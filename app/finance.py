@@ -25,6 +25,11 @@ def ym(d: date | str) -> str:
     return str(d)[:7]
 
 
+def current_period(today: date | None = None) -> str:
+    """İçinde bulunulan dönem (ay dönümü ayarına göre)."""
+    return db.period_of(today or date.today())
+
+
 def add_months(month: str, n: int) -> str:
     y, m = map(int, month.split("-"))
     y, m = divmod((y * 12 + m - 1) + n, 12)
@@ -151,7 +156,7 @@ def reference_month(today: date | None = None) -> str:
 
 def available_months() -> list[str]:
     ms = {t["period"] for t in db.card_transactions()} | {e["month"] for e in db.list_entries()}
-    ms.add(ym(date.today()))
+    ms.add(current_period())
     return sorted(ms, reverse=True)
 
 
@@ -239,7 +244,7 @@ def _spend_for(kind: str, name: str, month: str) -> float:
 def goals_review(today: date | None = None) -> list[dict]:
     """Her hedef için başlangıçtan bu aya kadar ay ay sonuç. Bu ay 'devam' (henüz bitmedi)."""
     today = today or date.today()
-    now = ym(today)
+    now = current_period(today)
     out = []
     for g in db.list_goals():
         months = []
@@ -343,7 +348,7 @@ def card_projection() -> dict:
 
 def plan(months: int = 6, today: date | None = None) -> dict:
     today = today or date.today()
-    start = ym(today)
+    start = current_period(today)
     span = [add_months(start, i) for i in range(months)]
     proj = card_projection()
     statements = db.list_statements()
@@ -408,7 +413,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
 
         # --- ödenmemiş faturalar (ödenenler zaten tek seferlik gider olarak girdi)
         for b in bills:
-            if ym(b["due_date"]) == m and b["paid_at"] is None:
+            if db.period_of(b["due_date"]) == m and b["paid_at"] is None:
                 lines.append({"type": "fatura", "kind": EXPENSE, "amount": b["amount"],
                               "description": f"{b['provider']} faturası (son {date.fromisoformat(b['due_date']):%d.%m})"})
 
@@ -563,7 +568,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                     "detail": "Maaşını Planlama → Sabit kalemler'e eklersen her ay ne kadar artı/eksi verdiğini görürsün."})
 
     # 4) Taksit yükü
-    next_m = add_months(ym(today), 1)
+    next_m = add_months(current_period(today), 1)
     nxt = next((mm for mm in p["months"] if mm["month"] == next_m), None)
     if nxt and nxt["groups"].get("taksit"):
         inst = nxt["groups"]["taksit"]
@@ -679,7 +684,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
 
     # 12) Bekleyen sabit kalemler
     pend = [r for r in rows if r.get("pending")]
-    if pend and month <= ym(today):
+    if pend and month <= current_period(today):
         out.append({"level": "bilgi", "title": f"{len(pend)} sabit kalem onay bekliyor",
                     "detail": ", ".join(r["description"] for r in pend[:4]) + " — gerçekleştiyse İşlemler'den onayla.",
                     "filter": {"pending": True}})

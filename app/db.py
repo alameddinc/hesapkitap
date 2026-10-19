@@ -175,6 +175,7 @@ def init_db() -> None:
         _backfill_statements(c)
         _sync_default_rules(c)
     auto_mark_paid()
+    auto_update_cycle()
 
 
 def _migrate_subscription_state(c) -> None:
@@ -435,9 +436,63 @@ def list_entries(month: str | None = None) -> list[dict]:
         return rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC"))
 
 
+def cycle_start_day() -> int:
+    """Ay dönümü günü: 1 = takvim ayı. Ör. 17 → "Kasım dönemi" 17 Ekim – 16 Kasım (kart kesimlerine hizalı)."""
+    v = get_setting("cycle_start_day")
+    return int(v) if v and v.isdigit() and 1 <= int(v) <= 28 else 1
+
+
+def period_of(d, start_day: int | None = None) -> str:
+    """Bir tarihin ait olduğu dönem (YYYY-MM). Ay dönümü gününden itibaren bir sonraki ayın dönemi başlar."""
+    from datetime import date as _date
+
+    d = _date.fromisoformat(str(d)[:10])
+    start = start_day or cycle_start_day()
+    y, m = d.year, d.month
+    if start > 1 and d.day >= start:
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return f"{y:04d}-{m:02d}"
+
+
+def set_cycle_start_day(day: int) -> int:
+    """Ay dönümünü değiştir ve elle girilen kayıtların dönemlerini yeniden hesapla."""
+    day = max(1, min(28, int(day)))
+    set_setting("cycle_start_day", str(day))
+    with connect() as c:
+        rs = c.execute("SELECT id, entry_date, recurring_id, month FROM entries").fetchall()
+        # sabit kalem onayları hangi aya onaylandıysa orada kalır; diğerleri tarihine göre
+        c.executemany("UPDATE entries SET month = ? WHERE id = ?",
+                      [(period_of(r["entry_date"], day), r["id"]) for r in rs if not r["recurring_id"]])
+    return day
+
+
+def suggested_cycle_day() -> int | None:
+    """Her kartın SON ekstresindeki kesim günlerinin en geçinden bir gün sonrası: her ekstre kendi dönemine düşer.
+    Banka kesim gününü kaydırırsa ya da yeni kart eklenirse öneri de değişir."""
+    with connect() as c:
+        days = [int(r[0][8:10]) for r in c.execute(
+            "SELECT MAX(period_end) FROM statements GROUP BY card_no")]
+    return min(28, max(days) + 1) if days else None
+
+
+def cycle_mode() -> str:
+    """auto: ay dönümü her ekstre yüklemesinde kesim günlerine göre güncellenir; manual: kullanıcı seçti."""
+    return get_setting("cycle_mode") or "auto"
+
+
+def auto_update_cycle() -> int | None:
+    """Otomatik moddaysa ay dönümünü kesim günlerine hizala. Değiştiyse yeni günü döner."""
+    if cycle_mode() != "auto":
+        return None
+    sug = suggested_cycle_day()
+    if sug and sug != cycle_start_day():
+        return set_cycle_start_day(sug)
+    return None
+
+
 def create_entry(data: dict) -> int:
     data = {k: data.get(k) for k in ENTRY_FIELDS if k in data}
-    data["month"] = str(data["entry_date"])[:7]
+    data["month"] = period_of(data["entry_date"]) if not data.get("recurring_id") else str(data["entry_date"])[:7]
     with connect() as c:
         cols = ", ".join(data)
         return c.execute(f"INSERT INTO entries ({cols}) VALUES ({', '.join('?' * len(data))})",
@@ -447,7 +502,7 @@ def create_entry(data: dict) -> int:
 def update_entry(entry_id: int, data: dict) -> None:
     data = {k: v for k, v in data.items() if k in ENTRY_FIELDS}
     if "entry_date" in data:
-        data["month"] = str(data["entry_date"])[:7]
+        data["month"] = period_of(data["entry_date"])
     if not data:
         return
     with connect() as c:

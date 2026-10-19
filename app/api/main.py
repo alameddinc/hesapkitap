@@ -168,6 +168,10 @@ def meta():
         "income_categories": INCOME_CATEGORIES,
         "card_kinds": [PURCHASE, REFUND, FEE, PAYMENT],
         "receipt_enabled": receipt.enabled(),
+        "current_month": finance.current_period(),
+        "cycle_start_day": db.cycle_start_day(),
+        "cycle_mode": db.cycle_mode(),
+        "suggested_cycle_day": db.suggested_cycle_day(),
     }
 
 
@@ -392,6 +396,9 @@ async def upload_statements(files: list[UploadFile] = File(...)):
             continue
         db.save_statement(data, f.filename or "ekstre.pdf", stmt)
         results.append({**res, "status": "saved", "linked": db.auto_link(), "marked_paid": db.auto_mark_paid()})
+    changed = db.auto_update_cycle()
+    if changed and results:
+        results[-1]["cycle_day"] = changed  # arayüz "ay dönümü X'e güncellendi" der
     return results
 
 
@@ -556,7 +563,7 @@ class BudgetIn(BaseModel):
 
 @app.get("/api/budgets")
 def list_budgets(month: str | None = None):
-    m = month or finance.ym(date.today())
+    m = month or finance.current_period()
     # öneri için son ekstre ayının kategori harcaması
     last = {g["name"]: g["amount"] for g in finance.summary(finance.reference_month())["by_category"]}
     return {"limits": db.list_budgets(), "status": finance.budgets(m), "last_month": last}
@@ -710,6 +717,21 @@ def settings_status():
                    "last_run": db.get_setting("job:backup")},
         "last_reminder": db.get_setting("job:remind"),
     }
+
+
+class CycleIn(BaseModel):
+    mode: Literal["auto", "manual"] = "manual"
+    day: int | None = Field(default=None, ge=1, le=28)  # manual için
+
+
+@app.put("/api/settings/cycle")
+def set_cycle(body: CycleIn):
+    db.set_setting("cycle_mode", body.mode)
+    if body.mode == "auto":
+        db.auto_update_cycle()
+    elif body.day:
+        db.set_cycle_start_day(body.day)
+    return {"day": db.cycle_start_day(), "mode": db.cycle_mode(), "current_month": finance.current_period()}
 
 
 class ConfigIn(BaseModel):

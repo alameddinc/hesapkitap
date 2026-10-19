@@ -180,6 +180,10 @@ export interface Meta {
   categories: string[];
   income_categories: string[];
   receipt_enabled: boolean;
+  current_month: string;
+  cycle_start_day: number;
+  cycle_mode: "auto" | "manual";
+  suggested_cycle_day: number | null;
 }
 
 export interface Rule {
@@ -200,6 +204,8 @@ export interface UploadResult {
   txn_count?: number;
   reconciliation_diff?: number;
   linked?: number;
+  ai?: boolean;
+  cycle_day?: number;
 }
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {

@@ -21,7 +21,7 @@ export default function Insights({ items, onClick }: { items: Insight[]; onClick
             <button disabled={!clickable} onClick={() => onClick?.(i)}
               className={cx("flex h-full w-full gap-3 rounded-xl border p-3 text-left", s.cls, clickable && "hover:shadow-sm")}>
               <s.icon size={18} className={cx("mt-0.5 shrink-0", s.ic)} aria-label={s.label} />
-              <span>
+              <span className="min-w-0">
                 <span className="block text-sm font-medium">{i.title}</span>
                 <span className="mt-0.5 block text-xs text-stone-600 dark:text-stone-400">{i.detail}</span>
               </span>

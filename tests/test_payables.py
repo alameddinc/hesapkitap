@@ -191,3 +191,38 @@ def test_estimate_not_counted_as_committed(client, upload):
     ins = finance.insights("2026-11", today=today)
     assert not any("kesin giderler geliri aşıyor" in i["title"] for i in ins)  # tahmin "açık" sayılmaz
     assert any("sıkışabilirsin" in i["title"] and i["level"] == "bilgi" for i in ins)
+
+
+def test_cycle_start_day(client, upload, tmpdb):
+    import datetime as dt
+
+    from app import finance
+
+    # ekstre yokken takvim ayı
+    e = client.post("/api/entries", json={"entry_date": "2026-10-20", "description": "Kahve", "amount": 100,
+                                          "kind": "gider", "category": "Kafe & Restoran"}).json()["id"]
+    assert tmpdb.cycle_start_day() == 1
+    assert next(x for x in tmpdb.list_entries() if x["id"] == e)["month"] == "2026-10"
+
+    # otomatik mod: ekstre yüklenince kesimler (13, 15, 16) → 17, elle girilenler yeniden hesaplanır
+    res = upload()
+    assert res[-1]["cycle_day"] == 17 and tmpdb.cycle_start_day() == 17
+    assert next(x for x in tmpdb.list_entries() if x["id"] == e)["month"] == "2026-11"
+    assert tmpdb.period_of("2026-10-16") == "2026-10" and tmpdb.period_of("2026-10-17") == "2026-11"
+    assert tmpdb.period_of("2026-12-20") == "2027-01"
+    assert finance.current_period(dt.date(2026, 10, 19)) == "2026-11"  # bütçe sıfırdan başlar
+    assert finance.plan(2, today=dt.date(2026, 10, 19))["months"][0]["month"] == "2026-11"
+    assert [x for x in client.get("/api/transactions", params={"month": "2026-10"}).json() if x["source"] == "card"]
+
+    # elle seçince otomatik kapanır; yeni ekstre değiştirmez
+    r = client.put("/api/settings/cycle", json={"mode": "manual", "day": 1}).json()
+    assert r == {"day": 1, "mode": "manual", "current_month": r["current_month"]}
+    assert tmpdb.auto_update_cycle() is None and tmpdb.cycle_start_day() == 1
+    # otomatiğe dön
+    assert client.put("/api/settings/cycle", json={"mode": "auto"}).json()["day"] == 17
+
+    # banka kesimi kaydırırsa (yeni ekstre 20'sinde kesilmiş) ay dönümü 21'e kayar
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, total_debt) "
+                  "VALUES ('y', 'VakıfBank', '4543***1234', '2026-11-20', 1)")
+    assert tmpdb.auto_update_cycle() == 21

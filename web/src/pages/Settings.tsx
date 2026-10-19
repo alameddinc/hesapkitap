@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Bell, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Send } from "lucide-react";
+import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Send } from "lucide-react";
+import { useMeta } from "../components/hooks";
+import { periodRange } from "../components/MonthPicker";
 import { useState } from "react";
 import { useSave } from "../components/hooks";
 import { cx, dateTR } from "../format";
@@ -77,6 +79,49 @@ function KeyRow({ c }: { c: ConfigItem }) {
         </div>
       )}
     </li>
+  );
+}
+
+function CycleForm() {
+  const ui = useUI();
+  const meta = useMeta();
+  const cur = meta.data?.cycle_start_day ?? 1;
+  const auto = (meta.data?.cycle_mode ?? "auto") === "auto";
+  const sug = meta.data?.suggested_cycle_day;
+  const save = useSave((body: { mode: "auto" | "manual"; day?: number }) => fetch("/api/settings/cycle", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }).then((r) => r.json()), (r: { current_month: string; day: number }) => {
+    ui.setMonth(r.current_month);
+    ui.toast(r.day > 1 ? `Ay dönümü: her ayın ${r.day}. günü` : "Ay dönümü: takvim ayı");
+  });
+  const example = meta.data?.current_month ? periodRange(meta.data.current_month, cur) : null;
+  return (
+    <section className="card space-y-3 p-4">
+      <h2 className="flex items-center gap-2 font-semibold"><CalendarClock size={18} /> Ay dönümü</h2>
+      <p className="text-sm text-stone-500">
+        Bütçe ve özet hangi günden itibaren yeni aya geçsin? Kart kesim tarihine hizalı olunca ekstreyi ödeyince yeni dönem
+        temiz başlar; elle girdiğin harcamalar da ilgili ekstreyle aynı döneme düşer.
+      </p>
+      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
+        <input type="checkbox" className="mt-0.5" checked={auto}
+          onChange={(e) => save.mutate(e.target.checked ? { mode: "auto" } : { mode: "manual", day: cur })} />
+        <span>
+          <b>Otomatik</b> — her ekstre yüklemesinde kartların son kesim günlerine göre güncellenir
+          {sug ? <span className="text-stone-500"> (şu an önerilen: {sug})</span> : <span className="text-stone-500"> (ekstre yükleyince)</span>}
+        </span>
+      </label>
+      {!auto && (
+        <select className="input w-auto" value={cur} aria-label="Ay dönümü günü"
+          onChange={(e) => save.mutate({ mode: "manual", day: Number(e.target.value) })}>
+          <option value={1}>Ayın 1'i (takvim ayı)</option>
+          {Array.from({ length: 27 }, (_, i) => i + 2).map((d) => <option key={d} value={d}>Her ayın {d}. günü</option>)}
+        </select>
+      )}
+      <p className="text-xs text-stone-500">
+        Şu an: {cur > 1 ? `her ayın ${cur}. günü` : "takvim ayı"}
+        {example && <> · {meta.data?.current_month} dönemi = {example}</>}
+      </p>
+    </section>
   );
 }
 
@@ -206,6 +251,7 @@ export default function Settings() {
         </ul>
       </section>
 
+      <CycleForm />
       {auth.data?.password_source === "app" && <PasswordForm />}
     </div>
   );

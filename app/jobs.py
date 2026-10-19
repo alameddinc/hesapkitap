@@ -5,7 +5,7 @@ Her iş günde bir kez çalışır; çalıştığı gün settings tablosuna yaz�
 import asyncio
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app import backup, db, finance, telegram
@@ -78,7 +78,7 @@ def reminders(today: date) -> list[str]:
                             "İnternet şubesinden indirip uygulamaya yükle; son ödeme hatırlatması ona göre gelir.")
 
     # 2b) Bütçe eşikleri: her kategori/eşik ayda bir kez
-    month = finance.ym(today)
+    month = finance.current_period(today)
     for b in finance.budgets(month):
         for th in (100, 80):
             if b["pct"] >= th:
@@ -89,9 +89,9 @@ def reminders(today: date) -> list[str]:
                     msgs.append(f"{icon} <b>{b['category']}</b> bütçesi %{b['pct']:.0f}: {_tl(b['spent'])} / {_tl(b['limit'])}")
                 break
 
-    # 3) Ayın 1'i: geçen ay özeti + bu ayın planı
-    if today.day == 1:
-        prev = finance.add_months(finance.ym(today), -1)
+    # 3) Yeni dönemin ilk günü (ay dönümü): biten dönemin özeti + yeni dönemin planı
+    if finance.current_period(today) != finance.current_period(today - timedelta(days=1)):
+        prev = finance.add_months(finance.current_period(today), -1)
         t = finance.summary(prev, today=today)["totals"]
         plan = finance.plan(1, today=today)["months"][0]
         msgs.append(f"📊 <b>{prev} özeti</b>\nGelir {_tl(t['income'])} · Gider {_tl(t['expense'])} · Net <b>{_tl(t['net'])}</b>"

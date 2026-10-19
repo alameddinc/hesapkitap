@@ -31,7 +31,7 @@ export default function Statements() {
           drag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30")}>
         {upload.isPending ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
         <div className="font-medium">{upload.isPending ? "İşleniyor…" : "PDF ekstreyi bırak veya seç"}</div>
-        <div className="text-xs text-stone-500">İnternet şubesinden indirilen hesap özeti · Şu an desteklenen: VakıfBank</div>
+        <div className="text-xs text-stone-500">İnternet şubesinden indirilen hesap özeti · Hazır okuyucu: VakıfBank, Kuveyt Türk · diğer bankalar yapay zekâ ile</div>
         <input ref={input} type="file" accept="application/pdf" multiple className="hidden" onChange={(e) => send(e.target.files)} />
       </div>
       {upload.error && <p className="text-sm text-red-600">{(upload.error as Error).message}</p>}
@@ -49,6 +49,8 @@ export default function Statements() {
                   <div className="text-stone-500">
                     {r.bank} {r.card_no} · kesim {dateTR(r.period_end!)} · {r.txn_count} işlem · {tl(r.total_debt!)}
                     {!!r.linked && <div className="text-blue-700 dark:text-blue-400">{r.linked} elle girilen kredi kartı gideri bu ekstreyle eşleşti</div>}
+                    {r.ai && <div className="text-violet-700 dark:text-violet-400">Bu banka için hazır okuyucu yok; yapay zekâ ile okundu</div>}
+                    {r.cycle_day && <div className="text-blue-700 dark:text-blue-400">Ay dönümü kesim günlerine göre her ayın {r.cycle_day}. gününe ayarlandı</div>}
                     <div className={r.reconciliation_diff === 0 ? "text-green-700 dark:text-green-400" : "text-amber-600"}>
                       {r.reconciliation_diff === 0 ? "Mutabakat tamam: tüm işlemler okundu" : `Mutabakat farkı ${tl(r.reconciliation_diff!)}`}
                     </div>

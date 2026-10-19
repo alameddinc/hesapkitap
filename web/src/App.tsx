@@ -5,6 +5,7 @@ import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
 import BillForm from "./components/BillForm";
 import PayForm from "./components/PayForm";
+import { useMeta } from "./components/hooks";
 import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
 import { cx } from "./format";
@@ -75,7 +76,16 @@ export default function App() {
 
 function Shell() {
   const [route, setRoute] = useState<Route>(readRoute);
+  const meta = useMeta();
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  // açılışta içinde bulunulan dönem (ay dönümü ayarına göre; ör. 19 Ekim → Kasım dönemi)
+  const [monthInit, setMonthInit] = useState(false);
+  useEffect(() => {
+    if (!monthInit && meta.data?.current_month) {
+      setMonth(meta.data.current_month);
+      setMonthInit(true);
+    }
+  }, [meta.data, monthInit]);
   const [modal, setModal] = useState<ModalState>(null);
   const [toastMsg, setToast] = useState<string | null>(null);
   const recurring = useQuery({ queryKey: ["recurring"], queryFn: api.recurring, enabled: modal?.type === "recurring" });
@@ -139,7 +149,7 @@ function Shell() {
           <div className="mt-auto"><LogoutButton /></div>
         </aside>
 
-        <main className={cx("mx-auto w-full px-4 pt-4 pb-28 md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
+        <main className={cx("mx-auto w-full min-w-0 px-4 pt-4 pb-28 md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
           <Page />
         </main>
       </div>

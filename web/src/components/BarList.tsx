@@ -10,6 +10,9 @@ export default function BarList({ items, selected, onSelect, limit }: {
   limit?: number;
 }) {
   const shown = limit ? items.slice(0, limit) : items;
+  if (!shown.length) {
+    return <p className="py-3 text-sm text-stone-500">Bu dönemde henüz harcama yok. Kart harcamaları ekstre gelince, fiş ve elle girdiklerin hemen görünür.</p>;
+  }
   const max = Math.max(...shown.map((i) => i.amount), 1);
   return (
     <ul className="space-y-1">

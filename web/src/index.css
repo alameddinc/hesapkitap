@@ -32,9 +32,15 @@
   }
 }
 
+html,
+body {
+  overflow-x: hidden; /* mobilde yana kayma olmasın */
+}
 body {
   @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
   font-feature-settings: "tnum";
+  /* "0000000000917532563 police" gibi bölünemeyen uzun açıklamalar ekranı genişletmesin */
+  overflow-wrap: anywhere;
 }
 
 @utility card {
