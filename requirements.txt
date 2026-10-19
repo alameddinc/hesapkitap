@@ -1,0 +1,10 @@
+fastapi==0.148.0
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32
+httpx==0.28.1
+pdfplumber==0.11.10
+# pdfminer'ın bağımlılığı. 50.x arm64 Docker Desktop'ta "Illegal instruction" (exit 132) ile çöküyor
+cryptography==46.0.3
+pytest==9.1.1
+# python:3.12-slim'de sistem saat dilimi verisi yok; zoneinfo için
+tzdata==2026.5

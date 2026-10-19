@@ -1,0 +1,17 @@
+# Hızlı kurulum: docker compose up -d  →  http://localhost:8080
+# İlk açılışta şifreni belirlersin; Gemini/Telegram anahtarları Ayarlar sayfasından girilir.
+services:
+  hesapkitap:
+    build:
+      context: .
+      target: prod
+    image: hesapkitap:latest
+    container_name: hesapkitap
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:${HESAPKITAP_PORT:-8080}:8000"

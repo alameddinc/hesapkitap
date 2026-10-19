@@ -1,0 +1,35 @@
+# Yerel geliştirme: http://localhost:5173
+services:
+  api:
+    build:
+      context: .
+      target: api
+    container_name: ekstre-api
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - EKSTRE_DB=/app/data/ekstre.db
+      - COOKIE_SECURE=0  # yerelde http
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.dev
+    container_name: ekstre-web
+    environment:
+      - API_URL=http://api:8000
+    volumes:
+      - ./web:/web
+      - /web/node_modules  # host'taki node_modules container'ı ezmesin
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - api

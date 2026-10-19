@@ -1,0 +1,10 @@
+# Kişisel finans verisi ve sırlar - asla commit etme
+*.pdf
+data/
+.env
+__pycache__/
+.pytest_cache/
+.venv/
+web/node_modules/
+web/dist/
+.playwright-mcp/
