@@ -22,7 +22,9 @@ FROM api AS prod
 COPY --from=web-build /web/dist /app/web-dist
 ENV WEB_DIST=/app/web-dist EKSTRE_DB=/app/data/ekstre.db
 RUN useradd --uid 1000 --create-home app && mkdir -p /app/data && chown -R app /app/data
-USER app
+COPY docker-entrypoint.sh /usr/local/bin/
 VOLUME ["/app/data"]
+# root olarak başlar, data/ sahipliğini düzeltip "app" kullanıcısına geçer (bkz. docker-entrypoint.sh)
+ENTRYPOINT ["docker-entrypoint.sh"]
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/auth/status')"
 CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
