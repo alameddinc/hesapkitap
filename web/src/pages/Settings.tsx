@@ -148,7 +148,7 @@ function PasswordForm() {
 }
 
 interface SettingsStatus {
-  telegram: { token: boolean; connected: boolean };
+  telegram: { token: boolean; connected: boolean; chat_name: string | null };
   backup: { encrypted_offsite: boolean; files: { name: string; size: number; created: string }[]; last_run: string | null };
   last_reminder: string | null;
 }
@@ -174,7 +174,12 @@ export default function Settings() {
   const ui = useUI();
   const st = useQuery({ queryKey: ["settings"], queryFn: () => fetch("/api/settings").then((r) => r.json() as Promise<SettingsStatus>) });
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
-  const connect = useSave(() => post<{ name: string }>("/api/settings/telegram/connect"), (r) => ui.toast(`Bağlandı: ${r.name}`));
+  const [pairInfo, setPairInfo] = useState<{ code: string; bot: string; link: string } | null>(null);
+  const pair = useSave(() => post<{ code: string; bot: string; link: string }>("/api/settings/telegram/pair"), setPairInfo);
+  const connect = useSave(() => post<{ name: string }>("/api/settings/telegram/connect"), (r) => {
+    setPairInfo(null);
+    ui.toast(`Bağlandı: ${r.name}`);
+  });
   const test = useSave(() => post<{ sent: number }>("/api/settings/telegram/test"), (r) => ui.toast(`${r.sent} mesaj gönderildi`));
   const disconnect = useSave(() => post("/api/settings/telegram/disconnect"), () => ui.toast("Bağlantı kaldırıldı"));
   const backupNow = useSave(() => post<{ path: string }>("/api/settings/backup/now"), (r) => ui.toast(`Yedek alındı: ${r.path}`));
@@ -208,13 +213,29 @@ export default function Settings() {
               {!s.telegram.token && <div className="mt-1 text-amber-600">Token henüz girilmedi.</div>}
             </Step>
             <Step n={2} done={s.telegram.connected}>
-              Oluşturduğun bota Telegram'dan <code>/start</code> yaz, sonra:
-              <div className="mt-2">
-                <button className="btn-primary" disabled={!s.telegram.token || connect.isPending}
-                  onClick={() => connect.mutate(undefined, onErr)}>
-                  {s.telegram.connected ? "Yeniden bağla" : "Bağla"}
+              {s.telegram.connected ? (
+                <span>Bağlı: <b>{s.telegram.chat_name ?? "Telegram sohbeti"}</b> — hatırlatmalar sadece bu sohbete gider.</span>
+              ) : "Telegram'ı bu hesaba bağla:"}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={!s.telegram.token || pair.isPending}
+                  onClick={() => pair.mutate(undefined, onErr)}>
+                  {s.telegram.connected ? "Başka sohbete bağla" : "Bağlantı kodu al"}
                 </button>
+                {pairInfo && (
+                  <>
+                    <a className="btn-primary" href={pairInfo.link} target="_blank" rel="noreferrer">Telegram'da aç</a>
+                    <button className="btn-primary" disabled={connect.isPending} onClick={() => connect.mutate(undefined, onErr)}>
+                      Başlat'a bastım, bağla
+                    </button>
+                  </>
+                )}
               </div>
+              {pairInfo && (
+                <p className="mt-2 text-xs text-stone-500">
+                  "Telegram'da aç" → @{pairInfo.bot} sohbetinde <b>BAŞLAT</b>'a bas (bota <code>/start {pairInfo.code}</code> gider).
+                  Kod 10 dakika geçerli ve tek kullanımlık; bot adını bilen başka biri bağlanamaz.
+                </p>
+              )}
             </Step>
             <Step n={3} done={!!s.last_reminder}>
               <div className="flex flex-wrap gap-2">

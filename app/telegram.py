@@ -36,15 +36,43 @@ def _call(method: str, timeout: float = 20, **kw) -> dict:
     return j["result"]
 
 
+PAIR_TTL = 10 * 60  # saniye
+
+
+def start_pairing() -> dict:
+    """Tek seferlik bağlantı kodu üret. Sadece bu kodu /start ile gönderen sohbet bağlanabilir;
+    böylece bot adını bilen başka biri araya giremez."""
+    import secrets
+    import time
+
+    code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+    db.set_setting("telegram_pair", f"{code}:{int(time.time()) + PAIR_TTL}")
+    bot = _call("getMe")["username"]
+    return {"code": code, "bot": bot, "link": f"https://t.me/{bot}?start={code}", "expires_in": PAIR_TTL}
+
+
 def discover_chat() -> dict:
-    """Kullanıcı bota /start yazdıktan sonra son mesajdan sohbet kimliğini bul ve kaydet."""
+    """Eşleştirme kodunu içeren /start mesajını bul, o sohbeti kaydet."""
+    import time
+
+    raw = db.get_setting("telegram_pair") or ""
+    code, _, exp = raw.partition(":")
+    if not code or not exp.isdigit() or int(exp) < time.time():
+        raise TelegramError("Bağlantı kodu yok ya da süresi doldu. Önce 'Bağlantı kodu al'a bas.")
     updates = _call("getUpdates", json={"timeout": 0, "allowed_updates": ["message"]})
-    msgs = [u["message"] for u in updates if "message" in u and u["message"].get("chat", {}).get("type") == "private"]
+    msgs = [u["message"] for u in updates if "message" in u
+            and u["message"].get("chat", {}).get("type") == "private"
+            and code in (u["message"].get("text") or "").upper()]
     if not msgs:
-        raise TelegramError("Mesaj bulunamadı. Telegram'da bota /start yaz, sonra tekrar dene.")
+        raise TelegramError("Kod bota henüz gelmedi. Bağlantıya dokunup Telegram'da BAŞLAT'a bas, sonra tekrar dene.")
     chat = msgs[-1]["chat"]
-    db.set_setting("telegram_chat_id", str(chat["id"]))
     name = " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) or chat.get("username", "")
+    db.set_setting("telegram_chat_id", str(chat["id"]))
+    db.set_setting("telegram_chat_name", name)
+    db.set_setting("telegram_pair", None)
+    # işlenen mesajları Telegram kuyruğundan düşür
+    if updates:
+        _call("getUpdates", json={"offset": updates[-1]["update_id"] + 1, "timeout": 0})
     return {"chat_id": chat["id"], "name": name}
 
 

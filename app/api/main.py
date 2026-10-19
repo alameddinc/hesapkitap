@@ -709,10 +709,26 @@ def bill_file(bid: int):
 
 # ---------------------------------------------------------------- ayarlar: telegram + yedek
 
+def _chat_name() -> str | None:
+    """Eski sürümde bağlanmış sohbetin adını bir kez Telegram'dan çekip sakla."""
+    name = db.get_setting("telegram_chat_name")
+    if name or not telegram.enabled():
+        return name
+    try:
+        ch = telegram._call("getChat", json={"chat_id": telegram.chat_id()})
+        name = " ".join(x for x in (ch.get("first_name"), ch.get("last_name")) if x) or ch.get("username")
+        if name:
+            db.set_setting("telegram_chat_name", name)
+    except telegram.TelegramError:
+        pass
+    return name
+
+
 @app.get("/api/settings")
 def settings_status():
     return {
-        "telegram": {"token": bool(telegram.token()), "connected": bool(telegram.chat_id())},
+        "telegram": {"token": bool(telegram.token()), "connected": bool(telegram.chat_id()),
+                     "chat_name": _chat_name()},
         "backup": {"encrypted_offsite": bool(backup.passphrase()), "files": backup.list_backups()[:10],
                    "last_run": db.get_setting("job:backup")},
         "last_reminder": db.get_setting("job:remind"),
@@ -792,6 +808,14 @@ def gen_backup_pass():
     return {"passphrase": pw}
 
 
+@app.post("/api/settings/telegram/pair")
+def telegram_pair():
+    try:
+        return telegram.start_pairing()
+    except telegram.TelegramError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.post("/api/settings/telegram/connect")
 def telegram_connect():
     try:
@@ -805,6 +829,7 @@ def telegram_connect():
 @app.post("/api/settings/telegram/disconnect")
 def telegram_disconnect():
     db.set_setting("telegram_chat_id", None)
+    db.set_setting("telegram_chat_name", None)
     return {"ok": True}
 
 
