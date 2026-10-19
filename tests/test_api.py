@@ -82,3 +82,33 @@ def test_duplicate_income_in_period_warns(client, tmpdb):
         client.post("/api/entries", json={"entry_date": d, "description": "Maaş", "amount": 1000, "kind": "gelir"})
     ins = finance.insights("2026-10", today=date(2026, 10, 19))
     assert any("Maaş" in i["title"] and "2 kez" in i["title"] for i in ins)
+
+
+def test_recurring_counted_once_per_period(client, tmpdb):
+    """Maaş günü ay dönümüne yakın/öbür tarafta olsa da her dönemde tek kez sayılır."""
+    tmpdb.set_cycle_start_day(17)
+    rid = client.post("/api/recurring", json={"description": "Maaş", "amount": 1000, "kind": "gelir",
+                                              "day_of_month": 15, "start_month": "2026-01"}).json()["id"]
+    client.post(f"/api/recurring/{rid}/confirm", json={"month": "2026-10"})
+    # geçmiş maaşlar yanlış günle (19) girildi: yine de kendi aylarına bağlanır, Ekim'e çift düşmez
+    for d in ("2026-09-19", "2026-08-19", "2026-07-19"):
+        client.post("/api/entries", json={"entry_date": d, "description": "maaş", "amount": 1000, "kind": "gelir"})
+    months = sorted(e["month"] for e in tmpdb.list_entries())
+    assert months == ["2026-07", "2026-08", "2026-09", "2026-10"]
+    assert all(e["recurring_id"] == rid for e in tmpdb.list_entries())
+    assert client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]["income"] == 1000
+
+
+def test_occurrence_when_salary_after_cycle_day(client, tmpdb):
+    """Maaş 20'sinde, ekstre 2'sinde kesiliyor (ay dönümü 3): Kasım dönemi maaşı 20 Ekim."""
+    tmpdb.set_cycle_start_day(3)
+    assert tmpdb.occurrence_date("2026-11", 20) == "2026-10-20"
+    assert tmpdb.occurrence_date("2026-11", 1) == "2026-11-01"
+    rid = client.post("/api/recurring", json={"description": "Maaş", "amount": 1000, "kind": "gelir",
+                                              "day_of_month": 20, "start_month": "2026-01"}).json()["id"]
+    rows = client.get("/api/transactions", params={"month": "2026-11"}).json()
+    assert next(r for r in rows if r.get("pending"))["date"] == "2026-10-20"
+    # hafta sonu yüzünden 18 Ekim'de erken yattı → yine Kasım dönemi, tek kez
+    client.post("/api/entries", json={"entry_date": "2026-10-18", "description": "Maaş", "amount": 1000, "kind": "gelir"})
+    s = client.get("/api/summary", params={"month": "2026-11"}).json()
+    assert s["totals"]["income"] == 1000 and s["pending"]["count"] == 0

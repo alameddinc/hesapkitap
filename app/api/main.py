@@ -352,9 +352,8 @@ def _recurring_or_404(rid: int) -> dict:
 def confirm_recurring(rid: int, body: RecurringAction):
     """Sabit kalem bu ay gerçekleşti → elle girilmiş kayda dönüştür."""
     r = _recurring_or_404(rid)
-    day = min(r["day_of_month"], 28)
     return {"id": db.create_entry({
-        "entry_date": f"{body.month}-{day:02d}", "description": r["description"],
+        "entry_date": db.occurrence_date(body.month, r["day_of_month"]), "month": body.month, "description": r["description"],
         "amount": body.amount if body.amount is not None else r["amount"], "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 0,
     })}
@@ -365,7 +364,8 @@ def skip_recurring(rid: int, body: RecurringAction):
     """Sabit kalem bu ay olmadı (ör. psikoloğa gidilmedi)."""
     r = _recurring_or_404(rid)
     return {"id": db.create_entry({
-        "entry_date": f"{body.month}-01", "description": r["description"], "amount": 0, "kind": r["kind"],
+        "entry_date": db.occurrence_date(body.month, r["day_of_month"]), "month": body.month,
+        "description": r["description"], "amount": 0, "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 1,
     })}
 

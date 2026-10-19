@@ -99,10 +99,9 @@ def _entry_row(e: dict) -> dict:
 
 
 def _pending_row(r: dict, month: str) -> dict:
-    day = min(r["day_of_month"] or 1, 28)
     return {
         "uid": f"r{r['id']}-{month}", "source": "recurring", "id": r["id"],
-        "date": f"{month}-{day:02d}", "month": month,
+        "date": db.occurrence_date(month, r["day_of_month"] or 1), "month": month,
         "description": r["description"], "merchant": r["description"],
         "amount": r["amount"], "kind": r["kind"], "category": r["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,

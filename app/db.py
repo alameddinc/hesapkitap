@@ -426,7 +426,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id")
+                "payment", "linked_txn_id", "month")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -452,6 +452,48 @@ def period_of(d, start_day: int | None = None) -> str:
     if start > 1 and d.day >= start:
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return f"{y:04d}-{m:02d}"
+
+
+def occurrence_date(month: str, day: int, start_day: int | None = None) -> str:
+    """Bir sabit kalemin (ayın `day`'inde) `month` dönemine denk gelen tarihi.
+    Dönem = [önceki ayın ay dönümü günü, bu ayın ay dönümü günü - 1]. Ör. ay dönümü 3, maaş 20 →
+    Kasım dönemi (3 Eki – 2 Kas) maaşı 20 Ekim'dir."""
+    start = start_day or cycle_start_day()
+    y, m = map(int, month.split("-"))
+    if start > 1 and day >= start:
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return f"{y:04d}-{m:02d}-{min(day, 28):02d}"
+
+
+def _months_around(period: str) -> list[str]:
+    y, m = map(int, period.split("-"))
+    out = []
+    for d in (-1, 0, 1):
+        t = y * 12 + (m - 1) + d
+        out.append(f"{t // 12:04d}-{t % 12 + 1:02d}")
+    return out
+
+
+def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
+    """Elle girilen kayıt bir sabit kalemle aynı adı taşıyorsa (ör. "Maaş"), tarihine en yakın dönemin
+    o sabit kalemine bağla: maaş bir gün erken/geç yatsa da her dönemde tam bir kez sayılır."""
+    from datetime import date as _date
+
+    if data.get("recurring_id") or data.get("skipped"):
+        return
+    name = (data.get("description") or "").strip().casefold()
+    rec = next((r for r in c.execute("SELECT * FROM recurring").fetchall()
+                if r["kind"] == data.get("kind") and r["description"].strip().casefold() == name), None)
+    if not rec:
+        return
+    d = _date.fromisoformat(str(data["entry_date"])[:10])
+    taken = {r["month"] for r in c.execute(
+        "SELECT month FROM entries WHERE recurring_id = ? AND id IS NOT ?", (rec["id"], exclude_id))}
+    cands = [m for m in _months_around(period_of(d)) if m not in taken]
+    if not cands:
+        return  # komşu dönemlerin hepsi dolu: bağlama, çift kayıt uyarısı görünsün
+    best = min(cands, key=lambda m: abs((_date.fromisoformat(occurrence_date(m, rec["day_of_month"])) - d).days))
+    data["recurring_id"], data["month"] = rec["id"], best
 
 
 def set_cycle_start_day(day: int) -> int:
@@ -492,8 +534,10 @@ def auto_update_cycle() -> int | None:
 
 def create_entry(data: dict) -> int:
     data = {k: data.get(k) for k in ENTRY_FIELDS if k in data}
-    data["month"] = period_of(data["entry_date"]) if not data.get("recurring_id") else str(data["entry_date"])[:7]
+    month = data.pop("month", None)
+    data["month"] = month or period_of(data["entry_date"])
     with connect() as c:
+        _attach_recurring(c, data)
         cols = ", ".join(data)
         return c.execute(f"INSERT INTO entries ({cols}) VALUES ({', '.join('?' * len(data))})",
                          tuple(data.values())).lastrowid
@@ -501,11 +545,16 @@ def create_entry(data: dict) -> int:
 
 def update_entry(entry_id: int, data: dict) -> None:
     data = {k: v for k, v in data.items() if k in ENTRY_FIELDS}
-    if "entry_date" in data:
-        data["month"] = period_of(data["entry_date"])
+    data.pop("month", None)
     if not data:
         return
     with connect() as c:
+        if "entry_date" in data:
+            cur = dict(c.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone())
+            merged = {**cur, **data, "recurring_id": None}
+            merged["month"] = period_of(merged["entry_date"])
+            _attach_recurring(c, merged, exclude_id=entry_id)
+            data["month"], data["recurring_id"] = merged["month"], merged["recurring_id"]
         c.execute(f"UPDATE entries SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?", (*data.values(), entry_id))
 
 
