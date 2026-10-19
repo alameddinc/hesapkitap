@@ -5,7 +5,7 @@ import CategoryPicker from "../components/CategoryPicker";
 import { useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
-import { addMonths, cx, dateTR, monthLabel, tl } from "../format";
+import { addMonths, cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 
 interface Sub {
@@ -67,9 +67,9 @@ function GoalForm({ data, onClose }: { data: SavingsData; onClose: () => void })
     ? (meta.data?.categories ?? []).filter((c) => c !== "Kategorisiz")
     : Object.keys(data.last_month_spend.by_merchant);
   const save = useSave(() => j("POST", "/api/goals", {
-    kind, name, baseline, target: Number(target.replace(",", ".")), start_month: start, note: note || null,
+    kind, name, baseline, target: parseAmount(target), start_month: start, note: note || null,
   }), () => { ui.toast("Hedef eklendi, planlama güncellendi"); onClose(); });
-  const t = Number(target.replace(",", "."));
+  const t = parseAmount(target);
 
   return (
     <Modal title="Kısma hedefi" onClose={onClose} footer={
@@ -117,7 +117,7 @@ function GoalForm({ data, onClose }: { data: SavingsData; onClose: () => void })
 export function DowngradeForm({ sub, onClose }: { sub: { merchant: string; monthly: number }; onClose: () => void }) {
   const ui = useUI();
   const [amount, setAmount] = useState("");
-  const n = Number(amount.replace(",", "."));
+  const n = parseAmount(amount);
   const save = useSave(() => j("PUT", "/api/subscriptions", { merchant: sub.merchant, status: "dusuruldu", new_amount: n }),
     () => { ui.toast("Paket değişikliği kaydedildi"); onClose(); });
   return (

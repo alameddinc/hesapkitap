@@ -1,8 +1,7 @@
-import { Check, CreditCard, Repeat, SkipForward } from "lucide-react";
-import { api, type Row } from "../api";
+import { Check, CreditCard, Repeat } from "lucide-react";
+import type { Row } from "../api";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import { useUI } from "../ui";
-import { useSave } from "./hooks";
 
 const BADGE: Record<string, string> = {
   iade: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
@@ -18,17 +17,15 @@ function amountClass(r: Row) {
 }
 
 function PendingActions({ r }: { r: Row }) {
-  const { toast } = useUI();
-  const confirm = useSave(() => api.confirmRecurring(r.recurring_id!, r.month), () => toast(`${r.description} onaylandı`));
-  const skip = useSave(() => api.skipRecurring(r.recurring_id!, r.month), () => toast(`${r.description} bu ay atlandı`));
+  const ui = useUI();
+  const open = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    ui.openRecurringMonth({ rid: r.recurring_id!, month: r.month, description: r.description, amount: r.amount,
+      template: r.template_amount ?? r.amount, kind: r.kind, mode: "confirm" });
+  };
   return (
     <div className="mt-2 flex gap-2">
-      <button className="btn-primary px-2.5 py-1 text-xs" onClick={(e) => { e.stopPropagation(); confirm.mutate(undefined); }}>
-        <Check size={14} /> Gerçekleşti
-      </button>
-      <button className="btn-ghost px-2.5 py-1 text-xs" onClick={(e) => { e.stopPropagation(); skip.mutate(undefined); }}>
-        <SkipForward size={14} /> Bu ay yok
-      </button>
+      <button className="btn-primary px-2.5 py-1 text-xs" onClick={open}><Check size={14} /> Gerçekleşti</button>
     </div>
   );
 }

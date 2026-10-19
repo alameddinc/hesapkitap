@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS savings_goals (
     active INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- Sabit kalemin belirli bir ay için planlanan tutarı (ör. brüt maaşta her ay değişen net)
+CREATE TABLE IF NOT EXISTS recurring_overrides (
+    recurring_id INTEGER NOT NULL REFERENCES recurring(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    amount REAL NOT NULL CHECK (amount >= 0),
+    PRIMARY KEY (recurring_id, month)
+);
 -- Kategori bazında aylık harcama limiti
 CREATE TABLE IF NOT EXISTS budgets (
     category TEXT PRIMARY KEY,
@@ -813,3 +820,25 @@ def update_goal(gid: int, data: dict) -> None:
 def delete_goal(gid: int) -> None:
     with connect() as c:
         c.execute("DELETE FROM savings_goals WHERE id = ?", (gid,))
+
+
+# ---------------------------------------------------------------- sabit kalem: aya özel tutar
+
+def recurring_overrides() -> dict[tuple[int, str], float]:
+    with connect() as c:
+        return {(r[0], r[1]): r[2] for r in c.execute("SELECT recurring_id, month, amount FROM recurring_overrides")}
+
+
+def set_recurring_override(rid: int, month: str, amount: float | None) -> None:
+    with connect() as c:
+        if amount is None:
+            c.execute("DELETE FROM recurring_overrides WHERE recurring_id = ? AND month = ?", (rid, month))
+        else:
+            c.execute("INSERT OR REPLACE INTO recurring_overrides (recurring_id, month, amount) VALUES (?, ?, ?)",
+                      (rid, month, amount))
+
+
+def planned_amount(r: dict, month: str, overrides: dict | None = None) -> float:
+    """Sabit kalemin o ay için beklenen tutarı: aya özel tutar varsa o, yoksa şablon."""
+    ov = overrides if overrides is not None else recurring_overrides()
+    return ov.get((r["id"], month), r["amount"])

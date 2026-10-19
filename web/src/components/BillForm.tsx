@@ -1,5 +1,6 @@
 import { FileText, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { parseAmount } from "../format";
 import { api, type BillDraft } from "../api";
 import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
@@ -18,7 +19,7 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
   const [err, setErr] = useState<string | null>(draft.error ? `Otomatik okunamadı: ${draft.error}. Elle doldur.` : null);
 
   const save = useSave(async () => {
-    const amt = Number(amount.replace(",", "."));
+    const amt = parseAmount(amount);
     if (!provider.trim() || !(amt >= 0) || !amount || !due) throw new Error("Kurum, tutar ve son ödeme tarihi gerekli");
     const body = { provider: provider.trim(), amount: amt, due_date: due, category, description: description || null, note: note || null };
     if (draft.id) return api.patchBill(draft.id, body);

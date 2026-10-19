@@ -112,3 +112,26 @@ def test_occurrence_when_salary_after_cycle_day(client, tmpdb):
     client.post("/api/entries", json={"entry_date": "2026-10-18", "description": "Maaş", "amount": 1000, "kind": "gelir"})
     s = client.get("/api/summary", params={"month": "2026-11"}).json()
     assert s["totals"]["income"] == 1000 and s["pending"]["count"] == 0
+
+
+def test_variable_salary(client, tmpdb):
+    """Brüt maaş: net her ay değişir. Onaylarken gerçek tutar, ileriki aylar için aya özel tutar."""
+    from datetime import date
+
+    from app import finance
+
+    rid = client.post("/api/recurring", json={"description": "Maaş", "amount": 220000, "kind": "gelir",
+                                              "day_of_month": 15, "start_month": "2026-01"}).json()["id"]
+    client.post(f"/api/recurring/{rid}/confirm", json={"month": "2026-10", "amount": 214350.75})
+    assert client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]["income"] == 214350.75
+
+    client.put(f"/api/recurring/{rid}/months/2026-12", json={"amount": 205000})  # Aralık'ta vergi dilimi
+    months = {m["month"]: m for m in finance.plan(3, today=date(2026, 11, 2))["months"]}
+    assert months["2026-11"]["income"] == 220000 and months["2026-12"]["income"] == 205000
+    # bekleyen satır ve onay da aya özel tutarı kullanır
+    rows = client.get("/api/transactions", params={"month": "2026-12"}).json()
+    assert next(r for r in rows if r.get("pending"))["amount"] == 205000
+    client.post(f"/api/recurring/{rid}/confirm", json={"month": "2026-12"})
+    assert client.get("/api/summary", params={"month": "2026-12"}).json()["totals"]["income"] == 205000
+    client.put(f"/api/recurring/{rid}/months/2026-12", json={"amount": None})  # şablona dön
+    assert tmpdb.recurring_overrides() == {}

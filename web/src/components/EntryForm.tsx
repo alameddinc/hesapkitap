@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
-import { dateTR, tl } from "../format";
+import { dateTR, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
@@ -44,7 +44,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     onClose();
   };
   const save = useSave(async () => {
-    const amt = Number(amount.replace(",", "."));
+    const amt = parseAmount(amount);
     if (!description.trim() || !(amt >= 0) || amount === "") throw new Error("Açıklama ve tutar gerekli");
     const common = { description: description.trim(), amount: amt, kind, category: category || null, note: note || null };
     const pay = kind === "gider" && !isRecurring && !rec ? { payment } : {};
@@ -154,6 +154,12 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             <Repeat size={16} className="text-stone-500" />
             <span>Her ay tekrarlansın <span className="text-stone-500">(maaş, kira, aidat…)</span></span>
           </label>
+        )}
+        {isRecurring && (
+          <p className="rounded-lg bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
+            Tutar her ay değişiyorsa (ör. brüt maaşta net) burada ortalama/beklenen tutarı yaz. O ay yatınca "Gerçekleşti"de
+            gerçek tutarı girersin; ileriki aylar için Planlama'da ay ay tutar verebilirsin.
+          </p>
         )}
         {isRecurring && (
           <div className="grid grid-cols-2 gap-3">

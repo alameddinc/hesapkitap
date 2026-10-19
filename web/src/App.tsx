@@ -5,6 +5,7 @@ import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
 import BillForm from "./components/BillForm";
 import PayForm from "./components/PayForm";
+import RecurringMonthForm, { type RecurringMonth } from "./components/RecurringMonthForm";
 import { useMeta } from "./components/hooks";
 import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
@@ -59,6 +60,7 @@ type ModalState =
   | { type: "recurring"; id?: number }
   | { type: "bill"; draft: BillDraft }
   | { type: "pay"; p: Payable }
+  | { type: "rmonth"; r: RecurringMonth }
   | null;
 
 export default function App() {
@@ -122,6 +124,7 @@ function Shell() {
     openRecurring: (id) => setModal({ type: "recurring", id }),
     openBill: (draft) => setModal({ type: "bill", draft: draft ?? {} }),
     openPay: (p) => setModal({ type: "pay", p }),
+    openRecurringMonth: (r) => setModal({ type: "rmonth", r }),
     toast: setToast,
   }), [month]);
 
@@ -188,6 +191,7 @@ function Shell() {
       {modal?.type === "recurring" && rec && <EntryForm recurring={rec} onClose={close} onSaved={setToast} />}
       {modal?.type === "bill" && <BillForm draft={modal.draft} onClose={close} onSaved={setToast} />}
       {modal?.type === "pay" && <PayForm p={modal.p} onClose={close} onSaved={setToast} />}
+      {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
 
       {toastMsg && (
         <div className="fixed inset-x-0 bottom-24 z-[60] flex justify-center px-4 md:bottom-6" role="status">

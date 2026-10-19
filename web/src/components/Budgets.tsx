@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertOctagon, AlertTriangle, CheckCircle2, Pencil } from "lucide-react";
 import { useState } from "react";
 import { api, type Budget } from "../api";
-import { cx, tl } from "../format";
+import { cx, parseAmount, tl } from "../format";
 import { useMeta, useSave } from "./hooks";
 import Modal from "./Modal";
 
@@ -64,7 +64,7 @@ export function BudgetForm({ month, onClose, onSaved }: { month: string; onClose
   const save = useSave(async () => {
     const changed = Object.entries(values);
     for (const [cat, v] of changed) {
-      const n = Number(v.replace(/\./g, "").replace(",", "."));
+      const n = parseAmount(v);
       await api.setBudget(cat, v.trim() && n > 0 ? n : null);
     }
     return changed.length;

@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { BillDraft, Payable, Row } from "./api";
+import type { RecurringMonth } from "./components/RecurringMonthForm";
 
 export interface EntryDraft {
   kind?: "gelir" | "gider";
@@ -22,6 +23,7 @@ export interface UI {
   openRecurring: (id?: number) => void;
   openBill: (draft?: BillDraft) => void;
   openPay: (p: Payable) => void;
+  openRecurringMonth: (r: RecurringMonth) => void;
   toast: (msg: string) => void;
 }
 

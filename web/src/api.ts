@@ -25,6 +25,7 @@ export interface Row {
   linked?: boolean;
   linked_txn_id?: number | null;
   awaiting_statement?: boolean;
+  template_amount?: number;
   subscription?: "aktif" | "iptal" | "dusuruldu" | null;
 }
 
@@ -140,6 +141,9 @@ export interface PlanLine {
   recurring_id?: number;
   entry_id?: number;
   confirmed?: boolean;
+  custom?: boolean;
+  template_amount?: number;
+  month?: string;
   due_date?: string;
 }
 

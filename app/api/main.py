@@ -3,6 +3,7 @@ Production'da WEB_DIST tanımlıysa derlenmiş React uygulamasını da aynı por
 import asyncio
 import mimetypes
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal
@@ -354,9 +355,23 @@ def confirm_recurring(rid: int, body: RecurringAction):
     r = _recurring_or_404(rid)
     return {"id": db.create_entry({
         "entry_date": db.occurrence_date(body.month, r["day_of_month"]), "month": body.month, "description": r["description"],
-        "amount": body.amount if body.amount is not None else r["amount"], "kind": r["kind"],
+        "amount": body.amount if body.amount is not None else db.planned_amount(r, body.month), "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 0,
     })}
+
+
+class MonthAmount(BaseModel):
+    amount: float | None = Field(default=None, ge=0)  # None = aya özel tutarı kaldır (şablona dön)
+
+
+@app.put("/api/recurring/{rid}/months/{month}")
+def set_month_amount(rid: int, month: str, body: MonthAmount):
+    """Sabit kalemin belirli bir ay için planlanan tutarı (ör. değişken net maaş)."""
+    _recurring_or_404(rid)
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(422, "Ay YYYY-MM olmalı")
+    db.set_recurring_override(rid, month, body.amount)
+    return {"ok": True}
 
 
 @app.post("/api/recurring/{rid}/skip")

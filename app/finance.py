@@ -98,12 +98,12 @@ def _entry_row(e: dict) -> dict:
     }
 
 
-def _pending_row(r: dict, month: str) -> dict:
+def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
     return {
         "uid": f"r{r['id']}-{month}", "source": "recurring", "id": r["id"],
         "date": db.occurrence_date(month, r["day_of_month"] or 1), "month": month,
         "description": r["description"], "merchant": r["description"],
-        "amount": r["amount"], "kind": r["kind"], "category": r["category"] or "Diğer",
+        "amount": db.planned_amount(r, month, overrides), "template_amount": r["amount"], "kind": r["kind"], "category": r["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": r["note"], "recurring_id": r["id"], "pending": True, "deleted": False,
     }
@@ -111,7 +111,8 @@ def _pending_row(r: dict, month: str) -> dict:
 
 def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) -> list[dict]:
     done = {e["recurring_id"] for e in entries if e["recurring_id"] and e["month"] == month}
-    return [_pending_row(r, month) for r in recurring if is_active(r, month) and r["id"] not in done]
+    ov = db.recurring_overrides()
+    return [_pending_row(r, month, ov) for r in recurring if is_active(r, month) and r["id"] not in done]
 
 
 def transactions(month: str | None, include_deleted: bool = False) -> list[dict]:
@@ -356,6 +357,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
     card_rows = db.card_transactions()
     bills = db.list_bills()
     goals = db.list_goals(active_only=True)
+    overrides = db.recurring_overrides()
 
     result = []
     cumulative = cumulative_est = 0.0
@@ -402,8 +404,10 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             e = next((e for e in entries if e["recurring_id"] == r["id"] and e["month"] == m), None)
             if e and e["skipped"]:
                 continue
-            lines.append({"type": "sabit", "kind": r["kind"], "amount": e["amount"] if e else r["amount"],
-                          "description": r["description"], "recurring_id": r["id"], "confirmed": bool(e)})
+            planned = db.planned_amount(r, m, overrides)
+            lines.append({"type": "sabit", "kind": r["kind"], "amount": e["amount"] if e else planned,
+                          "description": r["description"], "recurring_id": r["id"], "confirmed": bool(e),
+                          "custom": not e and planned != r["amount"], "template_amount": r["amount"], "month": m})
         # --- tek seferlik elle girilenler
         for e in entries:
             if e["month"] == m and not e["recurring_id"] and not e["skipped"] and not e["linked_txn_id"]:

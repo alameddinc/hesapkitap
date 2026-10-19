@@ -45,12 +45,18 @@ function MonthCard({ m, open, onToggle }: { m: PlanMonth; open: boolean; onToggl
           {m.lines.map((l, i) => (
             <li key={i}>
               <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-stone-50 sm:px-4 dark:hover:bg-stone-800/50"
-                onClick={() => l.recurring_id ? ui.openRecurring(l.recurring_id) : undefined}
+                onClick={() => {
+                  if (!l.recurring_id) return;
+                  if (l.confirmed) return ui.openRecurring(l.recurring_id);
+                  ui.openRecurringMonth({ rid: l.recurring_id, month: m.month, description: l.description, amount: l.amount,
+                    template: l.template_amount ?? l.amount, kind: l.kind, mode: "plan" });
+                }}
                 disabled={!l.recurring_id}>
                 <span className="w-24 shrink-0 text-xs text-stone-500 sm:w-32">{PLAN_LABEL[l.type]}</span>
                 <span className="min-w-0 flex-1 truncate">
                   {l.description}
-                  {l.type === "sabit" && !l.confirmed && <span className="ml-1 text-xs text-stone-400">(plan)</span>}
+                  {l.type === "sabit" && !l.confirmed && <span className="ml-1 text-xs text-stone-400">{l.custom ? "(bu aya özel)" : "(plan · dokun, tutarı değiştir)"}</span>}
+                  {l.type === "sabit" && l.confirmed && <span className="ml-1 text-xs text-green-600">✓</span>}
                 </span>
                 <span className={cx("shrink-0 whitespace-nowrap tabular-nums", l.kind !== "gider" && "text-green-700 dark:text-green-400")}>
                   {l.kind === "gider" ? "−" : l.kind === "gelir" ? "+" : "↓"}{tl(l.amount)}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, type Payable, type Payment } from "../api";
-import { dateTR, tl } from "../format";
+import { dateTR, parseAmount, tl } from "../format";
 import { useSave } from "./hooks";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
@@ -13,7 +13,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const [amount, setAmount] = useState(String(p.status === "odendi" ? p.paid_amount ?? p.amount : p.amount));
   const [date, setDate] = useState(p.paid_at ?? today());
   const [payment, setPayment] = useState<Payment>("havale");
-  const amt = Number(amount.replace(",", "."));
+  const amt = parseAmount(amount);
   const partial = amt + 0.01 < p.amount;
 
   const save = useSave(async () => {

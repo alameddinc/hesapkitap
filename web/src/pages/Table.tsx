@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type Row } from "../api";
 import MultiSelect from "../components/MultiSelect";
 import Segmented from "../components/Segmented";
-import { cx, dateTR, fold, KIND_LABEL, monthLabel, tl } from "../format";
+import { cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 
 type View = "liste" | "pivot";
@@ -67,8 +67,8 @@ export default function Table() {
 
   const filtered = useMemo(() => {
     const q = fold(f.q.trim());
-    const min = f.min ? Number(f.min.replace(",", ".")) : -Infinity;
-    const max = f.max ? Number(f.max.replace(",", ".")) : Infinity;
+    const min = f.min ? parseAmount(f.min) : -Infinity;
+    const max = f.max ? parseAmount(f.max) : Infinity;
     return data.filter((r) =>
       (!f.from || r.month >= f.from) && (!f.to || r.month <= f.to) &&
       (!f.categories.length || f.categories.includes(r.category)) &&

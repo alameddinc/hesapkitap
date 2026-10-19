@@ -55,3 +55,13 @@ export function cx(...c: (string | false | null | undefined)[]) {
 /** Arama için katla: büyük/küçük, Türkçe aksan ve ı/i farkını yok say ("SCRIBD" ~ "scribd", "İSPARK" ~ "ispark"). */
 export const fold = (s: string) =>
   s.toLocaleLowerCase("tr").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ı/g, "i");
+
+/** Kullanıcının yazdığı tutar: "214.350,75" (Türk) ya da "214350.75" / "214350" → sayı. Geçersizse NaN. */
+export function parseAmount(v: string): number {
+  const t = v.trim().replace(/\s|₺|TL/gi, "");
+  if (!t) return NaN;
+  if (t.includes(",")) return Number(t.replace(/\./g, "").replace(",", "."));
+  // tek nokta ve arkasında 3 hane varsa binlik ayırıcıdır ("220.000"); değilse ondalık
+  if (/^\d{1,3}(\.\d{3})+$/.test(t)) return Number(t.replace(/\./g, ""));
+  return Number(t);
+}
