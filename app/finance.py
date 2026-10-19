@@ -666,6 +666,18 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                 out.append({"level": "uyari", "title": f"{s['card_no']} limit doluluğu: %{ratio * 100:.0f}",
                             "detail": "Ödenmemiş ekstre borcu limite göre yüksek; kredi notunu olumsuz etkiler."})
 
+    # 9b) Aynı gelir bu dönemde birden fazla (ör. ay dönümü kayınca ya da yanlış tarihle girilince)
+    incomes = defaultdict(list)
+    for r in live:
+        if r["kind"] == INCOME:
+            incomes[r["description"].strip().casefold()].append(r)
+    for rs in incomes.values():
+        if len(rs) > 1:
+            dates = ", ".join(f"{date.fromisoformat(r['date'][:10]):%d.%m.%Y}" for r in sorted(rs, key=lambda r: r["date"]))
+            out.append({"level": "uyari", "title": f"\"{rs[0]['description']}\" bu dönemde {len(rs)} kez görünüyor",
+                        "detail": f"Tarihler: {dates}. Biri yanlış tarihle girilmiş olabilir; İşlemler → Gelir'den düzelt.",
+                        "filter": {"kind": INCOME}})
+
     # 10) Kategorisiz
     unc = [r for r in live if r["category"] == "Kategorisiz"]
     if unc:

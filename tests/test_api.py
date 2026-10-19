@@ -70,3 +70,15 @@ def test_credit_card_entry_links_to_statement(client, upload):
     assert cands and cands[0]["id"] == card["id"]
     client.post(f"/api/entries/{r['id']}/link", json={"txn_id": card["id"]})
     assert client.post(f"/api/entries/{nakit['id']}/link", json={"txn_id": card["id"]}).status_code == 409
+
+
+def test_duplicate_income_in_period_warns(client, tmpdb):
+    from datetime import date
+
+    from app import finance
+
+    tmpdb.set_cycle_start_day(17)
+    for d in ("2026-10-15", "2026-09-19"):  # ikisi de 17 Eyl – 16 Eki dönemine düşer
+        client.post("/api/entries", json={"entry_date": d, "description": "Maaş", "amount": 1000, "kind": "gelir"})
+    ins = finance.insights("2026-10", today=date(2026, 10, 19))
+    assert any("Maaş" in i["title"] and "2 kez" in i["title"] for i in ins)
