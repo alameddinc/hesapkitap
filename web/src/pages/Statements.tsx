@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, FileUp, Loader2, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, FileUp, KeyRound, Loader2, Trash2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type UploadResult } from "../api";
 import { useSave } from "../components/hooks";
@@ -11,13 +11,26 @@ export default function Statements() {
   const list = useQuery({ queryKey: ["statements"], queryFn: api.statements });
   const [results, setResults] = useState<UploadResult[]>([]);
   const [drag, setDrag] = useState(false);
+  const [locked, setLocked] = useState<File[]>([]); // şifre isteyen dosyalar
+  const [pw, setPw] = useState("");
+  const [remember, setRemember] = useState(true);
   const input = useRef<HTMLInputElement>(null);
-  const upload = useSave((files: File[]) => api.upload(files), setResults);
+  const upload = useSave(
+    ({ files, password }: { files: File[]; password?: string }) => api.upload(files, password, remember),
+    (res: UploadResult[]) => {
+      setResults(res);
+      setPw("");
+    },
+  );
+  const sendFiles = (files: File[], password?: string) =>
+    upload.mutate({ files, password }, {
+      onSuccess: (res) => setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required"))),
+    });
   const del = useSave((id: number) => api.deleteStatement(id), () => ui.toast("Ekstre silindi"));
 
   const send = (files: FileList | null) => {
     const pdfs = Array.from(files ?? []).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
-    if (pdfs.length) upload.mutate(pdfs);
+    if (pdfs.length) sendFiles(pdfs);
   };
 
   return (
@@ -32,18 +45,42 @@ export default function Statements() {
         {upload.isPending ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
         <div className="font-medium">{upload.isPending ? "İşleniyor…" : "PDF ekstreyi bırak veya seç"}</div>
         <div className="text-xs text-stone-500">İnternet şubesinden indirilen hesap özeti · Hazır okuyucu: VakıfBank, Kuveyt Türk · diğer bankalar yapay zekâ ile</div>
-        <input ref={input} type="file" accept="application/pdf" multiple className="hidden" onChange={(e) => send(e.target.files)} />
+        <input ref={input} type="file" accept="application/pdf" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>
       {upload.error && <p className="text-sm text-red-600">{(upload.error as Error).message}</p>}
+
+      {locked.length > 0 && (
+        <form className="card space-y-2 border-amber-300 p-3 dark:border-amber-800"
+          onSubmit={(e) => { e.preventDefault(); if (pw) sendFiles(locked, pw); }}>
+          <div className="flex items-center gap-2 text-sm font-medium"><KeyRound size={16} className="text-amber-600" />
+            {locked.length} PDF şifreli
+          </div>
+          <p className="text-xs text-stone-500">
+            Bankanın e-postasında yazan şifre (genelde TC kimlik no'nun bazı haneleri ya da doğum tarihi).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input className="input min-w-0 flex-1" type="password" autoComplete="off" placeholder="PDF şifresi" value={pw}
+              onChange={(e) => setPw(e.target.value)} autoFocus />
+            <button className="btn-primary" disabled={!pw || upload.isPending}>Aç</button>
+          </div>
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            Bu şifreyi hatırla (sonraki ekstreler sormadan açılır; Ayarlar'dan silinebilir)
+          </label>
+        </form>
+      )}
 
       {results.length > 0 && (
         <ul className="space-y-2">
           {results.map((r, i) => (
             <li key={i} className="card flex items-start gap-3 p-3 text-sm">
-              {r.status === "error" ? <XCircle className="text-red-600" size={18} /> : <CheckCircle2 className="text-green-600" size={18} />}
+              {r.status === "error" ? <XCircle className="text-red-600" size={18} />
+                : r.status === "password_required" ? <KeyRound className="text-amber-600" size={18} />
+                : <CheckCircle2 className="text-green-600" size={18} />}
               <div>
                 <div className="font-medium">{r.filename}</div>
                 {r.status === "error" && <div className="text-red-600">{r.message}</div>}
+                {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500">Zaten yüklü, atlandı.</div>}
                 {r.status === "saved" && (
                   <div className="text-stone-500">

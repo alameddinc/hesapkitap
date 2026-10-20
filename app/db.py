@@ -888,3 +888,31 @@ def learn_from_receipt(legal_name: str, brand: str, category: str | None) -> dic
     if out["rule"]:
         recategorize_all()
     return out
+
+
+# ---------------------------------------------------------------- PDF şifreleri (kullanıcı "hatırla" derse)
+
+def pdf_passwords() -> list[str]:
+    import json
+
+    try:
+        return json.loads(get_setting("pdf_passwords") or "[]")
+    except ValueError:
+        return []
+
+
+def remember_pdf_password(pw: str) -> None:
+    import json
+
+    pws = pdf_passwords()
+    if pw and pw not in pws:
+        set_setting("pdf_passwords", json.dumps([pw, *pws][:10]))
+
+
+def forget_pdf_password(index: int) -> None:
+    import json
+
+    pws = pdf_passwords()
+    if 0 <= index < len(pws):
+        pws.pop(index)
+        set_setting("pdf_passwords", json.dumps(pws))

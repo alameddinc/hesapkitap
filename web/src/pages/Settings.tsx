@@ -125,6 +125,27 @@ function CycleForm() {
   );
 }
 
+function PdfPasswords() {
+  const ui = useUI();
+  const q = useQuery({ queryKey: ["pdf-pw"], queryFn: () => fetch("/api/settings/pdf-passwords").then((r) => r.json() as Promise<{ index: number; hint: string }[]>) });
+  const del = useSave((i: number) => fetch(`/api/settings/pdf-passwords/${i}`, { method: "DELETE" }), () => ui.toast("Şifre silindi"));
+  if (!q.data?.length) return null;
+  return (
+    <section className="card p-4">
+      <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Hatırlanan PDF şifreleri</h2>
+      <p className="text-xs text-stone-500">Şifreli ekstreler yüklenirken sırayla denenir.</p>
+      <ul className="mt-2 divide-y divide-stone-100 text-sm dark:divide-stone-800">
+        {q.data.map((p) => (
+          <li key={p.index} className="flex items-center justify-between py-2">
+            <code>{p.hint}</code>
+            <button className="btn-danger px-2 py-1 text-xs" onClick={() => del.mutate(p.index)}>Sil</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function PrivacyForm() {
   const [on, setOn] = useState(() => { try { return localStorage.getItem("hk-hide-on-open") !== "0"; } catch { return true; } });
   return (
@@ -289,6 +310,7 @@ export default function Settings() {
 
       <PrivacyForm />
       <CycleForm />
+      <PdfPasswords />
       {auth.data?.password_source === "app" && <PasswordForm />}
     </div>
   );

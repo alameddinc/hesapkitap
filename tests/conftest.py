@@ -20,10 +20,10 @@ def _fixture_pdfs(monkeypatch):
 
     real = parsers.extract_text
 
-    def fake(data: bytes) -> str:
+    def fake(data: bytes, password: str | None = None) -> str:
         if data.startswith(b"FIXTURE:"):
             return (FIXTURES / data[8:].decode()).read_text(encoding="utf-8")
-        return real(data)
+        return real(data, password)
 
     monkeypatch.setattr(parsers, "extract_text", fake)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)  # testler dışarıya istek atmaz

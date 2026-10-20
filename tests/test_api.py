@@ -42,7 +42,7 @@ def test_upload_and_edit_fee(client, upload):
 def test_unknown_bank_without_ai(client, tmp_path, monkeypatch):
     import app.parsers as parsers
 
-    monkeypatch.setattr(parsers, "extract_text", lambda data: "BAŞKA BANKA EKSTRESİ")
+    monkeypatch.setattr(parsers, "extract_text", lambda data, password=None: "BAŞKA BANKA EKSTRESİ")
     res = client.post("/api/statements/upload", files=[("files", ("x.pdf", b"%PDF", "application/pdf"))]).json()
     assert res[0]["status"] == "error" and "Banka tanınamadı" in res[0]["message"]
 
@@ -159,3 +159,31 @@ def test_receipt_teaches_legal_name_alias(client, upload, tmpdb):
     assert card["category"] == "Kafe & Restoran"       # unvan için kural öğrenildi
     linked = next(e for e in tmpdb.list_entries() if e["description"] == "Ornek Kahve")
     assert linked["linked_txn_id"] == card["id"]       # tutar+tarihle eşleşti
+
+
+def test_encrypted_pdf_password_flow(client, monkeypatch, tmpdb):
+    """Şifreli ekstre: önce şifre istenir, doğru şifreyle okunur, 'hatırla' denirse sonra sormaz."""
+    import app.parsers as parsers
+    from app.parsers import PasswordRequired
+    from tests.conftest import FIXTURES
+
+    text = (FIXTURES / "vakifbank_a.txt").read_text(encoding="utf-8")
+
+    def fake(data, password=None):
+        if data.startswith(b"ENC:") and password != "123456":
+            raise PasswordRequired("PDF şifreli")
+        return text
+
+    monkeypatch.setattr(parsers, "extract_text", fake)
+    f = lambda: [("files", ("e.pdf", b"ENC:1", "application/pdf"))]  # noqa: E731
+    assert client.post("/api/statements/upload", files=f()).json()[0]["status"] == "password_required"
+    r = client.post("/api/statements/upload", files=f(), data={"password": "yanlis"}).json()[0]
+    assert r["status"] == "password_required" and "yanlış" in r["message"]
+    r = client.post("/api/statements/upload", files=f(), data={"password": "123456", "remember": "true"}).json()[0]
+    assert r["status"] == "saved" and r["reconciliation_diff"] == 0
+    assert tmpdb.pdf_passwords() == ["123456"]
+    hints = client.get("/api/settings/pdf-passwords").json()
+    assert hints == [{"index": 0, "hint": "1••••6"}] and "123456" not in str(hints)
+    # hatırlanan şifreyle başka ekstre kendiliğinden açılır
+    tmpdb.delete_statement(tmpdb.list_statements()[0]["id"])
+    assert client.post("/api/statements/upload", files=f()).json()[0]["status"] == "saved"

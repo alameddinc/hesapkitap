@@ -12,20 +12,44 @@ DETECTORS = [
 ]
 
 
-def extract_text(data: bytes) -> str:
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        return "\n".join(p.extract_text() or "" for p in pdf.pages)
+class PasswordRequired(ValueError):
+    """PDF şifreli ve verilen şifre(ler) açmadı."""
+
+
+def extract_text(data: bytes, password: str | None = None) -> str:
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+
+    try:
+        with pdfplumber.open(io.BytesIO(data), password=password or "") as pdf:
+            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+    except Exception as e:  # noqa: BLE001
+        if e.args and isinstance(e.args[0], PDFPasswordIncorrect):
+            raise PasswordRequired("PDF şifreli") from e
+        raise
+
+
+def _text_with_passwords(data: bytes, passwords: list[str]) -> tuple[str, str | None]:
+    """Şifresiz, sonra sırayla verilen şifrelerle dene. (metin, işe yarayan şifre) döner."""
+    for pw in [None, *passwords]:
+        try:
+            return extract_text(data, pw), pw
+        except PasswordRequired:
+            continue
+    raise PasswordRequired("PDF şifreli; şifre gerekli" if not passwords else "Şifre yanlış")
 
 
 SUPPORTED = "VakıfBank, Kuveyt Türk"
 
 
-def parse_statement(data: bytes, allow_ai: bool = True) -> Statement:
-    """Önce bankaya özel parser (kesin, ücretsiz); tanınmazsa ve GEMINI_API_KEY varsa yapay zekâ ile okuma."""
+def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | None = None) -> Statement:
+    """Önce bankaya özel parser (kesin, ücretsiz); tanınmazsa ve GEMINI_API_KEY varsa yapay zekâ ile okuma.
+    Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired."""
     try:
-        text = extract_text(data)
-    except Exception as e:  # noqa: BLE001 - bozuk/şifreli PDF
-        raise ValueError(f"PDF açılamadı (şifreli olabilir): {e}") from e
+        text, used_pw = _text_with_passwords(data, passwords or [])
+    except PasswordRequired:
+        raise
+    except Exception as e:  # noqa: BLE001 - bozuk PDF
+        raise ValueError(f"PDF açılamadı: {e}") from e
     for detect, parse in DETECTORS:
         if detect(text):
             return parse(text)
@@ -35,7 +59,8 @@ def parse_statement(data: bytes, allow_ai: bool = True) -> Statement:
         from app.parsers.ai import parse_pdf_with_ai
 
         try:
-            st = parse_pdf_with_ai(data)
+            # şifreli PDF'i model okuyamaz: çözülmüş metni gönder
+            st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")
         except receipt.ReceiptError as e:
             raise ValueError(f"Banka tanınamadı ve yapay zekâ ile okunamadı: {e}") from e
         st.ai_parsed = True

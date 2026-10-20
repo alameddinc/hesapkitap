@@ -53,8 +53,8 @@ def _mask(card: str | None, fallback: str) -> str:
     return f"{digits[:4]}***{digits[-4:]}" if len(digits) >= 8 else card
 
 
-def parse_pdf_with_ai(data: bytes) -> Statement:
-    raw, _ = receipt._gemini_json(PROMPT, data, "application/pdf", max_output_tokens=32000)
+def parse_pdf_with_ai(data: bytes, mime: str = "application/pdf") -> Statement:
+    raw, _ = receipt._gemini_json(PROMPT, data, mime, max_output_tokens=32000)
     main = _mask(raw.get("card_no"), "AI***0000")
     period_end = _d(raw.get("period_end"))
     if not period_end:

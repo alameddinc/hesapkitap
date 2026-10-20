@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -418,16 +418,25 @@ def list_statements():
 
 
 @app.post("/api/statements/upload")
-async def upload_statements(files: list[UploadFile] = File(...)):
+async def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
+                            remember: bool = Form(False)):
+    from app.parsers import PasswordRequired
+
     results = []
+    tried = ([password] if password else []) + db.pdf_passwords()
     for f in files:
         data = await f.read()
         res = {"filename": f.filename}
         try:
-            stmt = parse_statement(data)
+            stmt = parse_statement(data, passwords=tried)
+        except PasswordRequired as e:
+            results.append({**res, "status": "password_required", "message": str(e) if password else "PDF şifreli"})
+            continue
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
             results.append({**res, "status": "error", "message": str(e)})
             continue
+        if password and remember:
+            db.remember_pdf_password(password)
         res.update(bank=stmt.bank, card_no=stmt.card_no, period_end=stmt.period_end.isoformat(),
                    total_debt=stmt.total_debt, txn_count=len(stmt.transactions),
                    reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed)
@@ -809,6 +818,19 @@ class ConfigIn(BaseModel):
 @app.get("/api/settings/config")
 def get_config():
     return config.describe()
+
+
+@app.get("/api/settings/pdf-passwords")
+def list_pdf_passwords():
+    # şifrelerin kendisi değil, sadece maskeli ipucu döner
+    return [{"index": i, "hint": (p[:1] + "•" * max(0, len(p) - 2) + p[-1:]) if len(p) > 2 else "••"}
+            for i, p in enumerate(db.pdf_passwords())]
+
+
+@app.delete("/api/settings/pdf-passwords/{index}")
+def delete_pdf_password(index: int):
+    db.forget_pdf_password(index)
+    return {"ok": True}
 
 
 @app.put("/api/settings/config")

@@ -200,7 +200,7 @@ export interface Rule {
 
 export interface UploadResult {
   filename: string;
-  status: "saved" | "duplicate" | "error";
+  status: "saved" | "duplicate" | "error" | "password_required";
   message?: string;
   bank?: string;
   card_no?: string;
@@ -285,9 +285,11 @@ export const api = {
   unpayBill: (id: number) => req("DELETE", `/api/bills/${id}/pay`),
 
   statements: () => req<Statement[]>("GET", "/api/statements"),
-  upload: (files: File[]) => {
+  upload: (files: File[], password?: string, remember?: boolean) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
+    if (password) fd.append("password", password);
+    if (remember) fd.append("remember", "true");
     return req<UploadResult[]>("POST", "/api/statements/upload", fd);
   },
   deleteStatement: (id: number) => req("DELETE", `/api/statements/${id}`),
