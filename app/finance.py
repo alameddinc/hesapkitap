@@ -101,7 +101,7 @@ def _entry_row(e: dict) -> dict:
         "amount": e["amount"], "kind": e["kind"], "category": e["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
-        "payment": e["payment"], "linked_txn_id": e["linked_txn_id"],
+        "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
@@ -520,6 +520,18 @@ def payables(today: date | None = None) -> list[dict]:
                     "paid_amount": b["paid_amount"], "paid_at": b["paid_at"], "status": status,
                     "has_file": bool(b["file_name"]), "category": b["category"], "note": b["note"],
                     "description": b["description"]})
+    # Vadeli borçlarım (kişilere): TL ise tutar, değilse birimiyle
+    for d in db.list_debts():
+        if d["direction"] != "borc" or not d["due_date"] or d["asset"] != "TRY":  # döviz/altın: Transferler + hatırlatma
+            continue
+        if d["settled_at"] and (today - date.fromisoformat(d["settled_at"])).days > PAYABLE_WINDOW:
+            continue
+        status = "odendi" if d["settled_at"] else _status(d["amount"], d["paid_amount"] or None, d["due_date"], today)
+        out.append({"type": "debt", "id": d["id"], "title": f"{d['person']} (borç)",
+                    "subtitle": " · ".join(x for x in ("Borç", d["note"]) if x),
+                    "amount": d["amount"], "min_payment": None, "due_date": d["due_date"],
+                    "days_left": (date.fromisoformat(d["due_date"]) - today).days,
+                    "paid_amount": d["paid_amount"] or None, "paid_at": d["settled_at"], "status": status})
     # Kesilmemiş ekstreler: tahmini tutar, ödeme butonu yok
     for d in plan(3, today=today)["dues"]:
         if d["estimated"] and (date.fromisoformat(d["date"]) - today).days <= 45:
@@ -529,6 +541,24 @@ def payables(today: date | None = None) -> list[dict]:
                         "paid_amount": None, "paid_at": None, "status": "tahmini"})
     order = {"gecikti": 0, "kismi": 1, "bekliyor": 2, "tahmini": 3, "odendi": 4}
     return sorted(out, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
+
+
+# ---------------------------------------------------------------- birimler (borç/alacak: TL, döviz, altın)
+
+ASSETS = {"TRY": "TL", "USD": "Dolar", "EUR": "Euro", "GBP": "Sterlin", "GRAM_ALTIN": "gram altın",
+          "CEYREK_ALTIN": "çeyrek altın", "YARIM_ALTIN": "yarım altın", "TAM_ALTIN": "tam altın",
+          "CUMHURIYET_ALTIN": "Cumhuriyet altını"}
+
+
+def asset_label(asset: str) -> str:
+    return ASSETS.get(asset, asset)
+
+
+def fmt_asset(x: float, asset: str) -> str:
+    if asset == "TRY":
+        return _tl(x)
+    n = f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".").removesuffix(",00")
+    return f"{n} {asset_label(asset)}"
 
 
 # ---------------------------------------------------------------- insights
@@ -580,6 +610,27 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                               + ", ".join(f"{x['pay_date'][8:10]}.{x['pay_date'][5:7]} {_tl(x['amount'])}" for x in ps)
                               + ". Ekstreler sayfasından o ayların kart ekstresini yükle.",
                     "link": "ekstreler"})
+
+    # 2c) Ödemeler kartında görünmeyen açık borçlar (vadesiz ya da döviz/altın)
+    open_debt = [d for d in db.list_debts(open_only=True) if d["direction"] == "borc"
+                 and (d["asset"] != "TRY" or not d["due_date"])]
+    if open_debt:
+        out.append({"level": "bilgi", "title": f"{len(open_debt)} açık borcun var",
+                    "detail": " · ".join(f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
+                                         + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else "")
+                                         for d in open_debt) + ".", "link": "transferler"})
+
+    # 2d) Bekleyen alacaklar (sana borçlu olanlar)
+    open_rec = [d for d in db.list_debts(open_only=True) if d["direction"] == "alacak"]
+    if open_rec:
+        parts = [f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
+                 + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else
+                    f" ({(today - date.fromisoformat(d['debt_date'])).days} gündür)") for d in open_rec]
+        overdue = any(d["due_date"] and d["due_date"] < today.isoformat() for d in open_rec)
+        out.append({"level": "uyari" if overdue else "bilgi",
+                    "title": f"{len(open_rec)} alacağın var" + (" — vadesi geçen var" if overdue else ""),
+                    "detail": " · ".join(parts) + ". Transferler sayfasından takip et; havale gelince TL alacaklar "
+                              "kendiliğinden kapanır.", "link": "transferler"})
 
     # 3) Açık veren aylar
     has_income = any(r["kind"] == INCOME for r in p["recurring"]) or any(

@@ -133,6 +133,22 @@ CREATE TABLE IF NOT EXISTS card_payments (
     description TEXT,
     import_hash TEXT UNIQUE
 );
+-- Borç / alacak defteri: gelir/gider toplamlarını etkilemez, sadece kim kime ne borçlu takibi.
+-- Birim TL, döviz, altın ya da serbest metin olabilir (ör. TRY, USD, GRAM_ALTIN, CEYREK_ALTIN, "22 ayar bilezik").
+CREATE TABLE IF NOT EXISTS debts (
+    id INTEGER PRIMARY KEY,
+    person TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('borc', 'alacak')),  -- borc: ben ona borçluyum
+    asset TEXT NOT NULL DEFAULT 'TRY',
+    amount REAL NOT NULL CHECK (amount > 0),
+    paid_amount REAL NOT NULL DEFAULT 0,
+    debt_date DATE NOT NULL,
+    due_date DATE,
+    note TEXT,
+    settled_at DATE,
+    settled_entry_id INTEGER,          -- kapatan banka hareketi / elle kayıt
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- Kişi bazında ayar: kategori ve borç takibi
 CREATE TABLE IF NOT EXISTS counterparties (
     name TEXT PRIMARY KEY,
@@ -1122,9 +1138,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             if dup:
                 c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?) WHERE id = ?",
                           (r["hash"], who_here, dup["id"]))
-                stats["eslesen_elle"] += 1
-                seen.add(r["hash"])
-                continue
+                matched = c.execute("SELECT counterparty FROM entries WHERE id = ?", (dup["id"],)).fetchone()[0]
+        if dup:  # bağlantı yazıldıktan sonra (ayrı bağlantı açan borç kapatma kilitlenmesin)
+            if settle_debt_by_transfer(matched, kind, amount, r["date"], dup["id"]):
+                stats["borc_kapandi"] = stats.get("borc_kapandi", 0) + 1
+            stats["eslesen_elle"] += 1
+            seen.add(r["hash"])
+            continue
         norm = normalize(desc)
         category = None
         if kind == "gelir":
@@ -1168,10 +1188,12 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             desc = short if desc == r["description"] else desc
         if desc == r["description"] and len(desc) > 120:
             desc = desc[:120]  # uzun banka metni notta tam haliyle kalır
-        create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
-                      "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
-                      "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
-                      "import_hash": r["hash"], "counterparty": who})
+        eid = create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
+                            "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
+                            "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
+                            "import_hash": r["hash"], "counterparty": who})
+        if settle_debt_by_transfer(who, kind, amount, r["date"], eid):
+            stats["borc_kapandi"] = stats.get("borc_kapandi", 0) + 1
         stats[kind] += 1
         seen.add(r["hash"])
     return stats
@@ -1209,6 +1231,10 @@ def _pick_manual(cands: list[dict], who: str | None, people: set[str], d) -> dic
     return closest([x for x in cands if not any(_mentions(x, p) for p in people if p != who)])
 
 
+def known_counterparty(name: str) -> str:
+    return _known_counterparty(name)
+
+
 def _known_counterparty(name: str) -> str:
     """Aynı kişi farklı bankada farklı yazılabilir ('Elif DEMIR' / 'Elif Demir'): ilk kaydedilen yazılışı kullan."""
     import re as _re
@@ -1218,7 +1244,7 @@ def _known_counterparty(name: str) -> str:
     key = _re.sub(r"[^A-Z]", "", normalize(name))
     with connect() as c:
         for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL "
-                              "UNION SELECT name FROM counterparties"):
+                              "UNION SELECT name FROM counterparties UNION SELECT person FROM debts"):
             if _re.sub(r"[^A-Z]", "", normalize(n)) == key:
                 return n
     return name
@@ -1257,9 +1283,23 @@ def transfers_overview() -> dict:
         items = rows(c.execute(
             "SELECT id, entry_date, description, amount, kind, category, counterparty, note FROM entries "
             "WHERE counterparty IS NOT NULL ORDER BY entry_date DESC"))
+    debts = list_debts()
+    by_name = {p["name"]: p for p in people}
     for p in people:
         p["net"] = round(p["received"] - p["sent"], 2)  # + ise sana gelen fazla
-    return {"people": people, "own": own, "items": items}
+    for d in debts:
+        if d["person"] not in by_name:  # sadece defterde olan kişi (ör. nakit/altın borcu)
+            by_name[d["person"]] = {"name": d["person"], "sent": 0.0, "received": 0.0, "net": 0.0, "count": 0,
+                                    "last_date": d["debt_date"], "category": None, "track_debt": 1}
+            people.append(by_name[d["person"]])
+    for p in people:
+        # açık borç/alacak birim birim: {"TRY": -200, "CEYREK_ALTIN": 2} (+ alacak, − borç)
+        bal: dict[str, float] = {}
+        for d in debts:
+            if d["person"] == p["name"] and not d["settled_at"]:
+                bal[d["asset"]] = round(bal.get(d["asset"], 0) + (d["remaining"] if d["direction"] == "alacak" else -d["remaining"]), 4)
+        p["open"] = {k: v for k, v in bal.items() if v}
+    return {"people": people, "own": own, "items": items, "debts": debts}
 
 
 def card_payments_without_statement() -> list[dict]:
@@ -1284,3 +1324,84 @@ def _shift_days(d: str, n: int) -> str:
     from datetime import date as _date, timedelta
 
     return (_date.fromisoformat(d) + timedelta(days=n)).isoformat()
+
+
+# ---------------------------------------------------------------- borç / alacak
+
+DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note")
+
+
+def list_debts(open_only: bool = False) -> list[dict]:
+    with connect() as c:
+        out = rows(c.execute("SELECT * FROM debts" + (" WHERE settled_at IS NULL" if open_only else "")
+                             + " ORDER BY settled_at IS NOT NULL, COALESCE(due_date, debt_date), id"))
+    for d in out:
+        d["remaining"] = round(d["amount"] - d["paid_amount"], 4)
+    return out
+
+
+def create_debt(data: dict) -> int:
+    data = {k: data.get(k) for k in DEBT_FIELDS}
+    data["person"] = _known_counterparty(data["person"].strip())
+    data["asset"] = (data.get("asset") or "TRY").strip()
+    with connect() as c:
+        return c.execute(f"INSERT INTO debts ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
+                         tuple(data.values())).lastrowid
+
+
+def update_debt(debt_id: int, data: dict) -> bool:
+    data = {k: v for k, v in data.items() if k in DEBT_FIELDS}
+    if "person" in data and data["person"]:
+        data["person"] = _known_counterparty(data["person"].strip())
+    if not data:
+        return False
+    with connect() as c:
+        return c.execute(f"UPDATE debts SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?",
+                         (*data.values(), debt_id)).rowcount > 0
+
+
+def delete_debt(debt_id: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM debts WHERE id = ?", (debt_id,)).rowcount > 0
+
+
+def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None) -> None:
+    """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → tamamı."""
+    with connect() as c:
+        d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
+        if not d:
+            raise KeyError(debt_id)
+        paid = d["paid_amount"] + (amount if amount is not None else d["amount"] - d["paid_amount"])
+        settled = paid >= d["amount"] - 0.005
+        c.execute("UPDATE debts SET paid_amount = ?, settled_at = ?, settled_entry_id = COALESCE(?, settled_entry_id) "
+                  "WHERE id = ?", (min(paid, d["amount"]), on if settled else None, entry_id, debt_id))
+
+
+def unpay_debt(debt_id: int) -> None:
+    with connect() as c:
+        c.execute("UPDATE debts SET paid_amount = 0, settled_at = NULL, settled_entry_id = NULL WHERE id = ?", (debt_id,))
+
+
+def settle_debt_by_transfer(person: str | None, kind: str, amount: float, on: str, entry_id: int | None) -> dict | None:
+    """Kişiye giden havale açık TL borcumu, kişiden gelen havale açık TL alacağımı kapatır (kalan tutar birebir)."""
+    if not person:
+        return None
+    with connect() as c:  # bu hareket zaten bir borcu kapattıysa (elle girilip sonra dökümle eşleşti) tekrar kapatma
+        if entry_id and c.execute("SELECT 1 FROM debts WHERE settled_entry_id = ?", (entry_id,)).fetchone():
+            return None
+    direction = "borc" if kind == "gider" else "alacak"
+    key = _name_key(person)
+    for d in list_debts(open_only=True):
+        if (d["direction"] == direction and d["asset"] == "TRY" and _name_key(d["person"]) == key
+                and abs(d["remaining"] - amount) < 0.01 and d["debt_date"] <= on):
+            pay_debt(d["id"], amount, on, entry_id)
+            return d
+    return None
+
+
+def _name_key(name: str) -> str:
+    import re as _re
+
+    from app.textnorm import normalize
+
+    return _re.sub(r"[^A-Z]", "", normalize(name))

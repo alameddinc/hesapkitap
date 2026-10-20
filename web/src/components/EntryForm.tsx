@@ -35,6 +35,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
   const [isGross, setIsGross] = useState(!!rec?.gross_amount);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
+  const [person, setPerson] = useState(row?.counterparty ?? "");
+  const people = useQuery({ queryKey: ["people"], queryFn: api.people });
   const [err, setErr] = useState<string | null>(null);
   const showLink = !!editingEntry && kind === "gider" && payment === "kredi_karti" && editingEntry.payment === "kredi_karti";
   const cands = useQuery({
@@ -56,12 +58,14 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     const common = { description: description.trim(), amount: grossMode ? 0 : amt, kind, category: category || null, note: note || null,
       ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
     const pay = kind === "gider" && !isRecurring && !rec ? { payment } : {};
+    const who = !isRecurring && !rec ? { counterparty: person.trim() || null } : {};
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
-    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, entry_date: date });
-    return api.createEntry({ ...common, ...pay, entry_date: date, legal_name: draft?.legal_name ?? null });
+    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date });
+    return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
+    : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
     : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti" : "Kaydedildi"));
   const link = useSave((txnId: number | null) => api.linkEntry(editingEntry!.id, txnId),
     () => done("Eşleşme güncellendi"));
@@ -123,6 +127,14 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <label className="label" htmlFor="e-cat">Kategori</label>
           <CategoryPicker id="e-cat" value={category} onChange={setCategory} options={cats} placeholder="Seç veya yaz" />
         </div>
+        {!isRecurring && !rec && (
+          <div>
+            <label className="label" htmlFor="e-person">Kişi (opsiyonel)</label>
+            <CategoryPicker id="e-person" value={person} onChange={setPerson} options={people.data ?? []}
+              placeholder="Para bir kişiye gittiyse / kişiden geldiyse" />
+            <p className="mt-1 text-xs text-stone-500">Transferler'de o kişinin hesabına düşer; açık borç/alacakla aynı tutarsa kapatır.</p>
+          </div>
+        )}
         {kind === "gider" && !isRecurring && !rec && (
           <div>
             <span className="label">Ödeme şekli</span>

@@ -252,3 +252,39 @@ def test_manual_entry_for_other_person_not_stolen(client, tmpdb):
     assert st["eslesen_elle"] == 1 and st["gider"] == 1
     veli = next(e for e in tmpdb.list_entries() if e["description"] == "Veli'ye")
     assert veli["counterparty"] == "Veli Örnek"
+
+
+def test_debt_ledger_settles_by_transfer_and_assets(client, tmpdb):
+    from app import finance, jobs
+    from datetime import date
+
+    # nakit borç aldım (TL), altın borç verdim
+    d1 = client.post("/api/debts", json={"person": "Ali Örnek", "direction": "borc", "amount": 200,
+                                         "debt_date": "2026-10-10", "due_date": "2026-10-25"}).json()["id"]
+    client.post("/api/debts", json={"person": "Veli", "direction": "alacak", "asset": "CEYREK_ALTIN", "amount": 2,
+                                    "debt_date": "2026-10-01", "due_date": "2026-10-20"})
+    assert any(p["type"] == "debt" and p["id"] == d1 for p in finance.payables(date(2026, 10, 20)))
+    t = client.get("/api/transfers").json()
+    assert next(p for p in t["people"] if p["name"] == "Veli")["open"] == {"CEYREK_ALTIN": 2}
+    msgs = jobs.reminders(date(2026, 10, 20))
+    assert any("Veli" in m and "2 çeyrek altın" in m for m in msgs)
+    # Ali'ye havale → borç kapanır; aynı satır tekrar gelse ikinci kez kapatmaz
+    st = tmpdb.import_bank_rows([{"date": "2026-10-20", "amount": -200.0, "type": "gider", "hash": "h",
+                                  "description": "GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Ali Örnek,X Bankasi A.S.,TR00"}],
+                                owners=["AYŞE DEMIR"])
+    assert st["borc_kapandi"] == 1
+    assert next(d for d in tmpdb.list_debts() if d["id"] == d1)["settled_at"] == "2026-10-20"
+    # kısmi tahsilat (altın)
+    vid = next(d["id"] for d in tmpdb.list_debts() if d["person"] == "Veli")
+    client.post(f"/api/debts/{vid}/pay", json={"amount": 1, "paid_at": "2026-10-21"})
+    v = next(d for d in tmpdb.list_debts() if d["id"] == vid)
+    assert v["remaining"] == 1 and v["settled_at"] is None
+
+
+def test_manual_entry_with_person_settles_debt(client, tmpdb):
+    client.post("/api/debts", json={"person": "Ali Örnek", "direction": "alacak", "amount": 500, "debt_date": "2026-10-01"})
+    r = client.post("/api/entries", json={"entry_date": "2026-10-05", "description": "Ali ödedi", "amount": 500,
+                                          "kind": "gelir", "category": "Borç / Alacak", "counterparty": "ali örnek"}).json()
+    assert r["debt_settled"]
+    e = next(x for x in tmpdb.list_entries() if x["id"] == r["id"])
+    assert e["counterparty"] == "Ali Örnek"  # mevcut yazılışa oturur

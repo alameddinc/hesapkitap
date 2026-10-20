@@ -65,6 +65,17 @@ def reminders(today: date) -> list[str]:
             msgs.append(f"🧾 <b>{b['provider']}</b> faturası son ödeme {date.fromisoformat(b['due_date']):%d.%m} ({when})\n"
                         f"Tutar: <b>{_tl(b['amount'])}</b>")
 
+    # 1c) Borç / alacak vadeleri
+    for d in db.list_debts(open_only=True):
+        if not d["due_date"]:
+            continue
+        days = (date.fromisoformat(d["due_date"]) - today).days
+        if days in REMIND_DAYS or days in (-1, -7):
+            when = {0: "BUGÜN", -1: "DÜN GEÇTİ", -7: "1 HAFTA GEÇTİ"}.get(days, f"{days} gün kaldı")
+            amount = finance.fmt_asset(d["remaining"], d["asset"])
+            what = "Borcun" if d["direction"] == "borc" else "Alacağın"
+            msgs.append(f"🤝 {what}: <b>{d['person']}</b> · {amount} · vade {date.fromisoformat(d['due_date']):%d.%m} ({when})")
+
     # 2) Kesim tarihi geçti ama yeni ekstre yüklenmedi
     latest: dict[str, dict] = {}
     for s in statements:

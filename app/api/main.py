@@ -243,6 +243,7 @@ class EntryIn(BaseModel):
     recurring_id: int | None = None
     skipped: bool = False
     payment: Payment | None = None
+    counterparty: str | None = None  # kişi (Transferler / borç defteri)
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
 
 
@@ -255,6 +256,7 @@ class EntryPatch(BaseModel):
     note: str | None = None
     skipped: bool | None = None
     payment: Payment | None = None
+    counterparty: str | None = None  # kişi (Transferler / borç defteri)
 
 
 @app.post("/api/entries")
@@ -264,9 +266,13 @@ def create_entry(body: EntryIn):
     data["skipped"] = int(body.skipped)
     if body.legal_name and body.kind == "gider":
         db.learn_from_receipt(body.legal_name, body.description, body.category)
+    if data.get("counterparty"):
+        data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     eid = db.create_entry(data)
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
-    return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries())}
+    debt = db.settle_debt_by_transfer(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
+    return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()),
+            "debt_settled": debt["id"] if debt else None}
 
 
 @app.patch("/api/entries/{entry_id}")
@@ -278,6 +284,10 @@ def patch_entry(entry_id: int, body: EntryPatch):
         data["skipped"] = int(data["skipped"])
     if data.get("payment") and data["payment"] != "kredi_karti":
         data["linked_txn_id"] = None  # kartla ödenmediyse eşleşme anlamsız
+    if data.get("counterparty"):
+        data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
+    elif "counterparty" in data:
+        data["counterparty"] = None
     db.update_entry(entry_id, data)
     db.auto_link()
     return {"ok": True}
@@ -596,6 +606,79 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
     stats = db.import_bank_rows(parsed, account=account, owners=owners)
     db.auto_link()
     return stats
+
+
+# ---------------------------------------------------------------- borç / alacak
+
+class DebtIn(BaseModel):
+    person: str = Field(min_length=1)
+    direction: Literal["borc", "alacak"]
+    asset: str = Field(default="TRY", min_length=1, max_length=40)
+    amount: float = Field(gt=0)
+    debt_date: date
+    due_date: date | None = None
+    note: str | None = None
+
+
+class DebtPatch(BaseModel):
+    person: str | None = None
+    direction: Literal["borc", "alacak"] | None = None
+    asset: str | None = None
+    amount: float | None = Field(default=None, gt=0)
+    debt_date: date | None = None
+    due_date: date | None = None
+    note: str | None = None
+
+
+class DebtPayIn(BaseModel):
+    amount: float | None = Field(default=None, gt=0)  # boş → kalanın tamamı
+    paid_at: date
+
+
+@app.get("/api/debts")
+def list_debts():
+    return db.list_debts()
+
+
+@app.post("/api/debts")
+def create_debt(body: DebtIn):
+    data = body.model_dump()
+    data["debt_date"] = body.debt_date.isoformat()
+    data["due_date"] = body.due_date.isoformat() if body.due_date else None
+    return {"id": db.create_debt(data)}
+
+
+@app.patch("/api/debts/{did}")
+def patch_debt(did: int, body: DebtPatch):
+    data = body.model_dump(exclude_unset=True)
+    for k in ("debt_date", "due_date"):
+        if data.get(k):
+            data[k] = data[k].isoformat()
+    if not db.update_debt(did, data):
+        raise HTTPException(404, "Kayıt yok")
+    return {"ok": True}
+
+
+@app.delete("/api/debts/{did}")
+def delete_debt(did: int):
+    if not db.delete_debt(did):
+        raise HTTPException(404, "Kayıt yok")
+    return {"ok": True}
+
+
+@app.post("/api/debts/{did}/pay")
+def pay_debt(did: int, body: DebtPayIn):
+    try:
+        db.pay_debt(did, body.amount, body.paid_at.isoformat())
+    except KeyError as e:
+        raise HTTPException(404, "Kayıt yok") from e
+    return {"ok": True}
+
+
+@app.delete("/api/debts/{did}/pay")
+def unpay_debt(did: int):
+    db.unpay_debt(did)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- transferler
