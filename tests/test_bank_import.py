@@ -224,3 +224,31 @@ def test_card_payment_without_statement_warns(client, tmpdb):
     assert tmpdb.card_payments_without_statement() == []
     # aynı döküm tekrar yüklenirse kart ödemesi "zaten var" sayılır
     assert tmpdb.import_bank_rows(rows)["tekrar"] == 1
+
+
+def test_same_amount_transfers_match_right_person(client, tmpdb):
+    # 5 kişiye aynı gün 100'er TL; elle girilenler banka satırlarıyla kişi kişi eşleşmeli
+    names = ["Ali", "Veli", "Zeynep", "Fatma", "Can"]
+    for n in names:
+        client.post("/api/entries", json={"entry_date": "2026-11-03", "description": f"{n}'e borç", "amount": 100,
+                                          "kind": "gider", "category": "Borç / Alacak", "payment": "havale"})
+    rows = [{"date": "2026-11-03", "description": f"GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,{n} Örnek,"
+             f"Türkiye Is Bankasi A.S.,TR00", "amount": -100.0, "type": "gider", "hash": f"x{n}"}
+            for n in reversed(names)]
+    st = tmpdb.import_bank_rows(rows, owners=["AYŞE DEMIR"])
+    assert st["eslesen_elle"] == 5 and st["gider"] == 0
+    for e in tmpdb.list_entries():
+        assert e["counterparty"] == e["description"].split("'")[0] + " Örnek"
+
+
+def test_manual_entry_for_other_person_not_stolen(client, tmpdb):
+    client.post("/api/entries", json={"entry_date": "2026-11-03", "description": "Veli'ye", "amount": 100,
+                                      "kind": "gider", "category": "Borç / Alacak", "payment": "havale"})
+    rows = [{"date": "2026-11-03", "description": "GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Ali Örnek,X Bankasi A.S.,TR00",
+             "amount": -100.0, "type": "gider", "hash": "a"},
+            {"date": "2026-11-03", "description": "GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Veli Örnek,X Bankasi A.S.,TR00",
+             "amount": -100.0, "type": "gider", "hash": "v"}]
+    st = tmpdb.import_bank_rows(rows, owners=["AYŞE DEMIR"])
+    assert st["eslesen_elle"] == 1 and st["gider"] == 1
+    veli = next(e for e in tmpdb.list_entries() if e["description"] == "Veli'ye")
+    assert veli["counterparty"] == "Veli Örnek"
