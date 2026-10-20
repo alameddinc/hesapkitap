@@ -101,6 +101,22 @@ CREATE TABLE IF NOT EXISTS merchant_aliases (
     source TEXT PRIMARY KEY,   -- merchant_name(resmi unvan)
     display TEXT NOT NULL      -- merchant_name(marka)
 );
+-- Kendi hesapları arası aktarımlar (gelir/gider sayılmaz; Transferler panelinde görünür)
+CREATE TABLE IF NOT EXISTS own_transfers (
+    id INTEGER PRIMARY KEY,
+    transfer_date DATE NOT NULL,
+    amount REAL NOT NULL,            -- giren +, çıkan −
+    account TEXT,                    -- dökümün bankası
+    description TEXT,
+    import_hash TEXT UNIQUE
+);
+-- Kişi bazında ayar: kategori ve borç takibi
+CREATE TABLE IF NOT EXISTS counterparties (
+    name TEXT PRIMARY KEY,
+    category TEXT,
+    track_debt INTEGER NOT NULL DEFAULT 0,
+    note TEXT
+);
 -- Kategori bazında aylık harcama limiti
 CREATE TABLE IF NOT EXISTS budgets (
     category TEXT PRIMARY KEY,
@@ -130,6 +146,7 @@ CREATE TABLE IF NOT EXISTS entries (
     skipped INTEGER NOT NULL DEFAULT 0,  -- tekrarlayan kalem bu ay olmadı
     payment TEXT,                        -- kredi_karti | nakit | havale
     import_hash TEXT,                    -- banka hesap hareketinden geldiyse parmak izi (tekrarı önler)
+    counterparty TEXT,                   -- havale/FAST karşı tarafı (kişi)
     linked_txn_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,  -- ekstredeki karşılığı
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -159,6 +176,7 @@ MIGRATIONS = [
     ("statements", "paid_at", "DATE"),
     ("entries", "payment", "TEXT"),
     ("entries", "import_hash", "TEXT"),
+    ("entries", "counterparty", "TEXT"),
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
 ]
 
@@ -442,7 +460,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month", "import_hash")
+                "payment", "linked_txn_id", "month", "import_hash", "counterparty")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -947,7 +965,7 @@ def match_card_payment(amount: float, on: str, only_unpaid: bool = False):
             (amount, amount, amount, (d - timedelta(days=0)).isoformat())).fetchone()
 
 
-def import_bank_rows(rows: list[dict]) -> dict:
+def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | None = None) -> dict:
     """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner."""
     import re as _re
     from datetime import date as _date, timedelta
@@ -958,7 +976,8 @@ def import_bank_rows(rows: list[dict]) -> dict:
              "odendi_isaretlenen": 0, "maas": 0}
     with connect() as c:
         rules = load_rules(c)
-        seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
+        seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
+                                        "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL")}
         recurring = [dict(r) for r in c.execute("SELECT * FROM recurring")]
     for r in rows:
         if r["hash"] in seen:
@@ -967,6 +986,9 @@ def import_bank_rows(rows: list[dict]) -> dict:
         d = _date.fromisoformat(r["date"])
         if r["type"] == "virman":
             stats["virman"] += 1
+            with connect() as c:
+                c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash) "
+                          "VALUES (?, ?, ?, ?, ?)", (r["date"], r["amount"], account, r["description"][:500], r["hash"]))
             continue
         if r["type"] == "gider" and match_card_payment(abs(r["amount"]), r["date"]):
             r["type"] = "kart_odemesi"  # açıklamada "kart" yok ama tutar bir ekstreyle birebir
@@ -990,7 +1012,10 @@ def import_bank_rows(rows: list[dict]) -> dict:
                    AND entry_date BETWEEN ? AND ? LIMIT 1""",
                 (kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat())).fetchone()
             if dup:
-                c.execute("UPDATE entries SET import_hash = ? WHERE id = ?", (r["hash"], dup["id"]))
+                from app.bank_import import counterparty
+
+                c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?) WHERE id = ?",
+                          (r["hash"], counterparty(r["description"], r["amount"], owners), dup["id"]))
                 stats["eslesen_elle"] += 1
                 seen.add(r["hash"])
                 continue
@@ -1022,10 +1047,78 @@ def import_bank_rows(rows: list[dict]) -> dict:
             if category == "Kategorisiz":
                 category = None
         payment = "havale" if _re.search(r"EFT|HAVALE|FAST|TRANSFER", norm) else "nakit"
+        from app.bank_import import counterparty, transfer_note
+
+        who = counterparty(r["description"], r["amount"], owners)
+        if who:
+            who, payment = _known_counterparty(who), "havale"
+            cp = get_counterparty(who)
+            if cp and cp["category"]:
+                category = cp["category"]  # kişiye verilmiş kategori
+            note = transfer_note(r["description"])
+            short = f"{who}" + (f" · {note}" if note else "")
+            desc = short if desc == r["description"] else desc
+        if desc == r["description"] and len(desc) > 120:
+            desc = desc[:120]  # uzun banka metni notta tam haliyle kalır
         create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
                       "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
                       "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
-                      "import_hash": r["hash"]})
+                      "import_hash": r["hash"], "counterparty": who})
         stats[kind] += 1
         seen.add(r["hash"])
     return stats
+
+
+# ---------------------------------------------------------------- kişiler (transferler paneli)
+
+def _known_counterparty(name: str) -> str:
+    """Aynı kişi farklı bankada farklı yazılabilir ('Elif DEMIR' / 'Elif Demir'): ilk kaydedilen yazılışı kullan."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    key = _re.sub(r"[^A-Z]", "", normalize(name))
+    with connect() as c:
+        for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL "
+                              "UNION SELECT name FROM counterparties"):
+            if _re.sub(r"[^A-Z]", "", normalize(n)) == key:
+                return n
+    return name
+
+
+def get_counterparty(name: str) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT * FROM counterparties WHERE name = ?", (name,)).fetchone()
+        return dict(r) if r else None
+
+
+def set_counterparty(name: str, category: str | None = None, track_debt: bool | None = None, note: str | None = None) -> int:
+    """Kişi ayarı; kategori verilirse o kişinin tüm transferlerine uygulanır. Etkilenen kayıt sayısını döner."""
+    cur = get_counterparty(name) or {"category": None, "track_debt": 0, "note": None}
+    cat = category if category is not None else cur["category"]
+    td = int(track_debt) if track_debt is not None else cur["track_debt"]
+    with connect() as c:
+        c.execute("INSERT OR REPLACE INTO counterparties (name, category, track_debt, note) VALUES (?, ?, ?, ?)",
+                  (name, cat, td, note if note is not None else cur["note"]))
+        if category:
+            return c.execute("UPDATE entries SET category = ? WHERE counterparty = ?", (category, name)).rowcount
+    return 0
+
+
+def transfers_overview() -> dict:
+    with connect() as c:
+        people = rows(c.execute(
+            """SELECT e.counterparty AS name,
+                      ROUND(SUM(CASE WHEN e.kind = 'gider' THEN e.amount ELSE 0 END), 2) AS sent,
+                      ROUND(SUM(CASE WHEN e.kind = 'gelir' THEN e.amount ELSE 0 END), 2) AS received,
+                      COUNT(*) AS count, MAX(e.entry_date) AS last_date,
+                      cp.category AS category, COALESCE(cp.track_debt, 0) AS track_debt
+               FROM entries e LEFT JOIN counterparties cp ON cp.name = e.counterparty
+               WHERE e.counterparty IS NOT NULL GROUP BY e.counterparty ORDER BY sent + received DESC"""))
+        own = rows(c.execute("SELECT * FROM own_transfers ORDER BY transfer_date DESC"))
+        items = rows(c.execute(
+            "SELECT id, entry_date, description, amount, kind, category, counterparty, note FROM entries "
+            "WHERE counterparty IS NOT NULL ORDER BY entry_date DESC"))
+    for p in people:
+        p["net"] = round(p["received"] - p["sent"], 2)  # + ise sana gelen fazla
+    return {"people": people, "own": own, "items": items}

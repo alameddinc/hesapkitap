@@ -6,7 +6,7 @@ from app.textnorm import normalize, strip_gateway
 
 UNCATEGORIZED = "Kategorisiz"
 # Varsayılan kurallar değişince artır: mevcut veritabanlarına eksik kurallar eklenir (kullanıcı kuralları korunur)
-RULES_VERSION = 3
+RULES_VERSION = 4
 
 # (pattern, kategori) — sıra önemli, ilk eşleşen kazanır. Pattern'ler normalize() çıktısına göre (büyük harf, ASCII).
 DEFAULT_RULES: list[tuple[str, str]] = [
@@ -28,6 +28,15 @@ DEFAULT_RULES: list[tuple[str, str]] = [
     (r"TESISAT|IKEA|KOCTAS|BAUHAUS|ENGLISH HOME|MADAME COCO", "Ev & Tamirat"),
     (r"OTEL|HOTEL|PEGASUS|THY|TURK HAVA|AJET|BOOKING|AIRBNB", "Seyahat & Konaklama"),
     (r"POLICE|SIGORTA", "Sigorta"),
+    (r"VODAFONE|TURKCELL|TURK TELEKOM MOBIL|AVEA", "Telefon"),
+    (r"TTNET|TURK TELEKOM|SUPERONLINE|TURKNET|DIGITURK|D-SMART|KABLONET", "İnternet & TV"),
+    (r"ISKI|ASKI|IZSU|BUSKI|SU TAHSILAT", "Su"),
+    (r"IGDAS|BASKENTGAZ|IZMIRGAZ|DOGALGAZ|DOGAL GAZ", "Doğalgaz"),
+    (r"ENERJISA|CK BOGAZICI|BOGAZICI ELEKTRIK|AYEDAS|BEDAS|ELEKTRIK TAHSILAT|GEDIZ ELEKTRIK", "Elektrik"),
+    (r"VERGI TAHSILAT|TASIT V|MTV|HARC|GIB |GELIR IDARESI|TRAFIK CEZA", "Vergi & Harç"),
+    (r"ATM|PARA CEKME|NAKIT CEKIM", "Nakit Çekim"),
+    (r"\bKIRA\b|KIRA ODEME|AIDAT", "Kira & Aidat"),
+    (r"MASRAF TAHSIL|HESAP ISLETIM|KOMISYON|EFT UCRET|HAVALE UCRET", "Banka Faiz & Ücret"),
     (r"ECZANE|HASTANE|KLINIK|SAGLIK", "Sağlık"),
     (r"TOBACCO|TEKEL", "Tütün"),
     (r"D&R|KITAP|KIRTASIYE", "Kitap & Hobi"),

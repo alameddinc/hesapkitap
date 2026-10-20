@@ -1,6 +1,6 @@
 import { Landmark, Loader2 } from "lucide-react";
 import { useRef, useState } from "react";
-import { cx, dateTR, tl } from "../format";
+import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
@@ -12,11 +12,15 @@ interface Preview {
   profile_saved: boolean;
   total: number;
   counts: Record<string, number>;
-  sample: { date: string; description: string; amount: number; type: string }[];
+  sample: { date: string; description: string; amount: number; type: string; who?: string | null }[];
+  pdf?: boolean;
+  verified?: boolean;
+  bank?: string;
+  chain_bad?: number[];
 }
 
 const LABEL: Record<string, string> = {
-  gelir: "Gelir", gider: "Gider", kart_odemesi: "Kart ödemesi", virman: "Virman (atlanır)", tekrar: "Zaten var",
+  gelir: "Gelir", gider: "Gider", kart_odemesi: "Kart ödemesi", virman: "Kendi hesabın", tekrar: "Zaten var",
 };
 const FIELDS: { key: Key; label: string }[] = [
   { key: "date", label: "Tarih" }, { key: "description", label: "Açıklama" }, { key: "amount", label: "Tutar (±)" },
@@ -54,12 +58,12 @@ export default function BankImport() {
       setBusy(false);
     }
   };
-  const run = useSave(() => postForm<Record<string, number>>("/api/bank-import", file!, {
+  const run = useSave(() => postForm<Record<string, number>>("/api/bank-import", file!, pv!.pdf ? {} : {
     mapping: JSON.stringify(pv!.mapping), header_row: String(pv!.header_row),
   }), (r) => {
     const parts = [r.gelir && `${r.gelir} gelir`, r.gider && `${r.gider} gider`, r.maas && `${r.maas} maaş onaylandı`,
       r.odendi_isaretlenen && `${r.odendi_isaretlenen} ekstre ödendi`, r.eslesen_elle && `${r.eslesen_elle} elle girilenle eşleşti`,
-      r.tekrar && `${r.tekrar} zaten vardı`].filter(Boolean);
+      r.virman && `${r.virman} kendi hesapların arası`, r.tekrar && `${r.tekrar} zaten vardı`].filter(Boolean);
     ui.toast(parts.length ? parts.join(" · ") : "Yeni hareket yok");
     setPv(null);
     setFile(null);
@@ -77,19 +81,27 @@ export default function BankImport() {
       <div>
         <h2 className="flex items-center gap-2 font-semibold"><Landmark size={18} /> Hesap hareketleri</h2>
         <p className="text-xs text-stone-500">
-          Vadesiz hesabının dökümü (Excel ya da CSV, internet şubesi → hesap hareketleri). Maaş sabit kaleme bağlanır,
-          kredi kartı ödemeleri ilgili ekstreyi "ödendi" yapar, virmanlar atlanır, aynı hareket iki kez eklenmez.
+          Vadesiz hesabının dökümü (PDF, Excel ya da CSV; internet şubesi → hesap hareketleri). Maaş sabit kaleme bağlanır,
+          kredi kartı ödemeleri ilgili ekstreyi "ödendi" yapar, kendi hesapların arası aktarımlar gelir/gider sayılmaz
+          (Transferler'de görünür), aynı hareket iki kez eklenmez. PDF yapay zekâyla okunur ve bakiye zinciriyle doğrulanır.
         </p>
       </div>
       <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy} onClick={() => input.current?.click()}>
-        {busy ? <Loader2 size={16} className="animate-spin" /> : <Landmark size={16} />} Dosya seç (.xlsx, .xls, .csv)
+        {busy ? <Loader2 size={16} className="animate-spin" /> : <Landmark size={16} />} {busy ? "Okunuyor…" : "Dosya seç (.pdf, .xlsx, .xls, .csv)"}
       </button>
-      <input ref={input} type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden"
+      <input ref={input} type="file" accept=".pdf,application/pdf,.xlsx,.xls,.csv,text/csv" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setFile(f); preview(f); } }} />
       {err && <p className="text-sm text-red-600">{err}</p>}
 
       {pv && file && (
         <div className="space-y-3">
+          {pv.pdf ? (
+            <p className={cx("text-sm", pv.verified ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400")}>
+              {pv.bank && <b>{pv.bank} · </b>}
+              {pv.verified ? "Bakiye zinciriyle doğrulandı ✓ (her satırda önceki bakiye + tutar = bakiye)"
+                : `Doğrulanamadı: ${pv.chain_bad?.length ?? 0} satırda bakiye tutmuyor. Satırları kontrol et ya da tekrar yükle.`}
+            </p>
+          ) : (<>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {FIELDS.map((f) => (
               <label key={f.key} className="text-xs">
@@ -102,6 +114,7 @@ export default function BankImport() {
             ))}
           </div>
           {pv.profile_saved && <p className="text-xs text-green-700 dark:text-green-400">Bu bankanın biçimi hatırlandı.</p>}
+          </>)}
           <div className="flex flex-wrap gap-1.5 text-xs">
             {Object.entries(pv.counts).map(([k, n]) => (
               <span key={k} className={cx("rounded-full px-2 py-0.5", k === "tekrar" || k === "virman" ? "bg-stone-100 dark:bg-stone-800" : "bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300")}>
@@ -115,7 +128,7 @@ export default function BankImport() {
                 {pv.sample.map((r, i) => (
                   <tr key={i} className="border-t border-stone-100 first:border-0 dark:border-stone-800">
                     <td className="px-2 py-1 text-stone-500">{dateTR(r.date)}</td>
-                    <td className="max-w-32 truncate px-2 py-1 sm:max-w-64">{r.description}</td>
+                    <td className="max-w-32 truncate px-2 py-1 sm:max-w-64" title={r.description}>{r.who ? <b>{maskText(r.who)}</b> : maskText(r.description)}</td>
                     <td className={cx("px-2 py-1 text-right tabular-nums", r.amount > 0 && "text-green-700 dark:text-green-400")}>{tl(r.amount)}</td>
                     <td className="px-2 py-1 text-stone-500">{LABEL[r.type] ?? r.type}</td>
                   </tr>

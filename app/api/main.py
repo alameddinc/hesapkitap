@@ -431,6 +431,35 @@ def _bank_profile_key(columns: list[str]) -> str:
     return "bank_profile:" + hashlib.sha1("|".join(c.strip().casefold() for c in columns).encode()).hexdigest()[:16]
 
 
+_PDF_CACHE: dict[str, dict] = {}  # önizleme ile içe aktarma arasında yapay zekâ çağrısını tekrarlamamak için
+
+
+def _owners() -> list[str]:
+    """Hesap sahibi adları: kart ekstrelerindeki ana kart sahipleri (kendi hesapları arası virmanı tanımak için)."""
+    with db.connect() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT card_holder FROM transactions WHERE card_holder <> ''")]
+
+
+async def _read_bank_pdf(file: UploadFile) -> tuple[list[dict], dict]:
+    import hashlib
+
+    from app import bank_import, bank_pdf
+
+    data = await file.read()
+    key = hashlib.sha256(data).hexdigest()
+    if key not in _PDF_CACHE:
+        try:
+            _PDF_CACHE[key] = bank_pdf.parse_account_pdf(data, db.pdf_passwords())
+        except (bank_pdf.BankPdfError, receipt.ReceiptError) as e:
+            raise HTTPException(422, str(e)) from e
+        while len(_PDF_CACHE) > 8:
+            _PDF_CACHE.pop(next(iter(_PDF_CACHE)))
+    res = _PDF_CACHE[key]
+    owners = [res.get("owner_name") or "", *_owners()]
+    meta = {k: res[k] for k in ("bank", "owner_name", "verified", "chain_bad", "closing_ok")}
+    return bank_import.finalize(res["rows"], owners), meta
+
+
 async def _read_bank_file(file: UploadFile):
     from app import bank_import
 
@@ -454,6 +483,21 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
 
     from app import bank_import
 
+    if (file.filename or "").lower().endswith(".pdf"):
+        parsed, meta = await _read_bank_pdf(file)
+        with db.connect() as c:
+            seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
+        counts: dict[str, int] = {}
+        for r in parsed:
+            if r["type"] == "gider" and db.match_card_payment(abs(r["amount"]), r["date"]):
+                r["type"] = "kart_odemesi"
+            k = "tekrar" if r["hash"] in seen else r["type"]
+            counts[k] = counts.get(k, 0) + 1
+            if r["type"] in ("gelir", "gider"):
+                r["who"] = bank_import.counterparty(r["description"], r["amount"], [meta.get("owner_name")] if meta.get("owner_name") else _owners())
+        return {"pdf": True, **meta, "header_row": 0, "columns": [], "mapping": {}, "profile_saved": False,
+                "total": len(parsed), "counts": counts, "sample": parsed[:200], "raw_preview": []}
+
     rows = await _read_bank_file(file)
     det = bank_import.detect(rows)
     saved = db.get_setting(_bank_profile_key(det["columns"]))
@@ -463,7 +507,7 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
         det["mapping"] = json.loads(saved)
     if header_row is not None:
         det["header_row"], det["columns"] = header_row, rows[header_row]
-    parsed = bank_import.parse(rows, det["mapping"], det["header_row"])
+    parsed = bank_import.parse(rows, det["mapping"], det["header_row"], _owners())
     with db.connect() as c:
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
     counts: dict[str, int] = {}
@@ -477,20 +521,47 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
 
 
 @app.post("/api/bank-import")
-async def bank_import_run(file: UploadFile = File(...), mapping: str = Form(...), header_row: int = Form(...)):
+async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0)):
     import json
 
     from app import bank_import
 
-    rows = await _read_bank_file(file)
-    m = json.loads(mapping)
-    parsed = bank_import.parse(rows, m, header_row)
+    account = ""
+    if (file.filename or "").lower().endswith(".pdf"):
+        parsed, meta = await _read_bank_pdf(file)
+        account = meta.get("bank") or ""
+        # kişi ayrımında "kendin" = yalnızca döküm sahibi; ek kart sahipleri (eş, çocuk) Transferler'de kişi olarak görünsün
+        owners = [meta.get("owner_name") or ""] if meta.get("owner_name") else _owners()
+    else:
+        owners = _owners()
+        rows = await _read_bank_file(file)
+        m = json.loads(mapping)
+        parsed = bank_import.parse(rows, m, header_row, _owners())
+        if parsed:
+            db.set_setting(_bank_profile_key(rows[header_row]), json.dumps(m))  # bu banka biçimini hatırla
     if not parsed:
         raise HTTPException(422, "İçe aktarılacak satır bulunamadı; sütun eşlemesini kontrol et")
-    db.set_setting(_bank_profile_key(rows[header_row]), json.dumps(m))  # bu banka biçimini hatırla
-    stats = db.import_bank_rows(parsed)
+    stats = db.import_bank_rows(parsed, account=account, owners=owners)
     db.auto_link()
     return stats
+
+
+# ---------------------------------------------------------------- transferler
+
+class CounterpartyIn(BaseModel):
+    category: str | None = None
+    track_debt: bool | None = None
+    note: str | None = None
+
+
+@app.get("/api/transfers")
+def transfers():
+    return db.transfers_overview()
+
+
+@app.put("/api/transfers/people/{name}")
+def set_person(name: str, body: CounterpartyIn):
+    return {"updated": db.set_counterparty(name, body.category, body.track_debt, body.note)}
 
 
 # ---------------------------------------------------------------- statements
