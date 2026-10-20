@@ -1073,6 +1073,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                                         "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL "
                                         "UNION SELECT import_hash FROM card_payments WHERE import_hash IS NOT NULL")}
         recurring = [dict(r) for r in c.execute("SELECT * FROM recurring")]
+    from app.bank_import import counterparty
+
+    # bu dökümdeki ve daha önce görülen kişiler: aynı tutarda birden çok havale varsa elle girilen kaydı kişiye göre eşle
+    people = {p for p in (counterparty(x["description"], x["amount"], owners) for x in rows
+                          if x.get("type") in ("gelir", "gider")) if p}
+    with connect() as c:
+        people |= {n for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL")}
     for r in rows:
         if r["hash"] in seen:
             stats["tekrar"] += 1
@@ -1106,15 +1113,15 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         desc = r["description"]
         # daha önce elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog) → yeni kayıt açma, bağla
         with connect() as c:
-            dup = c.execute(
-                """SELECT id FROM entries WHERE import_hash IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
-                   AND entry_date BETWEEN ? AND ? LIMIT 1""",
-                (kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat())).fetchone()
+            cands = [dict(x) for x in c.execute(
+                """SELECT id, entry_date, description, note, counterparty FROM entries WHERE import_hash IS NULL
+                   AND kind = ? AND ABS(amount - ?) < 0.01 AND entry_date BETWEEN ? AND ?""",
+                (kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
+            who_here = counterparty(r["description"], r["amount"], owners)
+            dup = _pick_manual(cands, who_here, people, d)
             if dup:
-                from app.bank_import import counterparty
-
                 c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?) WHERE id = ?",
-                          (r["hash"], counterparty(r["description"], r["amount"], owners), dup["id"]))
+                          (r["hash"], who_here, dup["id"]))
                 stats["eslesen_elle"] += 1
                 seen.add(r["hash"])
                 continue
@@ -1171,6 +1178,36 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
 
 
 # ---------------------------------------------------------------- kişiler (transferler paneli)
+
+def _mentions(entry: dict, name: str) -> bool:
+    """Elle girilen kayıt bu kişiden mi bahsediyor? ('Harun'a borç' ↔ 'Mehmet Aydın'). Soyad tek başına yetmez:
+    aynı soyadlı iki kişi (aile) karışmasın; ad ya da ad+soyad geçmeli."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    words = set(_re.findall(r"[A-Z]+", normalize(" ".join(str(entry.get(k) or "") for k in ("description", "note", "counterparty")))))
+    toks = _re.findall(r"[A-Z]+", normalize(name))
+    if not toks:
+        return False
+    # Türkçe ek: 'HARUNA', 'HARUNUN' gibi yazımlar da ad sayılsın
+    return any(w == toks[0] or (w.startswith(toks[0]) and len(w) - len(toks[0]) <= 3) for w in words)
+
+
+def _pick_manual(cands: list[dict], who: str | None, people: set[str], d) -> dict | None:
+    """Aynı tutar ve ±3 gün içindeki elle girilmiş kayıtlardan banka hareketine en uygunu.
+    1) Hareketin karşı tarafını anan kayıt  2) Başka bir kişiyi anmayan kayıt  — ikisinde de tarihe en yakın."""
+    from datetime import date as _date
+
+    def closest(xs):
+        return min(xs, key=lambda x: abs((_date.fromisoformat(x["entry_date"]) - d).days)) if xs else None
+
+    if who:
+        named = [x for x in cands if _mentions(x, who)]
+        if named:
+            return closest(named)
+    return closest([x for x in cands if not any(_mentions(x, p) for p in people if p != who)])
+
 
 def _known_counterparty(name: str) -> str:
     """Aynı kişi farklı bankada farklı yazılabilir ('Elif DEMIR' / 'Elif Demir'): ilk kaydedilen yazılışı kullan."""
