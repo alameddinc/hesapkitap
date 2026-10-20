@@ -2,8 +2,18 @@ const tlFmt = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY
 const num1 = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 1 });
 const MONTHS = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
 
-export const tl = (x: number) => tlFmt.format(x);
+// Gizlilik: açıkken tüm tutarlar maskelenir (dışarıdan maaş vb. görünmesin)
+const MASK = "•••• ₺";
+let amountsHidden = false;
+export const setAmountsHidden = (v: boolean) => { amountsHidden = v; };
+export const areAmountsHidden = () => amountsHidden;
+
+export const tl = (x: number) => (amountsHidden ? MASK : tlFmt.format(x));
+/** Sunucudan gelen metinlerdeki tutarları da maskele ("16.793,18 ₺ taksit…" → "•••• ₺ taksit…"). */
+export const maskText = (s: string) =>
+  amountsHidden ? s.replace(/[-+]?₺?\s?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?\s?₺|₺\s?[-+]?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?/g, MASK) : s;
 export function tlCompact(x: number) {
+  if (amountsHidden) return MASK;
   const a = Math.abs(x);
   if (a >= 1e6) return `${num1.format(x / 1e6)} mn ₺`;
   if (a >= 1e3) return `${num1.format(x / 1e3)} bin ₺`;

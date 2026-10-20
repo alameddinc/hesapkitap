@@ -24,7 +24,8 @@ interface DocResult {
   total?: number | null;
   payment?: string;
   category?: string;
-  items?: { name: string; amount: number | null }[];
+  items?: { name: string; qty?: number; amount: number | null }[];
+  legal_name?: string | null;
   // fatura
   provider?: string;
   amount?: number | null;
@@ -62,7 +63,8 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           description: r.description, file_name: r.file_name, confidence: r.confidence });
         return;
       }
-      const items = (r.items ?? []).filter((i) => i.name).slice(0, 5).map((i) => i.name).join(", ");
+      const items = (r.items ?? []).filter((i) => i.name).slice(0, 6)
+        .map((i) => ((i.qty ?? 1) > 1 ? `${i.qty}× ${i.name}` : i.name)).join(", ");
       onPick({
         kind: "gider",
         description: r.merchant,
@@ -71,6 +73,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
         category: r.category,
         // fişte "kart" yazıyorsa kredi kartı varsay; banka kartıysa kullanıcı formda değiştirir
         payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" ? "kredi_karti" : undefined,
+        legal_name: r.legal_name,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
       });
     } catch (e) {

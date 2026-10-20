@@ -125,6 +125,21 @@ function CycleForm() {
   );
 }
 
+function PrivacyForm() {
+  const [on, setOn] = useState(() => { try { return localStorage.getItem("hk-hide-on-open") !== "0"; } catch { return true; } });
+  return (
+    <section className="card p-4">
+      <label className="flex cursor-pointer items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-0.5" checked={on} onChange={(e) => {
+          setOn(e.target.checked);
+          try { localStorage.setItem("hk-hide-on-open", e.target.checked ? "1" : "0"); } catch { /* özel mod */ }
+        }} />
+        <span><b>Açılışta tutarları gizle</b> — uygulama her açıldığında tutarlar •••• görünür, göz ikonuyla açılır. Bu cihaz için geçerli.</span>
+      </label>
+    </section>
+  );
+}
+
 function PasswordForm() {
   const ui = useUI();
   const [cur, setCur] = useState("");
@@ -272,6 +287,7 @@ export default function Settings() {
         </ul>
       </section>
 
+      <PrivacyForm />
       <CycleForm />
       {auth.data?.password_source === "app" && <PasswordForm />}
     </div>

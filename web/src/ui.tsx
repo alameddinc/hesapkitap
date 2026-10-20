@@ -11,6 +11,7 @@ export interface EntryDraft {
   note?: string;
   recurring?: boolean;
   payment?: "kredi_karti" | "nakit" | "havale";
+  legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
 }
 
 export interface UI {

@@ -230,6 +230,7 @@ class EntryIn(BaseModel):
     recurring_id: int | None = None
     skipped: bool = False
     payment: Payment | None = None
+    legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
 
 
 class EntryPatch(BaseModel):
@@ -245,9 +246,11 @@ class EntryPatch(BaseModel):
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
-    data = body.model_dump()
+    data = body.model_dump(exclude={"legal_name"})
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
+    if body.legal_name and body.kind == "gider":
+        db.learn_from_receipt(body.legal_name, body.description, body.category)
     eid = db.create_entry(data)
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries())}
@@ -687,6 +690,17 @@ async def parse_document(file: UploadFile = File(...)):
         doc = receipt.parse_document(data, mime, cats)
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
+    if doc["type"] == "receipt":
+        # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
+        from app.categorize import UNCATEGORIZED, categorize
+
+        with db.connect() as c:
+            rules = db.load_rules(c)
+        for name in (doc.get("legal_name"), doc.get("merchant")):
+            cat = categorize(name, "harcama", rules) if name else UNCATEGORIZED
+            if cat != UNCATEGORIZED:
+                doc["category"] = cat
+                break
     if doc["type"] == "bill":
         doc["file_name"] = db.save_bill_file(data, BILL_TYPES[mime])
     return doc

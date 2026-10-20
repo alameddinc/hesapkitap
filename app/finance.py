@@ -10,7 +10,7 @@ from statistics import median
 
 from app import db
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
-from app.textnorm import merchant_name
+from app.textnorm import legal_key, merchant_name
 
 INCOME = "gelir"
 EXPENSE = "gider"
@@ -59,6 +59,14 @@ def _round(x: float) -> float:
 
 # ---------------------------------------------------------------- unified rows
 
+def _display_merchant(desc: str, aliases: dict | None) -> str:
+    """Ekstredeki ad; fişten öğrenilmiş takma ad varsa marka (NEW TASTE GIDA → ESPRESSOLAB)."""
+    m = merchant_name(desc)
+    if aliases:
+        return aliases.get(legal_key(desc)) or aliases.get(m) or m
+    return m
+
+
 def _sub_state(t: dict, states: dict) -> str | None:
     m = merchant_name(t["description"])
     if m in states:
@@ -66,14 +74,15 @@ def _sub_state(t: dict, states: dict) -> str | None:
     return "aktif" if t["category"] in SUBSCRIPTION_CATEGORIES and t["txn_type"] == PURCHASE else None
 
 
-def _card_row(t: dict, states: dict | None = None) -> dict:
+def _card_row(t: dict, states: dict | None = None, aliases: dict | None = None) -> dict:
     inst = None
     if t["installment_no"] is not None and t["installments_left"] is not None:
         inst = f"{t['installment_no']}/{t['installment_no'] + t['installments_left']}"
     return {
         "uid": f"c{t['id']}", "source": "card", "id": t["id"],
         "date": t["txn_date"], "month": t["period"],
-        "description": t["description"], "merchant": merchant_name(t["description"]),
+        "description": t["description"],
+        "merchant": _display_merchant(t["description"], aliases),
         "amount": t["amount"], "kind": t["txn_type"], "category": t["category"],
         "card": card_label(t), "account": t["account"], "bank": t["bank"],
         "installment": inst,
@@ -116,8 +125,8 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
 
 
 def transactions(month: str | None, include_deleted: bool = False) -> list[dict]:
-    states = db.subscription_states()
-    card = [_card_row(t, states) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
+    states, aliases = db.subscription_states(), db.merchant_aliases()
+    card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
     entries = db.list_entries(month)
     out = card + [_entry_row(e) for e in entries]
     if month:

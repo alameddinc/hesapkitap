@@ -15,17 +15,18 @@ MAX_BYTES = 15 * 1024 * 1024
 
 PROMPT = """Bu bir Türkiye'de alınmış alışveriş fişi fotoğrafı. Bilgileri çıkar ve SADECE şu JSON'u döndür:
 {{
-  "merchant": "işyeri adı (fişin en üstündeki ticari unvan veya marka, kısa)",
+  "merchant": "MARKA / tabela adı, kısa (ör. Espressolab, Migros)",
+  "legal_name": "fişteki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
   "date": "YYYY-MM-DD (fişteki tarih; okunamazsa null)",
   "total": 0.00,
   "vat": 0.00,
   "payment": "nakit | kart | bilinmiyor",
   "category": "şu listeden en uygun olan: {categories}",
-  "items": [{{"name": "ürün", "amount": 0.00}}],
+  "items": [{{"name": "ürün", "qty": 1, "amount": 0.00}}],
   "confidence": "yüksek | orta | düşük"
 }}
 Kurallar: total = fişteki GENEL TOPLAM / TOPLAM (KDV dahil, ödenen tutar). Türk sayı formatında 1.234,56 = 1234.56.
-items en fazla 15 kalem. Fiş değilse veya okunamıyorsa total null ve confidence "düşük" döndür."""
+items en fazla 15 kalem; "2Adt x 230,00 Latte" gibi satırda qty=2, amount satır toplamı. Fiş değilse veya okunamıyorsa total null ve confidence "düşük" döndür."""
 
 
 class ReceiptError(Exception):
@@ -109,6 +110,18 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
                                  "output": usage.get("candidatesTokenCount")}
 
 
+def _items(raw: dict) -> list[dict]:
+    """Ürün satırları; "2Adt x 230,00" gibi adetler qty olarak gelir."""
+    out = []
+    for i in (raw.get("items") or [])[:15]:
+        if not isinstance(i, dict) or not i.get("name"):
+            continue
+        q = i.get("qty")
+        q = int(q) if isinstance(q, (int, float)) and q >= 1 and float(q).is_integer() else 1
+        out.append({"name": str(i["name"])[:60], "qty": q, "amount": _num(i.get("amount"))})
+    return out
+
+
 def _iso(d) -> str | None:
     try:
         return date.fromisoformat(d).isoformat() if d else None
@@ -121,7 +134,8 @@ DOC_PROMPT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapı
 SADECE şu JSON'u döndür:
 {{
   "doc_type": "fis | fatura",
-  "merchant": "işyeri veya kurum adı, kısa",
+  "merchant": "MARKA / tabela / kurum adı, kısa (ör. Espressolab, Enerjisa)",
+  "legal_name": "belgedeki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
   "date": "YYYY-MM-DD fiş tarihi / fatura düzenleme tarihi veya null",
   "total": 0.00,
   "due_date": "YYYY-MM-DD SON ÖDEME TARİHİ (sadece fatura) veya null",
@@ -130,10 +144,10 @@ SADECE şu JSON'u döndür:
   "subscriber_no": "abone/tesisat no veya null",
   "payment": "nakit | kart | bilinmiyor",
   "category": "fiş ise şu listeden en uygunu: {categories}",
-  "items": [{{"name": "ürün", "amount": 0.00}}],
+  "items": [{{"name": "ürün", "qty": 1, "amount": 0.00}}],
   "confidence": "yüksek | orta | düşük"
 }}
-total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56. items en fazla 15 (sadece fiş)."""
+total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56. items en fazla 15 (sadece fiş); "2Adt x 230,00 Latte" gibi satırda qty=2, amount satır toplamı."""
 
 
 def parse_document(data: bytes, mime: str, categories: list[str]) -> dict:
@@ -143,6 +157,7 @@ def parse_document(data: bytes, mime: str, categories: list[str]) -> dict:
         return {
             "type": "bill",
             "provider": (raw.get("merchant") or "").strip()[:60] or "Fatura",
+            "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
             "category": BILL_CATEGORY.get(raw.get("bill_type"), "Faturalar"),
             "amount": _num(raw.get("total")),
             "due_date": _iso(raw.get("due_date")),
@@ -157,8 +172,8 @@ def parse_document(data: bytes, mime: str, categories: list[str]) -> dict:
         "total": _num(raw.get("total")),
         "payment": raw.get("payment") or "bilinmiyor",
         "category": category,
-        "items": [{"name": str(i.get("name", ""))[:60], "amount": _num(i.get("amount"))}
-                  for i in (raw.get("items") or [])[:15] if isinstance(i, dict)],
+        "items": _items(raw),
+        "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
         "confidence": raw.get("confidence") or "orta",
     }
 
@@ -189,8 +204,8 @@ def parse_receipt(image: bytes, mime: str, categories: list[str]) -> dict:
         "vat": _num(raw.get("vat")),
         "payment": raw.get("payment") or "bilinmiyor",
         "category": category,
-        "items": [{"name": str(i.get("name", ""))[:60], "amount": _num(i.get("amount"))}
-                  for i in (raw.get("items") or [])[:15] if isinstance(i, dict)],
+        "items": _items(raw),
+        "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
         "confidence": raw.get("confidence") or "orta",
         "model": meta["model"],
         "tokens": {"input": meta["input"], "output": meta["output"]},

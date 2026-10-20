@@ -59,7 +59,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, entry_date: date });
-    return api.createEntry({ ...common, ...pay, entry_date: date });
+    return api.createEntry({ ...common, ...pay, entry_date: date, legal_name: draft?.legal_name ?? null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
     : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti" : "Kaydedildi"));
   const link = useSave((txnId: number | null) => api.linkEntry(editingEntry!.id, txnId),
@@ -97,6 +97,9 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <input id="e-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)}
             placeholder={kind === "gelir" ? "ör. Maaş" : "ör. Psikolog, Kira"} autoFocus={!row && !rec} />
         </div>
+        {draft?.legal_name && !editingEntry && (
+          <p className="-mt-1 text-xs text-stone-500">Ekstrede muhtemelen <b>{draft.legal_name}</b> adıyla geçer; eşleştirilip markayla gruplanır.</p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div className={isGross && kind === "gelir" && isRecurring ? "hidden" : undefined}>
             <label className="label" htmlFor="e-amt">Tutar (₺)</label>

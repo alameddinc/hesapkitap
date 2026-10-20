@@ -59,3 +59,25 @@ def strip_gateway(norm: str) -> str:
     if sep and head.strip() in PAYMENT_GATEWAYS and rest.strip("/ "):
         return rest.lstrip("/ ")
     return norm
+
+
+# Şirket unvanı ekleri: fişte "SAN.VE DIŞ.TİC.LTD.ŞTİ.", ekstrede "SANAYİ VE" — ikisi de aynı köke insin
+_COMPANY_WORDS = {"SAN", "SANAYI", "SANAYII", "VE", "TIC", "TICARET", "DIS", "LTD", "LIMITED", "STI", "SIRKETI",
+                  "AS", "A", "ANONIM", "INS", "INSAAT", "PAZ", "PAZARLAMA", "ITH", "IHR", "TUR", "TURIZM", "HIZ",
+                  "HIZMETLERI"}
+
+
+def legal_key(name: str) -> str:
+    """Resmi unvanın kökü: 'NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.' ve 'NEW TASTE GIDA SANAYİ VE' → 'NEW TASTE GIDA'."""
+    import re
+
+    norm = strip_gateway(normalize(name))
+    norm = re.split(r"/", norm, maxsplit=1)[0]
+    words = []
+    for w in re.split(r"[\s.,*]+", norm):
+        if not w:
+            continue
+        if w in _COMPANY_WORDS:
+            break
+        words.append(w)
+    return " ".join(words[:3])

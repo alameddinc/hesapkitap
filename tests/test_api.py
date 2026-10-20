@@ -135,3 +135,27 @@ def test_variable_salary(client, tmpdb):
     assert client.get("/api/summary", params={"month": "2026-12"}).json()["totals"]["income"] == 205000
     client.put(f"/api/recurring/{rid}/months/2026-12", json={"amount": None})  # şablona dön
     assert tmpdb.recurring_overrides() == {}
+
+
+def test_receipt_teaches_legal_name_alias(client, upload, tmpdb):
+    """Fişte marka 'Ornek Kahve', unvan 'ORNEK GIDA SAN. LTD. STI.'; ekstrede unvan geçer."""
+    # ekstrede unvanla bir işlem olsun
+    from app.parsers.base import PURCHASE, Statement, Transaction
+    from datetime import date
+    st = Statement(bank="Test", card_no="1111***2222", period_end=date(2026, 11, 13), due_date=date(2026, 11, 23),
+                   total_debt=675, min_payment=None, credit_limit=None, period_activity=675)
+    st.transactions.append(Transaction(txn_date=date(2026, 10, 20), description="ORNEK GIDA SANAYI VE",
+                                       amount=675, txn_type=PURCHASE, card="1111***2222"))
+    tmpdb.save_statement(b"x-test", "t.pdf", st)
+    assert tmpdb.list_rules() and not any("ORNEK" in r["pattern"] for r in tmpdb.list_rules())
+
+    client.post("/api/entries", json={"entry_date": "2026-10-20", "description": "Ornek Kahve", "amount": 675,
+                                      "kind": "gider", "category": "Kafe & Restoran", "payment": "kredi_karti",
+                                      "legal_name": "ORNEK GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ."})
+    assert tmpdb.merchant_aliases() == {"ORNEK GIDA": "ORNEK KAHVE"}  # "SAN.VE…" ve "SANAYI VE" aynı köke iner
+    rows = client.get("/api/transactions", params={"month": "2026-11"}).json()
+    card = next(r for r in rows if r["source"] == "card")
+    assert card["merchant"] == "ORNEK KAHVE"           # ekstre satırı markayla gruplanır
+    assert card["category"] == "Kafe & Restoran"       # unvan için kural öğrenildi
+    linked = next(e for e in tmpdb.list_entries() if e["description"] == "Ornek Kahve")
+    assert linked["linked_txn_id"] == card["id"]       # tutar+tarihle eşleşti

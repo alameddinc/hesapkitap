@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarRange, LayoutDashboard, List, Menu, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
+import { CalendarRange, Eye, EyeOff, LayoutDashboard, List, Menu, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -9,7 +9,7 @@ import RecurringMonthForm, { type RecurringMonth } from "./components/RecurringM
 import { useMeta } from "./components/hooks";
 import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
-import { cx } from "./format";
+import { cx, setAmountsHidden } from "./format";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
@@ -76,7 +76,24 @@ export default function App() {
   return <Shell />;
 }
 
+// Açılışta tutarlar gizli (cihaz ayarı); göz ikonuyla bu oturum için açılır
+const hideOnOpen = () => { try { return localStorage.getItem("hk-hide-on-open") !== "0"; } catch { return true; } };
+const sessionRevealed = () => { try { return sessionStorage.getItem("hk-revealed") === "1"; } catch { return false; } };
+
 function Shell() {
+  const [hidden, setHidden] = useState(() => hideOnOpen() && !sessionRevealed());
+  setAmountsHidden(hidden);
+  const toggleHidden = () => {
+    const next = !hidden;
+    try { sessionStorage.setItem("hk-revealed", next ? "0" : "1"); } catch { /* özel mod */ }
+    setHidden(next);
+  };
+  const EyeBtn = ({ className }: { className?: string }) => (
+    <button onClick={toggleHidden} aria-label={hidden ? "Tutarları göster" : "Tutarları gizle"} aria-pressed={!hidden}
+      className={cx("btn-ghost p-2", className)}>
+      {hidden ? <EyeOff size={18} /> : <Eye size={18} />}
+    </button>
+  );
   const [route, setRoute] = useState<Route>(readRoute);
   const meta = useMeta();
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -137,7 +154,8 @@ function Shell() {
         {/* Masaüstü yan menü */}
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-stone-200 bg-white p-3 md:flex dark:border-stone-800 dark:bg-stone-900">
           <div className="mb-4 flex items-center gap-2 px-2 py-1 text-lg font-semibold">
-            <img src="/icons/logo-mark.png" alt="" className="size-7" /> HesapKitap
+            <img src="/icons/logo-mark.png" alt="" className="size-7" /> <span className="flex-1">HesapKitap</span>
+            <EyeBtn className="-mr-2" />
           </div>
           <button className="btn-primary mb-3 justify-center py-2" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>
           <nav className="space-y-0.5">
@@ -152,6 +170,12 @@ function Shell() {
           <div className="mt-auto"><LogoutButton /></div>
         </aside>
 
+        {/* mobil üst çubuk: logo + tutarları göster/gizle */}
+        <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-stone-200 bg-white/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur md:hidden dark:border-stone-800 dark:bg-stone-900/90">
+          <img src="/icons/logo-mark.png" alt="" className="size-6" />
+          <span className="flex-1 py-2 font-semibold">HesapKitap</span>
+          <EyeBtn className="-mr-2" />
+        </div>
         <main className={cx("mx-auto w-full min-w-0 px-4 pt-4 pb-28 md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
           <Page />
         </main>

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type PlanLineType, type PlanMonth } from "../api";
 import Segmented from "../components/Segmented";
-import { addMonths, cx, dateTR, monthLabel, PLAN_LABEL, tl, tlCompact } from "../format";
+import { addMonths, cx, dateTR, maskText, monthLabel, PLAN_LABEL, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
 
 // Yığılmış gider serileri: doğrulanmış kategorik sıra (komşu çiftler CVD-güvenli)
@@ -54,7 +54,7 @@ function MonthCard({ m, open, onToggle }: { m: PlanMonth; open: boolean; onToggl
                 disabled={!l.recurring_id}>
                 <span className="w-24 shrink-0 text-xs text-stone-500 sm:w-32">{PLAN_LABEL[l.type]}</span>
                 <span className="min-w-0 flex-1 truncate">
-                  {l.description}
+                  {maskText(l.description)}
                   {l.type === "sabit" && !l.confirmed && <span className="ml-1 text-xs text-stone-400">{l.custom ? "(bu aya özel)" : "(plan · dokun, tutarı değiştir)"}</span>}
                   {l.type === "sabit" && l.confirmed && <span className="ml-1 text-xs text-green-600">✓</span>}
                 </span>

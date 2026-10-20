@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS recurring_overrides (
     amount REAL NOT NULL CHECK (amount >= 0),
     PRIMARY KEY (recurring_id, month)
 );
+-- İşyeri takma adları: ekstredeki resmi unvan → marka (ör. NEW TASTE GIDA → ESPRESSOLAB). Fişten öğrenilir.
+CREATE TABLE IF NOT EXISTS merchant_aliases (
+    source TEXT PRIMARY KEY,   -- merchant_name(resmi unvan)
+    display TEXT NOT NULL      -- merchant_name(marka)
+);
 -- Kategori bazında aylık harcama limiti
 CREATE TABLE IF NOT EXISTS budgets (
     category TEXT PRIMARY KEY,
@@ -852,3 +857,34 @@ def planned_amount(r: dict, month: str, overrides: dict | None = None) -> float:
         paid = occurrence_date(month, r["day_of_month"] or 1)  # maaşın o dönemde yattığı gerçek ay
         return net_for(r["gross_amount"], int(paid[:4]), int(paid[5:7]))
     return r["amount"]
+
+
+# ---------------------------------------------------------------- işyeri takma adları (fişten öğrenilir)
+
+def merchant_aliases() -> dict[str, str]:
+    with connect() as c:
+        return {r[0]: r[1] for r in c.execute("SELECT source, display FROM merchant_aliases")}
+
+
+def learn_from_receipt(legal_name: str, brand: str, category: str | None) -> dict:
+    """Fişte marka (Espressolab) ile resmi unvan (NEW TASTE GIDA…) farklıysa:
+    1) ekstredeki unvanlı satırlar markayla gruplansın diye takma ad kaydet,
+    2) unvan için hiçbir kural yoksa fişin kategorisiyle kural oluştur (ekstre gelince aynı kategoriye düşsün)."""
+    import re as _re
+
+    from app.textnorm import legal_key, merchant_name
+
+    src, dst = legal_key(legal_name), merchant_name(brand)
+    out = {"alias": None, "rule": None}
+    if not src or not dst or src == dst:
+        return out
+    with connect() as c:
+        c.execute("INSERT OR REPLACE INTO merchant_aliases (source, display) VALUES (?, ?)", (src, dst))
+        out["alias"] = (src, dst)
+        if category and categorize(src, "harcama", load_rules(c)) == "Kategorisiz":
+            pattern = _re.escape(src)
+            c.execute("INSERT INTO rules (pattern, category, priority) VALUES (?, ?, 10)", (pattern, category))
+            out["rule"] = pattern
+    if out["rule"]:
+        recategorize_all()
+    return out
