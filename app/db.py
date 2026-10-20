@@ -96,6 +96,19 @@ CREATE TABLE IF NOT EXISTS recurring_overrides (
     amount REAL NOT NULL CHECK (amount >= 0),
     PRIMARY KEY (recurring_id, month)
 );
+-- Maaş değişiklikleri (zam, iş değişikliği): o dönemden itibaren geçerli brüt. Eski aylar eski brütle kalır.
+CREATE TABLE IF NOT EXISTS salary_changes (
+    id INTEGER PRIMARY KEY,
+    recurring_id INTEGER NOT NULL REFERENCES recurring(id) ON DELETE CASCADE,
+    from_month TEXT NOT NULL,          -- dönem (YYYY-MM), uygulamadaki ay seçicisiyle aynı
+    gross REAL NOT NULL CHECK (gross >= 0),
+    reason TEXT NOT NULL DEFAULT 'zam' CHECK (reason IN ('zam', 'is_degisikligi')),
+    reset_cum INTEGER NOT NULL DEFAULT 0,   -- yeni işveren vergi matrahını sıfırdan başlattı
+    pay_day INTEGER,                   -- yeni maaş günü (iş değişikliği)
+    employer TEXT,                     -- banka açıklamasında geçen yeni işveren adı (eşleştirme için)
+    note TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- İşyeri takma adları: ekstredeki resmi unvan → marka (ör. NEW TASTE GIDA → ESPRESSOLAB). Fişten öğrenilir.
 CREATE TABLE IF NOT EXISTS merchant_aliases (
     source TEXT PRIMARY KEY,   -- merchant_name(resmi unvan)
@@ -536,7 +549,7 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
     cands = [m for m in _months_around(period_of(d)) if m not in taken]
     if not cands:
         return  # komşu dönemlerin hepsi dolu: bağlama, çift kayıt uyarısı görünsün
-    best = min(cands, key=lambda m: abs((_date.fromisoformat(occurrence_date(m, rec["day_of_month"])) - d).days))
+    best = min(cands, key=lambda m: abs((_date.fromisoformat(occurrence_date(m, day_at(rec, m))) - d).days))
     data["recurring_id"], data["month"] = rec["id"], best
 
 
@@ -545,7 +558,7 @@ def _nearest_recurring_month(rec, d) -> str:
     from datetime import date as _date
 
     return min(_months_around(period_of(d)),
-               key=lambda m: abs((_date.fromisoformat(occurrence_date(m, rec["day_of_month"])) - d).days))
+               key=lambda m: abs((_date.fromisoformat(occurrence_date(m, day_at(rec, m))) - d).days))
 
 
 def set_cycle_start_day(day: int) -> int:
@@ -884,17 +897,87 @@ def set_recurring_override(rid: int, month: str, amount: float | None) -> None:
                       (rid, month, amount))
 
 
-def planned_amount(r: dict, month: str, overrides: dict | None = None) -> float:
+def planned_amount(r: dict, month: str, overrides: dict | None = None, changes: list[dict] | None = None) -> float:
     """Sabit kalemin o ay için beklenen tutarı: aya özel tutar > brüt maaştan hesaplanan net > şablon."""
+    r = dict(r)
     ov = overrides if overrides is not None else recurring_overrides()
     if (r["id"], month) in ov:
         return ov[(r["id"], month)]
-    if r.get("gross_amount"):
-        from app.payroll import net_for
+    changes = salary_changes(r["id"]) if changes is None else changes
+    if r.get("gross_amount") or changes:
+        if gross_at(r, month, changes) is None:  # brüt bilinmeyen (ilk değişiklikten önceki) dönem: şablon net
+            return r["amount"]
+        from app.payroll import net_schedule
 
-        paid = occurrence_date(month, r["day_of_month"] or 1)  # maaşın o dönemde yattığı gerçek ay
-        return net_for(r["gross_amount"], int(paid[:4]), int(paid[5:7]))
+        paid = occurrence_date(month, day_at(r, month, changes))  # maaşın o dönemde yattığı gerçek ay
+        year = int(paid[:4])
+        grosses, resets = gross_schedule(r, year, changes)
+        return net_schedule(year, grosses, resets)["months"][int(paid[5:7]) - 1]["net"]
     return r["amount"]
+
+
+# ---------------------------------------------------------------- maaş değişiklikleri
+
+def salary_changes(recurring_id: int) -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM salary_changes WHERE recurring_id = ? ORDER BY from_month, id",
+                              (recurring_id,)))
+
+
+def add_salary_change(recurring_id: int, data: dict) -> int:
+    with connect() as c:
+        if not c.execute("SELECT 1 FROM recurring WHERE id = ?", (recurring_id,)).fetchone():
+            raise KeyError(recurring_id)
+        # aynı döneme ikinci değişiklik: öncekinin yerine geçer
+        c.execute("DELETE FROM salary_changes WHERE recurring_id = ? AND from_month = ?", (recurring_id, data["from_month"]))
+        return c.execute(
+            "INSERT INTO salary_changes (recurring_id, from_month, gross, reason, reset_cum, pay_day, employer, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (recurring_id, data["from_month"], data["gross"], data.get("reason") or "zam", int(bool(data.get("reset_cum"))),
+             data.get("pay_day"), (data.get("employer") or "").strip() or None, data.get("note"))).lastrowid
+
+
+def delete_salary_change(change_id: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM salary_changes WHERE id = ?", (change_id,)).rowcount > 0
+
+
+def gross_at(r: dict, month: str, changes: list[dict]) -> float | None:
+    """O dönemde geçerli brüt: son değişiklik, yoksa kalemin brütü."""
+    g = dict(r).get("gross_amount")
+    for ch in changes:
+        if ch["from_month"] <= month:
+            g = ch["gross"]
+    return g
+
+
+def day_at(r: dict, month: str, changes: list[dict] | None = None) -> int:
+    """O dönemde maaş günü (iş değişikliğinde değişebilir)."""
+    r = dict(r)
+    d = r.get("day_of_month") or 1
+    for ch in changes if changes is not None else salary_changes(r["id"]):
+        if ch["from_month"] <= month and ch.get("pay_day"):
+            d = ch["pay_day"]
+    return d
+
+
+def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, float], set[int]]:
+    """Takvim yılının her ayında ödenen brüt + vergi matrahının sıfırlandığı aylar.
+    Kayıttan önceki aylar (yıl başı) bilinen ilk brütle dolu varsayılır: kümülatif matrah gerçekçi kalsın."""
+    r = dict(r)
+    first = r.get("gross_amount") or (changes[0]["gross"] if changes else 0.0)
+    grosses: dict[int, float] = {}
+    for m in range(1, 13):
+        period = period_of(f"{year}-{m:02d}-{min(day_at(r, f'{year}-{m:02d}', changes), 28):02d}")
+        g = gross_at(r, period, changes)
+        grosses[m] = g if g is not None else first
+    resets = set()
+    for ch in changes:
+        if ch["reason"] == "is_degisikligi" and ch["reset_cum"]:
+            paid = occurrence_date(ch["from_month"], ch.get("pay_day") or r.get("day_of_month") or 1)
+            if int(paid[:4]) == year:
+                resets.add(int(paid[5:7]))
+    return grosses, resets
 
 
 # ---------------------------------------------------------------- işyeri takma adları (fişten öğrenilir)
@@ -1039,7 +1122,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         category = None
         if kind == "gelir":
             rec = next((x for x in recurring if x["kind"] == "gelir"
-                        and (normalize(x["description"]) in norm or (_re.search(r"MAAS|UCRET|BORDRO", norm)
+                        and (normalize(x["description"]) in norm
+                             or any(ch["employer"] and normalize(ch["employer"]) in norm for ch in salary_changes(x["id"]))
+                             or (_re.search(r"MAAS|UCRET|BORDRO", norm)
                              and _re.search(r"MAAS", normalize(x["description"]))))), None)
             if rec:
                 desc, category = rec["description"], rec["category"]  # sabit kaleme bağlansın

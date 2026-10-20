@@ -348,6 +348,58 @@ def payroll_net(gross: float, year: int | None = None, start_month: int = 1):
     return net_by_month(gross, year or date.today().year, start_month)
 
 
+class SalaryChangeIn(BaseModel):
+    from_month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    gross: float = Field(gt=0)
+    reason: Literal["zam", "is_degisikligi"] = "zam"
+    reset_cum: bool = False
+    pay_day: int | None = Field(default=None, ge=1, le=31)
+    employer: str | None = None
+    note: str | None = None
+
+
+class PayrollPlanIn(BaseModel):
+    year: int
+    draft: SalaryChangeIn | None = None  # kaydetmeden önce "olursa ne olur" önizlemesi
+
+
+@app.get("/api/recurring/{rid}/salary-changes")
+def list_salary_changes(rid: int):
+    return db.salary_changes(rid)
+
+
+@app.post("/api/recurring/{rid}/salary-changes")
+def add_salary_change(rid: int, body: SalaryChangeIn):
+    try:
+        return {"id": db.add_salary_change(rid, body.model_dump())}
+    except KeyError as e:
+        raise HTTPException(404, "Sabit kalem yok") from e
+
+
+@app.delete("/api/salary-changes/{cid}")
+def delete_salary_change(cid: int):
+    if not db.delete_salary_change(cid):
+        raise HTTPException(404, "Kayıt yok")
+    return {"ok": True}
+
+
+@app.post("/api/recurring/{rid}/payroll")
+def recurring_payroll(rid: int, body: PayrollPlanIn):
+    """Bir yılın ay ay brüt/net dökümü; kayıtlı değişiklikler + (varsa) taslak değişiklik."""
+    from app.payroll import net_schedule
+
+    r = next((x for x in db.list_recurring() if x["id"] == rid), None)
+    if not r:
+        raise HTTPException(404, "Sabit kalem yok")
+    changes = [c for c in db.salary_changes(rid) if not body.draft or c["from_month"] != body.draft.from_month]
+    if body.draft:
+        changes = sorted([*changes, {**body.draft.model_dump(), "id": None}], key=lambda c: c["from_month"])
+    if not (r.get("gross_amount") or changes):
+        raise HTTPException(422, "Brüt maaş tanımlı değil")
+    grosses, resets = db.gross_schedule(r, body.year, changes)
+    return {**net_schedule(body.year, grosses, resets), "resets": sorted(resets)}
+
+
 @app.get("/api/recurring")
 def list_recurring():
     return db.list_recurring()
@@ -392,7 +444,7 @@ def confirm_recurring(rid: int, body: RecurringAction):
     """Sabit kalem bu ay gerçekleşti → elle girilmiş kayda dönüştür."""
     r = _recurring_or_404(rid)
     return {"id": db.create_entry({
-        "entry_date": db.occurrence_date(body.month, r["day_of_month"]), "month": body.month, "description": r["description"],
+        "entry_date": db.occurrence_date(body.month, db.day_at(r, body.month)), "month": body.month, "description": r["description"],
         "amount": body.amount if body.amount is not None else db.planned_amount(r, body.month), "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 0,
     })}
@@ -417,7 +469,7 @@ def skip_recurring(rid: int, body: RecurringAction):
     """Sabit kalem bu ay olmadı (ör. psikoloğa gidilmedi)."""
     r = _recurring_or_404(rid)
     return {"id": db.create_entry({
-        "entry_date": db.occurrence_date(body.month, r["day_of_month"]), "month": body.month,
+        "entry_date": db.occurrence_date(body.month, db.day_at(r, body.month)), "month": body.month,
         "description": r["description"], "amount": 0, "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 1,
     })}

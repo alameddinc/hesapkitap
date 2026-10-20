@@ -74,3 +74,38 @@ def net_by_month(gross: float, year: int, start_month: int = 1, prior_cum_base: 
 
 def net_for(gross: float, year: int, month: int) -> float:
     return next(x["net"] for x in net_by_month(gross, year)["months"] if x["month"] == month)
+
+
+def net_schedule(year: int, gross_by_month: dict[int, float], resets: set[int] | None = None) -> dict:
+    """Ay ay farklı brütle (zam, iş değişikliği) yıl boyu net. resets: vergi matrahının sıfırdan başladığı aylar
+    (yeni işveren önceki matrahı devralmadıysa); asgari ücret istisnası sayacı da orada yeniden başlar.
+    Brütü 0 olan ay (iki iş arası) atlanır."""
+    used_year, p = params(year)
+    b = p["brackets"]
+    mw_base = p["min_wage"] * (1 - p["sgk"] - p["unemployment"])
+    cum, k = 0.0, 0
+    months = []
+    for m in range(1, 13):
+        if resets and m in resets:
+            cum, k = 0.0, 0
+        gross = gross_by_month.get(m) or 0.0
+        if gross <= 0:
+            months.append({"month": m, "gross": 0.0, "sgk": 0.0, "unemployment": 0.0, "income_tax": 0.0, "stamp": 0.0,
+                           "net": 0.0, "cumulative_base": _r(cum), "bracket_rate": None})
+            continue
+        sgk_base = min(gross, p["sgk_cap"])
+        sgk = _r(sgk_base * p["sgk"])
+        unemp = _r(sgk_base * p["unemployment"])
+        base = _r(gross - sgk - unemp)
+        tax = _r(income_tax(cum + base, b) - income_tax(cum, b))
+        exemption = _r(income_tax(mw_base * (k + 1), b) - income_tax(mw_base * k, b))
+        tax_net = max(0.0, _r(tax - exemption))
+        stamp = max(0.0, _r(_r(gross * p["stamp"]) - _r(p["min_wage"] * p["stamp"])))
+        cum += base
+        k += 1
+        rate = next(r for upper, r in b if upper is None or cum <= upper)
+        months.append({"month": m, "gross": _r(gross), "sgk": sgk, "unemployment": unemp, "income_tax": tax_net,
+                       "stamp": stamp, "net": _r(gross - sgk - unemp - tax_net - stamp),
+                       "cumulative_base": _r(cum), "bracket_rate": rate})
+    return {"year": year, "params_year": used_year, "months": months,
+            "annual_net": _r(sum(x["net"] for x in months))}
