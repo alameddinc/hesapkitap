@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, FileUp, KeyRound, Loader2, Trash2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type UploadResult } from "../api";
+import BankImport from "../components/BankImport";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
@@ -98,6 +99,8 @@ export default function Statements() {
           ))}
         </ul>
       )}
+
+      <BankImport />
 
       <ul className="space-y-2">
         {list.data?.map((s) => (

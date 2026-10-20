@@ -1,0 +1,94 @@
+"""Banka hesap hareketleri içe aktarma (sahte veriler)."""
+import io
+
+from app import bank_import
+
+CSV = """Hesap Hareketleri;;;;
+Müşteri: AYŞE YILMAZ;;;;
+Tarih;Açıklama;Tutar;Bakiye;Kanal
+15.10.2026;ORNEK A.S. MAAS ODEMESI EKIM;85.000,00;95.000,00;EFT
+16.10.2026;KREDI KARTI BORC ODEMESI 4543****1234;-12.500,00;82.500,00;MOBIL
+17.10.2026;HESAPLAR ARASI VIRMAN;-5.000,00;77.500,00;MOBIL
+18.10.2026;MIGROS ORNEK SUBE;-842,35;76.657,65;POS
+19.10.2026;FAST PSIKOLOG AHMET ORNEK;-3.000,00;73.657,65;FAST
+20.10.2026;KIRA ODEMESI EFT;-22.000,00;51.657,65;EFT
+"""
+
+
+def _upload(client, data: bytes, name: str, mapping=None, header_row=None):
+    import json
+
+    files = {"file": (name, data, "application/octet-stream")}
+    form = {}
+    if mapping is not None:
+        form = {"mapping": json.dumps(mapping), "header_row": str(header_row)}
+    return client.post("/api/bank-import" if mapping is not None else "/api/bank-import/preview", files=files, data=form)
+
+
+def test_detect_and_parse_csv():
+    rows = bank_import.read_rows(CSV.encode("utf-8"), "hareket.csv")
+    det = bank_import.detect(rows)
+    assert det["header_row"] == 2
+    assert det["mapping"]["date"] == 0 and det["mapping"]["description"] == 1 and det["mapping"]["amount"] == 2
+    parsed = bank_import.parse(rows, det["mapping"], det["header_row"])
+    types = [p["type"] for p in parsed]
+    assert types == ["gelir", "kart_odemesi", "virman", "gider", "gider", "gider"]
+    assert parsed[0]["amount"] == 85000 and parsed[3]["amount"] == -842.35
+
+
+def test_amount_formats():
+    p = bank_import.parse_amount
+    assert p("1.234,56") == 1234.56 and p("-1.234,56") == -1234.56 and p("1,234.56") == 1234.56
+    assert p("12.500") == 12500 and p("842,35 TL") == 842.35 and p("1.000,00-") == -1000
+
+
+def test_import_flow(client, tmpdb):
+    # maaş sabit kalemi + daha önce elle girilmiş psikolog + ödenmemiş kart ekstresi
+    client.post("/api/recurring", json={"description": "Maaş", "amount": 85000, "kind": "gelir", "category": "Maaş",
+                                        "day_of_month": 15, "start_month": "2026-01"})
+    client.post("/api/entries", json={"entry_date": "2026-10-19", "description": "Psikolog", "amount": 3000,
+                                      "kind": "gider", "category": "Sağlık", "payment": "havale"})
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt) "
+                  "VALUES ('k', 'VakıfBank', '4543***1234', '2026-10-13', '2026-10-23', 12500)")
+
+    pv = _upload(client, CSV.encode("cp1254"), "hareket.csv").json()  # Windows Türkçe kodlama
+    assert pv["total"] == 6 and pv["counts"]["kart_odemesi"] == 1 and pv["counts"]["virman"] == 1
+
+    r = _upload(client, CSV.encode("utf-8"), "hareket.csv", pv["mapping"], pv["header_row"]).json()
+    assert r == {"gelir": 1, "gider": 2, "kart_odemesi": 1, "virman": 1, "tekrar": 0, "eslesen_elle": 1,
+                 "odendi_isaretlenen": 1, "maas": 1}
+    st = tmpdb.list_statements()[0]
+    assert st["paid_amount"] == 12500 and st["paid_at"] == "2026-10-16"   # kart ödemesi → ekstre ödendi
+    entries = tmpdb.list_entries()
+    maas = next(e for e in entries if e["kind"] == "gelir")
+    assert maas["description"] == "Maaş" and maas["recurring_id"] and maas["month"] == "2026-10"  # sabit kaleme bağlandı
+    assert sum(1 for e in entries if e["description"] == "Psikolog") == 1   # elle girilen tekrar eklenmedi
+    assert not any("VIRMAN" in e["description"] for e in entries)
+
+    again = _upload(client, CSV.encode("utf-8"), "hareket.csv", pv["mapping"], pv["header_row"]).json()
+    # ikinci yükleme hiçbir şey eklemez; kart ödemesi tekrar okunur ama ekstre zaten ödendi, yeniden işaretlenmez
+    assert again["tekrar"] == 4 and again["gider"] == 0 and again["gelir"] == 0
+    assert again["eslesen_elle"] == 0 and again["odendi_isaretlenen"] == 0
+    # eşleme hatırlandı
+    assert _upload(client, CSV.encode("utf-8"), "hareket.csv").json()["profile_saved"] is True
+
+
+def test_xlsx_debit_credit_columns(client, tmpdb):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["ORNEK BANKASI HESAP DÖKÜMÜ"])
+    ws.append([])
+    ws.append(["İşlem Tarihi", "Açıklama", "Borç", "Alacak", "Bakiye"])
+    ws.append(["14.10.2026", "ORNEK MARKET POS", "450,00", "", "10.000,00"])
+    ws.append(["15.10.2026", "PRIM ODEMESI", "", "5.000,00", "15.000,00"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    pv = _upload(client, buf.getvalue(), "dokum.xlsx").json()
+    assert pv["mapping"]["debit"] == 2 and pv["mapping"]["credit"] == 3 and pv["total"] == 2
+    r = _upload(client, buf.getvalue(), "dokum.xlsx", pv["mapping"], pv["header_row"]).json()
+    assert r["gider"] == 1 and r["gelir"] == 1
+    kinds = sorted((e["kind"], e["amount"]) for e in tmpdb.list_entries())
+    assert kinds == [("gelir", 5000.0), ("gider", 450.0)]

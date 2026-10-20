@@ -3,6 +3,9 @@ uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 httpx==0.28.1
 pdfplumber==0.11.10
+# banka hesap hareketleri (Excel) içe aktarma
+openpyxl==3.1.5
+xlrd==2.0.2
 # pdfminer'ın bağımlılığı. 50.x arm64 Docker Desktop'ta "Illegal instruction" (exit 132) ile çöküyor
 cryptography==46.0.3
 pytest==9.1.1

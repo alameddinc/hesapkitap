@@ -28,15 +28,22 @@
 - **Ödemeler** — Kart ekstreleri ve faturalar tek listede, son ödeme tarihine göre. "Ödedim" (tam / asgari / kısmi).
   Yeni ekstre gelince önceki ekstre otomatik "ödendi" işaretlenir.
 - **Fiş ve fatura** — Telefondan fotoğraf çek ya da e-fatura PDF'i yükle; fiş mi fatura mı kendisi anlar,
-  tutar / tarih / son ödeme otomatik dolar. Kredi kartıyla ödenen fiş, ekstre gelince kart işlemiyle eşleşir (iki kez sayılmaz).
-- **Gelir & sabit kalemler** — Maaş, kira, aidat… her ay planlamaya girer; gerçekleşince onaylanır.
+  tutar / tarih / son ödeme otomatik dolar. Kredi kartıyla ödenen fiş, ekstre gelince kart işlemiyle eşleşir (iki kez sayılmaz);
+  fişteki marka ile ekstredeki resmi unvan (ör. Espressolab ↔ NEW TASTE GIDA) öğrenilir.
+- **Gelir & sabit kalemler** — Maaş, kira, aidat… her ay planlamaya girer; gerçekleşince gerçek tutarla onaylanır.
+  **Brütten nete** maaş hesabı (2026 vergi dilimleri, asgari ücret istisnası, SGK tavanı) her ayın netini planlar.
+- **Hesap hareketleri** — Vadesiz hesap dökümü (Excel/CSV) içe aktarılır: maaş sabit kaleme bağlanır,
+  kart ödemesi ekstreyi "ödendi" yapar, virman atlanır, aynı hareket iki kez eklenmez.
+- **Şifreli PDF** — Bankaların e-postayla gönderdiği şifreli ekstreler; şifre istenirse hatırlanır.
 - **Planlama (3–12 ay)** — Kalan taksitler, abonelikler, faturalar, sabit giderler; **kesin** ile **tahmini** harcama ayrı gösterilir.
+  **"Alırsam ne olur?"** simülatörü: taksit/vade farkı maliyeti ve önümüzdeki aylara etkisi.
+- **Ay dönümü** — Dönemler kart kesim tarihine otomatik hizalanır; ödenen ekstre yeni dönemin bütçesini şişirmez.
 - **Tasarruf** — Abonelikleri iptal / paket düşürme olarak işaretle; iptal edilen yine çekilirse uyarı. Kısma hedefleri ay ay "tuttu mu".
 - **Bütçe** — Kategori limitleri, %80 ve %100 uyarıları.
 - **Tablo** — Excel gibi filtreler, kategori × ay pivotu, Excel'e aktarma.
 - **Uyarılar** — Faiz ödedin mi, vade farkı ne kadar, hangi taksitler bitiyor, limit doluluğu, dövizli harcama…
 - **Telegram** — Son ödeme hatırlatmaları, aylık özet, günlük **şifreli** yedek.
-- **PWA** — Telefonda ana ekrana ekle, uygulama gibi açılır.
+- **PWA** — Telefonda ana ekrana ekle, uygulama gibi açılır. Açılışta tutarlar gizli (göz ikonuyla açılır).
 
 <p align="center">
   <img src="docs/screenshots/mobil-ozet.png" width="240" alt="Mobil özet">

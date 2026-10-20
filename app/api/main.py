@@ -423,6 +423,74 @@ def skip_recurring(rid: int, body: RecurringAction):
     })}
 
 
+# ---------------------------------------------------------------- banka hesap hareketleri
+
+def _bank_profile_key(columns: list[str]) -> str:
+    import hashlib
+
+    return "bank_profile:" + hashlib.sha1("|".join(c.strip().casefold() for c in columns).encode()).hexdigest()[:16]
+
+
+async def _read_bank_file(file: UploadFile):
+    from app import bank_import
+
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Dosya çok büyük")
+    try:
+        rows = bank_import.read_rows(data, file.filename or "dosya.csv")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(422, f"Dosya okunamadı: {e}") from e
+    if not rows:
+        raise HTTPException(422, "Dosya boş")
+    return rows
+
+
+@app.post("/api/bank-import/preview")
+async def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form(None),
+                              header_row: int | None = Form(None)):
+    """Sütunları tahmin et (ya da verilen eşlemeyi kullan), ilk satırları ve özetini döndür."""
+    import json
+
+    from app import bank_import
+
+    rows = await _read_bank_file(file)
+    det = bank_import.detect(rows)
+    saved = db.get_setting(_bank_profile_key(det["columns"]))
+    if mapping:
+        det["mapping"] = json.loads(mapping)
+    elif saved:
+        det["mapping"] = json.loads(saved)
+    if header_row is not None:
+        det["header_row"], det["columns"] = header_row, rows[header_row]
+    parsed = bank_import.parse(rows, det["mapping"], det["header_row"])
+    with db.connect() as c:
+        seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
+    counts: dict[str, int] = {}
+    for r in parsed:
+        k = "tekrar" if r["hash"] in seen else r["type"]
+        counts[k] = counts.get(k, 0) + 1
+    return {**det, "profile_saved": bool(saved), "total": len(parsed), "counts": counts, "sample": parsed[:15],
+            "raw_preview": rows[det["header_row"]: det["header_row"] + 6]}
+
+
+@app.post("/api/bank-import")
+async def bank_import_run(file: UploadFile = File(...), mapping: str = Form(...), header_row: int = Form(...)):
+    import json
+
+    from app import bank_import
+
+    rows = await _read_bank_file(file)
+    m = json.loads(mapping)
+    parsed = bank_import.parse(rows, m, header_row)
+    if not parsed:
+        raise HTTPException(422, "İçe aktarılacak satır bulunamadı; sütun eşlemesini kontrol et")
+    db.set_setting(_bank_profile_key(rows[header_row]), json.dumps(m))  # bu banka biçimini hatırla
+    stats = db.import_bank_rows(parsed)
+    db.auto_link()
+    return stats
+
+
 # ---------------------------------------------------------------- statements
 
 @app.get("/api/statements")

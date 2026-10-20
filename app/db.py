@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS entries (
     recurring_id INTEGER REFERENCES recurring(id) ON DELETE SET NULL,
     skipped INTEGER NOT NULL DEFAULT 0,  -- tekrarlayan kalem bu ay olmadı
     payment TEXT,                        -- kredi_karti | nakit | havale
+    import_hash TEXT,                    -- banka hesap hareketinden geldiyse parmak izi (tekrarı önler)
     linked_txn_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,  -- ekstredeki karşılığı
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -157,6 +158,7 @@ MIGRATIONS = [
     ("statements", "paid_amount", "REAL"),
     ("statements", "paid_at", "DATE"),
     ("entries", "payment", "TEXT"),
+    ("entries", "import_hash", "TEXT"),
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
 ]
 
@@ -440,7 +442,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month")
+                "payment", "linked_txn_id", "month", "import_hash")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -916,3 +918,77 @@ def forget_pdf_password(index: int) -> None:
     if 0 <= index < len(pws):
         pws.pop(index)
         set_setting("pdf_passwords", json.dumps(pws))
+
+
+# ---------------------------------------------------------------- banka hesap hareketleri
+
+def import_bank_rows(rows: list[dict]) -> dict:
+    """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner."""
+    import re as _re
+    from datetime import date as _date, timedelta
+
+    from app.textnorm import normalize
+
+    stats = {"gelir": 0, "gider": 0, "kart_odemesi": 0, "virman": 0, "tekrar": 0, "eslesen_elle": 0,
+             "odendi_isaretlenen": 0, "maas": 0}
+    with connect() as c:
+        rules = load_rules(c)
+        seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
+        recurring = [dict(r) for r in c.execute("SELECT * FROM recurring")]
+    for r in rows:
+        if r["hash"] in seen:
+            stats["tekrar"] += 1
+            continue
+        d = _date.fromisoformat(r["date"])
+        if r["type"] == "virman":
+            stats["virman"] += 1
+            continue
+        if r["type"] == "kart_odemesi":
+            stats["kart_odemesi"] += 1
+            amt = abs(r["amount"])
+            with connect() as c:
+                st = c.execute(
+                    """SELECT id FROM statements WHERE paid_amount IS NULL AND due_date IS NOT NULL
+                       AND ABS(total_debt - ?) <= 1 AND due_date BETWEEN ? AND ? ORDER BY due_date LIMIT 1""",
+                    (amt, (d - timedelta(days=10)).isoformat(), (d + timedelta(days=40)).isoformat())).fetchone()
+                if st:
+                    c.execute("UPDATE statements SET paid_amount = ?, paid_at = ? WHERE id = ?", (amt, r["date"], st["id"]))
+                    stats["odendi_isaretlenen"] += 1
+            seen.add(r["hash"])
+            continue
+        kind = "gelir" if r["amount"] > 0 else "gider"
+        amount = abs(r["amount"])
+        desc = r["description"]
+        # daha önce elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog) → yeni kayıt açma, bağla
+        with connect() as c:
+            dup = c.execute(
+                """SELECT id FROM entries WHERE import_hash IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
+                   AND entry_date BETWEEN ? AND ? LIMIT 1""",
+                (kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat())).fetchone()
+            if dup:
+                c.execute("UPDATE entries SET import_hash = ? WHERE id = ?", (r["hash"], dup["id"]))
+                stats["eslesen_elle"] += 1
+                seen.add(r["hash"])
+                continue
+        norm = normalize(desc)
+        category = None
+        if kind == "gelir":
+            rec = next((x for x in recurring if x["kind"] == "gelir"
+                        and (normalize(x["description"]) in norm or (_re.search(r"MAAS|UCRET|BORDRO", norm)
+                             and _re.search(r"MAAS", normalize(x["description"]))))), None)
+            if rec:
+                desc, category = rec["description"], rec["category"]  # sabit kaleme bağlansın
+                stats["maas"] += 1
+            category = category or "Diğer Gelir"
+        else:
+            category = categorize(desc, "harcama", rules)
+            if category == "Kategorisiz":
+                category = None
+        payment = "havale" if _re.search(r"EFT|HAVALE|FAST|TRANSFER", norm) else "nakit"
+        create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
+                      "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
+                      "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
+                      "import_hash": r["hash"]})
+        stats[kind] += 1
+        seen.add(r["hash"])
+    return stats
