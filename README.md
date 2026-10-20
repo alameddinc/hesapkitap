@@ -32,8 +32,12 @@
   fişteki marka ile ekstredeki resmi unvan (ör. Espressolab ↔ NEW TASTE GIDA) öğrenilir.
 - **Gelir & sabit kalemler** — Maaş, kira, aidat… her ay planlamaya girer; gerçekleşince gerçek tutarla onaylanır.
   **Brütten nete** maaş hesabı (2026 vergi dilimleri, asgari ücret istisnası, SGK tavanı) her ayın netini planlar.
-- **Hesap hareketleri** — Vadesiz hesap dökümü (Excel/CSV) içe aktarılır: maaş sabit kaleme bağlanır,
-  kart ödemesi ekstreyi "ödendi" yapar, virman atlanır, aynı hareket iki kez eklenmez.
+- **Hesap hareketleri** — Vadesiz hesap dökümü (PDF/Excel/CSV) içe aktarılır; PDF bakiye zinciriyle doğrulanır. Maaş sabit
+  kaleme bağlanır, kart ödemesi ekstreyi "ödendi" yapar, kendi hesaplar arası aktarım sayılmaz, aynı hareket iki kez eklenmez.
+- **E-posta otomasyonu** — Ayrı bir posta kutusuna yönlendirilen banka mailleri (kart e-ekstresi, işlem bildirimi, hesap özeti)
+  10 dakikada bir okunup içe aktarılır. Sadece banka alan adından gelen ve DKIM imzası doğrulanan mailler işlenir.
+- **Transferler ve borç/alacak** — Havale/FAST'ler kişi kişi; borç/alacak defteri (TL, döviz, altın), vadesinde hatırlatma,
+  havale görülünce kendiliğinden kapanma.
 - **Şifreli PDF** — Bankaların e-postayla gönderdiği şifreli ekstreler; şifre istenirse hatırlanır.
 - **Planlama (3–12 ay)** — Kalan taksitler, abonelikler, faturalar, sabit giderler; **kesin** ile **tahmini** harcama ayrı gösterilir.
   **"Alırsam ne olur?"** simülatörü: taksit/vade farkı maliyeti ve önümüzdeki aylara etkisi.

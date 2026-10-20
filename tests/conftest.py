@@ -27,7 +27,8 @@ def _fixture_pdfs(monkeypatch):
 
     monkeypatch.setattr(parsers, "extract_text", fake)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)  # testler dışarıya istek atmaz
-    for k in ("APP_PASSWORD", "SECRET_KEY", "TELEGRAM_BOT_TOKEN", "BACKUP_PASSPHRASE", "GEMINI_MODEL"):
+    for k in ("APP_PASSWORD", "SECRET_KEY", "TELEGRAM_BOT_TOKEN", "BACKUP_PASSPHRASE", "GEMINI_MODEL",
+              "MAIL_USER", "MAIL_PASSWORD", "MAIL_IMAP_HOST", "MAIL_SENDERS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("JOBS_ENABLED", "0")
     monkeypatch.setenv("HESAPKITAP_NO_AUTH", "1")  # test_auth bunu kendisi kaldırır

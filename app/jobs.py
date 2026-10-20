@@ -134,9 +134,27 @@ def due_jobs(now: datetime) -> list[tuple[str, callable]]:
             if now.hour >= hour and db.get_setting(f"job:{name}") != today]
 
 
+def mail_due(now: datetime) -> bool:
+    """E-posta kutusu her POLL_MINUTES dakikada bir kontrol edilir."""
+    from app import mailbox
+
+    if not mailbox.enabled():
+        return False
+    last = db.get_setting("mail:last_attempt")
+    return not last or (now - datetime.fromisoformat(last)).total_seconds() >= mailbox.POLL_MINUTES * 60
+
+
 async def scheduler() -> None:
+    from app import mailbox
+
     while True:
         now = datetime.now(TZ)
+        if mail_due(now):
+            db.set_setting("mail:last_attempt", now.isoformat(timespec="seconds"))
+            try:
+                log.info("mail poll: %s", await asyncio.to_thread(mailbox.poll))
+            except Exception:  # noqa: BLE001 - bağlantı hatası vb. bir sonraki turda yeniden denenir
+                log.exception("mail poll failed")
         for name, fn in due_jobs(now):
             try:
                 result = await asyncio.to_thread(fn, now.date())

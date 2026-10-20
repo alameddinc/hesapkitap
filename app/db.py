@@ -149,6 +149,17 @@ CREATE TABLE IF NOT EXISTS debts (
     settled_entry_id INTEGER,          -- kapatan banka hareketi / elle kayıt
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+-- E-posta otomasyonu günlüğü: her mail bir kez işlenir (Message-ID)
+CREATE TABLE IF NOT EXISTS mail_log (
+    message_id TEXT PRIMARY KEY,
+    received_at TEXT,
+    sender TEXT,
+    subject TEXT,
+    kind TEXT,            -- pdf | bildirim | diger | -
+    status TEXT,          -- ok | skip | error
+    detail TEXT,
+    processed_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- Kişi bazında ayar: kategori ve borç takibi
 CREATE TABLE IF NOT EXISTS counterparties (
     name TEXT PRIMARY KEY,
@@ -1097,13 +1108,17 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     with connect() as c:
         people |= {n for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL")}
     for r in rows:
-        if r["hash"] in seen:
+        if r["hash"] in seen or (r["hash"].startswith("mail:") and _already_imported(r, people, owners)):
             stats["tekrar"] += 1
             continue
         d = _date.fromisoformat(r["date"])
         if r["type"] == "virman":
             stats["virman"] += 1
             with connect() as c:
+                if not r["hash"].startswith("mail:"):  # PDF geldi: aynı aktarımın bildirimden gelen geçici kaydını sil
+                    c.execute("DELETE FROM own_transfers WHERE import_hash LIKE 'mail:%' AND ABS(amount - ?) < 0.01 "
+                              "AND transfer_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')",
+                              (r["amount"], r["date"], r["date"]))
                 c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash) "
                           "VALUES (?, ?, ?, ?, ?)", (r["date"], r["amount"], account, r["description"][:500], r["hash"]))
             continue
@@ -1114,6 +1129,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             amt = abs(r["amount"])
             card = _re.search(r"\d{4}\s*\*+\s*(\d{4})", r["description"])
             with connect() as c:
+                if not r["hash"].startswith("mail:"):
+                    c.execute("DELETE FROM card_payments WHERE import_hash LIKE 'mail:%' AND ABS(amount - ?) < 0.01 "
+                              "AND pay_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')", (amt, r["date"], r["date"]))
                 c.execute("INSERT OR IGNORE INTO card_payments (pay_date, amount, card_last4, account, description, import_hash) "
                           "VALUES (?, ?, ?, ?, ?, ?)", (r["date"], amt, card.group(1) if card else None, account,
                                                         r["description"][:300], r["hash"]))
@@ -1130,10 +1148,11 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         # daha önce elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog) → yeni kayıt açma, bağla
         with connect() as c:
             cands = [dict(x) for x in c.execute(
-                """SELECT id, entry_date, description, note, counterparty FROM entries WHERE import_hash IS NULL
-                   AND kind = ? AND ABS(amount - ?) < 0.01 AND entry_date BETWEEN ? AND ?""",
-                (kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
-            who_here = counterparty(r["description"], r["amount"], owners)
+                """SELECT id, entry_date, description, note, counterparty FROM entries
+                   WHERE (import_hash IS NULL OR (import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti'))
+                   AND import_hash IS NOT ? AND kind = ? AND ABS(amount - ?) < 0.01 AND entry_date BETWEEN ? AND ?""",
+                (r["hash"], kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
+            who_here = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
             dup = _pick_manual(cands, who_here, people, d)
             if dup:
                 c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?) WHERE id = ?",
@@ -1147,6 +1166,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             continue
         norm = normalize(desc)
         category = None
+        rec = None
         if kind == "gelir":
             rec = next((x for x in recurring if x["kind"] == "gelir"
                         and (normalize(x["description"]) in norm
@@ -1177,7 +1197,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         payment = "havale" if _re.search(r"EFT|HAVALE|FAST|TRANSFER", norm) else "nakit"
         from app.bank_import import counterparty, transfer_note
 
-        who = counterparty(r["description"], r["amount"], owners)
+        who = None if rec else counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)  # maaşta işveren kişi değil
         if who:
             who, payment = _known_counterparty(who), "havale"
             cp = get_counterparty(who)
@@ -1405,3 +1425,98 @@ def _name_key(name: str) -> str:
     from app.textnorm import normalize
 
     return _re.sub(r"[^A-Z]", "", normalize(name))
+
+
+# ---------------------------------------------------------------- e-posta otomasyonu
+
+def _who_hint(r: dict, owners: list[str] | None) -> str | None:
+    """Bildirim mailinde model karşı tarafı ayrıca verir; kendisi değilse kullan."""
+    import re as _re
+
+    from app.bank_import import _pretty, _squash
+
+    w = (r.get("who") or "").strip()
+    if not w or len(w) < 3:
+        return None
+    own = {_squash(o) for o in owners or [] if o}
+    if _squash(w) in own:
+        return None
+    return _pretty(_re.sub(r"\s+", " ", w.upper()), w) if w.isupper() else w
+
+
+def _already_imported(r: dict, people: set[str], owners: list[str] | None) -> bool:
+    """Bildirimden gelen hareket, dökümden (PDF) zaten içe aktarılmış mı? (bildirim geç işlendiyse çift olmasın)"""
+    from datetime import date as _date
+
+    from app.bank_import import counterparty
+
+    amt, d = abs(r["amount"]), r["date"]
+    window = ("date(?, '-3 days')", "date(?, '+3 days')")
+    with connect() as c:
+        if r["type"] == "virman":
+            return c.execute(f"SELECT 1 FROM own_transfers WHERE ABS(ABS(amount) - ?) < 0.01 AND transfer_date "
+                             f"BETWEEN {window[0]} AND {window[1]}", (amt, d, d)).fetchone() is not None
+        if r["type"] == "kart_odemesi":
+            return c.execute(f"SELECT 1 FROM card_payments WHERE ABS(amount - ?) < 0.01 AND pay_date "
+                             f"BETWEEN {window[0]} AND {window[1]}", (amt, d, d)).fetchone() is not None
+        kind = "gelir" if r["amount"] > 0 else "gider"
+        cands = [dict(x) for x in c.execute(
+            f"""SELECT id, entry_date, description, note, counterparty FROM entries WHERE import_hash IS NOT NULL
+                AND import_hash NOT LIKE 'mail:%' AND kind = ? AND ABS(amount - ?) < 0.01
+                AND entry_date BETWEEN {window[0]} AND {window[1]}""", (kind, amt, d, d))]
+    if not cands:
+        return False
+    who = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
+    return _pick_manual(cands, who, people, _date.fromisoformat(d)) is not None
+
+
+def mail_seen(message_id: str) -> bool:
+    with connect() as c:
+        return c.execute("SELECT 1 FROM mail_log WHERE message_id = ?", (message_id,)).fetchone() is not None
+
+
+def log_mail(r: dict) -> None:
+    with connect() as c:
+        c.execute("INSERT OR REPLACE INTO mail_log (message_id, received_at, sender, subject, kind, status, detail) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?)", (r["message_id"], r.get("received_at"), r.get("sender"),
+                                                  r.get("subject"), r.get("kind"), r.get("status"), r.get("detail")))
+
+
+def mail_log(limit: int = 50) -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM mail_log ORDER BY processed_at DESC, received_at DESC LIMIT ?", (limit,)))
+
+
+def card_holders() -> list[str]:
+    """Kart ekstrelerindeki kart sahipleri (kendi hesapları arası virmanı tanımak için)."""
+    with connect() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT card_holder FROM transactions WHERE card_holder <> ''")]
+
+
+def owner_names() -> list[str]:
+    import json
+
+    return json.loads(get_setting("bank_owner_names") or "[]")
+
+
+def remember_owner_name(name: str) -> None:
+    import json
+
+    names = owner_names()
+    if name and name not in names:
+        set_setting("bank_owner_names", json.dumps([*names, name], ensure_ascii=False))
+
+
+def create_card_notice(on: str, amount: float, merchant: str, import_hash: str) -> bool:
+    """Kart harcama bildirimi → "ekstre bekleniyor" kaydı; ekstre gelince karttaki işlemle eşleşir."""
+    from app.categorize import categorize
+
+    with connect() as c:
+        if c.execute("SELECT 1 FROM entries WHERE import_hash = ?", (import_hash,)).fetchone():
+            return False
+        rules = load_rules(c)
+    create_entry({"entry_date": on, "description": merchant[:120], "amount": amount, "kind": "gider",
+                  "category": categorize(merchant, "harcama", rules), "payment": "kredi_karti",
+                  "note": "Kart bildirimi (e-posta)", "import_hash": import_hash})
+    auto_link()
+    return True
