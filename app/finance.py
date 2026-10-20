@@ -187,10 +187,20 @@ def summary(month: str, today: date | None = None) -> dict:
     trend = [{"month": m, **{k: v for k, v in _totals(by_month[m]).items() if k in ("income", "expense", "net")}}
              for m in trend_months]
 
+    # Önceki dönemlerden artan para bu döneme devreder (eksi devretmez: açık, kart borcu olarak zaten görünür)
+    carry = 0.0
+    for m in sorted(by_month):
+        if m >= month:
+            break
+        carry = max(0.0, carry + _totals(by_month[m])["net"])
+    totals = _totals(rows)
+    totals["carry_in"] = _round(carry)
+    totals["balance"] = _round(carry + totals["net"])
+
     by_category = _group(expenses, "category")
     return {
         "month": month,
-        "totals": _totals(rows),
+        "totals": totals,
         "budgets": budgets(month, by_category),
         "pending": {
             "income": _round(sum(r["amount"] for r in pending if r["kind"] == INCOME)),
