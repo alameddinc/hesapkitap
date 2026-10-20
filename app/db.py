@@ -512,6 +512,14 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
     data["recurring_id"], data["month"] = rec["id"], best
 
 
+def _nearest_recurring_month(rec, d) -> str:
+    """Tarihe en yakın sabit kalem döneminin ayı (dolu olup olmamasına bakmadan)."""
+    from datetime import date as _date
+
+    return min(_months_around(period_of(d)),
+               key=lambda m: abs((_date.fromisoformat(occurrence_date(m, rec["day_of_month"])) - d).days))
+
+
 def set_cycle_start_day(day: int) -> int:
     """Ay dönümünü değiştir ve elle girilen kayıtların dönemlerini yeniden hesapla."""
     day = max(1, min(28, int(day)))
@@ -979,6 +987,19 @@ def import_bank_rows(rows: list[dict]) -> dict:
             if rec:
                 desc, category = rec["description"], rec["category"]  # sabit kaleme bağlansın
                 stats["maas"] += 1
+                # tarihe en yakın dönemin maaşı zaten elle girildi/onaylandıysa: yeni kayıt açma,
+                # bankadaki gerçek tutar ve tarihle güncelle (net maaş elle girilenden birkaç lira farklı olabilir)
+                target = _nearest_recurring_month(rec, d)
+                with connect() as c:
+                    existing = c.execute(
+                        "SELECT id FROM entries WHERE recurring_id = ? AND month = ? AND import_hash IS NULL AND skipped = 0",
+                        (rec["id"], target)).fetchone()
+                    if existing:
+                        c.execute("UPDATE entries SET amount = ?, entry_date = ?, import_hash = ?, note = ? WHERE id = ?",
+                                  (amount, r["date"], r["hash"], f"Hesap hareketi · {r['description']}", existing["id"]))
+                        stats["eslesen_elle"] += 1
+                        seen.add(r["hash"])
+                        continue
             category = category or "Diğer Gelir"
         else:
             category = categorize(desc, "harcama", rules)

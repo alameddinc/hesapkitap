@@ -92,3 +92,18 @@ def test_xlsx_debit_credit_columns(client, tmpdb):
     assert r["gider"] == 1 and r["gelir"] == 1
     kinds = sorted((e["kind"], e["amount"]) for e in tmpdb.list_entries())
     assert kinds == [("gelir", 5000.0), ("gider", 450.0)]
+
+
+def test_salary_updates_manual_entry_with_actual_amount(client, tmpdb):
+    """Maaş elle 225.000 girildi; bankada 224.987,40 yattı → yeni kayıt değil, mevcut güncellenir."""
+    rid = client.post("/api/recurring", json={"description": "Maaş", "amount": 220000, "kind": "gelir", "category": "Maaş",
+                                              "day_of_month": 15, "start_month": "2026-01"}).json()["id"]
+    client.post("/api/entries", json={"entry_date": "2026-09-15", "description": "Maaş", "amount": 225000, "kind": "gelir"})
+    assert tmpdb.list_entries()[0]["recurring_id"] == rid
+    csv = "Tarih;Açıklama;Tutar\n14.09.2026;ORNEK AS MAAS ODEMESI;224.987,40\n".encode()
+    pv = _upload(client, csv, "h.csv").json()
+    r = _upload(client, csv, "h.csv", pv["mapping"], pv["header_row"]).json()
+    assert r["eslesen_elle"] == 1 and r["gelir"] == 0
+    e = tmpdb.list_entries()
+    assert len(e) == 1 and e[0]["amount"] == 224987.40 and e[0]["entry_date"] == "2026-09-14" and e[0]["month"] == "2026-09"
+    assert client.get("/api/summary", params={"month": "2026-09"}).json()["totals"]["income"] == 224987.40
