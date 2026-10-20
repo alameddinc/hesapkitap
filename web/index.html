@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      // iOS Safari kutuya odaklanınca yakınlaştırıp öyle bırakıyor ve yakınlaştırmayı sayfa başına hatırlıyor.
+      // maximum-scale yalnızca iOS'ta: orada iki parmakla büyütme yine çalışır (Android'de engellerdi, eklenmez).
+      if (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) {
+        document.querySelector('meta[name="viewport"]').content += ", maximum-scale=1";
+      }
+    </script>
     <link rel="icon" type="image/png" href="/icons/favicon-64.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#1f5fe0" />
