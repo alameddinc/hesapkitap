@@ -138,7 +138,8 @@ CREATE TABLE IF NOT EXISTS recurring (
     day_of_month INTEGER NOT NULL DEFAULT 1,
     start_month TEXT NOT NULL,      -- YYYY-MM
     end_month TEXT,                 -- YYYY-MM, NULL = süresiz
-    note TEXT
+    note TEXT,
+    gross_amount REAL               -- brüt maaş: net her ay vergi dilimine göre hesaplanır
 );
 """
 
@@ -147,6 +148,7 @@ MIGRATIONS = [
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
+    ("recurring", "gross_amount", "REAL"),
     ("statements", "paid_amount", "REAL"),
     ("statements", "paid_at", "DATE"),
     ("entries", "payment", "TEXT"),
@@ -572,7 +574,8 @@ def delete_entry(entry_id: int) -> None:
 
 # ---------------------------------------------------------------- recurring
 
-RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note")
+RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note",
+                    "gross_amount")
 
 
 def list_recurring() -> list[dict]:
@@ -839,6 +842,13 @@ def set_recurring_override(rid: int, month: str, amount: float | None) -> None:
 
 
 def planned_amount(r: dict, month: str, overrides: dict | None = None) -> float:
-    """Sabit kalemin o ay için beklenen tutarı: aya özel tutar varsa o, yoksa şablon."""
+    """Sabit kalemin o ay için beklenen tutarı: aya özel tutar > brüt maaştan hesaplanan net > şablon."""
     ov = overrides if overrides is not None else recurring_overrides()
-    return ov.get((r["id"], month), r["amount"])
+    if (r["id"], month) in ov:
+        return ov[(r["id"], month)]
+    if r.get("gross_amount"):
+        from app.payroll import net_for
+
+        paid = occurrence_date(month, r["day_of_month"] or 1)  # maaşın o dönemde yattığı gerçek ay
+        return net_for(r["gross_amount"], int(paid[:4]), int(paid[5:7]))
+    return r["amount"]

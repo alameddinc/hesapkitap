@@ -170,6 +170,7 @@ export interface Recurring {
   start_month: string;
   end_month: string | null;
   note: string | null;
+  gross_amount?: number | null;
 }
 
 export interface Plan {

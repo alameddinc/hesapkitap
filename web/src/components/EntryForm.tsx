@@ -6,6 +6,7 @@ import { dateTR, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
+import PayrollPreview from "./PayrollPreview";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 
@@ -31,6 +32,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [day, setDay] = useState(String(rec?.day_of_month ?? new Date().getDate()));
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
+  const [isGross, setIsGross] = useState(!!rec?.gross_amount);
+  const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
   const [err, setErr] = useState<string | null>(null);
   const showLink = !!editingEntry && kind === "gider" && payment === "kredi_karti" && editingEntry.payment === "kredi_karti";
   const cands = useQuery({
@@ -45,8 +48,12 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   };
   const save = useSave(async () => {
     const amt = parseAmount(amount);
-    if (!description.trim() || !(amt >= 0) || amount === "") throw new Error("Açıklama ve tutar gerekli");
-    const common = { description: description.trim(), amount: amt, kind, category: category || null, note: note || null };
+    if (!description.trim() || ((!isGross || kind !== "gelir") && (!(amt >= 0) || amount === ""))) throw new Error("Açıklama ve tutar gerekli");
+    const g = parseAmount(gross);
+    const grossMode = isGross && kind === "gelir" && (isRecurring || !!rec);
+    if (grossMode && !(g > 0)) throw new Error("Brüt tutar gerekli");
+    const common = { description: description.trim(), amount: grossMode ? 0 : amt, kind, category: category || null, note: note || null,
+      ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
     const pay = kind === "gider" && !isRecurring && !rec ? { payment } : {};
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
@@ -91,7 +98,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             placeholder={kind === "gelir" ? "ör. Maaş" : "ör. Psikolog, Kira"} autoFocus={!row && !rec} />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div>
+          <div className={isGross && kind === "gelir" && isRecurring ? "hidden" : undefined}>
             <label className="label" htmlFor="e-amt">Tutar (₺)</label>
             <input id="e-amt" className="input text-right" inputMode="decimal" value={amount}
               onChange={(e) => setAmount(e.target.value)} placeholder="0,00" />
@@ -155,7 +162,22 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             <span>Her ay tekrarlansın <span className="text-stone-500">(maaş, kira, aidat…)</span></span>
           </label>
         )}
-        {isRecurring && (
+        {isRecurring && kind === "gelir" && (
+          <div className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input type="checkbox" checked={isGross} onChange={(e) => setIsGross(e.target.checked)} />
+              <span><b>Brüt maaş</b> — net her ay vergi dilimine göre otomatik hesaplansın</span>
+            </label>
+            {isGross && (
+              <>
+                <input className="input text-right" inputMode="decimal" placeholder="Aylık brüt (₺)" value={gross}
+                  onChange={(e) => setGross(e.target.value)} />
+                <PayrollPreview gross={parseAmount(gross)} year={Number((rec?.start_month ?? date).slice(0, 4))} />
+              </>
+            )}
+          </div>
+        )}
+        {isRecurring && !isGross && (
           <p className="rounded-lg bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
             Tutar her ay değişiyorsa (ör. brüt maaşta net) burada ortalama/beklenen tutarı yaz. O ay yatınca "Gerçekleşti"de
             gerçek tutarı girersin; ileriki aylar için Planlama'da ay ay tutar verebilirsin.

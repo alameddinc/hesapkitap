@@ -302,6 +302,7 @@ class RecurringIn(BaseModel):
     start_month: str = Field(pattern=r"^\d{4}-\d{2}$")
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
+    gross_amount: float | None = Field(default=None, ge=0)
 
 
 class RecurringPatch(BaseModel):
@@ -313,6 +314,7 @@ class RecurringPatch(BaseModel):
     start_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
+    gross_amount: float | None = Field(default=None, ge=0)
 
 
 class RecurringAction(BaseModel):
@@ -320,19 +322,39 @@ class RecurringAction(BaseModel):
     amount: float | None = Field(default=None, ge=0)  # o ay farklı tutar olduysa
 
 
+@app.get("/api/payroll/net")
+def payroll_net(gross: float, year: int | None = None, start_month: int = 1):
+    """Brütten nete ay ay döküm (2026 parametreleri; tanımsız yıl için en yakın yıl)."""
+    from app.payroll import net_by_month
+
+    if gross <= 0 or not 1 <= start_month <= 12:
+        raise HTTPException(422, "Geçersiz değer")
+    return net_by_month(gross, year or date.today().year, start_month)
+
+
 @app.get("/api/recurring")
 def list_recurring():
     return db.list_recurring()
 
 
+def _with_gross_net(data: dict) -> dict:
+    """Brüt maaşta şablon tutar = bu ayın neti (listelerde görünen; plan her ay kendi netini hesaplar)."""
+    if data.get("gross_amount"):
+        from app.payroll import net_for
+
+        t = date.today()
+        data["amount"] = net_for(data["gross_amount"], t.year, t.month)
+    return data
+
+
 @app.post("/api/recurring")
 def create_recurring(body: RecurringIn):
-    return {"id": db.create_recurring(body.model_dump())}
+    return {"id": db.create_recurring(_with_gross_net(body.model_dump()))}
 
 
 @app.patch("/api/recurring/{rid}")
 def patch_recurring(rid: int, body: RecurringPatch):
-    db.update_recurring(rid, body.model_dump(exclude_unset=True))
+    db.update_recurring(rid, _with_gross_net(body.model_dump(exclude_unset=True)))
     return {"ok": True}
 
 
