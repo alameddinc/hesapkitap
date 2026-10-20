@@ -715,3 +715,54 @@ def insights(month: str, today: date | None = None) -> list[dict]:
 
     order = {"kritik": 0, "uyari": 1, "bilgi": 2, "iyi": 3}
     return sorted(out, key=lambda i: order[i["level"]])
+
+
+# ---------------------------------------------------------------- "Alırsam ne olur?" simülasyonu
+
+TAX_ON_INTEREST = 0.30  # BSMV %15 + KKDF %15 (taksitli alışveriş / kredi kartı vade farkına)
+
+
+def installment_schedule(amount: float, n: int, monthly_rate: float) -> list[dict]:
+    """Eşit taksit. Vade farkı varsa üstüne BSMV+KKDF eklenir (efektif oran = oran × 1,30)."""
+    r = monthly_rate * (1 + TAX_ON_INTEREST)
+    pay = amount / n if r == 0 else amount * r / (1 - (1 + r) ** -n)
+    out, rem = [], amount
+    for i in range(n):
+        interest = rem * r
+        principal = pay - interest
+        rem -= principal
+        out.append({"no": i + 1, "payment": _round(pay), "principal": _round(principal), "cost": _round(interest)})
+    return out
+
+
+def simulate_purchase(amount: float, installments: int, monthly_rate: float = 0.0,
+                      start_month: str | None = None, today: date | None = None) -> dict:
+    today = today or date.today()
+    start = start_month or current_period(today)
+    sched = installment_schedule(amount, installments, monthly_rate)
+    horizon = max(6, installments + 1)
+    base = plan(horizon + 1, today=today)["months"]
+    by_m = {m["month"]: m for m in base}
+    months, cum_b, cum_a, extra_by_month = [], 0.0, 0.0, {}
+    for i, sch in enumerate(sched):
+        extra_by_month[add_months(start, i)] = sch["payment"]
+    for m in base:
+        add = extra_by_month.get(m["month"], 0.0)
+        cum_b += m["net"]
+        cum_a += m["net"] - add
+        months.append({"month": m["month"], "income": m["income"], "payment": _round(add),
+                       "net_before": m["net"], "net_after": _round(m["net"] - add),
+                       "with_estimate_after": _round(m["net_with_estimate"] - add),
+                       "cumulative_before": _round(cum_b), "cumulative_after": _round(cum_a)})
+    total = sum(s["payment"] for s in sched)
+    tight = [m for m in months if m["net_after"] < 0]
+    est_tight = [m for m in months if m["net_after"] >= 0 and m["with_estimate_after"] < 0]
+    return {
+        "amount": amount, "installments": installments, "monthly_rate": monthly_rate,
+        "monthly_payment": sched[0]["payment"], "total_cost": _round(total), "extra_cost": _round(total - amount),
+        "schedule": [{**s, "month": add_months(start, i)} for i, s in enumerate(sched)],
+        "months": [m for m in months if m["month"] in by_m],
+        "negative_months": [m["month"] for m in tight],
+        "tight_with_estimate": [m["month"] for m in est_tight],
+        "single_payment_month": start,
+    }

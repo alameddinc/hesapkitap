@@ -226,3 +226,35 @@ def test_cycle_start_day(client, upload, tmpdb):
         c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, total_debt) "
                   "VALUES ('y', 'VakıfBank', '4543***1234', '2026-11-20', 1)")
     assert tmpdb.auto_update_cycle() == 21
+
+
+def test_installment_schedule():
+    from app.finance import installment_schedule
+
+    s = installment_schedule(9000, 9, 0)  # faizsiz
+    assert [x["payment"] for x in s] == [1000.0] * 9 and sum(x["cost"] for x in s) == 0
+    s = installment_schedule(425, 9, 0.0375)  # %3,75 + BSMV/KKDF (%30) → efektif %4,875, eşit taksit
+    total = sum(x["payment"] for x in s)
+    assert s[0]["payment"] == 59.46 and round(total, 2) == 535.14  # annüite: 425·r/(1-(1+r)^-9)
+    assert abs(sum(x["principal"] for x in s) - 425) < 0.05
+
+
+def test_simulate_purchase(client, upload):
+    import datetime as dt
+
+    from app import finance
+
+    upload()
+    client.post("/api/recurring", json={"description": "Maaş", "amount": 60000, "kind": "gelir", "start_month": "2026-01"})
+    today = dt.date(2026, 11, 2)
+    r = finance.simulate_purchase(40000, 4, 0, today=today)
+    assert r["monthly_payment"] == 10000 and r["extra_cost"] == 0
+    first = r["schedule"][0]["month"]
+    m = {x["month"]: x for x in r["months"]}
+    assert m[first]["net_after"] == round(m[first]["net_before"] - 10000, 2)
+    # 5. ayda taksit yok → değişmez
+    later = [x for x in r["months"] if x["month"] > r["schedule"][-1]["month"]]
+    assert later and all(x["net_after"] == x["net_before"] for x in later)
+    # çok büyük alım → kesin giderle açık veren ay uyarısı
+    big = client.post("/api/plan/simulate", json={"amount": 900000, "installments": 3, "monthly_rate": 0.0375}).json()
+    assert big["negative_months"] and big["extra_cost"] > 0

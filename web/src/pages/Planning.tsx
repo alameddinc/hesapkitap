@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, ChevronDown, PiggyBank, Plus, Repeat } from "lucide-react";
+import { CalendarClock, Calculator, ChevronDown, PiggyBank, Plus, Repeat } from "lucide-react";
+import Simulator from "../components/Simulator";
 import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type PlanLineType, type PlanMonth } from "../api";
@@ -76,6 +77,7 @@ export default function Planning() {
   const [horizon, setHorizon] = useState<"3" | "6" | "12">("6");
   const plan = useQuery({ queryKey: ["plan", horizon], queryFn: () => api.plan(Number(horizon)) });
   const [open, setOpen] = useState<string | null>(null);
+  const [simOpen, setSimOpen] = useState(false);
   const p = plan.data;
 
   const chart = p?.months.map((m) => ({ month: m.month, Gelir: m.income, ...m.groups })) ?? [];
@@ -151,8 +153,12 @@ export default function Planning() {
         </section>
       )}
 
+      {simOpen && <Simulator onClose={() => setSimOpen(false)} />}
       <div className="flex flex-wrap gap-2">
-        <button className="btn-primary" onClick={() => ui.openEntry(undefined, { kind: "gider", recurring: true })}>
+        <button className="btn-primary" onClick={() => setSimOpen(true)}>
+          <Calculator size={16} /> Alırsam ne olur?
+        </button>
+        <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => ui.openEntry(undefined, { kind: "gider", recurring: true })}>
           <Repeat size={16} /> Sabit kalem ekle
         </button>
         <button className="btn-ghost border border-stone-300 dark:border-stone-700"

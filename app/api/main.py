@@ -191,6 +191,19 @@ def plan(months: int = 6):
     return finance.plan(max(1, min(months, 24)))
 
 
+class SimulateIn(BaseModel):
+    amount: float = Field(gt=0)
+    installments: int = Field(ge=1, le=36)
+    monthly_rate: float = Field(default=0.0, ge=0, le=0.2)  # 0.0375 = aylık %3,75 (vade farkı / kâr payı)
+    start_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+
+
+@app.post("/api/plan/simulate")
+def simulate(body: SimulateIn):
+    """Alırsam ne olur: taksit planı, toplam/ek maliyet, ay ay net öncesi→sonrası."""
+    return finance.simulate_purchase(body.amount, body.installments, body.monthly_rate, body.start_month)
+
+
 # ---------------------------------------------------------------- card transactions
 
 class CardTxnPatch(BaseModel):
