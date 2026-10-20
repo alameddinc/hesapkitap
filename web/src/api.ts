@@ -88,6 +88,8 @@ export interface Summary {
     refunds: number;
     expense: number;
     net: number;
+    carry_in: number; // önceki dönemlerden devreden artı
+    balance: number; // devreden + net
   };
   pending: { income: number; expense: number; count: number };
   budgets: Budget[];

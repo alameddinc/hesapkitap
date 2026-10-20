@@ -74,7 +74,12 @@ export default function Dashboard() {
               sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
             <Kpi label="Gider" value={s.totals.expense}
               sub={`Kart ${tlCompact(s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense)}`} />
-            <Kpi label="Net" value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"} />
+            {s.totals.carry_in > 0 ? (
+              <Kpi label="Kalan (devredenle)" value={s.totals.balance} tone={s.totals.balance < 0 ? "red" : "green"}
+                sub={`Bu dönem ${tl(s.totals.net)} · devreden +${tl(s.totals.carry_in)}`} />
+            ) : (
+              <Kpi label="Net" value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"} />
+            )}
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />
           </div>

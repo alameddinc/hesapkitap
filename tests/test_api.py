@@ -187,3 +187,18 @@ def test_encrypted_pdf_password_flow(client, monkeypatch, tmpdb):
     # hatırlanan şifreyle başka ekstre kendiliğinden açılır
     tmpdb.delete_statement(tmpdb.list_statements()[0]["id"])
     assert client.post("/api/statements/upload", files=f()).json()[0]["status"] == "saved"
+
+
+def test_summary_carries_positive_balance(client):
+    client.post("/api/entries", json={"entry_date": "2026-01-05", "description": "Maaş", "amount": 1000, "kind": "gelir",
+                                      "category": "Maaş"})
+    client.post("/api/entries", json={"entry_date": "2026-01-06", "description": "Kira", "amount": 300, "kind": "gider",
+                                      "category": "Kira & Aidat", "payment": "havale"})
+    client.post("/api/entries", json={"entry_date": "2026-02-05", "description": "Kira", "amount": 900, "kind": "gider",
+                                      "category": "Kira & Aidat", "payment": "havale"})
+    m1 = client.get("/api/summary", params={"month": "2026-01"}).json()["totals"]
+    m2 = client.get("/api/summary", params={"month": "2026-02"}).json()["totals"]
+    m3 = client.get("/api/summary", params={"month": "2026-03"}).json()["totals"]
+    assert m1["carry_in"] == 0 and m1["balance"] == 700
+    assert m2["carry_in"] == 700 and m2["balance"] == -200
+    assert m3["carry_in"] == 0  # eksi devretmez
