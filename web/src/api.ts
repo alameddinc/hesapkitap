@@ -27,6 +27,7 @@ export interface Row {
   awaiting_statement?: boolean;
   template_amount?: number;
   subscription?: "aktif" | "iptal" | "dusuruldu" | null;
+  counterparty?: string | null;
 }
 
 export type Payment = "kredi_karti" | "nakit" | "havale";
@@ -104,7 +105,7 @@ export interface Summary {
 export type PlanLineType = "kart_gercek" | "taksit" | "abonelik" | "degisken" | "sabit" | "tek_seferlik" | "fatura" | "tasarruf_notu";
 
 export interface Payable {
-  type: "statement" | "bill" | "estimate";
+  type: "statement" | "bill" | "estimate" | "debt";
   id: number | null;
   title: string;
   subtitle: string;
@@ -254,7 +255,8 @@ export const api = {
   patchCard: (id: number, body: Record<string, unknown>) =>
     req<{ ok: true; rule: string | null }>("PATCH", `/api/card-transactions/${id}`, body),
 
-  createEntry: (body: Record<string, unknown>) => req<{ id: number; linked: boolean }>("POST", "/api/entries", body),
+  createEntry: (body: Record<string, unknown>) =>
+    req<{ id: number; linked: boolean; debt_settled: number | null }>("POST", "/api/entries", body),
   linkCandidates: (id: number) => req<LinkCandidate[]>("GET", `/api/entries/${id}/candidates`),
   linkEntry: (id: number, txnId: number | null) => req("POST", `/api/entries/${id}/link`, { txn_id: txnId }),
   patchEntry: (id: number, body: Record<string, unknown>) => req("PATCH", `/api/entries/${id}`, body),
@@ -274,6 +276,9 @@ export const api = {
   setBudget: (category: string, monthly_limit: number | null) => req("PUT", "/api/budgets", { category, monthly_limit }),
   payStatement: (id: number, amount: number, paid_at: string) => req("POST", `/api/statements/${id}/pay`, { amount, paid_at }),
   unpayStatement: (id: number) => req("DELETE", `/api/statements/${id}/pay`),
+  payDebt: (id: number, amount: number | null, paid_at: string) => req("POST", `/api/debts/${id}/pay`, { amount, paid_at }),
+  unpayDebt: (id: number) => req("DELETE", `/api/debts/${id}/pay`),
+  people: () => req<{ people: { name: string }[] }>("GET", "/api/transfers").then((t) => t.people.map((p) => p.name)),
   parseBill: (file: File | Blob, name: string) => {
     const fd = new FormData();
     fd.append("file", file, name);

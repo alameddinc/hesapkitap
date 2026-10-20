@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, Handshake } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import { useMeta, useSave } from "../components/hooks";
+import Debts, { fmtAsset, type Debt } from "../components/Debts";
 import Kpi from "../components/Kpi";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
@@ -15,7 +16,7 @@ interface Person {
   count: number;
   last_date: string;
   category: string | null;
-  track_debt: number;
+  open: Record<string, number>; // açık borç/alacak birim birim (+ alacak, − borç)
 }
 interface Item {
   id: number;
@@ -34,7 +35,7 @@ interface Own {
   account: string | null;
   description: string | null;
 }
-interface Data { people: Person[]; own: Own[]; items: Item[] }
+interface Data { people: Person[]; own: Own[]; items: Item[]; debts: Debt[] }
 
 const shortBank = (b: string | null) => (b ? b.replace(/\s+(KATILIM\s+)?BANKASI.*$/i, "").replace(/\s+A\.?Ş\.?$/i, "") : "Hesap");
 
@@ -56,11 +57,10 @@ export default function Transfers() {
     "Aile", "Borç / Alacak", "Kira & Aidat"])], [meta.data]);
 
   if (!q.data) return <div className="text-sm text-stone-500">Yükleniyor…</div>;
-  const { people, own, items } = q.data;
+  const { people, own, items, debts } = q.data;
   const sent = people.reduce((s, p) => s + p.sent, 0);
   const received = people.reduce((s, p) => s + p.received, 0);
   const ownIn = own.filter((o) => o.amount > 0).reduce((s, o) => s + o.amount, 0);
-  const debts = people.filter((p) => p.track_debt);
 
   return (
     <div className="space-y-4">
@@ -68,7 +68,8 @@ export default function Transfers() {
         <h1 className="text-xl font-semibold">Transferler</h1>
         <p className="text-sm text-stone-500">
           Hesap dökümlerindeki havale/FAST'ler kişi kişi. Bir kişiye kategori verirsen o kişiye giden/gelen tüm
-          hareketler o kategoriye geçer. Kendi hesapların arası aktarımlar gelir/gider sayılmaz, aşağıda ayrı durur.
+          hareketler o kategoriye geçer. Borç/alacakları (TL, döviz, altın) aşağıdan kaydet, unutma.
+          Kendi hesapların arası aktarımlar gelir/gider sayılmaz, en altta ayrı durur.
         </p>
       </div>
 
@@ -78,22 +79,7 @@ export default function Transfers() {
         <Kpi label="Kendi hesapların arası" value={ownIn} sub="toplama katılmaz" />
       </div>
 
-      {debts.length > 0 && (
-        <section className="card p-4">
-          <h2 className="mb-2 flex items-center gap-2 font-semibold"><Handshake size={18} /> Borç / alacak takibi</h2>
-          <ul className="space-y-1 text-sm">
-            {debts.map((p) => (
-              <li key={p.name} className="flex justify-between gap-2">
-                <span>{maskText(p.name)}</span>
-                <span className={cx("tabular-nums", p.net > 0 ? "text-amber-700 dark:text-amber-400" : p.net < 0 ? "text-green-700 dark:text-green-400" : "text-stone-500")}>
-                  {p.net === 0 ? "ödeşik" : p.net > 0 ? `sen ${tl(p.net)} borçlusun` : `sana ${tl(-p.net)} borçlu`}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-xs text-stone-500">Net = gelen − giden. Kişiye giden para alacak, gelen para borç sayılır.</p>
-        </section>
-      )}
+      <Debts debts={debts} people={people.map((p) => p.name)} />
 
       <section className="card divide-y divide-stone-100 dark:divide-stone-800">
         {people.length === 0 && (
@@ -105,6 +91,13 @@ export default function Transfers() {
               <div className="min-w-0 flex-1">
                 <div className="font-medium">{maskText(p.name)}</div>
                 <div className="text-xs text-stone-500">{p.count} hareket · son {dateTR(p.last_date)}{p.category && ` · ${p.category}`}</div>
+                {Object.entries(p.open ?? {}).map(([asset, v]) => (
+                  <span key={asset} className={cx("mt-1 mr-1 inline-block rounded-full px-1.5 py-0.5 text-xs",
+                    v < 0 ? "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                      : "bg-green-50 text-green-800 dark:bg-green-950/40 dark:text-green-300")}>
+                    {v < 0 ? "borcun " : "alacağın "}{fmtAsset(Math.abs(v), asset)}
+                  </span>
+                ))}
               </div>
               <div className="text-right text-sm tabular-nums">
                 {p.sent > 0 && <div className="flex items-center justify-end gap-1"><ArrowUpRight size={14} className="text-red-500" />{tl(p.sent)}</div>}
@@ -114,17 +107,10 @@ export default function Transfers() {
             </button>
             {open === p.name && (
               <div className="space-y-3 px-4 pb-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <span className="label">Kategori (tüm hareketlerine uygulanır)</span>
-                    <CategoryPicker value={p.category ?? ""} options={options}
-                      onChange={(v) => save.mutate({ name: p.name, body: { category: v } })} />
-                  </div>
-                  <label className="flex items-center gap-2 self-end pb-2 text-sm">
-                    <input type="checkbox" checked={!!p.track_debt}
-                      onChange={(e) => save.mutate({ name: p.name, body: { track_debt: e.target.checked } })} />
-                    Borç / alacak olarak takip et
-                  </label>
+                <div className="sm:w-1/2">
+                  <span className="label">Kategori (tüm hareketlerine uygulanır)</span>
+                  <CategoryPicker value={p.category ?? ""} options={options}
+                    onChange={(v) => save.mutate({ name: p.name, body: { category: v } })} />
                 </div>
                 <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 text-sm dark:divide-stone-800 dark:border-stone-700">
                   {items.filter((i) => i.counterparty === p.name).map((i) => (

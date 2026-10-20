@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, CreditCard, FileText, Receipt } from "lucide-react";
+import { Check, CreditCard, FileText, Receipt, HandCoins } from "lucide-react";
 import { api, type Payable } from "../api";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
@@ -38,7 +38,7 @@ export default function Payables() {
         {items.map((p) => (
           <li key={`${p.type}-${p.id ?? p.title}`} className={cx("flex items-center gap-3 px-3 py-2.5 sm:px-4", p.status === "odendi" && "opacity-60")}>
             <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500 dark:bg-stone-800">
-              {p.type === "bill" ? <FileText size={15} /> : <CreditCard size={15} />}
+              {p.type === "bill" ? <FileText size={15} /> : p.type === "debt" ? <HandCoins size={15} /> : <CreditCard size={15} />}
             </span>
             <button className="min-w-0 flex-1 text-left" disabled={p.type !== "bill"}
               onClick={() => p.type === "bill" && ui.openBill({ id: p.id!, provider: p.title, amount: p.amount, due_date: p.due_date,

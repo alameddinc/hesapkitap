@@ -19,9 +19,11 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const save = useSave(async () => {
     if (!(amt >= 0)) throw new Error("Tutar geçersiz");
     if (p.type === "statement") return api.payStatement(p.id!, amt, date);
+    if (p.type === "debt") return api.payDebt(p.id!, amt, date);
     return api.payBill(p.id!, amt, date, payment);
   }, () => { onSaved?.(`${p.title} ödendi olarak işaretlendi`); onClose(); });
-  const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!) : api.unpayBill(p.id!)),
+  const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!)
+    : p.type === "debt" ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
     () => { onSaved?.("Ödeme geri alındı"); onClose(); });
 
   return (

@@ -1,0 +1,209 @@
+import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { cx, dateTR, maskText, parseAmount, tl } from "../format";
+import { useUI } from "../ui";
+import CategoryPicker from "./CategoryPicker";
+import { useSave } from "./hooks";
+import Segmented from "./Segmented";
+
+export interface Debt {
+  id: number;
+  person: string;
+  direction: "borc" | "alacak";
+  asset: string;
+  amount: number;
+  paid_amount: number;
+  remaining: number;
+  debt_date: string;
+  due_date: string | null;
+  note: string | null;
+  settled_at: string | null;
+}
+
+// Birimler: TL, döviz, altın; listede yoksa serbest yazılır ("22 ayar bilezik")
+export const ASSETS: { value: string; label: string }[] = [
+  { value: "TRY", label: "TL" }, { value: "USD", label: "Dolar" }, { value: "EUR", label: "Euro" },
+  { value: "GBP", label: "Sterlin" }, { value: "GRAM_ALTIN", label: "gram altın" },
+  { value: "CEYREK_ALTIN", label: "çeyrek altın" }, { value: "YARIM_ALTIN", label: "yarım altın" },
+  { value: "TAM_ALTIN", label: "tam altın" }, { value: "CUMHURIYET_ALTIN", label: "Cumhuriyet altını" },
+];
+const assetLabel = (a: string) => ASSETS.find((x) => x.value === a)?.label ?? a;
+
+/** 1.5 çeyrek altın / ₺200,00 — TL dışındaki birimler gizlilik modunda da maskelenir */
+export function fmtAsset(x: number, asset: string) {
+  if (asset === "TRY") return tl(x);
+  const n = x.toLocaleString("tr-TR", { maximumFractionDigits: 3 });
+  return maskText(`${n} ${assetLabel(asset)}`);
+}
+
+const json = async (method: string, url: string, body?: unknown) => {
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  return j;
+};
+const today = () => new Date().toISOString().slice(0, 10);
+
+/** Borç / alacak defteri: gelir-gider toplamlarını etkilemez; kim kime ne (TL, döviz, altın) borçlu. */
+export default function Debts({ debts, people }: { debts: Debt[]; people: string[] }) {
+  const ui = useUI();
+  const [adding, setAdding] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
+  const [paying, setPaying] = useState<Debt | null>(null);
+  const open = debts.filter((d) => !d.settled_at);
+  const closed = debts.filter((d) => d.settled_at);
+
+  const del = useSave((id: number) => json("DELETE", `/api/debts/${id}`), () => ui.toast("Silindi"));
+  const unpay = useSave((id: number) => json("DELETE", `/api/debts/${id}/pay`), () => ui.toast("Yeniden açıldı"));
+
+  const Row = ({ d }: { d: Debt }) => {
+    const late = !d.settled_at && d.due_date && d.due_date < today();
+    return (
+      <li className={cx("flex items-center gap-3 py-2", d.settled_at && "opacity-60")}>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm">
+            <b>{maskText(d.person)}</b>{" "}
+            <span className={cx("rounded-full px-1.5 py-0.5 text-xs",
+              d.direction === "borc" ? "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                : "bg-green-50 text-green-800 dark:bg-green-950/40 dark:text-green-300")}>
+              {d.direction === "borc" ? "borcum" : "alacağım"}
+            </span>
+          </div>
+          <div className="text-xs text-stone-500">
+            {dateTR(d.debt_date)}
+            {d.due_date && <span className={cx(late && "font-medium text-red-600")}> · vade {dateTR(d.due_date)}</span>}
+            {d.paid_amount > 0 && !d.settled_at && ` · ${fmtAsset(d.paid_amount, d.asset)} ödendi`}
+            {d.settled_at && ` · kapandı ${dateTR(d.settled_at)}`}
+            {d.note && ` · ${d.note}`}
+          </div>
+        </div>
+        <span className="text-right text-sm font-semibold tabular-nums">{fmtAsset(d.settled_at ? d.amount : d.remaining, d.asset)}</span>
+        {d.settled_at ? (
+          <button className="btn-ghost p-1.5 text-stone-400" aria-label="Yeniden aç" onClick={() => unpay.mutate(d.id)}><RotateCcw size={14} /></button>
+        ) : (
+          <button className="btn-primary px-2 py-1 text-xs" onClick={() => setPaying(d)}>
+            <Check size={14} /> {d.direction === "borc" ? "Ödedim" : "Aldım"}
+          </button>
+        )}
+        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil" onClick={() => del.mutate(d.id)}><Trash2 size={14} /></button>
+      </li>
+    );
+  };
+
+  return (
+    <section className="card p-4">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 font-semibold"><Handshake size={18} /> Borç / alacak</h2>
+        {!adding && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setAdding(true)}><Plus size={16} /> Ekle</button>}
+      </div>
+      <p className="mb-2 text-xs text-stone-500">
+        Gelir/gider toplamlarını etkilemez; sadece hatırlatır. TL borçlar o kişiye/kişiden aynı tutarda havale görülünce
+        kendiliğinden kapanır; döviz ve altında "Ödedim / Aldım" de. Vadesi gelince Telegram'dan hatırlatılır.
+      </p>
+      {adding && <DebtForm people={people} onDone={() => setAdding(false)} />}
+      {paying && <PayDebt d={paying} onDone={() => setPaying(null)} />}
+      <ul className="divide-y divide-stone-100 dark:divide-stone-800">
+        {open.map((d) => <Row key={d.id} d={d} />)}
+        {!open.length && !adding && <li className="py-3 text-sm text-stone-500">Açık borç ya da alacak yok.</li>}
+      </ul>
+      {closed.length > 0 && (
+        <>
+          <button className="mt-2 text-xs text-stone-500 underline" onClick={() => setShowClosed(!showClosed)}>
+            {showClosed ? "Kapananları gizle" : `Kapananlar (${closed.length})`}
+          </button>
+          {showClosed && <ul className="divide-y divide-stone-100 dark:divide-stone-800">{closed.map((d) => <Row key={d.id} d={d} />)}</ul>}
+        </>
+      )}
+    </section>
+  );
+}
+
+function DebtForm({ people, onDone }: { people: string[]; onDone: () => void }) {
+  const ui = useUI();
+  const [direction, setDirection] = useState<Debt["direction"]>("borc");
+  const [person, setPerson] = useState("");
+  const [asset, setAsset] = useState("TRY");
+  const [custom, setCustom] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(today());
+  const [due, setDue] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const save = useSave(async () => {
+    const a = parseAmount(amount);
+    if (!person.trim() || !(a > 0)) throw new Error("Kişi ve miktar gerekli");
+    const unit = asset === "_" ? custom.trim() : asset;
+    if (!unit) throw new Error("Birim yaz (ör. 22 ayar bilezik)");
+    return json("POST", "/api/debts", { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
+      due_date: due || null, note: note.trim() || null });
+  }, () => { ui.toast("Kaydedildi"); onDone(); });
+
+  return (
+    <div className="mb-3 space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+      <Segmented value={direction} onChange={setDirection} options={[
+        { value: "borc", label: "Borç aldım", tone: "red" }, { value: "alacak", label: "Borç verdim", tone: "green" },
+      ]} />
+      <div>
+        <span className="label">Kişi</span>
+        <CategoryPicker value={person} onChange={setPerson} options={people} placeholder="Seç veya yaz" />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs">
+          <span className="label">Miktar</span>
+          <input className="input text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </label>
+        <label className="text-xs">
+          <span className="label">Birim</span>
+          <select className="input" value={asset} onChange={(e) => setAsset(e.target.value)}>
+            {ASSETS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+            <option value="_">Diğer…</option>
+          </select>
+        </label>
+      </div>
+      {asset === "_" && (
+        <input className="input" placeholder="ör. 22 ayar bilezik (gram)" value={custom} onChange={(e) => setCustom(e.target.value)} />
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs">
+          <span className="label">Tarih</span>
+          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+        <label className="text-xs">
+          <span className="label">Vade (opsiyonel)</span>
+          <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} />
+        </label>
+      </div>
+      <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
+      {err && <p className="text-xs text-red-600">{err}</p>}
+      <div className="flex gap-2">
+        <button className="btn-primary" disabled={save.isPending}
+          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>Kaydet</button>
+        <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
+      </div>
+    </div>
+  );
+}
+
+function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
+  const ui = useUI();
+  const [amount, setAmount] = useState(String(d.remaining).replace(".", ","));
+  const [date, setDate] = useState(today());
+  const save = useSave(() => json("POST", `/api/debts/${d.id}/pay`, { amount: parseAmount(amount), paid_at: date }),
+    () => { ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı"); onDone(); });
+  return (
+    <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50/50 p-3 dark:border-blue-900 dark:bg-blue-950/20">
+      <div className="text-sm">
+        <b>{maskText(d.person)}</b> · {d.direction === "borc" ? "ne kadar ödedin?" : "ne kadar aldın?"} ({assetLabel(d.asset)})
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <input className="input text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+      </div>
+      <p className="text-xs text-stone-500">Kalanın tamamı kapatır; azını yazarsan kısmi ödeme olarak düşer.</p>
+      <div className="flex gap-2">
+        <button className="btn-primary" disabled={!(parseAmount(amount) > 0) || save.isPending} onClick={() => save.mutate(undefined)}>Kaydet</button>
+        <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
+      </div>
+    </div>
+  );
+}
