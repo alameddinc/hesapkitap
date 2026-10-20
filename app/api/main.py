@@ -468,6 +468,8 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
     counts: dict[str, int] = {}
     for r in parsed:
+        if r["type"] == "gider" and db.match_card_payment(abs(r["amount"]), r["date"]):
+            r["type"] = "kart_odemesi"  # tutar bir ekstreyle birebir → kart ödemesi (önizlemede de görünsün)
         k = "tekrar" if r["hash"] in seen else r["type"]
         counts[k] = counts.get(k, 0) + 1
     return {**det, "profile_saved": bool(saved), "total": len(parsed), "counts": counts, "sample": parsed[:15],

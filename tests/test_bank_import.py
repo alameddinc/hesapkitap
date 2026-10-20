@@ -107,3 +107,19 @@ def test_salary_updates_manual_entry_with_actual_amount(client, tmpdb):
     e = tmpdb.list_entries()
     assert len(e) == 1 and e[0]["amount"] == 224987.40 and e[0]["entry_date"] == "2026-09-14" and e[0]["month"] == "2026-09"
     assert client.get("/api/summary", params={"month": "2026-09"}).json()["totals"]["income"] == 224987.40
+
+
+def test_card_payment_detected_by_amount(client, tmpdb):
+    """Başka bankanın kartına EFT: açıklamada 'kart' yok; tutar ekstreyle birebir → gider sayılmaz."""
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt, min_payment) "
+                  "VALUES ('k', 'Kuveyt Türk', '4111***1111', '2026-10-15', '2026-10-26', 25000.00, 20800.00)")
+    csv = ("Tarih;Açıklama;Tutar\n"
+           "20.10.2026;EFT KUVEYT TURK KATILIM BANKASI;-25.000,00\n"
+           "21.10.2026;EFT AHMET ORNEK KIRA;-22.000,00\n").encode()
+    pv = _upload(client, csv, "h.csv").json()
+    assert pv["counts"] == {"kart_odemesi": 1, "gider": 1}
+    r = _upload(client, csv, "h.csv", pv["mapping"], pv["header_row"]).json()
+    assert r["kart_odemesi"] == 1 and r["gider"] == 1 and r["odendi_isaretlenen"] == 1
+    assert tmpdb.list_statements()[0]["paid_at"] == "2026-10-20"
+    assert [e["description"] for e in tmpdb.list_entries()] == ["EFT AHMET ORNEK KIRA"]  # sadece kira gider

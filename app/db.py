@@ -930,6 +930,23 @@ def forget_pdf_password(index: int) -> None:
 
 # ---------------------------------------------------------------- banka hesap hareketleri
 
+def match_card_payment(amount: float, on: str, only_unpaid: bool = False):
+    """Hesaptan çıkan tutar bir ekstrenin borcu/asgarisi ile aynı ve tarih ödeme penceresindeyse o ekstre.
+    Açıklamada "kart" geçmese de (ör. başka bankanın kartına EFT) kart ödemesini yakalar."""
+    from datetime import date as _date, timedelta
+
+    d = _date.fromisoformat(on)
+    with connect() as c:
+        return c.execute(
+            f"""SELECT * FROM statements WHERE due_date IS NOT NULL
+                AND (ABS(total_debt - ?) <= 1 OR ABS(COALESCE(min_payment, -1) - ?) <= 1
+                     OR ABS(COALESCE(paid_amount, -1) - ?) <= 1)
+                AND ? BETWEEN period_end AND date(due_date, '+10 days')
+                {'AND paid_amount IS NULL' if only_unpaid else ''}
+                ORDER BY due_date LIMIT 1""",
+            (amount, amount, amount, (d - timedelta(days=0)).isoformat())).fetchone()
+
+
 def import_bank_rows(rows: list[dict]) -> dict:
     """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner."""
     import re as _re
@@ -951,17 +968,16 @@ def import_bank_rows(rows: list[dict]) -> dict:
         if r["type"] == "virman":
             stats["virman"] += 1
             continue
+        if r["type"] == "gider" and match_card_payment(abs(r["amount"]), r["date"]):
+            r["type"] = "kart_odemesi"  # açıklamada "kart" yok ama tutar bir ekstreyle birebir
         if r["type"] == "kart_odemesi":
             stats["kart_odemesi"] += 1
             amt = abs(r["amount"])
-            with connect() as c:
-                st = c.execute(
-                    """SELECT id FROM statements WHERE paid_amount IS NULL AND due_date IS NOT NULL
-                       AND ABS(total_debt - ?) <= 1 AND due_date BETWEEN ? AND ? ORDER BY due_date LIMIT 1""",
-                    (amt, (d - timedelta(days=10)).isoformat(), (d + timedelta(days=40)).isoformat())).fetchone()
-                if st:
+            st = match_card_payment(amt, r["date"], only_unpaid=True)
+            if st:
+                with connect() as c:
                     c.execute("UPDATE statements SET paid_amount = ?, paid_at = ? WHERE id = ?", (amt, r["date"], st["id"]))
-                    stats["odendi_isaretlenen"] += 1
+                stats["odendi_isaretlenen"] += 1
             seen.add(r["hash"])
             continue
         kind = "gelir" if r["amount"] > 0 else "gider"
