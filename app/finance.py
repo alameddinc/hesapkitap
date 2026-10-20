@@ -111,7 +111,7 @@ def _entry_row(e: dict) -> dict:
 def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
     return {
         "uid": f"r{r['id']}-{month}", "source": "recurring", "id": r["id"],
-        "date": db.occurrence_date(month, r["day_of_month"] or 1), "month": month,
+        "date": db.occurrence_date(month, db.day_at(r, month)), "month": month,
         "description": r["description"], "merchant": r["description"],
         "amount": db.planned_amount(r, month, overrides), "template_amount": r["amount"], "kind": r["kind"], "category": r["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
