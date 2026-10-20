@@ -56,7 +56,12 @@ docker compose up -d
 → **http://localhost:8080** — ilk açılışta şifreni belirle, bitti.
 
 Gemini (fiş/fatura/ekstre okuma) ve Telegram (hatırlatma) anahtarlarını **Ayarlar → Anahtarlar** sayfasından girersin;
-`.env` dosyasıyla uğraşman gerekmez. İstersen önce demo verisiyle bakabilirsin:
+`.env` dosyasıyla uğraşman gerekmez.
+
+**Denemek için örnek belgeler:** [`docs/demo/`](docs/demo/) — uydurma ekstre PDF'leri (VakıfBank, Kuveyt Türk,
+yapay zekâ ile okunan "Örnek Bank"), fiş fotoğrafları ve fatura; adım adım 5 dakikalık demo akışı orada.
+
+Ya da hazır demo verisiyle bak:
 
 ```bash
 docker compose exec hesapkitap python -m app.demo

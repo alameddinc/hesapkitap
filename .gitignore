@@ -1,5 +1,6 @@
 # Kişisel finans verisi ve sırlar - asla commit etme
 *.pdf
+!docs/demo/*.pdf
 data/
 .env
 __pycache__/
