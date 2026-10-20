@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarRange, Eye, EyeOff, LayoutDashboard, List, Menu, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, CalendarRange, Eye, EyeOff, LayoutDashboard, List, Menu, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -21,6 +21,7 @@ import Table from "./pages/Table";
 import Settings from "./pages/Settings";
 import Statements from "./pages/Statements";
 import Transactions from "./pages/Transactions";
+import Transfers from "./pages/Transfers";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
@@ -32,6 +33,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   ayarlar: Settings,
   tasarruf: Savings,
   tablo: Table,
+  transferler: Transfers,
   diger: More,
 };
 
@@ -41,6 +43,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "tablo", label: "Tablo", icon: Sheet },
   { route: "plan", label: "Planlama", icon: CalendarRange },
   { route: "tasarruf", label: "Tasarruf", icon: PiggyBank },
+  { route: "transferler", label: "Transferler", icon: ArrowLeftRight },
   { route: "ekstreler", label: "Ekstreler", icon: ReceiptText },
   { route: "kurallar", label: "Kurallar", icon: Tags },
   { route: "ayarlar", label: "Ayarlar", icon: Settings2 },
@@ -188,7 +191,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 py-2 text-[11px]",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler"].includes(route))
                     ? "text-blue-600" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>

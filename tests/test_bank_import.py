@@ -68,7 +68,7 @@ def test_import_flow(client, tmpdb):
 
     again = _upload(client, CSV.encode("utf-8"), "hareket.csv", pv["mapping"], pv["header_row"]).json()
     # ikinci yükleme hiçbir şey eklemez; kart ödemesi tekrar okunur ama ekstre zaten ödendi, yeniden işaretlenmez
-    assert again["tekrar"] == 4 and again["gider"] == 0 and again["gelir"] == 0
+    assert again["tekrar"] == 5 and again["virman"] == 0 and again["gider"] == 0 and again["gelir"] == 0
     assert again["eslesen_elle"] == 0 and again["odendi_isaretlenen"] == 0
     # eşleme hatırlandı
     assert _upload(client, CSV.encode("utf-8"), "hareket.csv").json()["profile_saved"] is True
@@ -123,3 +123,86 @@ def test_card_payment_detected_by_amount(client, tmpdb):
     assert r["kart_odemesi"] == 1 and r["gider"] == 1 and r["odendi_isaretlenen"] == 1
     assert tmpdb.list_statements()[0]["paid_at"] == "2026-10-20"
     assert [e["description"] for e in tmpdb.list_entries()] == ["EFT AHMET ORNEK KIRA"]  # sadece kira gider
+
+
+def test_self_transfer_detection():
+    owners = ["AYŞE YILMAZ"]
+    c = bank_import.classify
+    # Kuveyt Türk: boşluksuz
+    assert c("GİDENFAST-AYŞEYILMAZTARAFINDANGÖNDERİLEN-Gönderen:AYŞEYILMAZ,Alıcı:AyşeYılmaz,FASTParaTransferi", 55000, owners) == "virman"
+    assert c("Gönderen:AYŞEYILMAZ,Alıcı:AYŞEYILMAZ,FASTParaTransferi", 2000, []) == "virman"  # isim bilinmese de
+    # VakıfBank: kendi Kuveyt Türk hesabına giden FAST
+    assert c("FAST (24/08/2026 tarihli 1 sorgu no'lu AYŞE YILMAZ hesabından Kuveyt Türk Katılım Bankası A.Ş. "
+             "AYŞE YILMAZ hesabına giden FAST ödemesi)", -2000, owners) == "virman"
+    # başkasına giden kira: virman değil
+    assert c("ev kirası (… AYŞE YILMAZ hesabından Türkiye İş Bankası A.Ş. Ayşe Örnek hesabına giden FAST ödemesi)",
+             -35000, owners) == "gider"
+    # boşluksuz kart borcu ödemesi
+    assert c("KrediKartıNo:9792********9106,KrediKartıBorçÖdemesi", -1362.24, owners) == "kart_odemesi"
+
+
+def test_counterparty_extraction():
+    owners = ["AYŞE YILMAZ"]
+    cp = bank_import.counterparty
+    assert cp("FAST Anlık Ödeme ev kirası (19/07/2026 tarihli 1 sorgu no'lu AYŞE YILMAZ hesabından "
+              "Türkiye İş Bankası A.Ş. Ayten Örnek hesabına giden FAST ödemesi)", -35000, owners) == "Ayten Örnek"
+    assert cp("Gelen FAST Anlık Ödeme GİDEN FAST - FATMA ÖRNEK TARAFINDAN GÖNDERİLEN (22.09.2026 …)", 800, owners) == "Fatma Örnek"
+    assert cp("Gönderilen havale TR68 0001 5001 00** **** **00 00 nolu AYŞE YILMAZ hesabından TR40 0001 5001 0000 0000 0000 00 "
+              "nolu ZEYNEP ÖRNEK hesabına havale", -8000, owners) == "Zeynep Örnek"
+    assert cp("Alınan havale TR04 0001 5001 00** **** **00 00 nolu ALİ ÖRNEK hesabından TR68 … nolu AYŞE YILMAZ hesabına",
+              1400, owners) == "Ali Örnek"
+    # kendisi → None
+    assert cp("GİDEN FAST - AYŞE YILMAZ TARAFINDAN GÖNDERİLEN", 5000, owners) is None
+    assert bank_import.transfer_note("FAST Anlık Ödeme ev kirası (19/07/2026 …)") == "ev kirası"
+
+
+def test_transfers_panel(client, tmpdb):
+    import json
+    rows = [
+        {"date": "2026-09-24", "description": "Gönderilen havale ali / TR68 0001 nolu AYŞE YILMAZ hesabından TR04 0001 nolu "
+         "ALİ ÖRNEK hesabına havale", "amount": -200.0, "type": "gider", "hash": "h1"},
+        {"date": "2026-09-24", "description": "Alınan havale TR04 nolu ALİ ÖRNEK hesabından TR68 nolu AYŞE YILMAZ hesabına",
+         "amount": 1400.0, "type": "gelir", "hash": "h2"},
+        {"date": "2026-09-01", "description": "GİDEN FAST - AYŞE YILMAZ TARAFINDAN GÖNDERİLEN", "amount": 10000.0,
+         "type": "virman", "hash": "h3"},
+    ]
+    tmpdb.import_bank_rows(rows, account="Örnek Bank", owners=["AYŞE YILMAZ"])
+    t = client.get("/api/transfers").json()
+    ali = next(p for p in t["people"] if p["name"] == "Ali Örnek")
+    assert (ali["sent"], ali["received"], ali["net"]) == (200, 1400, 1200)
+    assert len(t["own"]) == 1 and t["own"][0]["amount"] == 10000
+    assert client.put("/api/transfers/people/Ali Örnek", json={"category": "Aile", "track_debt": True}).json()["updated"] == 2
+    assert all(e["category"] == "Aile" for e in tmpdb.list_entries())
+
+
+def test_pdf_hash_ignores_description_wording():
+    a = bank_import.finalize([{"date": "2026-07-22", "description": "Gönderilen havale kısa", "amount": -8000.0,
+                               "balance": 18231.19}], [])
+    b = bank_import.finalize([{"date": "2026-07-22", "description": "Gönderilen havale TR68 … uzun hali", "amount": -8000.0,
+                               "balance": 18231.19}], [])
+    assert a[0]["hash"] == b[0]["hash"]
+
+
+def test_counterparty_halkbank_layout():
+    owners = ["AYŞE YILMAZ"]
+    cp = bank_import.counterparty
+    assert cp("GIDEN FAST - AYŞE YILMAZ TARAFINDAN GÖNDERILEN,Zeynep Örnek,Türkiye Is Bankasi A.S.,TR00", -8000, owners) \
+        == "Zeynep Örnek"
+    assert cp("Kira,Ali Örnek,Kuveyt Türk Katilim Bankasi A.S.,TR00", -6500, owners) == "Ali Örnek"
+    # kendi hesabına → None (virman)
+    assert cp("GIDEN FAST - AYŞE YILMAZ TARAFINDAN GÖNDERILEN,Ayşe Yılmaz,Türkiye Vakiflar Bankasi T.A.O.,TR00", -5, owners) is None
+
+
+def test_counterparty_company_and_casing():
+    cp = bank_import.counterparty
+    assert cp("GIDEN FAST - AYŞE YILMAZ TARAFINDAN GÖNDERILEN,Zeynep Örnek Egitim ve Danismanlik Limited Sirketi,"
+              "Kuveyt Türk Katilim Bankasi A.S.,TR00", -2000, ["AYŞE YILMAZ"]) == "Zeynep Örnek Egitim"
+    assert cp("Not,Esra ÖRNEK,Akbank T.A.S.,TR00", -4850, ["AYŞE YILMAZ"]) == "Esra Örnek"
+    assert cp("GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Elif Demir,Türkiye Is Bankasi A.S.,TR00", -8000,
+              ["AYŞE DEMIR"]) == "Elif Demir"
+
+
+def test_counterparty_ignores_bill_commas_and_fixes_dotless_i():
+    cp = bank_import.counterparty
+    assert cp("Enerjisa Tahsilatı Sözleşme No:1, Ad Soyad:, Son Ödeme Tarihi:01.10.2026, Bankası", -475, []) is None
+    assert cp("Not,Elif DEMIR,Türkiye Is Bankasi A.S.,TR00", -5000, ["AYŞE DEMIR"]) == "Elif Demir"
