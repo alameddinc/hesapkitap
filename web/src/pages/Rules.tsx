@@ -15,7 +15,7 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
   const del = useSave(() => api.deleteRule(r.id), () => ui.toast("Kural silindi"));
   return (
     <li className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center">
-      <input className="input font-mono text-xs sm:flex-1" value={pattern} onChange={(e) => setPattern(e.target.value)} aria-label="Pattern" />
+      <input className="input font-mono text-base sm:flex-1 sm:text-xs" value={pattern} onChange={(e) => setPattern(e.target.value)} aria-label="Pattern" />
       <div className="flex gap-2 sm:w-72">
         <div className="flex-1"><CategoryPicker value={category} onChange={setCategory} options={cats} /></div>
         {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}
@@ -59,7 +59,7 @@ export default function Rules() {
       <section className="card space-y-2 p-3 sm:p-4">
         <h2 className="font-semibold">Yeni kural</h2>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <input className="input font-mono text-xs sm:flex-1" placeholder="ör. NETFLIX|DISNEY" value={np} onChange={(e) => setNp(e.target.value)} />
+          <input className="input font-mono text-base sm:flex-1 sm:text-xs" placeholder="ör. NETFLIX|DISNEY" value={np} onChange={(e) => setNp(e.target.value)} />
           <div className="sm:w-56"><CategoryPicker value={nc} onChange={setNc} options={meta.data?.categories ?? []} placeholder="Kategori" /></div>
           <button className="btn-primary justify-center" disabled={!np || !nc}
             onClick={() => add.mutate(undefined, { onError: (e) => ui.toast(e.message) })}><Plus size={16} /> Ekle</button>
