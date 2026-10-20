@@ -497,9 +497,8 @@ _PDF_CACHE: dict[str, dict] = {}  # önizleme ile içe aktarma arasında yapay z
 
 
 def _owners() -> list[str]:
-    """Hesap sahibi adları: kart ekstrelerindeki ana kart sahipleri (kendi hesapları arası virmanı tanımak için)."""
-    with db.connect() as c:
-        return [r[0] for r in c.execute("SELECT DISTINCT card_holder FROM transactions WHERE card_holder <> ''")]
+    """Hesap sahibi adları: kart sahipleri + dökümlerden öğrenilen hesap sahibi (kendi hesapları arası virman)."""
+    return db.card_holders() + db.owner_names()
 
 
 async def _read_bank_pdf(file: UploadFile) -> tuple[list[dict], dict]:
@@ -592,6 +591,8 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
     if (file.filename or "").lower().endswith(".pdf"):
         parsed, meta = await _read_bank_pdf(file)
         account = meta.get("bank") or ""
+        if meta.get("owner_name"):
+            db.remember_owner_name(meta["owner_name"])  # e-posta bildirimlerinde de "kendin" tanınsın
         # kişi ayrımında "kendin" = yalnızca döküm sahibi; ek kart sahipleri (eş, çocuk) Transferler'de kişi olarak görünsün
         owners = [meta.get("owner_name") or ""] if meta.get("owner_name") else _owners()
     else:
@@ -1104,6 +1105,26 @@ class ConfigIn(BaseModel):
     value: str | None = None
 
 
+@app.get("/api/mail/status")
+def mail_status():
+    from app import mailbox
+
+    return {"enabled": mailbox.enabled(), "last_poll": db.get_setting("mail:last_poll"),
+            "poll_minutes": mailbox.POLL_MINUTES, "log": db.mail_log(30)}
+
+
+@app.post("/api/mail/poll")
+def mail_poll():
+    from app import mailbox
+
+    if not mailbox.enabled():
+        raise HTTPException(400, "E-posta otomasyonu ayarlı değil")
+    try:
+        return mailbox.poll()
+    except mailbox.MailError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.get("/api/settings/config")
 def get_config():
     return config.describe()
@@ -1149,6 +1170,15 @@ def test_config(name: str):
         model = config.get("GEMINI_MODEL")
         names = {m.get("name", "").split("/")[-1] for m in r.json().get("models", [])}
         return {"ok": True, "detail": "Anahtar çalışıyor" + ("" if model in names else f" (uyarı: '{model}' modeli listede yok)")}
+    if name in ("MAIL_USER", "MAIL_PASSWORD"):
+        from app import mailbox
+
+        if not mailbox.enabled():
+            raise HTTPException(400, "E-posta adresi ve uygulama şifresi gerekli")
+        try:
+            return {"ok": True, "detail": mailbox.test_connection()}
+        except mailbox.MailError as e:
+            raise HTTPException(400, str(e)) from e
     if name == "TELEGRAM_BOT_TOKEN":
         try:
             me = telegram._call("getMe")

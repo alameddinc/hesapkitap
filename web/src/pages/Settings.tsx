@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Send } from "lucide-react";
+import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send } from "lucide-react";
 import { useMeta } from "../components/hooks";
 import { periodRange } from "../components/MonthPicker";
 import { useState } from "react";
 import { useSave } from "../components/hooks";
-import { cx, dateTR } from "../format";
+import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 
 interface ConfigItem {
@@ -21,7 +21,13 @@ const HELP: Record<string, React.ReactNode> = {
   GEMINI_MODEL: <>Varsayılan: gemini-3.1-flash-lite (en ucuz; fiş başına ~0,1 cent).</>,
   TELEGRAM_BOT_TOKEN: <>Telegram'da <b>@BotFather</b> → <code>/newbot</code> → verdiği token.</>,
   BACKUP_PASSPHRASE: <>Telegram'a giden yedeğin şifresi. <b>Kaybetme</b>: yedek bu olmadan açılamaz.</>,
+  MAIL_USER: <>Sadece banka maillerinin yönlendirildiği <b>ayrı</b> bir adres (ör. yeni bir Gmail). Ana mailini bağlama.</>,
+  MAIL_PASSWORD: <>Gmail: Google Hesabı → Güvenlik → 2 adımlı doğrulama açık → <b>Uygulama şifreleri</b> → 16 haneli şifre. Normal şifren çalışmaz.</>,
+  MAIL_IMAP_HOST: <>Gmail için değiştirme. Outlook: outlook.office365.com · Yandex: imap.yandex.com.tr</>,
+  MAIL_FOLDER: <>Bankaların mailleri başka bir klasöre/etikete düşüyorsa adını yaz.</>,
+  MAIL_SENDERS: <>Listede olmayan bir bankan varsa alan adını ekle (ör. ornekbank.com.tr).</>,
 };
+const MAIL_KEYS = ["MAIL_USER", "MAIL_PASSWORD", "MAIL_IMAP_HOST", "MAIL_FOLDER", "MAIL_SENDERS"];
 
 function KeyRow({ c }: { c: ConfigItem }) {
   const ui = useUI();
@@ -34,7 +40,7 @@ function KeyRow({ c }: { c: ConfigItem }) {
   const gen = useSave(() => post<{ passphrase: string }>("/api/settings/config/generate-backup-passphrase"), (r) => setShown(r.passphrase));
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const locked = c.source === "env";
-  const testable = c.name === "GEMINI_API_KEY" || c.name === "TELEGRAM_BOT_TOKEN";
+  const testable = c.name === "GEMINI_API_KEY" || c.name === "TELEGRAM_BOT_TOKEN" || c.name === "MAIL_PASSWORD";
 
   return (
     <li className="space-y-1.5 py-3">
@@ -231,9 +237,11 @@ export default function Settings() {
         <h2 className="flex items-center gap-2 font-semibold"><KeyRound size={18} /> Anahtarlar</h2>
         <p className="text-xs text-stone-500">Değerler bu sunucuda saklanır; ekranda sadece son 4 karakteri görünür.</p>
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-          {cfg.data?.map((c) => <KeyRow key={c.name} c={c} />)}
+          {cfg.data?.filter((c) => !MAIL_KEYS.includes(c.name)).map((c) => <KeyRow key={c.name} c={c} />)}
         </ul>
       </section>
+
+      <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />
 
       <section className="card space-y-3 p-4">
         <h2 className="flex items-center gap-2 font-semibold"><Bell size={18} /> Telegram hatırlatmaları</h2>
@@ -313,5 +321,88 @@ export default function Settings() {
       <PdfPasswords />
       {auth.data?.password_source === "app" && <PasswordForm />}
     </div>
+  );
+}
+
+
+interface MailLog {
+  message_id: string;
+  received_at: string;
+  sender: string;
+  subject: string;
+  kind: string;
+  status: "ok" | "skip" | "error";
+  detail: string;
+}
+
+/** E-posta otomasyonu: bankaların mailleri (e-ekstre, işlem bildirimi, hesap özeti) kendiliğinden içe aktarılır. */
+function MailSection({ keys }: { keys: ConfigItem[] }) {
+  const ui = useUI();
+  const st = useQuery({
+    queryKey: ["mail"],
+    queryFn: () => fetch("/api/mail/status").then((r) => r.json() as Promise<{ enabled: boolean; last_poll: string | null; poll_minutes: number; log: MailLog[] }>),
+  });
+  const poll = useSave(() => post<{ processed: number; ok: number; error: number }>("/api/mail/poll"),
+    (r) => ui.toast(r.processed ? `${r.processed} yeni mail · ${r.ok} içe aktarıldı${r.error ? ` · ${r.error} hata` : ""}` : "Yeni mail yok"));
+  const [showAll, setShowAll] = useState(false);
+  const s = st.data;
+  const log = (s?.log ?? []).filter((m) => showAll || m.status !== "skip");
+  return (
+    <section className="card space-y-3 p-4">
+      <h2 className="flex items-center gap-2 font-semibold"><Mail size={18} /> E-posta otomasyonu</h2>
+      <p className="text-sm text-stone-500">
+        Bankaların gönderdiği <b>kart e-ekstreleri</b>, <b>işlem bildirimleri</b> (havale, maaş, fatura, kart harcaması) ve
+        <b> hesap özetleri</b> {s?.poll_minutes ?? 10} dakikada bir okunup kendiliğinden içe aktarılır; Telegram'dan haber verilir.
+        Sonradan gelen PDF aynı hareketi ikinci kez saymaz. Sadece banka alan adlarından gelen ve imzası doğrulanan mailler işlenir.
+      </p>
+      <ol className="list-decimal space-y-1 pl-5 text-sm">
+        <li>Sadece bu iş için yeni bir Gmail aç ve uygulama şifresi oluştur (aşağıdaki açıklamaya bak).</li>
+        <li>Ana mailinde filtre kur: bankalardan gelenleri (ör. <code>from:(vakifbank.com.tr OR halkbank.com.tr OR kuveytturk.com.tr)</code>) bu adrese <b>otomatik ilet</b>.</li>
+        <li>Bankaların uygulamasında <b>e-ekstre</b>yi ve <b>işlem bildirimlerini e-posta ile</b> aç.</li>
+        <li>Şifreli PDF'ler için: aynı bankanın ekstresini bir kez Ekstreler'den yükleyip "şifreyi hatırla" de.</li>
+      </ol>
+      <ul className="divide-y divide-stone-100 dark:divide-stone-800">
+        {keys.map((c) => <KeyRow key={c.name} c={c} />)}
+      </ul>
+      {s?.enabled && (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={poll.isPending}
+              onClick={() => poll.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>
+              <RefreshCw size={16} className={cx(poll.isPending && "animate-spin")} /> Şimdi kontrol et
+            </button>
+            <span className="text-xs text-stone-500">Son kontrol: {s.last_poll ? s.last_poll.replace("T", " ").slice(0, 16) : "henüz yok"}</span>
+          </div>
+          {s.log.length > 0 && (
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-sm font-medium">İşlenen mailler</span>
+                <label className="flex items-center gap-1 text-xs text-stone-500">
+                  <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> atlananları da göster
+                </label>
+              </div>
+              <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 text-sm dark:divide-stone-800 dark:border-stone-700">
+                {log.map((m) => (
+                  <li key={m.message_id} className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className={cx("rounded px-1.5 py-0.5 text-xs",
+                        m.status === "ok" ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
+                          : m.status === "error" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                            : "bg-stone-100 text-stone-500 dark:bg-stone-800")}>
+                        {m.status === "ok" ? "aktarıldı" : m.status === "error" ? "hata" : "atlandı"}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{m.subject || "(konusuz)"}</span>
+                      <span className="text-xs text-stone-500">{dateTR(m.received_at)}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs whitespace-pre-line text-stone-500">{maskText(m.detail)}</p>
+                  </li>
+                ))}
+                {!log.length && <li className="px-3 py-2 text-xs text-stone-500">Henüz aktarılan mail yok.</li>}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }

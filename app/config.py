@@ -14,6 +14,11 @@ EDITABLE = {
     "GEMINI_MODEL": {"secret": False, "label": "Gemini modeli", "default": "gemini-3.1-flash-lite"},
     "TELEGRAM_BOT_TOKEN": {"secret": True, "label": "Telegram bot token"},
     "BACKUP_PASSPHRASE": {"secret": True, "label": "Yedek şifresi"},
+    "MAIL_USER": {"secret": False, "label": "E-posta adresi (otomasyon kutusu)"},
+    "MAIL_PASSWORD": {"secret": True, "label": "E-posta uygulama şifresi"},
+    "MAIL_IMAP_HOST": {"secret": False, "label": "IMAP sunucusu", "default": "imap.gmail.com"},
+    "MAIL_FOLDER": {"secret": False, "label": "Klasör", "default": "INBOX"},
+    "MAIL_SENDERS": {"secret": False, "label": "Ek banka alan adları (virgülle)"},
 }
 
 
