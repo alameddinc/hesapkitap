@@ -4,6 +4,7 @@ Ay kavramı:
 - Kart işlemleri ekstrenin kesim ayına yazılır (o ay ödenen ekstre).
 - Elle girilen kalemler kendi tarihinin ayına yazılır.
 """
+import re
 from collections import defaultdict
 from datetime import date
 from statistics import median
@@ -563,6 +564,22 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         elif x["status"] == "kismi":
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
+
+    # 2b) Hesaptan kart ödemesi var ama ekstresi yok → o dönemin harcamaları hiç sayılmamış
+    missing: dict[str, list] = defaultdict(list)
+    for x in db.card_payments_without_statement():
+        missing[x["card_last4"] or "?"].append(x)
+    for last4, ps in missing.items():
+        bank = next((x["account"] for x in ps if x["account"]), "")
+        bank = re.sub(r"\s+(KATILIM\s+)?BANKASI.*$", "", bank, flags=re.I).strip()
+        card = f"{bank} …{last4}" if last4 != "?" else "Bir kart"
+        out.append({"level": "uyari",
+                    "title": f"{card}: {len(ps)} ödemenin ekstresi yüklenmemiş ({_tl(sum(x['amount'] for x in ps))})",
+                    "detail": "Hesabından bu karta ödeme yapılmış ama o döneme ait kart ekstresi yok; harcamalar hiçbir "
+                              "aya gider olarak yazılmadı, devreden bakiye bu yüzden fazla görünür. Ödemeler: "
+                              + ", ".join(f"{x['pay_date'][8:10]}.{x['pay_date'][5:7]} {_tl(x['amount'])}" for x in ps)
+                              + ". Ekstreler sayfasından o ayların kart ekstresini yükle.",
+                    "link": "ekstreler"})
 
     # 3) Açık veren aylar
     has_income = any(r["kind"] == INCOME for r in p["recurring"]) or any(

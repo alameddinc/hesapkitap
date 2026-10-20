@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS own_transfers (
     description TEXT,
     import_hash TEXT UNIQUE
 );
+-- Hesaptan yapılan kart ödemeleri (gider sayılmaz; ekstresi yüklenmemiş kartı fark etmek için tutulur)
+CREATE TABLE IF NOT EXISTS card_payments (
+    id INTEGER PRIMARY KEY,
+    pay_date DATE NOT NULL,
+    amount REAL NOT NULL,
+    card_last4 TEXT,
+    account TEXT,
+    description TEXT,
+    import_hash TEXT UNIQUE
+);
 -- Kişi bazında ayar: kategori ve borç takibi
 CREATE TABLE IF NOT EXISTS counterparties (
     name TEXT PRIMARY KEY,
@@ -977,7 +987,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     with connect() as c:
         rules = load_rules(c)
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
-                                        "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL")}
+                                        "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL "
+                                        "UNION SELECT import_hash FROM card_payments WHERE import_hash IS NOT NULL")}
         recurring = [dict(r) for r in c.execute("SELECT * FROM recurring")]
     for r in rows:
         if r["hash"] in seen:
@@ -995,6 +1006,11 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         if r["type"] == "kart_odemesi":
             stats["kart_odemesi"] += 1
             amt = abs(r["amount"])
+            card = _re.search(r"\d{4}\s*\*+\s*(\d{4})", r["description"])
+            with connect() as c:
+                c.execute("INSERT OR IGNORE INTO card_payments (pay_date, amount, card_last4, account, description, import_hash) "
+                          "VALUES (?, ?, ?, ?, ?, ?)", (r["date"], amt, card.group(1) if card else None, account,
+                                                        r["description"][:300], r["hash"]))
             st = match_card_payment(amt, r["date"], only_unpaid=True)
             if st:
                 with connect() as c:
@@ -1122,3 +1138,27 @@ def transfers_overview() -> dict:
     for p in people:
         p["net"] = round(p["received"] - p["sent"], 2)  # + ise sana gelen fazla
     return {"people": people, "own": own, "items": items}
+
+
+def card_payments_without_statement() -> list[dict]:
+    """Bankadan kart ödemesi yapılmış ama o döneme ait ekstre yüklenmemiş: harcamalar hiç sayılmamış demektir."""
+    with connect() as c:
+        pays = rows(c.execute("SELECT * FROM card_payments ORDER BY pay_date"))
+        sts = rows(c.execute("SELECT card_no, bank, period_end, due_date, total_debt FROM statements WHERE due_date IS NOT NULL"))
+    out = []
+    for p in pays:
+        covered = False
+        for s in sts:
+            same_card = s["card_no"][-4:] == p["card_last4"] if p["card_last4"] else abs(s["total_debt"] - p["amount"]) <= 1
+            if same_card and s["period_end"] <= p["pay_date"] <= _shift_days(s["due_date"], 20):
+                covered = True
+                break
+        if not covered:
+            out.append(p)
+    return out
+
+
+def _shift_days(d: str, n: int) -> str:
+    from datetime import date as _date, timedelta
+
+    return (_date.fromisoformat(d) + timedelta(days=n)).isoformat()

@@ -67,8 +67,8 @@ def test_import_flow(client, tmpdb):
     assert not any("VIRMAN" in e["description"] for e in entries)
 
     again = _upload(client, CSV.encode("utf-8"), "hareket.csv", pv["mapping"], pv["header_row"]).json()
-    # ikinci yükleme hiçbir şey eklemez; kart ödemesi tekrar okunur ama ekstre zaten ödendi, yeniden işaretlenmez
-    assert again["tekrar"] == 5 and again["virman"] == 0 and again["gider"] == 0 and again["gelir"] == 0
+    # ikinci yükleme hiçbir şey eklemez; kart ödemesi ve virman da "zaten var" sayılır
+    assert again["tekrar"] == 6 and again["virman"] == 0 and again["kart_odemesi"] == 0 and again["gider"] == 0 and again["gelir"] == 0
     assert again["eslesen_elle"] == 0 and again["odendi_isaretlenen"] == 0
     # eşleme hatırlandı
     assert _upload(client, CSV.encode("utf-8"), "hareket.csv").json()["profile_saved"] is True
@@ -206,3 +206,21 @@ def test_counterparty_ignores_bill_commas_and_fixes_dotless_i():
     cp = bank_import.counterparty
     assert cp("Enerjisa Tahsilatı Sözleşme No:1, Ad Soyad:, Son Ödeme Tarihi:01.10.2026, Bankası", -475, []) is None
     assert cp("Not,Elif DEMIR,Türkiye Is Bankasi A.S.,TR00", -5000, ["AYŞE DEMIR"]) == "Elif Demir"
+
+
+def test_card_payment_without_statement_warns(client, tmpdb):
+    from app import finance
+
+    rows = [{"date": "2026-08-15", "description": "KrediKartıNo:1111********9999,KrediKartıBorçÖdemesi",
+             "amount": -65000.0, "type": "kart_odemesi", "hash": "kp1"}]
+    tmpdb.import_bank_rows(rows, account="Örnek Katılım Bankası A.Ş.")
+    assert [p["card_last4"] for p in tmpdb.card_payments_without_statement()] == ["9999"]
+    titles = [i["title"] for i in finance.insights("2026-08")]
+    assert any("…9999" in t and "ekstresi yüklenmemiş" in t for t in titles)
+    # ekstre yüklenince uyarı kalkar
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt) "
+                  "VALUES ('x', 'Örnek', '1111***9999', '2026-08-05', '2026-08-15', 65000)")
+    assert tmpdb.card_payments_without_statement() == []
+    # aynı döküm tekrar yüklenirse kart ödemesi "zaten var" sayılır
+    assert tmpdb.import_bank_rows(rows)["tekrar"] == 1
