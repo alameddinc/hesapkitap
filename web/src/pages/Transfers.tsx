@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, HandCoins } from "lucide-react";
 import { useMemo, useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import { useMeta, useSave } from "../components/hooks";
-import Debts, { fmtAsset, type Debt } from "../components/Debts";
+import { fmtAsset, type Debt } from "../components/Debts";
 import Kpi from "../components/Kpi";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
@@ -68,7 +68,7 @@ export default function Transfers() {
         <h1 className="text-xl font-semibold">Transferler</h1>
         <p className="text-sm text-stone-500">
           Hesap dökümlerindeki havale/FAST'ler kişi kişi. Bir kişiye kategori verirsen o kişiye giden/gelen tüm
-          hareketler o kategoriye geçer. Borç/alacakları (TL, döviz, altın) aşağıdan kaydet, unutma.
+          hareketler o kategoriye geçer. Borç/alacaklar ayrı sayfada (Borç / Alacak).
           Kendi hesapların arası aktarımlar gelir/gider sayılmaz, en altta ayrı durur.
         </p>
       </div>
@@ -79,7 +79,16 @@ export default function Transfers() {
         <Kpi label="Kendi hesapların arası" value={ownIn} sub="toplama katılmaz" />
       </div>
 
-      <Debts debts={debts} people={people.map((p) => p.name)} />
+      {debts.some((d) => !d.settled_at) && (
+        <button className="card flex w-full items-center gap-3 p-4 text-left" onClick={() => ui.go("borclar")}>
+          <HandCoins size={18} className="text-stone-500" />
+          <span className="flex-1 text-sm">
+            <b>{debts.filter((d) => !d.settled_at).length} açık borç/alacak</b>
+            <span className="text-stone-500"> · Borç / Alacak sayfasında takip et</span>
+          </span>
+          <ChevronRight size={16} className="text-stone-400" />
+        </button>
+      )}
 
       <section className="card divide-y divide-stone-100 dark:divide-stone-800">
         {people.length === 0 && (

@@ -12,6 +12,7 @@ const TABS = [
   { key: "card", label: "Kart", test: (r: Row) => r.source === "card" && !r.deleted },
   { key: "manual", label: "Elle", test: (r: Row) => r.source !== "card" },
   { key: "income", label: "Gelir", test: (r: Row) => r.kind === "gelir" },
+  { key: "debt", label: "Borç", test: (r: Row) => r.kind === "borc" },
   { key: "fee", label: "Faiz", test: (r: Row) => r.kind === "faiz_ucret" && !r.deleted },
   { key: "pending", label: "Bekleyen", test: (r: Row) => !!r.pending },
   { key: "awaiting", label: "Ekstre bekleyen", test: (r: Row) => !!r.awaiting_statement },
@@ -32,7 +33,7 @@ export default function Transactions() {
       (!needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle)));
   }, [txns.data, tab, q]);
 
-  const spend = rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && r.kind !== "gelir" && r.kind !== "odeme")
+  const spend = rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && r.kind !== "gelir" && r.kind !== "odeme" && r.kind !== "borc")
     .reduce((a, r) => a + r.amount, 0);
 
   return (

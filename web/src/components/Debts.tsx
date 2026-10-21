@@ -18,6 +18,7 @@ export interface Debt {
   due_date: string | null;
   note: string | null;
   settled_at: string | null;
+  written_off_at: string | null;
 }
 
 // Birimler: TL, döviz, altın; listede yoksa serbest yazılır ("22 ayar bilezik")
@@ -55,6 +56,8 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
 
   const del = useSave((id: number) => json("DELETE", `/api/debts/${id}`), () => ui.toast("Silindi"));
   const unpay = useSave((id: number) => json("DELETE", `/api/debts/${id}/pay`), () => ui.toast("Yeniden açıldı"));
+  const writeOff = useSave((d: Debt) => json("POST", `/api/debts/${d.id}/write-off`, { on: today() }),
+    () => ui.toast("Kapatıldı; kalan bugünün gider/gelirine yazıldı"));
 
   const Row = ({ d }: { d: Debt }) => {
     const late = !d.settled_at && d.due_date && d.due_date < today();
@@ -73,7 +76,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
             {dateTR(d.debt_date)}
             {d.due_date && <span className={cx(late && "font-medium text-red-600")}> · vade {dateTR(d.due_date)}</span>}
             {d.paid_amount > 0 && !d.settled_at && ` · ${fmtAsset(d.paid_amount, d.asset)} ödendi`}
-            {d.settled_at && ` · kapandı ${dateTR(d.settled_at)}`}
+            {d.settled_at && (d.written_off_at ? ` · vazgeçildi ${dateTR(d.written_off_at)}` : ` · kapandı ${dateTR(d.settled_at)}`)}
             {d.note && ` · ${d.note}`}
           </div>
         </div>
@@ -85,7 +88,19 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
             <Check size={14} /> {d.direction === "borc" ? "Ödedim" : "Aldım"}
           </button>
         )}
-        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil" onClick={() => del.mutate(d.id)}><Trash2 size={14} /></button>
+        {!d.settled_at && (
+          <button className="btn-ghost px-1.5 py-1 text-xs text-stone-500" title={d.direction === "alacak"
+            ? "Geri gelmeyecek: kalan bugün gider olur" : "Karşı taraf sildi: kalan bugün gelir olur"}
+            onClick={() => window.confirm(d.direction === "alacak"
+              ? `${d.person} ödemeyecek mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gider olarak yazılır.`
+              : `${d.person} borcu sildi mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gelir olarak yazılır.`) && writeOff.mutate(d)}>
+            Vazgeçtim
+          </button>
+        )}
+        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil"
+          onClick={() => window.confirm("Kayıt silinsin mi? Bağlı havaleler yeniden normal gelir/gider sayılır.") && del.mutate(d.id)}>
+          <Trash2 size={14} />
+        </button>
       </li>
     );
   };
@@ -97,8 +112,8 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
         {!adding && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setAdding(true)}><Plus size={16} /> Ekle</button>}
       </div>
       <p className="mb-2 text-xs text-stone-500">
-        Gelir/gider toplamlarını etkilemez; sadece hatırlatır. TL borçlar o kişiye/kişiden aynı tutarda havale görülünce
-        kendiliğinden kapanır; döviz ve altında "Ödedim / Aldım" de. Vadesi gelince Telegram'dan hatırlatılır.
+        Havaleyle verip aldıysan banka dökümündeki o havaleler kendiliğinden bağlanır, gider/gelir sayılmaz. Döviz ve
+        altında "Ödedim / Aldım" de. Vadesi gelince Telegram'dan hatırlatılır.
       </p>
       {adding && <DebtForm people={people} onDone={() => setAdding(false)} />}
       {paying && <PayDebt d={paying} onDone={() => setPaying(null)} />}

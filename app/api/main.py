@@ -270,9 +270,9 @@ def create_entry(body: EntryIn):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     eid = db.create_entry(data)
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
-    debt = db.settle_debt_by_transfer(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
+    debt = db.link_debt_movement(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()),
-            "debt_settled": debt["id"] if debt else None}
+            "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None}
 
 
 @app.patch("/api/entries/{entry_id}")
@@ -671,6 +671,19 @@ def delete_debt(did: int):
 def pay_debt(did: int, body: DebtPayIn):
     try:
         db.pay_debt(did, body.amount, body.paid_at.isoformat())
+    except KeyError as e:
+        raise HTTPException(404, "Kayıt yok") from e
+    return {"ok": True}
+
+
+class DebtWriteOffIn(BaseModel):
+    on: date
+
+
+@app.post("/api/debts/{did}/write-off")
+def write_off_debt(did: int, body: DebtWriteOffIn):
+    try:
+        db.write_off_debt(did, body.on.isoformat())
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     return {"ok": True}

@@ -8,10 +8,12 @@ const BADGE: Record<string, string> = {
   faiz_ucret: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
   odeme: "bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-300",
   gelir: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
+  borc: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
 };
 
 function amountClass(r: Row) {
-  if (r.kind === "gelir") return "text-green-700 dark:text-green-400";
+  if (r.kind === "gelir" || (r.kind === "borc" && (r.flow ?? 0) > 0)) return "text-green-700 dark:text-green-400";
+  if (r.kind === "borc") return "text-stone-500";
   if (r.kind === "iade" || r.amount < 0) return "text-green-700 dark:text-green-400";
   return "";
 }
@@ -35,7 +37,8 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
   if (!rows.length) return <p className="py-8 text-center text-sm text-stone-500">{empty}</p>;
 
   const open = (r: Row) => {
-    if (r.source === "card") ui.openCardTxn(r);
+    if (r.source === "debt") ui.go("borclar");
+    else if (r.source === "card") ui.openCardTxn(r);
     else if (r.source === "manual") ui.openEntry(r);
     else ui.openRecurring(r.recurring_id ?? undefined);
   };
@@ -54,7 +57,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
               <div className="flex items-start justify-between gap-2">
                 <span className={cx("truncate font-medium", r.deleted && "line-through")}>{r.description}</span>
                 <span className={cx("shrink-0 font-semibold tabular-nums", amountClass(r))}>
-                  {r.kind === "gelir" ? "+" : ""}{tl(r.amount)}
+                  {r.kind === "gelir" || (r.kind === "borc" && (r.flow ?? 0) > 0) ? "+" : r.kind === "borc" ? "−" : ""}{tl(r.amount)}
                 </span>
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-stone-500">

@@ -272,7 +272,7 @@ def test_debt_ledger_settles_by_transfer_and_assets(client, tmpdb):
     st = tmpdb.import_bank_rows([{"date": "2026-10-20", "amount": -200.0, "type": "gider", "hash": "h",
                                   "description": "GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Ali Örnek,X Bankasi A.S.,TR00"}],
                                 owners=["AYŞE DEMIR"])
-    assert st["borc_kapandi"] == 1
+    assert st["borc_hareketi"] == 1
     assert next(d for d in tmpdb.list_debts() if d["id"] == d1)["settled_at"] == "2026-10-20"
     # kısmi tahsilat (altın)
     vid = next(d["id"] for d in tmpdb.list_debts() if d["person"] == "Veli")
@@ -288,3 +288,61 @@ def test_manual_entry_with_person_settles_debt(client, tmpdb):
     assert r["debt_settled"]
     e = next(x for x in tmpdb.list_entries() if x["id"] == r["id"])
     assert e["counterparty"] == "Ali Örnek"  # mevcut yazılışa oturur
+
+
+def test_debt_movements_not_income_or_expense(client, tmpdb):
+    from app import finance
+
+    # Ali'ye 600 TL nakit borç verdim (Ekim), Kasım'da elden geri aldım
+    did = client.post("/api/debts", json={"person": "Ali Örnek", "direction": "alacak", "amount": 600,
+                                          "debt_date": "2026-10-10"}).json()["id"]
+    oct_ = client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]
+    assert oct_["expense"] == 0 and oct_["debt_flow"] == -600 and oct_["cash_net"] == -600
+    assert oct_["receivable"] == 600
+    rows = finance.transactions("2026-10")
+    assert any(r["kind"] == "borc" and r["flow"] == -1 and "borç verildi" in r["description"] for r in rows)
+    client.post(f"/api/debts/{did}/pay", json={"paid_at": "2026-11-05"})
+    nov = client.get("/api/summary", params={"month": "2026-11"}).json()["totals"]
+    assert nov["income"] == 0 and nov["debt_flow"] == 600 and nov["receivable"] == 0
+
+
+def test_bank_transfers_linked_to_debt_are_not_expense(client, tmpdb):
+    # havaleyle borç verdim, havaleyle geri geldi: ikisi de dökümde; ikisi de gelir/gider sayılmaz
+    client.post("/api/debts", json={"person": "Ali Örnek", "direction": "alacak", "amount": 600, "debt_date": "2026-10-10"})
+    fast = "GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Ali Örnek,X Bankasi A.S.,TR00"
+    st = tmpdb.import_bank_rows([
+        {"date": "2026-10-11", "description": fast, "amount": -600.0, "type": "gider", "hash": "out"},
+        {"date": "2026-11-02", "description": "Gelen FAST GİDEN FAST - ALİ ÖRNEK TARAFINDAN GÖNDERİLEN", "amount": 600.0,
+         "type": "gelir", "hash": "in"}], owners=["AYŞE DEMIR"])
+    assert st["borc_hareketi"] == 2
+    d = tmpdb.list_debts()[0]
+    assert d["given_entry_id"] and d["settled_at"] == "2026-11-02"
+    for m in ("2026-10", "2026-11"):
+        t = client.get("/api/summary", params={"month": m}).json()["totals"]
+        assert t["income"] == 0 and t["expense"] == 0
+    # transfer geçmişinde yine görünür
+    ali = next(p for p in client.get("/api/transfers").json()["people"] if p["name"] == "Ali Örnek")
+    assert ali["sent"] == 600 and ali["received"] == 600
+
+
+def test_debt_created_after_import_links_existing_transfer(client, tmpdb):
+    fast = "GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Ali Örnek,X Bankasi A.S.,TR00"
+    tmpdb.import_bank_rows([{"date": "2026-10-11", "description": fast, "amount": -600.0, "type": "gider", "hash": "o"}],
+                           owners=["AYŞE DEMIR"])
+    assert client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]["expense"] == 600
+    client.post("/api/debts", json={"person": "Ali Örnek", "direction": "alacak", "amount": 600, "debt_date": "2026-10-10"})
+    t = client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]
+    assert t["expense"] == 0 and t["debt_flow"] == -600
+
+
+def test_write_off_turns_remaining_into_expense(client, tmpdb):
+    did = client.post("/api/debts", json={"person": "Ali Örnek", "direction": "alacak", "amount": 600,
+                                          "debt_date": "2026-10-01"}).json()["id"]
+    client.post(f"/api/debts/{did}/pay", json={"amount": 200, "paid_at": "2026-10-05"})
+    client.post(f"/api/debts/{did}/write-off", json={"on": "2026-10-10"})
+    t = client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]
+    # 600 çıktı, 200 geldi, 400 tahsil edilemedi → gider 400; eldeki para toplamda −400
+    assert t["expense"] == 400 and t["cash_net"] == -400 and t["receivable"] == 0
+    client.delete(f"/api/debts/{did}/pay")  # geri al
+    t = client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]
+    assert t["expense"] == 0 and t["receivable"] == 600

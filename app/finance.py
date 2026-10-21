@@ -15,6 +15,22 @@ from app.textnorm import legal_key, merchant_name
 
 INCOME = "gelir"
 EXPENSE = "gider"
+DEBT = "borc"  # borç hareketi: gelir/gider toplamına girmez, "Kalan"ı etkiler
+
+_DEBT_STEP = {"verildi": "borç verildi", "alindi": "borç alındı", "tahsil": "tahsil edildi", "odendi": "borç ödendi"}
+
+
+def _debt_row(d: dict) -> dict:
+    base = {"uid": d["uid"], "source": "debt", "id": d["debt_id"], "date": d["date"], "month": d["month"],
+            "merchant": d["person"], "card": None, "account": None, "bank": None, "installment": None, "fx": None,
+            "note": None, "deleted": False, "debt_id": d["debt_id"], "counterparty": d["person"]}
+    if d["step"] == "vazgecildi":  # tahsil edilemeyen alacak gider, silinen borç gelir; para el değiştirmedi
+        kind = EXPENSE if d["direction"] == "alacak" else INCOME
+        return {**base, "kind": kind, "amount": d["amount"], "category": "Borç / Alacak",
+                "description": f"{d['person']} · " + ("tahsil edilemedi" if kind == EXPENSE else "borç silindi"),
+                "debt_flow": d["amount"] if kind == EXPENSE else -d["amount"]}
+    return {**base, "kind": DEBT, "flow": d["flow"], "amount": d["amount"], "category": "Borç / Alacak",
+            "description": f"{d['person']} · {_DEBT_STEP[d['step']]}"}
 CARD_SPEND = (PURCHASE, REFUND)
 SUBSCRIPTION_CATEGORIES = {"Dijital Abonelik", "AI & Yazılım Abonelik"}
 VARIABLE_LOOKBACK = 6  # değişken harcama tahmini için son kaç dönem (medyan: tek uç ay tahmini şişirmesin)
@@ -94,6 +110,9 @@ def _card_row(t: dict, states: dict | None = None, aliases: dict | None = None) 
 
 
 def _entry_row(e: dict) -> dict:
+    if e.get("debt_id"):  # borç verildi/alındı/ödendi: gelir-gider değil, sadece eldeki para
+        return {**_entry_row({**e, "debt_id": None}), "kind": DEBT, "flow": 1 if e["kind"] == INCOME else -1,
+                "category": "Borç / Alacak", "debt_id": e["debt_id"]}
     return {
         "uid": f"m{e['id']}", "source": "manual", "id": e["id"],
         "date": e["entry_date"], "month": e["month"],
@@ -129,7 +148,7 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
     states, aliases = db.subscription_states(), db.merchant_aliases()
     card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
     entries = db.list_entries(month)
-    out = card + [_entry_row(e) for e in entries]
+    out = card + [_entry_row(e) for e in entries] + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
         out += pending_recurring(month, db.list_recurring(), entries)
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
@@ -145,8 +164,11 @@ def _totals(rows: list[dict]) -> dict:
     manual = sum(r["amount"] for r in live if r["kind"] == EXPENSE)
     refunds = -sum(r["amount"] for r in live if r["kind"] == REFUND)
     expense = card_spend + fees + manual
+    # borç verip almak gelir/gider değil ama eldeki parayı değiştirir
+    debt_flow = sum(r["flow"] * r["amount"] for r in live if r["kind"] == DEBT) + sum(r.get("debt_flow", 0) for r in live)
     return {k: _round(v) for k, v in dict(income=income, card_spend=card_spend, fees=fees, manual_expense=manual,
-                                          refunds=refunds, expense=expense, net=income - expense).items()}
+                                          refunds=refunds, expense=expense, net=income - expense, debt_flow=debt_flow,
+                                          cash_net=income - expense + debt_flow).items()}
 
 
 def _group(rows: list[dict], key: str) -> list[dict]:
@@ -193,10 +215,13 @@ def summary(month: str, today: date | None = None) -> dict:
     for m in sorted(by_month):
         if m >= month:
             break
-        carry = max(0.0, carry + _totals(by_month[m])["net"])
+        carry = max(0.0, carry + _totals(by_month[m])["cash_net"])
     totals = _totals(rows)
     totals["carry_in"] = _round(carry)
-    totals["balance"] = _round(carry + totals["net"])
+    totals["balance"] = _round(carry + totals["cash_net"])
+    open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
+    totals["receivable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "alacak"))
+    totals["payable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "borc"))
 
     by_category = _group(expenses, "category")
     return {
@@ -430,7 +455,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
                           "custom": not e and planned != r["amount"], "template_amount": r["amount"], "month": m})
         # --- tek seferlik elle girilenler
         for e in entries:
-            if e["month"] == m and not e["recurring_id"] and not e["skipped"] and not e["linked_txn_id"]:
+            if e["month"] == m and not e["recurring_id"] and not e["skipped"] and not e["linked_txn_id"] and not e.get("debt_id"):
                 lines.append({"type": "tek_seferlik", "kind": e["kind"], "amount": e["amount"],
                               "description": e["description"], "entry_id": e["id"]})
 

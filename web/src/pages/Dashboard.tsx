@@ -74,9 +74,13 @@ export default function Dashboard() {
               sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
             <Kpi label="Gider" value={s.totals.expense}
               sub={`Kart ${tlCompact(s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense)}`} />
-            {s.totals.carry_in > 0 ? (
+            {s.totals.carry_in > 0 || s.totals.debt_flow || s.totals.receivable || s.totals.payable ? (
               <Kpi label="Kalan (devredenle)" value={s.totals.balance} tone={s.totals.balance < 0 ? "red" : "green"}
-                sub={`Bu dönem ${tl(s.totals.net)} · devreden +${tl(s.totals.carry_in)}`} />
+                sub={[`Bu dönem ${tl(s.totals.net)}`,
+                  s.totals.debt_flow ? `borç hareketi ${s.totals.debt_flow > 0 ? "+" : ""}${tl(s.totals.debt_flow)}` : "",
+                  s.totals.carry_in ? `devreden +${tl(s.totals.carry_in)}` : "",
+                  s.totals.receivable ? `alacakta ${tl(s.totals.receivable)}` : "",
+                  s.totals.payable ? `borçta ${tl(s.totals.payable)}` : ""].filter(Boolean).join(" · ")} />
             ) : (
               <Kpi label="Net" value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"} />
             )}
