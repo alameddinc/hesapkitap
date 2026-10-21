@@ -44,6 +44,12 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   // fişten geldiyse: kalem kurallarına göre bölme önerisi; kullanıcı burada düzeltir, Kaydet'te onaylanmış olur
   const [parts, setParts] = useState<{ amount: string; category: string; description: string }[] | null>(null);
   const [wholeCat, setWholeCat] = useState<string | null>(null);
+  const receiptMismatch = (() => {
+    const its = draft?.items ?? [];
+    if (!its.length || !draft?.amount || its.some((i) => i.amount == null)) return null;
+    const sum = its.reduce((a, i) => a + (i.amount ?? 0), 0);
+    return Math.abs(sum - draft.amount) > Math.max(1, draft.amount * 0.02) ? sum : null;
+  })();
   useEffect(() => {
     if (!draft?.items?.length || draft.kind === "gelir") return;
     fetch("/api/splits/propose", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -254,6 +260,12 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <label className="label" htmlFor="e-note">Not</label>
           <input id="e-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+        {!editingEntry && kind === "gider" && receiptMismatch && (
+          <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            Fişten okunan satırların toplamı ({tl(receiptMismatch)}) fiş toplamıyla tutmuyor; bazı satırlar eksik ya da iki kez
+            sayılmış olabilir. Uzun fişse parçalarını birlikte okut.
+          </p>
+        )}
         {!editingEntry && kind === "gider" && wholeCat && !parts?.length && (
           <p className="rounded-lg bg-violet-50 p-2 text-xs text-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
             Fişin tamamı kalem kuralına uydu; kategori <b>{wholeCat}</b> yapıldı. Yanlışsa yukarıdan değiştir.

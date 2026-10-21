@@ -29,3 +29,43 @@ def test_price_history_and_insight(client, tmpdb):
     for x in tmpdb.list_entries():
         client.delete(f"/api/entries/{x['id']}")
     assert client.get("/api/prices").json() == []
+
+
+def _buy(client, merchant, day, items, total):
+    return client.post("/api/entries", json={"entry_date": day, "description": merchant, "amount": total, "kind": "gider",
+                                             "category": "Market & Gıda", "payment": "nakit", "items": items}).json()
+
+
+def test_products_single_unknown_inferred_and_store_compare(client, tmpdb):
+    # File: gofret 49,90 + peynir 0,750 kg (89,90/kg) + fiyatı okunamayan su (toplamdan çıkar)
+    _buy(client, "File", "2026-10-20", [
+        {"name": "ULKER GOFRET", "product": "Ülker Çikolatalı Gofret 36 g", "qty": 1, "unit": "adet", "amount": 49.90},
+        {"name": "PEYNIR", "product": "Beyaz Peynir", "qty": 0.75, "unit": "kg", "amount": 67.43},
+        {"name": "SU 1,5L", "product": "Su 1,5 L", "qty": 1, "amount": None}], total=127.33)
+    # BİM: aynı gofret farklı yazılışla, iki fiyatsız ürün (tahmin edilemez)
+    _buy(client, "BİM", "2026-10-21", [
+        {"name": "ÜLKER ÇİK.GOFRET 36GR", "product": "Ülker Çikolatalı Gofret 36 g", "qty": 2, "amount": 79.80},
+        {"name": "EKMEK", "product": "Ekmek", "qty": 1, "amount": None},
+        {"name": "YUMURTA", "product": "Yumurta 10'lu", "qty": 1, "amount": None}], total=150)
+    ps = {p["product"]: p for p in client.get("/api/prices").json()}
+    g = ps["Ülker Çikolatalı Gofret 36 g"]
+    assert [(s["store"], s["price"], s.get("cheapest", False)) for s in g["stores"]] == [("Bim", 39.9, True), ("File", 49.9, False)]
+    assert g["change_pct"] == -20.0
+    assert ps["Beyaz Peynir"]["unit"] == "kg" and ps["Beyaz Peynir"]["last_price"] == 89.91   # kg fiyatı
+    assert ps["Su 1,5 L"]["last_price"] == 10.0 and ps["Su 1,5 L"]["last_estimated"]           # 127,33 − 117,33
+    assert ps["Ekmek"]["last_price"] is None and ps["Ekmek"]["count"] == 1                      # tek alım, fiyatsız da görünür
+
+
+def test_parse_accepts_multiple_photos(client, monkeypatch):
+    from app import receipt
+
+    seen = {}
+
+    def fake(data, mime, cats, split, more=None):
+        seen["n"] = 1 + len(more or [])
+        return {"type": "receipt", "merchant": "Bim", "total": 10, "items": [], "category": "Market & Gıda",
+                "legal_name": None, "confidence": "yüksek", "date": None, "payment": "nakit"}
+
+    monkeypatch.setattr(receipt, "parse_document", fake)
+    files = [("file", (f"p{i}.jpg", b"\xff\xd8x", "image/jpeg")) for i in range(3)]
+    assert client.post("/api/documents/parse", files=files).status_code == 200 and seen["n"] == 3

@@ -274,7 +274,8 @@ def create_entry(body: EntryIn):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     eid = db.create_entry(data)
     if body.items and body.kind == "gider":
-        db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"])
+        db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
+                              total=body.amount)
     splits = []
     if body.splits and body.kind == "gider":
         try:
@@ -740,8 +741,8 @@ def delete_target(tid: int):
 
 @app.get("/api/prices")
 def prices():
-    """Fişlerden ürün fiyat takibi: aynı ürünün ilk ve son birim fiyatı."""
-    return db.price_history()
+    """Fişlerden ürün fiyat takibi: her ürün, mağaza mağaza son fiyat, ilk→son değişim."""
+    return db.products()
 
 
 @app.get("/api/item-rules")
@@ -1160,15 +1161,18 @@ async def parse_bill(file: UploadFile = File(...)):
 
 
 @app.post("/api/documents/parse")
-async def parse_document(file: UploadFile = File(...)):
-    """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır."""
-    data = await file.read()
-    mime = file.content_type or ""
-    if mime not in BILL_TYPES:
+async def parse_document(file: list[UploadFile] = File(...)):
+    """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
+    Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4)."""
+    files = file[:4]
+    data = await files[0].read()
+    mime = files[0].content_type or ""
+    if mime not in BILL_TYPES or any((f.content_type or "") not in BILL_TYPES for f in files[1:]):
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
+    more = [(await f.read(), f.content_type or "") for f in files[1:]]
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
-        doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}))
+        doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
     if doc["type"] == "receipt":
