@@ -155,6 +155,12 @@ async def scheduler() -> None:
                 log.info("mail poll: %s", await asyncio.to_thread(mailbox.poll))
             except Exception:  # noqa: BLE001 - bağlantı hatası vb. bir sonraki turda yeniden denenir
                 log.exception("mail poll failed")
+        if telegram.enabled():  # bota iletilen PDF'ler (her dakika)
+            try:
+                if n := await asyncio.to_thread(telegram.poll_inbox):
+                    log.info("telegram inbox: %s mesaj", n)
+            except Exception:  # noqa: BLE001
+                log.exception("telegram inbox failed")
         for name, fn in due_jobs(now):
             try:
                 result = await asyncio.to_thread(fn, now.date())

@@ -258,7 +258,13 @@ export default function Settings() {
             </Step>
             <Step n={2} done={s.telegram.connected}>
               {s.telegram.connected ? (
-                <span>Bağlı: <b>{s.telegram.chat_name ?? "Telegram sohbeti"}</b> — hatırlatmalar sadece bu sohbete gider.</span>
+                <span>
+                  Bağlı: <b>{s.telegram.chat_name ?? "Telegram sohbeti"}</b> — hatırlatmalar sadece bu sohbete gider.
+                  <span className="mt-1 block text-stone-500">
+                    Kart ekstresi ya da hesap dökümü PDF'ini bu sohbete gönderirsen (mailden, WhatsApp'tan "Paylaş →
+                    Telegram") bir dakika içinde içe aktarılır, sonucu bot yazar. Başka sohbetlerden gelenler işlenmez.
+                  </span>
+                </span>
               ) : "Telegram'ı bu hesaba bağla:"}
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={!s.telegram.token || pair.isPending}
