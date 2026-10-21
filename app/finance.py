@@ -170,9 +170,13 @@ def _apply_splits(rows: list[dict]) -> list[dict]:
         used = sum(p["amount"] for p in parts)
         out.append({**r, "amount": _round(r["amount"] - used), "split_total": _round(used), "original_amount": r["amount"]})
         for p in parts:
-            out.append({**r, "uid": f"{r['uid']}s{p['id']}", "amount": p["amount"], "category": p["category"],
-                        "description": f"{r['description']} · {p['description'] or p['category']}",
-                        "split_of": r["uid"], "split_origin": p["origin"]})
+            child = {**r, "uid": f"{r['uid']}s{p['id']}", "amount": p["amount"], "category": p["category"],
+                     "description": f"{r['description']} · {p['description'] or p['category']}",
+                     "split_of": r["uid"], "split_origin": p["origin"]}
+            if p.get("debt_id"):  # ortak harcamada başkasının payı: gider değil, ona alacak (para senden çıktı)
+                child.update(kind=DEBT, flow=-1, debt_id=p["debt_id"], counterparty=p.get("person"),
+                             description=f"{r['description']} · {p.get('person')} payı")
+            out.append(child)
     return out
 
 

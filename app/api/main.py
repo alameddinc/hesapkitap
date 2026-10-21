@@ -670,8 +670,9 @@ def delete_account(aid: int):
 
 class SplitPart(BaseModel):
     amount: float = Field(gt=0)
-    category: str = Field(min_length=1)
+    category: str = ""
     description: str | None = None
+    person: str | None = None  # ortak harcama: bu kısım kişinin payı → alacak
 
 
 class SplitsIn(BaseModel):
