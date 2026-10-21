@@ -7,6 +7,7 @@ import { BudgetForm, BudgetList } from "../components/Budgets";
 import Insights from "../components/Insights";
 import Kpi from "../components/Kpi";
 import NetWorth from "../components/NetWorth";
+import Compare from "../components/Compare";
 import MonthPicker from "../components/MonthPicker";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
@@ -89,7 +90,9 @@ export default function Dashboard() {
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />
           </div>
 
-          <NetWorth />
+          <NetWorth compact />
+
+          <Compare month={month} />
 
           <Payables />
 

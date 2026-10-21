@@ -856,6 +856,14 @@ def delete_target(tid: int):
     return {"ok": True}
 
 
+@app.get("/api/compare")
+def compare(month: str | None = None, all: bool = False):
+    """Bu dönem, aynı güne kadar: geçen dönem ve son 3 dönem ortalamasıyla; hafta günleri ve haftalar."""
+    if month and not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(422, "Ay YYYY-MM olmalı")
+    return finance.compare(month, variable_only=not all)
+
+
 @app.get("/api/prices")
 def prices(since: date | None = None, store: str | None = None, brand: str | None = None):
     """Fişlerden fiyat takibi: ürün / mağaza / marka kırılımı; tarihten beri, mağaza, marka filtresi."""

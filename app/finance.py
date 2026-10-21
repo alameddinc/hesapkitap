@@ -1011,3 +1011,115 @@ def targets(today: date | None = None) -> list[dict]:
                     "months_left": months_left, "need_per_month": need, "pace": pace, "eta": eta,
                     "on_track": left <= 0 or (pace > 0 and pace >= need)})
     return out
+
+
+# ---------------------------------------------------------------- dönem karşılaştırması (gün / hafta günü / hafta)
+
+_WD = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+_FIXED_CATEGORIES = {"Kira & Aidat", "Faturalar", "Elektrik", "Su", "Doğalgaz", "İnternet & TV", "Telefon", "Vergi & Harç",
+                     "Sigorta", "Banka Faiz & Ücret"}
+
+
+def period_bounds(month: str) -> tuple[date, date]:
+    """Dönemin ilk ve son günü (ay dönümüne göre): 2026-11, dönüm 20 → 20 Eki – 19 Kas."""
+    start_day = db.cycle_start_day()
+    y, m = map(int, month.split("-"))
+    if start_day > 1:
+        py, pm = (y - 1, 12) if m == 1 else (y, m - 1)
+        start = date(py, pm, min(start_day, 28))
+        end = date(y, m, min(start_day, 28)) - timedelta(days=1)
+    else:
+        start = date(y, m, 1)
+        end = (date(y + (m == 12), m % 12 + 1, 1)) - timedelta(days=1)
+    return start, end
+
+
+def compare(month: str | None = None, variable_only: bool = True, today: date | None = None) -> dict:
+    """Bu dönemi aynı güne kadar geçen dönem ve son 3 dönem ortalamasıyla kıyasla. Harcama GERÇEK tarihine göre
+    (kart işlemi de harcandığı gün; ekstre dönemine göre değil). variable_only: sabit giderler (kira, fatura, sabit kalem)
+    hariç — alışkanlığı ölçer."""
+    today = today or date.today()
+    month = month or current_period(today)
+    months = [add_months(month, -i) for i in range(4)]  # bu, geçen, 2 ve 3 önceki
+    bounds = {m: period_bounds(m) for m in months}
+    lo, hi = bounds[months[-1]][0], bounds[month][1]
+    daily: dict[str, dict[int, float]] = {m: defaultdict(float) for m in months}
+    for r in transactions(None):
+        if r.get("deleted") or r.get("skipped") or r.get("pending") or r.get("linked"):
+            continue
+        if r["kind"] not in (PURCHASE, REFUND, FEE, EXPENSE):
+            continue
+        if variable_only and (r.get("recurring_id") or r["category"] in _FIXED_CATEGORIES or r.get("installment")):
+            continue
+        d = date.fromisoformat(str(r["date"])[:10])
+        if not lo <= d <= hi:
+            continue
+        for m in months:
+            st, en = bounds[m]
+            if st <= d <= en:
+                daily[m][(d - st).days] += r["amount"]
+                break
+    st, en = bounds[month]
+    length = (en - st).days + 1
+    upto = min(length, max(0, (today - st).days + 1)) if st <= today else 0
+    if today > en:
+        upto = length
+
+    def cum(m: str, n: int) -> list[float]:
+        out, t = [], 0.0
+        for i in range(n):
+            t += daily[m].get(i, 0.0)
+            out.append(_round(t))
+        return out
+
+    prev = months[1]
+    prev_len = (bounds[prev][1] - bounds[prev][0]).days + 1
+    lens = {m: (bounds[m][1] - bounds[m][0]).days + 1 for m in months}
+    cur_c, prev_c = cum(month, upto), cum(prev, prev_len)
+    avg_c = [_round(sum(cum(m, length)[i] if i < lens[m] else cum(m, lens[m])[-1] for m in months[1:]) / 3) for i in range(length)]
+    same = upto - 1
+    def at(series: list[float], i: int) -> float:
+        return series[min(i, len(series) - 1)] if series and i >= 0 else 0.0
+    cur_v, prev_v, avg_v = at(cur_c, same), at(prev_c, same), at(avg_c, same)
+
+    def pct(a: float, b: float) -> float | None:
+        return round((a - b) / b * 100, 1) if b > 0 else None
+
+    # hafta günleri: gün başına ortalama (o güne kadar kaç pazartesi geçtiyse)
+    def by_wd(m: str, n: int) -> list[float]:
+        tot, cnt = [0.0] * 7, [0] * 7
+        for i in range(n):
+            wd = (bounds[m][0] + timedelta(days=i)).weekday()
+            tot[wd] += daily[m].get(i, 0.0)
+            cnt[wd] += 1
+        return [tot[k] / cnt[k] if cnt[k] else 0.0 for k in range(7)]
+    wd_cur = by_wd(month, upto)
+    span = lambda m: min(upto, lens[m]) if upto >= 7 else lens[m]  # noqa: E731 - aynı gün aralığı (elma-elma)
+    wd_avg = [sum(by_wd(m, span(m))[k] for m in months[1:]) / 3 for k in range(7)]
+    weekdays = [{"day": _WD[k], "current": _round(wd_cur[k]), "avg3": _round(wd_avg[k]), "pct": pct(wd_cur[k], wd_avg[k])}
+                for k in range(7)]
+    # dönemin haftaları (1–7. gün = 1. hafta …)
+    def by_week(m: str, n: int) -> list[float]:
+        w = [0.0] * 5
+        for i in range(n):
+            w[min(i // 7, 4)] += daily[m].get(i, 0.0)
+        return w
+    wk_cur, wk_avg = by_week(month, upto), [sum(by_week(m, lens[m])[k] for m in months[1:]) / 3 for k in range(5)]
+    weeks = [{"week": k + 1, "current": _round(wk_cur[k]), "avg3": _round(wk_avg[k]),
+              "done": upto >= min((k + 1) * 7, length), "pct": pct(wk_cur[k], wk_avg[k])} for k in range(5)]
+
+    notes = []
+    done_wd = [w for w in weekdays if w["pct"] is not None and w["avg3"] >= 20]
+    if done_wd and upto >= 7:
+        lo_w = min(done_wd, key=lambda w: w["pct"])
+        hi_w = max(done_wd, key=lambda w: w["pct"])
+        if lo_w["pct"] <= -15:
+            notes.append(f"{lo_w['day']} günleri son 3 döneme göre %{abs(round(lo_w['pct']))} daha az harcıyorsun")
+        if hi_w["pct"] >= 15:
+            notes.append(f"{hi_w['day']} günleri %{round(hi_w['pct'])} daha fazla")
+    return {"month": month, "start": st.isoformat(), "end": en.isoformat(), "length": length, "day": upto,
+            "variable_only": variable_only,
+            "current": cur_c, "prev": prev_c[:length], "avg3": avg_c,
+            "at_day": {"current": cur_v, "prev": prev_v, "avg3": avg_v,
+                       "vs_prev": pct(cur_v, prev_v), "vs_avg3": pct(cur_v, avg_v)},
+            "weekdays": weekdays, "weeks": [w for w in weeks if w["week"] <= (length + 6) // 7], "notes": notes}
