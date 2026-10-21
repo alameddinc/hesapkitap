@@ -244,7 +244,7 @@ class EntryIn(BaseModel):
     skipped: bool = False
     payment: Payment | None = None
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
-    items: list[dict] | None = None  # fiş satırları: kalem kurallarıyla alt kaleme bölünür; saklanmaz
+    splits: list[dict] | None = None  # formda onaylanan alt kalemler [{amount, category, description}]
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
 
 
@@ -262,7 +262,7 @@ class EntryPatch(BaseModel):
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
-    data = body.model_dump(exclude={"legal_name", "items"})
+    data = body.model_dump(exclude={"legal_name", "splits"})
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
     if body.legal_name and body.kind == "gider":
@@ -270,7 +270,14 @@ def create_entry(body: EntryIn):
     if data.get("counterparty"):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     eid = db.create_entry(data)
-    splits = db.auto_split_items(eid, [i for i in body.items or [] if isinstance(i, dict)]) if body.items else []
+    splits = []
+    if body.splits and body.kind == "gider":
+        try:
+            splits = db.set_splits("entry", eid, [p for p in body.splits if isinstance(p, dict)
+                                                  and isinstance(p.get("amount"), (int, float))], origin="fis")
+        except ValueError as e:
+            db.delete_entry(eid)
+            raise HTTPException(422, str(e)) from e
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
     debt = db.link_debt_movement(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()),
@@ -643,6 +650,18 @@ def put_splits(target: Literal["entry", "card"], pid: int, body: SplitsIn):
         return db.set_splits(target, pid, [p.model_dump() for p in body.parts])
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
+
+
+class SplitProposalIn(BaseModel):
+    items: list[dict]
+    category: str | None = None
+    total: float | None = None
+
+
+@app.post("/api/splits/propose")
+def propose_split(body: SplitProposalIn):
+    """Fiş okununca formda gösterilecek bölme önerisi; kaydetmez."""
+    return db.propose_split([i for i in body.items if isinstance(i, dict)], body.category, body.total)
 
 
 @app.get("/api/item-rules")

@@ -1760,39 +1760,28 @@ def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual")
     return splits_map().get((target, pid), [])
 
 
-def auto_split_items(entry_id: int, items: list[dict], ai_categories: set[str] | None = None) -> list[dict]:
-    """Fiş kalemlerine kalem kurallarını uygula (önce kelime kuralı, yakalanmazsa modelin etiketi).
-    Ana kaydın kategorisinden farklı kategoriye düşen satırlar alt kalem olur; hepsi aynı kategoriyse ana kayıt o olur."""
+def propose_split(items: list[dict], category: str | None, total: float | None) -> dict:
+    """Fiş satırlarından bölme ÖNERİSİ (kaydetmez; kullanıcı formda onaylar/düzeltir).
+    Döner: {"parts": [{category, amount, description, origin}], "category": tüm fiş tek kategoriyse o kategori}"""
     rules = list_item_rules()
-    if not rules or not items:
-        return []
     allowed = {r["category"] for r in rules}
-    with connect() as c:
-        e = c.execute("SELECT amount, category, kind FROM entries WHERE id = ?", (entry_id,)).fetchone()
-    if not e or e["kind"] != "gider":
-        return []
     groups: dict[str, dict] = {}
-    for it in items:
+    for it in items or []:
         amt = it.get("amount")
         if not amt or amt <= 0 or not it.get("name"):
             continue
         cat, origin = match_item(it["name"], rules), "kural"
-        if not cat and it.get("split") in allowed and (ai_categories is None or it["split"] in ai_categories):
+        if not cat and it.get("split") in allowed:
             cat, origin = it["split"], "ai"
-        if not cat or cat == e["category"]:
+        if not cat or cat == category:
             continue
         g = groups.setdefault(cat, {"amount": 0.0, "names": [], "origin": origin})
         g["amount"] += amt
         g["names"].append(f"{it['qty']}× {it['name']}" if (it.get("qty") or 1) > 1 else it["name"])
-    if not groups:
-        return []
     split_total = sum(g["amount"] for g in groups.values())
-    if len(groups) == 1 and split_total >= e["amount"] - 0.01:  # fişin tamamı tek kategori: bölme yerine kategori
-        with connect() as c:
-            c.execute("UPDATE entries SET category = ? WHERE id = ?", (next(iter(groups)), entry_id))
-        return []
-    if split_total > e["amount"] + 0.01:  # fiş satırları toplamı tutmuyorsa (okuma hatası) dokunma
-        return []
-    return set_splits("entry", entry_id, [{"amount": round(g["amount"], 2), "category": cat,
-                                           "description": ", ".join(g["names"])[:80], "origin": g["origin"]}
-                                          for cat, g in groups.items()])
+    if total and len(groups) == 1 and split_total >= total - 0.01:  # fişin tamamı tek kategori
+        return {"parts": [], "category": next(iter(groups))}
+    if not groups or (total and split_total > total + 0.01):  # satırlar toplamı tutmuyorsa (okuma hatası) önerme
+        return {"parts": [], "category": None}
+    return {"parts": [{"category": c, "amount": round(g["amount"], 2), "description": ", ".join(g["names"])[:80],
+                       "origin": g["origin"]} for c, g in groups.items()], "category": None}

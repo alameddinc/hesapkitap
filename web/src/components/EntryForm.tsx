@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
 import { dateTR, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
@@ -40,6 +40,20 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [isGross, setIsGross] = useState(!!rec?.gross_amount);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
   const [person, setPerson] = useState(row?.counterparty ?? "");
+  // fişten geldiyse: kalem kurallarına göre bölme önerisi; kullanıcı burada düzeltir, Kaydet'te onaylanmış olur
+  const [parts, setParts] = useState<{ amount: string; category: string; description: string }[] | null>(null);
+  const [wholeCat, setWholeCat] = useState<string | null>(null);
+  useEffect(() => {
+    if (!draft?.items?.length || draft.kind === "gelir") return;
+    fetch("/api/splits/propose", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: draft.items, category: draft.category ?? null, total: draft.amount ?? null }) })
+      .then((r) => r.json() as Promise<{ parts: { amount: number; category: string; description: string }[]; category: string | null }>)
+      .then((p) => {
+        if (p.category) { setCategory(p.category); setWholeCat(p.category); }
+        if (p.parts?.length) setParts(p.parts.map((x) => ({ amount: String(x.amount).replace(".", ","), category: x.category, description: x.description })));
+      })
+      .catch(() => { /* öneri yoksa sorun değil */ });
+  }, [draft]);
   const people = useQuery({ queryKey: ["people"], queryFn: api.people });
   const [err, setErr] = useState<string | null>(null);
   const showLink = !!editingEntry && kind === "gider" && payment === "kredi_karti" && editingEntry.payment === "kredi_karti";
@@ -68,7 +82,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date });
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
-      items: kind === "gider" ? draft?.items ?? null : null });
+      splits: kind === "gider" && parts?.length ? parts.filter((p) => parseAmount(p.amount) > 0 && p.category)
+        .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })) : null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
@@ -225,6 +240,37 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <label className="label" htmlFor="e-note">Not</label>
           <input id="e-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+        {!editingEntry && kind === "gider" && wholeCat && !parts?.length && (
+          <p className="rounded-lg bg-violet-50 p-2 text-xs text-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
+            Fişin tamamı kalem kuralına uydu; kategori <b>{wholeCat}</b> yapıldı. Yanlışsa yukarıdan değiştir.
+          </p>
+        )}
+        {!editingEntry && kind === "gider" && !!parts?.length && (
+          <div className="space-y-2 rounded-lg border border-violet-200 bg-violet-50/50 p-3 dark:border-violet-900 dark:bg-violet-950/20">
+            <div className="text-sm font-medium">Fişten bölme önerisi</div>
+            <p className="text-xs text-stone-500">
+              Bu satırlar harcamadan ayrılıp kendi kategorisine yazılacak; kalanı {category || "seçtiğin kategori"}'de kalır.
+              Yanlışsa düzelt ya da kaldır.
+            </p>
+            {parts.map((p, i) => (
+              <div key={i} className="grid grid-cols-[6.5rem_1fr_auto] items-start gap-2">
+                <input className="input text-right" inputMode="decimal" value={p.amount}
+                  onChange={(e) => setParts(parts.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))} />
+                <div>
+                  <CategoryPicker value={p.category} options={cats}
+                    onChange={(v) => setParts(parts.map((x, j) => (j === i ? { ...x, category: v } : x)))} />
+                  <div className="mt-0.5 truncate text-xs text-stone-500">{p.description}</div>
+                </div>
+                <button type="button" className="btn-ghost p-2 text-stone-400 hover:text-red-600" aria-label="Kaldır"
+                  onClick={() => setParts(parts.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
+              </div>
+            ))}
+            <p className="text-xs text-stone-500">
+              Ayrılan {tl(parts.reduce((a, p) => a + (parseAmount(p.amount) || 0), 0))} · kalan{" "}
+              {tl((parseAmount(amount) || 0) - parts.reduce((a, p) => a + (parseAmount(p.amount) || 0), 0))}
+            </p>
+          </div>
+        )}
         {editingEntry && kind === "gider" && !editingEntry.debt_id && !editingEntry.linked && (
           <SplitEditor target="entry" id={editingEntry.id} total={editingEntry.original_amount ?? editingEntry.amount} />
         )}
