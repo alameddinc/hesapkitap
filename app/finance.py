@@ -1137,9 +1137,42 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
             notes.append(f"{lo_w['day']} günleri son 3 döneme göre %{abs(round(lo_w['pct']))} daha az harcıyorsun")
         if hi_w["pct"] >= 15:
             notes.append(f"{hi_w['day']} günleri %{round(hi_w['pct'])} daha fazla")
+    def daily_list(m: str, n: int) -> list[dict]:
+        return [{"date": (bounds[m][0] + timedelta(days=i)).isoformat(), "amount": _round(daily[m].get(i, 0.0))} for i in range(n)]
+
+    cur_days, prev_days = daily_list(month, upto), daily_list(prev, prev_len)
+    # olağandışı gün: son 3 dönemin günlük ortalamasının 2,5 katından fazla
+    base = sum(sum(daily[m].values()) for m in months[1:]) / max(1, sum(lens[m] for m in months[1:]))
+    for dd in cur_days + prev_days:
+        dd["spike"] = base > 0 and dd["amount"] > base * 2.5
+    top = sorted([{**x, "period": "bu"} for x in cur_days] + [{**x, "period": "gecen"} for x in prev_days],
+                 key=lambda x: -x["amount"])[:4]
     return {"month": month, "start": st.isoformat(), "end": en.isoformat(), "length": length, "day": upto,
+            "daily": {"current": cur_days, "prev": prev_days, "avg_per_day": _round(base)},
+            "top_days": [t for t in top if t["amount"] > 0],
             "variable_only": variable_only,
             "current": cur_c, "prev": prev_c[:length], "avg3": avg_c,
             "at_day": {"current": cur_v, "prev": prev_v, "avg3": avg_v,
                        "vs_prev": pct(cur_v, prev_v), "vs_avg3": pct(cur_v, avg_v)},
             "weekdays": weekdays, "weeks": [w for w in weeks if w["week"] <= (length + 6) // 7], "notes": notes}
+
+
+
+def day_detail(d: str, variable_only: bool = False) -> dict:
+    """Bir günün harcamaları (gerçek tarihe göre; kart işlemi harcandığı gün)."""
+    rows = []
+    for r in transactions(None):
+        if str(r["date"])[:10] != d or r.get("deleted") or r.get("skipped") or r.get("pending") or r.get("linked"):
+            continue
+        if r["kind"] not in (PURCHASE, REFUND, FEE, EXPENSE):
+            continue
+        fixed = bool(r.get("recurring_id") or r["category"] in _FIXED_CATEGORIES or r.get("installment"))
+        if variable_only and fixed:
+            continue
+        rows.append({**r, "fixed": fixed})
+    rows.sort(key=lambda r: -r["amount"])
+    # o gün ödenen kart ekstreleri: bankadan para çıkar ama harcama değildir (harcamalar kendi günlerinde sayılır)
+    paid = [{"title": f"{s_['bank']} {s_['card_no']}", "amount": s_["paid_amount"], "period_end": s_["period_end"]}
+            for s_ in db.list_statements() if s_["paid_at"] == d and s_["paid_amount"]]
+    return {"date": d, "total": _round(sum(r["amount"] for r in rows)), "rows": rows,
+            "by_category": _group(rows, "category"), "card_payments": paid}

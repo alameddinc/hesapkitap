@@ -25,3 +25,17 @@ def test_compare_same_day_weekdays_and_fixed_excluded(client, tmpdb):
     assert finance.period_bounds("2026-11") == (date(2026, 11, 1), date(2026, 11, 30))
     tmpdb.set_cycle_start_day(20)
     assert finance.period_bounds("2026-11") == (date(2026, 10, 20), date(2026, 11, 19))
+
+
+def test_daily_spikes_top_days_and_day_detail(client, tmpdb):
+    tmpdb.set_cycle_start_day(1)
+    for m in ("2026-08", "2026-09", "2026-10"):
+        for day in range(1, 29):
+            tmpdb.create_entry({"entry_date": f"{m}-{day:02d}", "description": "Market", "amount": 100, "kind": "gider",
+                                "category": "Market & Gıda"})
+    tmpdb.create_entry({"entry_date": "2026-10-19", "description": "Mobilya", "amount": 9000, "kind": "gider", "category": "Ev"})
+    c = finance.compare("2026-11", today=date(2026, 11, 5))
+    assert c["top_days"][0] == {"date": "2026-10-19", "amount": 9100, "period": "gecen", "spike": True}
+    assert len(c["daily"]["prev"]) == 31 and c["daily"]["current"][0]["date"] == "2026-11-01"
+    d = client.get("/api/day/2026-10-19").json()
+    assert d["total"] == 9100 and d["rows"][0]["description"] == "Mobilya" and d["by_category"][0]["name"] == "Ev"
