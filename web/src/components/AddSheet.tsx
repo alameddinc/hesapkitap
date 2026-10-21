@@ -26,6 +26,7 @@ interface DocResult {
   category?: string;
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[];
   address?: string | null;
+  branch?: string | null;
   legal_name?: string | null;
   // fatura
   provider?: string;
@@ -79,6 +80,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
         legal_name: r.legal_name,
         items: r.items,
         location: r.address ?? null,
+        branch: r.branch ?? null,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
       });
     } catch (e) {

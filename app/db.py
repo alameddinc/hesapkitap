@@ -298,7 +298,9 @@ MIGRATIONS = [
     ("entries", "location", "TEXT"),            # fişteki işyeri adresi (opsiyonel)
     ("receipt_items", "unit", "TEXT NOT NULL DEFAULT 'adet'"),   # adet | kg | lt
     ("receipt_items", "product", "TEXT"),       # standart ürün adı (marketler arası eşleşme)
-    ("receipt_items", "price_known", "INTEGER NOT NULL DEFAULT 1"),  # 1 okundu · 2 toplamdan çıkarıldı · 0 okunamadı           # ortak harcamada kişinin payı → alacak
+    ("receipt_items", "price_known", "INTEGER NOT NULL DEFAULT 1"),  # 1 okundu · 2 toplamdan çıkarıldı · 0 okunamadı
+    ("receipt_items", "branch", "TEXT"),        # şube/semt (Fıstıkağacı)
+    ("receipt_items", "brand", "TEXT"),         # ürün markası (Ülker) ya da kafenin kendisi           # ortak harcamada kişinin payı → alacak
     ("debts", "split_id", "INTEGER"),           # alacak bir harcamanın payından doğduysa (veriliş = o harcama)
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
 ]
@@ -1920,7 +1922,8 @@ def product_key(name: str) -> str:
     return " ".join(n.split())[:60]
 
 
-def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str, total: float | None = None) -> int:
+def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str, total: float | None = None,
+                       branch: str | None = None) -> int:
     """Fiş satırlarını sakla. Tek bir satırın fiyatı okunamadıysa ve toplam belliyse: toplam − diğerleri (tahmini)."""
     good = [it for it in items if (it.get("name") or "").strip() and product_key(it.get("product") or it["name"])]
     missing = [it for it in good if not isinstance(it.get("amount"), (int, float)) or it["amount"] <= 0]
@@ -1937,58 +1940,100 @@ def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str,
             if it in missing:
                 amt, known = (inferred, 2) if inferred else (0.0, 0)
             product = (it.get("product") or "").strip() or None
-            c.execute("INSERT INTO receipt_items (entry_id, purchased_at, merchant, name, product, product_key, qty, unit, amount, "
-                      "unit_price, price_known) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                      (entry_id, on, merchant, it["name"].strip()[:60], product, product_key(product or it["name"]), qty,
+            c.execute("INSERT INTO receipt_items (entry_id, purchased_at, merchant, branch, name, product, brand, product_key, qty, "
+                      "unit, amount, unit_price, price_known) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                      (entry_id, on, (merchant or "").strip()[:60], (branch or "").strip()[:60] or None, it["name"].strip()[:60],
+                       product, (it.get("brand") or "").strip()[:40] or None, product_key(product or it["name"]), qty,
                        it.get("unit") or "adet", round(amt, 2), round(amt / qty, 2) if known else 0.0, known))
             n += 1
     return n
 
 
-def _store(name: str | None) -> str:
-    """Market adı gruplaması: 'BİM Birleşik Mağazalar' / 'Bim' → 'Bim'."""
+def _store_key(name: str | None) -> str:
+    """Mağaza gruplaması tam ada göre: 'KAHVE DÜNYASI' = 'Kahve Dünyası' (ilk kelimeye göre değil)."""
+    import re as _re
+
     from app.textnorm import normalize
 
-    n = normalize(name or "")
-    return n.split()[0].capitalize() if n else "?"
+    return _re.sub(r"[^A-Z0-9]", "", normalize(name or "")) or "?"
 
 
-def products() -> list[dict]:
-    """Fişte görülen her ürün (tek alınanlar da): son fiyat, mağaza mağaza son fiyat (en ucuz işaretli), ilk→son değişim."""
+def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
+    """Fişlerden: ürünler (tek alınanlar dahil, mağaza mağaza son fiyat, en ucuz işaretli, ilk→son değişim),
+    mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka."""
     with connect() as c:
         items = rows(c.execute("SELECT * FROM receipt_items ORDER BY purchased_at, id"))
-    by: dict[str, list[dict]] = {}
+    names: dict[str, str] = {}
+    for it in items:  # gösterim adı: küçük harf içeren (fişteki BÜYÜK HARF yerine) son yazılış
+        k, n = _store_key(it["merchant"]), (it["merchant"] or "?").strip()
+        if k not in names or not n.isupper() or names[k].isupper():
+            names[k] = n
+        it["store_key"] = k
+    brand_names = {}
     for it in items:
-        by.setdefault(it["product_key"], []).append(it)
-    out = []
-    for key, xs in by.items():
+        if it["brand"]:
+            brand_names[_store_key(it["brand"])] = it["brand"]
+    all_stores = sorted({names[k] for k in names})
+    all_brands = sorted(set(brand_names.values()))
+    items = [it for it in items if (not since or it["purchased_at"] >= since)
+             and (not store or it["store_key"] == _store_key(store))
+             and (not brand or _store_key(it["brand"]) == _store_key(brand))]
+
+    def summarize(xs: list[dict]) -> dict:
         priced = [x for x in xs if x["price_known"]]
         last = xs[-1]
-        stores: dict[str, dict] = {}
+        per_store: dict[str, dict] = {}
         for x in priced:
-            stores[_store(x["merchant"])] = {"store": _store(x["merchant"]), "merchant": x["merchant"], "price": x["unit_price"],
-                                             "date": x["purchased_at"], "estimated": x["price_known"] == 2}
-        st = sorted(stores.values(), key=lambda s_: s_["price"])
+            per_store[x["store_key"]] = {"store": names.get(x["store_key"], x["merchant"]), "branch": x["branch"],
+                                         "price": x["unit_price"], "date": x["purchased_at"], "estimated": x["price_known"] == 2}
+        st = sorted(per_store.values(), key=lambda s_: s_["price"])
         if len(st) > 1:
             st[0]["cheapest"] = True
         change = None
         if len(priced) >= 2 and priced[0]["unit_price"]:
             change = round((priced[-1]["unit_price"] - priced[0]["unit_price"]) / priced[0]["unit_price"] * 100, 1)
-        out.append({"key": key, "product": next((x["product"] for x in reversed(xs) if x["product"]), last["name"]),
-                    "unit": last["unit"], "count": len(xs), "last_date": last["purchased_at"],
-                    "last_price": priced[-1]["unit_price"] if priced else None,
-                    "last_estimated": bool(priced) and priced[-1]["price_known"] == 2,
-                    "first_price": priced[0]["unit_price"] if priced else None, "first_date": priced[0]["purchased_at"] if priced else None,
-                    "change_pct": change, "stores": st,
-                    "history": [{"date": x["purchased_at"], "price": x["unit_price"] if x["price_known"] else None,
-                                 "merchant": x["merchant"], "qty": x["qty"], "name": x["name"]} for x in xs]})
-    return sorted(out, key=lambda x: x["last_date"], reverse=True)
+        return {"key": last["product_key"], "product": next((x["product"] for x in reversed(xs) if x["product"]), last["name"]),
+                "brand": next((x["brand"] for x in reversed(xs) if x["brand"]), None),
+                "unit": last["unit"], "count": len(xs), "last_date": last["purchased_at"],
+                "last_price": priced[-1]["unit_price"] if priced else None,
+                "last_estimated": bool(priced) and priced[-1]["price_known"] == 2,
+                "first_price": priced[0]["unit_price"] if priced else None,
+                "first_date": priced[0]["purchased_at"] if priced else None, "change_pct": change, "stores": st,
+                "history": [{"date": x["purchased_at"], "price": x["unit_price"] if x["price_known"] else None,
+                             "store": names.get(x["store_key"], x["merchant"]), "branch": x["branch"], "qty": x["qty"],
+                             "name": x["name"]} for x in xs]}
+
+    by: dict[str, list[dict]] = {}
+    for it in items:
+        by.setdefault(it["product_key"], []).append(it)
+    prods = sorted((summarize(xs) for xs in by.values()), key=lambda x: x["last_date"], reverse=True)
+
+    stores_out = []
+    for sk in {it["store_key"] for it in items}:
+        xs = [it for it in items if it["store_key"] == sk]
+        per_p: dict[str, list[dict]] = {}
+        for x in xs:
+            per_p.setdefault(x["product_key"], []).append(x)
+        stores_out.append({"store": names.get(sk, sk), "visits": len({x["entry_id"] for x in xs}),
+                           "branches": sorted({x["branch"] for x in xs if x["branch"]}),
+                           "last_date": max(x["purchased_at"] for x in xs),
+                           "products": sorted((summarize(v) for v in per_p.values()), key=lambda x: x["last_date"], reverse=True)})
+    stores_out.sort(key=lambda x: x["last_date"], reverse=True)
+
+    brands_out = []
+    for bk in {_store_key(it["brand"]) for it in items if it["brand"]}:
+        bp = [p for p in prods if p["brand"] and _store_key(p["brand"]) == bk]
+        ch = [p["change_pct"] for p in bp if p["change_pct"] is not None]
+        brands_out.append({"brand": brand_names.get(bk, bk), "products": bp,
+                           "avg_change": round(sum(ch) / len(ch), 1) if ch else None})
+    brands_out.sort(key=lambda x: (-len(x["products"]), x["brand"]))
+    return {"products": prods, "stores": stores_out, "brands": brands_out, "all_stores": all_stores, "all_brands": all_brands}
 
 
 def price_history(min_count: int = 2) -> list[dict]:
-    """Geriye uyumluluk: en az iki fiyatı bilinen ürünler, değişime göre."""
-    return sorted([p for p in products() if p["change_pct"] is not None],
-                  key=lambda x: -abs(x["change_pct"]))
+    """En az iki fiyatı bilinen ürünler, değişime göre (Özet uyarısı için)."""
+    return sorted([p for p in products()["products"] if p["change_pct"] is not None], key=lambda x: -abs(x["change_pct"]))
+
 
 # ---------------------------------------------------------------- birikim hedefleri
 

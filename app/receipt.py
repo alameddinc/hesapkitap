@@ -16,6 +16,8 @@ MAX_BYTES = 15 * 1024 * 1024
 ITEM_RULES = """items (sadece fiş, en fazla 40 satır, fişteki sırayla):
 - name: satırın fişteki yazısı. product: aynı ürünü farklı marketlerde eşleştirmek için STANDART ad: marka + ürün + gramaj/hacim,
   Türkçe karakterli, kısaltmalar açık (ör. "ULKER GOFRET CIK 36GR" → "Ülker Çikolatalı Gofret 36 g"; "SUT 1L PINAR" → "Pınar Süt 1 L").
+- brand: ürünün markası (ör. Ülker, Pınar, Marlboro); kafe/restoranın kendi ürünüyse (latte, tost) işletmenin markası
+  (ör. Kahve Dünyası); bilinmiyorsa null.
 - "2Adt x 230,00 Latte" → qty=2, unit="adet", amount=460 (satır toplamı).
 - Tartılı ürün "0,750 KG x 89,90" → qty=0.75, unit="kg", amount=67.43; litre ise unit="lt".
 - Bir ürünün hemen altındaki İNDİRİM/KAMPANYA satırı o ürünün amount'undan düşülür; hangi ürüne ait olduğu belli olmayan genel
@@ -142,7 +144,8 @@ def _items(raw: dict) -> list[dict]:
             q = int(q) if float(q).is_integer() and q >= 1 else 1
         split = i.get("split") if isinstance(i.get("split"), str) and i.get("split") else None
         product = str(i.get("product") or "").strip()[:80] or None
-        out.append({"name": str(i["name"])[:60], "product": product, "qty": q, "unit": unit,
+        brand = str(i.get("brand") or "").strip()[:40] or None
+        out.append({"name": str(i["name"])[:60], "product": product, "brand": brand, "qty": q, "unit": unit,
                     "amount": _num(i.get("amount")), "split": split})
     return out
 
@@ -162,6 +165,7 @@ SADECE şu JSON'u döndür:
   "merchant": "MARKA / tabela / kurum adı, kısa (ör. Espressolab, Enerjisa)",
   "legal_name": "belgedeki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
   "address": "fişte yazan işyeri adresi (mahalle/cadde, ilçe/il) kısa, veya null",
+  "branch": "şube / semt adı, kısa (ör. Fıstıkağacı, Kadıköy Moda); fiş başlığında ya da adreste geçen; yoksa null",
   "date": "YYYY-MM-DD fiş tarihi / fatura düzenleme tarihi veya null",
   "total": 0.00,
   "due_date": "YYYY-MM-DD SON ÖDEME TARİHİ (sadece fatura) veya null",
@@ -170,7 +174,7 @@ SADECE şu JSON'u döndür:
   "subscriber_no": "abone/tesisat no veya null",
   "payment": "nakit | kart | bilinmiyor",
   "category": "fiş ise şu listeden en uygunu: {categories}",
-  "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "qty": 1, "unit": "adet", "amount": 0.00, "split": null}}],
+  "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
 }}
 {split_rule}total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56.
@@ -211,6 +215,7 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
         "items": _items(raw),
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
         "address": (raw.get("address") or "").strip()[:160] or None,
+        "branch": (raw.get("branch") or "").strip()[:60] or None,
         "confidence": raw.get("confidence") or "orta",
     }
 

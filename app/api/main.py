@@ -247,6 +247,7 @@ class EntryIn(BaseModel):
     splits: list[dict] | None = None  # formda onaylanan alt kalemler [{amount, category, description}]
     items: list[dict] | None = None  # fiş satırları: fiyat takibi için saklanır
     location: str | None = None  # fişteki işyeri adresi (opsiyonel)
+    branch: str | None = None  # fişteki şube/semt (fiyat geçmişinde)
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
 
 
@@ -265,7 +266,7 @@ class EntryPatch(BaseModel):
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
-    data = body.model_dump(exclude={"legal_name", "splits", "items"})
+    data = body.model_dump(exclude={"legal_name", "splits", "items", "branch"})
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
     if body.legal_name and body.kind == "gider":
@@ -275,7 +276,7 @@ def create_entry(body: EntryIn):
     eid = db.create_entry(data)
     if body.items and body.kind == "gider":
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
-                              total=body.amount)
+                              total=body.amount, branch=body.branch)
     splits = []
     if body.splits and body.kind == "gider":
         try:
@@ -740,9 +741,9 @@ def delete_target(tid: int):
 
 
 @app.get("/api/prices")
-def prices():
-    """Fişlerden ürün fiyat takibi: her ürün, mağaza mağaza son fiyat, ilk→son değişim."""
-    return db.products()
+def prices(since: date | None = None, store: str | None = None, brand: str | None = None):
+    """Fişlerden fiyat takibi: ürün / mağaza / marka kırılımı; tarihten beri, mağaza, marka filtresi."""
+    return db.products(since.isoformat() if since else None, store or None, brand or None)
 
 
 @app.get("/api/item-rules")

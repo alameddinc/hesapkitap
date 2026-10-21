@@ -90,6 +90,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date });
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
       items: kind === "gider" ? draft?.items ?? null : null,
+      branch: draft?.branch ?? null,
       splits: kind === "gider" && parts?.length ? parts.filter((p) => parseAmount(p.amount) > 0 && p.category)
         .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })) : null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
