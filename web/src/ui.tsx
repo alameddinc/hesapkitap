@@ -13,6 +13,7 @@ export interface EntryDraft {
   payment?: "kredi_karti" | "nakit" | "havale";
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
   items?: { name: string; qty?: number; amount: number | null; split?: string | null }[]; // fiş satırları (kalem kuralları)
+  location?: string | null; // fişteki işyeri adresi
 }
 
 export interface UI {

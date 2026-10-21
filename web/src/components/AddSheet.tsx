@@ -25,6 +25,7 @@ interface DocResult {
   payment?: string;
   category?: string;
   items?: { name: string; qty?: number; amount: number | null; split?: string | null }[];
+  address?: string | null;
   legal_name?: string | null;
   // fatura
   provider?: string;
@@ -75,6 +76,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
         payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" ? "kredi_karti" : undefined,
         legal_name: r.legal_name,
         items: r.items,
+        location: r.address ?? null,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
       });
     } catch (e) {

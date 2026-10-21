@@ -32,6 +32,7 @@ export interface Row {
   split_of?: string; // alt kalemse ana satırın uid'i
   split_total?: number; // ana satırdan ayrılan toplam
   original_amount?: number;
+  location?: string | null; // fişteki adres
   debt_id?: number | null;
 }
 

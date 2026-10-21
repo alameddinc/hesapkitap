@@ -137,6 +137,7 @@ SADECE şu JSON'u döndür:
   "doc_type": "fis | fatura",
   "merchant": "MARKA / tabela / kurum adı, kısa (ör. Espressolab, Enerjisa)",
   "legal_name": "belgedeki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
+  "address": "fişte yazan işyeri adresi (mahalle/cadde, ilçe/il) kısa, veya null",
   "date": "YYYY-MM-DD fiş tarihi / fatura düzenleme tarihi veya null",
   "total": 0.00,
   "due_date": "YYYY-MM-DD SON ÖDEME TARİHİ (sadece fatura) veya null",
@@ -182,6 +183,7 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
         "category": category,
         "items": _items(raw),
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
+        "address": (raw.get("address") or "").strip()[:160] or None,
         "confidence": raw.get("confidence") or "orta",
     }
 

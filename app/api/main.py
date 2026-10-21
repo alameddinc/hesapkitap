@@ -245,6 +245,8 @@ class EntryIn(BaseModel):
     payment: Payment | None = None
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
     splits: list[dict] | None = None  # formda onaylanan alt kalemler [{amount, category, description}]
+    items: list[dict] | None = None  # fiş satırları: fiyat takibi için saklanır
+    location: str | None = None  # fişteki işyeri adresi (opsiyonel)
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
 
 
@@ -257,12 +259,13 @@ class EntryPatch(BaseModel):
     note: str | None = None
     skipped: bool | None = None
     payment: Payment | None = None
+    location: str | None = None
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
 
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
-    data = body.model_dump(exclude={"legal_name", "splits"})
+    data = body.model_dump(exclude={"legal_name", "splits", "items"})
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
     if body.legal_name and body.kind == "gider":
@@ -270,6 +273,8 @@ def create_entry(body: EntryIn):
     if data.get("counterparty"):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     eid = db.create_entry(data)
+    if body.items and body.kind == "gider":
+        db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"])
     splits = []
     if body.splits and body.kind == "gider":
         try:
@@ -707,6 +712,12 @@ class SplitProposalIn(BaseModel):
 def propose_split(body: SplitProposalIn):
     """Fiş okununca formda gösterilecek bölme önerisi; kaydetmez."""
     return db.propose_split([i for i in body.items if isinstance(i, dict)], body.category, body.total)
+
+
+@app.get("/api/prices")
+def prices():
+    """Fişlerden ürün fiyat takibi: aynı ürünün ilk ve son birim fiyatı."""
+    return db.price_history()
 
 
 @app.get("/api/item-rules")

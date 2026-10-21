@@ -40,6 +40,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [isGross, setIsGross] = useState(!!rec?.gross_amount);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
   const [person, setPerson] = useState(row?.counterparty ?? "");
+  const [location, setLocation] = useState(row?.location ?? draft?.location ?? "");
   // fişten geldiyse: kalem kurallarına göre bölme önerisi; kullanıcı burada düzeltir, Kaydet'te onaylanmış olur
   const [parts, setParts] = useState<{ amount: string; category: string; description: string }[] | null>(null);
   const [wholeCat, setWholeCat] = useState<string | null>(null);
@@ -76,12 +77,13 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     const common = { description: description.trim(), amount: grossMode ? 0 : amt, kind, category: category || null, note: note || null,
       ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
     const pay = kind === "gider" && !isRecurring && !rec ? { payment } : {};
-    const who = !isRecurring && !rec ? { counterparty: person.trim() || null } : {};
+    const who = !isRecurring && !rec ? { counterparty: person.trim() || null, location: location.trim() || null } : {};
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date });
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
+      items: kind === "gider" ? draft?.items ?? null : null,
       splits: kind === "gider" && parts?.length ? parts.filter((p) => parseAmount(p.amount) > 0 && p.category)
         .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })) : null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
@@ -154,6 +156,18 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             <CategoryPicker id="e-person" value={person} onChange={setPerson} options={people.data ?? []}
               placeholder="Para bir kişiye gittiyse / kişiden geldiyse" />
             <p className="mt-1 text-xs text-stone-500">Transferler'de o kişinin hesabına düşer; açık borç/alacakla aynı tutarsa kapatır.</p>
+          </div>
+        )}
+        {kind === "gider" && !isRecurring && !rec && (location || draft?.items) && (
+          <div>
+            <label className="label" htmlFor="e-loc">Adres (fişten, opsiyonel)</label>
+            <div className="flex gap-2">
+              <input id="e-loc" className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="ör. Maslak, Sarıyer" />
+              {location.trim() && (
+                <a className="btn-ghost shrink-0 border border-stone-300 px-2 text-xs dark:border-stone-700" target="_blank" rel="noreferrer"
+                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${description} ${location}`)}`}>Harita</a>
+              )}
+            </div>
           </div>
         )}
         {kind === "gider" && !isRecurring && !rec && (
