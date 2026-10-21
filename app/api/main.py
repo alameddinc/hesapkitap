@@ -39,6 +39,11 @@ def client_ip(request: Request) -> str:
             or (request.client.host if request.client else "?"))
 
 
+from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB; API yanıtları da küçülür
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
@@ -53,6 +58,8 @@ async def require_login(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "same-origin")
     if path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
+    elif path.startswith("/assets/"):  # adında hash olan derleme dosyaları değişmez
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
     return response
 
 

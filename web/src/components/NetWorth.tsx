@@ -51,10 +51,11 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
           <span className="flex-1 text-sm text-stone-500">Hesaplarını, nakdini ve yemek/hediye kartlarını ekle: gerçek durumunu görürsün.</span>
         ) : (
           <span className="min-w-0 flex-1">
-            <span className="block text-xs text-stone-500">Net durum</span>
+            <span className="block text-xs text-stone-500">Net durum · gerçek paran (bankalar, kartlar, borç/alacak)</span>
             <span className={cx("block text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</span>
             <span className="block text-xs text-stone-500">
-              Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
+              Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
+              {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
             </span>
             {d.unknown_banks.length > 0 && (
               <span className="block text-xs text-amber-600">Bakiyesi girilmemiş: {d.unknown_banks.join(", ")}</span>
