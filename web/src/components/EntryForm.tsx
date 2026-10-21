@@ -8,10 +8,13 @@ import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
+import SplitEditor from "./SplitEditor";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 
 const today = () => new Date().toISOString().slice(0, 10);
+const splitsOf = (r: unknown) =>
+  (r && typeof r === "object" && "splits" in r ? (r as { splits?: { category: string; amount: number }[] }).splits : null) ?? [];
 
 /** Elle gelir/gider girişi. recurring=true ise "her ay" sabit kalem olarak kaydeder. */
 export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved }: {
@@ -25,7 +28,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const editingEntry = row?.source === "manual" ? row : undefined;
   const [kind, setKind] = useState<"gelir" | "gider">(rec?.kind ?? (row?.kind as "gelir" | "gider") ?? draft?.kind ?? "gider");
   const [description, setDescription] = useState(rec?.description ?? row?.description ?? draft?.description ?? "");
-  const [amount, setAmount] = useState(String(rec?.amount ?? row?.amount ?? draft?.amount ?? ""));
+  // bölünmüş kayıtta listedeki tutar kalan kısımdır; düzenlerken asıl toplam gösterilir
+  const [amount, setAmount] = useState(String(rec?.amount ?? row?.original_amount ?? row?.amount ?? draft?.amount ?? ""));
   const [date, setDate] = useState(row?.date?.slice(0, 10) ?? draft?.entry_date ?? today());
   const [category, setCategory] = useState(rec?.category ?? row?.category ?? draft?.category ?? "");
   const [note, setNote] = useState(rec?.note ?? row?.note ?? draft?.note ?? "");
@@ -63,8 +67,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date });
-    return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null });
+    return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
+      items: kind === "gider" ? draft?.items ?? null : null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
+    : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
     : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti" : "Kaydedildi"));
   const link = useSave((txnId: number | null) => api.linkEntry(editingEntry!.id, txnId),
@@ -219,6 +225,9 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <label className="label" htmlFor="e-note">Not</label>
           <input id="e-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+        {editingEntry && kind === "gider" && !editingEntry.debt_id && !editingEntry.linked && (
+          <SplitEditor target="entry" id={editingEntry.id} total={editingEntry.original_amount ?? editingEntry.amount} />
+        )}
         {err && <p className="text-sm text-red-600">{err}</p>}
       </div>
     </Modal>

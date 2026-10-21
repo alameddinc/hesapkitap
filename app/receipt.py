@@ -118,7 +118,8 @@ def _items(raw: dict) -> list[dict]:
             continue
         q = i.get("qty")
         q = int(q) if isinstance(q, (int, float)) and q >= 1 and float(q).is_integer() else 1
-        out.append({"name": str(i["name"])[:60], "qty": q, "amount": _num(i.get("amount"))})
+        split = i.get("split") if isinstance(i.get("split"), str) and i.get("split") else None
+        out.append({"name": str(i["name"])[:60], "qty": q, "amount": _num(i.get("amount")), "split": split})
     return out
 
 
@@ -144,15 +145,22 @@ SADECE şu JSON'u döndür:
   "subscriber_no": "abone/tesisat no veya null",
   "payment": "nakit | kart | bilinmiyor",
   "category": "fiş ise şu listeden en uygunu: {categories}",
-  "items": [{{"name": "ürün", "qty": 1, "amount": 0.00}}],
+  "items": [{{"name": "ürün", "qty": 1, "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
 }}
-total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56. items en fazla 15 (sadece fiş); "2Adt x 230,00 Latte" gibi satırda qty=2, amount satır toplamı."""
+{split_rule}total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56. items en fazla 15 (sadece fiş); "2Adt x 230,00 Latte" gibi satırda qty=2, amount satır toplamı."""
 
 
-def parse_document(data: bytes, mime: str, categories: list[str]) -> dict:
-    """Fiş mi fatura mı kendisi anlar; tek Gemini çağrısı."""
-    raw, meta = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories)), data, mime)
+SPLIT_RULE = """items[].split: ürün şu kategorilerden birine AÇIKÇA giriyorsa o kategorinin adı, değilse null: {cats}.
+Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin değilsen null.
+"""
+
+
+def parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None) -> dict:
+    """Fiş mi fatura mı kendisi anlar; tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri;
+    model her fiş satırını bunlardan birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için)."""
+    split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
+    raw, meta = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime)
     if raw.get("doc_type") == "fatura" or raw.get("due_date"):
         return {
             "type": "bill",

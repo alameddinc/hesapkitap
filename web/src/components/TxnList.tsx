@@ -36,7 +36,8 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
   const ui = useUI();
   if (!rows.length) return <p className="py-8 text-center text-sm text-stone-500">{empty}</p>;
 
-  const open = (r: Row) => {
+  const open = (row: Row) => {
+    const r = row.split_of ? rows.find((x) => x.uid === row.split_of) ?? row : row;  // alt kalem → ana kayıt
     if (r.source === "debt") ui.go("borclar");
     else if (r.source === "card") ui.openCardTxn(r);
     else if (r.source === "manual") ui.openEntry(r);
@@ -73,6 +74,8 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
                 {r.awaiting_statement && <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800 dark:bg-blue-950 dark:text-blue-300">Ekstre bekleniyor</span>}
                 {r.subscription === "iptal" && <span className="rounded bg-stone-200 px-1.5 py-0.5 dark:bg-stone-800">Abonelik iptal edildi</span>}
                 {r.subscription === "dusuruldu" && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Paket düşürüldü</span>}
+                {r.split_of && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-800 dark:bg-violet-950 dark:text-violet-300">Alt kalem</span>}
+                {!!r.split_total && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-800 dark:bg-violet-950 dark:text-violet-300">Bölündü · {tl(r.split_total)} ayrıldı</span>}
                 {r.linked && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Ekstreyle eşleşti</span>}
               </div>
               {r.note && <div className="mt-0.5 truncate text-xs text-stone-400">{r.note}</div>}
