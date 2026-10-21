@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, type Rule } from "../api";
 import CategoryPicker from "../components/CategoryPicker";
+import ItemRules from "../components/ItemRules";
 import { useMeta, useSave } from "../components/hooks";
 import { useUI } from "../ui";
 
@@ -55,6 +56,8 @@ export default function Rules() {
           Yukarıdaki kural önce çalışır. Elle kategori verdiğin işlemler etkilenmez.
         </p>
       </div>
+
+      <ItemRules />
 
       <section className="card space-y-2 p-3 sm:p-4">
         <h2 className="font-semibold">Yeni kural</h2>

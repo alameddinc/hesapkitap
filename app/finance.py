@@ -148,10 +148,32 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
     states, aliases = db.subscription_states(), db.merchant_aliases()
     card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
     entries = db.list_entries(month)
-    out = card + [_entry_row(e) for e in entries] + [_debt_row(d) for d in db.debt_rows(month)]
+    out = _apply_splits(card + [_entry_row(e) for e in entries]) + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
         out += pending_recurring(month, db.list_recurring(), entries)
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
+
+
+def _apply_splits(rows: list[dict]) -> list[dict]:
+    """Bölünmüş harcama: ana satır kalan tutarla, her alt kalem kendi kategorisinde ayrı satır.
+    Alt kalem ana satırın tarih/kart/eşleşme bilgilerini taşır; toplamlar ve kategoriler doğal olarak doğru çıkar."""
+    sm = db.splits_map()
+    if not sm:
+        return rows
+    out = []
+    for r in rows:
+        key = ("card", r["id"]) if r["source"] == "card" else ("entry", r["id"]) if r["source"] == "manual" else None
+        parts = sm.get(key) if key and r["kind"] in (PURCHASE, EXPENSE) else None
+        if not parts:
+            out.append(r)
+            continue
+        used = sum(p["amount"] for p in parts)
+        out.append({**r, "amount": _round(r["amount"] - used), "split_total": _round(used), "original_amount": r["amount"]})
+        for p in parts:
+            out.append({**r, "uid": f"{r['uid']}s{p['id']}", "amount": p["amount"], "category": p["category"],
+                        "description": f"{r['description']} · {p['description'] or p['category']}",
+                        "split_of": r["uid"], "split_origin": p["origin"]})
+    return out
 
 
 # ---------------------------------------------------------------- monthly summary

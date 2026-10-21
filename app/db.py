@@ -170,6 +170,24 @@ CREATE TABLE IF NOT EXISTS mail_log (
     detail TEXT,
     processed_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+-- Alt kalemler: bir harcamanın bir kısmı başka kategoride (ör. market fişindeki sigara). Ana kayıt kalan tutarla sayılır.
+CREATE TABLE IF NOT EXISTS splits (
+    id INTEGER PRIMARY KEY,
+    entry_id INTEGER REFERENCES entries(id) ON DELETE CASCADE,
+    txn_id INTEGER REFERENCES transactions(id) ON DELETE CASCADE,
+    amount REAL NOT NULL CHECK (amount > 0),
+    category TEXT NOT NULL,
+    description TEXT,
+    origin TEXT NOT NULL DEFAULT 'manual',   -- manual | kural | ai
+    CHECK ((entry_id IS NULL) <> (txn_id IS NULL))
+);
+-- Kalem kuralları: fişteki satırda bu kelimelerden biri geçerse o satır bu kategoriye ayrılır
+CREATE TABLE IF NOT EXISTS item_rules (
+    id INTEGER PRIMARY KEY,
+    keywords TEXT NOT NULL,                  -- virgülle: "sigara, marlboro, parliament"
+    category TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- Kişi bazında ayar: kategori ve borç takibi
 CREATE TABLE IF NOT EXISTS counterparties (
     name TEXT PRIMARY KEY,
@@ -227,6 +245,9 @@ CREATE TABLE IF NOT EXISTS recurring (
 """
 
 # Eski şemaya sonradan eklenen kolonlar: (tablo, kolon, tanım)
+DEFAULT_ITEM_RULE = ("sigara, marlboro, parliament, camel, winston, kent, lucky strike, chesterfield, l&m, "
+                     "tekel, samsun, maltepe, viceroy, west, davidoff, muratti, iqos, heets, terea, tütün, puro, sarmalık")
+
 MIGRATIONS = [
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
@@ -270,6 +291,10 @@ def init_db() -> None:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         _migrate_subscription_state(c)
         _backfill_statements(c)
+        if not c.execute("SELECT 1 FROM settings WHERE key = 'item_rules_seeded'").fetchone():
+            # hazır örnek: kullanıcı silebilir/değiştirebilir, bir kez eklenir
+            c.execute("INSERT INTO item_rules (keywords, category) VALUES (?, ?)", (DEFAULT_ITEM_RULE, "Sigara"))
+            c.execute("INSERT INTO settings (key, value) VALUES ('item_rules_seeded', '1')")
         # eski borç kayıtları: ödenen tutar tek bir ödeme satırına
         c.execute("""INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id)
                      SELECT id, paid_amount, COALESCE(settled_at, date('now')), settled_entry_id FROM debts
@@ -1649,3 +1674,125 @@ def create_card_notice(on: str, amount: float, merchant: str, import_hash: str) 
                   "note": "Kart bildirimi (e-posta)", "import_hash": import_hash})
     auto_link()
     return True
+
+
+# ---------------------------------------------------------------- alt kalemler (bölme) ve kalem kuralları
+
+def list_item_rules() -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM item_rules ORDER BY category, id"))
+
+
+def save_item_rule(keywords: str, category: str, rule_id: int | None = None) -> int:
+    kws = ", ".join(k.strip() for k in keywords.split(",") if k.strip())
+    if not kws or not category.strip():
+        raise ValueError("Kelime ve kategori gerekli")
+    with connect() as c:
+        if rule_id:
+            c.execute("UPDATE item_rules SET keywords = ?, category = ? WHERE id = ?", (kws, category.strip(), rule_id))
+            return rule_id
+        return c.execute("INSERT INTO item_rules (keywords, category) VALUES (?, ?)", (kws, category.strip())).lastrowid
+
+
+def delete_item_rule(rule_id: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM item_rules WHERE id = ?", (rule_id,)).rowcount > 0
+
+
+def match_item(name: str, rules: list[dict] | None = None) -> str | None:
+    """Fiş satırı hangi kalem kuralına giriyor? Kelime başında eşleşir ('KENT' ✓, 'KENTUCKY' ✗ değil: 'kent' kelime
+    sınırıyla aranır; 4+ harfli kelimeler satırın içinde de bulunur, fişteki bitişik yazımlar için)."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    n = normalize(name)
+    for r in rules if rules is not None else list_item_rules():
+        for kw in (k.strip() for k in r["keywords"].split(",")):
+            k = normalize(kw)
+            if not k:
+                continue
+            if _re.search(rf"(?<![A-Z]){_re.escape(k)}(?![A-Z])", n) or (len(k) >= 6 and k in n):
+                return r["category"]
+    return None
+
+
+def splits_map() -> dict[tuple[str, int], list[dict]]:
+    """('entry'|'card', id) → alt kalemler. Fişten girilen kayıt ekstredeki kart işlemiyle eşleştiyse
+    bölmesi kart işlemine de uygulanır (kart işleminin kendi bölmesi yoksa)."""
+    out: dict[tuple[str, int], list[dict]] = {}
+    with connect() as c:
+        for r in rows(c.execute("SELECT * FROM splits ORDER BY id")):
+            key = ("entry", r["entry_id"]) if r["entry_id"] else ("card", r["txn_id"])
+            out.setdefault(key, []).append(r)
+        if any(k[0] == "entry" for k in out):
+            for e in c.execute("SELECT id, linked_txn_id FROM entries WHERE linked_txn_id IS NOT NULL"):
+                if ("entry", e["id"]) in out and ("card", e["linked_txn_id"]) not in out:
+                    out[("card", e["linked_txn_id"])] = out[("entry", e["id"])]
+    return out
+
+
+def _parent_amount(c, target: str, pid: int) -> float:
+    if target == "entry":
+        r = c.execute("SELECT amount, kind FROM entries WHERE id = ?", (pid,)).fetchone()
+        if not r or r["kind"] != "gider":
+            raise ValueError("Sadece gider bölünebilir")
+    else:
+        r = c.execute("SELECT amount, txn_type AS kind FROM transactions WHERE id = ?", (pid,)).fetchone()
+        if not r or r["kind"] != "harcama":
+            raise ValueError("Sadece harcama bölünebilir")
+    return r["amount"]
+
+
+def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual") -> list[dict]:
+    """Alt kalemleri baştan yaz. Toplam ana tutarı geçemez; eşitse ana kayıt tümüyle bölünmüş olur."""
+    col = "entry_id" if target == "entry" else "txn_id"
+    parts = [p for p in parts if (p.get("amount") or 0) > 0 and (p.get("category") or "").strip()]
+    with connect() as c:
+        total = _parent_amount(c, target, pid)
+        if sum(p["amount"] for p in parts) > total + 0.005:
+            raise ValueError(f"Alt kalemlerin toplamı ({sum(p['amount'] for p in parts):.2f}) harcamayı ({total:.2f}) geçemez")
+        c.execute(f"DELETE FROM splits WHERE {col} = ?", (pid,))
+        for p in parts:
+            c.execute(f"INSERT INTO splits ({col}, amount, category, description, origin) VALUES (?, ?, ?, ?, ?)",
+                      (pid, round(p["amount"], 2), p["category"].strip(), (p.get("description") or "").strip()[:80] or None,
+                       p.get("origin") or origin))
+    return splits_map().get((target, pid), [])
+
+
+def auto_split_items(entry_id: int, items: list[dict], ai_categories: set[str] | None = None) -> list[dict]:
+    """Fiş kalemlerine kalem kurallarını uygula (önce kelime kuralı, yakalanmazsa modelin etiketi).
+    Ana kaydın kategorisinden farklı kategoriye düşen satırlar alt kalem olur; hepsi aynı kategoriyse ana kayıt o olur."""
+    rules = list_item_rules()
+    if not rules or not items:
+        return []
+    allowed = {r["category"] for r in rules}
+    with connect() as c:
+        e = c.execute("SELECT amount, category, kind FROM entries WHERE id = ?", (entry_id,)).fetchone()
+    if not e or e["kind"] != "gider":
+        return []
+    groups: dict[str, dict] = {}
+    for it in items:
+        amt = it.get("amount")
+        if not amt or amt <= 0 or not it.get("name"):
+            continue
+        cat, origin = match_item(it["name"], rules), "kural"
+        if not cat and it.get("split") in allowed and (ai_categories is None or it["split"] in ai_categories):
+            cat, origin = it["split"], "ai"
+        if not cat or cat == e["category"]:
+            continue
+        g = groups.setdefault(cat, {"amount": 0.0, "names": [], "origin": origin})
+        g["amount"] += amt
+        g["names"].append(f"{it['qty']}× {it['name']}" if (it.get("qty") or 1) > 1 else it["name"])
+    if not groups:
+        return []
+    split_total = sum(g["amount"] for g in groups.values())
+    if len(groups) == 1 and split_total >= e["amount"] - 0.01:  # fişin tamamı tek kategori: bölme yerine kategori
+        with connect() as c:
+            c.execute("UPDATE entries SET category = ? WHERE id = ?", (next(iter(groups)), entry_id))
+        return []
+    if split_total > e["amount"] + 0.01:  # fiş satırları toplamı tutmuyorsa (okuma hatası) dokunma
+        return []
+    return set_splits("entry", entry_id, [{"amount": round(g["amount"], 2), "category": cat,
+                                           "description": ", ".join(g["names"])[:80], "origin": g["origin"]}
+                                          for cat, g in groups.items()])

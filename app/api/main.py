@@ -244,6 +244,7 @@ class EntryIn(BaseModel):
     skipped: bool = False
     payment: Payment | None = None
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
+    items: list[dict] | None = None  # fiş satırları: kalem kurallarıyla alt kaleme bölünür; saklanmaz
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
 
 
@@ -261,7 +262,7 @@ class EntryPatch(BaseModel):
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
-    data = body.model_dump(exclude={"legal_name"})
+    data = body.model_dump(exclude={"legal_name", "items"})
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
     if body.legal_name and body.kind == "gider":
@@ -269,10 +270,12 @@ def create_entry(body: EntryIn):
     if data.get("counterparty"):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     eid = db.create_entry(data)
+    splits = db.auto_split_items(eid, [i for i in body.items or [] if isinstance(i, dict)]) if body.items else []
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
     debt = db.link_debt_movement(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()),
-            "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None}
+            "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
+            "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits]}
 
 
 @app.patch("/api/entries/{entry_id}")
@@ -288,6 +291,9 @@ def patch_entry(entry_id: int, body: EntryPatch):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     elif "counterparty" in data:
         data["counterparty"] = None
+    split_total = sum(p["amount"] for p in db.splits_map().get(("entry", entry_id), []))
+    if "amount" in data and data["amount"] + 0.005 < split_total:
+        raise HTTPException(422, f"Bu kayıt bölünmüş ({split_total:.2f} alt kalem); tutar bundan az olamaz")
     db.update_entry(entry_id, data)
     db.auto_link()
     return {"ok": True}
@@ -607,6 +613,70 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
     stats = db.import_bank_rows(parsed, account=account, owners=owners)
     db.auto_link()
     return stats
+
+
+# ---------------------------------------------------------------- bölme (alt kalemler) ve kalem kuralları
+
+class SplitPart(BaseModel):
+    amount: float = Field(gt=0)
+    category: str = Field(min_length=1)
+    description: str | None = None
+
+
+class SplitsIn(BaseModel):
+    parts: list[SplitPart]
+
+
+class ItemRuleIn(BaseModel):
+    keywords: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+
+
+@app.get("/api/splits/{target}/{pid}")
+def get_splits(target: Literal["entry", "card"], pid: int):
+    return db.splits_map().get((target, pid), [])
+
+
+@app.put("/api/splits/{target}/{pid}")
+def put_splits(target: Literal["entry", "card"], pid: int, body: SplitsIn):
+    try:
+        return db.set_splits(target, pid, [p.model_dump() for p in body.parts])
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.get("/api/item-rules")
+def list_item_rules():
+    return db.list_item_rules()
+
+
+@app.post("/api/item-rules")
+def create_item_rule(body: ItemRuleIn):
+    try:
+        return {"id": db.save_item_rule(body.keywords, body.category)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.put("/api/item-rules/{rid}")
+def update_item_rule(rid: int, body: ItemRuleIn):
+    try:
+        return {"id": db.save_item_rule(body.keywords, body.category, rid)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.delete("/api/item-rules/{rid}")
+def delete_item_rule(rid: int):
+    if not db.delete_item_rule(rid):
+        raise HTTPException(404, "Kural yok")
+    return {"ok": True}
+
+
+@app.post("/api/item-rules/test")
+def test_item_rule(body: dict):
+    """Kurallar sayfasında deneme: 'MARLBORO TOUCH' → Sigara"""
+    return {"category": db.match_item(str(body.get("text") or ""))}
 
 
 # ---------------------------------------------------------------- borç / alacak
@@ -999,7 +1069,7 @@ async def parse_document(file: UploadFile = File(...)):
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
-        doc = receipt.parse_document(data, mime, cats)
+        doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}))
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
     if doc["type"] == "receipt":

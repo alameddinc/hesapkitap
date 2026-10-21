@@ -29,6 +29,9 @@ export interface Row {
   subscription?: "aktif" | "iptal" | "dusuruldu" | null;
   counterparty?: string | null;
   flow?: number; // borç hareketi: +1 para geldi, −1 para çıktı
+  split_of?: string; // alt kalemse ana satırın uid'i
+  split_total?: number; // ana satırdan ayrılan toplam
+  original_amount?: number;
   debt_id?: number | null;
 }
 
@@ -262,7 +265,7 @@ export const api = {
     req<{ ok: true; rule: string | null }>("PATCH", `/api/card-transactions/${id}`, body),
 
   createEntry: (body: Record<string, unknown>) =>
-    req<{ id: number; linked: boolean; debt_settled: number | null }>("POST", "/api/entries", body),
+    req<{ id: number; linked: boolean; debt_settled: number | null; splits?: { category: string; amount: number }[] }>("POST", "/api/entries", body),
   linkCandidates: (id: number) => req<LinkCandidate[]>("GET", `/api/entries/${id}/candidates`),
   linkEntry: (id: number, txnId: number | null) => req("POST", `/api/entries/${id}/link`, { txn_id: txnId }),
   patchEntry: (id: number, body: Record<string, unknown>) => req("PATCH", `/api/entries/${id}`, body),

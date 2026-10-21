@@ -6,6 +6,7 @@ import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
 import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
+import SplitEditor from "./SplitEditor";
 
 /** Ekstreden gelen işlemi düzenle: kategori, tip (faiz → harcama gibi), not, gizle/geri al. */
 export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClose: () => void; onSaved?: (m: string) => void }) {
@@ -51,7 +52,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
         <div className="rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-800">
           <div className="flex justify-between gap-2">
             <span className="font-medium">{row.description}</span>
-            <span className="font-semibold tabular-nums">{tl(row.amount)}</span>
+            <span className="font-semibold tabular-nums">{tl(row.original_amount ?? row.amount)}</span>
           </div>
           <div className="mt-1 text-xs text-stone-500">
             {dateTR(row.date)} · {row.card}
@@ -76,7 +77,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
             )}
           </div>
         )}
-        {downgrade && <DowngradeForm sub={{ merchant: row.merchant, monthly: row.amount }} onClose={() => { setDowngrade(false); onClose(); }} />}
+        {downgrade && <DowngradeForm sub={{ merchant: row.merchant, monthly: row.original_amount ?? row.amount }} onClose={() => { setDowngrade(false); onClose(); }} />}
         <div>
           <label className="label" htmlFor="c-kind">İşlem tipi</label>
           <select id="c-kind" className="input" value={kind} onChange={(e) => setKind(e.target.value as Row["kind"])}>
@@ -105,6 +106,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           <input id="c-note" className="input" value={note} onChange={(e) => setNote(e.target.value)}
             placeholder="ör. iş gideri, hediye" />
         </div>
+        {row.kind === "harcama" && !row.deleted && <SplitEditor target="card" id={row.id} total={row.original_amount ?? row.amount} />}
         {row.deleted && <p className="text-sm text-amber-600">Bu işlem silinmiş; raporlara dahil değil.</p>}
       </div>
     </Modal>
