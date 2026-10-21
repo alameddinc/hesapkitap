@@ -7,7 +7,12 @@ import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
 
 interface Part { amount: string; category: string; description: string; person: string; share: boolean }
-interface Saved { id: number; amount: number; category: string; description: string | null; origin: string; person: string | null }
+interface Saved {
+  id: number; amount: number; category: string; description: string | null; origin: string; person: string | null;
+  debt_settled_at?: string | null; debt_remaining?: number | null;
+}
+const shareStatus = (p: Saved) => !p.person ? "" : p.debt_settled_at ? " · ödedi ✓"
+  : p.debt_remaining != null && p.debt_remaining < p.amount - 0.005 ? ` · kalan ${tl(p.debt_remaining)}` : " · bekliyor"
 
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -49,8 +54,8 @@ export default function SplitEditor({ target, id, total, onDone }: {
         <div className="flex items-center gap-2">
           <Scissors size={16} className="text-stone-500" />
           <span className="flex-1">
-            {saved.length ? <>Bölündü: {saved.map((p) => `${p.person ? `${p.person} payı` : p.category} ${tl(p.amount)}`).join(" · ")}</>
-              : <span className="text-stone-500">Bir kısmı başka kategoride ya da başkasının payı mı? (ör. sigara, ortak yemek)</span>}
+            {saved.length ? <>Bölündü: {saved.map((p) => `${p.person ? `${p.person} payı` : p.category} ${tl(p.amount)}${shareStatus(p)}`).join(" · ")}</>
+              : <span className="text-stone-500">Bir kısmı başka kategoride mi, ya da birinin payını sen mi ödedin? (ör. sigara, ortak yemek)</span>}
           </span>
           <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
             onClick={() => { setOpen(true); if (!parts.length) setParts([{ amount: "", category: "", description: "", person: "", share: false }]); }}>
@@ -64,24 +69,29 @@ export default function SplitEditor({ target, id, total, onDone }: {
     <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/40 p-3 dark:border-blue-900 dark:bg-blue-950/20">
       <div className="flex items-center gap-2 text-sm font-medium"><Scissors size={16} /> Alt kalemler</div>
       {parts.map((p, i) => (
-        <div key={i} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[7rem_1fr_1fr_auto]">
-          <input className="input text-right" inputMode="decimal" placeholder="Tutar" value={p.amount}
-            onChange={(e) => set(i, "amount", e.target.value)} />
-          <button type="button" className="btn-ghost p-2 text-stone-400 hover:text-red-600 sm:order-last" aria-label="Kaldır"
-            onClick={() => setParts(parts.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
-          <div className="col-span-2 space-y-1 sm:col-span-1">
-            <div className="flex gap-1 text-xs">
-              <button type="button" className={cx("rounded px-1.5 py-0.5", !p.share ? "bg-stone-800 text-white dark:bg-stone-200 dark:text-stone-900" : "text-stone-500")}
-                onClick={() => set(i, "share", false)}>Kategori</button>
-              <button type="button" className={cx("rounded px-1.5 py-0.5", p.share ? "bg-stone-800 text-white dark:bg-stone-200 dark:text-stone-900" : "text-stone-500")}
-                onClick={() => set(i, "share", true)}>Kişinin payı</button>
+        <div key={i} className="space-y-2 rounded-lg border border-stone-200 bg-white p-2 dark:border-stone-700 dark:bg-stone-900">
+          <div className="flex items-center gap-2">
+            <div className="grid flex-1 grid-cols-2 gap-1 rounded-lg bg-stone-100 p-1 text-xs dark:bg-stone-800" role="radiogroup">
+              <button type="button" role="radio" aria-checked={!p.share}
+                className={cx("rounded-md px-2 py-1 font-medium", !p.share ? "bg-white shadow-sm dark:bg-stone-700" : "text-stone-500")}
+                onClick={() => set(i, "share", false)}>Başka kategori</button>
+              <button type="button" role="radio" aria-checked={p.share}
+                className={cx("rounded-md px-2 py-1 font-medium", p.share ? "bg-white text-amber-800 shadow-sm dark:bg-stone-700 dark:text-amber-300" : "text-stone-500")}
+                onClick={() => set(i, "share", true)}>Birinin payı (borç)</button>
             </div>
+            <button type="button" className="btn-ghost p-2 text-stone-400 hover:text-red-600" aria-label="Kaldır"
+              onClick={() => setParts(parts.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
+          </div>
+          <div className="grid grid-cols-[7rem_1fr] gap-2">
+            <input className="input text-right" inputMode="decimal" placeholder="Tutar" value={p.amount}
+              onChange={(e) => set(i, "amount", e.target.value)} />
             {p.share
               ? <CategoryPicker value={p.person} onChange={(v) => set(i, "person", v)} options={people.data ?? []} placeholder="Kim? (ona alacak açılır)" />
               : <CategoryPicker value={p.category} onChange={(v) => set(i, "category", v)} options={meta.data?.categories ?? []} placeholder="Kategori" />}
           </div>
-          <input className="input col-span-2 sm:col-span-1" placeholder="Not (ör. 2× Marlboro)" value={p.description}
-            onChange={(e) => set(i, "description", e.target.value)} />
+          {!p.share && (
+            <input className="input" placeholder="Not (ör. 2× Marlboro)" value={p.description} onChange={(e) => set(i, "description", e.target.value)} />
+          )}
         </div>
       ))}
       <button type="button" className="btn-ghost px-2 py-1 text-xs"

@@ -1593,11 +1593,15 @@ def link_debt_movement(person: str | None, kind: str, amount: float, on: str, en
                     c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (d["id"], entry_id))
             return "verildi", d
     pay_dir = "borc" if kind == "gider" else "alacak"
-    for d in debts_:
-        if (d["direction"] == pay_dir and not d["settled_at"] and abs(d["remaining"] - amount) < 0.01
-                and d["debt_date"] <= on):
+    open_ = [d for d in debts_ if d["direction"] == pay_dir and not d["settled_at"] and d["debt_date"] <= on]
+    for d in open_:
+        if abs(d["remaining"] - amount) < 0.01:
             pay_debt(d["id"], amount, on, entry_id)
             return "odeme", d
+    # kısmi: kişinin TEK açık kaydı varsa ve gelen/giden tutar kalandan azsa ondan düşülür (300'ün 250'si)
+    if len(open_) == 1 and amount < open_[0]["remaining"]:
+        pay_debt(open_[0]["id"], amount, on, entry_id)
+        return "odeme", open_[0]
     return None
 
 
@@ -1804,7 +1808,8 @@ def splits_map() -> dict[tuple[str, int], list[dict]]:
     bölmesi kart işlemine de uygulanır (kart işleminin kendi bölmesi yoksa)."""
     out: dict[tuple[str, int], list[dict]] = {}
     with connect() as c:
-        for r in rows(c.execute("SELECT s.*, d.person FROM splits s LEFT JOIN debts d ON d.id = s.debt_id ORDER BY s.id")):
+        for r in rows(c.execute("SELECT s.*, d.person, d.settled_at AS debt_settled_at, d.amount - d.paid_amount AS debt_remaining "
+                                "FROM splits s LEFT JOIN debts d ON d.id = s.debt_id ORDER BY s.id")):
             key = ("entry", r["entry_id"]) if r["entry_id"] else ("card", r["txn_id"])
             out.setdefault(key, []).append(r)
         if any(k[0] == "entry" for k in out):

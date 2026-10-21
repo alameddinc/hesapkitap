@@ -101,3 +101,20 @@ def test_removing_unpaid_share_deletes_receivable(client, tmpdb):
     assert [(d["amount"]) for d in tmpdb.list_debts()] == [150]
     client.put(f"/api/splits/entry/{eid}", json={"parts": []})
     assert tmpdb.list_debts() == []
+
+
+def test_shares_at_creation_and_partial_transfer(client, tmpdb):
+    # 1200 ödedim: Ali 300, Veli 200 → benim giderim 700; Ali 250 havale etti → 50 kalır
+    r = client.post("/api/entries", json={"entry_date": "2026-10-21", "description": "Yemek", "amount": 1200, "kind": "gider",
+                                          "category": "Kafe & Restoran", "payment": "nakit",
+                                          "splits": [{"amount": 300, "person": "Ali Örnek"}, {"amount": 200, "person": "Veli Örnek"}]})
+    assert r.status_code == 200
+    m = tmpdb.list_entries()[0]["month"]
+    t = client.get("/api/summary", params={"month": m}).json()["totals"]
+    assert t["expense"] == 700 and t["receivable"] == 500
+    tmpdb.import_bank_rows([{"date": "2026-10-23", "amount": 250.0, "type": "gelir", "hash": "a1",
+                             "description": "Gelen FAST GİDEN FAST - ALİ ÖRNEK TARAFINDAN GÖNDERİLEN"}], owners=["AYŞE DEMIR"])
+    ali = next(d for d in tmpdb.list_debts() if d["person"] == "Ali Örnek")
+    assert ali["remaining"] == 50 and ali["settled_at"] is None
+    t = client.get("/api/summary", params={"month": m}).json()["totals"]
+    assert t["income"] == 0                                         # havale gelir sayılmaz, tahsilat
