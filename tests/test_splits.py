@@ -71,3 +71,33 @@ def test_split_follows_receipt_to_card_transaction(client, tmpdb):
     card = {x["category"]: x["amount"] for x in rows if x["source"] == "card"}
     assert card == {"Market & Gıda": 10, "Sigara": 110}
     assert finance.summary("2026-11")["totals"]["expense"] == 120   # fiş kaydı eşleştiği için sayılmaz
+
+
+def test_shared_expense_part_becomes_receivable(client, tmpdb):
+    # 900 TL yemek; 300'ü Ali'nin payı → giderim 600, Ali'ye 300 alacak; Ali havale edince kapanır
+    eid = client.post("/api/entries", json={"entry_date": "2026-10-21", "description": "Restoran", "amount": 900,
+                                            "kind": "gider", "category": "Kafe & Restoran", "payment": "nakit"}).json()["id"]
+    r = client.put(f"/api/splits/entry/{eid}", json={"parts": [{"amount": 300, "person": "Ali Örnek"}]})
+    assert r.status_code == 200
+    m = tmpdb.list_entries()[0]["month"]
+    t = client.get("/api/summary", params={"month": m}).json()["totals"]
+    assert t["expense"] == 600 and t["debt_flow"] == -300 and t["receivable"] == 300 and t["cash_net"] == -900
+    d = tmpdb.list_debts()[0]
+    assert (d["person"], d["direction"], d["amount"], d["split_id"] is not None) == ("Ali Örnek", "alacak", 300, True)
+    # Ali havale etti
+    tmpdb.import_bank_rows([{"date": "2026-10-23", "amount": 300.0, "type": "gelir", "hash": "ali",
+                             "description": "Gelen FAST GİDEN FAST - ALİ ÖRNEK TARAFINDAN GÖNDERİLEN"}], owners=["AYŞE DEMIR"])
+    t = client.get("/api/summary", params={"month": m}).json()["totals"]
+    assert t["income"] == 0 and t["receivable"] == 0 and t["cash_net"] == -600
+    # tahsil edilmiş payı silmek engellenir
+    assert client.put(f"/api/splits/entry/{eid}", json={"parts": []}).status_code == 422
+
+
+def test_removing_unpaid_share_deletes_receivable(client, tmpdb):
+    eid = client.post("/api/entries", json={"entry_date": "2026-10-21", "description": "Market", "amount": 400,
+                                            "kind": "gider", "category": "Market & Gıda", "payment": "nakit"}).json()["id"]
+    client.put(f"/api/splits/entry/{eid}", json={"parts": [{"amount": 100, "person": "Veli"}]})
+    client.put(f"/api/splits/entry/{eid}", json={"parts": [{"amount": 150, "person": "Veli"}]})   # payı güncelle
+    assert [(d["amount"]) for d in tmpdb.list_debts()] == [150]
+    client.put(f"/api/splits/entry/{eid}", json={"parts": []})
+    assert tmpdb.list_debts() == []

@@ -271,6 +271,8 @@ MIGRATIONS = [
     ("entries", "debt_id", "INTEGER"),  # borç hareketi: gelir/gider sayılmaz, sadece eldeki parayı etkiler
     ("debts", "given_entry_id", "INTEGER"),
     ("debts", "written_off_at", "DATE"),
+    ("splits", "debt_id", "INTEGER"),           # ortak harcamada kişinin payı → alacak
+    ("debts", "split_id", "INTEGER"),           # alacak bir harcamanın payından doğduysa (veriliş = o harcama)
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
 ]
 
@@ -1448,6 +1450,7 @@ def update_debt(debt_id: int, data: dict) -> bool:
 def delete_debt(debt_id: int) -> bool:
     with connect() as c:  # bağlı hareketler yeniden normal gelir/gider olur
         c.execute("UPDATE entries SET debt_id = NULL WHERE debt_id = ?", (debt_id,))
+        c.execute("DELETE FROM splits WHERE debt_id = ?", (debt_id,))  # ortak harcama payı: ana harcamaya geri döner
         c.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
         return c.execute("DELETE FROM debts WHERE id = ?", (debt_id,)).rowcount > 0
 
@@ -1521,7 +1524,7 @@ def link_debt_movement(person: str | None, kind: str, amount: float, on: str, en
     debts_ = [d for d in list_debts() if d["asset"] == "TRY" and _name_key(d["person"]) == key]
     given_dir = "alacak" if kind == "gider" else "borc"
     for d in debts_:
-        if (d["direction"] == given_dir and not d["given_entry_id"] and abs(d["amount"] - amount) < 0.01
+        if (d["direction"] == given_dir and not d["given_entry_id"] and not d.get("split_id") and abs(d["amount"] - amount) < 0.01
                 and abs((_date.fromisoformat(d["debt_date"]) - d_on).days) <= 3):
             with connect() as c:
                 c.execute("UPDATE debts SET given_entry_id = ? WHERE id = ?", (entry_id, d["id"]))
@@ -1549,7 +1552,7 @@ def _link_existing_given(debt_id: int) -> None:
 
     with connect() as c:
         d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
-        if d["asset"] != "TRY" or d["given_entry_id"]:
+        if d["asset"] != "TRY" or d["given_entry_id"] or d["split_id"]:
             return
         kind = "gider" if d["direction"] == "alacak" else "gelir"
         day = _date.fromisoformat(d["debt_date"])
@@ -1572,7 +1575,7 @@ def debt_rows(month: str | None = None) -> list[dict]:
         if d["asset"] != "TRY":
             continue
         out_flow = -1 if d["direction"] == "alacak" else 1  # alacak: para benden çıktı
-        if not d["given_entry_id"]:
+        if not d["given_entry_id"] and not d.get("split_id"):  # harcamanın payıysa veriliş o harcamanın alt kalemi
             out.append({"uid": f"d{d['id']}g", "debt_id": d["id"], "date": d["debt_date"], "flow": out_flow,
                         "amount": d["amount"], "person": d["person"], "step": "verildi" if d["direction"] == "alacak" else "alindi"})
         for p in pays:
@@ -1739,7 +1742,7 @@ def splits_map() -> dict[tuple[str, int], list[dict]]:
     bölmesi kart işlemine de uygulanır (kart işleminin kendi bölmesi yoksa)."""
     out: dict[tuple[str, int], list[dict]] = {}
     with connect() as c:
-        for r in rows(c.execute("SELECT * FROM splits ORDER BY id")):
+        for r in rows(c.execute("SELECT s.*, d.person FROM splits s LEFT JOIN debts d ON d.id = s.debt_id ORDER BY s.id")):
             key = ("entry", r["entry_id"]) if r["entry_id"] else ("card", r["txn_id"])
             out.setdefault(key, []).append(r)
         if any(k[0] == "entry" for k in out):
@@ -1762,18 +1765,55 @@ def _parent_amount(c, target: str, pid: int) -> float:
 
 
 def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual") -> list[dict]:
-    """Alt kalemleri baştan yaz. Toplam ana tutarı geçemez; eşitse ana kayıt tümüyle bölünmüş olur."""
+    """Alt kalemleri baştan yaz. Toplam ana tutarı geçemez; eşitse ana kayıt tümüyle bölünmüş olur.
+    Kalemde kişi varsa (ortak harcama: "300'ü Ali'nin payı") o kısım gider değil, o kişiye ALACAK olur."""
     col = "entry_id" if target == "entry" else "txn_id"
-    parts = [p for p in parts if (p.get("amount") or 0) > 0 and (p.get("category") or "").strip()]
+    parts = [p for p in parts if (p.get("amount") or 0) > 0
+             and ((p.get("category") or "").strip() or (p.get("person") or "").strip())]
+    for p in parts:
+        if (p.get("person") or "").strip():
+            p["person"] = _known_counterparty(p["person"].strip())
+            p["category"] = "Borç / Alacak"
     with connect() as c:
         total = _parent_amount(c, target, pid)
         if sum(p["amount"] for p in parts) > total + 0.005:
             raise ValueError(f"Alt kalemlerin toplamı ({sum(p['amount'] for p in parts):.2f}) harcamayı ({total:.2f}) geçemez")
+        pdate = c.execute("SELECT entry_date FROM entries WHERE id = ?" if target == "entry"
+                          else "SELECT txn_date FROM transactions WHERE id = ?", (pid,)).fetchone()[0]
+        pdesc = c.execute("SELECT description FROM entries WHERE id = ?" if target == "entry"
+                          else "SELECT description FROM transactions WHERE id = ?", (pid,)).fetchone()[0]
+        old = rows(c.execute(f"SELECT s.*, d.person, d.paid_amount FROM splits s LEFT JOIN debts d ON d.id = s.debt_id "
+                             f"WHERE s.{col} = ?", (pid,)))
+        old_debts = {_name_key(o["person"]): o for o in old if o["debt_id"]}
+        keep: set[int] = set()
+        for p in parts:
+            if p.get("person"):
+                o = old_debts.get(_name_key(p["person"]))
+                if o and o["paid_amount"] and p["amount"] + 0.005 < o["paid_amount"]:
+                    raise ValueError(f"{p['person']} payının {o['paid_amount']:.2f} TL'si tahsil edilmiş; daha az olamaz")
+                if o:
+                    keep.add(o["debt_id"])
+                    p["debt_id"] = o["debt_id"]
+                    c.execute("UPDATE debts SET amount = ? WHERE id = ?", (round(p["amount"], 2), o["debt_id"]))
+        for o in old:
+            if o["debt_id"] and o["debt_id"] not in keep:
+                if o["paid_amount"]:
+                    raise ValueError(f"{o['person']} payının tahsilatı var; önce Borç / Alacak'tan geri al")
+                c.execute("DELETE FROM debts WHERE id = ?", (o["debt_id"],))
         c.execute(f"DELETE FROM splits WHERE {col} = ?", (pid,))
         for p in parts:
-            c.execute(f"INSERT INTO splits ({col}, amount, category, description, origin) VALUES (?, ?, ?, ?, ?)",
-                      (pid, round(p["amount"], 2), p["category"].strip(), (p.get("description") or "").strip()[:80] or None,
-                       p.get("origin") or origin))
+            sid = c.execute(f"INSERT INTO splits ({col}, amount, category, description, origin, debt_id) VALUES (?, ?, ?, ?, ?, ?)",
+                            (pid, round(p["amount"], 2), p["category"].strip(), (p.get("description") or "").strip()[:80] or None,
+                             p.get("origin") or origin, p.get("debt_id"))).lastrowid
+            if p.get("person") and not p.get("debt_id"):
+                did = c.execute("INSERT INTO debts (person, direction, asset, amount, debt_date, note, split_id) "
+                                "VALUES (?, 'alacak', 'TRY', ?, ?, ?, ?)",
+                                (p["person"], round(p["amount"], 2), pdate, f"Ortak harcama: {pdesc}"[:120], sid)).lastrowid
+                c.execute("UPDATE splits SET debt_id = ? WHERE id = ?", (did, sid))
+            elif p.get("debt_id"):
+                c.execute("UPDATE debts SET split_id = ? WHERE id = ?", (sid, p["debt_id"]))
+        for o in {o["debt_id"] for o in old if o["debt_id"]} & keep:
+            _recalc_debt(c, o)
     return splits_map().get((target, pid), [])
 
 
