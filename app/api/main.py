@@ -622,6 +622,50 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
     return stats
 
 
+# ---------------------------------------------------------------- hesaplar / net varlık
+
+class AccountIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    kind: Literal["banka", "nakit", "diger"] = "nakit"
+    balance: float
+    as_of: date | None = None
+
+
+class AccountPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    kind: Literal["banka", "nakit", "diger"] | None = None
+    balance: float | None = None
+    as_of: date | None = None
+
+
+@app.get("/api/net-worth")
+def net_worth():
+    return finance.net_worth()
+
+
+@app.post("/api/accounts")
+def create_account(body: AccountIn):
+    db.set_account_balance(body.name.strip(), body.balance, (body.as_of or date.today()).isoformat(), "elle", body.kind)
+    return {"ok": True}
+
+
+@app.patch("/api/accounts/{aid}")
+def patch_account(aid: int, body: AccountPatch):
+    data = body.model_dump(exclude_unset=True)
+    if "as_of" in data or "balance" in data:
+        data["as_of"] = (data.get("as_of") or date.today()).isoformat() if not isinstance(data.get("as_of"), str) else data["as_of"]
+    if not db.update_account(aid, data):
+        raise HTTPException(404, "Hesap yok")
+    return {"ok": True}
+
+
+@app.delete("/api/accounts/{aid}")
+def delete_account(aid: int):
+    if not db.delete_account(aid):
+        raise HTTPException(404, "Hesap yok")
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- bölme (alt kalemler) ve kalem kuralları
 
 class SplitPart(BaseModel):
