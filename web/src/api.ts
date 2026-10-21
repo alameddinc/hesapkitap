@@ -33,10 +33,11 @@ export interface Row {
   split_total?: number; // ana satırdan ayrılan toplam
   original_amount?: number;
   location?: string | null; // fişteki adres
+  wallet_id?: number | null; // ön ödemeli kart
   debt_id?: number | null;
 }
 
-export type Payment = "kredi_karti" | "nakit" | "havale";
+export type Payment = "kredi_karti" | "nakit" | "havale" | "kart"; // kart: ön ödemeli (yemek/hediye/giyim)
 
 export interface LinkCandidate {
   id: number;

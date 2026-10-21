@@ -121,6 +121,7 @@ def _entry_row(e: dict) -> dict:
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
         "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
+        "wallet_id": e.get("wallet_id"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
@@ -925,10 +926,13 @@ def net_worth(today: date | None = None) -> dict:
     receivable = sum(d["remaining"] for d in open_try if d["direction"] == "alacak")
     payable = sum(d["remaining"] for d in open_try if d["direction"] == "borc")
     stale = [a["name"] for a in accounts if a["as_of"] and (today - date.fromisoformat(a["as_of"])).days > 35]
+    wallets = [{"id": w["id"], "name": w["name"], "card_type": w["card_type"], "balance": w["current"]} for w in db.list_wallets()]
+    in_wallets = sum(w["balance"] for w in wallets)
     return {"accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
-            "net": _round(cash - card_debt + receivable - payable),
-            "net_after_estimates": _round(cash - card_debt - card_est + receivable - payable), "stale": stale}
+            "wallets": wallets, "in_wallets": _round(in_wallets),
+            "net": _round(cash + in_wallets - card_debt + receivable - payable),
+            "net_after_estimates": _round(cash + in_wallets - card_debt - card_est + receivable - payable), "stale": stale}
 
 
 # ---------------------------------------------------------------- dönem sonu raporu (Telegram)

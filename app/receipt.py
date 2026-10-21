@@ -172,7 +172,8 @@ SADECE şu JSON'u döndür:
   "bill_type": "elektrik | dogalgaz | su | internet | telefon | aidat | diger | null",
   "period": "fatura dönemi veya null",
   "subscriber_no": "abone/tesisat no veya null",
-  "payment": "nakit | kart | bilinmiyor",
+  "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
+  "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
   "category": "fiş ise şu listeden en uygunu: {categories}",
   "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
@@ -211,6 +212,7 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
         "date": _iso(raw.get("date")),
         "total": _num(raw.get("total")),
         "payment": raw.get("payment") or "bilinmiyor",
+        "payment_card": (raw.get("payment_card") or "").strip()[:40] or None,
         "category": category,
         "items": _items(raw),
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
