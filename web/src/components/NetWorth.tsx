@@ -4,11 +4,13 @@ import { useState } from "react";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import Wallets from "./Wallets";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
   accounts: Account[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
+  wallets: { id: number; name: string; balance: number }[]; in_wallets: number;
   stale: string[];
 }
 
@@ -34,14 +36,14 @@ export default function NetWorth() {
   const del = useSave((id: number) => json("DELETE", `/api/accounts/${id}`), () => ui.toast("Silindi"));
   const d = q.data;
   if (!d) return null;
-  if (!d.accounts.length && !adding) {
+  if (!d.accounts.length && !d.wallets.length && !adding && !open) {
     return (
       <section className="card flex items-center gap-3 p-4 text-sm">
         <Landmark size={18} className="shrink-0 text-stone-500" />
         <span className="flex-1 text-stone-500">
           Hesap dökümü yükleyince bankadaki bakiye burada görünür; gerçek durumu (para − kart borcu) gösteririm.
         </span>
-        <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700" onClick={() => setAdding(true)}>
+        <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700" onClick={() => setOpen(true)}>
           Elle ekle
         </button>
       </section>
@@ -55,7 +57,7 @@ export default function NetWorth() {
           <div className="text-xs text-stone-500">Net durum (bankada − kart borcu ± borç/alacak)</div>
           <div className={cx("text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</div>
           <div className="text-xs text-stone-500">
-            Bankada {tl(d.cash)}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
+            Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
             {d.card_estimated ? ` · kesilecek ekstreler ~${tl(d.card_estimated)}` : ""}
           </div>
         </div>
@@ -92,6 +94,7 @@ export default function NetWorth() {
             {d.receivable > 0 && <li className="flex justify-between"><span>Alacakların</span><span className="tabular-nums text-green-700">+{tl(d.receivable)}</span></li>}
             {d.payable > 0 && <li className="flex justify-between"><span>Borçların</span><span className="tabular-nums text-red-600">−{tl(d.payable)}</span></li>}
           </ul>
+          <Wallets />
           {d.card_estimated > 0 && (
             <p className="text-xs text-stone-500">Henüz kesilmemiş ekstreler (tahmini {tl(d.card_estimated)}) düşülünce: <b>{tl(d.net_after_estimates)}</b></p>
           )}

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
-import { dateTR, parseAmount, tl } from "../format";
+import { dateTR, fold, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
@@ -37,6 +37,17 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [day, setDay] = useState(String(rec?.day_of_month ?? new Date().getDate()));
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
+  const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => fetch("/api/wallets").then((r) => r.json() as Promise<
+    { id: number; name: string; card_type: string; current: number }[]>) });
+  const [walletId, setWalletId] = useState<number | null>(row?.wallet_id ?? null);
+  useEffect(() => {  // fişte yazan kart (Multinet…) ya da tek yemek kartı
+    if (walletId || payment !== "kart" || !wallets.data?.length) return;
+    const hint = fold(draft?.wallet_hint ?? "");
+    const w = wallets.data.find((x) => hint && fold(x.name).includes(hint)) ?? wallets.data.find((x) => x.card_type === "yemek")
+      ?? (wallets.data.length === 1 ? wallets.data[0] : undefined);
+    if (w) setWalletId(w.id);
+  }, [wallets.data, payment, walletId, draft]);
+  const wallet = wallets.data?.find((w) => w.id === walletId);
   const [isGross, setIsGross] = useState(!!rec?.gross_amount);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
   const [person, setPerson] = useState(row?.counterparty ?? "");
@@ -82,7 +93,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (grossMode && !(g > 0)) throw new Error("Brüt tutar gerekli");
     const common = { description: description.trim(), amount: grossMode ? 0 : amt, kind, category: category || null, note: note || null,
       ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
-    const pay = kind === "gider" && !isRecurring && !rec ? { payment } : {};
+    if (kind === "gider" && payment === "kart" && !walletId) throw new Error("Hangi karttan ödendiğini seç");
+    const pay = kind === "gider" && !isRecurring && !rec ? { payment, wallet_id: payment === "kart" ? walletId : null } : {};
     const who = !isRecurring && !rec ? { counterparty: person.trim() || null, location: location.trim() || null } : {};
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
@@ -184,7 +196,20 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
               { value: "kredi_karti", label: "Kredi kartı" },
               { value: "nakit", label: "Nakit / Banka k." },
               { value: "havale", label: "Havale" },
+              ...(wallets.data?.length || payment === "kart" ? [{ value: "kart" as Payment, label: "Yemek / hediye" }] : []),
             ]} />
+            {payment === "kart" && (
+              <div className="mt-2">
+                <select className="input" value={walletId ?? ""} onChange={(e) => setWalletId(e.target.value ? Number(e.target.value) : null)}>
+                  <option value="">Hangi kart?</option>
+                  {wallets.data?.map((w) => <option key={w.id} value={w.id}>{w.name} · {tl(w.current)}</option>)}
+                </select>
+                {!wallets.data?.length && <p className="mt-1 text-xs text-amber-600">Önce Özet → Net durum → Kartlar'dan kartını ekle.</p>}
+                {wallet && parseAmount(amount) > wallet.current + 0.005 && !editingEntry && (
+                  <p className="mt-1 text-xs text-amber-600">{wallet.name} bakiyesi ({tl(wallet.current)}) bu harcamaya yetmiyor; kalanı başka yoldan mı ödedin?</p>
+                )}
+              </div>
+            )}
             {payment === "kredi_karti" && !editingEntry?.linked && (
               <p className="mt-1 text-xs text-stone-500">Ekstre gelince aynı tutarlı kart işlemiyle otomatik eşleşir; iki kez sayılmaz.</p>
             )}

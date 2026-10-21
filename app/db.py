@@ -300,6 +300,11 @@ MIGRATIONS = [
     ("receipt_items", "product", "TEXT"),       # standart ürün adı (marketler arası eşleşme)
     ("receipt_items", "price_known", "INTEGER NOT NULL DEFAULT 1"),  # 1 okundu · 2 toplamdan çıkarıldı · 0 okunamadı
     ("receipt_items", "branch", "TEXT"),        # şube/semt (Fıstıkağacı)
+    ("entries", "wallet_id", "INTEGER"),        # ön ödemeli kart (yemek/hediye/giyim): gider = harcama, gelir = yükleme
+    ("recurring", "wallet_id", "INTEGER"),      # karta aylık yükleme (kendiliğinden gerçekleşir)
+    ("accounts", "card_type", "TEXT"),          # kart: yemek | hediye | giyim | diger
+    ("accounts", "expires_at", "DATE"),         # hediye kartı son kullanma
+    ("accounts", "anchor_entry_id", "INTEGER NOT NULL DEFAULT 0"),  # kart bakiyesi bu kayıttan sonrakilerle güncellenir
     ("receipt_items", "brand", "TEXT"),         # ürün markası (Ülker) ya da kafenin kendisi           # ortak harcamada kişinin payı → alacak
     ("debts", "split_id", "INTEGER"),           # alacak bir harcamanın payından doğduysa (veriliş = o harcama)
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
@@ -595,7 +600,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location")
+                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -742,7 +747,7 @@ def delete_entry(entry_id: int) -> None:
 
 # ---------------------------------------------------------------- recurring
 
-RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note",
+RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note", "wallet_id",
                     "gross_amount")
 
 
@@ -1242,7 +1247,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             cands = [dict(x) for x in c.execute(
                 """SELECT id, entry_date, description, note, counterparty FROM entries
                    WHERE (import_hash IS NULL OR (import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti'))
-                   AND import_hash IS NOT ? AND kind = ? AND ABS(amount - ?) < 0.01 AND entry_date BETWEEN ? AND ?""",
+                   AND import_hash IS NOT ? AND wallet_id IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
+                   AND entry_date BETWEEN ? AND ?""",
                 (r["hash"], kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
             who_here = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
             dup = _pick_manual(cands, who_here, people, d)
@@ -1665,7 +1671,7 @@ def _already_imported(r: dict, people: set[str], owners: list[str] | None) -> bo
         kind = "gelir" if r["amount"] > 0 else "gider"
         cands = [dict(x) for x in c.execute(
             f"""SELECT id, entry_date, description, note, counterparty FROM entries WHERE import_hash IS NOT NULL
-                AND import_hash NOT LIKE 'mail:%' AND kind = ? AND ABS(amount - ?) < 0.01
+                AND import_hash NOT LIKE 'mail:%' AND wallet_id IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
                 AND entry_date BETWEEN {window[0]} AND {window[1]}""", (kind, amt, d, d))]
     if not cands:
         return False
@@ -1888,8 +1894,9 @@ def set_account_balance(name: str, balance: float, as_of: str, source: str = "el
 
 
 def list_accounts() -> list[dict]:
+    """Banka / nakit / diğer hesaplar (ön ödemeli kartlar ayrı: list_wallets)."""
     with connect() as c:
-        return rows(c.execute("SELECT * FROM accounts ORDER BY kind, name"))
+        return rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' ORDER BY kind, name"))
 
 
 def update_account(acc_id: int, data: dict) -> bool:
@@ -2051,3 +2058,135 @@ def create_target(name: str, amount: float, deadline: str, start_month: str, alr
 def delete_target(tid: int) -> bool:
     with connect() as c:
         return c.execute("DELETE FROM saving_targets WHERE id = ?", (tid,)).rowcount > 0
+
+
+# ---------------------------------------------------------------- ön ödemeli kartlar (yemek / hediye / giyim)
+
+WALLET_INCOME_CATEGORY = "Yan Haklar"
+
+
+def _wallet_balance(c, w: dict) -> float:
+    """Çapa (elle girilen/düzeltilen bakiye; o anki son kayıt no + tarih) + sonrasında kaydedilen yükleme − harcama.
+    Çapadan önceki tarihli kayıtlar (ör. bu ayın 1'indeki yükleme, girilen bakiyenin içinde) iki kez sayılmaz."""
+    r = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) FROM entries
+                     WHERE wallet_id = ? AND skipped = 0 AND entry_date >= ? AND id > ?""",
+                  (w["id"], w["as_of"] or "0000", w["anchor_entry_id"] or 0)).fetchone()[0]
+    return round(w["balance"] + r, 2)
+
+
+def list_wallets() -> list[dict]:
+    with connect() as c:
+        ws = rows(c.execute("SELECT * FROM accounts WHERE kind = 'kart' ORDER BY card_type, name"))
+        for w in ws:
+            w["current"] = _wallet_balance(c, w)
+            rec = c.execute("SELECT * FROM recurring WHERE wallet_id = ? ORDER BY id DESC LIMIT 1", (w["id"],)).fetchone()
+            w["schedule"] = dict(rec) if rec else None
+            w["recent"] = rows(c.execute("SELECT id, entry_date, description, amount, kind FROM entries WHERE wallet_id = ? "
+                                         "ORDER BY entry_date DESC, id DESC LIMIT 8", (w["id"],)))
+    return ws
+
+
+def get_wallet(wid: int) -> dict | None:
+    return next((w for w in list_wallets() if w["id"] == wid), None)
+
+
+def create_wallet(name: str, card_type: str, balance: float, expires_at: str | None = None) -> int:
+    from datetime import date as _date
+
+    with connect() as c:
+        if c.execute("SELECT 1 FROM accounts WHERE name = ?", (name.strip(),)).fetchone():
+            raise ValueError("Bu adla bir hesap/kart zaten var")
+        anchor = c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]
+        return c.execute("INSERT INTO accounts (name, kind, card_type, balance, as_of, source, expires_at, anchor_entry_id) "
+                         "VALUES (?, 'kart', ?, ?, ?, 'elle', ?, ?)",
+                         (name.strip(), card_type, round(balance, 2), _date.today().isoformat(), expires_at, anchor)).lastrowid
+
+
+def update_wallet(wid: int, data: dict) -> bool:
+    """balance verilirse bugünden itibaren yeni çapa (uygulamadaki gerçek bakiyeyle düzeltme)."""
+    from datetime import date as _date
+
+    sets, vals = [], []
+    for k in ("name", "card_type", "expires_at"):
+        if k in data:
+            sets.append(f"{k} = ?")
+            vals.append(data[k])
+    if not sets and data.get("balance") is None:
+        return False
+    with connect() as c:
+        if data.get("balance") is not None:
+            sets += ["balance = ?", "as_of = ?", "updated_at = CURRENT_TIMESTAMP", "anchor_entry_id = ?"]
+            vals += [round(data["balance"], 2), _date.today().isoformat(),
+                     c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]]
+        return c.execute(f"UPDATE accounts SET {', '.join(sets)} WHERE id = ? AND kind = 'kart'", (*vals, wid)).rowcount > 0
+
+
+def delete_wallet(wid: int) -> bool:
+    """Kart silinir; geçmiş harcama/yüklemeler kayıtlarda kalır, aylık yükleme biter."""
+    with connect() as c:
+        c.execute("UPDATE entries SET wallet_id = NULL WHERE wallet_id = ?", (wid,))
+        c.execute("UPDATE recurring SET end_month = COALESCE(end_month, start_month), wallet_id = NULL WHERE wallet_id = ?", (wid,))
+        return c.execute("DELETE FROM accounts WHERE id = ? AND kind = 'kart'", (wid,)).rowcount > 0
+
+
+def _shift_month(month: str, n: int) -> str:
+    y, m = map(int, month.split("-"))
+    m += n
+    y += (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    return f"{y:04d}-{m:02d}"
+
+
+def set_wallet_schedule(wid: int, amount: float, day: int, from_month: str, wallet_name: str) -> int:
+    """Aylık yükleme = karta bağlı gelir sabit kalemi. Tutar değişirse eskisi bir önceki dönem biter, yenisi başlar."""
+    with connect() as c:
+        cur = c.execute("SELECT * FROM recurring WHERE wallet_id = ? AND (end_month IS NULL OR end_month >= ?) "
+                        "ORDER BY id DESC LIMIT 1", (wid, from_month)).fetchone()
+        if cur and cur["start_month"] >= from_month:  # aynı dönemden başlayan: güncelle
+            c.execute("UPDATE recurring SET amount = ?, day_of_month = ?, end_month = NULL WHERE id = ?", (amount, day, cur["id"]))
+            return cur["id"]
+        if cur:
+            c.execute("UPDATE recurring SET end_month = ? WHERE id = ?", (_shift_month(from_month, -1), cur["id"]))
+        return c.execute("INSERT INTO recurring (description, amount, kind, category, day_of_month, start_month, wallet_id) "
+                         "VALUES (?, ?, 'gelir', ?, ?, ?, ?)",
+                         (f"{wallet_name} yüklemesi", amount, WALLET_INCOME_CATEGORY, day, from_month, wid)).lastrowid
+
+
+def stop_wallet_schedule(wid: int, last_month: str | None) -> bool:
+    """last_month: son yüklemenin dönemi ("bu ay son" = bu dönem, "durdur" = önceki dönem); None = devam ettir."""
+    with connect() as c:
+        rec = c.execute("SELECT * FROM recurring WHERE wallet_id = ? ORDER BY id DESC LIMIT 1", (wid,)).fetchone()
+        if not rec:
+            return False
+        if last_month is not None and last_month < rec["start_month"]:
+            last_month = _shift_month(rec["start_month"], -1)  # hiç yüklenmeden durduruldu
+        c.execute("UPDATE recurring SET end_month = ? WHERE id = ?", (last_month, rec["id"]))
+        return True
+
+
+def recurring_done(rid: int, month: str) -> bool:
+    with connect() as c:
+        return bool(c.execute("SELECT 1 FROM entries WHERE recurring_id = ? AND month = ?", (rid, month)).fetchone())
+
+
+def auto_load_wallets(today) -> int:
+    """Kartlara aylık yükleme günü geldiyse kendiliğinden gerçekleşir (onay beklemez)."""
+    n = 0
+    with connect() as c:
+        recs = rows(c.execute("SELECT * FROM recurring WHERE wallet_id IS NOT NULL"))
+    month = period_of(today)
+    for r in recs:
+        for m in sorted({_shift_month(month, -1), month}):  # bir önceki dönem kaçırılmış olabilir
+            if m < r["start_month"] or (r["end_month"] and m > r["end_month"]):
+                continue
+            when = occurrence_date(m, day_at(r, m))
+            if when > today.isoformat():
+                continue
+            with connect() as c:
+                if c.execute("SELECT 1 FROM entries WHERE recurring_id = ? AND month = ?", (r["id"], m)).fetchone():
+                    continue
+            create_entry({"entry_date": when, "month": m, "description": r["description"], "amount": planned_amount(r, m),
+                          "kind": "gelir", "category": r["category"], "recurring_id": r["id"], "skipped": 0,
+                          "wallet_id": r["wallet_id"], "note": "Otomatik yükleme"})
+            n += 1
+    return n

@@ -146,7 +146,7 @@ def logout(response: Response):
     return {"ok": True}
 
 Kind = Literal["gelir", "gider"]
-Payment = Literal["kredi_karti", "nakit", "havale"]
+Payment = Literal["kredi_karti", "nakit", "havale", "kart"]  # kart: ön ödemeli (yemek/hediye/giyim), wallet_id ile
 CardKind = Literal["harcama", "iade", "faiz_ucret", "odeme"]
 EXPENSE_CATEGORIES = ["Kira & Aidat", "Faturalar", "Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Sağlık",
                       "Eğitim", "Ulaşım & Araç", "Market & Gıda", "Kredi & Borç", "Diğer"]
@@ -243,6 +243,7 @@ class EntryIn(BaseModel):
     recurring_id: int | None = None
     skipped: bool = False
     payment: Payment | None = None
+    wallet_id: int | None = None  # ödeme 'kart' ise hangi ön ödemeli kart
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
     splits: list[dict] | None = None  # formda onaylanan alt kalemler [{amount, category, description}]
     items: list[dict] | None = None  # fiş satırları: fiyat takibi için saklanır
@@ -261,6 +262,7 @@ class EntryPatch(BaseModel):
     skipped: bool | None = None
     payment: Payment | None = None
     location: str | None = None
+    wallet_id: int | None = None  # ödeme 'kart' ise hangi ön ödemeli kart
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
 
 
@@ -273,6 +275,7 @@ def create_entry(body: EntryIn):
         db.learn_from_receipt(body.legal_name, body.description, body.category)
     if data.get("counterparty"):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
+    _check_wallet(data)
     eid = db.create_entry(data)
     if body.items and body.kind == "gider":
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
@@ -305,6 +308,8 @@ def patch_entry(entry_id: int, body: EntryPatch):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     elif "counterparty" in data:
         data["counterparty"] = None
+    if "payment" in data or "wallet_id" in data:
+        _check_wallet(data)
     split_total = sum(p["amount"] for p in db.splits_map().get(("entry", entry_id), []))
     if "amount" in data and data["amount"] + 0.005 < split_total:
         raise HTTPException(422, f"Bu kayıt bölünmüş ({split_total:.2f} alt kalem); tutar bundan az olamaz")
@@ -627,6 +632,117 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
     stats = db.import_bank_rows(parsed, account=account, owners=owners)
     db.auto_link()
     return stats
+
+
+# ---------------------------------------------------------------- ön ödemeli kartlar
+
+def _check_wallet(data: dict) -> None:
+    """Ödeme 'kart' ise geçerli bir kart seçilmiş olmalı; değilse kart bağlantısı kalkar."""
+    if data.get("payment") == "kart":
+        if not data.get("wallet_id") or not db.get_wallet(data["wallet_id"]):
+            raise HTTPException(422, "Hangi karttan ödendiğini seç")
+    elif "payment" in data:
+        data["wallet_id"] = None
+
+
+class WalletIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    card_type: Literal["yemek", "hediye", "giyim", "diger"] = "yemek"
+    balance: float = 0
+    expires_at: date | None = None
+    monthly_amount: float | None = Field(default=None, gt=0)
+    load_day: int = Field(default=1, ge=1, le=31)
+
+
+class WalletPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=40)
+    card_type: Literal["yemek", "hediye", "giyim", "diger"] | None = None
+    balance: float | None = None
+    expires_at: date | None = None
+
+
+class WalletSchedule(BaseModel):
+    amount: float = Field(gt=0)
+    day: int = Field(default=1, ge=1, le=31)
+    from_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+
+
+class WalletStop(BaseModel):
+    mode: Literal["now", "after_this", "resume"]
+
+
+class WalletLoad(BaseModel):
+    amount: float = Field(gt=0)
+    on: date | None = None
+
+
+@app.get("/api/wallets")
+def wallets():
+    return db.list_wallets()
+
+
+@app.post("/api/wallets")
+def create_wallet(body: WalletIn):
+    try:
+        wid = db.create_wallet(body.name, body.card_type, body.balance, body.expires_at.isoformat() if body.expires_at else None)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if body.monthly_amount:
+        db.set_wallet_schedule(wid, body.monthly_amount, body.load_day, finance.current_period(), body.name.strip())
+    return {"id": wid}
+
+
+@app.patch("/api/wallets/{wid}")
+def patch_wallet(wid: int, body: WalletPatch):
+    data = body.model_dump(exclude_unset=True)
+    if data.get("expires_at"):
+        data["expires_at"] = data["expires_at"].isoformat()
+    if not db.update_wallet(wid, data):
+        raise HTTPException(404, "Kart yok")
+    return {"ok": True}
+
+
+@app.delete("/api/wallets/{wid}")
+def delete_wallet(wid: int):
+    if not db.delete_wallet(wid):
+        raise HTTPException(404, "Kart yok")
+    return {"ok": True}
+
+
+@app.put("/api/wallets/{wid}/schedule")
+def wallet_schedule(wid: int, body: WalletSchedule):
+    w = db.get_wallet(wid)
+    if not w:
+        raise HTTPException(404, "Kart yok")
+    rid = db.set_wallet_schedule(wid, body.amount, body.day, body.from_month or finance.current_period(), w["name"])
+    db.auto_load_wallets(date.today())
+    return {"recurring_id": rid}
+
+
+@app.post("/api/wallets/{wid}/schedule/stop")
+def wallet_schedule_stop(wid: int, body: WalletStop):
+    cur = finance.current_period()
+    last = {"now": finance.add_months(cur, -1), "after_this": cur, "resume": None}[body.mode]
+    if body.mode == "now":  # bu dönemin yüklemesi yapılmışsa o kalır; yapılmadıysa artık yapılmaz
+        w = db.get_wallet(wid)
+        if w and w["schedule"] and db.recurring_done(w["schedule"]["id"], cur):
+            last = cur
+    if not db.stop_wallet_schedule(wid, last):
+        raise HTTPException(404, "Aylık yükleme yok")
+    if body.mode == "resume":
+        db.auto_load_wallets(date.today())
+    return {"ok": True}
+
+
+@app.post("/api/wallets/{wid}/load")
+def wallet_load(wid: int, body: WalletLoad):
+    """Tek seferlik yükleme (hediye kartına para yükleme, ikramiye vb.)."""
+    w = db.get_wallet(wid)
+    if not w:
+        raise HTTPException(404, "Kart yok")
+    return {"id": db.create_entry({"entry_date": (body.on or date.today()).isoformat(), "description": f"{w['name']} yüklemesi",
+                                   "amount": body.amount, "kind": "gelir", "category": db.WALLET_INCOME_CATEGORY,
+                                   "wallet_id": wid, "skipped": 0})}
 
 
 # ---------------------------------------------------------------- hesaplar / net varlık

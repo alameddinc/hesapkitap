@@ -76,6 +76,14 @@ def reminders(today: date) -> list[str]:
             what = "Borcun" if d["direction"] == "borc" else "Alacağın"
             msgs.append(f"🤝 {what}: <b>{d['person']}</b> · {amount} · vade {date.fromisoformat(d['due_date']):%d.%m} ({when})")
 
+    # 1d) Hediye/giyim kartı son kullanma (içinde para varken)
+    for w in db.list_wallets():
+        if w["expires_at"] and w["current"] > 0:
+            days = (date.fromisoformat(w["expires_at"]) - today).days
+            if days in (30, 7, 1, 0):
+                msgs.append(f"🎁 <b>{w['name']}</b> kartında {_tl(w['current'])} var; "
+                            + ("bugün sona eriyor" if days == 0 else f"{days} gün sonra sona eriyor") + ", harcamayı unutma.")
+
     # 2) Kesim tarihi geçti ama yeni ekstre yüklenmedi
     latest: dict[str, dict] = {}
     for s in statements:
@@ -125,7 +133,11 @@ def run_reminders(today: date) -> int:
 
 # ---------------------------------------------------------------- zamanlayıcı
 
-JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders)]
+def run_wallet_loads(today: date) -> int:
+    return db.auto_load_wallets(today)
+
+
+JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads)]
 
 
 def due_jobs(now: datetime) -> list[tuple[str, callable]]:

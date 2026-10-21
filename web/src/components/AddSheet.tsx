@@ -27,6 +27,7 @@ interface DocResult {
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[];
   address?: string | null;
   branch?: string | null;
+  payment_card?: string | null;
   legal_name?: string | null;
   // fatura
   provider?: string;
@@ -76,7 +77,8 @@ export default function AddSheet({ onClose, onPick, onBill }: {
         entry_date: r.date ?? undefined,
         category: r.category,
         // fişte "kart" yazıyorsa kredi kartı varsay; banka kartıysa kullanıcı formda değiştirir
-        payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" ? "kredi_karti" : undefined,
+        payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" ? "kredi_karti" : r.payment === "yemek_karti" ? "kart" : undefined,
+        wallet_hint: r.payment === "yemek_karti" ? r.payment_card ?? "yemek" : null,
         legal_name: r.legal_name,
         items: r.items,
         location: r.address ?? null,

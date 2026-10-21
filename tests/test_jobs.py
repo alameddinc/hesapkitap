@@ -41,10 +41,10 @@ def test_jobs_run_once_per_day(tmpdb):
     from app import jobs
 
     now = datetime(2026, 10, 19, 10, 0)
-    assert {n for n, _ in jobs.due_jobs(now)} == {"backup", "remind"}
+    assert {n for n, _ in jobs.due_jobs(now)} == {"backup", "remind", "wallet"}
     tmpdb.set_setting("job:backup", "2026-10-19")
-    assert {n for n, _ in jobs.due_jobs(now)} == {"remind"}
-    assert [n for n, _ in jobs.due_jobs(datetime(2026, 10, 20, 2, 0))] == []  # 03:00'ten önce yedek yok
+    assert {n for n, _ in jobs.due_jobs(now)} == {"remind", "wallet"}
+    assert [n for n, _ in jobs.due_jobs(datetime(2026, 10, 20, 0, 30))] == []  # gece yarısı hemen bir şey çalışmaz
 
 
 def test_period_report_on_cycle_day(tmpdb):

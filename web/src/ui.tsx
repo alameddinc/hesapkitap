@@ -10,11 +10,12 @@ export interface EntryDraft {
   category?: string;
   note?: string;
   recurring?: boolean;
-  payment?: "kredi_karti" | "nakit" | "havale";
+  payment?: "kredi_karti" | "nakit" | "havale" | "kart";
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[]; // fiş satırları
   location?: string | null; // fişteki işyeri adresi
   branch?: string | null; // fişteki şube/semt
+  wallet_hint?: string | null; // fişte yazan yemek kartı markası (Multinet…)
 }
 
 export interface UI {
