@@ -34,6 +34,18 @@ def _fixture_pdfs(monkeypatch):
     monkeypatch.setenv("HESAPKITAP_NO_AUTH", "1")  # test_auth bunu kendisi kaldırır
 
 
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    """Güvenlik ağı: hiçbir test geliştiricinin gerçek data/ekstre.db'sine dokunmasın; tmpdb kullanmayan test de
+    boş, şeması kurulmuş geçici bir veritabanı görür (CI'daki temiz ortamla aynı)."""
+    from app import db
+
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "isolated.db"))
+    monkeypatch.setattr(db, "UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(db, "BILL_DIR", str(tmp_path / "bills"))
+    db.init_db()
+
+
 @pytest.fixture()
 def tmpdb(tmp_path, monkeypatch):
     from app import db

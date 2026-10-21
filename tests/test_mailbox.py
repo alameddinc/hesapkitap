@@ -33,7 +33,7 @@ def notif(monkeypatch):
     return box
 
 
-def test_sender_check():
+def test_sender_check(tmpdb):
     from app.mailbox import sender_check
 
     assert sender_check(_mail())[0]
