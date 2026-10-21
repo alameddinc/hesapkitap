@@ -58,6 +58,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   // fişten geldiyse: kalem kurallarına göre bölme önerisi; kullanıcı burada düzeltir, Kaydet'te onaylanmış olur
   const [parts, setParts] = useState<{ amount: string; category: string; description: string }[] | null>(null);
   const [wholeCat, setWholeCat] = useState<string | null>(null);
+  // ortak harcama: başkalarının payı (kaydederken o kişilere alacak açılır)
+  const [shares, setShares] = useState<{ person: string; amount: string }[]>([]);
   const receiptMismatch = (() => {
     const its = draft?.items ?? [];
     if (!its.length || !draft?.amount || its.some((i) => i.amount == null)) return null;
@@ -110,8 +112,12 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
       items: kind === "gider" ? draft?.items ?? null : null,
       branch: draft?.branch ?? null,
-      splits: kind === "gider" && parts?.length ? parts.filter((p) => parseAmount(p.amount) > 0 && p.category)
-        .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })) : null });
+      splits: kind === "gider" && (parts?.length || shares.length) ? [
+        ...(parts ?? []).filter((p) => parseAmount(p.amount) > 0 && p.category)
+          .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })),
+        ...shares.filter((x) => x.person.trim() && parseAmount(x.amount) > 0)
+          .map((x) => ({ amount: parseAmount(x.amount), person: x.person.trim(), category: "" })),
+      ] : null });
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
@@ -347,6 +353,42 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
                 qc.invalidateQueries();
                 done(j.message);
               }}>{accountId ? "Hesap bakiyesine çevir" : "Önce hesabı seç"}</button>
+          </div>
+        )}
+        {!editingEntry && !isRecurring && !rec && kind === "gider" && (
+          <div className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <span className="font-medium">Ortak harcama</span>
+              <span className="text-xs text-stone-500">başkasının payını sen ödediysen</span>
+            </div>
+            {shares.map((x, i) => (
+              <div key={i} className="grid grid-cols-[1fr_7rem_auto] items-start gap-2">
+                <CategoryPicker value={x.person} options={people.data ?? []} placeholder="Kim?"
+                  onChange={(v) => setShares(shares.map((y, j) => (j === i ? { ...y, person: v } : y)))} />
+                <input className="input text-right" inputMode="decimal" placeholder="Payı" value={x.amount}
+                  onChange={(e) => setShares(shares.map((y, j) => (j === i ? { ...y, amount: e.target.value } : y)))} />
+                <button type="button" className="btn-ghost p-2 text-stone-400 hover:text-red-600" aria-label="Kaldır"
+                  onClick={() => setShares(shares.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
+              </div>
+            ))}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+                onClick={() => setShares([...shares, { person: "", amount: "" }])}>+ Kişi ekle</button>
+              {shares.length > 0 && parseAmount(amount) > 0 && (
+                <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+                  onClick={() => { const each = Math.round((parseAmount(amount) / (shares.length + 1)) * 100) / 100;
+                    setShares(shares.map((y) => ({ ...y, amount: String(each).replace(".", ",") }))); }}>
+                  Eşit böl ({shares.length + 1} kişi)
+                </button>
+              )}
+            </div>
+            {shares.some((x) => parseAmount(x.amount) > 0) && (
+              <p className="text-xs text-stone-500">
+                Senin payın {tl((parseAmount(amount) || 0) - shares.reduce((a, x) => a + (parseAmount(x.amount) || 0), 0)
+                  - (parts ?? []).reduce((a, p) => a + (parseAmount(p.amount) || 0), 0))}. Diğerleri sana borçlu olarak açılır; havale gelince
+                kendiliğinden kapanır (eksik gönderirse kalanı açık kalır), nakit verirse Borç / Alacak'tan "Aldım" de.
+              </p>
+            )}
           </div>
         )}
         {editingEntry && kind === "gider" && !editingEntry.debt_id && !editingEntry.linked && (
