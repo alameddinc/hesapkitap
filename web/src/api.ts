@@ -1,8 +1,8 @@
-export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider";
+export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
 
 export interface Row {
   uid: string;
-  source: "card" | "manual" | "recurring";
+  source: "card" | "manual" | "recurring" | "debt";
   id: number;
   date: string;
   month: string;
@@ -28,6 +28,8 @@ export interface Row {
   template_amount?: number;
   subscription?: "aktif" | "iptal" | "dusuruldu" | null;
   counterparty?: string | null;
+  flow?: number; // borç hareketi: +1 para geldi, −1 para çıktı
+  debt_id?: number | null;
 }
 
 export type Payment = "kredi_karti" | "nakit" | "havale";
@@ -90,6 +92,10 @@ export interface Summary {
     expense: number;
     net: number;
     carry_in: number; // önceki dönemlerden devreden artı
+    debt_flow: number; // borç verip almanın eldeki paraya etkisi
+    cash_net: number; // net + borç hareketleri
+    receivable: number; // açık TL alacak
+    payable: number; // açık TL borç
     balance: number; // devreden + net
   };
   pending: { income: number; expense: number; count: number };

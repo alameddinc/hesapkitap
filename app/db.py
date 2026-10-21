@@ -146,8 +146,18 @@ CREATE TABLE IF NOT EXISTS debts (
     due_date DATE,
     note TEXT,
     settled_at DATE,
-    settled_entry_id INTEGER,          -- kapatan banka hareketi / elle kayıt
+    settled_entry_id INTEGER,          -- (eski) kapatan hareket; artık debt_payments.entry_id
+    given_entry_id INTEGER,            -- parayı verdiğim/aldığım banka hareketi (varsa)
+    written_off_at DATE,               -- "vazgeçtim": kalan o gün gider (alacak) / gelir (borç) olur
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- Borç ödemeleri / tahsilatları (kısmi olabilir). entry_id: bunu karşılayan banka hareketi ya da elle kayıt
+CREATE TABLE IF NOT EXISTS debt_payments (
+    id INTEGER PRIMARY KEY,
+    debt_id INTEGER NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+    amount REAL NOT NULL CHECK (amount > 0),
+    paid_at DATE NOT NULL,
+    entry_id INTEGER
 );
 -- E-posta otomasyonu günlüğü: her mail bir kez işlenir (Message-ID)
 CREATE TABLE IF NOT EXISTS mail_log (
@@ -227,6 +237,9 @@ MIGRATIONS = [
     ("entries", "payment", "TEXT"),
     ("entries", "import_hash", "TEXT"),
     ("entries", "counterparty", "TEXT"),
+    ("entries", "debt_id", "INTEGER"),  # borç hareketi: gelir/gider sayılmaz, sadece eldeki parayı etkiler
+    ("debts", "given_entry_id", "INTEGER"),
+    ("debts", "written_off_at", "DATE"),
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
 ]
 
@@ -257,6 +270,12 @@ def init_db() -> None:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         _migrate_subscription_state(c)
         _backfill_statements(c)
+        # eski borç kayıtları: ödenen tutar tek bir ödeme satırına
+        c.execute("""INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id)
+                     SELECT id, paid_amount, COALESCE(settled_at, date('now')), settled_entry_id FROM debts
+                     WHERE paid_amount > 0 AND id NOT IN (SELECT debt_id FROM debt_payments)""")
+        c.execute("""UPDATE entries SET debt_id = (SELECT debt_id FROM debt_payments p WHERE p.entry_id = entries.id)
+                     WHERE debt_id IS NULL AND id IN (SELECT entry_id FROM debt_payments WHERE entry_id IS NOT NULL)""")
         _sync_default_rules(c)
     auto_mark_paid()
     auto_update_cycle()
@@ -510,7 +529,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month", "import_hash", "counterparty")
+                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -1159,8 +1178,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                           (r["hash"], who_here, dup["id"]))
                 matched = c.execute("SELECT counterparty FROM entries WHERE id = ?", (dup["id"],)).fetchone()[0]
         if dup:  # bağlantı yazıldıktan sonra (ayrı bağlantı açan borç kapatma kilitlenmesin)
-            if settle_debt_by_transfer(matched, kind, amount, r["date"], dup["id"]):
-                stats["borc_kapandi"] = stats.get("borc_kapandi", 0) + 1
+            if link_debt_movement(matched, kind, amount, r["date"], dup["id"]):
+                stats["borc_hareketi"] = stats.get("borc_hareketi", 0) + 1
             stats["eslesen_elle"] += 1
             seen.add(r["hash"])
             continue
@@ -1212,8 +1231,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                             "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
                             "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
                             "import_hash": r["hash"], "counterparty": who})
-        if settle_debt_by_transfer(who, kind, amount, r["date"], eid):
-            stats["borc_kapandi"] = stats.get("borc_kapandi", 0) + 1
+        if link_debt_movement(who, kind, amount, r["date"], eid):
+            stats["borc_hareketi"] = stats.get("borc_hareketi", 0) + 1
         stats[kind] += 1
         seen.add(r["hash"])
     return stats
@@ -1355,8 +1374,10 @@ def list_debts(open_only: bool = False) -> list[dict]:
     with connect() as c:
         out = rows(c.execute("SELECT * FROM debts" + (" WHERE settled_at IS NULL" if open_only else "")
                              + " ORDER BY settled_at IS NOT NULL, COALESCE(due_date, debt_date), id"))
+    pays = debt_payments() if out else []
     for d in out:
-        d["remaining"] = round(d["amount"] - d["paid_amount"], 4)
+        d["remaining"] = 0.0 if d["written_off_at"] else round(d["amount"] - d["paid_amount"], 4)
+        d["payments"] = [p for p in pays if p["debt_id"] == d["id"]]
     return out
 
 
@@ -1365,8 +1386,10 @@ def create_debt(data: dict) -> int:
     data["person"] = _known_counterparty(data["person"].strip())
     data["asset"] = (data.get("asset") or "TRY").strip()
     with connect() as c:
-        return c.execute(f"INSERT INTO debts ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
-                         tuple(data.values())).lastrowid
+        did = c.execute(f"INSERT INTO debts ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
+                        tuple(data.values())).lastrowid
+    _link_existing_given(did)
+    return did
 
 
 def update_debt(debt_id: int, data: dict) -> bool:
@@ -1381,42 +1404,148 @@ def update_debt(debt_id: int, data: dict) -> bool:
 
 
 def delete_debt(debt_id: int) -> bool:
-    with connect() as c:
+    with connect() as c:  # bağlı hareketler yeniden normal gelir/gider olur
+        c.execute("UPDATE entries SET debt_id = NULL WHERE debt_id = ?", (debt_id,))
+        c.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
         return c.execute("DELETE FROM debts WHERE id = ?", (debt_id,)).rowcount > 0
 
 
 def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None) -> None:
-    """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → tamamı."""
+    """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
+    entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz."""
     with connect() as c:
         d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
         if not d:
             raise KeyError(debt_id)
-        paid = d["paid_amount"] + (amount if amount is not None else d["amount"] - d["paid_amount"])
-        settled = paid >= d["amount"] - 0.005
-        c.execute("UPDATE debts SET paid_amount = ?, settled_at = ?, settled_entry_id = COALESCE(?, settled_entry_id) "
-                  "WHERE id = ?", (min(paid, d["amount"]), on if settled else None, entry_id, debt_id))
+        amt = amount if amount is not None else d["amount"] - d["paid_amount"]
+        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id) VALUES (?, ?, ?, ?)",
+                  (debt_id, amt, on, entry_id))
+        if entry_id:
+            c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, entry_id))
+        _recalc_debt(c, debt_id)
+
+
+def _recalc_debt(c, debt_id: int) -> None:
+    d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
+    paid, last = c.execute("SELECT COALESCE(SUM(amount), 0), MAX(paid_at) FROM debt_payments WHERE debt_id = ?",
+                           (debt_id,)).fetchone()
+    settled = d["written_off_at"] or (last if paid >= d["amount"] - 0.005 else None)
+    c.execute("UPDATE debts SET paid_amount = ?, settled_at = ? WHERE id = ?", (min(paid, d["amount"]), settled, debt_id))
 
 
 def unpay_debt(debt_id: int) -> None:
+    """Ödemeleri ve vazgeçmeyi geri al; bağlı hareketler yeniden normal gelir/gider olur."""
     with connect() as c:
-        c.execute("UPDATE debts SET paid_amount = 0, settled_at = NULL, settled_entry_id = NULL WHERE id = ?", (debt_id,))
+        c.execute("UPDATE entries SET debt_id = NULL WHERE id IN (SELECT entry_id FROM debt_payments WHERE debt_id = ?)",
+                  (debt_id,))
+        c.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
+        c.execute("UPDATE debts SET written_off_at = NULL WHERE id = ?", (debt_id,))
+        _recalc_debt(c, debt_id)
+
+
+def write_off_debt(debt_id: int, on: str) -> None:
+    """Vazgeçtim: kalan alacak o gün gider, kalan borç (karşı taraf sildi) o gün gelir olur."""
+    with connect() as c:
+        if not c.execute("UPDATE debts SET written_off_at = ? WHERE id = ?", (on, debt_id)).rowcount:
+            raise KeyError(debt_id)
+        _recalc_debt(c, debt_id)
+
+
+def debt_payments(debt_id: int | None = None) -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM debt_payments" + (" WHERE debt_id = ?" if debt_id else "") + " ORDER BY paid_at",
+                              (debt_id,) if debt_id else ()))
+
+
+def _entry_is_debt_linked(entry_id: int | None) -> bool:
+    if not entry_id:
+        return False
+    with connect() as c:
+        r = c.execute("SELECT debt_id FROM entries WHERE id = ?", (entry_id,)).fetchone()
+        return bool(r and r["debt_id"])
+
+
+def link_debt_movement(person: str | None, kind: str, amount: float, on: str, entry_id: int | None) -> tuple[str, dict] | None:
+    """Kişiye/kişiden TL hareketi açık bir borç kaydına ait mi?
+    1) Borcun VERİLİŞİ: aynı tutar, borç tarihine ±3 gün (alacak → giden para, borç → gelen para)
+    2) ÖDEME/TAHSİLAT: kalan tutar birebir (borcum → giden para, alacağım → gelen para)
+    Bağlanan hareket gelir/gider sayılmaz. Döner: ("verildi" | "odeme", borç) ya da None."""
+    from datetime import date as _date
+
+    if not person or _entry_is_debt_linked(entry_id):
+        return None
+    key = _name_key(person)
+    d_on = _date.fromisoformat(on)
+    debts_ = [d for d in list_debts() if d["asset"] == "TRY" and _name_key(d["person"]) == key]
+    given_dir = "alacak" if kind == "gider" else "borc"
+    for d in debts_:
+        if (d["direction"] == given_dir and not d["given_entry_id"] and abs(d["amount"] - amount) < 0.01
+                and abs((_date.fromisoformat(d["debt_date"]) - d_on).days) <= 3):
+            with connect() as c:
+                c.execute("UPDATE debts SET given_entry_id = ? WHERE id = ?", (entry_id, d["id"]))
+                if entry_id:
+                    c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (d["id"], entry_id))
+            return "verildi", d
+    pay_dir = "borc" if kind == "gider" else "alacak"
+    for d in debts_:
+        if (d["direction"] == pay_dir and not d["settled_at"] and abs(d["remaining"] - amount) < 0.01
+                and d["debt_date"] <= on):
+            pay_debt(d["id"], amount, on, entry_id)
+            return "odeme", d
+    return None
 
 
 def settle_debt_by_transfer(person: str | None, kind: str, amount: float, on: str, entry_id: int | None) -> dict | None:
-    """Kişiye giden havale açık TL borcumu, kişiden gelen havale açık TL alacağımı kapatır (kalan tutar birebir)."""
-    if not person:
-        return None
-    with connect() as c:  # bu hareket zaten bir borcu kapattıysa (elle girilip sonra dökümle eşleşti) tekrar kapatma
-        if entry_id and c.execute("SELECT 1 FROM debts WHERE settled_entry_id = ?", (entry_id,)).fetchone():
-            return None
-    direction = "borc" if kind == "gider" else "alacak"
-    key = _name_key(person)
-    for d in list_debts(open_only=True):
-        if (d["direction"] == direction and d["asset"] == "TRY" and _name_key(d["person"]) == key
-                and abs(d["remaining"] - amount) < 0.01 and d["debt_date"] <= on):
-            pay_debt(d["id"], amount, on, entry_id)
-            return d
-    return None
+    """Geriye uyumluluk: hareket bir borca bağlandıysa o borç."""
+    r = link_debt_movement(person, kind, amount, on, entry_id)
+    return r[1] if r else None
+
+
+def _link_existing_given(debt_id: int) -> None:
+    """Borç sonradan yazıldıysa: o gün civarı o kişiye/kişiden aynı tutarlı hareket zaten varsa verilişe bağla."""
+    from datetime import date as _date, timedelta
+
+    with connect() as c:
+        d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
+        if d["asset"] != "TRY" or d["given_entry_id"]:
+            return
+        kind = "gider" if d["direction"] == "alacak" else "gelir"
+        day = _date.fromisoformat(d["debt_date"])
+        key = _name_key(d["person"])
+        for e in c.execute("""SELECT id, counterparty FROM entries WHERE debt_id IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
+                              AND entry_date BETWEEN ? AND ? AND counterparty IS NOT NULL""",
+                           (kind, d["amount"], (day - timedelta(days=3)).isoformat(), (day + timedelta(days=3)).isoformat())):
+            if _name_key(e["counterparty"]) == key:
+                c.execute("UPDATE debts SET given_entry_id = ? WHERE id = ?", (e["id"], debt_id))
+                c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, e["id"]))
+                return
+
+
+def debt_rows(month: str | None = None) -> list[dict]:
+    """TL borçların kayıtlı hareketi olmayan adımları (nakit verildi/alındı, elle "Ödedim") ve vazgeçmeler:
+    finans listesine sentetik satır olarak girer."""
+    out = []
+    pays = debt_payments()
+    for d in list_debts():
+        if d["asset"] != "TRY":
+            continue
+        out_flow = -1 if d["direction"] == "alacak" else 1  # alacak: para benden çıktı
+        if not d["given_entry_id"]:
+            out.append({"uid": f"d{d['id']}g", "debt_id": d["id"], "date": d["debt_date"], "flow": out_flow,
+                        "amount": d["amount"], "person": d["person"], "step": "verildi" if d["direction"] == "alacak" else "alindi"})
+        for p in pays:
+            if p["debt_id"] == d["id"] and not p["entry_id"]:
+                out.append({"uid": f"d{d['id']}p{p['id']}", "debt_id": d["id"], "date": p["paid_at"], "flow": -out_flow,
+                            "amount": p["amount"], "person": d["person"],
+                            "step": "tahsil" if d["direction"] == "alacak" else "odendi"})
+        if d["written_off_at"]:
+            left = round(d["amount"] - sum(p["amount"] for p in pays if p["debt_id"] == d["id"]), 2)
+            if left > 0.005:
+                out.append({"uid": f"d{d['id']}w", "debt_id": d["id"], "date": d["written_off_at"], "flow": 0,
+                            "amount": left, "person": d["person"], "step": "vazgecildi", "direction": d["direction"]})
+    for r in out:
+        r["month"] = period_of(r["date"])
+    return [r for r in out if not month or r["month"] == month]
 
 
 def _name_key(name: str) -> str:

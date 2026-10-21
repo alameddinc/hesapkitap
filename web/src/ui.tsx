@@ -28,7 +28,7 @@ export interface UI {
   toast: (msg: string) => void;
 }
 
-export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "diger";
+export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "diger";
 
 export const UIContext = createContext<UI | null>(null);
 

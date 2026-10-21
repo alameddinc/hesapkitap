@@ -44,6 +44,7 @@ export const KIND_LABEL: Record<string, string> = {
   odeme: "Kart ödemesi",
   gelir: "Gelir",
   gider: "Gider",
+  borc: "Borç hareketi",
 };
 
 export const PLAN_LABEL: Record<string, string> = {

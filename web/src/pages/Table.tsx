@@ -9,6 +9,9 @@ import { useUI } from "../ui";
 
 type View = "liste" | "pivot";
 type PivotBy = "category" | "merchant" | "card";
+// tabloda gider +, gelir −; borç hareketi parayla aynı yönde (verilen +, gelen −)
+const spendOf = (r: Row) => (r.kind === "gelir" ? -r.amount : r.kind === "borc" ? -(r.flow ?? 0) * r.amount : r.amount);
+
 type SortKey = "date" | "month" | "description" | "category" | "card" | "kind" | "amount";
 
 interface Filters {
@@ -96,7 +99,7 @@ export default function Table() {
       const k = pivotKey(r);
       if (!map.has(k)) map.set(k, new Map());
       const m = map.get(k)!;
-      m.set(r.month, (m.get(r.month) ?? 0) + (r.kind === "gelir" ? -r.amount : r.amount));
+      m.set(r.month, (m.get(r.month) ?? 0) + spendOf(r));
     }
     const rows = [...map.entries()].map(([name, m]) => ({ name, cells: m, total: [...m.values()].reduce((a, b) => a + b, 0) }))
       .sort((a, b) => b.total - a.total);
@@ -105,7 +108,7 @@ export default function Table() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered, pivotBy]);
 
-  const total = listRows.reduce((a, r) => a + (r.kind === "gelir" ? -r.amount : r.amount), 0);
+  const total = listRows.reduce((a, r) => a + spendOf(r), 0);
   const activeCount = [f.from, f.to, f.q, f.min, f.max].filter(Boolean).length + (f.categories.length ? 1 : 0) + (f.cards.length ? 1 : 0);
 
   const exportCsv = () => {
@@ -151,7 +154,7 @@ export default function Table() {
         </select>
         <MultiSelect label="Kategori" options={categories} value={f.categories} onChange={(v) => set({ categories: v })} />
         <MultiSelect label="Kart" options={cards} value={f.cards} onChange={(v) => set({ cards: v })} />
-        <MultiSelect label="Tür" options={["harcama", "iade", "faiz_ucret", "gider", "gelir", "odeme"]} value={f.kinds}
+        <MultiSelect label="Tür" options={["harcama", "iade", "faiz_ucret", "gider", "gelir", "odeme", "borc"]} value={f.kinds}
           onChange={(v) => set({ kinds: v })} render={(o) => KIND_LABEL[o] ?? o} />
         <input className="input w-36 py-1.5" placeholder="Ara" value={f.q} onChange={(e) => set({ q: e.target.value })} />
         <input className="input w-20 py-1.5 text-right" inputMode="decimal" placeholder="min ₺" value={f.min} onChange={(e) => set({ min: e.target.value })} />
