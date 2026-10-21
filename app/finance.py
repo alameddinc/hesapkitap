@@ -921,3 +921,49 @@ def net_worth(today: date | None = None) -> dict:
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
             "net": _round(cash - card_debt + receivable - payable),
             "net_after_estimates": _round(cash - card_debt - card_est + receivable - payable), "stale": stale}
+
+
+# ---------------------------------------------------------------- dönem sonu raporu (Telegram)
+
+_AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+
+
+def _pct(now: float, before: float) -> str:
+    if before <= 0:
+        return ""
+    p = round((now - before) / before * 100)
+    return f" ({'+' if p > 0 else ''}{p}%)" if p else " (aynı)"
+
+
+def period_report(month: str) -> str:
+    """Biten dönemin kısa özeti (HTML, Telegram için)."""
+    import html
+
+    s = summary(month)
+    prev = summary(add_months(month, -1))
+    t, pt = s["totals"], prev["totals"]
+    y, m = map(int, month.split("-"))
+    lines = [f"📊 <b>{_AY[m - 1]} {y} dönemi bitti</b>",
+             f"Gelir {_tl(t['income'])} · Gider {_tl(t['expense'])}{_pct(t['expense'], pt['expense'])}",
+             f"Net <b>{_tl(t['net'])}</b>" + (f" · borç hareketi {_tl(t['debt_flow'])}" if t.get("debt_flow") else "")]
+    before = {c["name"]: c["amount"] for c in prev["by_category"]}
+    top = s["by_category"][:5]
+    if top:
+        lines.append("\n<b>En çok</b>")
+        lines += [f"• {html.escape(c['name'])}: {_tl(c['amount'])}{_pct(c['amount'], before.get(c['name'], 0))}" for c in top]
+    rising = [c for c in s["by_category"] if before.get(c["name"], 0) > 500 and c["amount"] > before[c["name"]] * 1.3][:3]
+    if rising:
+        lines.append("📈 Artanlar: " + ", ".join(f"{html.escape(c['name'])} {_pct(c['amount'], before[c['name']]).strip(' ()')}"
+                                                 for c in rising))
+    over = [b for b in s["budgets"] if b["spent"] > b["limit"]]
+    if over:
+        lines.append("⚠️ Bütçe aşıldı: " + ", ".join(f"{html.escape(b['category'])} ({_tl(b['spent'])} / {_tl(b['limit'])})" for b in over))
+    subs = [x for x in subscriptions() if x["status"] == "aktif"]
+    if subs:
+        lines.append(f"🔁 Aktif abonelikler: {len(subs)} · aylık ~{_tl(sum(x['monthly'] for x in subs))}")
+    if t.get("receivable") or t.get("payable"):
+        lines.append(f"🤝 Alacakta {_tl(t.get('receivable', 0))} · borçta {_tl(t.get('payable', 0))}")
+    nw = net_worth()
+    if nw["accounts"]:
+        lines.append(f"🏦 Net durum {_tl(nw['net'])} (bankada {_tl(nw['cash'])})")
+    return "\n".join(lines)
