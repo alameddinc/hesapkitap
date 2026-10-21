@@ -250,6 +250,7 @@ class EntryIn(BaseModel):
     location: str | None = None  # fişteki işyeri adresi (opsiyonel)
     branch: str | None = None  # fişteki şube/semt (fiyat geçmişinde)
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 class EntryPatch(BaseModel):
@@ -264,6 +265,7 @@ class EntryPatch(BaseModel):
     location: str | None = None
     wallet_id: int | None = None  # ödeme 'kart' ise hangi ön ödemeli kart
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 @app.post("/api/entries")
@@ -308,7 +310,7 @@ def patch_entry(entry_id: int, body: EntryPatch):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     elif "counterparty" in data:
         data["counterparty"] = None
-    if "payment" in data or "wallet_id" in data:
+    if "payment" in data or "wallet_id" in data or "account_id" in data:
         _check_wallet(data)
     split_total = sum(p["amount"] for p in db.splits_map().get(("entry", entry_id), []))
     if "amount" in data and data["amount"] + 0.005 < split_total:
@@ -354,6 +356,7 @@ class RecurringIn(BaseModel):
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
     gross_amount: float | None = Field(default=None, ge=0)
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 class RecurringPatch(BaseModel):
@@ -366,6 +369,7 @@ class RecurringPatch(BaseModel):
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
     gross_amount: float | None = Field(default=None, ge=0)
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 class RecurringAction(BaseModel):
@@ -481,7 +485,7 @@ def confirm_recurring(rid: int, body: RecurringAction):
     return {"id": db.create_entry({
         "entry_date": db.occurrence_date(body.month, db.day_at(r, body.month)), "month": body.month, "description": r["description"],
         "amount": body.amount if body.amount is not None else db.planned_amount(r, body.month), "kind": r["kind"],
-        "category": r["category"], "recurring_id": rid, "skipped": 0,
+        "category": r["category"], "recurring_id": rid, "skipped": 0, "account_id": r["account_id"],
     })}
 
 
@@ -637,12 +641,18 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
 # ---------------------------------------------------------------- ön ödemeli kartlar
 
 def _check_wallet(data: dict) -> None:
-    """Ödeme 'kart' ise geçerli bir kart seçilmiş olmalı; değilse kart bağlantısı kalkar."""
+    """Ödeme 'kart' ise geçerli bir kart seçilmiş olmalı; değilse kart bağlantısı kalkar.
+    Hesap (banka/nakit): kredi kartı ya da yemek kartıyla ödenen giderde olmaz; seçildiyse var olmalı."""
     if data.get("payment") == "kart":
         if not data.get("wallet_id") or not db.get_wallet(data["wallet_id"]):
             raise HTTPException(422, "Hangi karttan ödendiğini seç")
+        data["account_id"] = None
     elif "payment" in data:
         data["wallet_id"] = None
+    if data.get("payment") == "kredi_karti":
+        data["account_id"] = None
+    if data.get("account_id") and not any(a["id"] == data["account_id"] for a in db.list_accounts()):
+        raise HTTPException(422, "Hesap bulunamadı")
 
 
 class WalletIn(BaseModel):
@@ -759,6 +769,38 @@ class AccountPatch(BaseModel):
     kind: Literal["banka", "nakit", "diger"] | None = None
     balance: float | None = None
     as_of: date | None = None
+
+
+@app.get("/api/accounts")
+def accounts():
+    """Seçim listeleri için: banka/nakit hesapları (bakiyesi bilinmeyenler dahil) ve yemek/hediye kartları."""
+    return {"accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"], "current": a["current"]} for a in db.list_accounts()],
+            "wallets": [{"id": w["id"], "name": w["name"], "card_type": w["card_type"], "current": w["current"]}
+                        for w in db.list_wallets()]}
+
+
+class ToOpening(BaseModel):
+    account_id: int
+
+
+@app.post("/api/entries/{entry_id}/to-opening")
+def entry_to_opening(entry_id: int, body: ToOpening):
+    """Gelir olarak girilmiş başlangıç bakiyesini hesabın bakiyesine çevir."""
+    try:
+        return {"message": db.entry_to_opening_balance(entry_id, body.account_id)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+class PaymentAccount(BaseModel):
+    account_id: int | None = None
+
+
+@app.patch("/api/debt-payments/{pid}")
+def set_debt_payment_account(pid: int, body: PaymentAccount):
+    if not db.set_debt_payment_account(pid, body.account_id):
+        raise HTTPException(404, "Ödeme yok")
+    return {"ok": True}
 
 
 @app.get("/api/net-worth")
@@ -920,6 +962,7 @@ class DebtIn(BaseModel):
     debt_date: date
     due_date: date | None = None
     note: str | None = None
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 class DebtPatch(BaseModel):
@@ -930,11 +973,13 @@ class DebtPatch(BaseModel):
     debt_date: date | None = None
     due_date: date | None = None
     note: str | None = None
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 class DebtPayIn(BaseModel):
     amount: float | None = Field(default=None, gt=0)  # boş → kalanın tamamı
     paid_at: date
+    account_id: int | None = None  # banka/nakit hesabı
 
 
 @app.get("/api/debts")
@@ -971,7 +1016,7 @@ def delete_debt(did: int):
 @app.post("/api/debts/{did}/pay")
 def pay_debt(did: int, body: DebtPayIn):
     try:
-        db.pay_debt(did, body.amount, body.paid_at.isoformat())
+        db.pay_debt(did, body.amount, body.paid_at.isoformat(), account_id=body.account_id)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     return {"ok": True}

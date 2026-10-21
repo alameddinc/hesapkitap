@@ -305,6 +305,10 @@ MIGRATIONS = [
     ("accounts", "card_type", "TEXT"),          # kart: yemek | hediye | giyim | diger
     ("accounts", "expires_at", "DATE"),         # hediye kartı son kullanma
     ("accounts", "anchor_entry_id", "INTEGER NOT NULL DEFAULT 0"),  # kart bakiyesi bu kayıttan sonrakilerle güncellenir
+    ("entries", "account_id", "INTEGER"),       # gelirin girdiği / giderin çıktığı hesap (banka, nakit)
+    ("recurring", "account_id", "INTEGER"),     # sabit kalemin hesabı (Maaş → Halkbank)
+    ("debts", "account_id", "INTEGER"),         # borcun verildiği/alındığı hesap
+    ("debt_payments", "account_id", "INTEGER"), # ödeme/tahsilatın hesabı
     ("receipt_items", "brand", "TEXT"),         # ürün markası (Ülker) ya da kafenin kendisi           # ortak harcamada kişinin payı → alacak
     ("debts", "split_id", "INTEGER"),           # alacak bir harcamanın payından doğduysa (veriliş = o harcama)
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
@@ -350,6 +354,15 @@ def init_db() -> None:
         _sync_default_rules(c)
     auto_mark_paid()
     auto_update_cycle()
+    _ensure_imported_bank_accounts()
+
+
+def _ensure_imported_bank_accounts() -> None:
+    """Dökümü yüklenmiş bankalar kayıtlarda seçilebilsin: hesap yoksa bakiyesi bilinmeyen hesap olarak aç."""
+    from app.bank_import import short_bank
+
+    for name in {short_bank(b) for b in imported_bank_names()} - {"Banka hesabı"}:
+        ensure_account(name)
 
 
 def _migrate_subscription_state(c) -> None:
@@ -600,7 +613,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id")
+                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -747,7 +760,7 @@ def delete_entry(entry_id: int) -> None:
 
 # ---------------------------------------------------------------- recurring
 
-RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note", "wallet_id",
+RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note", "wallet_id", "account_id",
                     "gross_amount")
 
 
@@ -1184,13 +1197,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
 
     stats = {"gelir": 0, "gider": 0, "kart_odemesi": 0, "virman": 0, "tekrar": 0, "eslesen_elle": 0,
              "odendi_isaretlenen": 0, "maas": 0}
-    # hesabın son bakiyesi (tampon): dökümdeki en son satırın bakiyesi
-    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
-    if with_bal:
-        d_, _, bal = max(with_bal)
-        from app.bank_import import short_bank
+    from app.bank_import import short_bank
 
-        set_account_balance(short_bank(account), bal, d_, source="dokum")
+    acc_id = ensure_account(short_bank(account)) if account else None
     with connect() as c:
         rules = load_rules(c)
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
@@ -1207,6 +1216,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     for r in rows:
         if r["hash"] in seen or (r["hash"].startswith("mail:") and _already_imported(r, people, owners)):
             stats["tekrar"] += 1
+            if acc_id:  # eski yükleme hesapsız kaldıysa: tekrar yüklenince hesabına bağlanır
+                with connect() as c:
+                    c.execute("UPDATE entries SET account_id = ? WHERE import_hash = ? AND account_id IS NULL AND wallet_id IS NULL",
+                              (acc_id, r["hash"]))
+                    c.execute("UPDATE recurring SET account_id = ? WHERE account_id IS NULL AND id IN "
+                              "(SELECT recurring_id FROM entries WHERE import_hash = ? AND recurring_id IS NOT NULL)",
+                              (acc_id, r["hash"]))  # maaş bu hesaba yatıyormuş: sabit kalem öğrenir
             continue
         d = _date.fromisoformat(r["date"])
         if r["type"] == "virman":
@@ -1253,8 +1269,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             who_here = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
             dup = _pick_manual(cands, who_here, people, d)
             if dup:
-                c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?) WHERE id = ?",
-                          (r["hash"], who_here, dup["id"]))
+                c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?), "
+                          "account_id = COALESCE(account_id, ?) WHERE id = ?", (r["hash"], who_here, acc_id, dup["id"]))
                 matched = c.execute("SELECT counterparty FROM entries WHERE id = ?", (dup["id"],)).fetchone()[0]
         if dup:  # bağlantı yazıldıktan sonra (ayrı bağlantı açan borç kapatma kilitlenmesin)
             if link_debt_movement(matched, kind, amount, r["date"], dup["id"]):
@@ -1274,6 +1290,10 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             if rec:
                 desc, category = rec["description"], rec["category"]  # sabit kaleme bağlansın
                 stats["maas"] += 1
+                if acc_id and not rec.get("account_id"):  # maaş bu hesaba yatıyor: sabit kalem öğrenir
+                    with connect() as c:
+                        c.execute("UPDATE recurring SET account_id = ? WHERE id = ? AND account_id IS NULL", (acc_id, rec["id"]))
+                    rec["account_id"] = acc_id
                 # tarihe en yakın dönemin maaşı zaten elle girildi/onaylandıysa: yeni kayıt açma,
                 # bankadaki gerçek tutar ve tarihle güncelle (net maaş elle girilenden birkaç lira farklı olabilir)
                 target = _nearest_recurring_month(rec, d)
@@ -1282,8 +1302,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                         "SELECT id FROM entries WHERE recurring_id = ? AND month = ? AND import_hash IS NULL AND skipped = 0",
                         (rec["id"], target)).fetchone()
                     if existing:
-                        c.execute("UPDATE entries SET amount = ?, entry_date = ?, import_hash = ?, note = ? WHERE id = ?",
-                                  (amount, r["date"], r["hash"], f"Hesap hareketi · {r['description']}", existing["id"]))
+                        c.execute("UPDATE entries SET amount = ?, entry_date = ?, import_hash = ?, note = ?, "
+                                  "account_id = COALESCE(account_id, ?) WHERE id = ?",
+                                  (amount, r["date"], r["hash"], f"Hesap hareketi · {r['description']}", acc_id, existing["id"]))
                         stats["eslesen_elle"] += 1
                         seen.add(r["hash"])
                         continue
@@ -1309,11 +1330,16 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         eid = create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
                             "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
                             "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
-                            "import_hash": r["hash"], "counterparty": who})
+                            "import_hash": r["hash"], "counterparty": who, "account_id": acc_id})
         if link_debt_movement(who, kind, amount, r["date"], eid):
             stats["borc_hareketi"] = stats.get("borc_hareketi", 0) + 1
         stats[kind] += 1
         seen.add(r["hash"])
+    # hesabın son bakiyesi: dökümdeki en son satırın bakiyesi (kayıtlar yazıldıktan sonra çapalanır)
+    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
+    if with_bal and account:
+        d_, _, bal = max(with_bal)
+        set_account_balance(short_bank(account), bal, d_, source="dokum")
     return stats
 
 
@@ -1446,7 +1472,7 @@ def _shift_days(d: str, n: int) -> str:
 
 # ---------------------------------------------------------------- borç / alacak
 
-DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note")
+DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note", "account_id")
 
 
 def list_debts(open_only: bool = False) -> list[dict]:
@@ -1490,7 +1516,7 @@ def delete_debt(debt_id: int) -> bool:
         return c.execute("DELETE FROM debts WHERE id = ?", (debt_id,)).rowcount > 0
 
 
-def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None) -> None:
+def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None) -> None:
     """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
     entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz."""
     with connect() as c:
@@ -1498,8 +1524,8 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
         if not d:
             raise KeyError(debt_id)
         amt = amount if amount is not None else d["amount"] - d["paid_amount"]
-        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id) VALUES (?, ?, ?, ?)",
-                  (debt_id, amt, on, entry_id))
+        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id) VALUES (?, ?, ?, ?, ?)",
+                  (debt_id, amt, on, entry_id, account_id))
         if entry_id:
             c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, entry_id))
         _recalc_debt(c, debt_id)
@@ -1612,11 +1638,12 @@ def debt_rows(month: str | None = None) -> list[dict]:
         out_flow = -1 if d["direction"] == "alacak" else 1  # alacak: para benden çıktı
         if not d["given_entry_id"] and not d.get("split_id"):  # harcamanın payıysa veriliş o harcamanın alt kalemi
             out.append({"uid": f"d{d['id']}g", "debt_id": d["id"], "date": d["debt_date"], "flow": out_flow,
-                        "amount": d["amount"], "person": d["person"], "step": "verildi" if d["direction"] == "alacak" else "alindi"})
+                        "amount": d["amount"], "person": d["person"], "account_id": d.get("account_id"),
+                        "step": "verildi" if d["direction"] == "alacak" else "alindi"})
         for p in pays:
             if p["debt_id"] == d["id"] and not p["entry_id"]:
                 out.append({"uid": f"d{d['id']}p{p['id']}", "debt_id": d["id"], "date": p["paid_at"], "flow": -out_flow,
-                            "amount": p["amount"], "person": d["person"],
+                            "amount": p["amount"], "person": d["person"], "account_id": p.get("account_id"),
                             "step": "tahsil" if d["direction"] == "alacak" else "odendi"})
         if d["written_off_at"]:
             left = round(d["amount"] - sum(p["amount"] for p in pays if p["debt_id"] == d["id"]), 2)
@@ -1882,21 +1909,51 @@ def propose_split(items: list[dict], category: str | None, total: float | None) 
 # ---------------------------------------------------------------- hesaplar (bakiye tamponu)
 
 def set_account_balance(name: str, balance: float, as_of: str, source: str = "elle", kind: str = "banka") -> None:
-    """Döküm daha eski bir tarihe aitse mevcut (daha yeni) bakiyeyi ezmez."""
+    """Bakiye çapası: o tarihteki bakiye. Sonraki (ve aynı gün sonradan girilen) hareketler bunun üstüne eklenir.
+    Döküm daha eski bir tarihe aitse mevcut (daha yeni) bakiyeyi ezmez."""
     with connect() as c:
         cur = c.execute("SELECT as_of FROM accounts WHERE name = ?", (name,)).fetchone()
         if cur and cur["as_of"] and source == "dokum" and cur["as_of"] > as_of:
             return
-        c.execute("""INSERT INTO accounts (name, kind, balance, as_of, source, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        anchor = c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]
+        c.execute("""INSERT INTO accounts (name, kind, balance, as_of, source, anchor_entry_id, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                      ON CONFLICT(name) DO UPDATE SET balance = excluded.balance, as_of = excluded.as_of,
-                     source = excluded.source, updated_at = CURRENT_TIMESTAMP""",
-                  (name, kind, round(balance, 2), as_of, source))
+                     source = excluded.source, anchor_entry_id = excluded.anchor_entry_id, updated_at = CURRENT_TIMESTAMP""",
+                  (name, kind, round(balance, 2), as_of, source, anchor))
+
+
+def ensure_account(name: str, kind: str = "banka") -> int:
+    """Hesap yoksa bakiyesi bilinmeyen (as_of boş) olarak aç; id döner."""
+    with connect() as c:
+        r = c.execute("SELECT id FROM accounts WHERE name = ?", (name,)).fetchone()
+        if r:
+            return r["id"]
+        return c.execute("INSERT INTO accounts (name, kind, balance, as_of, source) VALUES (?, ?, 0, NULL, 'dokum')",
+                         (name, kind)).lastrowid
+
+
+def _account_balance(c, a: dict) -> float | None:
+    """Çapa + çapadan sonraki hareketler (elle girilen, e-posta bildirimi, borç hareketleri). Bakiyesi hiç girilmemiş: None."""
+    if not a["as_of"]:
+        return None
+    flows = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) FROM entries
+                         WHERE account_id = ? AND skipped = 0 AND (entry_date > ? OR (entry_date = ? AND id > ?))""",
+                      (a["id"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0)).fetchone()[0]
+    debt = 0.0
+    for d in debt_rows():
+        if d.get("account_id") == a["id"] and d["date"] > a["as_of"] and d["step"] != "vazgecildi":
+            debt += d["flow"] * d["amount"]
+    return round(a["balance"] + flows + debt, 2)
 
 
 def list_accounts() -> list[dict]:
-    """Banka / nakit / diğer hesaplar (ön ödemeli kartlar ayrı: list_wallets)."""
+    """Banka / nakit / diğer hesaplar (ön ödemeli kartlar ayrı: list_wallets). current: bugünkü tahmini bakiye."""
     with connect() as c:
-        return rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' ORDER BY kind, name"))
+        accs = rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' ORDER BY kind, name"))
+        for a in accs:
+            a["current"] = _account_balance(c, a)
+    return accs
 
 
 def update_account(acc_id: int, data: dict) -> bool:
@@ -1905,6 +1962,8 @@ def update_account(acc_id: int, data: dict) -> bool:
         return False
     data["source"] = "elle"
     with connect() as c:
+        if "balance" in data:  # yeni çapa: bu andan sonraki hareketler üstüne eklenir
+            data["anchor_entry_id"] = c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]
         return c.execute(f"UPDATE accounts SET {', '.join(f'{k} = ?' for k in data)}, updated_at = CURRENT_TIMESTAMP "
                          "WHERE id = ?", (*data.values(), acc_id)).rowcount > 0
 
@@ -2198,3 +2257,26 @@ def imported_bank_names() -> list[str]:
         return [r[0] for r in c.execute(
             "SELECT DISTINCT account FROM own_transfers WHERE COALESCE(account, '') <> '' "
             "UNION SELECT DISTINCT account FROM card_payments WHERE COALESCE(account, '') <> ''")]
+
+
+def set_debt_payment_account(payment_id: int, account_id: int | None) -> bool:
+    with connect() as c:
+        return c.execute("UPDATE debt_payments SET account_id = ? WHERE id = ?", (account_id, payment_id)).rowcount > 0
+
+
+def entry_to_opening_balance(entry_id: int, account_id: int) -> str:
+    """Yanlışlıkla gelir girilmiş başlangıç bakiyesi → hesabın o tarihteki bakiyesi; gelir kaydı silinir.
+    Hesabın daha yeni bir çapası (ör. döküm bakiyesi) varsa o doğrudur: kayıt yalnızca silinir."""
+    with connect() as c:
+        e = c.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
+        a = c.execute("SELECT * FROM accounts WHERE id = ? AND kind <> 'kart'", (account_id,)).fetchone()
+        if not e or not a or e["kind"] != "gelir":
+            raise ValueError("Gelir kaydı ya da hesap bulunamadı")
+        if a["as_of"] and a["as_of"] > e["entry_date"]:
+            c.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+            return f"{a['name']} bakiyesi {a['as_of']} tarihli daha yeni bilgiden geliyor; kayıt gelirden çıkarıldı"
+        same = a["as_of"] == e["entry_date"]
+        c.execute("UPDATE accounts SET balance = ?, as_of = ?, anchor_entry_id = 0, source = 'elle', updated_at = CURRENT_TIMESTAMP "
+                  "WHERE id = ?", (round((a["balance"] if same else 0) + e["amount"], 2), e["entry_date"], account_id))
+        c.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        return f"{a['name']} başlangıç bakiyesi {e['entry_date']} itibarıyla kaydedildi; gelirden çıkarıldı"

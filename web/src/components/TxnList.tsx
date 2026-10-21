@@ -2,6 +2,7 @@ import { Check, CreditCard, Repeat } from "lucide-react";
 import type { Row } from "../api";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import { useUI } from "../ui";
+import { useAccounts } from "./AccountSelect";
 
 const BADGE: Record<string, string> = {
   iade: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
@@ -34,6 +35,10 @@ function PendingActions({ r }: { r: Row }) {
 
 export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; empty?: string }) {
   const ui = useUI();
+  const accounts = useAccounts();
+  const accName = (id?: number | null) => (id ? accounts.data?.accounts.find((a) => a.id === id)?.name
+    ?? undefined : undefined);
+  const walletName = (id?: number | null) => (id ? accounts.data?.wallets.find((a) => a.id === id)?.name : undefined);
   if (!rows.length) return <p className="py-8 text-center text-sm text-stone-500">{empty}</p>;
 
   const open = (row: Row) => {
@@ -67,6 +72,8 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
                 {r.installment && <span>· {r.installment} taksit</span>}
                 {r.fx && <span>· {r.fx}</span>}
                 {r.card && <span className="hidden sm:inline">· {r.card}</span>}
+                {accName(r.account_id) && <span>· {accName(r.account_id)}</span>}
+                {walletName(r.wallet_id) && <span>· {walletName(r.wallet_id)}</span>}
                 {BADGE[r.kind] && <span className={cx("rounded px-1.5 py-0.5 font-medium", BADGE[r.kind])}>{KIND_LABEL[r.kind]}</span>}
                 {r.pending && <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">Bekliyor</span>}
                 {r.skipped && <span className="rounded bg-stone-200 px-1.5 py-0.5 dark:bg-stone-800">Atlandı</span>}
