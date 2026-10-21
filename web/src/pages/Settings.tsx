@@ -224,6 +224,7 @@ export default function Settings() {
   });
   const test = useSave(() => post<{ sent: number }>("/api/settings/telegram/test"), (r) => ui.toast(`${r.sent} mesaj gönderildi`));
   const disconnect = useSave(() => post("/api/settings/telegram/disconnect"), () => ui.toast("Bağlantı kaldırıldı"));
+  const report = useSave(() => post<{ month: string }>("/api/settings/telegram/report"), () => ui.toast("Rapor Telegram'a gönderildi"));
   const backupNow = useSave(() => post<{ path: string }>("/api/settings/backup/now"), (r) => ui.toast(`Yedek alındı: ${r.path}`));
   const s = st.data;
   const cfg = useQuery({ queryKey: ["config"], queryFn: () => fetch("/api/settings/config").then((r) => r.json() as Promise<ConfigItem[]>) });
@@ -259,7 +260,8 @@ export default function Settings() {
             <Step n={2} done={s.telegram.connected}>
               {s.telegram.connected ? (
                 <span>
-                  Bağlı: <b>{s.telegram.chat_name ?? "Telegram sohbeti"}</b> — hatırlatmalar sadece bu sohbete gider.
+                  Bağlı: <b>{s.telegram.chat_name ?? "Telegram sohbeti"}</b> — hatırlatmalar sadece bu sohbete gider. Her ay
+                  dönümünde biten dönemin raporu (gelir/gider, en çok harcananlar, artanlar, bütçe, abonelik) da gelir.
                   <span className="mt-1 block text-stone-500">
                     Kart ekstresi ya da hesap dökümü PDF'ini bu sohbete gönderirsen (mailden, WhatsApp'tan "Paylaş →
                     Telegram") bir dakika içinde içe aktarılır, sonucu bot yazar. Başka sohbetlerden gelenler işlenmez.
@@ -291,6 +293,8 @@ export default function Settings() {
               <div className="flex flex-wrap gap-2">
                 <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={!s.telegram.connected}
                   onClick={() => test.mutate(undefined, onErr)}><Send size={14} /> Test mesajı gönder</button>
+                <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={!s.telegram.connected}
+                  onClick={() => report.mutate(undefined, onErr)}>Geçen dönemin raporunu gönder</button>
                 {s.telegram.connected && (
                   <button className="btn-danger" onClick={() => disconnect.mutate(undefined, onErr)}>Bağlantıyı kaldır</button>
                 )}

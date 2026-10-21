@@ -105,7 +105,7 @@ def reminders(today: date) -> list[str]:
         prev = finance.add_months(finance.current_period(today), -1)
         t = finance.summary(prev, today=today)["totals"]
         plan = finance.plan(1, today=today)["months"][0]
-        msgs.append(f"📊 <b>{prev} özeti</b>\nGelir {_tl(t['income'])} · Gider {_tl(t['expense'])} · Net <b>{_tl(t['net'])}</b>"
+        msgs.append(finance.period_report(prev)
                     + (f"\nFaiz/ücret: {_tl(t['fees'])}" if t["fees"] else "")
                     + f"\n\nBu ay plan: gelir {_tl(plan['income'])}, gider {_tl(plan['expense'])} → net <b>{_tl(plan['net'])}</b>"
                     + "".join(f"\n{'✅' if m['status'] == 'tuttu' else '❌'} {g['name']}: {_tl(m['spent'])} / hedef {_tl(g['target'])}"

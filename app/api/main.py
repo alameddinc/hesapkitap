@@ -1384,6 +1384,17 @@ def telegram_test():
         raise HTTPException(400, str(e)) from e
 
 
+@app.post("/api/settings/telegram/report")
+def telegram_report(month: str | None = None):
+    """Biten (ya da verilen) dönemin raporunu şimdi gönder; Ayarlar'dan denemek için."""
+    m = month or finance.add_months(finance.current_period(), -1)
+    try:
+        telegram.send(finance.period_report(m))
+    except telegram.TelegramError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"month": m}
+
+
 @app.post("/api/settings/backup/now")
 def backup_now():
     try:
