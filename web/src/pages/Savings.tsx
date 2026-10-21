@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
+import PriceWatch from "../components/PriceWatch";
 import { useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
@@ -265,6 +266,8 @@ export default function Savings() {
           )}
         </ul>
       </section>
+
+      <PriceWatch />
 
       {adding && d && <GoalForm data={d} onClose={() => setAdding(false)} />}
       {downgrade && <DowngradeForm sub={downgrade} onClose={() => setDowngrade(null)} />}

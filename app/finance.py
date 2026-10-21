@@ -6,7 +6,7 @@ Ay kavramı:
 """
 import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from statistics import median
 
 from app import db
@@ -120,7 +120,7 @@ def _entry_row(e: dict) -> dict:
         "amount": e["amount"], "kind": e["kind"], "category": e["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
-        "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"),
+        "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
@@ -670,6 +670,14 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                     "detail": " · ".join(f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
                                          + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else "")
                                          for d in open_debt) + ".", "link": "transferler"})
+
+    # 2e) Fiyatı belirgin artan ürünler (fişlerden; son 120 gün içinde alınmış olanlar)
+    recent = (today - timedelta(days=120)).isoformat()
+    up = [p for p in db.price_history() if p["change_pct"] >= 10 and p["last_date"] >= recent][:4]
+    if up:
+        out.append({"level": "bilgi", "title": f"{len(up)} üründe zam var (fişlerinden)",
+                    "detail": " · ".join(f"{p['product']}: {_tl(p['first_price'])} → {_tl(p['last_price'])} (+%{p['change_pct']:g})"
+                                         for p in up) + ". Tasarruf → Fiyat takibi.", "link": "tasarruf"})
 
     # 2d) Bekleyen alacaklar (sana borçlu olanlar)
     open_rec = [d for d in db.list_debts(open_only=True) if d["direction"] == "alacak"]

@@ -181,6 +181,19 @@ CREATE TABLE IF NOT EXISTS splits (
     origin TEXT NOT NULL DEFAULT 'manual',   -- manual | kural | ai
     CHECK ((entry_id IS NULL) <> (txn_id IS NULL))
 );
+-- Fiş satırları: ürün fiyat takibi (kişisel enflasyon). Kayıt silinince satırları da gider.
+CREATE TABLE IF NOT EXISTS receipt_items (
+    id INTEGER PRIMARY KEY,
+    entry_id INTEGER REFERENCES entries(id) ON DELETE CASCADE,
+    purchased_at DATE NOT NULL,
+    merchant TEXT,
+    name TEXT NOT NULL,
+    product_key TEXT NOT NULL,         -- normalize edilmiş ad: aynı ürün farklı fişlerde eşleşsin
+    qty REAL NOT NULL DEFAULT 1,
+    amount REAL NOT NULL,
+    unit_price REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_receipt_items_key ON receipt_items(product_key);
 -- Kalem kuralları: fişteki satırda bu kelimelerden biri geçerse o satır bu kategoriye ayrılır
 CREATE TABLE IF NOT EXISTS item_rules (
     id INTEGER PRIMARY KEY,
@@ -271,7 +284,8 @@ MIGRATIONS = [
     ("entries", "debt_id", "INTEGER"),  # borç hareketi: gelir/gider sayılmaz, sadece eldeki parayı etkiler
     ("debts", "given_entry_id", "INTEGER"),
     ("debts", "written_off_at", "DATE"),
-    ("splits", "debt_id", "INTEGER"),           # ortak harcamada kişinin payı → alacak
+    ("splits", "debt_id", "INTEGER"),
+    ("entries", "location", "TEXT"),            # fişteki işyeri adresi (opsiyonel)           # ortak harcamada kişinin payı → alacak
     ("debts", "split_id", "INTEGER"),           # alacak bir harcamanın payından doğduysa (veriliş = o harcama)
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
 ]
@@ -566,7 +580,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id")
+                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location")
 
 
 def list_entries(month: str | None = None) -> list[dict]:
@@ -1876,3 +1890,55 @@ def update_account(acc_id: int, data: dict) -> bool:
 def delete_account(acc_id: int) -> bool:
     with connect() as c:
         return c.execute("DELETE FROM accounts WHERE id = ?", (acc_id,)).rowcount > 0
+
+
+# ---------------------------------------------------------------- fiyat takibi (fiş satırları)
+
+def product_key(name: str) -> str:
+    """'Latte 16 Oz' / 'LATTE 16OZ' → 'LATTE 16 OZ'. Fiyat/adet ekleri ve noktalama atılır."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    n = normalize(name)
+    n = _re.sub(r"(\d)([A-Z])", r"\1 \2", n)
+    n = _re.sub(r"[^A-Z0-9 ]", " ", n)
+    n = _re.sub(r"\b(ADT|ADET|X\d+|\d+X)\b", " ", n)
+    return " ".join(n.split())[:60]
+
+
+def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str) -> int:
+    n = 0
+    with connect() as c:
+        c.execute("DELETE FROM receipt_items WHERE entry_id = ?", (entry_id,))
+        for it in items:
+            amt, name = it.get("amount"), (it.get("name") or "").strip()
+            qty = it.get("qty") or 1
+            if not name or not isinstance(amt, (int, float)) or amt <= 0 or not product_key(name):
+                continue
+            c.execute("INSERT INTO receipt_items (entry_id, purchased_at, merchant, name, product_key, qty, amount, unit_price) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      (entry_id, on, merchant, name[:60], product_key(name), qty, round(amt, 2), round(amt / qty, 2)))
+            n += 1
+    return n
+
+
+def price_history(min_count: int = 2) -> list[dict]:
+    """Birden fazla kez alınan ürünler: ilk ve son birim fiyat, değişim."""
+    with connect() as c:
+        items = rows(c.execute("SELECT * FROM receipt_items ORDER BY purchased_at, id"))
+    by: dict[str, list[dict]] = {}
+    for it in items:
+        by.setdefault(it["product_key"], []).append(it)
+    out = []
+    for key, xs in by.items():
+        if len(xs) < min_count:
+            continue
+        first, last = xs[0], xs[-1]
+        out.append({"product": last["name"], "key": key, "merchant": last["merchant"], "count": len(xs),
+                    "first_price": first["unit_price"], "first_date": first["purchased_at"],
+                    "last_price": last["unit_price"], "last_date": last["purchased_at"],
+                    "change_pct": round((last["unit_price"] - first["unit_price"]) / first["unit_price"] * 100, 1)
+                    if first["unit_price"] else 0.0,
+                    "history": [{"date": x["purchased_at"], "price": x["unit_price"], "merchant": x["merchant"]} for x in xs]})
+    return sorted(out, key=lambda x: -abs(x["change_pct"]))
