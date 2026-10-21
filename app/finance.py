@@ -975,3 +975,35 @@ def period_report(month: str) -> str:
     if nw["accounts"]:
         lines.append(f"🏦 Net durum {_tl(nw['net'])} (bankada {_tl(nw['cash'])})")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- birikim hedefleri
+
+def targets(today: date | None = None) -> list[dict]:
+    """Her hedef için: biriken (başlangıç dönemi dahil, dönemlerin eldeki para artışı + başta ayrılan), kalan,
+    ayda gereken ve son 3 tamamlanmış dönemin ortalamasıyla tahmini ulaşma ayı."""
+    today = today or date.today()
+    cur = current_period(today)
+    all_rows = transactions(None)
+    by_month: dict[str, list] = defaultdict(list)
+    for r in all_rows:
+        by_month[r["month"]].append(r)
+    net_of = {m: _totals(rs)["cash_net"] for m, rs in by_month.items()}
+    done = [m for m in sorted(net_of) if m < cur][-3:]
+    pace = _round(sum(net_of[m] for m in done) / len(done)) if done else 0.0
+    out = []
+    for t in db.list_targets():
+        saved = _round(t["already"] + sum(v for m, v in net_of.items() if t["start_month"] <= m <= cur))
+        left = _round(max(0.0, t["amount"] - saved))
+        dl = date.fromisoformat(t["deadline"])
+        months_left = max(1, (dl.year - today.year) * 12 + dl.month - today.month)
+        need = _round(left / months_left)
+        eta = None
+        if left <= 0:
+            eta = cur
+        elif pace > 0:
+            eta = add_months(cur, int(-(-left // pace)))
+        out.append({**t, "saved": saved, "left": left, "pct": min(100.0, round(saved / t["amount"] * 100, 1)) if t["amount"] else 0,
+                    "months_left": months_left, "need_per_month": need, "pace": pace, "eta": eta,
+                    "on_track": left <= 0 or (pace > 0 and pace >= need)})
+    return out

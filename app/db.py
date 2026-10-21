@@ -194,6 +194,16 @@ CREATE TABLE IF NOT EXISTS receipt_items (
     unit_price REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_receipt_items_key ON receipt_items(product_key);
+-- Birikim hedefleri: "Haziran'a kadar 100 bin". İlerleme = hedef konduğu dönemden beri eldeki paradaki artış.
+CREATE TABLE IF NOT EXISTS saving_targets (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    amount REAL NOT NULL CHECK (amount > 0),
+    deadline DATE NOT NULL,
+    start_month TEXT NOT NULL,
+    already REAL NOT NULL DEFAULT 0,        -- hedefe başlarken zaten ayrılmış tutar
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- Kalem kuralları: fişteki satırda bu kelimelerden biri geçerse o satır bu kategoriye ayrılır
 CREATE TABLE IF NOT EXISTS item_rules (
     id INTEGER PRIMARY KEY,
@@ -1942,3 +1952,21 @@ def price_history(min_count: int = 2) -> list[dict]:
                     if first["unit_price"] else 0.0,
                     "history": [{"date": x["purchased_at"], "price": x["unit_price"], "merchant": x["merchant"]} for x in xs]})
     return sorted(out, key=lambda x: -abs(x["change_pct"]))
+
+
+# ---------------------------------------------------------------- birikim hedefleri
+
+def list_targets() -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM saving_targets ORDER BY deadline"))
+
+
+def create_target(name: str, amount: float, deadline: str, start_month: str, already: float = 0) -> int:
+    with connect() as c:
+        return c.execute("INSERT INTO saving_targets (name, amount, deadline, start_month, already) VALUES (?, ?, ?, ?, ?)",
+                         (name.strip(), amount, deadline, start_month, already)).lastrowid
+
+
+def delete_target(tid: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM saving_targets WHERE id = ?", (tid,)).rowcount > 0

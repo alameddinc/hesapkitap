@@ -714,6 +714,30 @@ def propose_split(body: SplitProposalIn):
     return db.propose_split([i for i in body.items if isinstance(i, dict)], body.category, body.total)
 
 
+class TargetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    amount: float = Field(gt=0)
+    deadline: date
+    already: float = Field(default=0, ge=0)
+
+
+@app.get("/api/targets")
+def targets():
+    return finance.targets()
+
+
+@app.post("/api/targets")
+def create_target(body: TargetIn):
+    return {"id": db.create_target(body.name, body.amount, body.deadline.isoformat(), finance.current_period(), body.already)}
+
+
+@app.delete("/api/targets/{tid}")
+def delete_target(tid: int):
+    if not db.delete_target(tid):
+        raise HTTPException(404, "Hedef yok")
+    return {"ok": True}
+
+
 @app.get("/api/prices")
 def prices():
     """Fişlerden ürün fiyat takibi: aynı ürünün ilk ve son birim fiyatı."""
