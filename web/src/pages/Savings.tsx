@@ -3,6 +3,7 @@ import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } fr
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import PriceWatch from "../components/PriceWatch";
+import Targets from "../components/Targets";
 import { useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
@@ -158,6 +159,8 @@ export default function Savings() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Tasarruf</h1>
+
+      <Targets />
 
       {d && (
         <div className="card flex items-center gap-4 p-4">
