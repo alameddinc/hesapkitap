@@ -891,3 +891,29 @@ def simulate_purchase(amount: float, installments: int, monthly_rate: float = 0.
         "tight_with_estimate": [m["month"] for m in est_tight],
         "single_payment_month": start,
     }
+
+
+# ---------------------------------------------------------------- net varlık (hesaplar tamponu)
+
+def net_worth(today: date | None = None) -> dict:
+    """Bankada/nakitte ne var, kartlara ne borçlusun, alacak/borç → bugünkü net durum."""
+    today = today or date.today()
+    accounts = db.list_accounts()
+    cash = sum(a["balance"] for a in accounts)
+    cards = []
+    for p in payables(today):
+        if p["type"] == "statement" and p["status"] != "odendi":
+            cards.append({"title": p["title"], "amount": _round(p["amount"] - (p["paid_amount"] or 0)), "due_date": p["due_date"],
+                          "estimated": False})
+        elif p["type"] == "estimate":
+            cards.append({"title": p["title"], "amount": p["amount"], "due_date": p["due_date"], "estimated": True})
+    card_debt = sum(c["amount"] for c in cards if not c["estimated"])
+    card_est = sum(c["amount"] for c in cards if c["estimated"])
+    open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
+    receivable = sum(d["remaining"] for d in open_try if d["direction"] == "alacak")
+    payable = sum(d["remaining"] for d in open_try if d["direction"] == "borc")
+    stale = [a["name"] for a in accounts if a["as_of"] and (today - date.fromisoformat(a["as_of"])).days > 35]
+    return {"accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
+            "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
+            "net": _round(cash - card_debt + receivable - payable),
+            "net_after_estimates": _round(cash - card_debt - card_est + receivable - payable), "stale": stale}

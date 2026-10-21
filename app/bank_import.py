@@ -179,7 +179,7 @@ def finalize(rows: list[dict], owners: list[str]) -> list[dict]:
         # bakiye (zincirle doğrulanmış) hareketi tek başına tanımlar, aynı PDF tekrar yüklenince çift kayıt olmaz
         bal = r.get("balance")
         out.append({"date": d.isoformat(), "description": r["description"][:500], "amount": round(r["amount"], 2),
-                    "type": classify(r["description"], r["amount"], owners),
+                    "type": classify(r["description"], r["amount"], owners), "balance": bal,
                     "hash": row_hash(d, "" if bal is not None else r["description"], r["amount"], f"{bal:.2f}" if bal is not None else "")})
     return out
 
@@ -202,7 +202,8 @@ def parse(rows: list[list[str]], mapping: dict, header_row: int, owners: list[st
         if not d or amt is None or amt == 0 or not desc:
             continue
         out.append({"date": d.isoformat(), "description": desc[:500], "amount": round(amt, 2),
-                    "type": classify(desc, amt, owners), "hash": row_hash(d, desc, amt, get("balance"))})
+                    "type": classify(desc, amt, owners), "hash": row_hash(d, desc, amt, get("balance")),
+                    "balance": parse_amount(get("balance")) if get("balance") else None})
     return out
 
 
@@ -280,3 +281,20 @@ def transfer_note(desc: str) -> str | None:
     m = re.match(r"\s*(?:FAST ANLIK ODEME|GONDERILEN HAVALE|FAST ANLIK ÖDEME|GÖNDERİLEN HAVALE)\s+(.+?)\s*(\(|/|$)", desc, re.I)
     note = m.group(1).strip() if m else None
     return note if note and not re.match(r"TR\d", note) else None
+
+
+_SHORT_BANKS = (("HALK", "Halkbank"), ("VAKIF", "VakıfBank"), ("KUVEYT", "Kuveyt Türk"), ("ZIRAAT", "Ziraat"),
+                ("GARANTI", "Garanti BBVA"), ("AKBANK", "Akbank"), ("YAPI VE KREDI", "Yapı Kredi"), ("YAPI KREDI", "Yapı Kredi"),
+                ("IS BANK", "İş Bankası"), ("ISBANK", "İş Bankası"), ("QNB", "QNB"), ("FINANSBANK", "QNB"),
+                ("DENIZ", "DenizBank"), ("ENPARA", "Enpara"), ("ING", "ING"), ("TEB", "TEB"), ("ALBARAKA", "Albaraka"),
+                ("EMLAK", "Emlak Katılım"), ("ZIRAAT KATILIM", "Ziraat Katılım"), ("VAKIF KATILIM", "Vakıf Katılım"),
+                ("PAPARA", "Papara"), ("ODEABANK", "Odeabank"), ("FIBABANKA", "Fibabanka"), ("SEKERBANK", "Şekerbank"))
+
+
+def short_bank(name: str | None) -> str:
+    """'Türkiye Halk Bankası A.Ş' → 'Halkbank', 'KUVEYT TÜRK KATILIM BANKASI A.Ş.' → 'Kuveyt Türk'."""
+    n = normalize(name or "")
+    for key, short in sorted(_SHORT_BANKS, key=lambda kv: -len(kv[0])):  # en uzun eşleşme (Ziraat Katılım > Ziraat)
+        if re.search(rf"\b{key}", n):
+            return short
+    return (name or "").strip() or "Banka hesabı"

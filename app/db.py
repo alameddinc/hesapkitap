@@ -188,6 +188,16 @@ CREATE TABLE IF NOT EXISTS item_rules (
     category TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+-- Hesaplar (tampon): her hesabın son bilinen bakiyesi. Döküm yüklenince kendiliğinden güncellenir; nakit/diğer elle.
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'banka',      -- banka | nakit | diger
+    balance REAL NOT NULL DEFAULT 0,
+    as_of DATE,
+    source TEXT NOT NULL DEFAULT 'elle',     -- dokum | elle
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- Kişi bazında ayar: kategori ve borç takibi
 CREATE TABLE IF NOT EXISTS counterparties (
     name TEXT PRIMARY KEY,
@@ -1138,6 +1148,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
 
     stats = {"gelir": 0, "gider": 0, "kart_odemesi": 0, "virman": 0, "tekrar": 0, "eslesen_elle": 0,
              "odendi_isaretlenen": 0, "maas": 0}
+    # hesabın son bakiyesi (tampon): dökümdeki en son satırın bakiyesi
+    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
+    if with_bal:
+        d_, _, bal = max(with_bal)
+        from app.bank_import import short_bank
+
+        set_account_balance(short_bank(account), bal, d_, source="dokum")
     with connect() as c:
         rules = load_rules(c)
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
@@ -1785,3 +1802,37 @@ def propose_split(items: list[dict], category: str | None, total: float | None) 
         return {"parts": [], "category": None}
     return {"parts": [{"category": c, "amount": round(g["amount"], 2), "description": ", ".join(g["names"])[:80],
                        "origin": g["origin"]} for c, g in groups.items()], "category": None}
+
+
+# ---------------------------------------------------------------- hesaplar (bakiye tamponu)
+
+def set_account_balance(name: str, balance: float, as_of: str, source: str = "elle", kind: str = "banka") -> None:
+    """Döküm daha eski bir tarihe aitse mevcut (daha yeni) bakiyeyi ezmez."""
+    with connect() as c:
+        cur = c.execute("SELECT as_of FROM accounts WHERE name = ?", (name,)).fetchone()
+        if cur and cur["as_of"] and source == "dokum" and cur["as_of"] > as_of:
+            return
+        c.execute("""INSERT INTO accounts (name, kind, balance, as_of, source, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(name) DO UPDATE SET balance = excluded.balance, as_of = excluded.as_of,
+                     source = excluded.source, updated_at = CURRENT_TIMESTAMP""",
+                  (name, kind, round(balance, 2), as_of, source))
+
+
+def list_accounts() -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM accounts ORDER BY kind, name"))
+
+
+def update_account(acc_id: int, data: dict) -> bool:
+    data = {k: v for k, v in data.items() if k in ("name", "kind", "balance", "as_of")}
+    if not data:
+        return False
+    data["source"] = "elle"
+    with connect() as c:
+        return c.execute(f"UPDATE accounts SET {', '.join(f'{k} = ?' for k in data)}, updated_at = CURRENT_TIMESTAMP "
+                         "WHERE id = ?", (*data.values(), acc_id)).rowcount > 0
+
+
+def delete_account(acc_id: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM accounts WHERE id = ?", (acc_id,)).rowcount > 0
