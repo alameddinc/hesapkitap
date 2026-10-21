@@ -204,7 +204,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
                   <option value="">Hangi kart?</option>
                   {wallets.data?.map((w) => <option key={w.id} value={w.id}>{w.name} · {tl(w.current)}</option>)}
                 </select>
-                {!wallets.data?.length && <p className="mt-1 text-xs text-amber-600">Önce Özet → Net durum → Kartlar'dan kartını ekle.</p>}
+                {!wallets.data?.length && <p className="mt-1 text-xs text-amber-600">Önce Diğer → Hesaplar ve kartlar'dan kartını ekle.</p>}
                 {wallet && parseAmount(amount) > wallet.current + 0.005 && !editingEntry && (
                   <p className="mt-1 text-xs text-amber-600">{wallet.name} bakiyesi ({tl(wallet.current)}) bu harcamaya yetmiyor; kalanı başka yoldan mı ödedin?</p>
                 )}

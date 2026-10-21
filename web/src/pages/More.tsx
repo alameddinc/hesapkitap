@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, ChevronRight, HandCoins, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, HandCoins, Landmark, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
 import { useUI } from "../ui";
 
 export default function More() {
@@ -19,6 +19,7 @@ export default function More() {
       <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
         <Item icon={<Sheet size={18} />} label="Tablo: filtreler, pivot, Excel" onClick={() => ui.go("tablo")} />
         <Item icon={<PiggyBank size={18} />} label="Tasarruf: abonelikler, kısma hedefleri" onClick={() => ui.go("tasarruf")} />
+        <Item icon={<Landmark size={18} />} label="Hesaplar ve kartlar: banka, nakit, yemek/hediye" onClick={() => ui.go("hesaplar")} />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} />
         <Item icon={<ArrowLeftRight size={18} />} label="Transferler: kime ne gitti" onClick={() => ui.go("transferler")} />
         <Item icon={<TagIcon size={18} />} label="Fiyatlar: fişlerden ürün fiyat takibi" onClick={() => ui.go("fiyatlar")} />
