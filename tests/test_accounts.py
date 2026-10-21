@@ -37,3 +37,16 @@ def test_net_worth_with_manual_cash_cards_and_debts(client, tmpdb):
     client.patch(f"/api/accounts/{aid}", json={"balance": 900})
     assert next(a for a in tmpdb.list_accounts() if a["id"] == aid)["balance"] == 900
     assert client.delete(f"/api/accounts/{aid}").json()["ok"]
+
+
+def test_net_worth_lists_all_credit_cards_and_unknown_banks(client, tmpdb):
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt, paid_amount, paid_at) "
+                  "VALUES ('a', 'Örnek', '1111***2222', '2026-10-13', '2026-10-23', 5000, 5000, '2026-10-20')")
+    tmpdb.import_bank_rows([{"date": "2026-10-01", "description": "GIDEN FAST - X TARAFINDAN GÖNDERILEN", "amount": -10.0,
+                             "type": "virman", "hash": "v"}], account="Türkiye Halk Bankası A.Ş")
+    nw = finance.net_worth(date(2026, 10, 21))
+    assert [(c["title"], c["unpaid"], c["paid_at"]) for c in nw["credit_cards"]] == [("Örnek 1111***2222", 0, "2026-10-20")]
+    assert nw["unknown_banks"] == ["Halkbank"]
+    tmpdb.set_account_balance("Halkbank", 100, "2026-10-21", "elle")
+    assert finance.net_worth(date(2026, 10, 21))["unknown_banks"] == []

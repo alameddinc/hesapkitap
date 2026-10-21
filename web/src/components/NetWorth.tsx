@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Landmark, Plus, Trash2, Wallet } from "lucide-react";
+import { ChevronDown, ChevronRight, CreditCard, Landmark, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -10,7 +10,9 @@ interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger";
 interface NW {
   accounts: Account[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
-  wallets: { id: number; name: string; balance: number }[]; in_wallets: number;
+  wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
+  credit_cards: { title: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
+    unpaid: number; next_estimate: number | null; next_due: string | null }[];
   stale: string[];
 }
 
@@ -33,12 +35,14 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
   const [kind, setKind] = useState<"banka" | "nakit" | "diger">("banka");
   const add = useSave(() => json("POST", "/api/accounts", { name, kind, balance: parseAmount(bal) }),
     () => { ui.toast("Hesap eklendi"); setAdding(false); setBal(""); });
+  const addKnown = useSave((a: { name: string; balance: number }) => json("POST", "/api/accounts", { name: a.name, kind: "banka", balance: a.balance }),
+    () => ui.toast("Bakiye kaydedildi"));
   const edit = useSave(({ id, balance }: { id: number; balance: number }) => json("PATCH", `/api/accounts/${id}`, { balance }),
     () => ui.toast("Bakiye güncellendi"));
   const del = useSave((id: number) => json("DELETE", `/api/accounts/${id}`), () => ui.toast("Silindi"));
   const d = q.data;
   if (!d) return null;
-  const empty = !d.accounts.length && !d.wallets.length;
+  const empty = !d.accounts.length && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
   if (compact) {
     return (
       <button className="card flex w-full items-center gap-3 p-4 text-left" onClick={() => ui.go("hesaplar")}>
@@ -52,6 +56,9 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
             <span className="block text-xs text-stone-500">
               Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
             </span>
+            {d.unknown_banks.length > 0 && (
+              <span className="block text-xs text-amber-600">Bakiyesi girilmemiş: {d.unknown_banks.join(", ")}</span>
+            )}
           </span>
         )}
         <ChevronRight size={16} className="shrink-0 text-stone-400" />
@@ -74,46 +81,84 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
       </button>
       {open && (
         <div className="space-y-3 border-t border-stone-100 px-4 pt-3 pb-4 dark:border-stone-800">
-          <ul className="space-y-1.5 text-sm">
-            {d.accounts.map((a) => (
-              <li key={a.id} className="flex items-center gap-2">
-                {a.kind === "banka" ? <Landmark size={14} className="text-stone-400" /> : <Wallet size={14} className="text-stone-400" />}
-                <span className="flex-1">
-                  {a.name}
-                  <span className={cx("ml-1 text-xs", d.stale.includes(a.name) ? "text-amber-600" : "text-stone-500")}>
-                    {a.as_of ? dateTR(a.as_of) : ""}{a.source === "dokum" ? " · dökümden" : " · elle"}
-                    {d.stale.includes(a.name) && " · eski, yeni döküm yükle"}
+          <div>
+            <div className="mb-1 text-xs font-medium text-stone-500">Banka ve nakit</div>
+            <ul className="space-y-1.5 text-sm">
+              {d.accounts.map((a) => (
+                <li key={a.id} className="flex items-center gap-2">
+                  {a.kind === "banka" ? <Landmark size={14} className="text-stone-400" /> : <Wallet size={14} className="text-stone-400" />}
+                  <span className="flex-1">
+                    {a.name}
+                    <span className={cx("ml-1 text-xs", d.stale.includes(a.name) ? "text-amber-600" : "text-stone-500")}>
+                      {a.as_of ? dateTR(a.as_of) : ""}{a.source === "dokum" ? " · dökümden" : " · elle"}
+                      {d.stale.includes(a.name) && " · eski, yeni döküm yükle"}
+                    </span>
                   </span>
-                </span>
-                <button className="tabular-nums underline decoration-dotted" title="Bakiyeyi düzelt"
-                  onClick={() => {
-                    const v = window.prompt(`${a.name} bakiyesi (bugün):`, String(a.balance).replace(".", ","));
-                    if (v != null && !Number.isNaN(parseAmount(v))) edit.mutate({ id: a.id, balance: parseAmount(v) });
-                  }}>{tl(a.balance)}</button>
-                <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
-                  onClick={() => window.confirm(`${a.name} silinsin mi?`) && del.mutate(a.id)}><Trash2 size={13} /></button>
-              </li>
-            ))}
-            {d.cards.filter((c) => !c.estimated).map((c) => (
-              <li key={c.title + c.due_date} className="flex justify-between gap-2 text-stone-600 dark:text-stone-400">
-                <span>{c.title} <span className="text-xs">· son ödeme {dateTR(c.due_date)}</span></span>
-                <span className="tabular-nums text-red-600">−{tl(c.amount)}</span>
-              </li>
-            ))}
-            {d.receivable > 0 && <li className="flex justify-between"><span>Alacakların</span><span className="tabular-nums text-green-700">+{tl(d.receivable)}</span></li>}
-            {d.payable > 0 && <li className="flex justify-between"><span>Borçların</span><span className="tabular-nums text-red-600">−{tl(d.payable)}</span></li>}
-          </ul>
-          {adding ? (
-            <div className="flex gap-2">
-              <select className="input w-28" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-                <option value="banka">Banka</option><option value="nakit">Nakit</option><option value="diger">Diğer</option>
-              </select>
-              <input className="input" placeholder={kind === "banka" ? "ör. Halkbank" : "ör. Cüzdan"} value={name} onChange={(e) => setName(e.target.value)} />
-              <input className="input w-32 text-right" inputMode="decimal" placeholder="Bakiye" value={bal} onChange={(e) => setBal(e.target.value)} />
-              <button className="btn-primary" disabled={!name.trim() || !(parseAmount(bal) >= 0)} onClick={() => add.mutate(undefined)}>Ekle</button>
+                  <button className="tabular-nums underline decoration-dotted" title="Bakiyeyi düzelt"
+                    onClick={() => {
+                      const v = window.prompt(`${a.name} bakiyesi (bugün):`, String(a.balance).replace(".", ","));
+                      if (v != null && !Number.isNaN(parseAmount(v))) edit.mutate({ id: a.id, balance: parseAmount(v) });
+                    }}>{tl(a.balance)}</button>
+                  <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
+                    onClick={() => window.confirm(`${a.name} silinsin mi?`) && del.mutate(a.id)}><Trash2 size={13} /></button>
+                </li>
+              ))}
+              {d.unknown_banks.map((b) => (
+                <li key={b} className="flex items-center gap-2">
+                  <Landmark size={14} className="text-stone-400" />
+                  <span className="flex-1">{b} <span className="text-xs text-amber-600">· bakiye bilinmiyor</span></span>
+                  <button className="btn-ghost border border-stone-300 px-2 py-0.5 text-xs dark:border-stone-700"
+                    onClick={() => {
+                      const v = window.prompt(`${b} bakiyesi (bugün):`);
+                      if (v != null && !Number.isNaN(parseAmount(v))) addKnown.mutate({ name: b, balance: parseAmount(v) });
+                    }}>Bakiye gir</button>
+                </li>
+              ))}
+            </ul>
+            {adding ? (
+              <div className="mt-2 flex gap-2">
+                <select className="input w-28" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+                  <option value="banka">Banka</option><option value="nakit">Nakit</option><option value="diger">Diğer</option>
+                </select>
+                <input className="input" placeholder={kind === "banka" ? "ör. Halkbank" : "ör. Cüzdan"} value={name} onChange={(e) => setName(e.target.value)} />
+                <input className="input w-32 text-right" inputMode="decimal" placeholder="Bakiye" value={bal} onChange={(e) => setBal(e.target.value)} />
+                <button className="btn-primary" disabled={!name.trim() || !(parseAmount(bal) >= 0)} onClick={() => add.mutate(undefined)}>Ekle</button>
+              </div>
+            ) : (
+              <button className="btn-ghost mt-1 px-2 py-1 text-xs" onClick={() => setAdding(true)}><Plus size={14} /> Banka / nakit hesabı ekle</button>
+            )}
+          </div>
+
+          {d.credit_cards.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs font-medium text-stone-500">Kredi kartları</div>
+              <ul className="space-y-2 text-sm">
+                {d.credit_cards.map((c) => (
+                  <li key={c.title} className="flex items-start gap-2">
+                    <CreditCard size={14} className="mt-0.5 shrink-0 text-stone-400" />
+                    <span className="min-w-0 flex-1">
+                      {c.title}
+                      <span className="block text-xs text-stone-500">
+                        son ekstre {dateTR(c.last_period_end)} · {tl(c.last_total)}
+                        {c.unpaid > 0 ? <span className="text-red-600"> · ödenmedi, son ödeme {c.last_due ? dateTR(c.last_due) : "?"}</span>
+                          : c.paid_at ? ` · ödendi ${dateTR(c.paid_at)}` : ""}
+                        {c.next_estimate != null && ` · sonraki ~${tl(c.next_estimate)}${c.next_due ? ` (son ödeme ${dateTR(c.next_due)})` : ""}`}
+                      </span>
+                    </span>
+                    <span className={cx("shrink-0 tabular-nums", c.unpaid > 0 ? "text-red-600" : "text-stone-500")}>
+                      {c.unpaid > 0 ? `−${tl(c.unpaid)}` : "borç yok"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
-          ) : (
-            <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setAdding(true)}><Plus size={14} /> Banka / nakit hesabı ekle</button>
+          )}
+
+          {(d.receivable > 0 || d.payable > 0) && (
+            <ul className="space-y-1 text-sm">
+              {d.receivable > 0 && <li className="flex justify-between"><span>Alacakların</span><span className="tabular-nums text-green-700">+{tl(d.receivable)}</span></li>}
+              {d.payable > 0 && <li className="flex justify-between"><span>Borçların</span><span className="tabular-nums text-red-600">−{tl(d.payable)}</span></li>}
+            </ul>
           )}
           <Wallets />
           {d.card_estimated > 0 && (

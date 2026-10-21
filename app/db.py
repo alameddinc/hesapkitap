@@ -2190,3 +2190,11 @@ def auto_load_wallets(today) -> int:
                           "wallet_id": r["wallet_id"], "note": "Otomatik yükleme"})
             n += 1
     return n
+
+
+def imported_bank_names() -> list[str]:
+    """Hesap dökümü yüklenmiş bankalar (bakiyesi kaydedilmemiş olsa da): virman ve kart ödemesi kayıtlarından."""
+    with connect() as c:
+        return [r[0] for r in c.execute(
+            "SELECT DISTINCT account FROM own_transfers WHERE COALESCE(account, '') <> '' "
+            "UNION SELECT DISTINCT account FROM card_payments WHERE COALESCE(account, '') <> ''")]
