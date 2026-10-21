@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
@@ -9,6 +9,7 @@ import { useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
 import SplitEditor from "./SplitEditor";
+import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 
@@ -25,6 +26,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   onSaved?: (msg: string) => void;
 }) {
   const meta = useMeta();
+  const qc = useQueryClient();
   const editingEntry = row?.source === "manual" ? row : undefined;
   const [kind, setKind] = useState<"gelir" | "gider">(rec?.kind ?? (row?.kind as "gelir" | "gider") ?? draft?.kind ?? "gider");
   const [description, setDescription] = useState(rec?.description ?? row?.description ?? draft?.description ?? "");
@@ -40,6 +42,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => fetch("/api/wallets").then((r) => r.json() as Promise<
     { id: number; name: string; card_type: string; current: number }[]>) });
   const [walletId, setWalletId] = useState<number | null>(row?.wallet_id ?? null);
+  const [accountId, setAccountId] = useState<number | null>(rec ? rec.account_id ?? null : row ? row.account_id ?? null : lastAccount());
   useEffect(() => {  // fişte yazan kart (Multinet…) ya da tek yemek kartı
     if (walletId || payment !== "kart" || !wallets.data?.length) return;
     const hint = fold(draft?.wallet_hint ?? "");
@@ -91,7 +94,11 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     const g = parseAmount(gross);
     const grossMode = isGross && kind === "gelir" && (isRecurring || !!rec);
     if (grossMode && !(g > 0)) throw new Error("Brüt tutar gerekli");
+    // hesap: gelirde her zaman; giderde nakit/banka kartı ve havalede (kredi kartı / yemek kartında hesap yok)
+    const usesAccount = kind === "gelir" || isRecurring || !!rec || payment === "nakit" || payment === "havale";
+    if (usesAccount) rememberAccount(accountId);
     const common = { description: description.trim(), amount: grossMode ? 0 : amt, kind, category: category || null, note: note || null,
+      account_id: usesAccount ? accountId : null,
       ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
     if (kind === "gider" && payment === "kart" && !walletId) throw new Error("Hangi karttan ödendiğini seç");
     const pay = kind === "gider" && !isRecurring && !rec ? { payment, wallet_id: payment === "kart" ? walletId : null } : {};
@@ -282,6 +289,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             </div>
           </div>
         )}
+        {(kind === "gelir" || isRecurring || !!rec || payment === "nakit" || payment === "havale") && (
+          <AccountSelect id="e-acc" value={accountId} onChange={setAccountId}
+            label={kind === "gelir" ? "Hangi hesaba girdi?" : "Hangi hesaptan çıktı?"} />
+        )}
         <div>
           <label className="label" htmlFor="e-note">Not</label>
           <input id="e-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -321,6 +332,21 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
               Ayrılan {tl(parts.reduce((a, p) => a + (parseAmount(p.amount) || 0), 0))} · kalan{" "}
               {tl((parseAmount(amount) || 0) - parts.reduce((a, p) => a + (parseAmount(p.amount) || 0), 0))}
             </p>
+          </div>
+        )}
+        {editingEntry && kind === "gelir" && !editingEntry.recurring_id && (
+          <div className="rounded-lg border border-stone-200 p-3 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-300">
+            Bu aslında bir hesabın <b>başlangıç bakiyesi</b> mi? (gelir değil) Yukarıdan hesabı seçip çevir; gelirden çıkar,
+            o tarihteki hesap bakiyesi olur.
+            <button type="button" className="btn-ghost mt-2 block border border-stone-300 px-2 py-1 dark:border-stone-700" disabled={!accountId}
+              onClick={async () => {
+                const r = await fetch(`/api/entries/${editingEntry.id}/to-opening`, { method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ account_id: accountId }) });
+                const j = await r.json();
+                if (!r.ok) return setErr(j.detail ?? "Çevrilemedi");
+                qc.invalidateQueries();
+                done(j.message);
+              }}>{accountId ? "Hesap bakiyesine çevir" : "Önce hesabı seç"}</button>
           </div>
         )}
         {editingEntry && kind === "gider" && !editingEntry.debt_id && !editingEntry.linked && (

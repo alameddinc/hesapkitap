@@ -2,6 +2,7 @@ import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, maskText, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
+import AccountSelect, { useAccounts } from "./AccountSelect";
 import CategoryPicker from "./CategoryPicker";
 import { useSave } from "./hooks";
 import Segmented from "./Segmented";
@@ -19,6 +20,8 @@ export interface Debt {
   note: string | null;
   settled_at: string | null;
   written_off_at: string | null;
+  account_id: number | null;
+  payments: { id: number; amount: number; paid_at: string; entry_id: number | null; account_id: number | null }[];
 }
 
 // Birimler: TL, döviz, altın; listede yoksa serbest yazılır ("22 ayar bilezik")
@@ -59,11 +62,42 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
   const writeOff = useSave((d: Debt) => json("POST", `/api/debts/${d.id}/write-off`, { on: today() }),
     () => ui.toast("Kapatıldı; kalan bugünün gider/gelirine yazıldı"));
 
+  const accounts = useAccounts();
+  const accName = (id: number | null) => accounts.data?.accounts.find((a) => a.id === id)?.name;
+  const setAcc = useSave(({ url, id }: { url: string; id: number | null }) => json("PATCH", url, { account_id: id }),
+    () => ui.toast("Hesap kaydedildi"));
+  const [openId, setOpenId] = useState<number | null>(null);
+
+  const Accounts = ({ d }: { d: Debt }) => (
+    <div className="mt-1 space-y-1 rounded-md bg-stone-50 p-2 text-xs dark:bg-stone-800/50">
+      {(
+        <label className="flex items-center gap-2">
+          <span className="w-28 shrink-0 text-stone-500">{d.direction === "alacak" ? "Verildiği hesap" : "Geldiği hesap"}</span>
+          <select className="input py-1" value={d.account_id ?? ""} onChange={(e) => setAcc.mutate({ url: `/api/debts/${d.id}`, id: e.target.value ? Number(e.target.value) : null })}>
+            <option value="">Nakit / belirtme</option>
+            {accounts.data?.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
+      )}
+      {d.payments.filter((p) => !p.entry_id).map((p) => (
+        <label key={p.id} className="flex items-center gap-2">
+          <span className="w-28 shrink-0 text-stone-500">{dateTR(p.paid_at)} · {fmtAsset(p.amount, d.asset)}</span>
+          <select className="input py-1" value={p.account_id ?? ""} onChange={(e) => setAcc.mutate({ url: `/api/debt-payments/${p.id}`, id: e.target.value ? Number(e.target.value) : null })}>
+            <option value="">Nakit / belirtme</option>
+            {accounts.data?.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </label>
+      ))}
+      {d.payments.some((p) => p.entry_id) && <p className="text-stone-500">Havaleyle bağlanan ödemelerin hesabı o kayıttan gelir.</p>}
+    </div>
+  );
+
   const Row = ({ d }: { d: Debt }) => {
     const late = !d.settled_at && d.due_date && d.due_date < today();
     return (
-      <li className={cx("flex items-center gap-3 py-2", d.settled_at && "opacity-60")}>
-        <div className="min-w-0 flex-1">
+      <li className={cx("py-2", d.settled_at && "opacity-60")}>
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => d.asset === "TRY" && setOpenId(openId === d.id ? null : d.id)}>
           <div className="text-sm">
             <b>{maskText(d.person)}</b>{" "}
             <span className={cx("rounded-full px-1.5 py-0.5 text-xs",
@@ -78,6 +112,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
             {d.paid_amount > 0 && !d.settled_at && ` · ${fmtAsset(d.paid_amount, d.asset)} ödendi`}
             {d.settled_at && (d.written_off_at ? ` · vazgeçildi ${dateTR(d.written_off_at)}` : ` · kapandı ${dateTR(d.settled_at)}`)}
             {d.note && ` · ${d.note}`}
+            {d.asset === "TRY" && (accName(d.account_id) ? ` · ${accName(d.account_id)}` : " · hesap?")}
           </div>
         </div>
         <span className="text-right text-sm font-semibold tabular-nums">{fmtAsset(d.settled_at ? d.amount : d.remaining, d.asset)}</span>
@@ -101,6 +136,8 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
           onClick={() => window.confirm("Kayıt silinsin mi? Bağlı havaleler yeniden normal gelir/gider sayılır.") && del.mutate(d.id)}>
           <Trash2 size={14} />
         </button>
+      </div>
+      {openId === d.id && <Accounts d={d} />}
       </li>
     );
   };
@@ -143,6 +180,7 @@ function DebtForm({ people, onDone }: { people: string[]; onDone: () => void }) 
   const [date, setDate] = useState(today());
   const [due, setDue] = useState("");
   const [note, setNote] = useState("");
+  const [accountId, setAccountId] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const save = useSave(async () => {
     const a = parseAmount(amount);
@@ -150,7 +188,7 @@ function DebtForm({ people, onDone }: { people: string[]; onDone: () => void }) 
     const unit = asset === "_" ? custom.trim() : asset;
     if (!unit) throw new Error("Birim yaz (ör. 22 ayar bilezik)");
     return json("POST", "/api/debts", { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
-      due_date: due || null, note: note.trim() || null });
+      due_date: due || null, note: note.trim() || null, account_id: unit === "TRY" ? accountId : null });
   }, () => { ui.toast("Kaydedildi"); onDone(); });
 
   return (
@@ -188,6 +226,10 @@ function DebtForm({ people, onDone }: { people: string[]; onDone: () => void }) 
           <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} />
         </label>
       </div>
+      {asset === "TRY" && (
+        <AccountSelect value={accountId} onChange={setAccountId}
+          label={direction === "alacak" ? "Hangi hesaptan verdin? (nakitse boş bırak)" : "Hangi hesaba geldi? (nakitse boş bırak)"} />
+      )}
       <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
       {err && <p className="text-xs text-red-600">{err}</p>}
       <div className="flex gap-2">
@@ -203,7 +245,9 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
   const ui = useUI();
   const [amount, setAmount] = useState(String(d.remaining).replace(".", ","));
   const [date, setDate] = useState(today());
-  const save = useSave(() => json("POST", `/api/debts/${d.id}/pay`, { amount: parseAmount(amount), paid_at: date }),
+  const [accountId, setAccountId] = useState<number | null>(d.account_id);
+  const save = useSave(() => json("POST", `/api/debts/${d.id}/pay`, { amount: parseAmount(amount), paid_at: date,
+    account_id: d.asset === "TRY" ? accountId : null }),
     () => { ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı"); onDone(); });
   return (
     <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50/50 p-3 dark:border-blue-900 dark:bg-blue-950/20">
@@ -214,6 +258,10 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
         <input className="input text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
       </div>
+      {d.asset === "TRY" && (
+        <AccountSelect value={accountId} onChange={setAccountId}
+          label={d.direction === "borc" ? "Hangi hesaptan ödedin? (nakitse boş)" : "Hangi hesaba geldi? (nakitse boş)"} />
+      )}
       <p className="text-xs text-stone-500">Kalanın tamamı kapatır; azını yazarsan kısmi ödeme olarak düşer.</p>
       <div className="flex gap-2">
         <button className="btn-primary" disabled={!(parseAmount(amount) > 0) || save.isPending} onClick={() => save.mutate(undefined)}>Kaydet</button>

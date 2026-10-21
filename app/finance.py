@@ -121,7 +121,7 @@ def _entry_row(e: dict) -> dict:
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
         "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
-        "wallet_id": e.get("wallet_id"),
+        "wallet_id": e.get("wallet_id"), "account_id": e.get("account_id"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
@@ -912,7 +912,7 @@ def net_worth(today: date | None = None) -> dict:
     """Bankada/nakitte ne var, kartlara ne borçlusun, alacak/borç → bugünkü net durum."""
     today = today or date.today()
     accounts = db.list_accounts()
-    cash = sum(a["balance"] for a in accounts)
+    cash = sum(a["current"] for a in accounts if a["current"] is not None)
     cards = []
     for p in payables(today):
         if p["type"] == "statement" and p["status"] != "odendi":
@@ -925,7 +925,8 @@ def net_worth(today: date | None = None) -> dict:
     open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
     receivable = sum(d["remaining"] for d in open_try if d["direction"] == "alacak")
     payable = sum(d["remaining"] for d in open_try if d["direction"] == "borc")
-    stale = [a["name"] for a in accounts if a["as_of"] and (today - date.fromisoformat(a["as_of"])).days > 35]
+    stale = [a["name"] for a in accounts if a["as_of"] and a["source"] == "dokum" and (today - date.fromisoformat(a["as_of"])).days > 35]
+    accounts = [a for a in accounts if a["as_of"]]  # bakiyesi bilinmeyenler unknown_banks'ta
     wallets = [{"id": w["id"], "name": w["name"], "card_type": w["card_type"], "balance": w["current"]} for w in db.list_wallets()]
     # ekstresi olan her kredi kartı (hepsi ödenmiş olsa da): son ekstre + sonraki tahmini
     latest: dict[str, dict] = {}
@@ -945,8 +946,9 @@ def net_worth(today: date | None = None) -> dict:
     # dökümü daha önce yüklenmiş ama bakiyesi bilinmeyen bankalar (tampon özelliğinden önceki yüklemeler)
     from app.bank_import import short_bank
 
-    have = {a["name"] for a in accounts}
-    seen_banks = sorted({short_bank(b) for b in db.imported_bank_names()} - have - {"Banka hesabı"})
+    have = {a["name"] for a in accounts if a["as_of"]}
+    seen_banks = sorted(({short_bank(b) for b in db.imported_bank_names()} | {a["name"] for a in accounts if not a["as_of"]})
+                        - have - {"Banka hesabı"})
     in_wallets = sum(w["balance"] for w in wallets)
     return {"accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),

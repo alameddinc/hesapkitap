@@ -34,6 +34,7 @@ export interface Row {
   original_amount?: number;
   location?: string | null; // fişteki adres
   wallet_id?: number | null; // ön ödemeli kart
+  account_id?: number | null; // banka/nakit hesabı
   debt_id?: number | null;
 }
 
@@ -185,6 +186,7 @@ export interface Recurring {
   end_month: string | null;
   note: string | null;
   gross_amount?: number | null;
+  account_id?: number | null;
 }
 
 export interface Plan {
