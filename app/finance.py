@@ -927,10 +927,30 @@ def net_worth(today: date | None = None) -> dict:
     payable = sum(d["remaining"] for d in open_try if d["direction"] == "borc")
     stale = [a["name"] for a in accounts if a["as_of"] and (today - date.fromisoformat(a["as_of"])).days > 35]
     wallets = [{"id": w["id"], "name": w["name"], "card_type": w["card_type"], "balance": w["current"]} for w in db.list_wallets()]
+    # ekstresi olan her kredi kartı (hepsi ödenmiş olsa da): son ekstre + sonraki tahmini
+    latest: dict[str, dict] = {}
+    for st in db.list_statements():
+        if st["card_no"] not in latest:
+            latest[st["card_no"]] = st
+    est = {p["title"]: p for p in payables(today) if p["type"] == "estimate"}
+    credit_cards = []
+    for card_no, st in latest.items():
+        title = f"{st['bank']} {card_no}"
+        unpaid = _round(max(0.0, st["total_debt"] - (st["paid_amount"] or 0))) if st["due_date"] else 0.0
+        nxt = est.get(title)
+        credit_cards.append({"title": title, "bank": st["bank"], "card_no": card_no, "last_period_end": st["period_end"],
+                             "last_total": st["total_debt"], "last_due": st["due_date"], "paid_at": st["paid_at"],
+                             "unpaid": unpaid, "next_estimate": nxt["amount"] if nxt else None,
+                             "next_due": nxt["due_date"] if nxt else None})
+    # dökümü daha önce yüklenmiş ama bakiyesi bilinmeyen bankalar (tampon özelliğinden önceki yüklemeler)
+    from app.bank_import import short_bank
+
+    have = {a["name"] for a in accounts}
+    seen_banks = sorted({short_bank(b) for b in db.imported_bank_names()} - have - {"Banka hesabı"})
     in_wallets = sum(w["balance"] for w in wallets)
     return {"accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
-            "wallets": wallets, "in_wallets": _round(in_wallets),
+            "wallets": wallets, "in_wallets": _round(in_wallets), "credit_cards": credit_cards, "unknown_banks": seen_banks,
             "net": _round(cash + in_wallets - card_debt + receivable - payable),
             "net_after_estimates": _round(cash + in_wallets - card_debt - card_est + receivable - payable), "stale": stale}
 
