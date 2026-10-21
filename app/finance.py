@@ -11,6 +11,37 @@ from statistics import median
 
 from app import db
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
+
+import copy as _copy
+import os as _os
+
+# Hesap önbelleği: aynı veritabanı durumu için ağır hesaplar (tüm işlemler, plan, ödemeler) bir kez yapılır.
+# Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur.
+_CACHE: dict = {}
+
+
+def _db_stamp() -> tuple:
+    try:
+        st = _os.stat(db.DB_PATH)
+        return db.DB_PATH, st.st_mtime_ns, st.st_size
+    except OSError:
+        return db.DB_PATH, 0, 0
+
+
+def _memo(fn):
+    def wrap(*args, **kwargs):
+        key = (fn.__name__, _db_stamp(), date.today(), repr(args), repr(sorted(kwargs.items())))
+        if key not in _CACHE:
+            if len(_CACHE) > 128:
+                _CACHE.clear()
+            _CACHE[key] = fn(*args, **kwargs)
+        hit = _CACHE[key]
+        # çağıran sonucu değiştirse de önbellek bozulmasın
+        if isinstance(hit, list) and all(isinstance(x, dict) for x in hit):
+            return [dict(x) for x in hit]
+        return _copy.deepcopy(hit)
+    wrap.__name__, wrap.__doc__, wrap.__wrapped__ = fn.__name__, fn.__doc__, fn
+    return wrap
 from app.textnorm import legal_key, merchant_name
 
 INCOME = "gelir"
@@ -145,6 +176,7 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
     return [_pending_row(r, month, ov) for r in recurring if is_active(r, month) and r["id"] not in done]
 
 
+@_memo
 def transactions(month: str | None, include_deleted: bool = False) -> list[dict]:
     states, aliases = db.subscription_states(), db.merchant_aliases()
     card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
@@ -418,6 +450,7 @@ def card_projection() -> dict:
     return out
 
 
+@_memo
 def plan(months: int = 6, today: date | None = None) -> dict:
     today = today or date.today()
     start = current_period(today)
@@ -543,6 +576,7 @@ def _status(amount: float, paid: float | None, due: str, today: date) -> str:
     return "gecikti" if date.fromisoformat(due) < today else "bekliyor"
 
 
+@_memo
 def payables(today: date | None = None) -> list[dict]:
     """Ödenecekler: kart ekstreleri, faturalar ve henüz kesilmemiş ekstrelerin tahmini."""
     today = today or date.today()
