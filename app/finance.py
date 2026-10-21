@@ -1172,7 +1172,9 @@ def day_detail(d: str, variable_only: bool = False) -> dict:
         rows.append({**r, "fixed": fixed})
     rows.sort(key=lambda r: -r["amount"])
     # o gün ödenen kart ekstreleri: bankadan para çıkar ama harcama değildir (harcamalar kendi günlerinde sayılır)
+    # ödeme tarihi ödeme penceresinde olmalı: geç yüklenen eski ekstreler "yükleme günü ödendi" diye işaretlenmiş olabilir
     paid = [{"title": f"{s_['bank']} {s_['card_no']}", "amount": s_["paid_amount"], "period_end": s_["period_end"]}
-            for s_ in db.list_statements() if s_["paid_at"] == d and s_["paid_amount"]]
+            for s_ in db.list_statements() if s_["paid_at"] == d and s_["paid_amount"]
+            and s_["period_end"] <= d <= (s_["due_date"] and (date.fromisoformat(s_["due_date"]) + timedelta(days=10)).isoformat() or d)]
     return {"date": d, "total": _round(sum(r["amount"] for r in rows)), "rows": rows,
             "by_category": _group(rows, "category"), "card_payments": paid}
