@@ -24,7 +24,7 @@ interface DocResult {
   total?: number | null;
   payment?: string;
   category?: string;
-  items?: { name: string; qty?: number; amount: number | null; split?: string | null }[];
+  items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[];
   address?: string | null;
   legal_name?: string | null;
   // fatura
@@ -47,15 +47,17 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  /** Fiş mi fatura mı sunucu (Gemini) karar verir; ona göre doğru form açılır. */
-  async function onFile(f: File | undefined) {
-    if (!f) return;
+  // uzun fiş: sırayla çekilen parçalar tek fiş olarak okunur
+  const [pages, setPages] = useState<Blob[]>([]);
+
+  /** Fiş mi fatura mı sunucu (Gemini) karar verir; ona göre doğru form açılır. Birden fazla görüntü = aynı fişin parçaları. */
+  async function parse(parts: { blob: Blob; name: string }[]) {
+    if (!parts.length) return;
     setBusy(true);
     setErr(null);
     try {
-      const isImg = f.type.startsWith("image/");
       const fd = new FormData();
-      fd.append("file", isImg ? await shrink(f) : f, isImg ? "belge.jpg" : f.name);
+      parts.slice(0, 4).forEach((p) => fd.append("file", p.blob, p.name));
       const res = await fetch("/api/documents/parse", { method: "POST", body: fd });
       const r = (await res.json()) as DocResult & { detail?: string };
       if (!res.ok) throw new Error(r.detail ?? "Belge okunamadı");
@@ -83,6 +85,30 @@ export default function AddSheet({ onClose, onPick, onBill }: {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+      setPages([]);
+    }
+  }
+
+  /** Kamera: her fotoğraf parçalara eklenir; "Bitti, oku" ile hepsi birlikte okunur. */
+  async function onCamera(f: File | undefined) {
+    if (!f) return;
+    try {
+      setPages([...pages, await shrink(f)]);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
+  /** Galeri/dosya: PDF tek başına; fotoğraflar (en fazla 4) aynı fişin parçaları sayılır. */
+  async function onFiles(list: FileList | null) {
+    const files = [...(list ?? [])];
+    if (!files.length) return;
+    const pdf = files.find((f) => f.type === "application/pdf");
+    if (pdf) return parse([{ blob: pdf, name: pdf.name }]);
+    try {
+      parse(await Promise.all(files.slice(0, 4).map(async (f, i) => ({ blob: await shrink(f), name: `parca${i + 1}.jpg` }))));
+    } catch (e) {
+      setErr((e as Error).message);
     }
   }
 
@@ -106,14 +132,28 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           title={busy ? "Okunuyor…" : "Fiş / fatura çek"}
           sub={meta.data?.receipt_enabled === false ? "Sunucuda GEMINI_API_KEY tanımlı değil"
             : "Fiş mi fatura mı kendisi anlar; tutar, tarih, işyeri otomatik dolar"}
-          onClick={() => cameraRef.current?.click()} disabled={busy || meta.data?.receipt_enabled === false} />
+          onClick={() => cameraRef.current?.click()} disabled={busy || pages.length > 0 || meta.data?.receipt_enabled === false} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden"
-          onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
+          onChange={(e) => { onCamera(e.target.files?.[0]); e.target.value = ""; }} />
+        {pages.length > 0 && !busy && (
+          <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900 dark:bg-blue-950/30">
+            <div className="text-sm"><b>{pages.length} fotoğraf</b> hazır. Fiş uzunsa devamını çek (en fazla 4); üst üste binen satırlar bir kez sayılır.</div>
+            <div className="flex flex-wrap gap-2">
+              {pages.length < 4 && (
+                <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => cameraRef.current?.click()}>
+                  <Camera size={16} /> Devamını çek
+                </button>
+              )}
+              <button className="btn-primary" onClick={() => parse(pages.map((b, i) => ({ blob: b, name: `parca${i + 1}.jpg` })))}>Bitti, oku</button>
+              <button className="btn-ghost" onClick={() => setPages([])}>Vazgeç</button>
+            </div>
+          </div>
+        )}
         <Opt icon={<FileText size={20} className="text-violet-600" />} title="Dosyadan yükle"
-          sub="E-fatura PDF'i veya galeriden fiş/fatura fotoğrafı"
+          sub="E-fatura PDF'i veya galeriden fiş fotoğrafı (uzun fişse parçalarını birlikte seç)"
           onClick={() => fileRef.current?.click()} disabled={busy || meta.data?.receipt_enabled === false} />
-        <input ref={fileRef} type="file" accept="application/pdf,image/*" className="hidden"
-          onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
+        <input ref={fileRef} type="file" accept="application/pdf,image/*" multiple className="hidden"
+          onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
         <Opt icon={<Minus size={20} className="text-red-600" />} title="Gider" sub="Psikolog, nakit ödeme, havale…"
           onClick={() => onPick({ kind: "gider" })} />
         <Opt icon={<Plus size={20} className="text-green-600" />} title="Gelir" sub="Maaş, ek gelir…"

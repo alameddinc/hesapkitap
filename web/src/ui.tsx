@@ -12,7 +12,7 @@ export interface EntryDraft {
   recurring?: boolean;
   payment?: "kredi_karti" | "nakit" | "havale";
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
-  items?: { name: string; qty?: number; amount: number | null; split?: string | null }[]; // fiş satırları (kalem kuralları)
+  items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[]; // fiş satırları
   location?: string | null; // fişteki işyeri adresi
 }
 
