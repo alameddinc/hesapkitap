@@ -864,6 +864,12 @@ def compare(month: str | None = None, all: bool = False):
     return finance.compare(month, variable_only=not all)
 
 
+@app.get("/api/day/{d}")
+def day_detail(d: date, all: bool = True):
+    """O günün harcamaları (Özet → karşılaştırma → güne dokun)."""
+    return finance.day_detail(d.isoformat(), variable_only=not all)
+
+
 @app.get("/api/prices")
 def prices(since: date | None = None, store: str | None = None, brand: str | None = None):
     """Fişlerden fiyat takibi: ürün / mağaza / marka kırılımı; tarihten beri, mağaza, marka filtresi."""

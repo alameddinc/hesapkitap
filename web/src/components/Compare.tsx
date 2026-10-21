@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { cx, tl, tlCompact } from "../format";
+import { X } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { cx, dateTR, maskText, tl, tlCompact } from "../format";
 import Segmented from "./Segmented";
 
 interface Cmp {
@@ -11,6 +12,54 @@ interface Cmp {
   weekdays: { day: string; current: number; avg3: number; pct: number | null }[];
   weeks: { week: number; current: number; avg3: number; done: boolean; pct: number | null }[];
   notes: string[];
+  daily: { current: Day[]; prev: Day[]; avg_per_day: number };
+  top_days: (Day & { period: "bu" | "gecen" })[];
+}
+interface Day { date: string; amount: number; spike: boolean }
+interface DayDetail {
+  date: string; total: number; by_category: { name: string; amount: number }[];
+  card_payments: { title: string; amount: number; period_end: string }[];
+  rows: { uid: string; description: string; category: string; amount: number; card: string | null; source: string; fixed: boolean }[];
+}
+
+const TR_MON = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+const short = (d: string) => `${Number(d.slice(8, 10))} ${TR_MON[Number(d.slice(5, 7)) - 1]}`;
+
+/** Bir günün harcamaları: kategori özeti + kalem kalem. */
+function DayPanel({ date, all, onClose }: { date: string; all: boolean; onClose: () => void }) {
+  const q = useQuery({ queryKey: ["day", date, all], queryFn: () => fetch(`/api/day/${date}?all=${all}`).then((r) => r.json() as Promise<DayDetail>) });
+  const d = q.data;
+  return (
+    <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+      <div className="flex items-center justify-between gap-2">
+        <b>{dateTR(date)}{d && ` · ${tl(d.total)}`}</b>
+        <button className="btn-ghost p-1" aria-label="Kapat" onClick={onClose}><X size={16} /></button>
+      </div>
+      {d && d.by_category.length > 1 && (
+        <div className="mt-1 flex flex-wrap gap-1 text-xs">
+          {d.by_category.map((c) => <span key={c.name} className="rounded-full bg-stone-100 px-2 py-0.5 dark:bg-stone-800">{c.name} {tl(c.amount)}</span>)}
+        </div>
+      )}
+      <ul className="mt-2 divide-y divide-stone-100 text-sm dark:divide-stone-800">
+        {d?.rows.map((r) => (
+          <li key={r.uid} className="flex items-start justify-between gap-2 py-1.5">
+            <span className="min-w-0">
+              <span className="block truncate">{maskText(r.description)}</span>
+              <span className="block text-xs text-stone-500">{r.category}{r.card ? ` · ${r.card}` : r.source === "manual" ? " · elle" : ""}{r.fixed ? " · sabit" : ""}</span>
+            </span>
+            <span className={cx("shrink-0 tabular-nums", r.amount < 0 && "text-green-700")}>{tl(r.amount)}</span>
+          </li>
+        ))}
+        {d && !d.rows.length && <li className="py-2 text-sm text-stone-500">Bu gün harcama yok.</li>}
+      </ul>
+      {!!d?.card_payments.length && (
+        <div className="mt-2 rounded-md bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-300">
+          Bu gün ödenen kart ekstreleri (harcama sayılmaz; içindeki harcamalar yapıldıkları günlerde sayılır):
+          {d.card_payments.map((p) => <div key={p.title} className="flex justify-between"><span>{p.title} · kesim {dateTR(p.period_end)}</span><span className="tabular-nums">{tl(p.amount)}</span></div>)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const tip = { background: "var(--chart-surface)", border: "1px solid var(--chart-grid)", borderRadius: 8 };
@@ -21,7 +70,9 @@ const Pct = ({ v }: { v: number | null }) => v == null ? <span className="text-s
 /** Bu dönem aynı güne kadar: geçen dönem ve son 3 dönem ortalamasıyla kıyas; hafta günleri ve haftalar. */
 export default function Compare({ month }: { month: string }) {
   const [all, setAll] = useState(false);
-  const [tab, setTab] = useState<"gun" | "haftagunu" | "hafta">("gun");
+  const [tab, setTab] = useState<"gunluk" | "gun" | "haftagunu" | "hafta">("gunluk");
+  const [which, setWhich] = useState<"bu" | "gecen">("bu");
+  const [day, setDay] = useState<string | null>(null);
   const q = useQuery({ queryKey: ["compare", month, all], queryFn: () => fetch(`/api/compare?month=${month}${all ? "&all=1" : ""}`).then((r) => r.json() as Promise<Cmp>) });
   const c = q.data;
   if (!c || c.day === 0) return null;
@@ -46,10 +97,44 @@ export default function Compare({ month }: { month: string }) {
             options={[{ value: "var", label: "Değişken" }, { value: "all", label: "Tümü" }]} />
         </div>
       </div>
-      <Segmented value={tab} onChange={setTab} options={[{ value: "gun", label: "Gün gün" }, { value: "haftagunu", label: "Hafta günü" }, { value: "hafta", label: "Haftalar" }]} />
+      {c.top_days.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-stone-500">En yoğun günler:</span>
+          {c.top_days.map((t) => (
+            <button key={t.date} onClick={() => setDay(t.date)}
+              className={cx("rounded-full px-2 py-0.5 tabular-nums", t.spike ? "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200" : "bg-stone-100 dark:bg-stone-800",
+                day === t.date && "ring-2 ring-blue-500")}>
+              {short(t.date)} · {tl(t.amount)}
+            </button>
+          ))}
+        </div>
+      )}
+      <Segmented value={tab} onChange={setTab} options={[{ value: "gunluk", label: "Günlük" }, { value: "gun", label: "Birikimli" },
+        { value: "haftagunu", label: "Hf. günü" }, { value: "hafta", label: "Haftalar" }]} />
+      {tab === "gunluk" && (
+        <div className="w-56">
+          <Segmented value={which} onChange={setWhich} options={[{ value: "bu", label: "Bu dönem" }, { value: "gecen", label: "Geçen dönem" }]} />
+        </div>
+      )}
       <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
-          {tab === "gun" ? (
+          {tab === "gunluk" ? (
+            <BarChart data={(which === "bu" ? c.daily.current : c.daily.prev).map((x) => ({ ...x, ad: short(x.date) }))}
+              onClick={(e) => { const i = (e as { activeTooltipIndex?: number } | null)?.activeTooltipIndex;
+                const list = which === "bu" ? c.daily.current : c.daily.prev;
+                if (i != null && list[Number(i)]) setDay(list[Number(i)].date); }}>
+              <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+              <XAxis dataKey="ad" tick={axis} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              <YAxis tickFormatter={(v: number) => tlCompact(v)} tick={axis} axisLine={false} tickLine={false} width={56} />
+              <Tooltip formatter={(v) => [tl(Number(v)), "Harcama"]} labelFormatter={(_l, p) => dateTR(String(p?.[0]?.payload?.date ?? ""))}
+                cursor={{ fill: "var(--chart-grid)", opacity: 0.5 }} contentStyle={tip} />
+              <Bar dataKey="amount" radius={[3, 3, 0, 0]} maxBarSize={18} cursor="pointer">
+                {(which === "bu" ? c.daily.current : c.daily.prev).map((x) => (
+                  <Cell key={x.date} fill={x.date === day ? "var(--chart-ink)" : x.spike ? "var(--series-4)" : "var(--series-1)"} />
+                ))}
+              </Bar>
+            </BarChart>
+          ) : tab === "gun" ? (
             <LineChart data={data}>
               <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
               <XAxis dataKey="gun" tick={axis} axisLine={false} tickLine={false} interval="preserveStartEnd" />
@@ -77,8 +162,10 @@ export default function Compare({ month }: { month: string }) {
           )}
         </ResponsiveContainer>
       </div>
+      {day && <DayPanel date={day} all={all} onClose={() => setDay(null)} />}
       <p className={cx("text-xs text-stone-500")}>
-        {tab === "haftagunu" ? "O gün başına ortalama harcama (dönemin aynı gün aralığıyla kıyaslanır)." :
+        {tab === "gunluk" ? `Güne dokun, o günün harcamaları açılsın. Sarı: son 3 dönemin günlük ortalamasının (${tl(c.daily.avg_per_day)}) 2,5 katından fazla.` :
+          tab === "haftagunu" ? "O gün başına ortalama harcama (dönemin aynı gün aralığıyla kıyaslanır)." :
           tab === "hafta" ? "Dönemin 1–7. günü 1. hafta, 8–14. günü 2. hafta…" :
           "Birikimli harcama; kart harcaması ekstre dönemine göre değil harcandığı güne göre."}
         {!all && " Kira, fatura, taksit ve sabit kalemler hariç."}
