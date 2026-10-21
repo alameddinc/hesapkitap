@@ -677,7 +677,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     if up:
         out.append({"level": "bilgi", "title": f"{len(up)} üründe zam var (fişlerinden)",
                     "detail": " · ".join(f"{p['product']}: {_tl(p['first_price'])} → {_tl(p['last_price'])} (+%{p['change_pct']:g})"
-                                         for p in up) + ". Tasarruf → Fiyat takibi.", "link": "tasarruf"})
+                                         for p in up) + ".", "link": "fiyatlar"})
 
     # 2d) Bekleyen alacaklar (sana borçlu olanlar)
     open_rec = [d for d in db.list_debts(open_only=True) if d["direction"] == "alacak"]

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, ChevronRight, HandCoins, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, HandCoins, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
 import { useUI } from "../ui";
 
 export default function More() {
@@ -21,6 +21,7 @@ export default function More() {
         <Item icon={<PiggyBank size={18} />} label="Tasarruf: abonelikler, kısma hedefleri" onClick={() => ui.go("tasarruf")} />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} />
         <Item icon={<ArrowLeftRight size={18} />} label="Transferler: kime ne gitti" onClick={() => ui.go("transferler")} />
+        <Item icon={<TagIcon size={18} />} label="Fiyatlar: fişlerden ürün fiyat takibi" onClick={() => ui.go("fiyatlar")} />
         <Item icon={<FileText size={18} />} label="Ekstreler" onClick={() => ui.go("ekstreler")} />
         <Item icon={<Tags size={18} />} label="Kategori kuralları" onClick={() => ui.go("kurallar")} />
         <Item icon={<Settings2 size={18} />} label="Ayarlar: Telegram, yedekler" onClick={() => ui.go("ayarlar")} />
