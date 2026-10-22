@@ -7,6 +7,7 @@ import { BudgetForm, BudgetList } from "../components/Budgets";
 import Insights from "../components/Insights";
 import Kpi from "../components/Kpi";
 import NetWorth from "../components/NetWorth";
+import Onboarding from "../components/Onboarding";
 import Compare from "../components/Compare";
 import MonthPicker from "../components/MonthPicker";
 import Payables from "../components/Payables";
@@ -81,6 +82,8 @@ export default function Dashboard() {
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />
           </div>
+
+          <Onboarding />
 
           <NetWorth compact />
 

@@ -1,5 +1,5 @@
 import { Landmark, Loader2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
@@ -38,28 +38,42 @@ async function postForm<T>(url: string, file: File, extra: Record<string, string
 }
 
 /** Vadesiz hesap dökümü (Excel/CSV) içe aktarma: sütun tahmini → önizleme → içe aktar. */
-export default function BankImport() {
+/** incoming: Ekstreler'deki tek yükleme alanından gelen hesap dökümü (önizleme hemen başlar). */
+export default function BankImport({ incoming, onDone }: { incoming?: { file: File; password?: string } | null; onDone?: () => void } = {}) {
   const ui = useUI();
   const input = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [password, setPassword] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (incoming && incoming.file !== file) {
+      setFile(incoming.file);
+      setPassword(incoming.password);
+      setPv(null);
+      void preview(incoming.file, undefined, undefined, incoming.password);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming]);
   const [pv, setPv] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const preview = async (f: File, mapping?: Preview["mapping"], headerRow?: number) => {
+  const preview = async (f: File, mapping?: Preview["mapping"], headerRow?: number, pw?: string) => {
     setBusy(true);
     setErr(null);
     try {
-      setPv(await postForm<Preview>("/api/bank-import/preview", f,
-        mapping ? { mapping: JSON.stringify(mapping), header_row: String(headerRow ?? 0) } : {}));
+      setPv(await postForm<Preview>("/api/bank-import/preview", f, {
+        ...(mapping ? { mapping: JSON.stringify(mapping), header_row: String(headerRow ?? 0) } : {}),
+        ...(pw ?? password ? { password: (pw ?? password)! } : {}),
+      }));
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
-  const run = useSave(() => postForm<Record<string, number>>("/api/bank-import", file!, pv!.pdf ? {} : {
-    mapping: JSON.stringify(pv!.mapping), header_row: String(pv!.header_row),
+  const run = useSave(() => postForm<Record<string, number>>("/api/bank-import", file!, {
+    ...(pv!.pdf ? {} : { mapping: JSON.stringify(pv!.mapping), header_row: String(pv!.header_row) }),
+    ...(password ? { password } : {}),
   }), (r) => {
     const parts = [r.gelir && `${r.gelir} gelir`, r.gider && `${r.gider} gider`, r.maas && `${r.maas} maaş onaylandı`,
       r.odendi_isaretlenen && `${r.odendi_isaretlenen} ekstre ödendi`, r.eslesen_elle && `${r.eslesen_elle} elle girilenle eşleşti`,
@@ -67,6 +81,7 @@ export default function BankImport() {
     ui.toast(parts.length ? parts.join(" · ") : "Yeni hareket yok");
     setPv(null);
     setFile(null);
+    onDone?.();
   });
   const setCol = (k: Key, v: string) => {
     if (!pv || !file) return;
@@ -76,21 +91,25 @@ export default function BankImport() {
     preview(file, mapping, pv.header_row);
   };
 
+  if (incoming !== undefined && !file && !busy && !err) return null;  // tek yükleme alanından gelen bir şey yok
   return (
     <section className="card space-y-3 p-4">
       <div>
-        <h2 className="flex items-center gap-2 font-semibold"><Landmark size={18} /> Hesap hareketleri</h2>
+        <h2 className="flex items-center gap-2 font-semibold"><Landmark size={18} /> Hesap dökümü{file ? `: ${file.name}` : ""}</h2>
         <p className="text-xs text-stone-500">
-          Vadesiz hesabının dökümü (PDF, Excel ya da CSV; internet şubesi → hesap hareketleri). Maaş sabit kaleme bağlanır,
-          kredi kartı ödemeleri ilgili ekstreyi "ödendi" yapar, kendi hesapların arası aktarımlar gelir/gider sayılmaz
-          (Transferler'de görünür), aynı hareket iki kez eklenmez. PDF yapay zekâyla okunur ve bakiye zinciriyle doğrulanır.
+          Maaş sabit kaleme bağlanır, kredi kartı ödemeleri ilgili ekstreyi "ödendi" yapar, kendi hesapların arası aktarımlar
+          gelir/gider sayılmaz, aynı hareket iki kez eklenmez, hesabın bakiyesi güncellenir.
+          {busy && " PDF yapay zekâyla okunuyor ve bakiye zinciriyle doğrulanıyor (bir dakika sürebilir)…"}
         </p>
       </div>
-      <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy} onClick={() => input.current?.click()}>
-        {busy ? <Loader2 size={16} className="animate-spin" /> : <Landmark size={16} />} {busy ? "Okunuyor…" : "Dosya seç (.pdf, .xlsx, .xls, .csv)"}
-      </button>
-      <input ref={input} type="file" accept=".pdf,application/pdf,.xlsx,.xls,.csv,text/csv" className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setFile(f); preview(f); } }} />
+      {incoming === undefined && <>
+        <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy} onClick={() => input.current?.click()}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <Landmark size={16} />} {busy ? "Okunuyor…" : "Dosya seç (.pdf, .xlsx, .xls, .csv)"}
+        </button>
+        <input ref={input} type="file" accept=".pdf,application/pdf,.xlsx,.xls,.csv,text/csv" className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setFile(f); preview(f); } }} />
+      </>}
+      {busy && <Loader2 size={18} className="animate-spin text-blue-600" />}
       {err && <p className="text-sm text-red-600">{err}</p>}
 
       {pv && file && (
@@ -141,7 +160,7 @@ export default function BankImport() {
               onClick={() => run.mutate(undefined, { onError: (e) => setErr(e.message) })}>
               {pv.total} hareketi içe aktar
             </button>
-            <button className="btn-ghost" onClick={() => { setPv(null); setFile(null); }}>Vazgeç</button>
+            <button className="btn-ghost" onClick={() => { setPv(null); setFile(null); setErr(null); onDone?.(); }}>Vazgeç</button>
           </div>
         </div>
       )}

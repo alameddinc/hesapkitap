@@ -216,7 +216,7 @@ export interface Rule {
 
 export interface UploadResult {
   filename: string;
-  status: "saved" | "duplicate" | "error" | "password_required";
+  status: "saved" | "duplicate" | "error" | "password_required" | "account_statement";
   message?: string;
   bank?: string;
   card_no?: string;

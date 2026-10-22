@@ -202,3 +202,21 @@ def test_summary_carries_positive_balance(client):
     assert m1["carry_in"] == 0 and m1["balance"] == 700
     assert m2["carry_in"] == 700 and m2["balance"] == -200
     assert m3["carry_in"] == 0  # eksi devretmez
+
+
+def test_unified_upload_routes_account_statements(client, monkeypatch):
+    import app.api.main as m
+
+    monkeypatch.setattr(m, "_statement_kind", lambda data, pw: "account")
+    r = client.post("/api/statements/upload", files=[("files", ("vb.pdf", b"%PDF-x", "application/pdf")),
+                                                    ("files", ("hareket.xlsx", b"x", "application/octet-stream"))]).json()
+    assert [x["status"] for x in r] == ["account_statement", "account_statement"]
+
+
+def test_onboarding_steps(client, tmpdb):
+    o = client.get("/api/onboarding").json()
+    assert o["done"] == 0 and o["total"] == 7 and not o["dismissed"]
+    client.post("/api/accounts", json={"name": "Banka", "kind": "banka", "balance": 10})
+    assert next(s for s in client.get("/api/onboarding").json()["steps"] if s["key"] == "hesap")["done"]
+    client.post("/api/onboarding/dismiss")
+    assert client.get("/api/onboarding").json()["dismissed"]
