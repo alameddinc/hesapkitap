@@ -72,3 +72,16 @@ def test_hijri():
     from app.zakat import to_hijri
 
     assert to_hijri(date(2026, 2, 19)).endswith("Ramazan 1447")  # Ramazan 1447 ≈ 18/19 Şubat 2026
+
+
+def test_acquired_date_suggest_and_safii(client, tmpdb):
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 20, "acquired": "2025-03-01"})
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 40, "acquired": "2025-09-01"})
+    p = _person(client.get("/api/zakat").json(), "Ben")
+    assert p["suggest_start"] == "2025-09-01"  # 60 çeyrek ≈ 624 bin > nisap; 20'si tek başına yetmez
+    # Hanefî: yıl içinde eklenen de sayılır; Şâfiî: yılını doldurmamış olan sayılmaz
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2025-03-01"})  # yıl 2026-02-18'de biter
+    assert _person(client.get("/api/zakat").json(), "Ben")["total"] == 624000
+    client.put("/api/zakat/settings", json={"madhhab": "safii"})
+    assert _person(client.get("/api/zakat").json(), "Ben")["total"] == 208000

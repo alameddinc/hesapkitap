@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS zakat_assets (
     kind TEXT NOT NULL,
     quantity REAL NOT NULL CHECK (quantity > 0),
     is_jewelry INTEGER NOT NULL DEFAULT 0,    -- takılan ziynet (Şâfiî'de muaf)
+    acquired DATE,                            -- eline geçtiği gün (yıl başlangıcı önerisi; Şâfiî'de kendi yılı)
     note TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -84,6 +85,8 @@ CREATE TABLE IF NOT EXISTS zakat_payments (
 
 def _init(c) -> None:
     c.executescript(SCHEMA)
+    if "acquired" not in {r[1] for r in c.execute("PRAGMA table_info(zakat_assets)")}:
+        c.execute("ALTER TABLE zakat_assets ADD COLUMN acquired DATE")
     if not c.execute("SELECT 1 FROM zakat_people").fetchone():
         c.execute("INSERT INTO zakat_people (name, is_self) VALUES ('Ben', 1)")
 
@@ -221,16 +224,23 @@ def compute(today: date | None = None) -> dict:
     out = []
     for p in people():
         plus, minus = [], []
+        # yılın bittiği gün: Şâfiî'de o güne kadar bir yılını doldurmamış varlık bu yıl sayılmaz
+        year_end = (date.fromisoformat(p["hawl_start"]) + timedelta(days=LUNAR_YEAR_DAYS)) if p["hawl_start"] else today
         for a in p["assets"]:
             label, key, unit = KINDS.get(a["kind"], (a["kind"], "", ""))
+            base = {"id": a["id"], "qty": a["quantity"], "unit": unit, "source": "varlik", "note": a["note"],
+                    "acquired": a["acquired"]}
             if a["is_jewelry"] and st["madhhab"] == "safii":
-                plus.append({"id": a["id"], "label": f"{label} (ziynet, muaf)", "qty": a["quantity"], "unit": unit,
-                             "value": 0.0, "exempt": True, "source": "varlik"})
+                plus.append({**base, "label": f"{label} (ziynet, muaf)", "value": 0.0, "exempt": True})
+                continue
+            if (st["madhhab"] == "safii" and a["acquired"]
+                    and date.fromisoformat(a["acquired"]) + timedelta(days=LUNAR_YEAR_DAYS) > year_end):
+                ready = date.fromisoformat(a["acquired"]) + timedelta(days=LUNAR_YEAR_DAYS)
+                plus.append({**base, "label": f"{label} (yılı {ready:%d.%m.%Y}'de dolar)", "value": 0.0, "exempt": True})
                 continue
             price = 1.0 if a["kind"] == "TRY" else pr.get(key)
-            plus.append({"id": a["id"], "label": label + (" (ziynet)" if a["is_jewelry"] else ""), "qty": a["quantity"],
-                         "unit": unit, "value": round(a["quantity"] * price, 2) if price else None,
-                         "price": price, "source": "varlik", "note": a["note"]})
+            plus.append({**base, "label": label + (" (ziynet)" if a["is_jewelry"] else ""),
+                         "value": round(a["quantity"] * price, 2) if price else None, "price": price})
         if p["is_self"] and st["include_app"]:
             ap, am = _app_lines(pr, st, today)
             plus += ap
@@ -240,6 +250,17 @@ def compute(today: date | None = None) -> dict:
         total = round(max(0.0, gross - deduct), 2)
         above = nisab is not None and total >= nisab
         hawl = None
+        suggest = None
+        if not p["hawl_start"] and nisab:
+            # tarihi girilmiş varlıkları sırayla topla: toplam nisaba ilk ulaştığı gün (bugünkü fiyatla, yaklaşık)
+            dated = sorted((x["acquired"], x["value"] or 0) for x in plus if x.get("acquired") and not x.get("exempt"))
+            undated = sum(x["value"] or 0 for x in plus if not x.get("acquired")) - deduct
+            run = undated
+            for d_, v in dated:
+                run += v
+                if run >= nisab:
+                    suggest = d_
+                    break
         if p["hawl_start"]:
             start = date.fromisoformat(p["hawl_start"])
             due = start + timedelta(days=LUNAR_YEAR_DAYS)
@@ -252,7 +273,7 @@ def compute(today: date | None = None) -> dict:
         out.append({"id": p["id"], "name": p["name"], "is_self": bool(p["is_self"]), "note": p["note"],
                     "plus": plus, "minus": minus if st["madhhab"] == "hanefi" else [], "gross": gross, "deduct": deduct,
                     "total": total, "above_nisab": above, "estimate": round(total * RATE, 2) if above else 0.0,
-                    "hawl": hawl, "payments": p["payments"],
+                    "hawl": hawl, "suggest_start": suggest, "payments": p["payments"],
                     "missing_prices": [x["label"] for x in plus if x.get("value") is None]})
     return {"nisab": nisab, "nisab_grams": NISAB_GRAMS, "gram_price": gram, "rate": RATE, "settings": st,
             "prices": {"updated": pd["updated"], "source": pd["source"] if not pd.get("manual_gram") else "elle",
@@ -286,17 +307,18 @@ def delete_person(pid: int) -> bool:
         return c.execute("DELETE FROM zakat_people WHERE id = ? AND is_self = 0", (pid,)).rowcount > 0
 
 
-def add_asset(pid: int, kind: str, quantity: float, is_jewelry: bool, note: str | None) -> int:
+def add_asset(pid: int, kind: str, quantity: float, is_jewelry: bool, note: str | None, acquired: str | None = None) -> int:
     if kind not in KINDS:
         raise ValueError("Bilinmeyen varlık türü")
     with db.connect() as c:
         _init(c)
-        return c.execute("INSERT INTO zakat_assets (person_id, kind, quantity, is_jewelry, note) VALUES (?, ?, ?, ?, ?)",
-                         (pid, kind, quantity, int(is_jewelry), (note or "").strip() or None)).lastrowid
+        return c.execute("INSERT INTO zakat_assets (person_id, kind, quantity, is_jewelry, note, acquired) "
+                         "VALUES (?, ?, ?, ?, ?, ?)",
+                         (pid, kind, quantity, int(is_jewelry), (note or "").strip() or None, acquired)).lastrowid
 
 
 def update_asset(aid: int, data: dict) -> bool:
-    data = {k: v for k, v in data.items() if k in ("person_id", "kind", "quantity", "is_jewelry", "note")}
+    data = {k: v for k, v in data.items() if k in ("person_id", "kind", "quantity", "is_jewelry", "note", "acquired")}
     if not data:
         return False
     with db.connect() as c:
