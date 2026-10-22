@@ -1033,6 +1033,103 @@ def onboarding_dismiss():
     return {"ok": True}
 
 
+class JarIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    goal: float | None = Field(None, gt=0)
+    deadline: date | None = None
+    account_id: int | None = None
+    monthly: float | None = Field(None, gt=0)
+    auto_day: int | None = Field(None, ge=1, le=28)
+    note: str | None = None
+    initial: float = Field(0, ge=0)
+
+
+class JarPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=60)
+    goal: float | None = Field(None, gt=0)
+    deadline: date | None = None
+    account_id: int | None = None
+    monthly: float | None = Field(None, gt=0)
+    auto_day: int | None = Field(None, ge=1, le=28)
+    note: str | None = None
+    closed: bool | None = None
+
+
+class JarMoveIn(BaseModel):
+    amount: float = Field(gt=0)
+    direction: Literal["yatir", "cek"] = "yatir"
+    move_date: date | None = None
+    note: str | None = None
+
+
+def _jar_view(j: dict, today: date) -> dict:
+    """Hedef ilerlemesi ve son tarihe göre ayda gereken."""
+    out = {**j}
+    if j["goal"]:
+        out["pct"] = min(100.0, round(j["balance"] / j["goal"] * 100, 1))
+        left = max(0.0, j["goal"] - j["balance"])
+        out["left"] = round(left, 2)
+        if j["deadline"] and left > 0:
+            dl = date.fromisoformat(j["deadline"])
+            months = max(1, (dl.year - today.year) * 12 + dl.month - today.month)
+            out["need_per_month"] = round(left / months, 2)
+    return out
+
+
+@app.get("/api/jars")
+def list_jars():
+    today = date.today()
+    return [_jar_view(j, today) for j in db.list_jars(today)]
+
+
+@app.post("/api/jars")
+def create_jar(body: JarIn):
+    data = body.model_dump(exclude={"initial"})
+    data["name"] = data["name"].strip()
+    if data["deadline"]:
+        data["deadline"] = data["deadline"].isoformat()
+    if bool(data["monthly"]) != bool(data["auto_day"]):
+        data["monthly"] = data["auto_day"] = None
+    return {"id": db.create_jar(data, body.initial)}
+
+
+@app.patch("/api/jars/{jid}")
+def patch_jar(jid: int, body: JarPatch):
+    data = body.model_dump(exclude_unset=True)
+    if "deadline" in data and data["deadline"]:
+        data["deadline"] = data["deadline"].isoformat()
+    if "closed" in data:
+        data["closed_at"] = date.today().isoformat() if data.pop("closed") else None
+    if not db.update_jar(jid, data):
+        raise HTTPException(404, "Kumbara yok")
+    return {"ok": True}
+
+
+@app.delete("/api/jars/{jid}")
+def delete_jar(jid: int):
+    if not db.delete_jar(jid):
+        raise HTTPException(404, "Kumbara yok")
+    return {"ok": True}
+
+
+@app.post("/api/jars/{jid}/moves")
+def add_jar_move(jid: int, body: JarMoveIn):
+    amt = body.amount if body.direction == "yatir" else -body.amount
+    try:
+        return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note)}
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.delete("/api/jar-moves/{mid}")
+def delete_jar_move(mid: int):
+    if not db.delete_jar_move(mid):
+        raise HTTPException(404, "Hareket yok")
+    return {"ok": True}
+
+
 @app.get("/api/net-worth")
 def net_worth():
     return finance.net_worth()

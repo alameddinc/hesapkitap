@@ -8,7 +8,8 @@ import Wallets from "./Wallets";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
-  accounts: Account[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
+  reserved: number; free: number;
+  accounts: (Account & { reserved: number })[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
   credit_cards: { title: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
@@ -57,6 +58,9 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
               Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
               {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
             </span>
+            {d.reserved > 0 && (
+              <span className="block text-xs text-stone-500">Kumbaralarda {tl(d.reserved)} · harcanabilir <b>{tl(d.free)}</b></span>
+            )}
             {d.unknown_banks.length > 0 && (
               <span className="block text-xs text-amber-600">Bakiyesi girilmemiş: {d.unknown_banks.join(", ")}</span>
             )}
@@ -77,6 +81,9 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
             Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
             {d.card_estimated ? ` · kesilecek ekstreler ~${tl(d.card_estimated)}` : ""}
           </div>
+          {d.reserved > 0 && (
+            <div className="text-xs text-stone-500">Kumbaralarda ayrılan {tl(d.reserved)} · harcanabilir <b>{tl(d.free)}</b></div>
+          )}
         </div>
         <ChevronDown size={16} className={cx("text-stone-400 transition-transform", open && "rotate-180")} />
       </button>
@@ -93,6 +100,7 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
                     <span className={cx("ml-1 text-xs", d.stale.includes(a.name) ? "text-amber-600" : "text-stone-500")}>
                       {a.as_of ? dateTR(a.as_of) : ""}{a.source === "dokum" ? " · dökümden" : " · elle"}
                       {d.stale.includes(a.name) && " · eski, yeni döküm yükle"}
+                      {a.reserved > 0 && ` · ${tl(a.reserved)} kumbarada`}
                     </span>
                   </span>
                   <button className="tabular-nums underline decoration-dotted" title="Bakiyeyi düzelt"
