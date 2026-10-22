@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronRight, Circle, X } from "lucide-react";
 import { useUI, type Route } from "../ui";
 import { useSave } from "./hooks";
 
-interface Step { key: string; done: boolean; route: Route; action?: "add"; title: string; text: string; guide?: string[] }
+interface Step { key: string; done: boolean; route: Route; action?: "add" | "salary"; cta?: string; title: string; text: string; guide?: string[] }
 interface Data { steps: Step[]; done: number; total: number; dismissed: boolean }
 
 /** Başlarken: ilk kurulum adımları; tamamlandıkça işaretlenir, istenince kapatılır. */
@@ -14,6 +14,9 @@ export default function Onboarding() {
   const d = q.data;
   if (!d || d.dismissed || d.done === d.total) return null;
   const next = d.steps.find((s) => !s.done);
+  const run = (s: Step) => s.action === "add" ? ui.openAdd()
+    : s.action === "salary" ? ui.openEntry(undefined, { kind: "gelir", description: "Maaş", category: "Maaş", recurring: true })
+    : ui.go(s.route);
   return (
     <section className="card p-4">
       <div className="mb-2 flex items-start justify-between gap-2">
@@ -32,7 +35,7 @@ export default function Onboarding() {
           <li key={s.key}>
             <button className={"flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50"
               + (s.key === next?.key ? " bg-blue-50/60 dark:bg-blue-950/20" : "")}
-              onClick={() => (s.action === "add" ? ui.openAdd() : ui.go(s.route))}>
+              onClick={() => run(s)}>
               {s.done ? <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-green-600" /> : <Circle size={18} className="mt-0.5 shrink-0 text-stone-300" />}
               <span className="min-w-0 flex-1">
                 <span className={"block text-sm font-medium" + (s.done ? " text-stone-400 line-through" : "")}>{s.title}</span>
@@ -45,7 +48,7 @@ export default function Onboarding() {
                 <ol className="list-decimal space-y-1 pl-4 text-xs text-stone-600 dark:text-stone-400">
                   {s.guide.map((g) => <li key={g}>{g}</li>)}
                 </ol>
-                <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => ui.go(s.route)}>Ekstreleri yükle</button>
+                <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => run(s)}>{s.cta ?? "Ekstreleri yükle"}</button>
               </div>
             )}
           </li>

@@ -1001,7 +1001,18 @@ def onboarding():
              "title": "Hesap bakiyelerini kontrol et",
              "text": "Dökümden gelen hesapların bakiyesi hazır; nakdini ve yemek kartını sen ekle."},
             {"key": "maas", "done": one("SELECT 1 FROM recurring WHERE kind = 'gelir'"), "route": "plan",
-             "title": "Maaşını ve sabit giderlerini gir", "text": "Maaş, kira, aidat… Planlama her ayı buna göre hesaplar."},
+             "action": "salary", "cta": "Maaşımı gir",
+             "title": "Maaşını ve sabit giderlerini gir",
+             "text": "Maaş, kira, aidat… Planlama gelecek ayları buna göre hesaplar.",
+             "guide": [
+                 "Net maaşını biliyorsan: tutarı yaz, 'Her ay tekrarlansın' açık kalsın, yattığı günü seç.",
+                 "Brüt maaşını biliyorsan: 'Brüt maaş'ı işaretle, aylık brütü yaz. Net her ay vergi dilimine göre "
+                 "hesaplanır (yıl ilerledikçe düşer, ocakta yeniden yükselir); altında ay ay dökümü görürsün.",
+                 "Zam ya da iş değişikliği olunca: Planlama'da maaş kalemini aç → 'Zam / iş değişikliği'; o aydan "
+                 "itibaren yeni brütle hesaplar, iş değişince vergi matrahı sıfırdan başlar.",
+                 "Hesap dökümü yüklediysen yatan maaşlar zaten gelir olarak görünür; bu adım gelecek ayların planı için.",
+                 "Kira, aidat, abonelik gibi her ay olan giderleri de aynı şekilde 'Her ay' olarak gir.",
+             ]},
             {"key": "fis", "done": one("SELECT 1 FROM receipt_items") or one("SELECT 1 FROM entries WHERE note LIKE 'Fiş:%'"),
              "route": "ozet", "action": "add", "title": "Bir fiş okut",
              "text": "+ → Fiş çek: tutar, işyeri, ürünler kendiliğinden dolar; fiyat takibi başlar."},

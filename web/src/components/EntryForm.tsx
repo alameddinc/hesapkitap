@@ -51,7 +51,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (w) setWalletId(w.id);
   }, [wallets.data, payment, walletId, draft]);
   const wallet = wallets.data?.find((w) => w.id === walletId);
-  const [isGross, setIsGross] = useState(!!rec?.gross_amount);
+  const [isGross, setIsGross] = useState(!!rec?.gross_amount || !!draft?.gross);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
   const [person, setPerson] = useState(row?.counterparty ?? "");
   const [location, setLocation] = useState(row?.location ?? draft?.location ?? "");
