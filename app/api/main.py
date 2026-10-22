@@ -1148,6 +1148,7 @@ class ZakatAssetIn(BaseModel):
     quantity: float = Field(gt=0)
     is_jewelry: bool = False
     note: str | None = None
+    acquired: date | None = None
 
 
 class ZakatAssetPatch(BaseModel):
@@ -1156,6 +1157,7 @@ class ZakatAssetPatch(BaseModel):
     quantity: float | None = Field(None, gt=0)
     is_jewelry: bool | None = None
     note: str | None = None
+    acquired: date | None = None
 
 
 class ZakatPaymentIn(BaseModel):
@@ -1249,7 +1251,8 @@ def zakat_delete_payment(pay_id: int):
 @app.post("/api/zakat/assets")
 def zakat_add_asset(body: ZakatAssetIn):
     try:
-        return {"id": zakat.add_asset(body.person_id, body.kind, body.quantity, body.is_jewelry, body.note)}
+        return {"id": zakat.add_asset(body.person_id, body.kind, body.quantity, body.is_jewelry, body.note,
+                                      body.acquired.isoformat() if body.acquired else None)}
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 
@@ -1259,6 +1262,8 @@ def zakat_patch_asset(aid: int, body: ZakatAssetPatch):
     d = body.model_dump(exclude_unset=True)
     if "is_jewelry" in d:
         d["is_jewelry"] = int(d["is_jewelry"])
+    if d.get("acquired"):
+        d["acquired"] = d["acquired"].isoformat()
     if not zakat.update_asset(aid, d):
         raise HTTPException(404, "Varlık yok")
     return {"ok": True}

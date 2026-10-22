@@ -6,11 +6,11 @@ import Modal from "../components/Modal";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 
-interface Line { id?: number; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
+interface Line { id?: number; acquired?: string | null; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
 interface Payment { id: number; year_start: string; pay_date: string; amount: number; note: string | null }
 interface Person {
   id: number; name: string; is_self: boolean; plus: Line[]; minus: Line[]; gross: number; deduct: number; total: number;
-  above_nisab: boolean; estimate: number; payments: Payment[]; missing_prices: string[];
+  above_nisab: boolean; estimate: number; suggest_start: string | null; payments: Payment[]; missing_prices: string[];
   hawl: null | { start: string; start_hijri: string; due: string; due_hijri: string; days_left: number; progress: number;
     zakat: number; paid: number; remaining: number };
 }
@@ -37,8 +37,9 @@ function AssetForm({ d, personId, onClose }: { d: ZakatData; personId: number; o
   const [qty, setQty] = useState("");
   const [jewelry, setJewelry] = useState(false);
   const [note, setNote] = useState("");
+  const [acquired, setAcquired] = useState("");
   const gold = kind.startsWith("ALTIN") || ["CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS"].includes(kind);
-  const save = useSave(() => json("POST", "/api/zakat/assets", { person_id: owner, kind, quantity: parseAmount(qty), is_jewelry: gold && jewelry, note }),
+  const save = useSave(() => json("POST", "/api/zakat/assets", { person_id: owner, kind, quantity: parseAmount(qty), is_jewelry: gold && jewelry, note, acquired: acquired || null }),
     () => { ui.toast("Eklendi"); onClose(); });
   return (
     <Modal title="Varlık ekle" onClose={onClose} footer={
@@ -63,6 +64,14 @@ function AssetForm({ d, personId, onClose }: { d: ZakatData; personId: number; o
             <label className="label" htmlFor="z-qty">Miktar ({d.kinds[kind]?.unit})</label>
             <input id="z-qty" className="input text-right" inputMode="decimal" autoFocus value={qty} onChange={(e) => setQty(e.target.value)} />
           </div>
+        </div>
+        <div>
+          <label className="label" htmlFor="z-acq">Ne zaman eline geçti? (ops.)</label>
+          <input id="z-acq" type="date" className="input" max={today()} value={acquired} onChange={(e) => setAcquired(e.target.value)} />
+          <p className="mt-1 text-xs text-stone-500">
+            Hanefî'de nisabın üstündeyken sonradan alınan mevcut yıla katılır; tarih, zekât yılının ne zaman başladığını bulmak için
+            işe yarar. Şâfiî'de her varlığın kendi yılı vardır. Tam bilmiyorsan yaklaşık ay yeter (ör. düğün tarihi).
+          </p>
         </div>
         {gold && (
           <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -171,6 +180,12 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               Zekât yılı, mal varlığının nisaba ulaştığı gün başlar ve bir kameri yıl (354 gün) sürer.
               {p.above_nisab ? " Şu an nisap üstündesin." : ""} Başladığı günü biliyorsan gir; bilmiyorsan bugünü ya da her yıl verdiğin günü (ör. Ramazan'ın 1'i) seç.
             </p>
+            {p.suggest_start && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-2 dark:border-blue-900 dark:bg-blue-950/30">
+                Girdiğin tarihlere göre nisaba yaklaşık <b>{dateTR(p.suggest_start)}</b>'de ulaşmışsın (bugünkü fiyatla).
+                <button className="btn-primary ml-2 px-2 py-0.5 text-xs" onClick={() => setStart.mutate(p.suggest_start, onErr)}>Bu tarihten başlat</button>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <input type="date" className="input w-44" max={today()} onChange={(e) => e.target.value && setStart.mutate(e.target.value, onErr)} />
               <button className="btn-ghost border border-stone-300 px-2 py-1 dark:border-stone-700" onClick={() => setStart.mutate(today(), onErr)}>Bugünden başlat</button>
@@ -191,6 +206,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               <li key={`p${i}`} className="flex items-center justify-between gap-2 py-1.5">
                 <span className={cx("min-w-0", x.exempt && "text-stone-400")}>
                   {x.label}{x.qty != null && <span className="text-xs text-stone-500"> · {x.qty} {x.unit}</span>}
+                  {x.acquired && <span className="text-xs text-stone-500"> · {dateTR(x.acquired)}</span>}
                   {x.note && <span className="text-xs text-stone-500"> · {x.note}</span>}
                   {x.source !== "varlik" && <span className="text-xs text-stone-400"> · uygulamadan</span>}
                 </span>
@@ -297,7 +313,7 @@ export default function Zakat() {
             <li><b>Nisap:</b> 80,18 gram altın değeri. Altın, gümüş, TL, döviz ve alacaklar aynı havuzda toplanır.</li>
             <li><b>Yıl:</b> nisaba ulaştığın günden itibaren bir kameri yıl (354 gün). Nisabın yılın başında ve sonunda olması yeter; arada azalıp çoğalması önemli değil.</li>
             <li><b>Bozdurup yeniden almak:</b> yıl içinde altını paraya ya da dövize çevirip sonra yeniden alman yılı bozmaz; hepsi aynı havuz. Sadece zekâta tabi malın <b>tamamı biterse</b> yıl yeniden başlar ("Yıl başlangıcını değiştir").</li>
-            <li><b>Tutar:</b> yıl dolduğu gündeki toplamın %2,5'i (kırkta biri). Yıl içinde kazandığın para da yıl sonundaki toplama dahildir.</li>
+            <li><b>Tutar:</b> yıl dolduğu gündeki toplamın %2,5'i (kırkta biri). Hanefî'de yıl içinde eline geçen para ve altın da yıl sonundaki toplama dahildir; Şâfiî'de sonradan gelen her varlığın kendi yılı vardır, yılını doldurmayan o yıl sayılmaz.</li>
             <li><b>Kimin malı:</b> zekât sahibine düşer; ailede her kişi ayrı hesaplanır. Düğün takıları aksi konuşulmadıkça kadına aittir. Eşin zekâtını onun izniyle sen de verebilirsin.</li>
             <li><b>Ziynet:</b> Hanefî'ye (Diyanet) göre takılan altın da dahil; Şâfiî'ye göre mutad kullanılan ziynet muaf.</li>
             <li><b>Borçlar:</b> Hanefî'de vadesi bu yıl içinde dolan borçlar (kart ekstreleri, kısa vadeli borçlar) düşülür; uzun vadeli kredinin sadece bu yılki taksitleri. Şâfiî'de borç düşülmez.</li>
