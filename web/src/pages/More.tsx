@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, ChevronRight, HandCoins, Landmark, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
 import { useUI } from "../ui";
 
 export default function More() {
@@ -21,6 +21,7 @@ export default function More() {
         <Item icon={<PiggyBank size={18} />} label="Tasarruf: kumbaralar, abonelikler, hedefler" onClick={() => ui.go("tasarruf")} />
         <Item icon={<Landmark size={18} />} label="Hesaplar ve kartlar: banka, nakit, kumbara" onClick={() => ui.go("hesaplar")} />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} />
+        <Item icon={<Moon size={18} />} label="Zekât: nisap, kameri yıl, hatırlatma" onClick={() => ui.go("zekat")} />
         <Item icon={<ArrowLeftRight size={18} />} label="Transferler: kime ne gitti" onClick={() => ui.go("transferler")} />
         <Item icon={<TagIcon size={18} />} label="Fiyatlar: fişlerden ürün fiyat takibi" onClick={() => ui.go("fiyatlar")} />
         <Item icon={<FileText size={18} />} label="Ekstreler" onClick={() => ui.go("ekstreler")} />

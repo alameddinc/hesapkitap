@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, finance, jobs, receipt, system, telegram
+from app import auth, backup, config, db, finance, jobs, receipt, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -1127,6 +1127,147 @@ def add_jar_move(jid: int, body: JarMoveIn):
 def delete_jar_move(mid: int):
     if not db.delete_jar_move(mid):
         raise HTTPException(404, "Hareket yok")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- zekât
+
+class ZakatPersonIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class ZakatPersonPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=40)
+    hawl_start: date | None = None
+    note: str | None = None
+
+
+class ZakatAssetIn(BaseModel):
+    person_id: int
+    kind: str
+    quantity: float = Field(gt=0)
+    is_jewelry: bool = False
+    note: str | None = None
+
+
+class ZakatAssetPatch(BaseModel):
+    person_id: int | None = None
+    kind: str | None = None
+    quantity: float | None = Field(None, gt=0)
+    is_jewelry: bool | None = None
+    note: str | None = None
+
+
+class ZakatPaymentIn(BaseModel):
+    amount: float = Field(gt=0)
+    pay_date: date | None = None
+    note: str | None = None
+
+
+class ZakatSettingsIn(BaseModel):
+    madhhab: Literal["hanefi", "safii"] | None = None
+    include_app: bool | None = None
+    include_receivables: bool | None = None
+    manual_gram: float | None = Field(None, ge=0)  # 0: elle fiyatı kaldır
+
+
+@app.get("/api/zakat")
+def zakat_summary():
+    return zakat.compute()
+
+
+@app.put("/api/zakat/settings")
+def zakat_settings(body: ZakatSettingsIn):
+    d = body.model_dump(exclude_unset=True)
+    if "madhhab" in d:
+        db.set_setting("zakat:madhhab", d["madhhab"])
+    for k in ("include_app", "include_receivables"):
+        if k in d:
+            db.set_setting(f"zakat:{k}", "1" if d[k] else "0")
+    if "manual_gram" in d:
+        db.set_setting("zakat:manual_gram", str(d["manual_gram"]) if d["manual_gram"] else None)
+    return {"ok": True}
+
+
+@app.post("/api/zakat/prices/refresh")
+def zakat_prices_refresh():
+    return zakat.fetch_prices(force=True)
+
+
+@app.post("/api/zakat/people")
+def zakat_add_person(body: ZakatPersonIn):
+    import sqlite3
+
+    try:
+        return {"id": zakat.add_person(body.name)}
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(409, "Bu isimde biri zaten var") from e
+
+
+@app.patch("/api/zakat/people/{pid}")
+def zakat_patch_person(pid: int, body: ZakatPersonPatch):
+    d = body.model_dump(exclude_unset=True)
+    if "hawl_start" in d and d["hawl_start"]:
+        d["hawl_start"] = d["hawl_start"].isoformat()
+    if not zakat.update_person(pid, d):
+        raise HTTPException(404, "Kişi yok")
+    return {"ok": True}
+
+
+@app.delete("/api/zakat/people/{pid}")
+def zakat_delete_person(pid: int):
+    if not zakat.delete_person(pid):
+        raise HTTPException(404, "Kişi yok ya da silinemez")
+    return {"ok": True}
+
+
+@app.post("/api/zakat/people/{pid}/next-year")
+def zakat_next_year(pid: int):
+    try:
+        return {"hawl_start": zakat.next_year(pid)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.post("/api/zakat/people/{pid}/payments")
+def zakat_add_payment(pid: int, body: ZakatPaymentIn):
+    try:
+        return {"id": zakat.add_payment(pid, body.amount, (body.pay_date or date.today()).isoformat(), body.note)}
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.delete("/api/zakat/payments/{pay_id}")
+def zakat_delete_payment(pay_id: int):
+    if not zakat.delete_payment(pay_id):
+        raise HTTPException(404, "Ödeme yok")
+    return {"ok": True}
+
+
+@app.post("/api/zakat/assets")
+def zakat_add_asset(body: ZakatAssetIn):
+    try:
+        return {"id": zakat.add_asset(body.person_id, body.kind, body.quantity, body.is_jewelry, body.note)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.patch("/api/zakat/assets/{aid}")
+def zakat_patch_asset(aid: int, body: ZakatAssetPatch):
+    d = body.model_dump(exclude_unset=True)
+    if "is_jewelry" in d:
+        d["is_jewelry"] = int(d["is_jewelry"])
+    if not zakat.update_asset(aid, d):
+        raise HTTPException(404, "Varlık yok")
+    return {"ok": True}
+
+
+@app.delete("/api/zakat/assets/{aid}")
+def zakat_delete_asset(aid: int):
+    if not zakat.delete_asset(aid):
+        raise HTTPException(404, "Varlık yok")
     return {"ok": True}
 
 
