@@ -537,7 +537,7 @@ def _owners() -> list[str]:
     return db.card_holders() + db.owner_names()
 
 
-async def _read_bank_pdf(file: UploadFile) -> tuple[list[dict], dict]:
+async def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple[list[dict], dict]:
     import hashlib
 
     from app import bank_import, bank_pdf
@@ -546,7 +546,7 @@ async def _read_bank_pdf(file: UploadFile) -> tuple[list[dict], dict]:
     key = hashlib.sha256(data).hexdigest()
     if key not in _PDF_CACHE:
         try:
-            _PDF_CACHE[key] = bank_pdf.parse_account_pdf(data, db.pdf_passwords())
+            _PDF_CACHE[key] = bank_pdf.parse_account_pdf(data, ([password] if password else []) + db.pdf_passwords())
         except (bank_pdf.BankPdfError, receipt.ReceiptError) as e:
             raise HTTPException(422, str(e)) from e
         while len(_PDF_CACHE) > 8:
@@ -574,14 +574,14 @@ async def _read_bank_file(file: UploadFile):
 
 @app.post("/api/bank-import/preview")
 async def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form(None),
-                              header_row: int | None = Form(None)):
+                              header_row: int | None = Form(None), password: str | None = Form(None)):
     """Sütunları tahmin et (ya da verilen eşlemeyi kullan), ilk satırları ve özetini döndür."""
     import json
 
     from app import bank_import
 
     if (file.filename or "").lower().endswith(".pdf"):
-        parsed, meta = await _read_bank_pdf(file)
+        parsed, meta = await _read_bank_pdf(file, password)
         with db.connect() as c:
             seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
         counts: dict[str, int] = {}
@@ -618,14 +618,15 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
 
 
 @app.post("/api/bank-import")
-async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0)):
+async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0),
+                          password: str | None = Form(None)):
     import json
 
     from app import bank_import
 
     account = ""
     if (file.filename or "").lower().endswith(".pdf"):
-        parsed, meta = await _read_bank_pdf(file)
+        parsed, meta = await _read_bank_pdf(file, password)
         account = meta.get("bank") or ""
         if meta.get("owner_name"):
             db.remember_owner_name(meta["owner_name"])  # e-posta bildirimlerinde de "kendin" tanınsın
@@ -807,6 +808,40 @@ class PaymentAccount(BaseModel):
 def set_debt_payment_account(pid: int, body: PaymentAccount):
     if not db.set_debt_payment_account(pid, body.account_id):
         raise HTTPException(404, "Ödeme yok")
+    return {"ok": True}
+
+
+@app.get("/api/onboarding")
+def onboarding():
+    """Başlarken: hangi adımlar tamam (Özet'teki rehber kartı)."""
+    from app import mailbox, telegram
+
+    with db.connect() as c:
+        one = lambda q: bool(c.execute(q).fetchone())  # noqa: E731
+        steps = [
+            {"key": "hesap", "done": one("SELECT 1 FROM accounts WHERE as_of IS NOT NULL"), "route": "hesaplar",
+             "title": "Hesaplarını ekle", "text": "Banka hesaplarının ve nakdinin bugünkü bakiyesini gir (yemek kartı da)."},
+            {"key": "ekstre", "done": one("SELECT 1 FROM statements"), "route": "ekstreler",
+             "title": "Kredi kartı ekstreni yükle", "text": "İnternet şubesinden indirdiğin PDF'i Ekstreler'e bırak."},
+            {"key": "dokum", "done": one("SELECT 1 FROM entries WHERE import_hash IS NOT NULL"), "route": "ekstreler",
+             "title": "Hesap dökümünü yükle", "text": "Vadesiz hesabın hareketleri: maaş, havaleler, faturalar kendiliğinden girer."},
+            {"key": "maas", "done": one("SELECT 1 FROM recurring WHERE kind = 'gelir'"), "route": "plan",
+             "title": "Maaşını ve sabit giderlerini gir", "text": "Maaş, kira, aidat… Planlama her ayı buna göre hesaplar."},
+            {"key": "fis", "done": one("SELECT 1 FROM receipt_items") or one("SELECT 1 FROM entries WHERE note LIKE 'Fiş:%'"),
+             "route": "ozet", "action": "add", "title": "Bir fiş okut",
+             "text": "+ → Fiş çek: tutar, işyeri, ürünler kendiliğinden dolar; fiyat takibi başlar."},
+            {"key": "telegram", "done": telegram.enabled(), "route": "ayarlar",
+             "title": "Telegram'ı bağla (isteğe bağlı)", "text": "Son ödeme hatırlatmaları ve ay sonu raporu telefonuna gelsin."},
+            {"key": "mail", "done": mailbox.enabled(), "route": "ayarlar",
+             "title": "E-postayı bağla (isteğe bağlı)", "text": "Bankanın e-ekstreleri kendiliğinden içe aktarılsın."},
+        ]
+    return {"steps": steps, "done": sum(s_["done"] for s_ in steps), "total": len(steps),
+            "dismissed": db.get_setting("onboarding_dismissed") == "1"}
+
+
+@app.post("/api/onboarding/dismiss")
+def onboarding_dismiss():
+    db.set_setting("onboarding_dismissed", "1")
     return {"ok": True}
 
 
@@ -1073,6 +1108,20 @@ def list_statements():
     return db.list_statements()
 
 
+def _statement_kind(data: bytes, passwords: list[str]) -> str | None:
+    """PDF kart ekstresi mi hesap dökümü mü? (açılamazsa None: kart akışı şifre ister)"""
+    from app.mailbox import _looks_like_account_statement
+    from app.parsers import extract_text
+
+    for pw in [None, *passwords]:
+        try:
+            text = extract_text(data, pw)
+        except Exception:  # noqa: BLE001 - şifreli: sıradaki
+            continue
+        return "account" if _looks_like_account_statement(text) else "card"
+    return None
+
+
 @app.post("/api/statements/upload")
 async def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
                             remember: bool = Form(False)):
@@ -1083,6 +1132,16 @@ async def upload_statements(files: list[UploadFile] = File(...), password: str |
     for f in files:
         data = await f.read()
         res = {"filename": f.filename}
+        name = (f.filename or "").lower()
+        if name.endswith((".xlsx", ".xls", ".csv")):  # tablo dosyası = hesap hareketleri
+            results.append({**res, "status": "account_statement"})
+            continue
+        kind = _statement_kind(data, tried)
+        if kind == "account":  # vadesiz hesap dökümü: arayüz hesap hareketleri önizlemesine yönlendirir
+            if password and remember:
+                db.remember_pdf_password(password)
+            results.append({**res, "status": "account_statement"})
+            continue
         try:
             stmt = parse_statement(data, passwords=tried)
         except PasswordRequired as e:

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, FileUp, KeyRound, Loader2, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, FileUp, KeyRound, Landmark, Loader2, Trash2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type UploadResult } from "../api";
 import BankImport from "../components/BankImport";
@@ -16,6 +16,8 @@ export default function Statements() {
   const [pw, setPw] = useState("");
   const [remember, setRemember] = useState(true);
   const input = useRef<HTMLInputElement>(null);
+  // tek yükleme alanı: hesap dökümleri sırayla hesap hareketleri önizlemesine gider
+  const [queue, setQueue] = useState<{ file: File; password?: string }[]>([]);
   const upload = useSave(
     ({ files, password }: { files: File[]; password?: string }) => api.upload(files, password, remember),
     (res: UploadResult[]) => {
@@ -25,13 +27,17 @@ export default function Statements() {
   );
   const sendFiles = (files: File[], password?: string) =>
     upload.mutate({ files, password }, {
-      onSuccess: (res) => setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required"))),
+      onSuccess: (res) => {
+        setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required")));
+        const acc = files.filter((f) => res.some((r) => r.filename === f.name && r.status === "account_statement"));
+        if (acc.length) setQueue((q) => [...q, ...acc.map((file) => ({ file, password }))]);
+      },
     });
   const del = useSave((id: number) => api.deleteStatement(id), () => ui.toast("Ekstre silindi"));
 
   const send = (files: FileList | null) => {
-    const pdfs = Array.from(files ?? []).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
-    if (pdfs.length) sendFiles(pdfs);
+    const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
+    if (ok.length) sendFiles(ok);
   };
 
   return (
@@ -44,9 +50,12 @@ export default function Statements() {
         className={cx("card flex cursor-pointer flex-col items-center gap-2 border-2 border-dashed p-8 text-center",
           drag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30")}>
         {upload.isPending ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
-        <div className="font-medium">{upload.isPending ? "İşleniyor…" : "PDF ekstreyi bırak veya seç"}</div>
-        <div className="text-xs text-stone-500">İnternet şubesinden indirilen hesap özeti · Hazır okuyucu: VakıfBank, Kuveyt Türk · diğer bankalar yapay zekâ ile</div>
-        <input ref={input} type="file" accept="application/pdf" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
+        <div className="font-medium">{upload.isPending ? "İşleniyor…" : "Ekstre ya da hesap dökümü bırak veya seç"}</div>
+        <div className="text-xs text-stone-500">
+          Kredi kartı ekstresi (PDF) ya da vadesiz hesap dökümü (PDF, Excel, CSV) — hangisi olduğunu kendisi anlar ·
+          birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri yapay zekâ ile)
+        </div>
+        <input ref={input} type="file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>
       {upload.error && <p className="text-sm text-red-600">{(upload.error as Error).message}</p>}
 
@@ -75,7 +84,8 @@ export default function Statements() {
         <ul className="space-y-2">
           {results.map((r, i) => (
             <li key={i} className="card flex items-start gap-3 p-3 text-sm">
-              {r.status === "error" ? <XCircle className="text-red-600" size={18} />
+              {r.status === "account_statement" ? <Landmark className="text-blue-600" size={18} />
+                : r.status === "error" ? <XCircle className="text-red-600" size={18} />
                 : r.status === "password_required" ? <KeyRound className="text-amber-600" size={18} />
                 : <CheckCircle2 className="text-green-600" size={18} />}
               <div>
@@ -83,6 +93,7 @@ export default function Statements() {
                 {r.status === "error" && <div className="text-red-600">{r.message}</div>}
                 {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500">Zaten yüklü, atlandı.</div>}
+                {r.status === "account_statement" && <div className="text-blue-700 dark:text-blue-400">Hesap dökümü → aşağıda önizle ve içe aktar</div>}
                 {r.status === "saved" && (
                   <div className="text-stone-500">
                     {r.bank} {r.card_no} · kesim {dateTR(r.period_end!)} · {r.txn_count} işlem · {tl(r.total_debt!)}
@@ -100,7 +111,7 @@ export default function Statements() {
         </ul>
       )}
 
-      <BankImport />
+      <BankImport incoming={queue[0] ?? null} onDone={() => setQueue((q) => q.slice(1))} />
 
       <ul className="space-y-2">
         {list.data?.map((s) => (
