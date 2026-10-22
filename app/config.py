@@ -57,9 +57,11 @@ def describe() -> list[dict]:
 
 
 def secret_key() -> str:
-    """Oturum imza anahtarı: env yoksa ilk açılışta üretilip saklanır."""
-    v = os.environ.get("SECRET_KEY") or db.get_setting("auth:secret_key")
+    """Sunucu geneli gizli anahtar (sistem veritabanında): env yoksa ilk açılışta üretilip saklanır."""
+    from app import system
+
+    v = os.environ.get("SECRET_KEY") or system.get("secret_key")
     if not v:
         v = secrets.token_hex(32)
-        db.set_setting("auth:secret_key", v)
+        system.put("secret_key", v)
     return v

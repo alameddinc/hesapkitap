@@ -13,12 +13,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, finance, jobs, receipt, telegram
+from app import auth, backup, config, db, finance, jobs, receipt, system, telegram
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 db.init_db()
+auth.ensure_admin()
 
 
 @asynccontextmanager
@@ -47,12 +48,18 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB;
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
+    user = None
     if auth.enabled() and path.startswith("/api/") and not path.startswith("/api/auth/"):
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)
-        if not auth.valid_token(request.cookies.get(auth.COOKIE)):
+        user = auth.token_user(request.cookies.get(auth.COOKIE))
+        if not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
-    response = await call_next(request)
+    if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
+        with db.use_space(system.user_db_path(user), user):
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -64,10 +71,12 @@ async def require_login(request: Request, call_next):
 
 
 class LoginIn(BaseModel):
+    username: str | None = None  # boş: yönetici (eski tek kullanıcılı giriş)
     password: str
 
 
 class SetupIn(BaseModel):
+    username: str = "admin"
     password: str
     code: str | None = None
 
@@ -77,10 +86,10 @@ class PasswordChange(BaseModel):
     new: str
 
 
-def _start_session(request: Request, response: Response) -> None:
+def _start_session(request: Request, response: Response, user: dict) -> None:
     # HTTPS arkasındaysa (doğrudan ya da proxy başlığıyla) çerez otomatik Secure olur
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    response.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.SESSION_DAYS * 86400,
+    response.set_cookie(auth.COOKIE, auth.make_token(system.user(user["id"])), max_age=auth.SESSION_DAYS * 86400,
                         httponly=True, secure=auth.cookie_secure() or https, samesite="lax", path="/")
 
 
@@ -93,8 +102,10 @@ def auth_status(request: Request):
         if not local:
             auth.setup_code()  # log'a yazılsın
         return {"required": True, "authenticated": False, "setup_required": True, "setup_code_needed": not local}
-    return {"required": True, "authenticated": auth.valid_token(request.cookies.get(auth.COOKIE)),
-            "setup_required": False, "password_source": auth.password_source()}
+    u = auth.token_user(request.cookies.get(auth.COOKIE))
+    return {"required": True, "authenticated": bool(u), "setup_required": False,
+            "password_source": auth.password_source(u) if u else None,
+            "user": {"username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
 
 
 @app.post("/api/auth/setup")
@@ -110,10 +121,10 @@ def setup(body: SetupIn, request: Request, response: Response):
             auth.record_fail(ip)
             raise HTTPException(403, "Kurulum kodu yanlış. Kodu sunucu log'unda bulabilirsin: docker compose logs | grep kurulum")
     try:
-        auth.set_password(body.password)
+        u = auth.create_admin(body.username, body.password)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    _start_session(request, response)
+    _start_session(request, response, u)
     return {"ok": True}
 
 
@@ -126,24 +137,26 @@ def login(body: LoginIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
-    if not auth.check_password(body.password):
+    u = auth.login(body.username, body.password)
+    if not u:
         auth.record_fail(ip)
-        raise HTTPException(401, "Şifre yanlış")
-    _start_session(request, response)
+        raise HTTPException(401, "Kullanıcı adı ya da şifre yanlış" if body.username else "Şifre yanlış")
+    _start_session(request, response, u)
     return {"ok": True}
 
 
 @app.post("/api/settings/password")
 def change_password(body: PasswordChange, request: Request, response: Response):
-    if auth.password_source() == "env":
+    u = db.current_user() or auth.admin()
+    if auth.password_source(u) == "env":
         raise HTTPException(409, "Şifre sunucuda APP_PASSWORD ortam değişkeniyle belirlenmiş; oradan değiştir.")
-    if not auth.check_password(body.current):
+    if not auth.check_password(u, body.current):
         raise HTTPException(403, "Mevcut şifre yanlış")
     try:
-        auth.set_password(body.new)
+        auth.set_password(u["id"], body.new)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    _start_session(request, response)  # imza anahtarı yenilendi; bu cihazda oturum devam etsin
+    _start_session(request, response, u)  # eski oturumlar düştü; bu cihazda oturum devam etsin
     return {"ok": True}
 
 
@@ -1479,7 +1492,7 @@ def bill_file(bid: int):
     b = db.get_bill(bid)
     if not b or not b["file_name"]:
         raise HTTPException(404)
-    path = os.path.join(db.BILL_DIR, b["file_name"])
+    path = os.path.join(db.bill_dir(), b["file_name"])
     if not os.path.isfile(path):
         raise HTTPException(404)
     return FileResponse(path, filename=f"{b['provider']}-{b['due_date']}{os.path.splitext(path)[1]}")

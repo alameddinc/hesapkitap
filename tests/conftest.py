@@ -40,6 +40,9 @@ def _isolated_db(tmp_path, monkeypatch):
     boş, şeması kurulmuş geçici bir veritabanı görür (CI'daki temiz ortamla aynı)."""
     from app import db
 
+    from app import system
+
+    monkeypatch.setattr(system, "SYSTEM_DB", str(tmp_path / "system.db"))
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "isolated.db"))
     monkeypatch.setattr(db, "UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr(db, "BILL_DIR", str(tmp_path / "bills"))

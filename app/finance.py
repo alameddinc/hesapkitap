@@ -22,10 +22,11 @@ _CACHE: dict = {}
 
 def _db_stamp() -> tuple:
     try:
-        st = _os.stat(db.DB_PATH)
-        return db.DB_PATH, st.st_mtime_ns, st.st_size
+        path = db.db_path()
+        st = _os.stat(path)
+        return path, st.st_mtime_ns, st.st_size
     except OSError:
-        return db.DB_PATH, 0, 0
+        return db.db_path(), 0, 0
 
 
 def _memo(fn):

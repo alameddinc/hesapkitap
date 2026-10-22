@@ -5,6 +5,7 @@ import { useState } from "react";
 /** İlk açılış: şifre belirle. Uzaktan erişimde container log'undaki kurulum kodu istenir. */
 export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
   const qc = useQueryClient();
+  const [user, setUser] = useState("admin");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [code, setCode] = useState("");
@@ -18,7 +19,7 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
     setErr(null);
     const res = await fetch("/api/auth/setup", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pw, code: code || null }),
+      body: JSON.stringify({ username: user.trim() || "admin", password: pw, code: code || null }),
     });
     setBusy(false);
     if (res.ok) qc.invalidateQueries();
@@ -31,7 +32,11 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
         <div className="flex flex-col items-center gap-2 text-center">
           <img src="/icons/icon-192.png" alt="" className="size-16 rounded-2xl shadow-sm" />
           <h1 className="text-lg font-semibold">HesapKitap'a hoş geldin</h1>
-          <p className="text-sm text-stone-500">Önce bir şifre belirle. Verilerin sadece bu sunucuda durur.</p>
+          <p className="text-sm text-stone-500">Yönetici hesabını oluştur. Verilerin sadece bu sunucuda durur.</p>
+        </div>
+        <div>
+          <label className="label" htmlFor="s-user">Kullanıcı adı</label>
+          <input id="s-user" className="input" autoComplete="username" autoCapitalize="none" value={user} onChange={(e) => setUser(e.target.value)} />
         </div>
         <div>
           <label className="label" htmlFor="s-pw">Şifre (en az 10 karakter)</label>

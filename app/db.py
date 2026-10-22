@@ -3,6 +3,7 @@ import hashlib
 import os
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
 
 from app.categorize import DEFAULT_RULES, RULES_VERSION, categorize
@@ -315,10 +316,54 @@ MIGRATIONS = [
 ]
 
 
+# ---------------------------------------------------------------- aktif kullanıcının alanı
+# Her istek (ve zamanlanmış iş) giriş yapan kullanıcının veritabanında çalışır. Bağlam boşsa ana veritabanı
+# (DB_PATH: yönetici / tek kullanıcılı kurulum / testler).
+_space: ContextVar[dict | None] = ContextVar("hesapkitap_space", default=None)
+
+
+def db_path() -> str:
+    s = _space.get()
+    return s["db"] if s else DB_PATH
+
+
+def upload_dir() -> str:
+    s = _space.get()
+    return s["uploads"] if s else UPLOAD_DIR
+
+
+def bill_dir() -> str:
+    s = _space.get()
+    return s["bills"] if s else BILL_DIR
+
+
+def current_user() -> dict | None:
+    s = _space.get()
+    return s.get("user") if s else None
+
+
+@contextmanager
+def use_space(db_file: str | None, user: dict | None = None):
+    """db_file None: ana veritabanı. Kullanıcı klasöründe ilk kullanımda şema kurulur."""
+    if db_file:
+        base = os.path.dirname(os.path.abspath(db_file))
+        space = {"db": db_file, "uploads": os.path.join(base, "uploads"), "bills": os.path.join(base, "bills"), "user": user}
+    else:
+        space = {"db": DB_PATH, "uploads": UPLOAD_DIR, "bills": BILL_DIR, "user": user}
+    token = _space.set(space)
+    try:
+        if db_file and not os.path.exists(db_file):
+            init_db()
+        yield
+    finally:
+        _space.reset(token)
+
+
 @contextmanager
 def connect():
-    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    path = db_path()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
@@ -414,7 +459,7 @@ def _backfill_statements(c) -> None:
     from app.parsers import parse_statement
 
     for r in c.execute("SELECT id, file_hash FROM statements WHERE next_due_date IS NULL").fetchall():
-        path = os.path.join(UPLOAD_DIR, f"{r['file_hash']}.pdf")
+        path = os.path.join(upload_dir(), f"{r['file_hash']}.pdf")
         if not os.path.exists(path):
             continue
         try:
@@ -479,8 +524,8 @@ def save_statement(data: bytes, filename: str, stmt: Statement) -> int:
             row["statement_id"] = sid
             cols = ", ".join(row)
             c.execute(f"INSERT INTO transactions ({cols}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    with open(os.path.join(UPLOAD_DIR, f"{file_hash(data)}.pdf"), "wb") as out:
+    os.makedirs(upload_dir(), exist_ok=True)
+    with open(os.path.join(upload_dir(), f"{file_hash(data)}.pdf"), "wb") as out:
         out.write(data)
     return sid
 
@@ -911,7 +956,7 @@ def delete_bill(bid: int) -> None:
         c.execute("DELETE FROM bills WHERE id = ?", (bid,))
     if b["file_name"]:
         try:
-            os.remove(os.path.join(BILL_DIR, b["file_name"]))
+            os.remove(os.path.join(bill_dir(), b["file_name"]))
         except OSError:
             pass
 
@@ -944,9 +989,9 @@ def unpay_bill(bid: int) -> None:
 
 
 def save_bill_file(data: bytes, ext: str) -> str:
-    os.makedirs(BILL_DIR, exist_ok=True)
+    os.makedirs(bill_dir(), exist_ok=True)
     name = f"{file_hash(data)[:24]}{ext}"
-    with open(os.path.join(BILL_DIR, name), "wb") as f:
+    with open(os.path.join(bill_dir(), name), "wb") as f:
         f.write(data)
     return name
 
