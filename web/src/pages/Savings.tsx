@@ -3,7 +3,6 @@ import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } fr
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import Jars from "../components/Jars";
-import Targets from "../components/Targets";
 import { useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
@@ -161,7 +160,6 @@ export default function Savings() {
       <h1 className="text-xl font-semibold">Tasarruf</h1>
 
       <Jars />
-      <Targets />
 
       {d && (
         <div className="card flex items-center gap-4 p-4">

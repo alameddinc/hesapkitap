@@ -1063,16 +1063,27 @@ class JarMoveIn(BaseModel):
 
 
 def _jar_view(j: dict, today: date) -> dict:
-    """Hedef ilerlemesi ve son tarihe göre ayda gereken."""
+    """Hedef ilerlemesi, son tarihe göre ayda gereken ve bu hızla ne zaman ulaşılacağı.
+    Hız: otomatik aylık ayırma varsa o; yoksa son 3 ayda ayrılan (başlangıç ayırması hariç) aylık ortalaması."""
+    from datetime import timedelta
+
     out = {**j}
+    since = (today - timedelta(days=90)).isoformat()
+    recent = sum(m["amount"] for m in j["moves"] if m["move_date"] >= since
+                 and m["note"] not in ("Başlangıç", "Hedeften aktarıldı"))
+    out["pace"] = j["monthly"] or (round(recent / 3, 2) if recent > 0 else 0.0)
     if j["goal"]:
         out["pct"] = min(100.0, round(j["balance"] / j["goal"] * 100, 1))
         left = max(0.0, j["goal"] - j["balance"])
         out["left"] = round(left, 2)
+        if left > 0 and out["pace"] > 0:
+            n = -(-left // out["pace"])
+            out["eta"] = finance.add_months(today.strftime("%Y-%m"), int(n))
         if j["deadline"] and left > 0:
             dl = date.fromisoformat(j["deadline"])
             months = max(1, (dl.year - today.year) * 12 + dl.month - today.month)
             out["need_per_month"] = round(left / months, 2)
+            out["on_track"] = bool(out.get("eta") and out["eta"] <= j["deadline"][:7])
     return out
 
 

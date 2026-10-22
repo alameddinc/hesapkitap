@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Minus, PiggyBank, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR, parseAmount, tl } from "../format";
+import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import AccountSelect from "./AccountSelect";
 import { useSave } from "./hooks";
@@ -12,6 +12,7 @@ interface Jar {
   id: number; name: string; goal: number | null; deadline: string | null; account_id: number | null; account_name: string | null;
   monthly: number | null; auto_day: number | null; note: string | null; closed_at: string | null;
   balance: number; moves: Move[]; pct?: number; left?: number; need_per_month?: number;
+  pace: number; eta?: string; on_track?: boolean;
 }
 
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
@@ -128,7 +129,7 @@ export default function Jars() {
         <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setForm({})}><Plus size={16} /> Kumbara</button>
       </div>
       {!all.length && (
-        <p className="text-sm text-stone-500">Tatil, telefon, acil durum… Bir şey için para ayır; harcanabilir bakiyenden düşer, ne kadar biriktiğini görürsün.</p>
+        <p className="text-sm text-stone-500">Tatil, telefon, acil durum… Bir şey için para ayır: hedef ve son tarih koyarsan ayda ne kadar ayırman gerektiğini ve bu hızla ne zaman ulaşacağını gösterir. Ayrılan para harcanabilir bakiyenden düşer.</p>
       )}
       <ul className="space-y-3">
         {(showClosed ? all : active).map((j) => (
@@ -151,6 +152,12 @@ export default function Jars() {
                   : [j.deadline && `son tarih ${dateTR(j.deadline)}`, j.need_per_month && `ayda ${tl(j.need_per_month)} ayırmalısın`,
                     j.monthly && `her ayın ${j.auto_day}. günü ${tl(j.monthly)} otomatik`, j.account_name && `yeri: ${j.account_name}`]
                     .filter(Boolean).join(" · ")}
+                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && (
+                  <span className={cx("block", j.eta ? (j.on_track === false ? "text-amber-600" : "text-green-700 dark:text-green-400") : "text-stone-500")}>
+                    {j.eta ? `Bu hızla (ayda ${tl(j.pace)}) ${monthLabel(j.eta)}'de ulaşırsın${j.on_track === false ? ", son tarihe yetişmiyor" : ""}`
+                      : "Son 3 ayda ayırma yok; ayır ya da otomatik ayırmayı aç"}
+                  </span>
+                )}
               </span>
               {!j.closed_at && (
                 <span className="flex gap-1">

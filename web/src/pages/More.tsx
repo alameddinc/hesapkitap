@@ -18,7 +18,7 @@ export default function More() {
       <h1 className="text-xl font-semibold">Diğer</h1>
       <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
         <Item icon={<Sheet size={18} />} label="Tablo: filtreler, pivot, Excel" onClick={() => ui.go("tablo")} />
-        <Item icon={<PiggyBank size={18} />} label="Tasarruf: kumbaralar, abonelikler, hedefler" onClick={() => ui.go("tasarruf")} />
+        <Item icon={<PiggyBank size={18} />} label="Tasarruf: kumbaralar, abonelikler, kısma hedefleri" onClick={() => ui.go("tasarruf")} />
         <Item icon={<Landmark size={18} />} label="Hesaplar ve kartlar: banka, nakit, kumbara" onClick={() => ui.go("hesaplar")} />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} />
         <Item icon={<Moon size={18} />} label="Zekât: nisap, kameri yıl, hatırlatma" onClick={() => ui.go("zekat")} />
