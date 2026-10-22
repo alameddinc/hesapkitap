@@ -44,6 +44,7 @@ export default function Login() {
         <button className="btn-primary mt-4 w-full justify-center py-2" disabled={busy || !pw}>
           {busy ? "Giriş yapılıyor…" : "Giriş"}
         </button>
+        <a href="#/kayit" className="mt-3 block text-center text-xs text-stone-500 underline">Davet kodun var mı? Hesap aç</a>
       </form>
     </div>
   );

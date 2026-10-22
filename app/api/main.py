@@ -55,6 +55,9 @@ async def require_login(request: Request, call_next):
         user = auth.token_user(request.cookies.get(auth.COOKIE))
         if not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
+        # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
+        if user["must_change_password"] and path != "/api/settings/password":
+            return JSONResponse({"detail": "password_change_required"}, status_code=403)
     if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
         with db.use_space(system.user_db_path(user), user):
             response = await call_next(request)
@@ -158,6 +161,153 @@ def change_password(body: PasswordChange, request: Request, response: Response):
         raise HTTPException(422, str(e)) from e
     _start_session(request, response, u)  # eski oturumlar düştü; bu cihazda oturum devam etsin
     return {"ok": True}
+
+
+class RegisterIn(BaseModel):
+    code: str
+    username: str
+    password: str
+
+
+@app.get("/api/auth/invite/{code}")
+def invite_check(code: str):
+    return {"valid": system.valid_invite(code)}
+
+
+@app.post("/api/auth/register")
+def register(body: RegisterIn, request: Request, response: Response):
+    """Davet koduyla hesap aç. Kod tek kullanımlık; her kullanıcının verisi kendi dosyasında."""
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    if not system.valid_invite(body.code):
+        auth.record_fail(ip)
+        raise HTTPException(403, "Davet kodu geçersiz, kullanılmış ya da süresi dolmuş")
+    try:
+        u = auth.create_user(body.username, body.password)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if not system.use_invite(body.code, u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
+        system.delete_user(u["id"])
+        raise HTTPException(409, "Davet kodu az önce kullanıldı")
+    _start_session(request, response, u)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- yönetici: kullanıcılar ve davetler
+# Yönetici sadece hesapları yönetir; kullanıcıların finans verisine erişen bir uç yoktur.
+
+def _require_admin() -> None:
+    if not config.is_admin():
+        raise HTTPException(403, "Sadece yönetici")
+
+
+def _user_row(u: dict) -> dict:
+    return {"id": u["id"], "username": u["username"], "role": u["role"], "created_at": u["created_at"],
+            "last_login": u["last_login"], "disabled": bool(u["disabled"]),
+            "must_change_password": bool(u["must_change_password"]),
+            "ai_used": system.ai_used(u["id"]), "ai_quota": system.ai_quota(u), "ai_quota_custom": u["ai_quota"]}
+
+
+class AdminUserIn(BaseModel):
+    username: str
+
+
+class AdminUserPatch(BaseModel):
+    disabled: bool | None = None
+    ai_quota: int | None = Field(None, ge=0, le=100000)
+    reset_quota: bool = False  # True: varsayılan kotaya dön
+
+
+class InviteIn(BaseModel):
+    note: str | None = None
+    days: int = Field(14, ge=1, le=90)
+
+
+@app.get("/api/admin/users")
+def admin_users():
+    _require_admin()
+    return {"users": [_user_row(u) for u in system.users()], "invites": system.invites(),
+            "default_quota": system.ai_quota({"role": "user"})}
+
+
+@app.post("/api/admin/users")
+def admin_create_user(body: AdminUserIn):
+    """Davetsiz hesap: geçici şifre bir kez gösterilir, ilk girişte değiştirilir."""
+    _require_admin()
+    temp = auth.temp_password()
+    try:
+        u = auth.create_user(body.username, temp, must_change=True)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"user": _user_row(u), "temp_password": temp}
+
+
+@app.patch("/api/admin/users/{uid}")
+def admin_update_user(uid: int, body: AdminUserPatch):
+    _require_admin()
+    u = system.user(uid)
+    if not u:
+        raise HTTPException(404, "Kullanıcı yok")
+    if u["role"] == "admin" and body.disabled:
+        raise HTTPException(409, "Yönetici kapatılamaz")
+    if body.disabled is not None:
+        system.update_user(uid, disabled=int(body.disabled))
+        if body.disabled:
+            system.bump_session(uid)
+    if body.reset_quota:
+        system.update_user(uid, ai_quota=None)
+    elif body.ai_quota is not None:
+        system.update_user(uid, ai_quota=body.ai_quota)
+    return _user_row(system.user(uid))
+
+
+@app.post("/api/admin/users/{uid}/reset-password")
+def admin_reset_password(uid: int):
+    _require_admin()
+    u = system.user(uid)
+    if not u or u["role"] == "admin":
+        raise HTTPException(404, "Kullanıcı yok")
+    temp = auth.temp_password()
+    auth.set_password(uid, temp, must_change=True)
+    return {"temp_password": temp}
+
+
+@app.delete("/api/admin/users/{uid}")
+def admin_delete_user(uid: int):
+    """Hesabı siler; veri dosyası hemen silinmez, kenara (users/_silinen) taşınır."""
+    _require_admin()
+    u = system.user(uid)
+    if not u or u["role"] == "admin":
+        raise HTTPException(404, "Kullanıcı yok")
+    system.delete_user(uid)
+    system.archive_user_data(u)
+    return {"ok": True}
+
+
+@app.post("/api/admin/invites")
+def admin_create_invite(body: InviteIn):
+    _require_admin()
+    return system.create_invite(body.note, body.days)
+
+
+@app.delete("/api/admin/invites/{code}")
+def admin_delete_invite(code: str):
+    _require_admin()
+    if not system.delete_invite(code):
+        raise HTTPException(404, "Davet yok ya da kullanılmış")
+    return {"ok": True}
+
+
+@app.get("/api/me/ai")
+def my_ai():
+    """Yapay zekâ kullanımı: ortak anahtarla aylık kota; kendi anahtarı varsa sınırsız."""
+    u = db.current_user()
+    if not u or u["role"] == "admin":
+        return {"used": None, "quota": None, "own_key": False}
+    own = bool(config.own_ai_key())
+    return {"used": system.ai_used(u["id"]), "quota": None if own else system.ai_quota(u), "own_key": own,
+            "shared_available": bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))}
 
 
 @app.post("/api/auth/logout")
@@ -1590,7 +1740,10 @@ def put_config(body: ConfigIn):
         raise HTTPException(404, "Bilinmeyen ayar")
     if config.source(body.name) == "env":
         raise HTTPException(409, "Bu değer sunucuda ortam değişkeniyle belirlenmiş; oradan değiştir.")
-    config.set_value(body.name, body.value)
+    try:
+        config.set_value(body.name, body.value)
+    except PermissionError as e:
+        raise HTTPException(403, "Bu ayarı sadece yönetici değiştirebilir") from e
     return {"ok": True}
 
 

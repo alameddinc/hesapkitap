@@ -51,6 +51,36 @@ class ReceiptError(Exception):
     pass
 
 
+def _shared_key_user() -> dict | None:
+    """Ortak (yöneticinin) anahtarını kullanan yönetici-olmayan kullanıcı; kota ona uygulanır."""
+    from app import db
+
+    u = db.current_user()
+    if not u or u.get("role") == "admin" or config.own_ai_key():
+        return None
+    return u
+
+
+def _check_quota() -> None:
+    from app import system
+
+    u = _shared_key_user()
+    if not u:
+        return
+    quota, used = system.ai_quota(u), system.ai_used(u["id"])
+    if quota is not None and used >= quota:
+        raise ReceiptError(f"Bu ayki ücretsiz yapay zekâ okuma hakkın doldu ({used}/{quota}). Ay başında yenilenir; "
+                           "beklemek istemezsen Ayarlar'dan kendi Gemini anahtarını girebilirsin.")
+
+
+def _count_usage() -> None:
+    from app import system
+
+    u = _shared_key_user()
+    if u:
+        system.ai_add(u["id"])
+
+
 def enabled() -> bool:
     return bool(config.get("GEMINI_API_KEY"))
 
@@ -100,6 +130,7 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
+    _check_quota()
     docs = [(data, mime), *(more or [])]
     if sum(len(d) for d, _ in docs) > MAX_BYTES:
         raise ReceiptError("Dosya çok büyük (en fazla 15 MB)")
@@ -126,6 +157,7 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
         text = "".join(p.get("text", "") for p in resp["candidates"][0]["content"]["parts"])
     except (KeyError, IndexError) as e:
         raise ReceiptError("Gemini boş yanıt döndü") from e
+    _count_usage()
     usage = resp.get("usageMetadata", {})
     return _extract_json(text), {"model": model, "input": usage.get("promptTokenCount"),
                                  "output": usage.get("candidatesTokenCount")}

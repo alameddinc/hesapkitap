@@ -56,7 +56,10 @@ def _verify(pw: str, stored: str) -> bool:
 
 def ensure_admin() -> None:
     """Eski tek kullanıcılı kurulumu yöneticiye taşı (bir kez): APP_PASSWORD ya da ana veritabanındaki şifre."""
+    from app import config
+
     system.init()
+    config.migrate_globals()
     if system.has_users():
         return
     if os.environ.get("APP_PASSWORD"):
@@ -118,6 +121,12 @@ def create_admin(username: str, pw: str) -> dict:
 def create_user(username: str, pw: str, must_change: bool = False) -> dict:
     _check_strength(pw)
     return system.create_user(username, _hash(pw), must_change=must_change)
+
+
+def temp_password() -> str:
+    """Yöneticinin verdiği geçici şifre (okunaklı, ilk girişte değiştirilir)."""
+    abc = "abcdefghjkmnpqrstuvwxyz23456789"
+    return "-".join("".join(secrets.choice(abc) for _ in range(4)) for _ in range(3))
 
 
 def set_password(uid: int, pw: str, must_change: bool = False) -> None:
