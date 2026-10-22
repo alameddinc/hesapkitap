@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronRight, Circle, X } from "lucide-react";
 import { useUI, type Route } from "../ui";
 import { useSave } from "./hooks";
 
-interface Step { key: string; done: boolean; route: Route; action?: "add"; title: string; text: string }
+interface Step { key: string; done: boolean; route: Route; action?: "add"; title: string; text: string; guide?: string[] }
 interface Data { steps: Step[]; done: number; total: number; dismissed: boolean }
 
 /** Başlarken: ilk kurulum adımları; tamamlandıkça işaretlenir, istenince kapatılır. */
@@ -36,10 +36,18 @@ export default function Onboarding() {
               {s.done ? <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-green-600" /> : <Circle size={18} className="mt-0.5 shrink-0 text-stone-300" />}
               <span className="min-w-0 flex-1">
                 <span className={"block text-sm font-medium" + (s.done ? " text-stone-400 line-through" : "")}>{s.title}</span>
-                {!s.done && <span className="block text-xs text-stone-500">{s.text}</span>}
+                {(!s.done || s.key === "ekstre") && <span className="block text-xs text-stone-500">{s.text}</span>}
               </span>
               {!s.done && <ChevronRight size={16} className="mt-0.5 shrink-0 text-stone-400" />}
             </button>
+            {s.key === next?.key && s.guide && (
+              <div className="mb-1 ml-8 mr-2 space-y-2">
+                <ol className="list-decimal space-y-1 pl-4 text-xs text-stone-600 dark:text-stone-400">
+                  {s.guide.map((g) => <li key={g}>{g}</li>)}
+                </ol>
+                <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => ui.go(s.route)}>Ekstreleri yükle</button>
+              </div>
+            )}
           </li>
         ))}
       </ul>
