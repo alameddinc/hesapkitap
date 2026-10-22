@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
+import Users from "../components/Users";
 
 interface ConfigItem {
   name: string;
@@ -229,6 +230,9 @@ export default function Settings() {
   const s = st.data;
   const cfg = useQuery({ queryKey: ["config"], queryFn: () => fetch("/api/settings/config").then((r) => r.json() as Promise<ConfigItem[]>) });
   const auth = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const isAdmin = !auth.data?.user || auth.data.user.role === "admin";
+  const ai = useQuery({ queryKey: ["me-ai"], enabled: !isAdmin,
+    queryFn: () => fetch("/api/me/ai").then((r) => r.json() as Promise<{ used: number; quota: number | null; own_key: boolean; shared_available: boolean }>) });
 
   return (
     <div className="space-y-4">
@@ -237,6 +241,15 @@ export default function Settings() {
       <section className="card p-4">
         <h2 className="flex items-center gap-2 font-semibold"><KeyRound size={18} /> Anahtarlar</h2>
         <p className="text-xs text-stone-500">Değerler bu sunucuda saklanır; ekranda sadece son 4 karakteri görünür.</p>
+        {ai.data && (
+          <p className="mt-2 rounded-lg bg-stone-50 p-2 text-sm dark:bg-stone-900">
+            {ai.data.own_key
+              ? <>Kendi Gemini anahtarını kullanıyorsun: okuma sınırı yok (bu ay {ai.data.used} okuma).</>
+              : ai.data.shared_available
+                ? <>Fiş/ekstre okuma: bu ay <b>{ai.data.used}/{ai.data.quota}</b> ücretsiz hak kullanıldı. Sınırsız için kendi anahtarını girebilirsin.</>
+                : <>Bu sunucuda ortak anahtar yok; fiş okumak için kendi Gemini anahtarını gir.</>}
+          </p>
+        )}
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
           {cfg.data?.filter((c) => !MAIL_KEYS.includes(c.name)).map((c) => <KeyRow key={c.name} c={c} />)}
         </ul>
@@ -244,7 +257,9 @@ export default function Settings() {
 
       <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />
 
-      <section className="card space-y-3 p-4">
+      {isAdmin && <Users />}
+
+      {isAdmin && <section className="card space-y-3 p-4">
         <h2 className="flex items-center gap-2 font-semibold"><Bell size={18} /> Telegram hatırlatmaları</h2>
         <p className="text-sm text-stone-500">
           Son ödemeden 3 gün, 1 gün önce ve son gün sabah 09:00'da mesaj; kesim tarihinden 3 gün sonra "ekstreyi yükle";
@@ -302,7 +317,7 @@ export default function Settings() {
             </Step>
           </ol>
         )}
-      </section>
+      </section>}
 
       <section className="card space-y-3 p-4">
         <h2 className="flex items-center gap-2 font-semibold"><DatabaseBackup size={18} /> Yedekler</h2>

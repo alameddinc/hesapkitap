@@ -165,7 +165,24 @@ def bump_session(uid: int) -> None:
 
 def delete_user(uid: int) -> None:
     with connect() as c:
-        c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,))
+        if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
+            c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))  # id ileride yeniden verilebilir
+
+
+def archive_user_data(u: dict) -> str | None:
+    """Silinen kullanıcının klasörünü users/_silinen/ altına taşı (geri dönüş için; elle temizlenir)."""
+    import shutil
+    import time
+
+    if not u.get("db_file"):
+        return None
+    src = os.path.join(data_root(), os.path.dirname(u["db_file"]))
+    if not os.path.isdir(src):
+        return None
+    dst = os.path.join(data_root(), "_silinen", f"{u['id']}-{u['username']}-{int(time.time())}")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(src, dst)
+    return dst
 
 
 # ---------------------------------------------------------------- davetler
@@ -187,19 +204,19 @@ def invites() -> list[dict]:
 
 def valid_invite(code: str) -> bool:
     with connect() as c:
-        return bool(c.execute("SELECT 1 FROM invites WHERE code = ? AND used_by IS NULL AND "
+        return bool(c.execute("SELECT 1 FROM invites WHERE code = ? AND used_at IS NULL AND "
                               "(expires_at IS NULL OR expires_at >= date('now'))", (code.strip().upper(),)).fetchone())
 
 
 def use_invite(code: str, uid: int) -> bool:
     with connect() as c:
-        return c.execute("UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_by IS NULL "
+        return c.execute("UPDATE invites SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND used_at IS NULL "
                          "AND (expires_at IS NULL OR expires_at >= date('now'))", (uid, code.strip().upper())).rowcount > 0
 
 
 def delete_invite(code: str) -> bool:
     with connect() as c:
-        return c.execute("DELETE FROM invites WHERE code = ? AND used_by IS NULL", (code,)).rowcount > 0
+        return c.execute("DELETE FROM invites WHERE code = ? AND used_at IS NULL", (code,)).rowcount > 0
 
 
 # ---------------------------------------------------------------- yapay zekâ kotası

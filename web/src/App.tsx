@@ -13,6 +13,8 @@ import { cx, setAmountsHidden } from "./format";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
+import Register from "./pages/Register";
+import ChangePassword from "./pages/ChangePassword";
 import More, { LogoutButton } from "./pages/More";
 import Planning from "./pages/Planning";
 import Rules from "./pages/Rules";
@@ -80,11 +82,19 @@ export default function App() {
     queryKey: ["auth"],
     queryFn: () => fetch("/api/auth/status").then((r) => r.json() as Promise<{
       required: boolean; authenticated: boolean; setup_required?: boolean; setup_code_needed?: boolean;
+      user?: { username: string; role: string; must_change_password: boolean } | null;
     }>),
   });
+  const [hash, setHash] = useState(window.location.hash);
+  useEffect(() => {
+    const on = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
   if (auth.isLoading) return null;
   if (auth.data?.setup_required) return <Setup codeNeeded={!!auth.data.setup_code_needed} />;
-  if (auth.data && !auth.data.authenticated) return <Login />;
+  if (auth.data && !auth.data.authenticated) return hash.startsWith("#/kayit") ? <Register /> : <Login />;
+  if (auth.data?.user?.must_change_password) return <ChangePassword username={auth.data.user.username} />;
   return <Shell />;
 }
 

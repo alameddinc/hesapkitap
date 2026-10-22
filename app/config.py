@@ -22,38 +22,92 @@ EDITABLE = {
 }
 
 
+# Sunucu geneli: sistem veritabanında, sadece yönetici değiştirir. Gemini anahtarı herkes için ortak kullanılır
+# (kotayla); kullanıcı kendi anahtarını girerse onunki kullanılır ve kotaya takılmaz.
+GLOBAL = {"GEMINI_API_KEY", "GEMINI_MODEL", "TELEGRAM_BOT_TOKEN"}
+ADMIN_ONLY = {"GEMINI_MODEL", "TELEGRAM_BOT_TOKEN"}
+
+
+def is_admin() -> bool:
+    """Bağlamda kullanıcı yoksa (tek kullanıcılı kurulum, zamanlayıcı ana alanı, testler) yönetici sayılır."""
+    u = db.current_user()
+    return u is None or u.get("role") == "admin"
+
+
+def _system_value(name: str) -> str | None:
+    from app import system
+
+    return system.get(f"cfg:{name}")
+
+
+def own_ai_key() -> str | None:
+    """Yönetici olmayan kullanıcının kendi Gemini anahtarı (varsa)."""
+    return None if is_admin() else db.get_setting("cfg:GEMINI_API_KEY")
+
+
 def get(name: str) -> str | None:
     v = os.environ.get(name)
     if v:
         return v
-    v = db.get_setting(f"cfg:{name}")
+    if name == "GEMINI_API_KEY" and own_ai_key():
+        return own_ai_key()
+    v = _system_value(name) if name in GLOBAL else db.get_setting(f"cfg:{name}")
     if v:
         return v
     return EDITABLE.get(name, {}).get("default")
 
 
 def source(name: str) -> str:
+    if name == "GEMINI_API_KEY" and not is_admin():
+        return "app" if own_ai_key() else "none"  # kullanıcı sadece kendi anahtarını görür
     if os.environ.get(name):
         return "env"
-    return "app" if db.get_setting(f"cfg:{name}") else "none"
+    v = _system_value(name) if name in GLOBAL else db.get_setting(f"cfg:{name}")
+    return "app" if v else "none"
 
 
 def set_value(name: str, value: str | None) -> None:
     if name not in EDITABLE:
         raise KeyError(name)
-    db.set_setting(f"cfg:{name}", value.strip() if value and value.strip() else None)
+    if not is_admin() and name in ADMIN_ONLY:
+        raise PermissionError(name)
+    v = value.strip() if value and value.strip() else None
+    if name in GLOBAL and is_admin():
+        from app import system
+
+        system.put(f"cfg:{name}", v)
+    else:
+        db.set_setting(f"cfg:{name}", v)
 
 
 def describe() -> list[dict]:
     out = []
+    admin = is_admin()
     for name, meta in EDITABLE.items():
-        v, src = get(name), source(name)
+        if not admin and name in ADMIN_ONLY:
+            continue
+        src = source(name)
+        v = (own_ai_key() if name == "GEMINI_API_KEY" and not admin else get(name)) if src != "none" else None
         hint = None
-        if v and src != "none":
+        if v:
             hint = f"••••{v[-4:]}" if meta["secret"] else v
-        out.append({"name": name, "label": meta["label"], "secret": meta["secret"], "source": src,
+        label = meta["label"]
+        if name == "GEMINI_API_KEY" and not admin:
+            label = "Kendi Gemini anahtarın (isteğe bağlı; girersen ücretsiz kotaya takılmazsın)"
+        out.append({"name": name, "label": label, "secret": meta["secret"], "source": src,
                     "value_hint": hint, "default": meta.get("default")})
     return out
+
+
+def migrate_globals() -> None:
+    """Eski kurulum: sunucu geneli anahtarlar ana veritabanındaydı → sistem veritabanına (bir kez)."""
+    from app import system
+
+    with db.use_space(None):
+        for name in GLOBAL:
+            old = db.get_setting(f"cfg:{name}")
+            if old and not system.get(f"cfg:{name}"):
+                system.put(f"cfg:{name}", old)
 
 
 def secret_key() -> str:
