@@ -981,23 +981,37 @@ def onboarding():
 
     with db.connect() as c:
         one = lambda q: bool(c.execute(q).fetchone())  # noqa: E731
+        has_card = one("SELECT 1 FROM statements")
+        has_account = one("SELECT 1 FROM entries WHERE import_hash IS NOT NULL")
+        loaded = [x for x, ok in (("kart ekstresi", has_card), ("hesap dökümü", has_account)) if ok]
         steps = [
+            {"key": "ekstre", "done": has_card or has_account, "route": "ekstreler",
+             "title": "Ekstrelerini yükle",
+             "text": ("Yüklendi: " + " ve ".join(loaded) + ". Diğer bankalarını da ekleyebilirsin.") if loaded else
+                     "Kart ekstresi ve hesap dökümü PDF'lerini Ekstreler'e bırak; kartların, hesapların, bakiyen ve "
+                     "maaşın kendiliğinden gelir.",
+             "guide": [
+                 "Bankanın mobil uygulaması ya da internet şubesi → Kartlar → Ekstreler → son ekstre → PDF indir/paylaş.",
+                 "Vadesiz hesap için: Hesaplar → Hesap hareketleri → son 1–3 ay → PDF (dekont/hesap dökümü).",
+                 "İndirdiğin PDF'leri Ekstreler sayfasındaki alana bırak; hangisinin kart, hangisinin hesap olduğunu "
+                 "kendisi anlar. Şifreliyse (çoğu bankada TC kimlik no'nun ilk/son haneleri) bir kez sorar.",
+                 "Telefonda: PDF'i açıp Paylaş → Dosyalara kaydet, sonra Ekstreler'de 'Dosya seç'.",
+             ]},
             {"key": "hesap", "done": one("SELECT 1 FROM accounts WHERE as_of IS NOT NULL"), "route": "hesaplar",
-             "title": "Hesaplarını ekle", "text": "Banka hesaplarının ve nakdinin bugünkü bakiyesini gir (yemek kartı da)."},
-            {"key": "ekstre", "done": one("SELECT 1 FROM statements"), "route": "ekstreler",
-             "title": "Kredi kartı ekstreni yükle", "text": "İnternet şubesinden indirdiğin PDF'i Ekstreler'e bırak."},
-            {"key": "dokum", "done": one("SELECT 1 FROM entries WHERE import_hash IS NOT NULL"), "route": "ekstreler",
-             "title": "Hesap dökümünü yükle", "text": "Vadesiz hesabın hareketleri: maaş, havaleler, faturalar kendiliğinden girer."},
+             "title": "Hesap bakiyelerini kontrol et",
+             "text": "Dökümden gelen hesapların bakiyesi hazır; nakdini ve yemek kartını sen ekle."},
             {"key": "maas", "done": one("SELECT 1 FROM recurring WHERE kind = 'gelir'"), "route": "plan",
              "title": "Maaşını ve sabit giderlerini gir", "text": "Maaş, kira, aidat… Planlama her ayı buna göre hesaplar."},
             {"key": "fis", "done": one("SELECT 1 FROM receipt_items") or one("SELECT 1 FROM entries WHERE note LIKE 'Fiş:%'"),
              "route": "ozet", "action": "add", "title": "Bir fiş okut",
              "text": "+ → Fiş çek: tutar, işyeri, ürünler kendiliğinden dolar; fiyat takibi başlar."},
-            {"key": "telegram", "done": telegram.enabled(), "route": "ayarlar",
-             "title": "Telegram'ı bağla (isteğe bağlı)", "text": "Son ödeme hatırlatmaları ve ay sonu raporu telefonuna gelsin."},
-            {"key": "mail", "done": mailbox.enabled(), "route": "ayarlar",
-             "title": "E-postayı bağla (isteğe bağlı)", "text": "Bankanın e-ekstreleri kendiliğinden içe aktarılsın."},
         ]
+        if config.is_admin():  # kullanıcılar için Telegram henüz yok
+            steps.append({"key": "telegram", "done": bool(telegram.chat_id()), "route": "ayarlar",
+                          "title": "Telegram'ı bağla (isteğe bağlı)",
+                          "text": "Son ödeme hatırlatmaları ve ay sonu raporu telefonuna gelsin."})
+        steps.append({"key": "mail", "done": mailbox.enabled(), "route": "ayarlar",
+                      "title": "E-postayı bağla (isteğe bağlı)", "text": "Bankanın e-ekstreleri kendiliğinden içe aktarılsın."})
     return {"steps": steps, "done": sum(s_["done"] for s_ in steps), "total": len(steps),
             "dismissed": db.get_setting("onboarding_dismissed") == "1"}
 
