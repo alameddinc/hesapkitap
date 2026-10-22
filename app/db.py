@@ -2218,9 +2218,24 @@ def _apply_auto_jar(c, j: dict, today: date) -> None:
         c.execute("UPDATE jars SET last_auto = ? WHERE id = ?", (last, j["id"]))
 
 
+def _targets_to_jars(c) -> None:
+    """Birikim hedefleri kumbaraya taşındı (bir kez): ad, tutar, son tarih; "başta ayrılan" başlangıç ayırması olur.
+    Eski tablo yerinde kalır (geri dönüş için)."""
+    if c.execute("SELECT 1 FROM settings WHERE key = 'targets_migrated'").fetchone():
+        return
+    for t in rows(c.execute("SELECT * FROM saving_targets ORDER BY id")):
+        jid = c.execute("INSERT INTO jars (name, goal, deadline, created_at) VALUES (?, ?, ?, ?)",
+                        (t["name"], t["amount"], t["deadline"], t["created_at"])).lastrowid
+        if t["already"]:
+            c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note) VALUES (?, ?, ?, 'Hedeften aktarıldı')",
+                      (jid, (t["created_at"] or date.today().isoformat())[:10], t["already"]))
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('targets_migrated', '1')")
+
+
 def list_jars(today: date | None = None, include_closed: bool = True) -> list[dict]:
     today = today or date.today()
     with connect() as c:
+        _targets_to_jars(c)
         for j in rows(c.execute("SELECT * FROM jars WHERE closed_at IS NULL")):
             _apply_auto_jar(c, j, today)
         js = rows(c.execute("SELECT j.*, a.name AS account_name FROM jars j LEFT JOIN accounts a ON a.id = j.account_id "

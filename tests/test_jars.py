@@ -29,3 +29,14 @@ def test_jar_auto_monthly(tmpdb):
     assert js[0]["balance"] == 2000 and len(js[0]["moves"]) == 2  # 5 Eylül, 5 Ekim
     assert tmpdb.list_jars(date(2026, 10, 23))[0]["balance"] == 2000  # tekrar eklenmez
     assert jid
+
+
+def test_targets_migrate_to_jars_and_pace(client, tmpdb):
+    tmpdb.create_target("Tatil", 30000, "2027-06-30", "2026-10", already=6000)
+    js = client.get("/api/jars").json()
+    assert [(j["name"], j["goal"], j["balance"]) for j in js] == [("Tatil", 30000, 6000)]
+    assert len(client.get("/api/jars").json()) == 1  # bir kez taşınır
+    jid = js[0]["id"]
+    client.post(f"/api/jars/{jid}/moves", json={"amount": 3000})
+    j = client.get("/api/jars").json()[0]
+    assert j["pace"] == 1000 and j["eta"]  # son 3 ayda 3000 → ayda 1000
