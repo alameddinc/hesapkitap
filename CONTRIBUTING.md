@@ -36,3 +36,10 @@ cd web && npm ci && npx tsc --noEmit
 ```
 
 Commit mesajları: [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:` …).
+
+
+## Lisans ve katkılar
+
+Proje [PolyForm Noncommercial 1.0.0](LICENSE) ile yayımlanır. Pull request göndererek katkının bu lisansla yayımlanmasını
+ve proje sahibinin projeyi (katkın dahil) ileride başka lisanslarla da — ticari lisans dahil — sunabilmesini kabul etmiş
+olursun. Kabul etmiyorsan lütfen PR açmadan önce bir issue ile konuşalım.
