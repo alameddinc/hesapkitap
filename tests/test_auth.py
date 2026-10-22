@@ -70,7 +70,9 @@ def test_password_is_hashed(authed, tmpdb):
         authed.post("/api/auth/setup", json={"password": "uzun-bir-sifre-1"})
     finally:
         auth.is_local = monkeypatch_ip
-    stored = tmpdb.get_setting("auth:password_hash")
+    from app import system
+
+    stored = system.users()[0]["password_hash"]
     assert stored.startswith("pbkdf2$") and "uzun-bir-sifre-1" not in stored
 
 
@@ -106,3 +108,46 @@ def test_config_keys_from_settings(authed, monkeypatch):
     assert c.put("/api/settings/config", json={"name": "BILINMEYEN", "value": "x"}).status_code == 404
     pw = c.post("/api/settings/config/generate-backup-passphrase").json()["passphrase"]
     assert config.get("BACKUP_PASSPHRASE") == pw and len(pw) >= 30
+
+
+def test_single_user_install_migrates_to_admin(authed, tmpdb):
+    """Eski kurulum: ana veritabanında şifre hash'i var → yönetici 'admin' olur, şifre ve veri aynen."""
+    from app import auth, system
+
+    tmpdb.set_setting("auth:password_hash", auth._hash("eski-sifre-1234"))
+    tmpdb.create_entry({"entry_date": "2026-10-01", "description": "Eski kayıt", "amount": 10, "kind": "gider"})
+    assert not system.has_users()
+    assert authed.post("/api/auth/login", json={"password": "eski-sifre-1234"}).status_code == 200   # kullanıcı adsız
+    u = system.users()[0]
+    assert (u["username"], u["role"], u["db_file"]) == ("admin", "admin", None)
+    assert any(e["description"] == "Eski kayıt" for e in authed.get("/api/transactions", params={"month": "2026-10"}).json())
+    authed.post("/api/auth/logout")
+    assert authed.post("/api/auth/login", json={"username": "admin", "password": "eski-sifre-1234"}).status_code == 200
+
+
+def test_users_cannot_see_each_others_data(authed, tmpdb):
+    """İki kullanıcı: her istek kendi veritabanında çalışır; yönetici başkasının verisini görmez."""
+    from fastapi.testclient import TestClient
+
+    from app import auth, system
+    from app.api.main import app
+
+    admin = auth.create_admin("admin", "yonetici-sifre-1")
+    ayse = auth.create_user("ayse", "ayse-sifre-12345")
+    a, b = TestClient(app), TestClient(app)
+    assert a.post("/api/auth/login", json={"username": "admin", "password": "yonetici-sifre-1"}).status_code == 200
+    assert b.post("/api/auth/login", json={"username": "ayse", "password": "ayse-sifre-12345"}).status_code == 200
+    assert a.post("/api/entries", json={"entry_date": "2026-10-01", "description": "Yönetici gideri", "amount": 5,
+                                        "kind": "gider"}).status_code == 200
+    assert b.post("/api/entries", json={"entry_date": "2026-10-01", "description": "Ayşe gideri", "amount": 7,
+                                        "kind": "gider"}).status_code == 200
+    ea = {e["description"] for e in a.get("/api/transactions", params={"month": "2026-10"}).json()}
+    eb = {e["description"] for e in b.get("/api/transactions", params={"month": "2026-10"}).json()}
+    assert "Ayşe gideri" not in ea and "Yönetici gideri" not in eb and "Ayşe gideri" in eb
+    assert b.get("/api/auth/status").json()["user"]["username"] == "ayse"
+    # ayrı dosya
+    assert system.user_db_path(system.user(ayse["id"])).endswith(f"{ayse['id']}/ekstre.db")
+    # kapatılan kullanıcının oturumu düşer
+    system.update_user(ayse["id"], disabled=1)
+    assert b.get("/api/meta").status_code == 401
+    assert admin["role"] == "admin"

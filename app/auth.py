@@ -1,11 +1,12 @@
-"""Tek kullanıcılı şifre koruması.
+"""Kullanıcı girişi (çok kullanıcılı).
 
-Şifre kaynağı: APP_PASSWORD ortam değişkeni (sunucu yöneticileri) ya da ilk açılışta uygulamadan belirlenen şifre
-(PBKDF2-SHA256 hash'i DB'de). Hiçbiri yoksa "kurulum gerekli": ilk açan kişi şifreyi belirler.
-Yerel ağ dışından gelen kurulum isteği için container log'una yazılan tek seferlik kod istenir.
+Kullanıcılar sistem veritabanındadır (app/system.py); her kullanıcının finans verisi kendi dosyasında.
+İlk kullanıcı yöneticidir; eski tek kullanıcılı kurulum ilk açılışta otomatik yöneticiye taşınır (şifre ve veri aynen).
+Yönetici şifresi APP_PASSWORD ortam değişkeninden de gelebilir (sunucu yöneticileri).
+Hiç kullanıcı yoksa "kurulum gerekli": ilk açan kişi yönetici olur; yerel ağ dışından ise log'daki tek seferlik kod istenir.
 
-Oturum: HMAC-SHA256 imzalı çerez (son kullanma + imza). Sunucu tarafında durum tutulmaz.
-HESAPKITAP_NO_AUTH=1 sadece testler içindir.
+Oturum: HMAC-SHA256 imzalı çerez (son kullanma, kullanıcı, oturum sürümü, imza). Şifre değişince ya da kullanıcı
+kapatılınca oturum sürümü artar, eski çerezler geçersiz olur. HESAPKITAP_NO_AUTH=1 sadece testler içindir.
 """
 import hashlib
 import hmac
@@ -16,7 +17,7 @@ import secrets
 import time
 from collections import defaultdict, deque
 
-from app import config, db
+from app import db, system
 
 COOKIE = "ekstre_session"
 SESSION_DAYS = 30
@@ -34,6 +35,10 @@ def disabled() -> bool:
     return os.environ.get("HESAPKITAP_NO_AUTH") == "1"
 
 
+def enabled() -> bool:
+    return not disabled()
+
+
 def _hash(pw: str, salt: bytes | None = None) -> str:
     salt = salt or os.urandom(16)
     h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, PBKDF2_ITER)
@@ -49,18 +54,37 @@ def _verify(pw: str, stored: str) -> bool:
         return False
 
 
-def password_source() -> str:
+def ensure_admin() -> None:
+    """Eski tek kullanıcılı kurulumu yöneticiye taşı (bir kez): APP_PASSWORD ya da ana veritabanındaki şifre."""
+    system.init()
+    if system.has_users():
+        return
     if os.environ.get("APP_PASSWORD"):
+        system.create_user("admin", None, role="admin", main_db=True)
+        return
+    with db.use_space(None):
+        old = db.get_setting("auth:password_hash")
+    if old:
+        system.create_user("admin", old, role="admin", main_db=True)
+        log.warning("Tek kullanıcılı kurulum yönetici hesabına taşındı: kullanıcı adı 'admin', şifre aynı")
+
+
+def admin() -> dict | None:
+    return next((u for u in system.users() if u["role"] == "admin"), None)
+
+
+def password_source(u: dict | None = None) -> str:
+    u = u or admin()
+    if u and u["role"] == "admin" and not u["password_hash"] and os.environ.get("APP_PASSWORD"):
         return "env"
-    return "app" if db.get_setting("auth:password_hash") else "none"
+    return "app" if u else "none"
 
 
 def setup_required() -> bool:
-    return not disabled() and password_source() == "none"
-
-
-def enabled() -> bool:
-    return not disabled()
+    if disabled():
+        return False
+    ensure_admin()
+    return not system.has_users()
 
 
 def setup_code() -> str:
@@ -80,43 +104,85 @@ def is_local(ip: str) -> bool:
         return False
 
 
-def set_password(pw: str) -> None:
+def _check_strength(pw: str) -> None:
     if len(pw) < MIN_PASSWORD:
         raise ValueError(f"Şifre en az {MIN_PASSWORD} karakter olmalı")
-    db.set_setting("auth:password_hash", _hash(pw))
-    # şifre değişince eski oturumlar düşsün
-    db.set_setting("auth:secret_key", secrets.token_hex(32))
 
 
-def check_password(pw: str) -> bool:
-    env = os.environ.get("APP_PASSWORD")
-    if env:
-        return hmac.compare_digest(pw.encode(), env.encode())
-    stored = db.get_setting("auth:password_hash")
-    return bool(stored) and _verify(pw, stored)
+def create_admin(username: str, pw: str) -> dict:
+    """İlk kurulum: yönetici, ana veritabanını kullanır."""
+    _check_strength(pw)
+    return system.create_user(username or "admin", _hash(pw), role="admin", main_db=True)
+
+
+def create_user(username: str, pw: str, must_change: bool = False) -> dict:
+    _check_strength(pw)
+    return system.create_user(username, _hash(pw), must_change=must_change)
+
+
+def set_password(uid: int, pw: str, must_change: bool = False) -> None:
+    _check_strength(pw)
+    system.update_user(uid, password_hash=_hash(pw), must_change_password=int(must_change))
+    system.bump_session(uid)  # eski oturumlar düşsün
+
+
+def login(username: str | None, pw: str) -> dict | None:
+    """Kullanıcı adı verilmezse yönetici (eski tek kullanıcılı giriş ekranı ve APP_PASSWORD uyumu)."""
+    u = system.user_by_name(username) if username else admin()
+    if not u or u["disabled"]:
+        return None
+    if not u["password_hash"]:
+        env = os.environ.get("APP_PASSWORD")
+        ok = bool(env) and u["role"] == "admin" and hmac.compare_digest(pw.encode(), env.encode())
+    else:
+        ok = _verify(pw, u["password_hash"])
+    if ok:
+        system.update_user(u["id"], last_login=time.strftime("%Y-%m-%d %H:%M:%S"))
+    return u if ok else None
+
+
+def check_password(u: dict, pw: str) -> bool:
+    if not u["password_hash"]:
+        env = os.environ.get("APP_PASSWORD")
+        return bool(env) and hmac.compare_digest(pw.encode(), env.encode())
+    return _verify(pw, u["password_hash"])
 
 
 def _secret() -> bytes:
-    return hashlib.sha256(config.secret_key().encode()).digest()
+    v = os.environ.get("SECRET_KEY") or system.get("secret_key")
+    if not v:
+        v = secrets.token_hex(32)
+        system.put("secret_key", v)
+    return hashlib.sha256(v.encode()).digest()
 
 
 def _sign(payload: str) -> str:
     return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def make_token() -> str:
+def make_token(u: dict) -> str:
     exp = int(time.time()) + SESSION_DAYS * 86400
-    payload = f"{exp}.{secrets.token_hex(8)}"
+    payload = f"{exp}.{u['id']}.{u['session_version']}.{secrets.token_hex(8)}"
     return f"{payload}.{_sign(payload)}"
 
 
+def token_user(token: str | None) -> dict | None:
+    """Geçerli oturumun kullanıcısı (imza, süre, oturum sürümü ve kapatılma kontrol edilir)."""
+    if not token or token.count(".") != 4:
+        return None
+    exp, uid, ver, nonce, sig = token.split(".")
+    if not hmac.compare_digest(sig, _sign(f"{exp}.{uid}.{ver}.{nonce}")):
+        return None
+    if not (exp.isdigit() and int(exp) > time.time() and uid.isdigit() and ver.isdigit()):
+        return None
+    u = system.user(int(uid))
+    if not u or u["disabled"] or u["session_version"] != int(ver):
+        return None
+    return u
+
+
 def valid_token(token: str | None) -> bool:
-    if not token or token.count(".") != 2:
-        return False
-    exp, nonce, sig = token.split(".")
-    if not hmac.compare_digest(sig, _sign(f"{exp}.{nonce}")):
-        return False
-    return exp.isdigit() and int(exp) > time.time()
+    return token_user(token) is not None
 
 
 def rate_limited(ip: str) -> bool:

@@ -20,7 +20,7 @@ MAGIC = b"EKSTRE1"  # dosya başı: MAGIC + 16 bayt salt + fernet token
 
 
 def backup_dir() -> str:
-    d = os.path.join(os.path.dirname(os.path.abspath(db.DB_PATH)), "backups")
+    d = os.path.join(os.path.dirname(os.path.abspath(db.db_path())), "backups")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -29,7 +29,7 @@ def make_backup(today: date | None = None) -> str:
     """Çalışan veritabanının tutarlı kopyasını al (yazma sürerken bile güvenli)."""
     today = today or date.today()
     path = os.path.join(backup_dir(), f"ekstre-{today:%Y%m%d}.db")
-    src = sqlite3.connect(db.DB_PATH)
+    src = sqlite3.connect(db.db_path())
     dst = sqlite3.connect(path)
     try:
         src.backup(dst)

@@ -46,7 +46,7 @@ export function LogoutButton() {
       await fetch("/api/auth/logout", { method: "POST" });
       qc.invalidateQueries();
     }}>
-      <LogOut size={16} /> Çıkış
+      <LogOut size={16} /> Çıkış{status.data?.user?.username ? ` (${status.data.user.username})` : ""}
     </button>
   );
 }
