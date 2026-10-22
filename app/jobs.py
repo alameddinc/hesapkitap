@@ -119,6 +119,11 @@ def reminders(today: date) -> list[str]:
                     + "".join(f"\n{'✅' if m['status'] == 'tuttu' else '❌'} {g['name']}: {_tl(m['spent'])} / hedef {_tl(g['target'])}"
                               for g in finance.goals_review(today) if g["active"]
                               for m in g["months"] if m["month"] == prev))
+
+    # 6) Zekât yılı dolmak üzere
+    from app import zakat
+
+    msgs += zakat.reminders(today)
     return msgs
 
 
