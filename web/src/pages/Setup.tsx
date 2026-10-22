@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import DataPrivacy from "../components/DataPrivacy";
 
 /** İlk açılış: şifre belirle. Uzaktan erişimde container log'undaki kurulum kodu istenir. */
 export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
@@ -34,6 +35,7 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
           <h1 className="text-lg font-semibold">HesapKitap'a hoş geldin</h1>
           <p className="text-sm text-stone-500">Yönetici hesabını oluştur. Verilerin sadece bu sunucuda durur.</p>
         </div>
+        <DataPrivacy mode="self" collapsible />
         <div>
           <label className="label" htmlFor="s-user">Kullanıcı adı</label>
           <input id="s-user" className="input" autoComplete="username" autoCapitalize="none" value={user} onChange={(e) => setUser(e.target.value)} />

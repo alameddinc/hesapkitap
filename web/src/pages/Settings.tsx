@@ -7,6 +7,7 @@ import { useSave } from "../components/hooks";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 import Users from "../components/Users";
+import DataPrivacy from "../components/DataPrivacy";
 
 interface ConfigItem {
   name: string;
@@ -341,6 +342,10 @@ export default function Settings() {
         </ul>
       </section>
 
+      <section className="card space-y-3 p-4">
+        <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Verilerin nerede?</h2>
+        <DataPrivacy mode={isAdmin ? "self" : "hosted"} />
+      </section>
       <PrivacyForm />
       <CycleForm />
       <PdfPasswords />
