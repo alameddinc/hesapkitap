@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict
+from datetime import date, timedelta
 
 from app.categorize import DEFAULT_RULES, RULES_VERSION, categorize
 from app.parsers.base import Statement
@@ -204,6 +205,29 @@ CREATE TABLE IF NOT EXISTS saving_targets (
     start_month TEXT NOT NULL,
     already REAL NOT NULL DEFAULT 0,        -- hedefe başlarken zaten ayrılmış tutar
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- Kumbara: bir hedef için ayrılan para. Para hesapta/cepte durmaya devam eder (toplam servet değişmez) ama
+-- "serbest" bakiyeden düşer; böylece harcanabilecek gerçek tutar görünür.
+CREATE TABLE IF NOT EXISTS jars (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    goal REAL CHECK (goal IS NULL OR goal > 0),
+    deadline DATE,
+    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,  -- paranın durduğu hesap (bilgi)
+    monthly REAL CHECK (monthly IS NULL OR monthly > 0),            -- her ay otomatik ayrılan
+    auto_day INTEGER CHECK (auto_day IS NULL OR auto_day BETWEEN 1 AND 28),
+    last_auto TEXT,                                                 -- son otomatik ayrılan ay (YYYY-MM)
+    note TEXT,
+    closed_at DATE,                                                 -- hedefe ulaşıldı / harcandı: ayrılan serbest kalır
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS jar_moves (
+    id INTEGER PRIMARY KEY,
+    jar_id INTEGER NOT NULL REFERENCES jars(id) ON DELETE CASCADE,
+    move_date DATE NOT NULL,
+    amount REAL NOT NULL CHECK (amount <> 0),   -- + yatır, − çek
+    note TEXT,
+    auto INTEGER NOT NULL DEFAULT 0
 );
 -- Kalem kuralları: fişteki satırda bu kelimelerden biri geçerse o satır bu kategoriye ayrılır
 CREATE TABLE IF NOT EXISTS item_rules (
@@ -2162,6 +2186,110 @@ def create_target(name: str, amount: float, deadline: str, start_month: str, alr
     with connect() as c:
         return c.execute("INSERT INTO saving_targets (name, amount, deadline, start_month, already) VALUES (?, ?, ?, ?, ?)",
                          (name.strip(), amount, deadline, start_month, already)).lastrowid
+
+
+# ---------------------------------------------------------------- kumbaralar
+
+def _next_month(m: str) -> str:
+    y, mo = map(int, m.split("-"))
+    return f"{y + 1:04d}-01" if mo == 12 else f"{y:04d}-{mo + 1:02d}"
+
+
+def _auto_start(today: date, day: int) -> str:
+    """İlk otomatik ayırmadan önceki ay: bu ayın günü geçtiyse bu ay, geçmediyse geçen ay (yani bu ay başlar)."""
+    if today.day >= day:
+        return today.strftime("%Y-%m")
+    return (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+
+
+def _apply_auto_jar(c, j: dict, today: date) -> None:
+    """Otomatik aylık ayırma: günü gelmiş her ay için bir kez (istek anında; zamanlayıcı gerekmez)."""
+    if not j["monthly"] or not j["auto_day"] or j["closed_at"] or not j["last_auto"]:
+        return
+    m, last = _next_month(j["last_auto"]), None
+    while True:
+        d = date(*map(int, m.split("-")), j["auto_day"])
+        if d > today:
+            break
+        c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, auto) VALUES (?, ?, ?, 'Otomatik', 1)",
+                  (j["id"], d.isoformat(), j["monthly"]))
+        last, m = m, _next_month(m)
+    if last:
+        c.execute("UPDATE jars SET last_auto = ? WHERE id = ?", (last, j["id"]))
+
+
+def list_jars(today: date | None = None, include_closed: bool = True) -> list[dict]:
+    today = today or date.today()
+    with connect() as c:
+        for j in rows(c.execute("SELECT * FROM jars WHERE closed_at IS NULL")):
+            _apply_auto_jar(c, j, today)
+        js = rows(c.execute("SELECT j.*, a.name AS account_name FROM jars j LEFT JOIN accounts a ON a.id = j.account_id "
+                            "ORDER BY j.closed_at IS NOT NULL, COALESCE(j.deadline, '9999'), j.id"))
+        for j in js:
+            j["moves"] = rows(c.execute("SELECT * FROM jar_moves WHERE jar_id = ? ORDER BY move_date DESC, id DESC", (j["id"],)))
+            j["balance"] = round(sum(m["amount"] for m in j["moves"]), 2)
+    return [j for j in js if include_closed or not j["closed_at"]]
+
+
+def jar_reserved(today: date | None = None) -> dict:
+    """Açık kumbaralarda ayrılan toplam ve hesap bazında dağılım."""
+    by_acc: dict[int | None, float] = {}
+    for j in list_jars(today, include_closed=False):
+        by_acc[j["account_id"]] = round(by_acc.get(j["account_id"], 0) + j["balance"], 2)
+    return {"total": round(sum(by_acc.values()), 2), "by_account": by_acc}
+
+
+JAR_FIELDS = ("name", "goal", "deadline", "account_id", "monthly", "auto_day", "note", "closed_at")
+
+
+def create_jar(data: dict, initial: float = 0, today: date | None = None) -> int:
+    today = today or date.today()
+    data = {k: v for k, v in data.items() if k in JAR_FIELDS}
+    with connect() as c:
+        jid = c.execute(f"INSERT INTO jars ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
+                        tuple(data.values())).lastrowid
+        if initial:
+            c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note) VALUES (?, ?, ?, 'Başlangıç')",
+                      (jid, today.isoformat(), initial))
+        if data.get("monthly") and data.get("auto_day"):
+            c.execute("UPDATE jars SET last_auto = ? WHERE id = ?", (_auto_start(today, data["auto_day"]), jid))
+    return jid
+
+
+def update_jar(jid: int, data: dict) -> bool:
+    data = {k: v for k, v in data.items() if k in JAR_FIELDS}
+    if not data:
+        return False
+    if data.get("auto_day"):  # otomatik ayırma yeniden kurulunca geçmiş aylar doldurulmaz
+        data["last_auto"] = _auto_start(date.today(), data["auto_day"])
+    with connect() as c:
+        return c.execute(f"UPDATE jars SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?",
+                         (*data.values(), jid)).rowcount > 0
+
+
+def delete_jar(jid: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM jars WHERE id = ?", (jid,)).rowcount > 0
+
+
+def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = None) -> int:
+    """amount > 0 yatır, < 0 çek. Kumbarada olandan fazlası çekilemez."""
+    with connect() as c:
+        j = c.execute("SELECT closed_at FROM jars WHERE id = ?", (jid,)).fetchone()
+        if not j:
+            raise LookupError("Kumbara yok")
+        if j["closed_at"]:
+            raise ValueError("Kumbara kapalı; önce yeniden aç")
+        bal = c.execute("SELECT COALESCE(SUM(amount), 0) FROM jar_moves WHERE jar_id = ?", (jid,)).fetchone()[0]
+        if amount < 0 and bal + amount < -0.005:
+            raise ValueError(f"Kumbarada {bal:.2f} var; daha fazlası çekilemez")
+        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note) VALUES (?, ?, ?, ?)",
+                         (jid, move_date, amount, (note or "").strip() or None)).lastrowid
+
+
+def delete_jar_move(mid: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM jar_moves WHERE id = ?", (mid,)).rowcount > 0
 
 
 def delete_target(tid: int) -> bool:

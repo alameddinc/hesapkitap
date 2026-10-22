@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
+import Jars from "../components/Jars";
 import Targets from "../components/Targets";
 import { useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
@@ -159,6 +160,7 @@ export default function Savings() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Tasarruf</h1>
 
+      <Jars />
       <Targets />
 
       {d && (

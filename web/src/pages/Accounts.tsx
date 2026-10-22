@@ -1,3 +1,4 @@
+import Jars from "../components/Jars";
 import NetWorth from "../components/NetWorth";
 
 /** Hesaplar ve kartlar: banka, nakit, yemek/hediye kartları, kart borçları ve net durum. */
@@ -11,6 +12,7 @@ export default function Accounts() {
         </p>
       </div>
       <NetWorth />
+      <Jars />
     </div>
   );
 }
