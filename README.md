@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/alameddinc/hesapkitap/actions/workflows/ci.yml"><img src="https://github.com/alameddinc/hesapkitap/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-MIT-blue" alt="MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-PolyForm%20Noncommercial-blue" alt="PolyForm Noncommercial"></a>
 </p>
 
 <p align="center">
@@ -135,8 +135,13 @@ docker compose -f docker-compose.dev.yml run --rm api pytest -q
 HesapKitap is a self-hosted personal finance app for Turkish credit card statements: upload bank PDFs (exact parsers
 for VakıfBank and Kuveyt Türk, Gemini fallback for any other bank, all verified by a reconciliation check), auto-categorize,
 track payments and bills, snap receipts, plan the next months, manage subscriptions and budgets, get Telegram reminders.
-Quick start: `docker compose up -d` → http://localhost:8080. MIT licensed.
+Quick start: `docker compose up -d` → http://localhost:8080. Source-available under the PolyForm Noncommercial License 1.0.0:
+free for personal and other noncommercial use; commercial use requires a separate license from the author.
 
 ## Lisans
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE) — kaynağı açık, **ticari olmayan** her kullanım serbest: kendin için kurup
+kullanabilir, değiştirebilir, arkadaşlarınla paylaşabilirsin. Ticari kullanım (ücretli hizmet sunmak, bir şirket ürününe
+gömmek vb.) için yazardan ayrıca izin/lisans gerekir.
+
+Bu değişiklikten önce MIT ile yayımlanmış sürümler MIT lisansıyla kalır; yeni lisans bundan sonraki sürümler içindir.
