@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { UserPlus } from "lucide-react";
 import { useState } from "react";
+import DataPrivacy from "../components/DataPrivacy";
 
 const codeFromHash = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("kod") ?? "";
 
@@ -37,8 +38,9 @@ export default function Register() {
         <div className="mb-5 flex flex-col items-center gap-2 text-center">
           <img src="/icons/icon-192.png" alt="" className="size-16 rounded-2xl shadow-sm" />
           <h1 className="flex items-center gap-2 text-lg font-semibold"><UserPlus size={18} /> Hesap aç</h1>
-          <p className="text-xs text-stone-500">Verilerin sadece sana ait ayrı bir dosyada tutulur; sunucu yöneticisi dahil kimse göremez.</p>
+          <p className="text-xs text-stone-500">Verilerin sana ait ayrı bir dosyada tutulur; uygulamada kimsenin onları görebileceği bir ekran yok.</p>
         </div>
+        <div className="mb-4"><DataPrivacy mode="hosted" collapsible /></div>
         <label className="label" htmlFor="code">Davet kodu</label>
         <input id="code" className="input mb-3 font-mono uppercase" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
           placeholder="XXXX-XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} />
