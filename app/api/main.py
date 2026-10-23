@@ -1206,12 +1206,13 @@ def holding_estimate(kind: str, cost: float, day: date):
 
 @app.get("/api/holdings/candidates")
 def holding_candidates(min_amount: float = 1000):
-    """Altını ne zaman aldığını hatırlamayanlar için: büyük nakit çekimler (ATM, gişe/"Nakit Ödeme") ve kuyumcu
+    """Altını ne zaman aldığını hatırlamayanlar için: büyük nakit çekimler (ATM, gişe/"Nakit Ödeme"), giden havale/EFT ve kuyumcu
     harcamaları (hesap dökümü + kart). Açıklamalar boşluksuz ve Türkçe karaktersiz karşılaştırılır ("NakitÖdeme")."""
     from app.categorize import fold_key
 
     cash = ("ATM", "PARACEK", "NAKITCEK", "NAKITODEME", "GISE")
     gold = ("KUYUMCU", "ALTIN", "GOLD", "JEWEL", "MUCEVHER", "DARPHANE")
+    sent = ("HAVALE", "EFT", "FAST", "GIDEN", "GONDER", "TRANSFER", "VIRMAN")
     with db.connect() as c:
         rows = db.rows(c.execute(
             "SELECT entry_date AS date, description, amount, category, 'hesap' AS src FROM entries "
@@ -1225,6 +1226,8 @@ def holding_candidates(min_amount: float = 1000):
             out.append({**r, "kind": "kuyumcu"})
         elif r["category"] == "Nakit Çekim" or any(x in k for x in cash):
             out.append({**r, "kind": "nakit"})
+        elif r["src"] == "hesap" and any(x in k for x in sent):  # kuyumcuya havale/EFT ile ödeme
+            out.append({**r, "kind": "gonderim"})
     return out[:500]
 
 

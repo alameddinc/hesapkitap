@@ -28,8 +28,9 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
   const [acquired, setAcquired] = useState("");
   const [cost, setCost] = useState("");
   const [finding, setFinding] = useState(false);
+  const [candKind, setCandKind] = useState<"" | "nakit" | "gonderim" | "kuyumcu">("");
   const cands = useQuery({ queryKey: ["holding-candidates"], enabled: finding,
-    queryFn: () => json<{ date: string; description: string; amount: number; kind: "nakit" | "kuyumcu"; src: string }[]>("GET", "/api/holdings/candidates") });
+    queryFn: () => json<{ date: string; description: string; amount: number; kind: "nakit" | "gonderim" | "kuyumcu"; src: string }[]>("GET", "/api/holdings/candidates") });
   const canEstimate = ["ALTIN_24", "ALTIN_22", "ALTIN_18", "ALTIN_14", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA"].includes(kind);
   const gold = kind.startsWith("ALTIN") || ["CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS"].includes(kind);
   const save = useSave(() => json("POST", "/api/zakat/assets", { person_id: owner, kind, quantity: parseAmount(qty), is_jewelry: gold && jewelry, note, acquired: acquired || null, cost: parseAmount(cost) > 0 ? parseAmount(cost) : null,
@@ -64,20 +65,30 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
           <div className="flex gap-2">
             <input id="z-acq" type="date" className="input min-w-0 flex-1" max={today()} value={acquired} onChange={(e) => setAcquired(e.target.value)} />
             <button type="button" className="btn-ghost shrink-0 border border-stone-300 px-2 text-xs dark:border-stone-700"
-              onClick={() => setFinding(!finding)}>Para çekimlerimden bul</button>
+              onClick={() => setFinding(!finding)}>Çekim / gönderimlerimden bul</button>
           </div>
+          {finding && (
+            <div className="mt-2 flex flex-wrap gap-1 text-xs">
+              {([["", "Tümü"], ["nakit", "🏧 Çekim"], ["gonderim", "↗ Gönderim"], ["kuyumcu", "💍 Kuyumcu"]] as const).map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setCandKind(k)}
+                  className={"rounded-full border px-2 py-0.5 " + (candKind === k ? "border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300" : "border-stone-300 dark:border-stone-700")}>
+                  {l}{cands.data ? ` (${cands.data.filter((c) => !k || c.kind === k).length})` : ""}
+                </button>
+              ))}
+            </div>
+          )}
           {finding && (
             <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-stone-200 dark:border-stone-700">
               {cands.isLoading && <p className="p-2 text-xs text-stone-500">Aranıyor…</p>}
               {cands.data && !cands.data.length && (
-                <p className="p-2 text-xs text-stone-500">Büyük nakit çekim ya da kuyumcu harcaması bulunamadı. O döneme ait hesap dökümünü yüklersen burada çıkar.</p>
+                <p className="p-2 text-xs text-stone-500">Büyük nakit çekim, gönderim ya da kuyumcu harcaması bulunamadı. O döneme ait hesap dökümünü yüklersen burada çıkar.</p>
               )}
               <ul className="divide-y divide-stone-100 text-xs dark:divide-stone-800">
-                {cands.data?.map((c, i) => (
+                {cands.data?.filter((c) => !candKind || c.kind === candKind).map((c, i) => (
                   <li key={i}>
                     <button type="button" className="flex w-full items-center justify-between gap-2 p-2 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50"
                       onClick={() => { setAcquired(c.date); setCost(String(c.amount)); setFinding(false); }}>
-                      <span className="min-w-0">{dateTR(c.date)} · {c.kind === "kuyumcu" ? "💍 " : "🏧 "}<span className="text-stone-500">{c.description}</span></span>
+                      <span className="min-w-0">{dateTR(c.date)} · {c.kind === "kuyumcu" ? "💍 " : c.kind === "gonderim" ? "↗ " : "🏧 "}<span className="text-stone-500">{c.description}</span></span>
                       <span className="shrink-0 tabular-nums">{tl(c.amount)}</span>
                     </button>
                   </li>

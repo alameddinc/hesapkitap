@@ -110,9 +110,11 @@ def test_holding_candidates(client, tmpdb):
     # şubeden çekim, boşluksuz açıklama
     tmpdb.create_entry({"entry_date": "2025-11-24", "description": "NakitÖdeme,AdıSoyadı:X", "amount": 250000, "kind": "gider"})
     tmpdb.create_entry({"entry_date": "2025-12-01", "description": "ABC KUYUMCULUK", "amount": 9000, "kind": "gider"})
+    tmpdb.create_entry({"entry_date": "2025-12-05", "description": "FAST Giden Ödeme X Ltd", "amount": 40000, "kind": "gider"})
     rows = client.get("/api/holdings/candidates").json()
     assert [(r["date"], r["amount"], r["kind"]) for r in rows] == [
-        ("2025-12-01", 9000, "kuyumcu"), ("2025-11-24", 250000, "nakit"), ("2025-03-02", 25000, "nakit")]
+        ("2025-12-05", 40000, "gonderim"), ("2025-12-01", 9000, "kuyumcu"), ("2025-11-24", 250000, "nakit"),
+        ("2025-03-02", 25000, "nakit")]
 
 
 def test_estimate_quantity_is_conservative(client, tmpdb, monkeypatch):
