@@ -166,6 +166,11 @@ YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={p1}&pe
 
 def _yahoo_low(sym: str, day: date) -> float | None:
     """O güne (ya da hemen önceki işlem gününe) ait günlük en düşük değer."""
+    return _yahoo(sym, day, "low")
+
+
+def _yahoo(sym: str, day: date, field: str = "close") -> float | None:
+    """O güne (ya da hemen önceki işlem gününe) ait günlük değer (low/close/high)."""
     import calendar
 
     p1 = calendar.timegm((day - timedelta(days=6)).timetuple())
@@ -174,9 +179,9 @@ def _yahoo_low(sym: str, day: date) -> float | None:
     r.raise_for_status()
     res = r.json()["chart"]["result"][0]
     best = None
-    for ts, low in zip(res.get("timestamp") or [], res["indicators"]["quote"][0].get("low") or []):
-        if low and date.fromtimestamp(ts) <= day:
-            best = low
+    for ts, v in zip(res.get("timestamp") or [], res["indicators"]["quote"][0].get(field) or []):
+        if v and date.fromtimestamp(ts) <= day:
+            best = v
     return best
 
 
@@ -193,6 +198,41 @@ def historical_gram_price(day: date) -> float:
     price = round(ons * usd / 31.1035, 2)
     system.put(key, str(price))
     return price
+
+
+# geçmiş tarihte değerleme (zekât geçmişi): kapanış fiyatı; 24 ayar gram = ons × dolar / 31,1035
+_HIST_FX = {"USD": "TRY%3DX", "EUR": "EURTRY%3DX", "GBP": "GBPTRY%3DX"}
+
+
+def historical_prices(day: date) -> dict[str, float]:
+    """O günün fiyatları (TL): GRA (24 ayar gram), USD, EUR, GBP, GUMUS. Sunucu geneli önbellek."""
+    from app import system
+
+    key = f"hist_px:{day.isoformat()}"
+    if v := system.get(key):
+        return json.loads(v)
+    usd = _yahoo("TRY%3DX", day)
+    ons = _yahoo("GC%3DF", day)
+    if not usd or not ons:
+        raise ValueError(f"{day:%d.%m.%Y} fiyatı bulunamadı")
+    out = {"USD": usd, "GRA": round(ons * usd / 31.1035, 2)}
+    for k in ("EUR", "GBP"):
+        if v := _yahoo(_HIST_FX[k], day):
+            out[k] = v
+    if ag := _yahoo("SI%3DF", day):
+        out["GUMUS"] = round(ag * usd / 31.1035, 2)
+    if day < date.today():  # bugünün fiyatı gün içinde değişir; geçmiş günler sabit
+        system.put(key, json.dumps(out))
+    return out
+
+
+def _value_at(kind: str, qty: float, px: dict) -> float | None:
+    if kind == "TRY":
+        return qty
+    if kind in PURE_GRAMS:  # has değeri (işçiliksiz): kuyumcunun alış fiyatına yakın
+        return round(qty * PURE_GRAMS[kind] / 0.995 * px["GRA"], 2) if kind != "ALTIN_24" else round(qty * px["GRA"], 2)
+    p = px.get(kind)
+    return round(qty * p, 2) if p else None
 
 
 def estimate_quantity(kind: str, cost: float, day: date) -> dict:
@@ -370,6 +410,115 @@ def holdings() -> dict:
             "family_total": round(sum(i["value"] or 0 for i in items if not i["is_self"]), 2)}
 
 
+# ---------------------------------------------------------------- geçmiş yıllar (kaza zekâtı)
+
+def _bank_at(day: date) -> tuple[float, list[str]]:
+    """O günkü banka/nakit bakiyeleri: bugünkü çapadan geriye (ya da ileriye) hareketlerle. Hareketi o tarihe
+    uzanmayan hesap bilinmiyor sayılır."""
+    total, unknown = 0.0, []
+    with db.connect() as c:
+        accs = db.rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' AND as_of IS NOT NULL"))
+        for a in accs:
+            first = c.execute("SELECT MIN(entry_date) FROM entries WHERE account_id = ? AND skipped = 0",
+                              (a["id"],)).fetchone()[0]
+            d = day.isoformat()
+            if d < a["as_of"] and (not first or first > d):
+                unknown.append(a["name"])
+                continue
+            lo, hi, sign = (d, a["as_of"], -1) if d < a["as_of"] else (a["as_of"], d, 1)
+            flows = c.execute("SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) "
+                              "FROM entries WHERE account_id = ? AND skipped = 0 AND entry_date > ? AND entry_date <= ?",
+                              (a["id"], lo, hi)).fetchone()[0]
+            debt = sum(r["flow"] * r["amount"] for r in db.debt_rows()
+                       if r.get("account_id") == a["id"] and lo < r["date"] <= hi and r["step"] != "vazgecildi")
+            total += a["balance"] + sign * (flows + debt)
+    return round(total, 2), unknown
+
+
+def _debts_at(day: date, px: dict) -> float:
+    """O gün ödenmemiş kart ekstreleri (kesilmiş, son ödemesi bir yıl içinde) + açık kişisel borçlar."""
+    d = day.isoformat()
+    total = 0.0
+    for st in db.list_statements():
+        if st["period_end"] <= d and (not st["paid_at"] or st["paid_at"] > d):
+            total += st["total_debt"] or 0
+    for x in db.list_debts():
+        if x["direction"] != "borc" or x["debt_date"] > d or (x["settled_at"] and x["settled_at"] <= d):
+            continue
+        paid = sum(p["amount"] for p in x["payments"] if p["paid_at"] <= d)
+        rate = 1.0 if x["asset"] == "TRY" else px.get(DEBT_ASSET_KEYS.get(x["asset"], ""), 0)
+        total += max(0.0, x["amount"] - paid) * rate
+    return round(total, 2)
+
+
+def history(pid: int, today: date | None = None, max_years: int = 6) -> dict:
+    """Geçmiş zekât yılları: her yıl sonunda varlık, nisap, zekât, ödenen, kalan (kaza). Yıllar mevcut yıl
+    başlangıcından geriye 354'er gün; verinin başladığı yere kadar."""
+    today = today or date.today()
+    st = _settings()
+    p = next((x for x in people() if x["id"] == pid), None)
+    if not p:
+        raise LookupError("Kişi yok")
+    anchor = date.fromisoformat(p["hawl_start"]) if p["hawl_start"] else None
+    if not anchor:
+        return {"years": [], "need_start": True, "total_due": 0.0, "notes": []}
+    dates = [a["acquired"] for a in p["assets"] if a["acquired"]]
+    if p["is_self"] and st["include_app"]:
+        with db.connect() as c:
+            if first := c.execute("SELECT MIN(entry_date) FROM entries WHERE import_hash IS NOT NULL").fetchone()[0]:
+                dates.append(first)
+    if not dates:
+        return {"years": [], "need_start": False, "total_due": 0.0,
+                "notes": ["Geçmişi hesaplamak için varlıklara alış tarihi gir ya da eski hesap dökümlerini yükle."]}
+    earliest = date.fromisoformat(min(dates))
+    notes = set()
+    if any(not a["acquired"] for a in p["assets"]):
+        notes.add("Tarihi girilmemiş varlıklar her yıl elinde varsayıldı.")
+    if p["is_self"] and st["include_app"]:
+        notes.add("Sadece dökümü yüklenen bankalar bilinir; evdeki nakit, diğer bankalar ve arada satılanlar hesapta yok.")
+    ends = []
+    end = anchor
+    while end > earliest and len(ends) < max_years:
+        ends.append(end)
+        end -= timedelta(days=LUNAR_YEAR_DAYS)
+    years, carry = [], 0.0
+    for end in reversed(ends):  # eskiden yeniye: ödenmeyen zekât sonraki yılın tabanından düşülür (Hanefî)
+        start = end - timedelta(days=LUNAR_YEAR_DAYS)
+        try:
+            px = historical_prices(end)
+        except Exception as e:  # noqa: BLE001
+            years.append({"start": start.isoformat(), "end": end.isoformat(), "end_hijri": to_hijri(end),
+                          "error": str(e)})
+            continue
+        items = 0.0
+        for a in p["assets"]:
+            if a["acquired"] and a["acquired"] > end.isoformat():
+                continue
+            if a["is_jewelry"] and st["madhhab"] == "safii":
+                continue
+            items += _value_at(a["kind"], a["quantity"], px) or 0
+        bank, unknown = (0.0, [])
+        deduct = 0.0
+        if p["is_self"] and st["include_app"]:
+            bank, unknown = _bank_at(end)
+            if st["madhhab"] == "hanefi":
+                deduct = _debts_at(end, px)
+        if st["madhhab"] == "hanefi":
+            deduct += carry
+        total = round(max(0.0, items + bank - deduct), 2)
+        nisab = round(NISAB_GRAMS * px["GRA"], 2)
+        due = round(total * RATE, 2) if total >= nisab else 0.0
+        paid = round(sum(x["amount"] for x in p["payments"] if x["year_start"] == start.isoformat()), 2)
+        left = round(max(0.0, due - paid), 2)
+        carry = left
+        years.append({"start": start.isoformat(), "end": end.isoformat(), "end_hijri": to_hijri(end),
+                      "assets": round(items, 2), "bank": bank, "deduct": deduct, "total": total, "nisab": nisab,
+                      "gram_price": px["GRA"], "above_nisab": total >= nisab, "zakat": due, "paid": paid, "remaining": left,
+                      "unknown_accounts": unknown, "partial": start < earliest})
+    return {"years": list(reversed(years)), "need_start": False, "notes": sorted(notes),
+            "total_due": round(sum(y.get("remaining", 0) for y in years), 2)}
+
+
 # ---------------------------------------------------------------- değişiklikler
 
 def add_person(name: str) -> int:
@@ -422,16 +571,17 @@ def delete_asset(aid: int) -> bool:
         return c.execute("DELETE FROM zakat_assets WHERE id = ?", (aid,)).rowcount > 0
 
 
-def add_payment(pid: int, amount: float, pay_date: str, note: str | None) -> int:
+def add_payment(pid: int, amount: float, pay_date: str, note: str | None, year_start: str | None = None) -> int:
+    """year_start verilmezse içinde bulunulan zekât yılı (geçmiş yıl için o yılın başlangıcı)."""
     with db.connect() as c:
         _init(c)
         p = c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()
         if not p:
             raise LookupError("Kişi yok")
-        if not p["hawl_start"]:
+        if not (year_start or p["hawl_start"]):
             raise ValueError("Önce zekât yılının başladığı günü gir")
         return c.execute("INSERT INTO zakat_payments (person_id, year_start, pay_date, amount, note) VALUES (?, ?, ?, ?, ?)",
-                         (pid, p["hawl_start"], pay_date, amount, (note or "").strip() or None)).lastrowid
+                         (pid, year_start or p["hawl_start"], pay_date, amount, (note or "").strip() or None)).lastrowid
 
 
 def delete_payment(pay_id: int) -> bool:
