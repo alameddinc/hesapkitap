@@ -58,7 +58,8 @@ def parse_pdf_with_ai(data: bytes, mime: str = "application/pdf") -> Statement:
     main = _mask(raw.get("card_no"), "AI***0000")
     period_end = _d(raw.get("period_end"))
     if not period_end:
-        raise ValueError("Yapay zekâ hesap kesim tarihini okuyamadı")
+        raise ValueError("Bu PDF'te kredi kartı ekstresi bulunamadı (hesap kesim tarihi yok). Banka hesap dökümüyse "
+                         "Ekstreler → Hesap hareketleri bölümünden yükle; olmazsa bankanın adını bana bildir.")
     num = receipt._num
     st = Statement(
         bank=f"{(raw.get('bank') or 'Banka').strip()}",
