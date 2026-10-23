@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS zakat_assets (
     quantity REAL NOT NULL CHECK (quantity > 0),
     is_jewelry INTEGER NOT NULL DEFAULT 0,    -- takılan ziynet (Şâfiî'de muaf)
     acquired DATE,                            -- eline geçtiği gün (yıl başlangıcı önerisi; Şâfiî'de kendi yılı)
+    cost REAL,                                -- toplam alış bedeli TL (kazanç hesabı için, opsiyonel)
     note TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -85,8 +86,11 @@ CREATE TABLE IF NOT EXISTS zakat_payments (
 
 def _init(c) -> None:
     c.executescript(SCHEMA)
-    if "acquired" not in {r[1] for r in c.execute("PRAGMA table_info(zakat_assets)")}:
+    cols = {r[1] for r in c.execute("PRAGMA table_info(zakat_assets)")}
+    if "acquired" not in cols:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN acquired DATE")
+    if "cost" not in cols:
+        c.execute("ALTER TABLE zakat_assets ADD COLUMN cost REAL")
     if not c.execute("SELECT 1 FROM zakat_people").fetchone():
         c.execute("INSERT INTO zakat_people (name, is_self) VALUES ('Ben', 1)")
 
@@ -283,6 +287,31 @@ def compute(today: date | None = None) -> dict:
             "people": out, "today_hijri": to_hijri(today)}
 
 
+# ---------------------------------------------------------------- varlıklar (Net durum)
+
+def holdings() -> dict:
+    """Altın/döviz/para varlıkları: bugünkü değer, alış bedeli girildiyse kazanç. 'Ben'inkiler Net durum'a girer,
+    aile üyelerininki ayrı gösterilir. Varlık yoksa fiyat çekilmez."""
+    ps = people()
+    if not any(p["assets"] for p in ps):
+        return {"items": [], "self_total": 0.0, "family_total": 0.0, "updated": None}
+    pd = prices()
+    pr = pd["prices"]
+    items = []
+    for p in ps:
+        for a in p["assets"]:
+            label, key, unit = KINDS.get(a["kind"], (a["kind"], "", ""))
+            price = 1.0 if a["kind"] == "TRY" else pr.get(key)
+            value = round(a["quantity"] * price, 2) if price else None
+            gain = round(value - a["cost"], 2) if value is not None and a["cost"] else None
+            items.append({**a, "label": label, "unit": unit, "price": price, "value": value, "person": p["name"],
+                          "is_self": bool(p["is_self"]), "gain": gain,
+                          "gain_pct": round(gain / a["cost"] * 100, 1) if gain is not None else None})
+    return {"items": items, "updated": pd["updated"],
+            "self_total": round(sum(i["value"] or 0 for i in items if i["is_self"]), 2),
+            "family_total": round(sum(i["value"] or 0 for i in items if not i["is_self"]), 2)}
+
+
 # ---------------------------------------------------------------- değişiklikler
 
 def add_person(name: str) -> int:
@@ -307,18 +336,19 @@ def delete_person(pid: int) -> bool:
         return c.execute("DELETE FROM zakat_people WHERE id = ? AND is_self = 0", (pid,)).rowcount > 0
 
 
-def add_asset(pid: int, kind: str, quantity: float, is_jewelry: bool, note: str | None, acquired: str | None = None) -> int:
+def add_asset(pid: int, kind: str, quantity: float, is_jewelry: bool, note: str | None, acquired: str | None = None,
+              cost: float | None = None) -> int:
     if kind not in KINDS:
         raise ValueError("Bilinmeyen varlık türü")
     with db.connect() as c:
         _init(c)
-        return c.execute("INSERT INTO zakat_assets (person_id, kind, quantity, is_jewelry, note, acquired) "
-                         "VALUES (?, ?, ?, ?, ?, ?)",
-                         (pid, kind, quantity, int(is_jewelry), (note or "").strip() or None, acquired)).lastrowid
+        return c.execute("INSERT INTO zakat_assets (person_id, kind, quantity, is_jewelry, note, acquired, cost) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (pid, kind, quantity, int(is_jewelry), (note or "").strip() or None, acquired, cost)).lastrowid
 
 
 def update_asset(aid: int, data: dict) -> bool:
-    data = {k: v for k, v in data.items() if k in ("person_id", "kind", "quantity", "is_jewelry", "note", "acquired")}
+    data = {k: v for k, v in data.items() if k in ("person_id", "kind", "quantity", "is_jewelry", "note", "acquired", "cost")}
     if not data:
         return False
     with db.connect() as c:

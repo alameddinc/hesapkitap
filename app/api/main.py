@@ -1160,6 +1160,7 @@ class ZakatAssetIn(BaseModel):
     is_jewelry: bool = False
     note: str | None = None
     acquired: date | None = None
+    cost: float | None = Field(None, gt=0)
 
 
 class ZakatAssetPatch(BaseModel):
@@ -1169,6 +1170,7 @@ class ZakatAssetPatch(BaseModel):
     is_jewelry: bool | None = None
     note: str | None = None
     acquired: date | None = None
+    cost: float | None = Field(None, gt=0)
 
 
 class ZakatPaymentIn(BaseModel):
@@ -1182,6 +1184,11 @@ class ZakatSettingsIn(BaseModel):
     include_app: bool | None = None
     include_receivables: bool | None = None
     manual_gram: float | None = Field(None, ge=0)  # 0: elle fiyatı kaldır
+
+
+@app.get("/api/holdings")
+def holdings():
+    return zakat.holdings()
 
 
 @app.get("/api/zakat")
@@ -1263,7 +1270,7 @@ def zakat_delete_payment(pay_id: int):
 def zakat_add_asset(body: ZakatAssetIn):
     try:
         return {"id": zakat.add_asset(body.person_id, body.kind, body.quantity, body.is_jewelry, body.note,
-                                      body.acquired.isoformat() if body.acquired else None)}
+                                      body.acquired.isoformat() if body.acquired else None, body.cost)}
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 

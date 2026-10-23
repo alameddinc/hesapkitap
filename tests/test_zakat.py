@@ -85,3 +85,18 @@ def test_acquired_date_suggest_and_safii(client, tmpdb):
     assert _person(client.get("/api/zakat").json(), "Ben")["total"] == 624000
     client.put("/api/zakat/settings", json={"madhhab": "safii"})
     assert _person(client.get("/api/zakat").json(), "Ben")["total"] == 208000
+
+
+def test_holdings_in_net_worth(client, tmpdb):
+    assert client.get("/api/holdings").json()["items"] == []
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    wife = client.post("/api/zakat/people", json={"name": "Eşim"}).json()["id"]
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 2, "acquired": "2025-01-10",
+                                           "cost": 16000})
+    client.post("/api/zakat/assets", json={"person_id": wife, "kind": "ALTIN_22", "quantity": 10, "is_jewelry": True})
+    h = client.get("/api/holdings").json()
+    mine = next(i for i in h["items"] if i["is_self"])
+    assert mine["value"] == 20800 and mine["gain"] == 4800 and mine["gain_pct"] == 30.0
+    assert h["self_total"] == 20800 and h["family_total"] == 59000
+    nw = client.get("/api/net-worth").json()
+    assert nw["holdings"] == 20800 and nw["family_holdings"] == 59000 and nw["net"] == 20800  # eşinki net duruma girmez
