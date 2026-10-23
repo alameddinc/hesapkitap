@@ -171,10 +171,13 @@ def _pdfs(msg: Message) -> list[tuple[str, bytes]]:
 
 
 def _looks_like_account_statement(text: str) -> bool:
-    t = text.lower()
-    card = re.search(r"son [öo]deme tarihi|asgari [öo]deme|kredi kart[ıi] (hesap )?ekstre", t)
-    acct = re.search(r"vadesiz|hesap hareket|hesap [öo]zeti|hesap ekstresi|hesap d[öo]k[üu]m", t)
-    return bool(acct and not card)
+    t = text.replace("İ", "i").replace("I", "ı").lower()  # Türkçe büyük harf: "İ".lower() birleşik nokta üretir
+    card = re.search(r"son [öo]deme tarihi|asgari [öo]deme|kredi kart[ıi] (hesap )?ekstre|hesap kesim tarihi|d[öo]nem borcu", t)
+    if card:
+        return False
+    acct = re.search(r"vadesiz|hesap hareket|hesap [öo]zeti|hesap ekstresi|hesap d[öo]k[üu]m|i[şs]lem d[öo]k[üu]m", t)
+    # başlığı farklı bankalar: kart işareti yok ama IBAN ya da bakiye sütunu var → hesap dökümü
+    return bool(acct or re.search(r"\btr\s?\d{2}(\s?\d{4}){5}|\b[iı]ban\b|bakiye", t))
 
 
 def handle_pdf(name: str, data: bytes) -> str:
