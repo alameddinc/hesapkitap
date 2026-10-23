@@ -39,6 +39,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [day, setDay] = useState(String(rec?.day_of_month ?? new Date().getDate()));
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
+  const [installments, setInstallments] = useState(row?.installments ?? draft?.installments ?? 1);
   const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => fetch("/api/wallets").then((r) => r.json() as Promise<
     { id: number; name: string; card_type: string; current: number }[]>) });
   const [walletId, setWalletId] = useState<number | null>(row?.wallet_id ?? null);
@@ -103,7 +104,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
       account_id: usesAccount ? accountId : null,
       ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
     if (kind === "gider" && payment === "kart" && !walletId) throw new Error("Hangi karttan ödendiğini seç");
-    const pay = kind === "gider" && !isRecurring && !rec ? { payment, wallet_id: payment === "kart" ? walletId : null } : {};
+    const pay = kind === "gider" && !isRecurring && !rec
+      ? { payment, wallet_id: payment === "kart" ? walletId : null, installments: payment === "kredi_karti" ? installments : 1 } : {};
     const who = !isRecurring && !rec ? { counterparty: person.trim() || null, location: location.trim() || null } : {};
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
@@ -223,8 +225,23 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
                 )}
               </div>
             )}
+            {payment === "kredi_karti" && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <select className="input w-40" aria-label="Taksit" value={installments} onChange={(e) => setInstallments(Number(e.target.value))}>
+                  <option value={1}>Tek çekim</option>
+                  {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 24].map((n) => <option key={n} value={n}>{n} taksit</option>)}
+                </select>
+                {installments > 1 && parseAmount(amount) > 0 && (
+                  <span className="text-xs text-stone-500">{installments} ay × {tl(parseAmount(amount) / installments)}</span>
+                )}
+              </div>
+            )}
             {payment === "kredi_karti" && !editingEntry?.linked && (
-              <p className="mt-1 text-xs text-stone-500">Ekstre gelince aynı tutarlı kart işlemiyle otomatik eşleşir; iki kez sayılmaz.</p>
+              <p className="mt-1 text-xs text-stone-500">
+                {installments > 1
+                  ? "Her taksit kendi ayına gider olarak yazılır. Ekstre gelince ilk taksitle eşleşir, sonrakiler ekstrelerden gelir; iki kez sayılmaz."
+                  : "Ekstre gelince aynı tutarlı kart işlemiyle otomatik eşleşir; iki kez sayılmaz."}
+              </p>
             )}
           </div>
         )}

@@ -6,7 +6,7 @@ import BarList from "../components/BarList";
 import { BudgetForm, BudgetList } from "../components/Budgets";
 import Insights from "../components/Insights";
 import Kpi from "../components/Kpi";
-import NetWorth from "../components/NetWorth";
+import NetWorth, { ZakatDue } from "../components/NetWorth";
 import Onboarding from "../components/Onboarding";
 import Compare from "../components/Compare";
 import MonthPicker from "../components/MonthPicker";
@@ -86,6 +86,7 @@ export default function Dashboard() {
           <Onboarding />
 
           <NetWorth compact />
+          <ZakatDue />
 
           <Compare month={month} />
 

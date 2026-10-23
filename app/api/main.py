@@ -421,6 +421,7 @@ class EntryIn(BaseModel):
     branch: str | None = None  # fişteki şube/semt (fiyat geçmişinde)
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
     account_id: int | None = None  # banka/nakit hesabı
+    installments: int = Field(1, ge=1, le=36)  # kredi kartı taksit sayısı
 
 
 class EntryPatch(BaseModel):
@@ -436,6 +437,7 @@ class EntryPatch(BaseModel):
     wallet_id: int | None = None  # ödeme 'kart' ise hangi ön ödemeli kart
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
     account_id: int | None = None  # banka/nakit hesabı
+    installments: int | None = Field(None, ge=1, le=36)
 
 
 @app.post("/api/entries")

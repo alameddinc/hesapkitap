@@ -15,6 +15,7 @@ export interface Row {
   account: string | null;
   bank: string | null;
   installment: string | null;
+  installments?: number; // elle girilen kart harcamasının taksit sayısı
   fx: string | null;
   note: string | null;
   deleted: boolean;

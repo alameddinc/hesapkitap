@@ -311,6 +311,7 @@ MIGRATIONS = [
     ("statements", "next_due_date", "DATE"),
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
     ("recurring", "gross_amount", "REAL"),
+    ("entries", "installments", "INTEGER NOT NULL DEFAULT 1"),  # kredi kartı taksit sayısı
     ("statements", "paid_amount", "REAL"),
     ("statements", "paid_at", "DATE"),
     ("entries", "payment", "TEXT"),
@@ -603,7 +604,10 @@ def auto_link() -> int:
             return 0
         free = _free_card_txns(c)
         for e in sorted(pending, key=lambda e: e["entry_date"]):
-            cands = [t for t in free if abs(t["amount"] - e["amount"]) <= 0.05
+            n = int(e.get("installments") or 1)
+            target = e["amount"] / n  # taksitli: ekstreye ilk taksit yansır
+            cands = [t for t in free if abs(t["amount"] - target) <= (0.05 if n == 1 else 0.02 * n)
+                     and (n == 1 or (t.get("installment_no") or 1) == 1)
                      and _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS]
             if not cands:
                 continue
@@ -682,7 +686,28 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 # ---------------------------------------------------------------- manual entries
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
-                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id")
+                "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
+                "installments")
+
+
+def installment_parts(e: dict) -> list[tuple[int, str, float]]:
+    """Taksitli kredi kartı harcaması: (sıra, dönem, tutar). Tek çekimde tek parça. Kuruş farkı son taksitte."""
+    n = int(e.get("installments") or 1)
+    if n <= 1 or e.get("payment") != "kredi_karti" or e.get("kind") != "gider":
+        return [(0, e["month"], e["amount"])]
+    part = round(e["amount"] / n, 2)
+    y, m = map(int, e["month"].split("-"))
+    out = []
+    for k in range(n):
+        mm = (m - 1 + k) % 12 + 1
+        yy = y + (m - 1 + k) // 12
+        out.append((k, f"{yy:04d}-{mm:02d}", part if k < n - 1 else round(e["amount"] - part * (n - 1), 2)))
+    return out
+
+
+def installment_entries() -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM entries WHERE installments > 1 AND payment = 'kredi_karti' AND kind = 'gider'"))
 
 
 def list_entries(month: str | None = None) -> list[dict]:

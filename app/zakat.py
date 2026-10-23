@@ -204,13 +204,16 @@ def historical_gram_price(day: date) -> float:
 _HIST_FX = {"USD": "TRY%3DX", "EUR": "EURTRY%3DX", "GBP": "GBPTRY%3DX"}
 
 
-def historical_prices(day: date) -> dict[str, float]:
-    """O günün fiyatları (TL): GRA (24 ayar gram), USD, EUR, GBP, GUMUS. Sunucu geneli önbellek."""
+def historical_prices(day: date, offline: bool = False) -> dict[str, float]:
+    """O günün fiyatları (TL): GRA (24 ayar gram), USD, EUR, GBP, GUMUS. Sunucu geneli önbellek.
+    offline: sadece önbellek (Özet gibi hızlı açılması gereken yerler)."""
     from app import system
 
     key = f"hist_px:{day.isoformat()}"
     if v := system.get(key):
         return json.loads(v)
+    if offline:
+        raise LookupError("önbellekte yok")
     usd = _yahoo("TRY%3DX", day)
     ons = _yahoo("GC%3DF", day)
     if not usd or not ons:
@@ -451,7 +454,7 @@ def _debts_at(day: date, px: dict) -> float:
     return round(total, 2)
 
 
-def history(pid: int, today: date | None = None, max_years: int = 6) -> dict:
+def history(pid: int, today: date | None = None, max_years: int = 6, offline: bool = False) -> dict:
     """Geçmiş zekât yılları: her yıl sonunda varlık, nisap, zekât, ödenen, kalan (kaza). Yıllar mevcut yıl
     başlangıcından geriye 354'er gün; verinin başladığı yere kadar."""
     today = today or date.today()
@@ -485,7 +488,7 @@ def history(pid: int, today: date | None = None, max_years: int = 6) -> dict:
     for end in reversed(ends):  # eskiden yeniye: ödenmeyen zekât sonraki yılın tabanından düşülür (Hanefî)
         start = end - timedelta(days=LUNAR_YEAR_DAYS)
         try:
-            px = historical_prices(end)
+            px = historical_prices(end, offline=offline)
         except Exception as e:  # noqa: BLE001
             years.append({"start": start.isoformat(), "end": end.isoformat(), "end_hijri": to_hijri(end),
                           "error": str(e)})
@@ -517,6 +520,19 @@ def history(pid: int, today: date | None = None, max_years: int = 6) -> dict:
                       "unknown_accounts": unknown, "partial": start < earliest})
     return {"years": list(reversed(years)), "need_start": False, "notes": sorted(notes),
             "total_due": round(sum(y.get("remaining", 0) for y in years), 2)}
+
+
+def self_due() -> float:
+    """Kullanıcının ("Ben") ödenmemiş geçmiş yıl zekâtı; Net durum'da borç olarak. Sadece önbellekteki fiyatlarla
+    (Zekât sayfası açılınca dolar), ağ beklenmez."""
+    try:
+        me = next((p for p in people() if p["is_self"]), None)
+        if not me or not me["hawl_start"]:
+            return 0.0
+        return history(me["id"], offline=True)["total_due"]
+    except Exception:  # noqa: BLE001 - Net durum zekât yüzünden bozulmasın
+        log.exception("zekât borcu")
+        return 0.0
 
 
 # ---------------------------------------------------------------- değişiklikler

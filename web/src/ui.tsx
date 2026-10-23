@@ -12,6 +12,7 @@ export interface EntryDraft {
   recurring?: boolean;
   gross?: boolean; // maaş: brüt seçeneği açık gelsin
   payment?: "kredi_karti" | "nakit" | "havale" | "kart";
+  installments?: number; // kredi kartı taksit sayısı (fişte yazıyorsa)
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[]; // fiş satırları
   location?: string | null; // fişteki işyeri adresi

@@ -153,11 +153,21 @@ def _entry_row(e: dict) -> dict:
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
         "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
-        "wallet_id": e.get("wallet_id"), "account_id": e.get("account_id"),
+        "wallet_id": e.get("wallet_id"), "account_id": e.get("account_id"), "installments": e.get("installments") or 1,
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
     }
+
+
+def _installment_row(e: dict, k: int, month: str, amount: float) -> dict:
+    n = int(e["installments"])
+    row = _entry_row(e)
+    if k == 0:
+        return {**row, "amount": amount, "installment": f"1/{n}", "original_amount": e["amount"]}
+    return {**row, "uid": f"m{e['id']}-{k}", "month": month, "amount": amount, "installment": f"{k + 1}/{n}",
+            "original_amount": e["amount"], "date": db.occurrence_date(month, int(e["entry_date"][8:10])),
+            "installment_of": e["id"]}
 
 
 def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
@@ -182,7 +192,19 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
     states, aliases = db.subscription_states(), db.merchant_aliases()
     card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
     entries = db.list_entries(month)
-    out = _apply_splits(card + [_entry_row(e) for e in entries]) + [_debt_row(d) for d in db.debt_rows(month)]
+    rows = []
+    for e in entries:
+        if int(e.get("installments") or 1) <= 1:
+            rows.append(_entry_row(e))
+    # taksitli kart harcamaları: her taksit kendi döneminde (önceki aylarda yapılanların bu aya düşen taksiti dahil)
+    for e in db.installment_entries():
+        for k, m, amt in db.installment_parts(e):
+            if month and m != month:
+                continue
+            if e["linked_txn_id"] and k > 0:  # ekstreyle eşleşti: sonraki taksitler ekstrelerden gelir
+                continue
+            rows.append(_installment_row(e, k, m, amt))
+    out = _apply_splits(card + rows) + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
         out += pending_recurring(month, db.list_recurring(), entries)
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
@@ -516,9 +538,13 @@ def plan(months: int = 6, today: date | None = None) -> dict:
                           "custom": not e and planned != r["amount"], "template_amount": r["amount"], "month": m})
         # --- tek seferlik elle girilenler
         for e in entries:
-            if e["month"] == m and not e["recurring_id"] and not e["skipped"] and not e["linked_txn_id"] and not e.get("debt_id"):
-                lines.append({"type": "tek_seferlik", "kind": e["kind"], "amount": e["amount"],
-                              "description": e["description"], "entry_id": e["id"]})
+            if e["recurring_id"] or e["skipped"] or e["linked_txn_id"] or e.get("debt_id"):
+                continue
+            for k, pm, amt in db.installment_parts(e):  # taksitliyse her taksit kendi ayında
+                if pm == m:
+                    n = int(e.get("installments") or 1)
+                    lines.append({"type": "tek_seferlik", "kind": e["kind"], "amount": amt, "entry_id": e["id"],
+                                  "description": e["description"] + (f" ({k + 1}/{n} taksit)" if n > 1 else "")})
 
         # --- ödenmemiş faturalar (ödenenler zaten tek seferlik gider olarak girdi)
         for b in bills:
@@ -988,15 +1014,17 @@ def net_worth(today: date | None = None) -> dict:
     from app import zakat
 
     hold = zakat.holdings()  # altın/döviz: sadece "Ben"inkiler net duruma girer
+    zakat_due = zakat.self_due()  # ödenmemiş geçmiş yıl zekâtı: borç
     jars = db.jar_reserved(today)
     for a in accounts:
         a["reserved"] = jars["by_account"].get(a["id"], 0.0)
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
             "wallets": wallets, "in_wallets": _round(in_wallets), "credit_cards": credit_cards, "unknown_banks": seen_banks,
-            "holdings": hold["self_total"], "family_holdings": hold["family_total"],
-            "net": _round(cash + in_wallets + hold["self_total"] - card_debt + receivable - payable),
-            "net_after_estimates": _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable),
+            "holdings": hold["self_total"], "family_holdings": hold["family_total"], "zakat_due": zakat_due,
+            "net": _round(cash + in_wallets + hold["self_total"] - card_debt + receivable - payable - zakat_due),
+            "net_after_estimates": _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable
+                                          - zakat_due),
             "stale": stale}
 
 
