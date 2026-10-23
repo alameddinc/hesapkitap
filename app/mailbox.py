@@ -172,6 +172,13 @@ def _pdfs(msg: Message) -> list[tuple[str, bytes]]:
 
 def _looks_like_account_statement(text: str) -> bool:
     t = text.replace("İ", "i").replace("I", "ı").lower()  # Türkçe büyük harf: "İ".lower() birleşik nokta üretir
+    # önce başlık: hesap dökümünün işlem açıklamalarında "kredi kartı … son ödeme" geçebilir (kart borcu ödemesi)
+    first_row = re.search(r"^\s*\d{2}[./]\d{2}[./]\d{4}\s+\d{2}:\d{2}", t, re.M)  # ilk hareket satırı
+    head = t[:first_row.start()] if first_row else t[:2500]
+    card_re = r"son [öo]deme tarihi|asgari [öo]deme|kredi kart[ıi] (hesap )?ekstre|hesap kesim tarihi|d[öo]nem borcu"
+    acct_re = r"vadesiz|hesap hareket|hesap [öo]zeti|hesap ekstresi|hesap d[öo]k[üu]m|i[şs]lem d[öo]k[üu]m"
+    if re.search(acct_re, head) and not re.search(card_re, head):
+        return True
     card = re.search(r"son [öo]deme tarihi|asgari [öo]deme|kredi kart[ıi] (hesap )?ekstre|hesap kesim tarihi|d[öo]nem borcu", t)
     if card:
         return False
