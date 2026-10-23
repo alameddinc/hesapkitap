@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS zakat_assets (
     is_jewelry INTEGER NOT NULL DEFAULT 0,    -- takılan ziynet (Şâfiî'de muaf)
     acquired DATE,                            -- eline geçtiği gün (yıl başlangıcı önerisi; Şâfiî'de kendi yılı)
     cost REAL,                                -- toplam alış bedeli TL (kazanç hesabı için, opsiyonel)
+    estimated INTEGER NOT NULL DEFAULT 0,     -- miktar bilinmiyordu, tutar ve o günkü fiyattan tahmin edildi
     note TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -91,6 +92,8 @@ def _init(c) -> None:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN acquired DATE")
     if "cost" not in cols:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN cost REAL")
+    if "estimated" not in cols:
+        c.execute("ALTER TABLE zakat_assets ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0")
     if not c.execute("SELECT 1 FROM zakat_people").fetchone():
         c.execute("INSERT INTO zakat_people (name, is_self) VALUES ('Ben', 1)")
 
@@ -148,6 +151,60 @@ def prices() -> dict:
     if manual:
         p["GRA"] = float(manual)
     return {**data, "prices": p, "manual_gram": float(manual) if manual else None}
+
+
+# ---------------------------------------------------------------- geçmiş fiyat (miktar tahmini)
+
+# saf altın içeriği (gram): ayar oranı × ağırlık. Ziynet/sikkelerde işçilik ve prim tahmine katılmaz:
+# ödenen paranın tamamı altına sayılır → miktar olduğundan FAZLA çıkar (zekâtta eksik bırakmamak için ihtiyat).
+PURE_GRAMS = {"ALTIN_24": 0.995, "ALTIN_22": 0.916, "ALTIN_18": 0.75, "ALTIN_14": 0.585,
+              "CEYREK": 1.75 * 0.916, "YARIM": 3.5 * 0.916, "TAM": 7.0 * 0.916, "CUMHURIYET": 7.216 * 0.916,
+              "ATA": 7.216 * 0.916}
+SAFETY = 0.98  # fiyatı %2 düşük varsay → miktar biraz daha fazla çıkar
+YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={p1}&period2={p2}&interval=1d"
+
+
+def _yahoo_low(sym: str, day: date) -> float | None:
+    """O güne (ya da hemen önceki işlem gününe) ait günlük en düşük değer."""
+    import calendar
+
+    p1 = calendar.timegm((day - timedelta(days=6)).timetuple())
+    p2 = calendar.timegm((day + timedelta(days=1)).timetuple())
+    r = httpx.get(YAHOO.format(sym=sym, p1=p1, p2=p2), timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    res = r.json()["chart"]["result"][0]
+    best = None
+    for ts, low in zip(res.get("timestamp") or [], res["indicators"]["quote"][0].get("low") or []):
+        if low and date.fromtimestamp(ts) <= day:
+            best = low
+    return best
+
+
+def historical_gram_price(day: date) -> float:
+    """24 ayar gram altının o günkü (ihtiyatlı, düşük) TL fiyatı: ons (en düşük) × dolar/TL (en düşük) / 31,1035."""
+    from app import system
+
+    key = f"hist_gram:{day.isoformat()}"
+    if v := system.get(key):
+        return float(v)
+    ons, usd = _yahoo_low("GC%3DF", day), _yahoo_low("TRY%3DX", day)
+    if not ons or not usd:
+        raise ValueError("O tarihin altın fiyatı bulunamadı")
+    price = round(ons * usd / 31.1035, 2)
+    system.put(key, str(price))
+    return price
+
+
+def estimate_quantity(kind: str, cost: float, day: date) -> dict:
+    if kind not in PURE_GRAMS:
+        raise ValueError("Tahmin sadece altın türleri için")
+    gram = historical_gram_price(day) * SAFETY
+    unit_value = gram * PURE_GRAMS[kind]
+    raw = cost / unit_value
+    gram_kind = kind.startswith("ALTIN")
+    qty = round(raw, 1) if gram_kind else max(1, round(raw))
+    return {"quantity": qty, "gram_price": round(gram, 2), "unit_value": round(unit_value, 2), "raw": round(raw, 2),
+            "unit": "gr" if gram_kind else "adet"}
 
 
 # ---------------------------------------------------------------- kameri takvim (gösterim için, ±1 gün)
@@ -243,7 +300,8 @@ def compute(today: date | None = None) -> dict:
                 plus.append({**base, "label": f"{label} (yılı {ready:%d.%m.%Y}'de dolar)", "value": 0.0, "exempt": True})
                 continue
             price = 1.0 if a["kind"] == "TRY" else pr.get(key)
-            plus.append({**base, "label": label + (" (ziynet)" if a["is_jewelry"] else ""),
+            plus.append({**base, "estimated": bool(a["estimated"]),
+                         "label": label + (" (ziynet)" if a["is_jewelry"] else "") + (" · tahmini" if a["estimated"] else ""),
                          "value": round(a["quantity"] * price, 2) if price else None, "price": price})
         if p["is_self"] and st["include_app"]:
             ap, am = _app_lines(pr, st, today)
@@ -337,18 +395,19 @@ def delete_person(pid: int) -> bool:
 
 
 def add_asset(pid: int, kind: str, quantity: float, is_jewelry: bool, note: str | None, acquired: str | None = None,
-              cost: float | None = None) -> int:
+              cost: float | None = None, estimated: bool = False) -> int:
     if kind not in KINDS:
         raise ValueError("Bilinmeyen varlık türü")
     with db.connect() as c:
         _init(c)
-        return c.execute("INSERT INTO zakat_assets (person_id, kind, quantity, is_jewelry, note, acquired, cost) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                         (pid, kind, quantity, int(is_jewelry), (note or "").strip() or None, acquired, cost)).lastrowid
+        return c.execute("INSERT INTO zakat_assets (person_id, kind, quantity, is_jewelry, note, acquired, cost, estimated) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (pid, kind, quantity, int(is_jewelry), (note or "").strip() or None, acquired, cost,
+                          int(estimated))).lastrowid
 
 
 def update_asset(aid: int, data: dict) -> bool:
-    data = {k: v for k, v in data.items() if k in ("person_id", "kind", "quantity", "is_jewelry", "note", "acquired", "cost")}
+    data = {k: v for k, v in data.items() if k in ("person_id", "kind", "quantity", "is_jewelry", "note", "acquired", "cost", "estimated")}
     if not data:
         return False
     with db.connect() as c:

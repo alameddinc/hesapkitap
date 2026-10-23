@@ -21,6 +21,8 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
   const [owner, setOwner] = useState(personId ?? people[0]?.id);
   const [kind, setKind] = useState("CEYREK");
   const [qty, setQty] = useState("");
+  const [est, setEst] = useState<{ quantity: number; gram_price: number; unit_value: number; unit: string } | null>(null);
+  const [estErr, setEstErr] = useState<string | null>(null);
   const [jewelry, setJewelry] = useState(false);
   const [note, setNote] = useState("");
   const [acquired, setAcquired] = useState("");
@@ -28,8 +30,10 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
   const [finding, setFinding] = useState(false);
   const cands = useQuery({ queryKey: ["holding-candidates"], enabled: finding,
     queryFn: () => json<{ date: string; description: string; amount: number; kind: "nakit" | "kuyumcu"; src: string }[]>("GET", "/api/holdings/candidates") });
+  const canEstimate = ["ALTIN_24", "ALTIN_22", "ALTIN_18", "ALTIN_14", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA"].includes(kind);
   const gold = kind.startsWith("ALTIN") || ["CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS"].includes(kind);
-  const save = useSave(() => json("POST", "/api/zakat/assets", { person_id: owner, kind, quantity: parseAmount(qty), is_jewelry: gold && jewelry, note, acquired: acquired || null, cost: parseAmount(cost) > 0 ? parseAmount(cost) : null }),
+  const save = useSave(() => json("POST", "/api/zakat/assets", { person_id: owner, kind, quantity: parseAmount(qty), is_jewelry: gold && jewelry, note, acquired: acquired || null, cost: parseAmount(cost) > 0 ? parseAmount(cost) : null,
+    estimated: !!est && parseAmount(qty) === est.quantity }),
     () => { ui.toast("Eklendi"); onClose(); });
   return (
     <Modal title="Varlık ekle" onClose={onClose} footer={
@@ -52,7 +56,7 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
           </div>
           <div>
             <label className="label" htmlFor="z-qty">Miktar ({kinds[kind]?.unit})</label>
-            <input id="z-qty" className="input text-right" inputMode="decimal" autoFocus value={qty} onChange={(e) => setQty(e.target.value)} />
+            <input id="z-qty" className="input text-right" inputMode="decimal" autoFocus value={qty} onChange={(e) => { setQty(e.target.value); setEst(null); }} />
           </div>
         </div>
         <div>
@@ -91,6 +95,33 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
             <label className="label" htmlFor="z-cost">Toplam kaça aldın? (ops., TL)</label>
             <input id="z-cost" className="input text-right" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} />
             <p className="mt-1 text-xs text-stone-500">Girersen aldığından beri ne kadar kazandırdığı görünür. Hediye geldiyse boş bırak.</p>
+            {canEstimate && (
+              <button type="button" className="btn-ghost mt-2 border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+                disabled={!acquired || !(parseAmount(cost) > 0)}
+                onClick={async () => {
+                  setEstErr(null);
+                  try {
+                    const r = await json<{ quantity: number; gram_price: number; unit_value: number; unit: string }>("GET",
+                      `/api/holdings/estimate?kind=${kind}&cost=${parseAmount(cost)}&day=${acquired}`);
+                    setEst(r); setQty(String(r.quantity).replace(".", ","));
+                  } catch (e) { setEstErr((e as Error).message); }
+                }}>
+                {kinds[kind]?.unit === "gr" ? "Gramı" : "Adedi"} bilmiyorum, tutar ve tarihten tahmin et
+              </button>
+            )}
+            {canEstimate && (!acquired || !(parseAmount(cost) > 0)) && (
+              <p className="mt-1 text-xs text-stone-500">Tahmin için tarih ve tutar gerekli.</p>
+            )}
+            {estErr && <p className="mt-1 text-xs text-red-600">{estErr}</p>}
+            {est && (
+              <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                <b>Tahmini: {String(est.quantity).replace(".", ",")} {est.unit}.</b> O günkü en düşük altın fiyatıyla
+                (24 ayar gram ≈ {tl(est.gram_price)}, %2 ihtiyat payı dahil) ve ödediğin paranın tamamı altına sayılarak
+                hesaplandı; işçilik düşülmediği için gerçek miktar büyük ihtimalle biraz <b>daha az</b>. Zekâtta eksik kalmasın
+                diye bilerek fazla tahmin edildi. <b>Kuyumcuda tartırıp gerçek miktarı girmen en doğrusu</b>; o zamana kadar
+                listede "tahmini" diye görünür.
+              </div>
+            )}
           </div>
         )}
         {gold && (

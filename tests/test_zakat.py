@@ -113,3 +113,20 @@ def test_holding_candidates(client, tmpdb):
     rows = client.get("/api/holdings/candidates").json()
     assert [(r["date"], r["amount"], r["kind"]) for r in rows] == [
         ("2025-12-01", 9000, "kuyumcu"), ("2025-11-24", 250000, "nakit"), ("2025-03-02", 25000, "nakit")]
+
+
+def test_estimate_quantity_is_conservative(client, tmpdb, monkeypatch):
+    from app import zakat
+
+    monkeypatch.setattr(zakat, "_yahoo_low", lambda sym, day: 4036.4 if "GC" in sym else 42.407)
+    r = client.get("/api/holdings/estimate", params={"kind": "ALTIN_22", "cost": 250000, "day": "2025-11-24"}).json()
+    # 24 ayar ≈ 5503 TL; %2 ihtiyat; 22 ayar saf oran 0,916 → işçilik dahil edilmediği için gram fazla çıkar
+    assert 50 <= r["quantity"] <= 51 and r["unit"] == "gr"
+    c = client.get("/api/holdings/estimate", params={"kind": "CEYREK", "cost": 18000, "day": "2025-11-24"}).json()
+    assert c["quantity"] == 2 and c["unit"] == "adet"
+    assert client.get("/api/holdings/estimate", params={"kind": "USD", "cost": 1, "day": "2025-11-24"}).status_code == 422
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "ALTIN_22", "quantity": r["quantity"], "cost": 250000,
+                                           "acquired": "2025-11-24", "estimated": True, "is_jewelry": True})
+    item = client.get("/api/holdings").json()["items"][0]
+    assert item["estimated"] == 1
