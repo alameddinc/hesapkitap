@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR, tl } from "../format";
+import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import AssetForm from "./AssetForm";
 import { useSave } from "./hooks";
@@ -9,6 +9,7 @@ import { useSave } from "./hooks";
 interface Item {
   id: number; label: string; unit: string; quantity: number; value: number | null; person: string; is_self: boolean;
   acquired: string | null; cost: number | null; gain: number | null; gain_pct: number | null; note: string | null; is_jewelry: number;
+  estimated: number;
 }
 interface Data { items: Item[]; self_total: number; family_total: number; updated: string | null }
 interface ZakatMeta { people: { id: number; name: string }[]; kinds: Record<string, { label: string; unit: string }> }
@@ -20,6 +21,9 @@ export default function Holdings() {
   const meta = useQuery({ queryKey: ["zakat"], queryFn: () => fetch("/api/zakat").then((r) => r.json() as Promise<ZakatMeta>) });
   const [adding, setAdding] = useState(false);
   const del = useSave((id: number) => fetch(`/api/zakat/assets/${id}`, { method: "DELETE" }), () => ui.toast("Silindi"));
+  const fix = useSave((a: { id: number; quantity: number }) => fetch(`/api/zakat/assets/${a.id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quantity: a.quantity, estimated: false }),
+  }), () => ui.toast("Miktar güncellendi"));
   const d = q.data;
   if (!d) return null;
   const cost = d.items.filter((i) => i.is_self && i.cost).reduce((s, i) => s + (i.cost ?? 0), 0);
@@ -46,7 +50,15 @@ export default function Holdings() {
         {d.items.map((i) => (
           <li key={i.id} className="flex items-start justify-between gap-2 py-2">
             <span className="min-w-0">
-              {i.quantity} {i.unit !== "adet" && i.unit !== "gr" ? "" : i.unit} {i.label}
+              <button className="underline decoration-dotted" title="Miktarı düzelt" onClick={() => {
+                const v = window.prompt(`${i.label}: gerçek miktar (${i.unit})`, String(i.quantity).replace(".", ","));
+                const n = v == null ? NaN : parseAmount(v);
+                if (n > 0) fix.mutate({ id: i.id, quantity: n });
+              }}>{String(i.quantity).replace(".", ",")} {i.unit !== "adet" && i.unit !== "gr" ? "" : i.unit}</button> {i.label}
+              {!!i.estimated && (
+                <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                  title="Tutar ve tarihten fazla tahmin edildi; tartıp gerçek miktara dokunarak düzelt">tahmini · tartıp düzelt</span>
+              )}
               <span className="block text-xs text-stone-500">
                 {[!i.is_self && i.person, i.is_jewelry ? "ziynet" : null, i.acquired && `alış ${dateTR(i.acquired)}`,
                   i.cost && `${tl(i.cost)}'ye`, i.note].filter(Boolean).join(" · ")}

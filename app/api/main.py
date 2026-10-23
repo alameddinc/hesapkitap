@@ -1161,6 +1161,7 @@ class ZakatAssetIn(BaseModel):
     note: str | None = None
     acquired: date | None = None
     cost: float | None = Field(None, gt=0)
+    estimated: bool = False
 
 
 class ZakatAssetPatch(BaseModel):
@@ -1171,6 +1172,7 @@ class ZakatAssetPatch(BaseModel):
     note: str | None = None
     acquired: date | None = None
     cost: float | None = Field(None, gt=0)
+    estimated: bool | None = None
 
 
 class ZakatPaymentIn(BaseModel):
@@ -1189,6 +1191,17 @@ class ZakatSettingsIn(BaseModel):
 @app.get("/api/holdings")
 def holdings():
     return zakat.holdings()
+
+
+@app.get("/api/holdings/estimate")
+def holding_estimate(kind: str, cost: float, day: date):
+    """Miktarı bilinmeyen altın: ödenen tutar ve o günkü fiyattan ihtiyatlı (fazla) tahmin."""
+    try:
+        return zakat.estimate_quantity(kind, cost, day)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except Exception as e:  # noqa: BLE001 - fiyat servisine ulaşılamadı
+        raise HTTPException(502, f"Geçmiş fiyat alınamadı: {e}") from e
 
 
 @app.get("/api/holdings/candidates")
@@ -1294,7 +1307,8 @@ def zakat_delete_payment(pay_id: int):
 def zakat_add_asset(body: ZakatAssetIn):
     try:
         return {"id": zakat.add_asset(body.person_id, body.kind, body.quantity, body.is_jewelry, body.note,
-                                      body.acquired.isoformat() if body.acquired else None, body.cost)}
+                                      body.acquired.isoformat() if body.acquired else None, body.cost,
+                                      body.estimated)}
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 
@@ -1302,8 +1316,9 @@ def zakat_add_asset(body: ZakatAssetIn):
 @app.patch("/api/zakat/assets/{aid}")
 def zakat_patch_asset(aid: int, body: ZakatAssetPatch):
     d = body.model_dump(exclude_unset=True)
-    if "is_jewelry" in d:
-        d["is_jewelry"] = int(d["is_jewelry"])
+    for k in ("is_jewelry", "estimated"):
+        if k in d and d[k] is not None:
+            d[k] = int(d[k])
     if d.get("acquired"):
         d["acquired"] = d["acquired"].isoformat()
     if not zakat.update_asset(aid, d):
