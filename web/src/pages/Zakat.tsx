@@ -3,6 +3,8 @@ import { ChevronDown, Info, Moon, Plus, RefreshCw, Trash2, UserPlus } from "luci
 import { useState } from "react";
 import { useSave } from "../components/hooks";
 import AssetForm from "../components/AssetForm";
+import Sadaka from "../components/Sadaka";
+import Segmented from "../components/Segmented";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 
@@ -252,8 +254,25 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   );
 }
 
-/** Zekât: kişi bazında nisap, kameri yıl, hesap ve ödeme takibi (Diyanet / Hanefî esas). */
+const TAB_KEY = "hk-zakat-tab";
+
+/** Zekât ve Sadaka: iki sekme. */
 export default function Zakat() {
+  const [tab, setTab] = useState<"zekat" | "sadaka">(() => { try { return localStorage.getItem(TAB_KEY) === "sadaka" ? "sadaka" : "zekat"; } catch { return "zekat"; } });
+  const pick = (t: "zekat" | "sadaka") => { setTab(t); try { localStorage.setItem(TAB_KEY, t); } catch { /* özel mod */ } };
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="flex items-center gap-2 text-xl font-semibold"><Moon size={20} /> Zekât ve Sadaka</h1>
+        <Segmented value={tab} onChange={pick} options={[{ value: "zekat", label: "Zekât" }, { value: "sadaka", label: "Sadaka" }]} />
+      </div>
+      {tab === "zekat" ? <ZakatTab /> : <Sadaka />}
+    </div>
+  );
+}
+
+/** Zekât: kişi bazında nisap, kameri yıl, hesap ve ödeme takibi (Diyanet / Hanefî esas). */
+function ZakatTab() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["zakat"], queryFn: () => json<ZakatData>("GET", "/api/zakat") });
   const [newPerson, setNewPerson] = useState("");
@@ -268,10 +287,7 @@ export default function Zakat() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold"><Moon size={20} /> Zekât</h1>
-        <p className="text-sm text-stone-500">Her kişi için ayrı: nisap, kameri yıl, hesap ve ödeme. Bugün {d.today_hijri}.</p>
-      </div>
+      <p className="text-sm text-stone-500">Her kişi için ayrı: nisap, kameri yıl, hesap ve ödeme. Bugün {d.today_hijri}.</p>
 
       <section className="card space-y-2 p-4 text-sm">
         <div className="flex flex-wrap items-baseline justify-between gap-2">

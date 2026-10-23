@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, finance, jobs, receipt, system, telegram, zakat
+from app import auth, backup, config, db, donations, finance, jobs, receipt, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -319,7 +319,7 @@ Kind = Literal["gelir", "gider"]
 Payment = Literal["kredi_karti", "nakit", "havale", "kart"]  # kart: ön ödemeli (yemek/hediye/giyim), wallet_id ile
 CardKind = Literal["harcama", "iade", "faiz_ucret", "odeme"]
 EXPENSE_CATEGORIES = ["Kira & Aidat", "Faturalar", "Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Sağlık",
-                      "Eğitim", "Ulaşım & Araç", "Market & Gıda", "Kredi & Borç", "Diğer"]
+                      "Eğitim", "Ulaşım & Araç", "Market & Gıda", "Kredi & Borç", "Bağış & Sadaka", "Diğer"]
 INCOME_CATEGORIES = ["Maaş", "Ek Gelir", "Kira Geliri", "Yatırım", "Diğer Gelir"]
 
 
@@ -1140,6 +1140,70 @@ def add_jar_move(jid: int, body: JarMoveIn):
 def delete_jar_move(mid: int):
     if not db.delete_jar_move(mid):
         raise HTTPException(404, "Hareket yok")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- sadaka ve bağışlar
+
+class DonationIn(BaseModel):
+    kind: str
+    amount: float = Field(gt=0)
+    given_date: date | None = None
+    recipient: str | None = Field(None, max_length=80)
+    note: str | None = Field(None, max_length=200)
+    as_expense: bool = False   # nakitten/hesaptan verdim, dökümde görünmeyecek → gider olarak da yaz
+    account_id: int | None = None
+
+
+class DonationMarkIn(BaseModel):
+    source: Literal["entry", "card"]
+    id: int
+    kind: str                  # sadaka, fitre, … ya da "zekat"
+    person_id: int | None = None
+    year_start: date | None = None
+    recipient: str | None = Field(None, max_length=80)
+
+
+@app.get("/api/donations")
+def donations_summary():
+    return donations.summary()
+
+
+@app.post("/api/donations")
+def donations_add(body: DonationIn):
+    try:
+        return {"id": donations.add(body.kind, body.amount, (body.given_date or date.today()).isoformat(), body.recipient,
+                                    body.note, body.account_id, body.as_expense)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.delete("/api/donations/{did}")
+def donations_delete(did: int):
+    if not donations.delete(did):
+        raise HTTPException(404, "Kayıt yok")
+    return {"ok": True}
+
+
+@app.post("/api/donations/mark")
+def donations_mark(body: DonationMarkIn):
+    try:
+        return donations.mark(body.source, body.id, body.kind, body.person_id,
+                              body.year_start.isoformat() if body.year_start else None, body.recipient)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.get("/api/donations/mark/{source}/{sid}")
+def donations_mark_of(source: Literal["entry", "card"], sid: int):
+    return {"mark": donations.mark_of(source, sid)}
+
+
+@app.delete("/api/donations/mark/{source}/{sid}")
+def donations_unmark(source: Literal["entry", "card"], sid: int):
+    donations.unmark(source, sid)
     return {"ok": True}
 
 

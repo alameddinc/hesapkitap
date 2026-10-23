@@ -56,7 +56,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "transferler", label: "Transferler", icon: ArrowLeftRight },
   { route: "hesaplar", label: "Hesaplar", icon: Landmark },
   { route: "borclar", label: "Borç / Alacak", icon: HandCoins },
-  { route: "zekat", label: "Zekât", icon: Moon },
+  { route: "zekat", label: "Zekât ve Sadaka", icon: Moon },
   { route: "fiyatlar", label: "Fiyatlar", icon: Tag },
   { route: "ekstreler", label: "Ekstreler", icon: ReceiptText },
   { route: "kurallar", label: "Kurallar", icon: Tags },

@@ -9,6 +9,7 @@ import { useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
 import SplitEditor from "./SplitEditor";
+import MarkDonation from "./MarkDonation";
 import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
@@ -409,7 +410,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           </div>
         )}
         {editingEntry && kind === "gider" && !editingEntry.debt_id && !editingEntry.linked && (
-          <SplitEditor target="entry" id={editingEntry.id} total={editingEntry.original_amount ?? editingEntry.amount} />
+          <>
+            <SplitEditor target="entry" id={editingEntry.id} total={editingEntry.original_amount ?? editingEntry.amount} />
+            <MarkDonation source="entry" id={editingEntry.id} />
+          </>
         )}
         {err && <p className="text-sm text-red-600">{err}</p>}
       </div>
