@@ -163,6 +163,14 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
                                  "output": usage.get("candidatesTokenCount")}
 
 
+def _installments(v) -> int:
+    try:
+        n = int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return 1
+    return n if 2 <= n <= 36 else 1
+
+
 def _items(raw: dict) -> list[dict]:
     """Ürün satırları; "2Adt x 230,00" gibi adetler qty olarak gelir."""
     out = []
@@ -206,6 +214,7 @@ SADECE şu JSON'u döndür:
   "subscriber_no": "abone/tesisat no veya null",
   "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
   "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
+  "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
   "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
@@ -245,6 +254,7 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
         "total": _num(raw.get("total")),
         "payment": raw.get("payment") or "bilinmiyor",
         "payment_card": (raw.get("payment_card") or "").strip()[:40] or None,
+        "installments": _installments(raw.get("installments")),
         "category": category,
         "items": _items(raw),
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,

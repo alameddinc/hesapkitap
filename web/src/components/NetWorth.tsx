@@ -8,7 +8,7 @@ import Wallets from "./Wallets";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
-  reserved: number; free: number; holdings: number; family_holdings: number;
+  reserved: number; free: number; holdings: number; family_holdings: number; zakat_due: number;
   accounts: (Account & { reserved: number })[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
@@ -26,6 +26,20 @@ const json = async <T,>(method: string, url: string, body?: unknown): Promise<T>
 
 /** Gerçek durum: hesaplardaki para (dökümden ya da elle) + kartlar − kart borcu ± borç/alacak.
  *  compact: Özet'teki tek satırlık özet (dokununca Hesaplar sayfası); değilse sayfanın tamamı. */
+/** Özet: ödenmemiş geçmiş yıl zekâtı varsa hatırlat (Zekât sayfasına götürür). */
+export function ZakatDue() {
+  const ui = useUI();
+  const q = useQuery({ queryKey: ["net-worth"], queryFn: () => json<NW>("GET", "/api/net-worth") });
+  if (!q.data?.zakat_due) return null;
+  return (
+    <button className="card flex w-full items-center gap-3 border-amber-300 bg-amber-50 p-3 text-left text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+      onClick={() => ui.go("zekat")}>
+      <span className="flex-1">🌙 Geçmiş yıllardan ödenmemiş görünen zekâtın var: <b>{tl(q.data.zakat_due)}</b>. Ödediysen ilgili yıla "Ödedim" de.</span>
+      <ChevronRight size={16} className="shrink-0" />
+    </button>
+  );
+}
+
 export default function NetWorth({ compact = false }: { compact?: boolean }) {
   const ui = useUI();
   const q = useQuery({ queryKey: ["net-worth"], queryFn: () => json<NW>("GET", "/api/net-worth") });
@@ -57,6 +71,7 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
             <span className="block text-xs text-stone-500">
               Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
               {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
+              {d.zakat_due ? ` · zekât borcu −${tl(d.zakat_due)}` : ""}
             </span>
             {d.reserved > 0 && (
               <span className="block text-xs text-stone-500">Kumbaralarda {tl(d.reserved)} · harcanabilir <b>{tl(d.free)}</b></span>
@@ -163,10 +178,16 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
             </div>
           )}
 
-          {(d.receivable > 0 || d.payable > 0) && (
+          {(d.receivable > 0 || d.payable > 0 || d.zakat_due > 0) && (
             <ul className="space-y-1 text-sm">
               {d.receivable > 0 && <li className="flex justify-between"><span>Alacakların</span><span className="tabular-nums text-green-700">+{tl(d.receivable)}</span></li>}
               {d.payable > 0 && <li className="flex justify-between"><span>Borçların</span><span className="tabular-nums text-red-600">−{tl(d.payable)}</span></li>}
+              {d.zakat_due > 0 && (
+                <li className="flex justify-between">
+                  <button className="underline decoration-dotted" onClick={() => ui.go("zekat")}>Ödenmemiş zekât (geçmiş yıllar)</button>
+                  <span className="tabular-nums text-red-600">−{tl(d.zakat_due)}</span>
+                </li>
+              )}
             </ul>
           )}
           <Wallets />

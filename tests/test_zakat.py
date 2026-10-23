@@ -137,7 +137,7 @@ def test_estimate_quantity_is_conservative(client, tmpdb, monkeypatch):
 def test_history_missed_years(client, tmpdb, monkeypatch):
     from app import zakat
 
-    monkeypatch.setattr(zakat, "historical_prices", lambda day: {"GRA": 5000.0, "USD": 40.0})
+    monkeypatch.setattr(zakat, "historical_prices", lambda day, offline=False: {"GRA": 5000.0, "USD": 40.0})
     me = _person(client.get("/api/zakat").json(), "Ben")["id"]
     assert client.get(f"/api/zakat/people/{me}/history").json()["need_start"] is True
     client.post("/api/zakat/assets", json={"person_id": me, "kind": "ALTIN_22", "quantity": 100, "acquired": "2024-06-01"})
@@ -154,6 +154,9 @@ def test_history_missed_years(client, tmpdb, monkeypatch):
     h2 = client.get(f"/api/zakat/people/{me}/history").json()
     assert h2["years"][-1]["remaining"] == 0 and h2["years"][1]["deduct"] == 0
     assert h2["total_due"] < h["total_due"]
+    # Net durum'da borç (sadece önbellekteki fiyatlarla; burada sahte fiyat önbellek yerine geçiyor)
+    nw = client.get("/api/net-worth").json()
+    assert nw["zakat_due"] == h2["total_due"] and nw["net"] == round(nw["holdings"] - h2["total_due"], 2)
 
 
 def test_bank_balance_at_past_date(client, tmpdb):
