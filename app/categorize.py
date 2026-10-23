@@ -6,10 +6,12 @@ from app.textnorm import normalize, strip_gateway
 
 UNCATEGORIZED = "Kategorisiz"
 # Varsayılan kurallar değişince artır: mevcut veritabanlarına eksik kurallar eklenir (kullanıcı kuralları korunur)
-RULES_VERSION = 4
+RULES_VERSION = 5
 
 # (pattern, kategori) — sıra önemli, ilk eşleşen kazanır. Pattern'ler normalize() çıktısına göre (büyük harf, ASCII).
 DEFAULT_RULES: list[tuple[str, str]] = [
+    (r"DIYANET VAKF|TURKIYE DIYANET|\bTDV\b|KIZILAY|DENIZ FENERI|\bIHH\b|LOSEV|DARUSSAFAKA|\bAFAD\b|TEMA VAKFI|"
+     r"CANSUYU|HAYRAT|YARDIMELI|BIR AVUC|IYILIK DERNEGI|SADAKA|ZEKAT|FITRE|BAGIS", "Bağış & Sadaka"),
     (r"FACEBK|META ADS|GOOGLE ADS", "Reklam"),
     (r"GOOGLE ?\*?CLOUD|HETZNER|CLOUDFLARE|RAILWAY|SQSP|DOMAIN|WEBSHARE|GOOGLE WORKSPACE|AWS|DIGITALOCEAN|VERCEL", "Yazılım & Bulut"),
     (r"OPENAI|CHATGPT|ANTHROPIC|CLAUDE|ELEVENLABS|SUNO|GAMMA\.APP|CANVA|MIDJOURNEY|CURSOR", "AI & Yazılım Abonelik"),

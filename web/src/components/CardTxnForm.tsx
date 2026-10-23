@@ -7,6 +7,7 @@ import { useMeta, useSave } from "./hooks";
 import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
 import SplitEditor from "./SplitEditor";
+import MarkDonation from "./MarkDonation";
 
 /** Ekstreden gelen işlemi düzenle: kategori, tip (faiz → harcama gibi), not, gizle/geri al. */
 export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClose: () => void; onSaved?: (m: string) => void }) {
@@ -107,6 +108,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
             placeholder="ör. iş gideri, hediye" />
         </div>
         {row.kind === "harcama" && !row.deleted && <SplitEditor target="card" id={row.id} total={row.original_amount ?? row.amount} />}
+        {row.kind === "harcama" && !row.deleted && <MarkDonation source="card" id={row.id} />}
         {row.deleted && <p className="text-sm text-amber-600">Bu işlem silinmiş; raporlara dahil değil.</p>}
       </div>
     </Modal>
