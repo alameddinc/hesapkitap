@@ -19,3 +19,38 @@ def test_uppercase_turkish_headers():
     assert acct("VADESİZ HESAP")
     assert acct("IBAN: XX")
     assert not acct("KREDİ KARTI HESAP EKSTRESİ")
+
+
+VB_TEXT = """Hesap Hareketleri
+AD SOYAD SUBE
+Hesap No: 00120000000000001 01.10.2026 10:00
+VB Müşteri No : 123 Bakiye : 1.000,00 TL
+Hesap Türü : Vadesiz Ek Hesap Limiti : 0,00 TL
+IBAN : TR00 0000 0000 0000 0000 0000 00 Tarih Aralığı : 01.01.2026
+TARİH SAAT İŞLEM NO TUTAR BAKİYE İŞLEM ADI
+02.10.2026 10:00 1234567890123457 -500,00 1.000,00 ATM Para Çekme
+ATM'den 500 TL para çekildi.
+01.10.2026 09:00 1234567890123456 -500,00 1.500,00 Kredi Kartı Borç Ödeme
+5400********1234 nolu kredi kartı borç ödemesi Son Ödeme Tarihi:05.10.2026
+Hesap Hareketleri
+AD SOYAD SUBE
+Hesap No: 00120000000000001 01.10.2026 10:00
+TARİH SAAT İŞLEM NO TUTAR BAKİYE İŞLEM ADI
+30.09.2026 12:00 1234567890123455 2.000,00 2.000,00 Maaş
+Şirket maaş ödemesi
+"""
+
+
+def test_account_statement_with_card_payments_in_rows():
+    # işlem satırlarında "kredi kartı … son ödeme" geçse de başlık hesap dökümü diyor
+    assert acct(VB_TEXT)
+
+
+def test_vakifbank_rule_based_parser():
+    from app import bank_pdf
+
+    r = bank_pdf.parse_rule_based(VB_TEXT)
+    assert r["verified"] and r["bank"] == "VakıfBank"
+    assert [(x["date"], x["amount"]) for x in r["rows"]] == [("2026-09-30", 2000.0), ("2026-10-01", -500.0), ("2026-10-02", -500.0)]
+    assert "AD SOYAD" not in " ".join(x["description"] for x in r["rows"])  # sayfa başlığı açıklamaya karışmaz
+    assert "nolu kredi kartı" in r["rows"][1]["description"]

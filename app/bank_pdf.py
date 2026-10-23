@@ -41,10 +41,52 @@ class BankPdfError(ValueError):
     pass
 
 
+# ---------------------------------------------------------------- kural tabanlı okuyucular (yapay zekâsız)
+# Satırı "tarih saat işlem-no tutar bakiye açıklama" olan dökümler (VakıfBank "Hesap Hareketleri").
+# Hızlı, ücretsiz ve uzunluk sınırı yok (yıllarca hareket); bakiye zinciri tutmazsa yapay zekâya düşülür.
+_VB_ROW = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4}) \d{2}:\d{2} \d{10,20} (-?[\d.]+,\d{2}) (-?[\d.]+,\d{2}) ?(.*)$")
+_VB_NOISE = re.compile(r"^(hesap hareketleri|hesap no ?:|tari̇h saat|tarih saat|vb .*no ?:|iban|sayfa|\S{0,3}$)", re.I)
+
+
+def _tr_num(v: str) -> float:
+    return float(v.replace(".", "").replace(",", "."))
+
+
+def parse_rule_based(text: str) -> dict | None:
+    lines = text.splitlines()
+    rows: list[dict] = []
+    in_header = False  # her sayfanın başındaki blok (hesap sahibi, IBAN…) tablo başlığına kadar atlanır
+    for line in lines:
+        st = line.strip()
+        low = st.replace("İ", "i").lower()
+        if low == "hesap hareketleri":
+            in_header = True
+            continue
+        if in_header:
+            in_header = not low.startswith("tarih saat")
+            continue
+        m = _VB_ROW.match(st)
+        if m:
+            d, mo, y, amt, bal, desc = m.groups()
+            rows.append({"date": f"{y}-{mo}-{d}", "amount": _tr_num(amt), "balance": _tr_num(bal), "description": desc.strip()})
+        elif rows and line.strip() and not _VB_NOISE.match(line.strip()) and len(rows[-1]["description"]) < 480:
+            rows[-1]["description"] = f"{rows[-1]['description']} {line.strip()}".strip()
+    if len(rows) < 3 or len(rows) < len(lines) / 40:  # bu düzen değil
+        return None
+    # sıra: yeniden eskiye listelenmişse çevir (zincir eskiden yeniye doğrulanır)
+    def chain_hits(rs):
+        return sum(abs(round(b["balance"] - a["balance"], 2) - b["amount"]) <= 0.01 for a, b in zip(rs, rs[1:]))
+    if chain_hits(rows[::-1]) > chain_hits(rows):
+        rows.reverse()
+    opening = round(rows[0]["balance"] - rows[0]["amount"], 2)
+    check = verify_chain(rows, opening, rows[-1]["balance"])
+    bank = "VakıfBank" if re.search(r"vak[ıi]f|\bVB\b", text[:3000], re.I) else ""
+    for r in rows:
+        r["description"] = r["description"][:500]
+    return {"owner_name": "", "bank": bank, "rows": rows, "rule_based": True, **check}
+
+
 def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
-    if not receipt.enabled():
-        raise BankPdfError("PDF dökümleri yapay zekâ ile okunur; Ayarlar → Anahtarlar'dan Gemini anahtarı gir "
-                           "ya da bankadan Excel/CSV indir.")
     text = None
     for pw in [None, *(passwords or [])]:
         try:
@@ -54,6 +96,12 @@ def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
             continue
     if text is None:
         raise BankPdfError("PDF açılamadı (şifreli olabilir)")
+    ruled = parse_rule_based(text)
+    if ruled and ruled["verified"]:
+        return ruled
+    if not receipt.enabled():
+        raise BankPdfError("Bu bankanın PDF dökümü yapay zekâ ile okunur; Ayarlar → Anahtarlar'dan Gemini anahtarı gir "
+                           "ya da bankadan Excel/CSV indir.")
     best = None
     for _attempt in range(3):  # model bazen bir satır atlar: bakiye zinciri tutana kadar tekrar dene
         res = _parse_text(text)
