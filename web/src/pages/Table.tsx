@@ -243,7 +243,7 @@ export default function Table() {
               <tbody>
                 {listRows.map((r) => (
                   <tr key={r.uid} className="cursor-pointer border-t border-stone-100 hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-800/50"
-                    onClick={() => (r.source === "card" ? ui.openCardTxn(r) : ui.openEntry(r))}>
+                    onClick={() => (r.source === "card" ? ui.openCardTxn(r) : r.source === "estimate" ? ui.go("ekstreler") : ui.openEntry(r))}>
                     <td className="px-2 py-1.5 whitespace-nowrap">{dateTR(r.date)}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap text-stone-500">{monthLabel(r.month, true)}</td>
                     <td className="max-w-72 px-2 py-1.5">

@@ -44,6 +44,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
   const open = (row: Row) => {
     const r = row.split_of ? rows.find((x) => x.uid === row.split_of) ?? row : row;  // alt kalem → ana kayıt
     if (r.source === "debt") ui.go("borclar");
+    else if (r.source === "estimate") ui.go("ekstreler");
     else if (r.source === "card") ui.openCardTxn(r);
     else if (r.source === "manual") ui.openEntry(r);
     else ui.openRecurring(r.recurring_id ?? undefined);
@@ -57,7 +58,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
             className={cx("flex cursor-pointer gap-3 px-3 py-2.5 hover:bg-stone-50 dark:hover:bg-stone-800/50",
               (r.deleted || r.skipped || r.linked) && "opacity-50", r.pending && "bg-amber-50/60 dark:bg-amber-950/20")}>
             <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500 dark:bg-stone-800">
-              {r.source === "card" ? <CreditCard size={15} /> : r.source === "recurring" || r.recurring_id ? <Repeat size={15} /> : <span className="text-xs font-semibold">₺</span>}
+              {r.source === "card" || r.source === "estimate" ? <CreditCard size={15} /> : r.source === "recurring" || r.recurring_id ? <Repeat size={15} /> : <span className="text-xs font-semibold">₺</span>}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">
