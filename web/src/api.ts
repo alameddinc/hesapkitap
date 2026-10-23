@@ -2,7 +2,7 @@ export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gide
 
 export interface Row {
   uid: string;
-  source: "card" | "manual" | "recurring" | "debt";
+  source: "card" | "manual" | "recurring" | "debt" | "estimate"; // estimate: ekstresi olmayan kart ödemesi
   id: number;
   date: string;
   month: string;

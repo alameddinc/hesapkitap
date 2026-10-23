@@ -160,6 +160,19 @@ def _entry_row(e: dict) -> dict:
     }
 
 
+CARD_ESTIMATE_CATEGORY = "Kart harcaması (ekstresiz)"
+
+
+def _card_payment_estimate_row(p: dict, month: str) -> dict:
+    bank = re.sub(r"\s+(KATILIM\s+)?BANKASI.*$", "", p.get("account") or "", flags=re.I).strip()
+    card = f"{bank} …{p['card_last4']}".strip() if p.get("card_last4") else (bank or "Kredi kartı")
+    return {"uid": f"cp{p['id']}", "source": "estimate", "id": p["id"], "date": p["pay_date"], "month": month,
+            "description": f"{card} ödemesi (ekstre yok, tahmini harcama)", "merchant": card, "amount": p["amount"],
+            "kind": EXPENSE, "category": CARD_ESTIMATE_CATEGORY, "card": card, "account": None, "bank": bank or None,
+            "installment": None, "fx": None, "note": None, "recurring_id": None, "skipped": False, "deleted": False,
+            "estimated": True}
+
+
 def _installment_row(e: dict, k: int, month: str, amount: float) -> dict:
     n = int(e["installments"])
     row = _entry_row(e)
@@ -204,6 +217,12 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
             if e["linked_txn_id"] and k > 0:  # ekstreyle eşleşti: sonraki taksitler ekstrelerden gelir
                 continue
             rows.append(_installment_row(e, k, m, amt))
+    # ekstresi olmayan dönemlerin kart ödemesi: o dönemin kart harcaması yerine ödeme tutarı (tahmini) sayılır;
+    # ekstre yüklenince kendiliğinden kalkar
+    for p in db.card_payments_without_statement():
+        pm = db.period_of(p["pay_date"])
+        if not month or pm == month:
+            rows.append(_card_payment_estimate_row(p, pm))
     out = _apply_splits(card + rows) + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
         out += pending_recurring(month, db.list_recurring(), entries)
@@ -710,16 +729,24 @@ def insights(month: str, today: date | None = None) -> list[dict]:
 
     # 2b) Hesaptan kart ödemesi var ama ekstresi yok → o dönemin harcamaları hiç sayılmamış
     missing: dict[str, list] = defaultdict(list)
+    archived = []
     for x in db.card_payments_without_statement():
-        missing[x["card_last4"] or "?"].append(x)
+        (archived if x["before_first"] else missing[x["card_last4"] or "?"]).append(x)
+    archived = [x for x in archived if db.period_of(x["pay_date"]) == month]
+    if archived:
+        out.append({"level": "bilgi",
+                    "title": f"Bu ayın kart harcaması tahmini ({_tl(sum(x['amount'] for x in archived))})",
+                    "detail": "Bu ödemeler kartların yüklenen ilk ekstresinden eski (bankalar genelde son 12 ayı verir). "
+                              "O ayların kart harcaması, ödenen tutar kadar \"" + CARD_ESTIMATE_CATEGORY + "\" olarak sayıldı. "
+                              "Eski ekstreyi bulursan yükle; tahmin kendiliğinden kalkar."})
     for last4, ps in missing.items():
         bank = next((x["account"] for x in ps if x["account"]), "")
         bank = re.sub(r"\s+(KATILIM\s+)?BANKASI.*$", "", bank, flags=re.I).strip()
         card = f"{bank} …{last4}" if last4 != "?" else "Bir kart"
         out.append({"level": "uyari",
                     "title": f"{card}: {len(ps)} ödemenin ekstresi yüklenmemiş ({_tl(sum(x['amount'] for x in ps))})",
-                    "detail": "Hesabından bu karta ödeme yapılmış ama o döneme ait kart ekstresi yok; harcamalar hiçbir "
-                              "aya gider olarak yazılmadı, devreden bakiye bu yüzden fazla görünür. Ödemeler: "
+                    "detail": "Hesabından bu karta ödeme yapılmış ama o döneme ait kart ekstresi yok; şimdilik ödenen tutar "
+                              "o ayın tahmini kart harcaması sayıldı. Ödemeler: "
                               + ", ".join(f"{x['pay_date'][8:10]}.{x['pay_date'][5:7]} {_tl(x['amount'])}" for x in ps)
                               + ". Ekstreler sayfasından o ayların kart ekstresini yükle.",
                     "link": "ekstreler"})

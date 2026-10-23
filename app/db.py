@@ -1545,6 +1545,10 @@ def card_payments_without_statement() -> list[dict]:
     with connect() as c:
         pays = rows(c.execute("SELECT * FROM card_payments ORDER BY pay_date"))
         sts = rows(c.execute("SELECT card_no, bank, period_end, due_date, total_debt FROM statements WHERE due_date IS NOT NULL"))
+    first: dict[str, str] = {}  # kartın yüklenen ilk ekstresi: öncesi bankanın arşivinden eski olabilir
+    for s in sts:
+        k = s["card_no"][-4:]
+        first[k] = min(first.get(k, s["period_end"]), s["period_end"])
     out = []
     for p in pays:
         covered = False
@@ -1554,7 +1558,9 @@ def card_payments_without_statement() -> list[dict]:
                 covered = True
                 break
         if not covered:
-            out.append(p)
+            # ilk ekstreden önceki ödeme: bankalar çoğunlukla son 12 ayı verir, o ekstreler yüklenemeyebilir
+            out.append({**p, "before_first": bool(p["card_last4"] and p["card_last4"] in first
+                                                 and p["pay_date"] < first[p["card_last4"]])})
     return out
 
 
