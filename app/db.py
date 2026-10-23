@@ -1540,6 +1540,31 @@ def transfers_overview() -> dict:
     return {"people": people, "own": own, "items": items, "debts": debts}
 
 
+def interest_charges(period: str) -> list[dict]:
+    """Bu dönemin ekstrelerindeki faiz / vade farkı / faize bağlı vergi satırları ve nedeni için önceki ekstre ile
+    ona yapılan ödemeler (geç mi, eksik mi)."""
+    with connect() as c:
+        rs = rows(c.execute(
+            "SELECT t.description, t.amount, s.id AS statement_id, s.bank, s.card_no, s.period_end FROM transactions t "
+            "JOIN statements s ON s.id = t.statement_id WHERE t.txn_type = 'faiz_ucret' AND t.is_deleted = 0 "
+            "AND substr(s.period_end, 1, 7) = ?", (period,)))
+        out = []
+        for st_id in dict.fromkeys(r["statement_id"] for r in rs):
+            lines = [r for r in rs if r["statement_id"] == st_id]
+            st = lines[0]
+            prev = c.execute("SELECT period_end, due_date, total_debt FROM statements WHERE card_no = ? AND bank = ? "
+                             "AND period_end < ? ORDER BY period_end DESC LIMIT 1",
+                             (st["card_no"], st["bank"], st["period_end"])).fetchone()
+            pays = []
+            if prev and prev["due_date"]:
+                pays = rows(c.execute("SELECT pay_date, amount FROM card_payments WHERE card_last4 = ? AND pay_date >= ? "
+                                      "AND pay_date <= ? ORDER BY pay_date",
+                                      (st["card_no"][-4:], prev["period_end"], _shift_days(prev["due_date"], 25))))
+            out.append({"bank": st["bank"], "card_no": st["card_no"], "period_end": st["period_end"], "lines": lines,
+                        "prev": dict(prev) if prev else None, "payments": pays})
+    return out
+
+
 def card_payments_without_statement() -> list[dict]:
     """Bankadan kart ödemesi yapılmış ama o döneme ait ekstre yüklenmemiş: harcamalar hiç sayılmamış demektir."""
     with connect() as c:

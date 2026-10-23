@@ -699,6 +699,59 @@ def _tl(x: float) -> str:
     return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
 
 
+def _fold(s: str) -> str:
+    from app.categorize import fold_key
+
+    return fold_key(s)
+
+
+def interest_alarm(month: str) -> list[dict]:
+    """Faiz alarmı: bu dönem ödenen faiz / vade farkı ve NEDENİ (geç ödeme, eksik ödeme, taksit vade farkı)."""
+    out = []
+    for st in db.interest_charges(month):
+        card = f"{st['bank']} …{st['card_no'][-4:]}"
+        total = round(sum(x["amount"] for x in st["lines"]), 2)
+        if total <= 0:
+            continue
+        keys = [(x, _fold(x["description"])) for x in st["lines"]]
+        late = sum(x["amount"] for x, k in keys if "GECIKME" in k)
+        shop = sum(x["amount"] for x, k in keys if "ALISVERIS" in k or "AKDI" in k)
+        vade = [(x["description"].split("-", 1)[-1].strip(), x["amount"]) for x, k in keys if "VADEFARK" in k]
+        reasons = []
+        prev, pays = st["prev"], st["payments"]
+        if prev and prev["due_date"] and (late or shop):
+            paid = round(sum(p["amount"] for p in pays), 2)
+            on_time = round(sum(p["amount"] for p in pays if p["pay_date"] <= prev["due_date"]), 2)
+            due = date.fromisoformat(prev["due_date"])
+            if pays and on_time < (prev["total_debt"] or 0) - 1:
+                first_late = next((p for p in pays if p["pay_date"] > prev["due_date"]), None)
+                if first_late:
+                    days = (date.fromisoformat(first_late["pay_date"]) - due).days
+                    reasons.append(f"önceki ekstrenin son ödemesi {due:%d.%m}, ödeme {date.fromisoformat(first_late['pay_date']):%d.%m}: "
+                                   f"{days} gün geç. Bir gün geç ödemek bile dönem borcunun tamamına faiz işletir")
+                elif paid < (prev["total_debt"] or 0) - 1:
+                    reasons.append(f"önceki dönem borcunun {_tl(paid)}'si ödendi, kalan {_tl(prev['total_debt'] - paid)}'ye faiz işledi")
+            elif not pays:
+                reasons.append(f"önceki ekstreye ({_tl(prev['total_debt'] or 0)}, son ödeme {due:%d.%m}) ödeme görünmüyor")
+        if vade:
+            reasons.append("taksitli işlemlere vade farkı eklendi: " + ", ".join(f"{m} {_tl(a)}" for m, a in vade[:5])
+                           + ". Taksit yerine tek çekim seçersen vade farkı ödemezsin")
+        out.append({"level": "kritik", "title": f"Faiz alarmı: {card} bu dönem {_tl(total)} faiz ve vergi",
+                    "detail": ("Neden: " + "; ".join(reasons) + "." if reasons else
+                               "Ekstrede faiz, vade farkı ya da faize bağlı vergi var.")
+                              + (f" (gecikme faizi {_tl(late)}, alışveriş faizi {_tl(shop)})" if late or shop else "")
+                              + " Önlem: bankada son ödeme gününde dönem borcunun tamamı için otomatik ödeme talimatı ver.",
+                    "filter": {"kind": FEE}})
+    # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): arındır
+    inc = [r for r in transactions(month) if r["kind"] == INCOME and not r.get("pending")
+           and any(k in _fold(r["description"]) for k in ("FAIZ", "FAİZ", "NEMA"))]
+    if inc:
+        out.append({"level": "uyari", "title": f"Faiz geliri: {_tl(sum(r['amount'] for r in inc))} (arındırılacak)",
+                    "detail": "Hesabına faiz işlemiş görünüyor. Faizden uzak durmak istiyorsan bu tutarı sevap beklemeden "
+                              "ihtiyaç sahibine vererek arındırabilirsin; hesap türünü (ör. katılım ya da faizsiz vadesiz) kontrol et."})
+    return out
+
+
 def insights(month: str, today: date | None = None) -> list[dict]:
     """Seçili ay + önümüzdeki aylar için dikkat edilmesi gerekenler. level: kritik | uyari | bilgi | iyi"""
     today = today or date.today()
@@ -712,10 +765,11 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     # 1) Faiz
     fee_rows = [r for r in live if r["kind"] == FEE]
     if fee_rows:
-        out.append({"level": "kritik", "title": f"{_tl(t['fees'])} faiz ve vergi ödedin",
-                    "detail": "Ekstre borcunun tamamı son ödeme tarihine kadar ödenmediğinde alışveriş faizi, geç "
-                              "ödendiğinde gecikme faizi işler; üstüne BSMV ve KKDF eklenir. Asgari değil, toplam borcu öde.",
-                    "filter": {"kind": FEE}})
+        out += interest_alarm(month) or [{
+            "level": "kritik", "title": f"{_tl(t['fees'])} faiz ve vergi ödedin",
+            "detail": "Ekstre borcunun tamamı son ödeme tarihine kadar ödenmediğinde alışveriş faizi, geç "
+                      "ödendiğinde gecikme faizi işler; üstüne BSMV ve KKDF eklenir. Asgari değil, toplam borcu öde.",
+            "filter": {"kind": FEE}}]
 
     # 2) Gecikmiş veya kısmi ödenmiş (yaklaşanlar "Ödemeler" kartında)
     for x in payables(today):
