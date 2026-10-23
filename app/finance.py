@@ -985,14 +985,19 @@ def net_worth(today: date | None = None) -> dict:
     seen_banks = sorted(({short_bank(b) for b in db.imported_bank_names()} | {a["name"] for a in accounts if not a["as_of"]})
                         - have - {"Banka hesabı"})
     in_wallets = sum(w["balance"] for w in wallets)
+    from app import zakat
+
+    hold = zakat.holdings()  # altın/döviz: sadece "Ben"inkiler net duruma girer
     jars = db.jar_reserved(today)
     for a in accounts:
         a["reserved"] = jars["by_account"].get(a["id"], 0.0)
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
             "wallets": wallets, "in_wallets": _round(in_wallets), "credit_cards": credit_cards, "unknown_banks": seen_banks,
-            "net": _round(cash + in_wallets - card_debt + receivable - payable),
-            "net_after_estimates": _round(cash + in_wallets - card_debt - card_est + receivable - payable), "stale": stale}
+            "holdings": hold["self_total"], "family_holdings": hold["family_total"],
+            "net": _round(cash + in_wallets + hold["self_total"] - card_debt + receivable - payable),
+            "net_after_estimates": _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable),
+            "stale": stale}
 
 
 # ---------------------------------------------------------------- dönem sonu raporu (Telegram)

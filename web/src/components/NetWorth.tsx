@@ -8,7 +8,7 @@ import Wallets from "./Wallets";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
-  reserved: number; free: number;
+  reserved: number; free: number; holdings: number; family_holdings: number;
   accounts: (Account & { reserved: number })[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
@@ -43,7 +43,7 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
   const del = useSave((id: number) => json("DELETE", `/api/accounts/${id}`), () => ui.toast("Silindi"));
   const d = q.data;
   if (!d) return null;
-  const empty = !d.accounts.length && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
+  const empty = !d.accounts.length && !d.holdings && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
   if (compact) {
     return (
       <button className="card flex w-full items-center gap-3 p-4 text-left" onClick={() => ui.go("hesaplar")}>
@@ -55,7 +55,7 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
             <span className="block text-xs text-stone-500">Net durum · gerçek paran (bankalar, kartlar, borç/alacak)</span>
             <span className={cx("block text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</span>
             <span className="block text-xs text-stone-500">
-              Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
+              Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
               {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
             </span>
             {d.reserved > 0 && (
@@ -75,10 +75,10 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
       <button className="flex w-full items-center gap-3 p-4 text-left" onClick={() => setOpen(!open)}>
         <Landmark size={18} className="shrink-0 text-stone-500" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-stone-500">Net durum (bankada + kartlarda − kart borcu ± borç/alacak)</div>
+          <div className="text-xs text-stone-500">Net durum (bankada + altın/döviz + kartlarda − kart borcu ± borç/alacak)</div>
           <div className={cx("text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</div>
           <div className="text-xs text-stone-500">
-            Bankada {tl(d.cash)}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
+            Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
             {d.card_estimated ? ` · kesilecek ekstreler ~${tl(d.card_estimated)}` : ""}
           </div>
           {d.reserved > 0 && (
