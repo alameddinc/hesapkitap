@@ -107,5 +107,9 @@ def test_holding_candidates(client, tmpdb):
                         "category": "Nakit Çekim"})
     tmpdb.create_entry({"entry_date": "2025-03-03", "description": "Market", "amount": 2500, "kind": "gider"})
     tmpdb.create_entry({"entry_date": "2025-03-04", "description": "ATM", "amount": 200, "kind": "gider"})
+    # şubeden çekim, boşluksuz açıklama
+    tmpdb.create_entry({"entry_date": "2025-11-24", "description": "NakitÖdeme,AdıSoyadı:X", "amount": 250000, "kind": "gider"})
+    tmpdb.create_entry({"entry_date": "2025-12-01", "description": "ABC KUYUMCULUK", "amount": 9000, "kind": "gider"})
     rows = client.get("/api/holdings/candidates").json()
-    assert [(r["date"], r["amount"], r["kind"]) for r in rows] == [("2025-03-02", 25000, "nakit")]
+    assert [(r["date"], r["amount"], r["kind"]) for r in rows] == [
+        ("2025-12-01", 9000, "kuyumcu"), ("2025-11-24", 250000, "nakit"), ("2025-03-02", 25000, "nakit")]

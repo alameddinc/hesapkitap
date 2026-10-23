@@ -1193,21 +1193,26 @@ def holdings():
 
 @app.get("/api/holdings/candidates")
 def holding_candidates(min_amount: float = 1000):
-    """Altını ne zaman aldığını hatırlamayanlar için: büyük nakit çekimler ve kuyumcu harcamaları (hesap dökümü + kart)."""
-    gold = r"(KUYUMCU|ALTIN|GOLD|JEWEL|MUCEVHER|MÜCEVHER|DARPHANE)"
+    """Altını ne zaman aldığını hatırlamayanlar için: büyük nakit çekimler (ATM, gişe/"Nakit Ödeme") ve kuyumcu
+    harcamaları (hesap dökümü + kart). Açıklamalar boşluksuz ve Türkçe karaktersiz karşılaştırılır ("NakitÖdeme")."""
+    from app.categorize import fold_key
+
+    cash = ("ATM", "PARACEK", "NAKITCEK", "NAKITODEME", "GISE")
+    gold = ("KUYUMCU", "ALTIN", "GOLD", "JEWEL", "MUCEVHER", "DARPHANE")
     with db.connect() as c:
         rows = db.rows(c.execute(
             "SELECT entry_date AS date, description, amount, category, 'hesap' AS src FROM entries "
-            "WHERE kind = 'gider' AND skipped = 0 AND amount >= ? AND (category = 'Nakit Çekim' "
-            "OR UPPER(description) LIKE '%ATM%' OR UPPER(description) LIKE '%PARA CEK%' OR UPPER(description) LIKE '%NAKIT CEK%' "
-            "OR UPPER(description) LIKE '%KUYUMCU%' OR UPPER(description) LIKE '%ALTIN%') "
+            "WHERE kind = 'gider' AND skipped = 0 AND amount >= ? "
             "UNION ALL SELECT txn_date, description, amount, category, 'kart' FROM transactions "
-            "WHERE txn_type = 'harcama' AND amount >= ? AND (category = 'Nakit Çekim' OR UPPER(description) LIKE '%KUYUMCU%' "
-            "OR UPPER(description) LIKE '%ALTIN%' OR UPPER(description) LIKE '%GOLD%' OR UPPER(description) LIKE '%JEWEL%') "
-            "ORDER BY date DESC LIMIT 80", (min_amount, min_amount)))
+            "WHERE txn_type = 'harcama' AND amount >= ? ORDER BY date DESC", (min_amount, min_amount)))
+    out = []
     for r in rows:
-        r["kind"] = "kuyumcu" if re.search(gold, r["description"].upper()) and r["category"] != "Nakit Çekim" else "nakit"
-    return rows
+        k = fold_key(r["description"])
+        if any(g in k for g in gold):
+            out.append({**r, "kind": "kuyumcu"})
+        elif r["category"] == "Nakit Çekim" or any(x in k for x in cash):
+            out.append({**r, "kind": "nakit"})
+    return out[:500]
 
 
 @app.get("/api/zakat")

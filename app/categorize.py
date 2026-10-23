@@ -34,7 +34,7 @@ DEFAULT_RULES: list[tuple[str, str]] = [
     (r"IGDAS|BASKENTGAZ|IZMIRGAZ|DOGALGAZ|DOGAL GAZ", "Doğalgaz"),
     (r"ENERJISA|CK BOGAZICI|BOGAZICI ELEKTRIK|AYEDAS|BEDAS|ELEKTRIK TAHSILAT|GEDIZ ELEKTRIK", "Elektrik"),
     (r"VERGI TAHSILAT|TASIT V|MTV|HARC|GIB |GELIR IDARESI|TRAFIK CEZA", "Vergi & Harç"),
-    (r"ATM|PARA CEKME|NAKIT CEKIM", "Nakit Çekim"),
+    (r"ATM|PARA ?CEKME|NAKIT ?CEKIM|NAKIT ?ODEME", "Nakit Çekim"),
     (r"\bKIRA\b|KIRA ODEME|AIDAT", "Kira & Aidat"),
     (r"MASRAF TAHSIL|HESAP ISLETIM|KOMISYON|EFT UCRET|HAVALE UCRET", "Banka Faiz & Ücret"),
     (r"ECZANE|HASTANE|KLINIK|SAGLIK", "Sağlık"),
@@ -68,3 +68,9 @@ def suggest_pattern(description: str) -> str:
     norm = re.sub(r"[*/].*$", "", norm).strip() or norm  # 'FACEBK *ABC/DUBLIN' -> 'FACEBK'
     words = [w for w in norm.split() if not re.fullmatch(r"[\d\-]+", w)][:2]
     return re.escape(" ".join(words)) if words else re.escape(norm)
+
+
+def fold_key(text: str) -> str:
+    """Karşılaştırma anahtarı: büyük harf, Türkçe karaktersiz, boşluksuz ("Nakit Ödeme" = "NakitÖdeme" = "NAKITODEME")."""
+    tr = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
+    return "".join((text or "").translate(tr).upper().split())
