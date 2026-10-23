@@ -100,3 +100,12 @@ def test_holdings_in_net_worth(client, tmpdb):
     assert h["self_total"] == 20800 and h["family_total"] == 59000
     nw = client.get("/api/net-worth").json()
     assert nw["holdings"] == 20800 and nw["family_holdings"] == 59000 and nw["net"] == 20800  # eşinki net duruma girmez
+
+
+def test_holding_candidates(client, tmpdb):
+    tmpdb.create_entry({"entry_date": "2025-03-02", "description": "ATM PARA CEKME", "amount": 25000, "kind": "gider",
+                        "category": "Nakit Çekim"})
+    tmpdb.create_entry({"entry_date": "2025-03-03", "description": "Market", "amount": 2500, "kind": "gider"})
+    tmpdb.create_entry({"entry_date": "2025-03-04", "description": "ATM", "amount": 200, "kind": "gider"})
+    rows = client.get("/api/holdings/candidates").json()
+    assert [(r["date"], r["amount"], r["kind"]) for r in rows] == [("2025-03-02", 25000, "nakit")]

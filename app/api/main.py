@@ -1191,6 +1191,25 @@ def holdings():
     return zakat.holdings()
 
 
+@app.get("/api/holdings/candidates")
+def holding_candidates(min_amount: float = 1000):
+    """Altını ne zaman aldığını hatırlamayanlar için: büyük nakit çekimler ve kuyumcu harcamaları (hesap dökümü + kart)."""
+    gold = r"(KUYUMCU|ALTIN|GOLD|JEWEL|MUCEVHER|MÜCEVHER|DARPHANE)"
+    with db.connect() as c:
+        rows = db.rows(c.execute(
+            "SELECT entry_date AS date, description, amount, category, 'hesap' AS src FROM entries "
+            "WHERE kind = 'gider' AND skipped = 0 AND amount >= ? AND (category = 'Nakit Çekim' "
+            "OR UPPER(description) LIKE '%ATM%' OR UPPER(description) LIKE '%PARA CEK%' OR UPPER(description) LIKE '%NAKIT CEK%' "
+            "OR UPPER(description) LIKE '%KUYUMCU%' OR UPPER(description) LIKE '%ALTIN%') "
+            "UNION ALL SELECT txn_date, description, amount, category, 'kart' FROM transactions "
+            "WHERE txn_type = 'harcama' AND amount >= ? AND (category = 'Nakit Çekim' OR UPPER(description) LIKE '%KUYUMCU%' "
+            "OR UPPER(description) LIKE '%ALTIN%' OR UPPER(description) LIKE '%GOLD%' OR UPPER(description) LIKE '%JEWEL%') "
+            "ORDER BY date DESC LIMIT 80", (min_amount, min_amount)))
+    for r in rows:
+        r["kind"] = "kuyumcu" if re.search(gold, r["description"].upper()) and r["category"] != "Nakit Çekim" else "nakit"
+    return rows
+
+
 @app.get("/api/zakat")
 def zakat_summary():
     return zakat.compute()
