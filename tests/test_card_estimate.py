@@ -41,3 +41,18 @@ def test_interest_alarm_explains_late_payment(client, tmpdb):
     assert len(alarms) == 1
     a = alarms[0]
     assert "666,84" in a["title"] and "1 gün geç" in a["detail"] and "25.08" in a["detail"] and "26.08" in a["detail"]
+
+
+def test_interest_history(client, tmpdb):
+    test_interest_alarm_explains_late_payment(client, tmpdb)
+    h = client.get("/api/interest-history").json()
+    assert [m["month"] for m in h["months"]] == ["2026-09"] and h["total"] == 666.84 and h["checked"] == 2
+
+
+def test_missing_salary_months(client, tmpdb):
+    from app import finance
+
+    for d in ("2025-11-15", "2026-07-15"):
+        tmpdb.create_entry({"entry_date": d, "description": "Maaş", "amount": 100, "kind": "gelir", "category": "Maaş"})
+    ins = [i for i in finance.insights(tmpdb.period_of("2026-07-15")) if "maaş görünmüyor" in i["title"]]
+    assert ins and ins[0]["title"].startswith("7 ayda") and "Aralık 2025 – Haziran 2026" in ins[0]["detail"]

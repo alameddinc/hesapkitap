@@ -1412,6 +1412,11 @@ def zakat_delete_asset(aid: int):
     return {"ok": True}
 
 
+@app.get("/api/interest-history")
+def interest_history():
+    return finance.interest_history()
+
+
 @app.get("/api/net-worth")
 def net_worth():
     return finance.net_worth()
