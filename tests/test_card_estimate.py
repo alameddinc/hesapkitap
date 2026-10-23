@@ -24,3 +24,20 @@ def test_payments_before_first_statement_are_estimated(client, tmpdb):
     titles = [i["title"] for i in finance.insights(tmpdb.period_of("2026-01-17"))]
     assert any("1 ödemenin ekstresi yüklenmemiş" in t for t in titles)  # sadece gerçek boşluk uyarılır
     assert not any("2 ödemenin" in t for t in titles)
+
+
+def test_interest_alarm_explains_late_payment(client, tmpdb):
+    from app import finance
+
+    with tmpdb.connect() as c:
+        _statement(c, "2026-08-15", "2026-08-25", 38450.82)
+        _statement(c, "2026-09-15", "2026-09-25", 37125.32)
+        _payment(c, "2026-08-26", 38450.82, "6613")  # bir gün geç
+        sid = c.execute("SELECT id FROM statements WHERE period_end = '2026-09-15'").fetchone()[0]
+        for d, a in (("ALIŞVERİŞ FAİZİ (Oran:3.75)", 538.31), ("GECİKME FAİZİ (Oran:4.05)", 41.53), ("BSMV", 87.0)):
+            c.execute("INSERT INTO transactions (statement_id, txn_date, description, amount, txn_type, category) "
+                      "VALUES (?, '2026-09-15', ?, ?, 'faiz_ucret', 'Banka Faiz & Ücret')", (sid, d, a))
+    alarms = finance.interest_alarm("2026-09")
+    assert len(alarms) == 1
+    a = alarms[0]
+    assert "666,84" in a["title"] and "1 gün geç" in a["detail"] and "25.08" in a["detail"] and "26.08" in a["detail"]
