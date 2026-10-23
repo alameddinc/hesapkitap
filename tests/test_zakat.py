@@ -132,3 +132,39 @@ def test_estimate_quantity_is_conservative(client, tmpdb, monkeypatch):
                                            "acquired": "2025-11-24", "estimated": True, "is_jewelry": True})
     item = client.get("/api/holdings").json()["items"][0]
     assert item["estimated"] == 1
+
+
+def test_history_missed_years(client, tmpdb, monkeypatch):
+    from app import zakat
+
+    monkeypatch.setattr(zakat, "historical_prices", lambda day: {"GRA": 5000.0, "USD": 40.0})
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    assert client.get(f"/api/zakat/people/{me}/history").json()["need_start"] is True
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "ALTIN_22", "quantity": 100, "acquired": "2024-06-01"})
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2026-10-01"})
+    h = client.get(f"/api/zakat/people/{me}/history").json()
+    ends = [y["end"] for y in h["years"]]
+    assert ends == ["2026-10-01", "2025-10-12", "2024-10-23"]  # yeniden eskiye, 354'er gün
+    oldest = h["years"][-1]
+    assert oldest["above_nisab"] and oldest["zakat"] == round(oldest["total"] * 0.025, 2) and oldest["partial"]
+    # Hanefî: ödenmeyen zekât sonraki yılın tabanından düşülür
+    assert h["years"][1]["deduct"] == oldest["remaining"]
+    # geçmiş yılın ödemesi o yıla yazılır
+    client.post(f"/api/zakat/people/{me}/payments", json={"amount": oldest["zakat"], "year_start": oldest["start"]})
+    h2 = client.get(f"/api/zakat/people/{me}/history").json()
+    assert h2["years"][-1]["remaining"] == 0 and h2["years"][1]["deduct"] == 0
+    assert h2["total_due"] < h["total_due"]
+
+
+def test_bank_balance_at_past_date(client, tmpdb):
+    from app import zakat
+
+    client.post("/api/accounts", json={"name": "Vakıf", "kind": "banka", "balance": 10000})
+    acc = client.get("/api/accounts").json()["accounts"][0]
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET as_of = '2026-10-01' WHERE id = ?", (acc["id"],))
+    tmpdb.create_entry({"entry_date": "2026-03-01", "description": "Maaş", "amount": 5000, "kind": "gelir", "account_id": acc["id"]})
+    tmpdb.create_entry({"entry_date": "2026-06-01", "description": "Kira", "amount": 2000, "kind": "gider", "account_id": acc["id"]})
+    assert zakat._bank_at(date(2026, 4, 1)) == (12000.0, [])   # 10000 + 2000 (kira sonra çıktı)
+    assert zakat._bank_at(date(2026, 3, 1)) == (12000.0, [])   # maaş günü (maaş dahil)
+    assert zakat._bank_at(date(2026, 2, 1)) == (0.0, ["Vakıf"])  # ilk hareketten önce: bilinmiyor

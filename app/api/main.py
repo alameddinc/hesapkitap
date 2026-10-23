@@ -1179,6 +1179,7 @@ class ZakatPaymentIn(BaseModel):
     amount: float = Field(gt=0)
     pay_date: date | None = None
     note: str | None = None
+    year_start: date | None = None  # geçmiş bir yılın ödemesi
 
 
 class ZakatSettingsIn(BaseModel):
@@ -1281,6 +1282,14 @@ def zakat_delete_person(pid: int):
     return {"ok": True}
 
 
+@app.get("/api/zakat/people/{pid}/history")
+def zakat_history(pid: int):
+    try:
+        return zakat.history(pid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
 @app.post("/api/zakat/people/{pid}/next-year")
 def zakat_next_year(pid: int):
     try:
@@ -1292,7 +1301,8 @@ def zakat_next_year(pid: int):
 @app.post("/api/zakat/people/{pid}/payments")
 def zakat_add_payment(pid: int, body: ZakatPaymentIn):
     try:
-        return {"id": zakat.add_payment(pid, body.amount, (body.pay_date or date.today()).isoformat(), body.note)}
+        return {"id": zakat.add_payment(pid, body.amount, (body.pay_date or date.today()).isoformat(), body.note,
+                                        body.year_start.isoformat() if body.year_start else None)}
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except ValueError as e:

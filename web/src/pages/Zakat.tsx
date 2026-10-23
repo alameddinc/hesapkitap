@@ -30,12 +30,72 @@ const json = async <T,>(method: string, url: string, body?: unknown): Promise<T>
 };
 const today = () => new Date().toISOString().slice(0, 10);
 
+interface HistYear {
+  start: string; end: string; end_hijri: string; error?: string; assets?: number; bank?: number; deduct?: number; total?: number;
+  nisab?: number; above_nisab?: boolean; zakat?: number; paid?: number; remaining?: number; unknown_accounts?: string[]; partial?: boolean;
+}
+
+/** Geçmiş zekât yılları: o yılın sonunda varlık, nisap, zekât, ödenen; ödenmemişse kaza. */
+function History({ p }: { p: Person }) {
+  const ui = useUI();
+  const q = useQuery({ queryKey: ["zakat-history", p.id, p.hawl?.start],
+    queryFn: () => json<{ years: HistYear[]; need_start: boolean; total_due: number; notes: string[] }>("GET", `/api/zakat/people/${p.id}/history`) });
+  const pay = useSave((a: { y: HistYear; amount: number }) => json("POST", `/api/zakat/people/${p.id}/payments`,
+    { amount: a.amount, year_start: a.y.start, note: "Geçmiş yıl" }), () => ui.toast("Ödeme o yıla kaydedildi"));
+  const d = q.data;
+  if (q.isLoading) return <p className="text-xs text-stone-500">Geçmiş fiyatlar alınıyor…</p>;
+  if (!d) return null;
+  if (d.need_start) return <p className="text-xs text-stone-500">Önce zekât yılının başladığı günü gir.</p>;
+  return (
+    <div className="space-y-2">
+      {d.total_due > 0 && (
+        <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          Ödenmemiş görünen (kaza) zekât toplamı: <b>{tl(d.total_due)}</b>. Daha önce ödediysen ilgili yıla "Ödedim" de.
+        </p>
+      )}
+      <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
+        {d.years.map((y) => (
+          <li key={y.end} className="py-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="font-medium">{dateTR(y.start)} → {dateTR(y.end)} <span className="text-xs font-normal text-stone-500">({y.end_hijri})</span></span>
+              {y.error ? <span className="text-xs text-red-600">{y.error}</span>
+                : !y.above_nisab ? <span className="rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-600 dark:bg-stone-800">nisap altı</span>
+                : (y.remaining ?? 0) <= 0 ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800 dark:bg-green-950 dark:text-green-300">ödendi</span>
+                : <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">ödenmedi · {tl(y.remaining ?? 0)}</span>}
+            </div>
+            {!y.error && (
+              <div className="mt-0.5 text-xs text-stone-500">
+                Yıl sonunda {tl(y.total ?? 0)}{" "}
+                ({[y.assets ? `altın/döviz ${tl(y.assets)}` : null, y.bank ? `banka ${tl(y.bank)}` : null,
+                  y.deduct ? `düşülen ${tl(y.deduct)}` : null].filter(Boolean).join(" · ") || "varlık yok"})
+                {" "}· nisap {tl(y.nisab ?? 0)}
+                {y.above_nisab && <> · zekât {tl(y.zakat ?? 0)}{(y.paid ?? 0) > 0 && <> · ödenen {tl(y.paid ?? 0)}</>}</>}
+                {y.partial && <span className="block text-amber-600">Yılın başında veri yok: yıl daha geç başlamış olabilir.</span>}
+                {!!y.unknown_accounts?.length && <span className="block text-amber-600">O tarihte hareketi bilinmeyen: {y.unknown_accounts.join(", ")}</span>}
+              </div>
+            )}
+            {!y.error && (y.remaining ?? 0) > 0 && (
+              <button className="btn-ghost mt-1 border border-stone-300 px-2 py-0.5 text-xs dark:border-stone-700" onClick={() => {
+                const v = window.prompt(`${dateTR(y.end)}'de biten yıl için ödediğin tutar:`, String(y.remaining).replace(".", ","));
+                if (v && parseAmount(v) > 0) pay.mutate({ y, amount: parseAmount(v) }, { onError: (e) => ui.toast(e.message) });
+              }}>Ödedim</button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {d.notes.map((n) => <p key={n} className="text-xs text-stone-500">• {n}</p>)}
+      <p className="text-xs text-stone-500">• Ödenmeyen zekât, Hanefî'ye göre borç olarak kalır ve sonraki yılın hesabından düşülür. Kesin karar için müftülüğe danış.</p>
+    </div>
+  );
+}
+
 function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const ui = useUI();
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [paying, setPaying] = useState(false);
   const [payAmt, setPayAmt] = useState("");
+  const [hist, setHist] = useState(false);
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
   const nextYear = useSave(() => json("POST", `/api/zakat/people/${p.id}/next-year`), () => ui.toast("Yeni zekât yılı başladı"));
@@ -178,6 +238,14 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
       )}
       {!open && (
         <button className="btn-ghost ml-1 px-2 py-1 text-xs" onClick={() => setAdding(true)}><Plus size={14} /> Varlık ekle</button>
+      )}
+      {h && (
+        <>
+          <button className="btn-ghost ml-1 px-2 py-1 text-xs" onClick={() => setHist(!hist)}>
+            <ChevronDown size={14} className={cx("transition-transform", hist && "rotate-180")} /> Geçmiş yıllar (ödendi mi?)
+          </button>
+          {hist && <History p={p} />}
+        </>
       )}
       {adding && <AssetForm people={d.people} kinds={d.kinds} personId={p.id} onClose={() => setAdding(false)} />}
     </section>
