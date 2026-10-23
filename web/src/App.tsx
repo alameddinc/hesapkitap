@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -28,6 +28,7 @@ import Borclar from "./pages/Borclar";
 import Prices from "./pages/Prices";
 import Accounts from "./pages/Accounts";
 import Zakat from "./pages/Zakat";
+import Stats from "./pages/Stats";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
@@ -44,12 +45,14 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   fiyatlar: Prices,
   hesaplar: Accounts,
   zekat: Zakat,
+  istatistik: Stats,
   diger: More,
 };
 
 const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "ozet", label: "Özet", icon: LayoutDashboard },
   { route: "islemler", label: "İşlemler", icon: List },
+  { route: "istatistik", label: "İstatistik", icon: BarChart3 },
   { route: "tablo", label: "Tablo", icon: Sheet },
   { route: "plan", label: "Planlama", icon: CalendarRange },
   { route: "tasarruf", label: "Tasarruf", icon: PiggyBank },
@@ -213,7 +216,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 py-2 text-[11px]",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik"].includes(route))
                     ? "text-blue-600" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>

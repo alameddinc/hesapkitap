@@ -752,6 +752,18 @@ def interest_alarm(month: str) -> list[dict]:
     return out
 
 
+def interest_history(months: int = 24) -> dict:
+    """Ekstrelerdeki faiz / vade farkı / faize bağlı vergi, dönem dönem (İstatistik → Faiz alarmı)."""
+    periods = sorted({st["period_end"][:7] for st in db.list_statements()}, reverse=True)[:months]
+    out = []
+    for m in periods:
+        alarms = interest_alarm(m)
+        total = round(sum(sum(x["amount"] for x in st["lines"]) for st in db.interest_charges(m)), 2)
+        if total > 0 or alarms:
+            out.append({"month": m, "total": total, "alarms": alarms})
+    return {"months": out, "total": round(sum(x["total"] for x in out), 2), "checked": len(periods)}
+
+
 def insights(month: str, today: date | None = None) -> list[dict]:
     """Seçili ay + önümüzdeki aylar için dikkat edilmesi gerekenler. level: kritik | uyari | bilgi | iyi"""
     today = today or date.today()
@@ -780,6 +792,20 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         elif x["status"] == "kismi":
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
+
+    # 2a) Maaş görünmeyen aylar: ilk ve son maaş arasında boşluk → o aylara ait döküm eksik
+    sal = sorted({e["month"] for e in db.list_entries() if e["kind"] == INCOME and e["category"] == "Maaş" and not e["skipped"]})
+    if len(sal) >= 2:
+        gaps, m = [], sal[0]
+        while m < sal[-1]:
+            if m not in sal:
+                gaps.append(m)
+            m = add_months(m, 1)
+        if gaps:
+            out.append({"level": "uyari", "title": f"{len(gaps)} ayda maaş görünmüyor",
+                        "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında maaş geliri yok; o aylarda gelir eksik "
+                                  "görünür. Maaşın o dönem başka bankaya yattıysa, o hesabın bu aylara ait dökümünü yükle.",
+                        "link": "ekstreler"})
 
     # 2b) Hesaptan kart ödemesi var ama ekstresi yok → o dönemin harcamaları hiç sayılmamış
     missing: dict[str, list] = defaultdict(list)

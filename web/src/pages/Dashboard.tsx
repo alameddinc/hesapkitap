@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type Insight, type Row } from "../api";
 import BarList from "../components/BarList";
 import { BudgetForm, BudgetList } from "../components/Budgets";
@@ -8,11 +7,10 @@ import Insights from "../components/Insights";
 import Kpi from "../components/Kpi";
 import NetWorth, { ZakatDue } from "../components/NetWorth";
 import Onboarding from "../components/Onboarding";
-import Compare from "../components/Compare";
 import MonthPicker from "../components/MonthPicker";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
-import { monthLabel, tl, tlCompact } from "../format";
+import { tl, tlCompact } from "../format";
 import { useUI, type Route } from "../ui";
 
 type Sel = { by: "category" | "merchant" | "card"; name: string } | null;
@@ -85,13 +83,6 @@ export default function Dashboard() {
 
           <Onboarding />
 
-          <NetWorth compact />
-          <ZakatDue />
-
-          <Compare month={month} />
-
-          <Payables />
-
           <section>
             <h2 className="mb-2 font-semibold">Dikkat etmen gerekenler</h2>
             <Insights items={s.insights} onClick={(i) => {
@@ -100,6 +91,9 @@ export default function Dashboard() {
               setInsightFilter(insightFilter === i ? null : i);
             }} />
           </section>
+
+          <NetWorth compact />
+          <ZakatDue />
 
           {detail && (
             <section className="card overflow-hidden" id="detay">
@@ -127,38 +121,14 @@ export default function Dashboard() {
             </Section>
           </div>
 
-          {s.by_card.length > 0 && (
-            <Section title="Kart bazında">
-              <BarList items={s.by_card} selected={sel?.by === "card" ? sel.name : null} onSelect={select("card")} />
-            </Section>
-          )}
+          <button className="card flex w-full items-center justify-between p-3 text-left text-sm" onClick={() => ui.go("istatistik")}>
+            <span>📊 <b>İstatistik</b> · geçen dönemlerle karşılaştırma, aylara göre gelir/gider, kartlar, faiz</span>
+            <span className="text-stone-400">›</span>
+          </button>
 
-          {s.trend.length > 0 && (
-            <Section title="Aylara göre gelir ve gider">
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={s.trend} barGap={2} onClick={(e) => {
-                    const m = (e as { activeLabel?: string } | null)?.activeLabel;
-                    if (m) setMonth(String(m));
-                  }}>
-                    <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-                    <XAxis dataKey="month" tickFormatter={(m: string) => monthLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
-                      axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={(v: number) => tlCompact(v)} tick={{ fill: "var(--chart-text)", fontSize: 11 }}
-                      axisLine={false} tickLine={false} width={64} />
-                    <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => monthLabel(String(m))}
-                      cursor={{ fill: "var(--chart-grid)", opacity: 0.5 }}
-                      contentStyle={{ background: "var(--chart-surface)", border: "1px solid var(--chart-grid)", borderRadius: 8 }} />
-                    <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }}
-                      formatter={(v) => <span style={{ color: "var(--chart-text)" }}>{v}</span>} />
-                    <Bar dataKey="income" name="Gelir" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                    <Bar dataKey="expense" name="Gider" fill="var(--series-2)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <p className="mt-1 text-xs text-stone-500">Bir aya tıklayınca o ayın özetine geçer.</p>
-            </Section>
-          )}
+          <Payables />
+
+
         </>
       )}
     </div>

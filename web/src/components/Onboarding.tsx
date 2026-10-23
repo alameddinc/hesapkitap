@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, ChevronRight, Circle, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, X } from "lucide-react";
+import { useState } from "react";
 import { useUI, type Route } from "../ui";
 import { useSave } from "./hooks";
 
@@ -11,26 +12,33 @@ export default function Onboarding() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["onboarding"], queryFn: () => fetch("/api/onboarding").then((r) => r.json() as Promise<Data>) });
   const dismiss = useSave(() => fetch("/api/onboarding/dismiss", { method: "POST" }));
+  // varsayılan kapalı (akordiyon); hiç adım tamamlanmamışsa (yeni kullanıcı) açık başlar
+  const [open, setOpen] = useState<boolean | null>(() => { try { const v = localStorage.getItem("hk-onboarding-open"); return v == null ? null : v === "1"; } catch { return null; } });
   const d = q.data;
   if (!d || d.dismissed || d.done === d.total) return null;
   const next = d.steps.find((s) => !s.done);
+  const isOpen = open ?? d.done === 0;
+  const toggle = () => { const v = !isOpen; setOpen(v); try { localStorage.setItem("hk-onboarding-open", v ? "1" : "0"); } catch { /* özel mod */ } };
   const run = (s: Step) => s.action === "add" ? ui.openAdd()
     : s.action === "salary" ? ui.openEntry(undefined, { kind: "gelir", description: "Maaş", category: "Maaş", recurring: true })
     : ui.go(s.route);
   return (
     <section className="card p-4">
       <div className="mb-2 flex items-start justify-between gap-2">
-        <div>
-          <h2 className="font-semibold">Başlarken · {d.done}/{d.total}</h2>
-          <p className="text-xs text-stone-500">Birkaç adımda kur; sonra her şey kendiliğinden işler.</p>
-        </div>
+        <button className="min-w-0 flex-1 text-left" onClick={toggle} aria-expanded={isOpen}>
+          <h2 className="flex items-center gap-1 font-semibold">
+            Başlarken · {d.done}/{d.total}
+            <ChevronDown size={16} className={"text-stone-400 transition-transform" + (isOpen ? " rotate-180" : "")} />
+          </h2>
+          <p className="text-xs text-stone-500">{isOpen ? "Birkaç adımda kur; sonra her şey kendiliğinden işler." : `Sıradaki: ${next?.title ?? ""}`}</p>
+        </button>
         <button className="btn-ghost p-1 text-stone-400" aria-label="Rehberi kapat" title="Rehberi kapat"
           onClick={() => window.confirm("Başlarken rehberi kapatılsın mı?") && dismiss.mutate(undefined)}><X size={16} /></button>
       </div>
       <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800">
         <div className="h-full rounded-full bg-green-600" style={{ width: `${(d.done / d.total) * 100}%` }} />
       </div>
-      <ul className="space-y-1">
+      {isOpen && <ul className="space-y-1">
         {d.steps.map((s) => (
           <li key={s.key}>
             <button className={"flex w-full items-start gap-2 rounded-lg p-2 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50"
@@ -53,7 +61,7 @@ export default function Onboarding() {
             )}
           </li>
         ))}
-      </ul>
+      </ul>}
     </section>
   );
 }
