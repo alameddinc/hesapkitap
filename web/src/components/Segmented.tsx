@@ -11,7 +11,7 @@ export default function Segmented<T extends string>({ value, onChange, options }
         <button key={o.value} type="button" role="radio" aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
           className={cx(
-            "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+            "flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
             value === o.value
               ? cx("bg-white shadow-sm dark:bg-stone-700",
                   o.tone === "red" && "text-red-600 dark:text-red-400",

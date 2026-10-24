@@ -1,42 +1,127 @@
 <p align="center">
-  <img src="docs/logo.png" width="96" alt="HesapKitap logosu">
+  <img src="docs/logo.png" width="88" alt="HesapKitap logosu">
 </p>
 
 <h1 align="center">HesapKitap</h1>
 
 <p align="center">
-  Kredi kartı ekstrelerini ve banka dökümlerini yükle, paranın nereye gittiğini gör, önümüzdeki ayları planla.<br>
-  Zekât, sadaka, altın, kumbara ve faiz takibi dahil — Türkiye'deki bankalar ve alışkanlıklar için.<br>
-  <b>Kendi sunucunda çalışır · verin sende kalır · telefonda uygulama gibi</b>
+  <b>Ekstreni bırak, gerisini HesapKitap yapsın — verin sende kalır.</b><br>
+  Kredi kartı ekstreleri, banka dökümleri, fişler, plan, altın, kumbara, zekât ve sadaka.<br>
+  Türkiye'deki bankalar ve alışkanlıklar için, kendi sunucunda çalışan kişisel finans uygulaması.
 </p>
 
 <p align="center">
   <a href="https://github.com/alameddinc/hesapkitap/actions/workflows/ci.yml"><img src="https://github.com/alameddinc/hesapkitap/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/alameddinc/hesapkitap/pkgs/container/hesapkitap"><img src="https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker imajı"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/lisans-PolyForm%20Noncommercial-blue" alt="PolyForm Noncommercial"></a>
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19">
+  <img src="https://img.shields.io/badge/SQLite-kullanıcı%20başına%20dosya-003B57?logo=sqlite&logoColor=white" alt="SQLite">
+  <img src="https://img.shields.io/badge/PWA-iOS%20%C2%B7%20Android-5A0FC8?logo=pwa&logoColor=white" alt="PWA">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/ozet.png" width="720" alt="Özet ekranı">
+  <a href="#-hızlı-kurulum"><b>Kurulum</b></a> ·
+  <a href="docs/KURULUM.md"><b>Tek tıkla / evde / VPS</b></a> ·
+  <a href="#-ekran-görüntüleri"><b>Ekran görüntüleri</b></a> ·
+  <a href="#-tüm-özellikler"><b>Tüm özellikler</b></a> ·
+  <a href="#-gizlilik"><b>Gizlilik</b></a>
 </p>
 
-## İçindekiler
+<p align="center">
+  <img src="docs/screenshots/hero.png" width="900" alt="HesapKitap masaüstü ve telefon">
+</p>
 
-- [Neler yapar](#neler-yapar)
-  - [Belgeleri içeri almak](#belgeleri-içeri-almak)
-  - [Harcama, gelir ve plan](#harcama-gelir-ve-plan)
-  - [Varlıklar, kumbara, borç/alacak](#varlıklar-kumbara-borçalacak)
-  - [Zekât ve sadaka](#zekât-ve-sadaka)
-  - [Faiz alarmı](#faiz-alarmı)
-  - [Telefonda](#telefonda)
-  - [Birden fazla kullanıcı](#birden-fazla-kullanıcı)
-- [Hızlı kurulum](#hızlı-kurulum) · [tek tıkla / evde / VPS rehberi](docs/KURULUM.md)
-- [Gizlilik](#gizlilik)
-- [Geliştirme](#geliştirme)
-- [Lisans](#lisans)
+## ✨ Öne çıkanlar
 
-## Neler yapar
+<table>
+<tr>
+<td width="33%" valign="top">
 
-### Belgeleri içeri almak
+### 📄 Ekstreni bırak
+Kart ekstresi, hesap dökümü, fiş, fatura — **kendisi anlar**. Mutabakat ve bakiye zinciriyle kuruşu kuruşuna doğrular.
+
+</td>
+<td width="33%" valign="top">
+
+### 📊 Paranı gör
+Gelir, gider, **gerçek net durum**; geçen dönemlerle karşılaştırma, en yoğun günler, bütçe uyarıları.
+
+</td>
+<td width="33%" valign="top">
+
+### 🗓️ Önünü gör
+Brütten nete maaş, taksitler, sabit giderler — **3–12 ay plan**. "Alırsam ne olur?" simülatörü.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🐷 Kumbara ve altın
+Hedef için para ayır, harcanabilir bakiyenden düşsün. Altın/döviz anlık fiyatla; **ne zaman, kaça aldığın**.
+
+</td>
+<td valign="top">
+
+### 🌙 Zekât ve sadaka
+Nisap, **kameri yıl**, aile üyeleri ayrı, geçmiş yıllar ve kaza zekâtı. Sadaka, fitre, kurban — tutarlar gizli.
+
+</td>
+<td valign="top">
+
+### 🚨 Faiz alarmı
+Faiz ya da vade farkı ödediysen **nedenini** söyler: "son ödeme 25.08, ödeme 26.08 — 1 gün geç".
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 📲 Telefondan paylaş
+Banka uygulamasından PDF'i, galeriden fişi **Paylaş** ile gönder. iPhone kısayolu tek dokunuş, Android doğrudan.
+
+</td>
+<td valign="top">
+
+### 👨‍👩‍👧 Aile ve arkadaşlar
+Davetle hesap aç; herkesin verisi **ayrı dosyada**, yönetici kimsenin harcamasını göremez.
+
+</td>
+<td valign="top">
+
+### 🔒 Verin sende
+Kendi sunucunda, tek tıkla kurulum ya da evdeki cihazda. Kodu açık, abonelik ve reklam yok.
+
+</td>
+</tr>
+</table>
+
+## 📸 Ekran görüntüleri
+
+| Özet | İstatistik |
+|---|---|
+| ![Özet](docs/screenshots/ozet.png) | ![İstatistik](docs/screenshots/istatistik.png) |
+| **Hesaplar, altın, kumbara** | **Zekât** |
+| ![Hesaplar](docs/screenshots/hesaplar.png) | ![Zekât](docs/screenshots/zekat.png) |
+| **Planlama** | **Tablo (pivot)** |
+| ![Planlama](docs/screenshots/planlama.png) | ![Tablo](docs/screenshots/tablo.png) |
+
+<p align="center">
+  <img src="docs/screenshots/mobil-ozet.png" width="200" alt="Mobil özet">
+  <img src="docs/screenshots/mobil-hesaplar.png" width="200" alt="Mobil hesaplar">
+  <img src="docs/screenshots/mobil-zekat.png" width="200" alt="Mobil zekât">
+  <img src="docs/screenshots/mobil-ekle.png" width="200" alt="Fiş / fatura ekleme">
+</p>
+
+<sub>Tüm görüntüler uydurma demo verisiyle alındı (<code>python -m app.demo</code>).</sub>
+
+## 📋 Tüm özellikler
+
+Ayrıntılar için başlığa dokun.
+
+<details>
+<summary><b>Belgeleri içeri almak</b></summary>
 
 - **Tek yükleme alanı** — Kart ekstresi mi, hesap dökümü mü, fiş mi, fatura mı kendisi anlar. PDF, fotoğraf, Excel/CSV.
 - **Kart ekstreleri** — İşlemler, taksitler (kaçıncı taksit, kalan), dövizli harcamalar, faiz/BSMV/KKDF, vade farkı ayrıştırılır.
@@ -55,7 +140,10 @@
 - **Telegram'dan** — Bota gönderilen PDF içe aktarılır (sadece bağlı sohbetten).
 - **Şifreli PDF'ler** — Bankaların şifreli ekstreleri; şifre bir kez sorulur, hatırlanır.
 
-### Harcama, gelir ve plan
+</details>
+
+<details>
+<summary><b>Harcama, gelir ve plan</b></summary>
 
 - **Özet** — Dönem geliri/gideri/neti, "Dikkat etmen gerekenler", net durum, bütçeler, kategoriler, en çok harcanan yerler, ödemeler.
 - **Ay dönümü** — Dönemler kart kesim tarihine hizalanır (ör. 20 Ekim – 19 Kasım "Kasım dönemi").
@@ -81,7 +169,10 @@
 - **Tablo** — Excel gibi filtreler, kategori × ay pivotu, Excel'e aktarma.
 - **Uyarılar** — Faiz, vade farkı, biten taksitler, limit doluluğu, dövizli harcama, eksik ekstre, maaşı görünmeyen aylar…
 
-### Varlıklar, kumbara, borç/alacak
+</details>
+
+<details>
+<summary><b>Varlıklar, kumbara, borç/alacak</b></summary>
 
 - **Hesaplar ve net durum** — Banka, nakit, yemek/hediye kartları, kredi kartı borçları, altın/döviz, borç/alacak → gerçek net durum.
   Bakiyeler dökümden kendiliğinden güncellenir ya da elle düzeltilir.
@@ -95,7 +186,10 @@
 - **Borç / alacak defteri** — TL, döviz, altın; kısmi ödemeler, vadesinde hatırlatma, havale görülünce kendiliğinden kapanma,
   "vazgeçtim". **Transferler**: kime ne gitti, kişi kişi.
 
-### Zekât ve sadaka
+</details>
+
+<details>
+<summary><b>Zekât ve sadaka</b></summary>
 
 - **Zekât** — Diyanet (Hanefî) esas, Şâfiî seçeneği. Kişi bazında (aile üyeleri ayrı), **nisap** 80,18 gr altın,
   **kameri yıl** (354 gün) ve hicri tarih, %2,5.
@@ -109,13 +203,19 @@
   Deniz Feneri, İHH, LÖSEV, Darüşşafaka, AFAD…) giden ödemeler yakalanıp "sadaka mı, zekât mı?" diye sorulur; herhangi bir
   harcama "zekât" olarak işaretlenirse o yılın zekât ödemesine yazılır. Tutarlar varsayılan gizli.
 
-### Faiz alarmı
+</details>
+
+<details>
+<summary><b>Faiz alarmı</b></summary>
 
 - Ekstrede faiz, vade farkı ya da faize bağlı vergi varsa **nedeniyle birlikte** uyarır: önceki ekstre **kaç gün geç** ödendi,
   eksik mi ödendi, hangi taksitli alışverişe vade farkı eklendi. Önlem: otomatik ödeme talimatı.
 - Hesaba faiz işlerse "arındırılacak" uyarısı. İstatistik'te dönem dönem faiz geçmişi.
 
-### Telefonda
+</details>
+
+<details>
+<summary><b>Telefonda</b></summary>
 
 - **Uygulama gibi** — "Uygulamayı yükle" düğmesi (Android/masaüstü Chrome, Edge); iPhone'da Ana Ekrana Ekle.
   Yeni sürüm öne gelince kendiliğinden yüklenir. Açılışta tutarlar gizli (göz ikonuyla açılır).
@@ -125,19 +225,19 @@
   - Ekstre ve dökümler hemen içe aktarılır; fiş ve faturalar Özet'te "onay bekliyor" olarak bekler.
 - **Telegram** — Son ödeme ve zekât hatırlatmaları, ay sonu raporu, günlük **şifreli** yedek.
 
-### Birden fazla kullanıcı
+</details>
+
+<details>
+<summary><b>Birden fazla kullanıcı</b></summary>
 
 - Arkadaşlarına **davet bağlantısı** ya da geçici şifreyle hesap aç. Her kullanıcının verisi **ayrı bir SQLite dosyasında**;
   yönetici ekranında sadece kullanıcı adı, son giriş ve yapay zekâ kullanımı görünür, kimsenin harcaması görünmez.
 - Yöneticinin Gemini anahtarı paylaşılır, kişi başı **aylık okuma kotasıyla** (varsayılan 100); kendi anahtarını giren sınırsız.
 - Başlarken rehberi: ekstre yükle → bakiyeleri kontrol et → maaş (net/brüt) → fiş okut → bildirimler.
 
-<p align="center">
-  <img src="docs/screenshots/mobil-ozet.png" width="240" alt="Mobil özet">
-  <img src="docs/screenshots/mobil-ekle.png" width="240" alt="Fiş / fatura ekleme">
-</p>
+</details>
 
-## Hızlı kurulum
+## 🚀 Hızlı kurulum
 
 ### Tek tıkla, kendi sunucunda
 
@@ -186,17 +286,7 @@ Aynı `docker compose up -d`; önüne HTTPS yapan bir reverse proxy (Caddy, Ngin
 - **iPhone kısayolu** kendi adresin için (macOS gerekir): `python3 scripts/make_shortcut.py https://alanadin` →
   çıkan dosyayı `data/shortcuts/hesapkitap.shortcut` olarak koy; Ayarlar'daki "Kısayolu ekle" düğmesi onu verir.
 
-## Ekran görüntüleri
-
-| Planlama | Tablo (pivot) |
-|---|---|
-| ![Planlama](docs/screenshots/planlama.png) | ![Tablo](docs/screenshots/tablo.png) |
-
-| Tasarruf |
-|---|
-| ![Tasarruf](docs/screenshots/tasarruf.png) |
-
-## Gizlilik
+## 🔒 Gizlilik
 
 - **Kendi sunucunda** tüm veri o sunucuda, SQLite dosyalarında durur. Dışarıya sadece senin açtığın özellikler konuşur:
   - Gemini anahtarı girersen fiş, fatura ve tanınmayan bankaların ekstreleri okunmak için Google'a gider.
@@ -209,7 +299,7 @@ Aynı `docker compose up -d`; önüne HTTPS yapan bir reverse proxy (Caddy, Ngin
   Verini istediğin an Ayarlar → Yedekler'den tek dosya olarak indirebilirsin.
 - Kart numaraları sadece maskeli (ilk 4 + son 4) saklanır. Paylaş kısayolunun anahtarı sunucuda sadece özet (hash) olarak tutulur.
 
-## Geliştirme
+## 🛠️ Geliştirme
 
 ```bash
 cp .env.example .env            # isteğe bağlı
@@ -248,10 +338,13 @@ iPhone/Android, and invite friends with fully separate per-user databases. Quick
 http://localhost:8080. Source-available under the PolyForm Noncommercial License 1.0.0: free for personal and other
 noncommercial use; commercial use requires a separate license from the author.
 
-## Lisans
+## 📜 Lisans
 
 [PolyForm Noncommercial 1.0.0](LICENSE) — kaynağı açık, **ticari olmayan** her kullanım serbest: kendin için kurup
 kullanabilir, değiştirebilir, arkadaşlarınla paylaşabilirsin. Ticari kullanım (ücretli hizmet sunmak, bir şirket ürününe
 gömmek vb.) için yazardan ayrıca izin/lisans gerekir.
 
 Bu değişiklikten önce MIT ile yayımlanmış sürümler MIT lisansıyla kalır; yeni lisans bundan sonraki sürümler içindir.
+
+</details>
+
