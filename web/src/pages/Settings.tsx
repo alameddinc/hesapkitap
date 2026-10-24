@@ -9,6 +9,7 @@ import { useUI } from "../ui";
 import Users from "../components/Users";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
+import BankTemplates from "../components/BankTemplates";
 
 interface ConfigItem {
   name: string;
@@ -258,6 +259,8 @@ export default function Settings() {
       </section>
 
       <ShareSetup />
+
+      <BankTemplates isAdmin={isAdmin} />
 
       <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />
 

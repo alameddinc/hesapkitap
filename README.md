@@ -130,7 +130,9 @@ Ayrıntılar için başlığa dokun.
   - Hazır okuyucu: **VakıfBank**, **Kuveyt Türk**
   - Diğer bankalar: Gemini anahtarı varsa **yapay zekâyla okunur** (aynı mutabakat kontrolüyle)
 - **Hesap dökümleri (vadesiz)** — Her satır **bakiye zinciriyle** doğrulanır (önceki bakiye + tutar = bakiye).
-  VakıfBank "Hesap Hareketleri" yapay zekâsız, kuralla okunur (yıllarca hareket, ücretsiz); diğer bankalar yapay zekâyla.
+  VakıfBank "Hesap Hareketleri" yapay zekâsız, kuralla okunur (yıllarca hareket, ücretsiz). Diğer bankalarda **şablon**
+  denenir: kayıtlı ya da topluluktan gelen bir kural, yoksa bakiye zincirini tutturan kural **kendiliğinden öğrenilir**
+  (Halkbank dahil); hiçbiri tutmazsa yapay zekâ. Banka, IBAN'daki banka kodundan tanınır.
   Maaş sabit kaleme bağlanır, kart ödemesi ekstreyi "ödendi" yapar, **kendi hesapların arası aktarım** gelir/gider sayılmaz,
   aynı hareket iki kez eklenmez, eski döküm güncel bakiyeyi ezmez.
 - **Fiş ve fatura** — Fotoğraf çek (uzun fişte birkaç kare), tutar, tarih, işyeri, şube, ürün satırları, ödeme şekli,
@@ -294,6 +296,9 @@ Aynı `docker compose up -d`; önüne HTTPS yapan bir reverse proxy (Caddy, Ngin
 - **Kendi sunucunda** tüm veri o sunucuda, SQLite dosyalarında durur. Dışarıya sadece senin açtığın özellikler konuşur:
   - Gemini anahtarı girersen fiş, fatura ve tanınmayan bankaların ekstreleri okunmak için Google'a gider.
     Anahtar girmezsen fişler sunucuda yerel OCR ile okunur, hiçbir yere gitmez.
+  - **Banka şablonları (varsayılan açık):** yeni bir bankanın dökümü yapay zekâsız okunmayı öğrenince, okuma kuralı
+    (banka adı ve satır düzeni — isim, IBAN, tutar, açıklama **değil**) topluluk deposuna gönderilir; onaylananlar
+    [`templates/`](templates/) klasörüne eklenir ve herkes yararlanır. Kurulumda ya da Ayarlar → Banka şablonları'ndan kapatılır.
     Tanınan bankaların (VakıfBank, Kuveyt Türk) ekstreleri ve VakıfBank hesap dökümü sunucuda okunur, dışarı çıkmaz.
     Google AI Studio'da faturalandırmayı açarsan (ücretli katman) içerik model eğitiminde kullanılmaz.
   - Anlık ve geçmiş altın/döviz fiyatı için sadece fiyat sorgulanır (finans.truncgil.com, Yahoo Finance); kişisel veri gitmez.

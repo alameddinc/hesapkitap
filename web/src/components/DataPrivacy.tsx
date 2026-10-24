@@ -15,7 +15,8 @@ const HOSTED: Item[] = [
 // Kendi sunucusu: veri dışarı çıkmaz; dışarıyla konuşan her şey kullanıcının açtığı bir özelliktir.
 const SELF: Item[] = [
   { icon: <Server size={16} />, text: <>Bütün verin <b>bu sunucuda</b>, tek bir dosyada durur. Bize ya da başka bir yere gönderilmez; üyelik, abonelik, reklam yok.</> },
-  { icon: <Sparkles size={16} />, text: <>Dışarıyla sadece senin açtığın özellikler konuşur: fiş okuma (<b>Google Gemini</b>), Telegram hatırlatmaları ve e-posta. Hiçbirini açmazsan hiçbir şey dışarı çıkmaz.</> },
+  { icon: <Sparkles size={16} />, text: <>Dışarıyla sadece senin açtığın özellikler konuşur: fiş okuma (<b>Google Gemini</b>; anahtar yoksa fişler yerelde okunur), Telegram hatırlatmaları ve e-posta.</> },
+  { icon: <Code2 size={16} />, text: <>Varsayılan olarak, yeni bir bankanın <b>okuma kuralı</b> (banka adı ve satır düzeni — isim, IBAN, tutar değil) topluluk deposuna gönderilir; Ayarlar → Banka şablonları'ndan kapatabilirsin.</> },
   { icon: <Cloud size={16} />, text: <>Telegram'a giden yedek <b>senin şifrenle kilitlenir</b>; şifre olmadan Telegram dahil kimse açamaz.</> },
   { icon: <Code2 size={16} />, text: <>Kodu açık: ne yaptığını herkes <a className="underline" href="https://github.com/alameddinc/hesapkitap" target="_blank" rel="noreferrer">GitHub'da</a> inceleyebilir.</> },
 ];

@@ -49,7 +49,8 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB;
 async def require_login(request: Request, call_next):
     path = request.url.path
     user = None
-    if auth.enabled() and path.startswith("/api/") and not path.startswith("/api/auth/"):
+    public = path.startswith("/api/auth/") or path == "/api/templates/submit"  # şablon gönderimi: oturumsuz (hub)
+    if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)
         user = auth.token_user(request.cookies.get(auth.COOKIE))
@@ -85,6 +86,7 @@ class SetupIn(BaseModel):
     username: str = "admin"
     password: str
     code: str | None = None
+    share_templates: bool = True  # yeni bankaların okuma kuralını toplulukla paylaş (kişisel veri değil)
 
 
 class PasswordChange(BaseModel):
@@ -130,6 +132,9 @@ def setup(body: SetupIn, request: Request, response: Response):
         u = auth.create_admin(body.username, body.password)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
+    from app import templates
+
+    templates.set_sharing(body.share_templates)
     _start_session(request, response, u)
     return {"ok": True}
 
@@ -1447,6 +1452,71 @@ def net_worth_at(month: str):
         raise HTTPException(422, "Ay YYYY-AA olmalı")
     end = finance.period_bounds(month)[1]
     return finance.net_worth_at(min(end, date.today()))
+
+
+# ---------------------------------------------------------------- banka şablonları (topluluk)
+
+_tpl_hits: dict[str, list[float]] = {}
+
+
+@app.post("/api/templates/submit")
+def template_submit(body: dict, request: Request):
+    """Başka sunuculardan gelen şablon (sadece hub). Oturumsuz; IP başına saatte 30 gönderim."""
+    import time as _t
+
+    from app import templates
+
+    if not templates.is_hub():
+        raise HTTPException(404)
+    ip = client_ip(request)
+    now = _t.time()
+    hits = [x for x in _tpl_hits.get(ip, []) if now - x < 3600]
+    if len(hits) >= 30:
+        raise HTTPException(429, "Çok fazla gönderim")
+    _tpl_hits[ip] = [*hits, now]
+    if not templates.submit_local(body.get("spec") or {}):
+        raise HTTPException(422, "Geçersiz şablon")
+    return {"ok": True}
+
+
+class SharingIn(BaseModel):
+    on: bool
+
+
+@app.get("/api/templates")
+def templates_overview():
+    from app import templates
+
+    return {"templates": templates.all_templates(), "sharing": templates.sharing_enabled(), "is_hub": templates.is_hub(),
+            "submissions": templates.submissions() if templates.is_hub() and config.is_admin() else []}
+
+
+@app.put("/api/templates/sharing")
+def templates_sharing(body: SharingIn):
+    from app import templates
+
+    if not config.is_admin():
+        raise HTTPException(403, "Sadece yönetici")
+    templates.set_sharing(body.on)
+    return {"ok": True}
+
+
+@app.post("/api/templates/submissions/{sid}/{status}")
+def templates_review(sid: int, status: Literal["onaylandi", "reddedildi", "bekliyor"]):
+    from app import templates
+
+    if not config.is_admin():
+        raise HTTPException(403, "Sadece yönetici")
+    if not templates.review(sid, status):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+@app.post("/api/templates/sync")
+def templates_sync():
+    from app import templates
+
+    return {"added": templates.sync_community(force=True)}
 
 
 @app.get("/api/net-worth")

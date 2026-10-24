@@ -1,0 +1,20 @@
+[
+  {
+    "v": 1,
+    "kind": "account",
+    "bank": "Halkbank",
+    "keywords": [
+      "hesap özeti",
+      "bakiye",
+      "açıklama",
+      "dekont"
+    ],
+    "date": {
+      "sep": "-",
+      "order": "dmy"
+    },
+    "amount_idx": 0,
+    "balance_idx": 1,
+    "scope": "block"
+  }
+]
