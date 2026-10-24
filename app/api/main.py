@@ -53,6 +53,9 @@ async def require_login(request: Request, call_next):
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)
         user = auth.token_user(request.cookies.get(auth.COOKIE))
+        if not user and path == "/api/share":  # telefondan Paylaş (iOS Kısayollar): kişisel anahtar, sadece bu uçta
+            bearer = request.headers.get("authorization", "")
+            user = system.token_owner(bearer[7:].strip()) if bearer.lower().startswith("bearer ") else None
         if not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
         # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
@@ -1972,6 +1975,93 @@ async def parse_bill(file: UploadFile = File(...)):
     except receipt.ReceiptError as e:
         parsed = {"error": str(e)}
     return {**parsed, "file_name": name}
+
+
+# ---------------------------------------------------------------- telefondan Paylaş
+
+@app.post("/api/share")
+async def share(request: Request, file: list[UploadFile] = File(...)):
+    """iOS Kısayollar / uygulama: paylaşılan PDF ve fotoğraflar. Yanıt düz metin (Kısayol bildirim olarak gösterir)."""
+    from fastapi.responses import PlainTextResponse
+
+    from app import share as share_mod
+
+    out = []
+    for f in file[:5]:
+        data = await f.read()
+        if len(data) > 15 * 1024 * 1024:
+            out.append(f"{f.filename}: dosya çok büyük")
+            continue
+        res = await asyncio.to_thread(share_mod.process, f.filename or "dosya", data, f.content_type or "")
+        out.append(res["message"])
+    if "text/plain" in request.headers.get("accept", "") or "json" not in request.headers.get("accept", ""):
+        return PlainTextResponse("\n".join(out) or "Dosya yok")
+    return {"messages": out}
+
+
+@app.post("/share-target")
+async def share_target(request: Request):
+    """Android: yüklü uygulamanın Paylaş hedefi (manifest share_target). Oturum çereziyle; sonra uygulamaya döner."""
+    from fastapi.responses import RedirectResponse
+
+    from app import share as share_mod
+
+    u = auth.token_user(request.cookies.get(auth.COOKIE)) if auth.enabled() else None
+    if auth.enabled() and not u:
+        return RedirectResponse("/#/ozet", status_code=303)
+    form = await request.form()
+    msgs = []
+    with db.use_space(system.user_db_path(u) if u else None, u):
+        for f in form.getlist("file")[:5]:
+            if hasattr(f, "read"):
+                data = await f.read()
+                res = await asyncio.to_thread(share_mod.process, f.filename or "dosya", data, f.content_type or "")
+                msgs.append(res["message"])
+    from urllib.parse import quote
+
+    return RedirectResponse("/#/ozet?paylasim=" + quote(" · ".join(msgs)[:300]), status_code=303)
+
+
+@app.get("/api/inbox")
+def shared_inbox():
+    from app import share as share_mod
+
+    return share_mod.inbox()
+
+
+@app.post("/api/inbox/{iid}/{action}")
+def shared_inbox_close(iid: int, action: Literal["kaydedildi", "silindi"]):
+    from app import share as share_mod
+
+    if not share_mod.close(iid, action):
+        raise HTTPException(404, "Yok")
+    return {"ok": True}
+
+
+class TokenIn(BaseModel):
+    name: str | None = None
+
+
+@app.get("/api/settings/tokens")
+def list_tokens():
+    u = db.current_user() or auth.admin()
+    return system.tokens(u["id"]) if u else []
+
+
+@app.post("/api/settings/tokens")
+def create_token(body: TokenIn):
+    u = db.current_user() or auth.admin()
+    if not u:
+        raise HTTPException(409, "Önce kurulum")
+    return {"token": system.create_token(u["id"], body.name or "Paylaş kısayolu")}
+
+
+@app.delete("/api/settings/tokens/{tid}")
+def delete_token(tid: int):
+    u = db.current_user() or auth.admin()
+    if not u or not system.delete_token(u["id"], tid):
+        raise HTTPException(404, "Yok")
+    return {"ok": True}
 
 
 @app.post("/api/documents/parse")

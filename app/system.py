@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS sys_settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT,
+    token_hash TEXT NOT NULL UNIQUE,      -- sadece özet; anahtarın kendisi bir kez gösterilir
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    last_used TEXT
+);
 CREATE TABLE IF NOT EXISTS tg_pairs (
     code TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -243,3 +251,43 @@ def ai_quota(u: dict) -> int | None:
         return u["ai_quota"]
     v = get("ai_default_quota")
     return int(v) if v and v.isdigit() else DEFAULT_AI_QUOTA
+
+
+# ---------------------------------------------------------------- kişisel erişim anahtarları (Paylaş kısayolu)
+
+def _token_hash(token: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_token(uid: int, name: str | None = None) -> str:
+    token = "hk_" + secrets.token_urlsafe(32)
+    with connect() as c:
+        c.execute("INSERT INTO api_tokens (user_id, name, token_hash) VALUES (?, ?, ?)",
+                  (uid, (name or "").strip()[:40] or None, _token_hash(token)))
+    return token
+
+
+def tokens(uid: int) -> list[dict]:
+    with connect() as c:
+        return [dict(r) for r in c.execute("SELECT id, name, created_at, last_used FROM api_tokens WHERE user_id = ? "
+                                           "ORDER BY id DESC", (uid,))]
+
+
+def delete_token(uid: int, tid: int) -> bool:
+    with connect() as c:
+        return c.execute("DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (tid, uid)).rowcount > 0
+
+
+def token_owner(token: str) -> dict | None:
+    """Anahtarın sahibi (kapatılmış kullanıcıysa None)."""
+    if not token or not token.startswith("hk_"):
+        return None
+    with connect() as c:
+        r = c.execute("SELECT user_id FROM api_tokens WHERE token_hash = ?", (_token_hash(token),)).fetchone()
+        if not r:
+            return None
+        c.execute("UPDATE api_tokens SET last_used = CURRENT_TIMESTAMP WHERE token_hash = ?", (_token_hash(token),))
+    u = user(r["user_id"])
+    return u if u and not u["disabled"] else None

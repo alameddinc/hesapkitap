@@ -1,5 +1,5 @@
 // HesapKitap service worker: uygulama kabuğunu önbelleğe alır, API'yi ASLA önbelleğe almaz (finans verisi hep taze).
-const VERSION = "v2";
+const VERSION = "v3";
 const SHELL = `shell-${VERSION}`;
 const ASSETS = `assets-${VERSION}`;
 
