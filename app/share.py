@@ -51,8 +51,12 @@ def process(name: str, data: bytes, mime: str) -> dict:
     name = name or "dosya"
     is_pdf = mime == "application/pdf" or name.lower().endswith(".pdf")
     if is_pdf and _is_statement(data):
+        from app import undo
+
         try:
-            return {"status": "ok", "message": mailbox.handle_pdf(name, data)}
+            with undo.batch(f"Telefondan: {name}"):  # yanlışsa Ekstreler → Son yüklemeler'den geri alınır
+                msg = mailbox.handle_pdf(name, data)
+            return {"status": "ok", "message": msg}
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
             return {"status": "hata", "message": str(e)}
     if not is_pdf and mime not in IMAGE_TYPES:

@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, FileUp, KeyRound, Landmark, Loader2, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, Trash2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
-import { api, type UploadResult } from "../api";
+import { api, type DocKind, type UploadResult } from "../api";
 import BankImport from "../components/BankImport";
+import RecentImports from "../components/RecentImports";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
@@ -19,16 +20,22 @@ export default function Statements() {
   const input = useRef<HTMLInputElement>(null);
   // tek yükleme alanı: hesap dökümleri sırayla hesap hareketleri önizlemesine gider
   const [queue, setQueue] = useState<{ file: File; password?: string }[]>([]);
+  const [asking, setAsking] = useState<File[]>([]); // türünden emin olunamayan dosyalar: kullanıcıya sorulur
   const upload = useSave(
-    ({ files, password }: { files: File[]; password?: string }) => api.upload(files, password, remember),
+    ({ files, password, kind }: { files: File[]; password?: string; kind?: DocKind }) =>
+      api.upload(files, password, remember, kind),
     (res: UploadResult[]) => {
-      setResults(res);
       setPw("");
+      return res;
     },
   );
-  const sendFiles = (files: File[], password?: string) =>
-    upload.mutate({ files, password }, {
+  const sendFiles = (files: File[], password?: string, kind?: DocKind) =>
+    upload.mutate({ files, password, kind }, {
       onSuccess: (res) => {
+        // soru cevaplanınca o dosyanın sonucu listede yerini alır
+        setResults((old) => kind ? [...old.filter((o) => !files.some((f) => f.name === o.filename)), ...res] : res);
+        setAsking((a) => [...(kind ? a.filter((f) => !files.includes(f)) : []),
+          ...files.filter((f) => res.some((r) => r.filename === f.name && r.status === "ask"))]);
         setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required")));
         const acc = files.filter((f) => res.some((r) => r.filename === f.name && r.status === "account_statement"));
         if (acc.length) setQueue((q) => [...q, ...acc.map((file) => ({ file, password }))]);
@@ -87,6 +94,7 @@ export default function Statements() {
           {results.map((r, i) => (
             <li key={i} className="card flex items-start gap-3 p-3 text-sm">
               {r.status === "account_statement" ? <Landmark className="text-blue-600" size={18} />
+                : r.status === "ask" ? <FileQuestion className="text-amber-600" size={18} />
                 : r.status === "error" ? <XCircle className="text-red-600" size={18} />
                 : r.status === "password_required" ? <KeyRound className="text-amber-600" size={18} />
                 : <CheckCircle2 className="text-green-600" size={18} />}
@@ -95,6 +103,29 @@ export default function Statements() {
                 {r.status === "error" && <div className="text-red-600">{r.message}</div>}
                 {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500">Zaten yüklü, atlandı.</div>}
+                {r.status === "ask" && (() => {
+                  const file = asking.find((f) => f.name === r.filename);
+                  const opts: [DocKind, string, string][] = [
+                    ["account", "Hesap dökümü", "vadesiz hesabın hareket listesi (bakiyeli)"],
+                    ["card", "Kredi kartı ekstresi", "aylık kart hesap özeti"],
+                    ["dekont", "Dekont", "tek bir havale / EFT / FAST belgesi"],
+                  ];
+                  return (
+                    <div className="space-y-2">
+                      <div className="text-amber-700 dark:text-amber-400">
+                        Bu belgenin ne olduğundan emin olamadım; yanlış tahmin bakiyeni bozabilir. Hangisi?
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {opts.map(([k, label, hint]) => (
+                          <button key={k} className={cx("btn-ghost border border-stone-200 text-left dark:border-stone-700", k === r.guess && "ring-2 ring-blue-400")} title={hint}
+                            disabled={!file || upload.isPending} onClick={() => file && sendFiles([file], undefined, k)}>
+                            {label}{k === r.guess && <span className="ml-1 text-xs text-stone-500">(tahminim)</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {r.status === "account_statement" && <div className="text-blue-700 dark:text-blue-400">Hesap dökümü → aşağıda önizle ve içe aktar</div>}
                 {r.status === "saved" && r.dekont && (
                   <div className="text-stone-500">{r.message}
@@ -126,6 +157,8 @@ export default function Statements() {
       )}
 
       <BankImport incoming={queue[0] ?? null} onDone={() => setQueue((q) => q.slice(1))} />
+
+      <RecentImports />
 
       <ul className="space-y-2">
         {list.data?.map((s) => (

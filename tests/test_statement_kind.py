@@ -54,3 +54,26 @@ def test_vakifbank_rule_based_parser():
     assert [(x["date"], x["amount"]) for x in r["rows"]] == [("2026-09-30", 2000.0), ("2026-10-01", -500.0), ("2026-10-02", -500.0)]
     assert "AD SOYAD" not in " ".join(x["description"] for x in r["rows"])  # sayfa başlığı açıklamaya karışmaz
     assert "nolu kredi kartı" in r["rows"][1]["description"]
+
+
+def test_classify_confidence():
+    from app.mailbox import classify
+
+    assert classify("KREDİ KARTI HESAP ÖZETİ Son Ödeme Tarihi 25.10.2026") == ("card", True)
+    assert classify(VB_TEXT) == ("account", True)
+    # başlıksız, sadece bakiye geçiyor: tahmin hesap dökümü ama emin değil
+    assert classify("Tarih Açıklama Tutar Bakiye 01.03.2025 ATM -5.000,00 12.000,00") == ("account", False)
+    assert classify("Tarih Açıklama Tutar 01.03.2025 MARKET 50,00")[1] is False
+
+
+def test_upload_asks_when_unsure_and_honours_choice(client, monkeypatch):
+    import app.parsers as parsers
+
+    text = "Tarih Açıklama Tutar Bakiye\n01.03.2025 ATM -5.000,00 12.000,00"
+    monkeypatch.setattr(parsers, "extract_text", lambda data, pw=None: text)
+    f = {"files": ("belge.pdf", b"%PDF", "application/pdf")}
+    r = client.post("/api/statements/upload", files=f).json()[0]
+    assert r["status"] == "ask" and r["guess"] == "account"
+    assert client.get("/api/imports").json() == []  # hiçbir şey yazılmadı
+    r = client.post("/api/statements/upload", files=f, data={"kind": "account"}).json()[0]
+    assert r["status"] == "account_statement"

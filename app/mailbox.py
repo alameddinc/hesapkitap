@@ -195,6 +195,32 @@ def _looks_like_account_statement_inner(text: str) -> bool:
     return bool(acct or re.search(r"\btr\s?\d{2}(\s?\d{4}){5}|\b[iı]ban\b|bakiye", t))
 
 
+def classify(text: str) -> tuple[str, bool]:
+    """(tür, emin mi): tür dekont | account | card. Emin değilse yükleme ekranı kullanıcıya sorar."""
+    from app.dekont import is_dekont
+
+    if is_dekont(text):
+        return "dekont", True
+    t = text.replace("İ", "i").replace("I", "ı").lower()
+    first_row = re.search(r"^\s*\d{2}[./]\d{2}[./]\d{4}\s+\d{2}:\d{2}", t, re.M)
+    head = t[:first_row.start()] if first_row else t[:2500]
+    card_re = r"son [öo]deme tarihi|asgari [öo]deme|kredi kart[ıi] (?:hesap )?ekstre|hesap kesim tarihi|d[öo]nem borcu"
+    acct_re = r"vadesiz|hesap hareket|hesap [öo]zeti|hesap ekstresi|hesap d[öo]k[üu]m|i[şs]lem d[öo]k[üu]m"
+
+    def acct_in(x: str) -> bool:  # "Kredi Kartı Hesap Özeti" kart belgesidir
+        return bool(re.search(acct_re, re.sub(r"kredi kart[ıi] hesap|[öo]nceki d[öo]nem hesap [öo]zeti", " ", x)))
+
+    head_card, head_acct = len(set(re.findall(card_re, head))), acct_in(head)
+    if head_card >= 2 or bool(head_card) != head_acct:  # başlık tek bir şey söylüyor
+        return ("card" if head_card else "account"), True
+    any_card, any_acct = bool(re.search(card_re, t)), acct_in(t)
+    if any_card and not any_acct:
+        return "card", True
+    if any_acct and not any_card:
+        return "account", True
+    return ("account" if _looks_like_account_statement_inner(text) else "card"), False
+
+
 def handle_pdf(name: str, data: bytes) -> str:
     """PDF'i tanı ve içe aktar; kısa sonuç metni döner."""
     from app import bank_import, bank_pdf

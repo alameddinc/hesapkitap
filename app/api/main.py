@@ -829,8 +829,12 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
             db.set_setting(_bank_profile_key(rows[header_row]), json.dumps(m))  # bu banka biçimini hatırla
     if not parsed:
         raise HTTPException(422, "İçe aktarılacak satır bulunamadı; sütun eşlemesini kontrol et")
-    stats = db.import_bank_rows(parsed, account=account, owners=owners)
-    db.auto_link()
+    from app import undo
+
+    with undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
+        stats = db.import_bank_rows(parsed, account=account, owners=owners)
+        db.auto_link()
+        b["summary"] = stats
     return stats
 
 
@@ -1804,27 +1808,58 @@ def list_statements():
     return db.list_statements()
 
 
+class _Kind(str):
+    sure = True  # sınıflandırıcı belge türünden emin mi
+
+
 def _statement_kind(data: bytes, passwords: list[str]) -> str | None:
-    """PDF kart ekstresi mi hesap dökümü mü? (açılamazsa None: kart akışı şifre ister)"""
-    from app.mailbox import _looks_like_account_statement
+    """PDF kart ekstresi mi hesap dökümü mü dekont mu? (açılamazsa None: kart akışı şifre ister)"""
+    k = _classify_pdf(data, passwords)
+    if not k:
+        return None
+    out = _Kind(k[0])
+    out.sure = k[1]
+    return out
+
+
+def _try_text(data: bytes, pw: str | None) -> str | None:
     from app.parsers import extract_text
 
-    from app.dekont import is_dekont
+    try:
+        return extract_text(data, pw)
+    except Exception:  # noqa: BLE001 - şifreli / bozuk
+        return None
+
+
+def _classify_pdf(data: bytes, passwords: list[str]) -> tuple[str, bool] | None:
+    from app.mailbox import classify
+    from app.parsers import extract_text
 
     for pw in [None, *passwords]:
         try:
             text = extract_text(data, pw)
         except Exception:  # noqa: BLE001 - şifreli: sıradaki
             continue
-        if is_dekont(text):
-            return "dekont"
-        return "account" if _looks_like_account_statement(text) else "card"
+        return classify(text)
     return None
 
 
 @app.post("/api/statements/upload")
 async def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
-                            remember: bool = Form(False)):
+                            remember: bool = Form(False),
+                            kind: Literal["card", "account", "dekont"] | None = Form(None)):
+    from app import undo
+
+    names = ", ".join(f.filename or "dosya" for f in files)
+    with undo.batch(f"Ekstre: {names[:120]}") as b:
+        results = await _upload_statements(files, password, remember, kind)
+        b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
+                                                "message")} for r in results]
+    return results
+
+
+async def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
+                             forced: str | None = None) -> list[dict]:
     from app.parsers import PasswordRequired
 
     results = []
@@ -1847,13 +1882,25 @@ async def upload_statements(files: list[UploadFile] = File(...), password: str |
             else:
                 results.append({**res, "status": "account_statement"})
             continue
-        kind = _statement_kind(data, tried)
+        guess = _statement_kind(data, tried)
+        kind = forced or guess
+        if not forced and guess == "account" and not getattr(guess, "sure", True):
+            # hesap dökümü olduğundan emin değil: tahminle bakiyeyi bozma, kullanıcıya sor
+            results.append({**res, "status": "ask", "guess": str(guess)})
+            continue
         if kind == "dekont":  # tek işlem: hesaba eklenir, bakiye değişmez
             from app import mailbox
 
             try:
-                results.append({**res, "status": "saved", "message": mailbox.handle_pdf(f.filename or "dekont.pdf", data),
-                                "dekont": True})
+                if forced:  # kullanıcı "dekont" dedi: başlıkta "dekont" yazmasa da tek işlem olarak oku
+                    from app import dekont
+
+                    text = next(t for t in (_try_text(data, pw) for pw in [None, *tried]) if t)
+                    d = dekont.import_text(text)
+                    msg = f"Dekont: {d['amount']:,.2f} TL {d['kind']}" + (" (zaten vardı)" if d["status"] == "duplicate" else "")
+                else:
+                    msg = mailbox.handle_pdf(f.filename or "dekont.pdf", data)
+                results.append({**res, "status": "saved", "message": msg, "dekont": True})
             except Exception as e:  # noqa: BLE001
                 results.append({**res, "status": "error", "message": str(e)})
             continue
@@ -1890,6 +1937,25 @@ async def upload_statements(files: list[UploadFile] = File(...), password: str |
 def delete_statement(sid: int):
     db.delete_statement(sid)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- yüklemeyi geri al
+
+@app.get("/api/imports")
+def list_imports():
+    from app import undo
+
+    return undo.list_batches()
+
+
+@app.post("/api/imports/{bid}/undo")
+def undo_import(bid: str, force: bool = False):
+    from app import undo
+
+    try:
+        return undo.undo(bid, force)
+    except KeyError as e:
+        raise HTTPException(404, "Yükleme bulunamadı") from e
 
 
 # ---------------------------------------------------------------- rules

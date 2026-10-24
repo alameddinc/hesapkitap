@@ -139,6 +139,9 @@ Ayrıntılar için başlığa dokun.
   (Halkbank dahil); hiçbiri tutmazsa yapay zekâ. Banka, IBAN'daki banka kodundan tanınır.
   Maaş sabit kaleme bağlanır, kart ödemesi ekstreyi "ödendi" yapar, **kendi hesapların arası aktarım** gelir/gider sayılmaz,
   aynı hareket iki kez eklenmez, eski döküm güncel bakiyeyi ezmez.
+- **Yanlış mı yükledin? Geri al** — Her yükleme (ekstre, döküm, dekont, telefondan paylaşılan) tek tıkla geri alınır:
+  eklediği her şey silinir, değiştirdiği her şey (bakiye, eşleşmeler, "ödendi" işaretleri) eski haline döner; sonradan
+  yaptığın başka işler bozulmaz. Belgenin ne olduğundan emin olamazsa tahmin edip bakiyeni bozmak yerine **sorar**.
 - **Fiş ve fatura** — Fotoğraf çek (uzun fişte birkaç kare), tutar, tarih, işyeri, şube, ürün satırları, ödeme şekli,
   **taksit sayısı** ve yemek kartı markası okunur. Kredi kartıyla ödenen fiş ekstre gelince kart işlemiyle eşleşir; iki kez sayılmaz.
   Fişteki marka ile ekstredeki resmi unvan (ör. Espressolab ↔ NEW TASTE GIDA) öğrenilir.

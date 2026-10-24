@@ -217,9 +217,20 @@ export interface Rule {
   priority: number;
 }
 
+export type DocKind = "card" | "account" | "dekont";
+
+export interface ImportBatch {
+  id: string;
+  created_at: string;
+  label: string;
+  undone_at: string | null;
+  counts: Record<string, { added: number; changed: number; removed: number }>;
+}
+
 export interface UploadResult {
   filename: string;
-  status: "saved" | "duplicate" | "error" | "password_required" | "account_statement";
+  status: "saved" | "duplicate" | "error" | "password_required" | "account_statement" | "ask";
+  guess?: DocKind; // ask: türünden emin değil, tahmin
   message?: string;
   bank?: string;
   card_no?: string;
@@ -310,13 +321,17 @@ export const api = {
   unpayBill: (id: number) => req("DELETE", `/api/bills/${id}/pay`),
 
   statements: () => req<Statement[]>("GET", "/api/statements"),
-  upload: (files: File[], password?: string, remember?: boolean) => {
+  upload: (files: File[], password?: string, remember?: boolean, kind?: DocKind) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     if (password) fd.append("password", password);
     if (remember) fd.append("remember", "true");
+    if (kind) fd.append("kind", kind);
     return req<UploadResult[]>("POST", "/api/statements/upload", fd);
   },
+  imports: () => req<ImportBatch[]>("GET", "/api/imports"),
+  undoImport: (id: string, force = false) =>
+    req<{ ok: boolean; conflicts?: string[]; already?: boolean }>("POST", `/api/imports/${id}/undo${force ? "?force=true" : ""}`),
   deleteStatement: (id: number) => req("DELETE", `/api/statements/${id}`),
 
   rules: () => req<Rule[]>("GET", "/api/rules"),
