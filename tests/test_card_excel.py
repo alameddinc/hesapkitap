@@ -40,3 +40,10 @@ def test_card_excel_becomes_statements(client, tmpdb):
     assert r2["card_excel"]["statements"] == 0
     p = client.post("/api/bank-import/preview", files={"file": ("kart.xlsx", data, "application/vnd.ms-excel")})
     assert p.status_code == 422 and "kredi kartı" in p.json()["detail"]
+
+
+def test_account_preview_warns_when_all_positive(client):
+    rows = [["Tarih", "Açıklama", "Tutar"]] + [[f"0{i}.06.2026", f"MAĞAZA {i}", f"{100 + i},00"] for i in range(1, 8)]
+    data = _xlsx(rows)
+    p = client.post("/api/bank-import/preview", files={"file": ("hareket.xlsx", data, "application/vnd.ms-excel")}).json()
+    assert p["warning"] and "kredi kartı" in p["warning"]
