@@ -4,6 +4,7 @@ import { useState } from "react";
 import { dateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import InstallApp from "./InstallApp";
 
 /** Ayarlar: telefondan Paylaş. Android: yüklü uygulama Paylaş menüsünde. iOS: Kısayollar + kişisel anahtar. */
 export default function ShareSetup() {
@@ -25,8 +26,9 @@ export default function ShareSetup() {
       </p>
       <details className="rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
         <summary className="cursor-pointer font-medium">Android</summary>
+        <div className="mt-2"><InstallApp /></div>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-stone-600 dark:text-stone-400">
-          <li>Chrome'da bu siteyi aç → ⋮ menü → <b>Uygulamayı yükle</b> (ya da Ana ekrana ekle).</li>
+          <li>Uygulamayı yükle (yukarıdaki düğme; çıkmazsa Chrome ⋮ → <b>Ana ekrana ekle</b>).</li>
           <li>Bir PDF ya da fotoğrafta <b>Paylaş</b> → listede <b>HesapKitap</b>'ı seç. Bu kadar.</li>
         </ol>
       </details>

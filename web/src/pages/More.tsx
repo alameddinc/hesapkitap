@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
 import { useUI } from "../ui";
+import InstallApp from "../components/InstallApp";
 
 export default function More() {
   const ui = useUI();
@@ -16,6 +17,7 @@ export default function More() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Diğer</h1>
+      <InstallApp compact />
       <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
         <Item icon={<BarChart3 size={18} />} label="İstatistik: karşılaştırma, aylık grafik, faiz alarmı" onClick={() => ui.go("istatistik")} />
         <Item icon={<Sheet size={18} />} label="Tablo: filtreler, pivot, Excel" onClick={() => ui.go("tablo")} />
