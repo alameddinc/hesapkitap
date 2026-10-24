@@ -55,6 +55,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const wallet = wallets.data?.find((w) => w.id === walletId);
   const [isGross, setIsGross] = useState(!!rec?.gross_amount || !!draft?.gross);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
+  const [advance, setAdvance] = useState(!!rec?.advance_pay);
   const [person, setPerson] = useState(row?.counterparty ?? "");
   const [location, setLocation] = useState(row?.location ?? draft?.location ?? "");
   // fişten geldiyse: kalem kurallarına göre bölme önerisi; kullanıcı burada düzeltir, Kaydet'te onaylanmış olur
@@ -103,7 +104,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (usesAccount) rememberAccount(accountId);
     const common = { description: description.trim(), amount: grossMode ? 0 : amt, kind, category: category || null, note: note || null,
       account_id: usesAccount ? accountId : null,
-      ...(isRecurring || rec ? { gross_amount: grossMode ? g : null } : {}) };
+      ...(isRecurring || rec ? { gross_amount: grossMode ? g : null, ...(grossMode ? { advance_pay: advance } : {}) } : {}) };
     if (kind === "gider" && payment === "kart" && !walletId) throw new Error("Hangi karttan ödendiğini seç");
     const pay = kind === "gider" && !isRecurring && !rec
       ? { payment, wallet_id: payment === "kart" ? walletId : null, installments: payment === "kredi_karti" ? installments : 1 } : {};
@@ -286,6 +287,13 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
               <>
                 <input className="input text-right" inputMode="decimal" placeholder="Aylık brüt (₺)" value={gross}
                   onChange={(e) => setGross(e.target.value)} />
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input type="checkbox" className="mt-1" checked={advance} onChange={(e) => setAdvance(e.target.checked)} />
+                  <span>Maaş peşin ödeniyor (memur)
+                    <span className="block text-xs text-stone-500">Maaş ayın 15'inde, sonraki bir ay için önden yatar. Zam ayın 1'inde başladığı için ilk
+                      zamlı maaşa aradaki günlerin farkı eklenir (ör. ocak ve temmuz).</span>
+                  </span>
+                </label>
                 <PayrollPreview gross={parseAmount(gross)} year={Number((rec?.start_month ?? date).slice(0, 4))} />
               </>
             )}

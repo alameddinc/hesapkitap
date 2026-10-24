@@ -531,6 +531,7 @@ class RecurringIn(BaseModel):
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
     gross_amount: float | None = Field(default=None, ge=0)
+    advance_pay: bool | None = None  # maaş peşin (memur): zam farkı ilk zamlı maaşta
     account_id: int | None = None  # banka/nakit hesabı
 
 
@@ -544,6 +545,7 @@ class RecurringPatch(BaseModel):
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
     gross_amount: float | None = Field(default=None, ge=0)
+    advance_pay: bool | None = None  # maaş peşin (memur): zam farkı ilk zamlı maaşta
     account_id: int | None = None  # banka/nakit hesabı
 
 

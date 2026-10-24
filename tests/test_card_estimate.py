@@ -80,3 +80,18 @@ def test_no_pending_salary_when_actual_exists(client, tmpdb):
                         "category": "Maaş"})
     jan = [r for r in finance.transactions("2026-01") if r["kind"] == "gelir"]
     assert [(r["amount"], bool(r.get("pending"))) for r in jan] == [(210000, False)]
+
+
+def test_advance_pay_raise_difference(tmpdb):
+    """Memur: maaş 15'inde peşin; ocak zammının 1–14 günlük farkı ocak maaşına eklenir."""
+    rid = tmpdb.create_recurring({"description": "Maaş", "amount": 0, "kind": "gelir", "day_of_month": 15,
+                                  "start_month": "2025-12", "gross_amount": 100000})
+    tmpdb.add_salary_change(rid, {"from_month": "2026-01", "gross": 120000, "reason": "zam"})
+    r = dict(next(x for x in tmpdb.list_recurring() if x["id"] == rid))
+    plain = tmpdb.planned_amount(r, "2026-01")
+    tmpdb.update_recurring(rid, {"advance_pay": True})
+    r = dict(next(x for x in tmpdb.list_recurring() if x["id"] == rid))
+    jan, feb = tmpdb.planned_amount(r, "2026-01"), tmpdb.planned_amount(r, "2026-02")
+    assert jan > plain and jan > feb  # ocakta fark var, şubatta yok
+    g, _ = tmpdb.gross_schedule(r, 2026, tmpdb.salary_changes(rid))
+    assert g[1] == round(120000 + 20000 * 14 / 30, 2) and g[2] == 120000

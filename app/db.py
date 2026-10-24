@@ -312,6 +312,7 @@ MIGRATIONS = [
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
     ("recurring", "gross_amount", "REAL"),
     ("entries", "installments", "INTEGER NOT NULL DEFAULT 1"),  # kredi kartı taksit sayısı
+    ("recurring", "advance_pay", "INTEGER NOT NULL DEFAULT 0"),  # maaş peşin (memur): zam farkı ilk zamlı maaşta
     ("statements", "paid_amount", "REAL"),
     ("statements", "paid_at", "DATE"),
     ("entries", "payment", "TEXT"),
@@ -855,7 +856,7 @@ def delete_entry(entry_id: int) -> None:
 # ---------------------------------------------------------------- recurring
 
 RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note", "wallet_id", "account_id",
-                    "gross_amount")
+                    "gross_amount", "advance_pay")
 
 
 def list_recurring() -> list[dict]:
@@ -863,15 +864,24 @@ def list_recurring() -> list[dict]:
         return rows(c.execute("SELECT * FROM recurring ORDER BY kind DESC, amount DESC"))
 
 
+def _norm_recurring(data: dict) -> dict:
+    if "advance_pay" in data:
+        if data["advance_pay"] is None:
+            data.pop("advance_pay")
+        else:
+            data["advance_pay"] = int(bool(data["advance_pay"]))
+    return data
+
+
 def create_recurring(data: dict) -> int:
-    data = {k: data.get(k) for k in RECURRING_FIELDS if k in data}
+    data = _norm_recurring({k: data.get(k) for k in RECURRING_FIELDS if k in data})
     with connect() as c:
         return c.execute(f"INSERT INTO recurring ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
                          tuple(data.values())).lastrowid
 
 
 def update_recurring(rid: int, data: dict) -> None:
-    data = {k: v for k, v in data.items() if k in RECURRING_FIELDS}
+    data = _norm_recurring({k: v for k, v in data.items() if k in RECURRING_FIELDS})
     if not data:
         return
     with connect() as c:
@@ -1195,6 +1205,16 @@ def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, f
         period = period_of(f"{year}-{m:02d}-{min(day_at(r, f'{year}-{m:02d}', changes), 28):02d}")
         g = gross_at(r, period, changes)
         grosses[m] = g if g is not None else first
+    # Peşin maaş (memur: ayın 15'inde o günden sonraki ay için): zam ayın 1'inde başlar, 1..(gün-1) arası eski
+    # maaşla önceden ödenmiştir → aradaki fark zamlı ilk maaşa eklenir (vergiye tabi brüt olarak)
+    if r.get("advance_pay"):
+        day = r.get("day_of_month") or 1
+        prev_g = gross_at(r, period_of(f"{year - 1}-12-{min(day, 28):02d}"), changes) or first
+        for m in range(1, 13):
+            base = grosses[m]
+            if base > prev_g and day > 1:
+                grosses[m] = round(base + (base - prev_g) * (day - 1) / 30, 2)
+            prev_g = base
     resets = set()
     for ch in changes:
         if ch["reason"] == "is_degisikligi" and ch["reset_cum"]:
