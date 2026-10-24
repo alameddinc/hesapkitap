@@ -206,7 +206,8 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
         if not is_active(r, month) or r["id"] in done:
             continue
         row = _pending_row(r, month, ov)
-        if past and r["kind"] == INCOME and (r["category"] or "") == "Maaş" and not salary_seen:
+        is_salary = (r["category"] or "") == "Maaş" or bool(r.get("gross_amount")) or "MAAS" in _fold(r["description"])
+        if past and r["kind"] == INCOME and is_salary and not salary_seen:
             row = {**row, "pending": False, "estimated": True, "source": "estimate",
                    "description": f"{r['description']} (tahmini, döküm yok)"}
         out.append(row)
