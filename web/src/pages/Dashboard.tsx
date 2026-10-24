@@ -95,7 +95,7 @@ export default function Dashboard() {
             }} />
           </section>
 
-          <NetWorth compact />
+          <NetWorth compact month={month} />
           <ZakatDue />
 
           {detail && (

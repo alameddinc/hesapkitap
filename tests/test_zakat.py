@@ -171,3 +171,17 @@ def test_bank_balance_at_past_date(client, tmpdb):
     assert zakat._bank_at(date(2026, 4, 1)) == (12000.0, [])   # 10000 + 2000 (kira sonra çıktı)
     assert zakat._bank_at(date(2026, 3, 1)) == (12000.0, [])   # maaş günü (maaş dahil)
     assert zakat._bank_at(date(2026, 2, 1)) == (0.0, ["Vakıf"])  # ilk hareketten önce: bilinmiyor
+
+
+def test_net_worth_at_past_date(client, tmpdb, monkeypatch):
+    from app import zakat
+
+    monkeypatch.setattr(zakat, "historical_prices", lambda day, offline=False: {"GRA": 5000.0, "USD": 40.0})
+    client.post("/api/accounts", json={"name": "Vakıf", "kind": "banka", "balance": 10000})
+    acc = client.get("/api/accounts").json()["accounts"][0]
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET as_of = '2026-10-01' WHERE id = ?", (acc["id"],))
+    tmpdb.create_entry({"entry_date": "2026-03-01", "description": "Maaş", "amount": 5000, "kind": "gelir", "account_id": acc["id"]})
+    tmpdb.create_entry({"entry_date": "2026-06-01", "description": "Kira", "amount": 2000, "kind": "gider", "account_id": acc["id"]})
+    r = client.get("/api/net-worth/at", params={"month": "2026-04"}).json()
+    assert r["cash"] == 12000 and r["net"] == 12000 and r["as_of"].startswith("2026-04")

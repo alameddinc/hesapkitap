@@ -242,6 +242,17 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
     out = _apply_splits(card + rows) + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
         out += pending_recurring(month, db.list_recurring(), entries)
+    else:  # tüm aylar (trend, devreden): dökümü olmayan geçmiş aylardaki maaş tahminleri de girsin
+        cur = current_period()
+        recs = db.list_recurring()
+        by_m: dict[str, list] = defaultdict(list)
+        for e in entries:
+            by_m[e["month"]].append(e)
+        starts = [r["start_month"] for r in recs if r["kind"] == INCOME]
+        m = min(starts) if starts else cur
+        while m < cur:
+            out += [r for r in pending_recurring(m, recs, by_m.get(m, [])) if r.get("estimated")]
+            m = add_months(m, 1)
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
 
 
@@ -1150,6 +1161,44 @@ def net_worth(today: date | None = None) -> dict:
             "net_after_estimates": _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable
                                           - zakat_due),
             "stale": stale}
+
+
+def net_worth_at(day: date) -> dict:
+    """Geçmiş bir günün net durumu (yaklaşık): o günkü banka bakiyeleri (bugünkü çapadan geriye hareketlerle),
+    o gün ödenmemiş kart ekstreleri, açık borç/alacak, o günün fiyatıyla altın/döviz ("Ben"). Yemek kartları dahil değil."""
+    from app import zakat
+
+    d = day.isoformat()
+    bank, unknown = zakat._bank_at(day)
+    card = 0.0
+    for st in db.list_statements():
+        if st["period_end"] <= d and (not st["paid_at"] or st["paid_at"] > d):
+            card += max(0.0, (st["total_debt"] or 0) - ((st["paid_amount"] or 0) if st["paid_at"] and st["paid_at"] <= d else 0))
+    try:
+        px = zakat.historical_prices(day, offline=False)
+    except Exception:  # noqa: BLE001 - fiyat yoksa altın/döviz sayılmaz
+        px = {}
+    recv = pay = 0.0
+    for x in db.list_debts():
+        if x["debt_date"] > d or (x["settled_at"] and x["settled_at"] <= d) or (x["written_off_at"] and x["written_off_at"] <= d):
+            continue
+        left = max(0.0, x["amount"] - sum(p["amount"] for p in x["payments"] if p["paid_at"] <= d))
+        rate = 1.0 if x["asset"] == "TRY" else px.get(zakat.DEBT_ASSET_KEYS.get(x["asset"], ""), 0)
+        if x["direction"] == "alacak":
+            recv += left * rate
+        else:
+            pay += left * rate
+    hold = 0.0
+    if px:
+        for p in zakat.people():
+            if not p["is_self"]:
+                continue
+            for a in p["assets"]:
+                if not a["acquired"] or a["acquired"] <= d:
+                    hold += zakat._value_at(a["kind"], a["quantity"], px) or 0
+    net = bank + hold - card + recv - pay
+    return {"as_of": d, "cash": _round(bank), "holdings": _round(hold), "card_debt": _round(card), "receivable": _round(recv),
+            "payable": _round(pay), "net": _round(net), "unknown_accounts": unknown, "prices": bool(px)}
 
 
 # ---------------------------------------------------------------- dönem sonu raporu (Telegram)

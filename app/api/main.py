@@ -1422,6 +1422,15 @@ def interest_history():
     return finance.interest_history()
 
 
+@app.get("/api/net-worth/at")
+def net_worth_at(month: str):
+    """Seçilen geçmiş dönemin son günündeki net durum (yaklaşık)."""
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(422, "Ay YYYY-AA olmalı")
+    end = finance.period_bounds(month)[1]
+    return finance.net_worth_at(min(end, date.today()))
+
+
 @app.get("/api/net-worth")
 def net_worth():
     return finance.net_worth()
