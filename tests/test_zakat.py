@@ -200,3 +200,30 @@ def test_bank_at_includes_card_payments_and_own_transfers(client, tmpdb):
     assert zakat._bank_at(date(2026, 9, 17)) == (13000.0, [])
     assert zakat._bank_at(date(2026, 9, 20)) == (10000.0, [])
     assert zakat._bank_at(date(2026, 9, 16)) == (0.0, ["VakıfBank"])  # ilk hareketten önce: bilinmiyor
+
+
+def test_minor_has_no_zakat(client, tmpdb):
+    kid = client.post("/api/zakat/people", json={"name": "Bebek"}).json()["id"]
+    client.post("/api/zakat/assets", json={"person_id": kid, "kind": "ALTIN_24", "quantity": 200})
+    client.patch(f"/api/zakat/people/{kid}", json={"hawl_start": "2025-01-01"})
+    p = _person(client.get("/api/zakat").json(), "Bebek")
+    assert p["above_nisab"] and p["estimate"] > 0
+    client.patch(f"/api/zakat/people/{kid}", json={"is_minor": True})
+    p = _person(client.get("/api/zakat").json(), "Bebek")
+    assert p["is_minor"] and not p["above_nisab"] and p["estimate"] == 0 and p["hawl"] is None
+    assert client.get(f"/api/zakat/people/{kid}/history").json()["years"] == []
+    assert client.get("/api/holdings").json()["family_total"] > 0  # varlık olarak görünmeye devam eder
+
+
+def test_history_requires_nisab_at_start(client, tmpdb, monkeypatch):
+    from app import zakat
+
+    monkeypatch.setattr(zakat, "historical_prices", lambda day, offline=False: {"GRA": 5000.0, "USD": 40.0})
+    w = client.post("/api/zakat/people", json={"name": "Eşim"}).json()["id"]
+    client.post("/api/zakat/assets", json={"person_id": w, "kind": "ALTIN_22", "quantity": 30, "acquired": "2023-10-08"})
+    client.post("/api/zakat/assets", json={"person_id": w, "kind": "ALTIN_22", "quantity": 80, "acquired": "2026-02-20"})
+    client.patch(f"/api/zakat/people/{w}", json={"hawl_start": "2026-02-20"})
+    h = client.get(f"/api/zakat/people/{w}/history").json()
+    # 20.02.2026'da biten "yıl"ın başında sadece 30 gr vardı (nisap altı): zekât yok
+    assert h["years"][0]["end"] == "2026-02-20" and h["years"][0]["zakat"] == 0 and h["years"][0]["start_below"]
+    assert h["total_due"] == 0
