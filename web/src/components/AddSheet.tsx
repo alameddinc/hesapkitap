@@ -16,7 +16,7 @@ async function shrink(file: File, max = 1600): Promise<Blob> {
   return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error("Görüntü işlenemedi"))), "image/jpeg", 0.85));
 }
 
-interface DocResult {
+export interface DocResult {
   type: "receipt" | "bill";
   // fiş
   merchant?: string;
@@ -37,6 +37,28 @@ interface DocResult {
   description?: string;
   file_name?: string;
   confidence: string;
+}
+
+/** Okunan fişi forma taslak olarak çevir (AddSheet ve telefondan paylaşılanlar). */
+export function docToDraft(r: DocResult): EntryDraft {
+  const items = (r.items ?? []).filter((i) => i.name).slice(0, 6)
+        .map((i) => ((i.qty ?? 1) > 1 ? `${i.qty}× ${i.name}` : i.name)).join(", ");
+  return {
+        kind: "gider",
+        description: r.merchant,
+        amount: r.total ?? undefined,
+        entry_date: r.date ?? undefined,
+        category: r.category,
+        // fişte "kart" yazıyorsa kredi kartı varsay; banka kartıysa kullanıcı formda değiştirir
+        payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" || (r.installments ?? 1) > 1 ? "kredi_karti" : r.payment === "yemek_karti" ? "kart" : undefined,
+        wallet_hint: r.payment === "yemek_karti" ? r.payment_card ?? "yemek" : null,
+        installments: r.installments && r.installments > 1 ? r.installments : undefined,
+        legal_name: r.legal_name,
+        items: r.items,
+        location: r.address ?? null,
+        branch: r.branch ?? null,
+        note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
+  };
 }
 
 export default function AddSheet({ onClose, onPick, onBill }: {
@@ -69,24 +91,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           description: r.description, file_name: r.file_name, confidence: r.confidence });
         return;
       }
-      const items = (r.items ?? []).filter((i) => i.name).slice(0, 6)
-        .map((i) => ((i.qty ?? 1) > 1 ? `${i.qty}× ${i.name}` : i.name)).join(", ");
-      onPick({
-        kind: "gider",
-        description: r.merchant,
-        amount: r.total ?? undefined,
-        entry_date: r.date ?? undefined,
-        category: r.category,
-        // fişte "kart" yazıyorsa kredi kartı varsay; banka kartıysa kullanıcı formda değiştirir
-        payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" || (r.installments ?? 1) > 1 ? "kredi_karti" : r.payment === "yemek_karti" ? "kart" : undefined,
-        wallet_hint: r.payment === "yemek_karti" ? r.payment_card ?? "yemek" : null,
-        installments: r.installments && r.installments > 1 ? r.installments : undefined,
-        legal_name: r.legal_name,
-        items: r.items,
-        location: r.address ?? null,
-        branch: r.branch ?? null,
-        note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
-      });
+      onPick(docToDraft(r));
     } catch (e) {
       setErr((e as Error).message);
     } finally {

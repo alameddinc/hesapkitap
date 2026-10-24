@@ -8,6 +8,7 @@ import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 import Users from "../components/Users";
 import DataPrivacy from "../components/DataPrivacy";
+import ShareSetup from "../components/ShareSetup";
 
 interface ConfigItem {
   name: string;
@@ -255,6 +256,8 @@ export default function Settings() {
           {cfg.data?.filter((c) => !MAIL_KEYS.includes(c.name)).map((c) => <KeyRow key={c.name} c={c} />)}
         </ul>
       </section>
+
+      <ShareSetup />
 
       <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />
 
