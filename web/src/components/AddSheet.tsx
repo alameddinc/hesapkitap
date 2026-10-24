@@ -141,7 +141,8 @@ export default function AddSheet({ onClose, onPick, onBill }: {
       <div className="space-y-2">
         <Opt icon={busy ? <Loader2 className="animate-spin" size={20} /> : <Camera size={20} className="text-blue-600" />}
           title={busy ? "Okunuyor…" : "Fiş / fatura çek"}
-          sub={meta.data?.receipt_enabled === false ? "Sunucuda GEMINI_API_KEY tanımlı değil"
+          sub={meta.data?.receipt_enabled === false ? "Bu sunucuda fiş okuma yok (Gemini anahtarı ya da Tesseract gerekli)"
+            : meta.data?.receipt_engine === "yerel" ? "Yerel okuma (anahtarsız): tutar, tarih, işyeri dolar — kontrol et"
             : "Fiş mi fatura mı kendisi anlar; tutar, tarih, işyeri otomatik dolar"}
           onClick={() => cameraRef.current?.click()} disabled={busy || pages.length > 0 || meta.data?.receipt_enabled === false} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden"

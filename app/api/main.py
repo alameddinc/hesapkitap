@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, donations, finance, jobs, receipt, system, telegram, zakat
+from app import auth, backup, config, db, donations, finance, jobs, ocr, receipt, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -341,7 +341,8 @@ def meta():
         "categories": _by_usage(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme"}),
         "income_categories": INCOME_CATEGORIES,
         "card_kinds": [PURCHASE, REFUND, FEE, PAYMENT],
-        "receipt_enabled": receipt.enabled(),
+        "receipt_enabled": receipt.enabled() or ocr.available(),
+        "receipt_engine": "gemini" if receipt.enabled() else "yerel" if ocr.available() else None,
         "current_month": finance.current_period(),
         "cycle_start_day": db.cycle_start_day(),
         "cycle_mode": db.cycle_mode(),
@@ -1028,6 +1029,17 @@ def onboarding():
             steps.append({"key": "telegram", "done": bool(telegram.chat_id()), "route": "ayarlar",
                           "title": "Telegram'ı bağla (isteğe bağlı)",
                           "text": "Son ödeme hatırlatmaları ve ay sonu raporu telefonuna gelsin."})
+        if not receipt.enabled():  # engel değil: fiş yine yerelde okunur, anahtarla daha iyi
+            steps.append({"key": "gemini", "done": False, "route": "ayarlar", "cta": "Anahtarı gir",
+                          "title": "Yapay zekâ anahtarı (isteğe bağlı, ücretsiz)",
+                          "text": "Fişler şu an yerel okunuyor (toplam, tarih, işyeri). Anahtarla ürün satırları ve tanınmayan "
+                                  "bankaların ekstreleri de okunur.",
+                          "guide": [
+                              "aistudio.google.com/apikey adresine Google hesabınla gir.",
+                              "\"Create API key\" (API anahtarı oluştur) → çıkan anahtarı kopyala.",
+                              "HesapKitap → Ayarlar → Anahtarlar → Gemini API anahtarı → yapıştır → Kaydet.",
+                              "Ücretsiz katman kişisel kullanıma yeter; faturalandırmayı açarsan verilerin model eğitiminde kullanılmaz.",
+                          ]})
         steps.append({"key": "mail", "done": mailbox.enabled(), "route": "ayarlar",
                       "title": "E-postayı bağla (isteğe bağlı)", "text": "Bankanın e-ekstreleri kendiliğinden içe aktarılsın."})
     return {"steps": steps, "done": sum(s_["done"] for s_ in steps), "total": len(steps),
