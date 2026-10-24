@@ -10,6 +10,7 @@ import Users from "../components/Users";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
+import UpdateNotice from "../components/UpdateNotice";
 
 interface ConfigItem {
   name: string;
@@ -240,6 +241,7 @@ export default function Settings() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ayarlar</h1>
+      {isAdmin && <UpdateNotice />}
 
       <section className="card p-4">
         <h2 className="flex items-center gap-2 font-semibold"><KeyRound size={18} /> Anahtarlar</h2>

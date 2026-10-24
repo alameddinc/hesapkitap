@@ -1531,6 +1531,16 @@ def templates_sync():
     return {"added": templates.sync_community(force=True)}
 
 
+@app.get("/api/version")
+def version_info(refresh: bool = False):
+    """Bu kurulumun sürümü ve GitHub'daki son sürüm (yönetici: güncelleme bildirimi)."""
+    from app import version
+
+    if not config.is_admin():
+        return {"current": version.current()}
+    return version.check(force=refresh)
+
+
 @app.get("/api/net-worth")
 def net_worth():
     return finance.net_worth()
