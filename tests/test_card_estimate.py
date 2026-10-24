@@ -61,7 +61,7 @@ def test_missing_salary_months(client, tmpdb):
 def test_salary_estimated_for_months_without_statement(client, tmpdb):
     from app import finance
 
-    client.post("/api/recurring", json={"description": "Maaş", "amount": 200000, "kind": "gelir", "category": "Maaş",
+    client.post("/api/recurring", json={"description": "Maaş", "amount": 200000, "kind": "gelir",
                                         "day_of_month": 15, "start_month": "2025-12"})
     tmpdb.create_entry({"entry_date": "2026-01-15", "description": "Maaş", "amount": 210000, "kind": "gelir", "category": "Maaş"})
     feb = [r for r in finance.transactions("2026-02") if r["kind"] == "gelir"]
