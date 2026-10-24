@@ -97,3 +97,14 @@ def test_advance_pay_raise_difference(tmpdb):
     assert jan > plain and jan > feb  # ocakta fark var, şubatta yok
     g, _ = tmpdb.gross_schedule(r, 2026, tmpdb.salary_changes(rid))
     assert g[1] == round(120000 + 20000 * 14 / 30, 2) and g[2] == 120000
+
+
+def test_card_debt_at_uses_latest_statement(tmpdb):
+    with tmpdb.connect() as c:
+        _statement(c, "2026-07-15", "2026-07-25", 50000)   # ödeme kaydı yok
+        _statement(c, "2026-08-15", "2026-08-25", 60000)   # eskinin ödenmeyeni bunun içinde
+    assert tmpdb.card_debt_at("2026-08-20") == 60000
+    assert tmpdb.card_debt_at("2026-07-20") == 50000
+    with tmpdb.connect() as c:
+        c.execute("UPDATE statements SET paid_at = '2026-08-24', paid_amount = 60000 WHERE period_end = '2026-08-15'")
+    assert tmpdb.card_debt_at("2026-08-30") == 0

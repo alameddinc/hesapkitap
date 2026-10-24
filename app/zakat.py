@@ -441,10 +441,7 @@ def _bank_at(day: date) -> tuple[float, list[str]]:
 def _debts_at(day: date, px: dict) -> float:
     """O gün ödenmemiş kart ekstreleri (kesilmiş, son ödemesi bir yıl içinde) + açık kişisel borçlar."""
     d = day.isoformat()
-    total = 0.0
-    for st in db.list_statements():
-        if st["period_end"] <= d and (not st["paid_at"] or st["paid_at"] > d):
-            total += st["total_debt"] or 0
+    total = db.card_debt_at(d)
     for x in db.list_debts():
         if x["direction"] != "borc" or x["debt_date"] > d or (x["settled_at"] and x["settled_at"] <= d):
             continue
