@@ -186,6 +186,7 @@ export interface Recurring {
   start_month: string;
   end_month: string | null;
   note: string | null;
+  advance_pay?: number; // maaş peşin (memur)
   gross_amount?: number | null;
   account_id?: number | null;
 }
