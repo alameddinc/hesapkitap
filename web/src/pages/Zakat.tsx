@@ -11,7 +11,8 @@ import { useUI } from "../ui";
 interface Line { id?: number; acquired?: string | null; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
 interface Payment { id: number; year_start: string; pay_date: string; amount: number; note: string | null }
 interface Person {
-  id: number; name: string; is_self: boolean; is_minor?: boolean; plus: Line[]; minus: Line[]; gross: number; deduct: number; total: number;
+  id: number; name: string; is_self: boolean; is_minor?: boolean; plus: Line[];
+  check?: { date: string; hijri: string; days_left: number; zakat_now: number; paid: number; difference: number } | null; minus: Line[]; gross: number; deduct: number; total: number;
   above_nisab: boolean; estimate: number; suggest_start: string | null; payments: Payment[]; missing_prices: string[];
   hawl: null | { start: string; start_hijri: string; due: string; due_hijri: string; days_left: number; progress: number;
     zakat: number; paid: number; remaining: number };
@@ -101,6 +102,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
   const setMinor = useSave((v: boolean) => json("PATCH", `/api/zakat/people/${p.id}`, { is_minor: v }));
+  const setCheck = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { check_date: v }));
   const nextYear = useSave(() => json("POST", `/api/zakat/people/${p.id}/next-year`), () => ui.toast("Yeni zekât yılı başladı"));
   const pay = useSave(() => json("POST", `/api/zakat/people/${p.id}/payments`, { amount: parseAmount(payAmt), pay_date: today() }),
     () => { setPaying(false); setPayAmt(""); ui.toast("Ödeme kaydedildi. Allah kabul etsin."); });
@@ -175,6 +177,23 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                   onClick={() => window.confirm("Yeni zekât yılı başlasın mı? (bu yılın ödemeleri geçmişte kalır)") && nextYear.mutate(undefined, onErr)}>
                   Yeni yılı başlat
                 </button>
+              )}
+            </div>
+            <div className="mt-3 border-t border-stone-200 pt-2 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-400">
+              {p.check ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    Ek kontrol: <b>{dateTR(p.check.date)}</b> ({p.check.hijri}) · {p.check.days_left >= 0 ? `${p.check.days_left} gün kaldı` : "geçti"} ·
+                    bugünkü hesapla fark <b>{tl(p.check.difference)}</b>
+                  </span>
+                  <button className="btn-ghost px-1.5 py-0.5" onClick={() => setCheck.mutate(null, onErr)}>Kaldır</button>
+                </div>
+              ) : (
+                <label className="flex flex-wrap items-center gap-2">
+                  Ek kontrol günü (ops.)
+                  <input type="date" className="input w-40 px-2 py-1 text-xs" onChange={(e) => e.target.value && setCheck.mutate(e.target.value, onErr)} />
+                  <span className="w-full text-stone-500">Yıl başı belirsizse ikinci olası zekât günü: o gün yeniden hesaplanır, ödenenden fazlası "fark" olarak hatırlatılır.</span>
+                </label>
               )}
             </div>
             {yearPays.length > 0 && (

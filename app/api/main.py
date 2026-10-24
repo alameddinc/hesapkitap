@@ -1223,6 +1223,7 @@ class ZakatPersonPatch(BaseModel):
     hawl_start: date | None = None
     note: str | None = None
     is_minor: bool | None = None
+    check_date: date | None = None  # ek kontrol günü (boş göndermek için null)
 
 
 class ZakatAssetIn(BaseModel):
@@ -1344,6 +1345,8 @@ def zakat_patch_person(pid: int, body: ZakatPersonPatch):
         d["hawl_start"] = d["hawl_start"].isoformat()
     if "is_minor" in d:
         d["is_minor"] = int(bool(d["is_minor"]))
+    if d.get("check_date"):
+        d["check_date"] = d["check_date"].isoformat()
     if not zakat.update_person(pid, d):
         raise HTTPException(404, "Kişi yok")
     return {"ok": True}

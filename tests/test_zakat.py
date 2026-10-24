@@ -227,3 +227,16 @@ def test_history_requires_nisab_at_start(client, tmpdb, monkeypatch):
     # 20.02.2026'da biten "yıl"ın başında sadece 30 gr vardı (nisap altı): zekât yok
     assert h["years"][0]["end"] == "2026-02-20" and h["years"][0]["zakat"] == 0 and h["years"][0]["start_below"]
     assert h["total_due"] == 0
+
+
+def test_check_date_reminder_and_difference(client, tmpdb):
+    from app import jobs, zakat
+
+    w = client.post("/api/zakat/people", json={"name": "Eşim"}).json()["id"]
+    client.post("/api/zakat/assets", json={"person_id": w, "kind": "ALTIN_24", "quantity": 120})  # 768.000
+    client.patch(f"/api/zakat/people/{w}", json={"hawl_start": "2025-11-24", "check_date": "2027-02-09"})
+    client.post(f"/api/zakat/people/{w}/payments", json={"amount": 18000, "pay_date": "2026-11-13"})
+    ck = _person(zakat.compute(date(2027, 2, 2)), "Eşim")["check"]
+    assert ck["days_left"] == 7 and ck["paid"] == 18000 and ck["difference"] == round(768000 * 0.025 - 18000, 2)
+    assert any("Zekât kontrolü" in m for m in jobs.reminders(date(2027, 2, 2)))
+    assert zakat.upcoming_checks(date(2027, 2, 5))[0]["kind"] == "kontrol"
