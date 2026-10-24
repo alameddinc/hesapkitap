@@ -49,3 +49,18 @@ def test_android_share_target(client, fake_parse):
 def test_unsupported_file(client):
     r = client.post("/api/share", files={"file": ("a.txt", b"x", "text/plain")})
     assert "sadece PDF ya da fotoğraf" in r.text
+
+
+def test_shortcut_download(client, tmp_path, monkeypatch):
+    import os
+
+    from app import system
+
+    assert client.get("/api/share/shortcut").json() == {"available": False}
+    assert client.get("/hesapkitap.shortcut").status_code == 404
+    d = os.path.join(os.path.dirname(os.path.abspath(system.SYSTEM_DB)), "shortcuts")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "hesapkitap.shortcut"), "wb").write(b"AEA1signed")
+    assert client.get("/api/share/shortcut").json() == {"available": True}
+    r = client.get("/hesapkitap.shortcut")
+    assert r.status_code == 200 and r.content == b"AEA1signed"
