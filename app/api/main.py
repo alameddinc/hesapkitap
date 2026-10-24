@@ -1222,6 +1222,7 @@ class ZakatPersonPatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=40)
     hawl_start: date | None = None
     note: str | None = None
+    is_minor: bool | None = None
 
 
 class ZakatAssetIn(BaseModel):
@@ -1341,6 +1342,8 @@ def zakat_patch_person(pid: int, body: ZakatPersonPatch):
     d = body.model_dump(exclude_unset=True)
     if "hawl_start" in d and d["hawl_start"]:
         d["hawl_start"] = d["hawl_start"].isoformat()
+    if "is_minor" in d:
+        d["is_minor"] = int(bool(d["is_minor"]))
     if not zakat.update_person(pid, d):
         raise HTTPException(404, "Kişi yok")
     return {"ok": True}

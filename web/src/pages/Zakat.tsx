@@ -11,7 +11,7 @@ import { useUI } from "../ui";
 interface Line { id?: number; acquired?: string | null; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
 interface Payment { id: number; year_start: string; pay_date: string; amount: number; note: string | null }
 interface Person {
-  id: number; name: string; is_self: boolean; plus: Line[]; minus: Line[]; gross: number; deduct: number; total: number;
+  id: number; name: string; is_self: boolean; is_minor?: boolean; plus: Line[]; minus: Line[]; gross: number; deduct: number; total: number;
   above_nisab: boolean; estimate: number; suggest_start: string | null; payments: Payment[]; missing_prices: string[];
   hawl: null | { start: string; start_hijri: string; due: string; due_hijri: string; days_left: number; progress: number;
     zakat: number; paid: number; remaining: number };
@@ -34,7 +34,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 interface HistYear {
   start: string; end: string; end_hijri: string; error?: string; assets?: number; bank?: number; deduct?: number; total?: number;
-  nisab?: number; above_nisab?: boolean; zakat?: number; paid?: number; remaining?: number; unknown_accounts?: string[]; partial?: boolean;
+  nisab?: number; above_nisab?: boolean; start_below?: boolean; zakat?: number; paid?: number; remaining?: number; unknown_accounts?: string[]; partial?: boolean;
 }
 
 /** Geçmiş zekât yılları: o yılın sonunda varlık, nisap, zekât, ödenen; ödenmemişse kaza. */
@@ -61,7 +61,7 @@ function History({ p }: { p: Person }) {
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-medium">{dateTR(y.start)} → {dateTR(y.end)} <span className="text-xs font-normal text-stone-500">({y.end_hijri})</span></span>
               {y.error ? <span className="text-xs text-red-600">{y.error}</span>
-                : !y.above_nisab ? <span className="rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-600 dark:bg-stone-800">nisap altı</span>
+                : !y.above_nisab ? <span className="rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-600 dark:bg-stone-800">{y.start_below ? "yıl başında nisap altı" : "nisap altı"}</span>
                 : (y.remaining ?? 0) <= 0 ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800 dark:bg-green-950 dark:text-green-300">ödendi</span>
                 : <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">ödenmedi · {tl(y.remaining ?? 0)}</span>}
             </div>
@@ -100,6 +100,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const [hist, setHist] = useState(false);
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
+  const setMinor = useSave((v: boolean) => json("PATCH", `/api/zakat/people/${p.id}`, { is_minor: v }));
   const nextYear = useSave(() => json("POST", `/api/zakat/people/${p.id}/next-year`), () => ui.toast("Yeni zekât yılı başladı"));
   const pay = useSave(() => json("POST", `/api/zakat/people/${p.id}/payments`, { amount: parseAmount(payAmt), pay_date: today() }),
     () => { setPaying(false); setPayAmt(""); ui.toast("Ödeme kaydedildi. Allah kabul etsin."); });
@@ -118,7 +119,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
         </div>
         <span className={cx("rounded px-2 py-0.5 text-xs", p.above_nisab ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
           : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-400")}>
-          {p.above_nisab ? "Nisap üstü" : "Nisap altı"}
+          {p.is_minor ? "Çocuk · zekât yok" : p.above_nisab ? "Nisap üstü" : "Nisap altı"}
         </span>
       </div>
 
@@ -129,7 +130,19 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
         </div>
       )}
 
+      {!p.is_self && (
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-stone-600 dark:text-stone-400">
+          <input type="checkbox" checked={!!p.is_minor} onChange={(e) => setMinor.mutate(e.target.checked, onErr)} />
+          Çocuk (ergenlik çağına gelmemiş) — Hanefî'ye göre malına zekât düşmez
+        </label>
+      )}
+
       {/* zekât yılı */}
+      {p.is_minor ? (
+        <p className="mt-3 rounded-lg bg-stone-50 p-3 text-xs text-stone-600 dark:bg-stone-900 dark:text-stone-400">
+          Varlıkları takip edilir ama zekât hesaplanmaz. Ergenlik çağına girince işareti kaldır; zekât yılı nisaba ulaştığı günden başlar.
+        </p>
+      ) : (
       <div className="mt-3 rounded-lg bg-stone-50 p-3 text-sm dark:bg-stone-900">
         {h ? (
           <>
@@ -197,6 +210,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
           </div>
         )}
       </div>
+      )}
 
       {p.missing_prices.length > 0 && <p className="mt-2 text-xs text-amber-600">Fiyatı bulunamadı: {p.missing_prices.join(", ")}</p>}
 
@@ -241,7 +255,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
       {!open && (
         <button className="btn-ghost ml-1 px-2 py-1 text-xs" onClick={() => setAdding(true)}><Plus size={14} /> Varlık ekle</button>
       )}
-      {h && (
+      {h && !p.is_minor && (
         <>
           <button className="btn-ghost ml-1 px-2 py-1 text-xs" onClick={() => setHist(!hist)}>
             <ChevronDown size={14} className={cx("transition-transform", hist && "rotate-180")} /> Geçmiş yıllar (ödendi mi?)

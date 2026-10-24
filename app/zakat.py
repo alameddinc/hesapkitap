@@ -92,6 +92,9 @@ def _init(c) -> None:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN acquired DATE")
     if "cost" not in cols:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN cost REAL")
+    pcols = {r[1] for r in c.execute("PRAGMA table_info(zakat_people)")}
+    if "is_minor" not in pcols:  # ergenlik öncesi çocuk: Hanefî'de zekât düşmez (varlıkları yine görünür)
+        c.execute("ALTER TABLE zakat_people ADD COLUMN is_minor INTEGER NOT NULL DEFAULT 0")
     if "estimated" not in cols:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0")
     if not c.execute("SELECT 1 FROM zakat_people").fetchone():
@@ -353,10 +356,11 @@ def compute(today: date | None = None) -> dict:
         gross = round(sum(x["value"] or 0 for x in plus), 2)
         deduct = round(sum(x["value"] for x in minus), 2) if st["madhhab"] == "hanefi" else 0.0
         total = round(max(0.0, gross - deduct), 2)
-        above = nisab is not None and total >= nisab
+        minor = bool(p.get("is_minor"))
+        above = nisab is not None and total >= nisab and not minor
         hawl = None
         suggest = None
-        if not p["hawl_start"] and nisab:
+        if not p["hawl_start"] and nisab and not minor:
             # tarihi girilmiş varlıkları sırayla topla: toplam nisaba ilk ulaştığı gün (bugünkü fiyatla, yaklaşık)
             dated = sorted((x["acquired"], x["value"] or 0) for x in plus if x.get("acquired") and not x.get("exempt"))
             undated = sum(x["value"] or 0 for x in plus if not x.get("acquired")) - deduct
@@ -366,7 +370,7 @@ def compute(today: date | None = None) -> dict:
                 if run >= nisab:
                     suggest = d_
                     break
-        if p["hawl_start"]:
+        if p["hawl_start"] and not minor:
             start = date.fromisoformat(p["hawl_start"])
             due = start + timedelta(days=LUNAR_YEAR_DAYS)
             paid = round(sum(x["amount"] for x in p["payments"] if x["year_start"] == p["hawl_start"]), 2)
@@ -375,7 +379,7 @@ def compute(today: date | None = None) -> dict:
                     "due_hijri": to_hijri(due), "days_left": (due - today).days,
                     "progress": min(100.0, round((today - start).days / LUNAR_YEAR_DAYS * 100, 1)),
                     "zakat": zakat, "paid": paid, "remaining": round(max(0.0, zakat - paid), 2)}
-        out.append({"id": p["id"], "name": p["name"], "is_self": bool(p["is_self"]), "note": p["note"],
+        out.append({"id": p["id"], "name": p["name"], "is_self": bool(p["is_self"]), "note": p["note"], "is_minor": minor,
                     "plus": plus, "minus": minus if st["madhhab"] == "hanefi" else [], "gross": gross, "deduct": deduct,
                     "total": total, "above_nisab": above, "estimate": round(total * RATE, 2) if above else 0.0,
                     "hawl": hawl, "suggest_start": suggest, "payments": p["payments"],
@@ -467,6 +471,9 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
     p = next((x for x in people() if x["id"] == pid), None)
     if not p:
         raise LookupError("Kişi yok")
+    if p.get("is_minor"):
+        return {"years": [], "need_start": False, "total_due": 0.0,
+                "notes": ["Ergenlik çağına gelmemiş çocuğun malına Hanefî'ye göre zekât düşmez."]}
     anchor = date.fromisoformat(p["hawl_start"]) if p["hawl_start"] else None
     if not anchor:
         return {"years": [], "need_start": True, "total_due": 0.0, "notes": []}
@@ -498,30 +505,40 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
             years.append({"start": start.isoformat(), "end": end.isoformat(), "end_hijri": to_hijri(end),
                           "error": str(e)})
             continue
-        items = 0.0
-        for a in p["assets"]:
-            if a["acquired"] and a["acquired"] > end.isoformat():
-                continue
-            if a["is_jewelry"] and st["madhhab"] == "safii":
-                continue
-            items += _value_at(a["kind"], a["quantity"], px) or 0
-        bank, unknown = (0.0, [])
-        deduct = 0.0
-        if p["is_self"] and st["include_app"]:
-            bank, unknown = _bank_at(end)
-            if st["madhhab"] == "hanefi":
-                deduct = _debts_at(end, px)
-        if st["madhhab"] == "hanefi":
-            deduct += carry
-        total = round(max(0.0, items + bank - deduct), 2)
+        def wealth(day: date, prices: dict, extra_deduct: float = 0.0) -> tuple[float, float, float, float, list[str]]:
+            items = 0.0
+            for a in p["assets"]:
+                if a["acquired"] and a["acquired"] > day.isoformat():
+                    continue
+                if a["is_jewelry"] and st["madhhab"] == "safii":
+                    continue
+                items += _value_at(a["kind"], a["quantity"], prices) or 0
+            bank, unknown, deduct = 0.0, [], 0.0
+            if p["is_self"] and st["include_app"]:
+                bank, unknown = _bank_at(day)
+                if st["madhhab"] == "hanefi":
+                    deduct = _debts_at(day, prices)
+            deduct += extra_deduct
+            return round(max(0.0, items + bank - deduct), 2), items, bank, deduct, unknown
+
+        total, items, bank, deduct, unknown = wealth(end, px, carry if st["madhhab"] == "hanefi" else 0.0)
         nisab = round(NISAB_GRAMS * px["GRA"], 2)
-        due = round(total * RATE, 2) if total >= nisab else 0.0
+        # Hanefî: nisap yılın BAŞINDA da olmalı (başta yoksa yıl o gün başlamamıştır)
+        start_ok = True
+        if start >= earliest:
+            try:
+                spx = historical_prices(start, offline=offline)
+                start_ok = wealth(start, spx)[0] >= NISAB_GRAMS * spx["GRA"]
+            except Exception:  # noqa: BLE001 - başlangıç fiyatı yoksa yalnız sonu esas
+                start_ok = True
+        due = round(total * RATE, 2) if total >= nisab and start_ok else 0.0
         paid = round(sum(x["amount"] for x in p["payments"] if x["year_start"] == start.isoformat()), 2)
         left = round(max(0.0, due - paid), 2)
         carry = left
         years.append({"start": start.isoformat(), "end": end.isoformat(), "end_hijri": to_hijri(end),
                       "assets": round(items, 2), "bank": bank, "deduct": deduct, "total": total, "nisab": nisab,
-                      "gram_price": px["GRA"], "above_nisab": total >= nisab, "zakat": due, "paid": paid, "remaining": left,
+                      "gram_price": px["GRA"], "above_nisab": total >= nisab and start_ok, "start_below": not start_ok,
+                      "zakat": due, "paid": paid, "remaining": left,
                       "unknown_accounts": unknown, "partial": start < earliest})
     return {"years": list(reversed(years)), "need_start": False, "notes": sorted(notes),
             "total_due": round(sum(y.get("remaining", 0) for y in years), 2)}
@@ -549,7 +566,7 @@ def add_person(name: str) -> int:
 
 
 def update_person(pid: int, data: dict) -> bool:
-    data = {k: v for k, v in data.items() if k in ("name", "hawl_start", "note")}
+    data = {k: v for k, v in data.items() if k in ("name", "hawl_start", "note", "is_minor")}
     if not data:
         return False
     with db.connect() as c:
