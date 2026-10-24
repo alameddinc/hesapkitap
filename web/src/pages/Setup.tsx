@@ -10,6 +10,7 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [code, setCode] = useState("");
+  const [share, setShare] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -20,7 +21,7 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
     setErr(null);
     const res = await fetch("/api/auth/setup", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: user.trim() || "admin", password: pw, code: code || null }),
+      body: JSON.stringify({ username: user.trim() || "admin", password: pw, code: code || null, share_templates: share }),
     });
     setBusy(false);
     if (res.ok) qc.invalidateQueries();
@@ -58,6 +59,11 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
             </p>
           </div>
         )}
+        <label className="flex cursor-pointer items-start gap-2 text-xs text-stone-600 dark:text-stone-400">
+          <input type="checkbox" className="mt-0.5" checked={share} onChange={(e) => setShare(e.target.checked)} />
+          <span><b>Uygulamanın gelişmesine destek ol:</b> yeni bir bankanın dökümünü okumayı öğrenince okuma kuralını
+            toplulukla paylaş (sadece banka adı ve satır düzeni; isim, IBAN, tutar gitmez). Ayarlar'dan kapatabilirsin.</span>
+        </label>
         {err && <p className="text-sm text-red-600">{err}</p>}
         <button className="btn-primary w-full justify-center py-2" disabled={busy || pw.length < 10}>
           <ShieldCheck size={16} /> {busy ? "Kaydediliyor…" : "Şifreyi belirle ve başla"}

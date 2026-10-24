@@ -31,6 +31,12 @@ def _fixture_pdfs(monkeypatch):
               "MAIL_USER", "MAIL_PASSWORD", "MAIL_IMAP_HOST", "MAIL_SENDERS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("JOBS_ENABLED", "0")
+    monkeypatch.delenv("HESAPKITAP_IS_HUB", raising=False)
+    from app import templates
+
+    # şablon paylaşımı / topluluktan çekme ağa çıkmasın (ilgili testler kendi sahtesini kurar)
+    monkeypatch.setattr(templates, "sync_community", lambda force=False: 0)
+    monkeypatch.setattr(templates, "share_async", lambda spec: None)
     monkeypatch.setenv("HESAPKITAP_NO_AUTH", "1")  # test_auth bunu kendisi kaldırır
 
 

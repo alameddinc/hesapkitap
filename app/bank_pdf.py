@@ -99,6 +99,12 @@ def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
     ruled = parse_rule_based(text)
     if ruled and ruled["verified"]:
         return ruled
+    from app import templates
+
+    templated = templates.read(text)  # kayıtlı şablon ya da yeni öğrenilen kural (yapay zekâsız)
+    if templated and templated["verified"]:
+        templated["bank"] = templated.get("bank") or templates.bank_of(text)
+        return templated
     if not receipt.enabled():
         raise BankPdfError("Bu bankanın PDF dökümü yapay zekâ ile okunur; Ayarlar → Anahtarlar'dan Gemini anahtarı gir "
                            "ya da bankadan Excel/CSV indir.")
