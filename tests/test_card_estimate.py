@@ -69,3 +69,14 @@ def test_salary_estimated_for_months_without_statement(client, tmpdb):
     jan = [r for r in finance.transactions("2026-01") if r["kind"] == "gelir"]
     assert [(r["amount"], r.get("estimated")) for r in jan] == [(210000, None)]  # gerçek maaş var: tahmin yok
     assert finance.summary("2026-02")["totals"]["income"] == 200000
+
+
+def test_no_pending_salary_when_actual_exists(client, tmpdb):
+    from app import finance
+
+    client.post("/api/recurring", json={"description": "Maaş", "amount": 200000, "kind": "gelir", "day_of_month": 15,
+                                        "start_month": "2025-12"})
+    tmpdb.create_entry({"entry_date": "2026-01-15", "description": "Maaş ödemesi", "amount": 210000, "kind": "gelir",
+                        "category": "Maaş"})
+    jan = [r for r in finance.transactions("2026-01") if r["kind"] == "gelir"]
+    assert [(r["amount"], bool(r.get("pending"))) for r in jan] == [(210000, False)]

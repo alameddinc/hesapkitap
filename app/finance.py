@@ -207,6 +207,8 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
             continue
         row = _pending_row(r, month, ov)
         is_salary = (r["category"] or "") == "Maaş" or bool(r.get("gross_amount")) or "MAAS" in _fold(r["description"])
+        if r["kind"] == INCOME and is_salary and salary_seen:  # o ayın maaşı dökümden gelmiş: "bekliyor" gösterme
+            continue
         if past and r["kind"] == INCOME and is_salary and not salary_seen:
             row = {**row, "pending": False, "estimated": True, "source": "estimate",
                    "description": f"{r['description']} (tahmini, döküm yok)"}
