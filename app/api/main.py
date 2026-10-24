@@ -794,8 +794,15 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
             r["type"] = "kart_odemesi"  # tutar bir ekstreyle birebir → kart ödemesi (önizlemede de görünsün)
         k = "tekrar" if r["hash"] in seen else r["type"]
         counts[k] = counts.get(k, 0) + 1
+    # güvenlik ağı: neredeyse hiç eksi tutar yok ve bakiye sütunu yoksa kart dökümü olabilir (harcamalar gelir görünür)
+    warning = None
+    amounts = [r["amount"] for r in parsed if r.get("amount") is not None]
+    if len(amounts) >= 5 and sum(a > 0 for a in amounts) / len(amounts) >= 0.9 and not det["mapping"].get("balance"):
+        warning = ("Bu dosyada tutarların neredeyse hepsi artı ve bakiye sütunu yok: bir kredi kartı dökümü olabilir. "
+                   "Öyleyse içe aktarma — harcamalar gelir sayılır. Kart dökümünü Ekstreler sayfasına bırak; tanınmazsa "
+                   "bize bildir.")
     return {**det, "profile_saved": bool(saved), "total": len(parsed), "counts": counts, "sample": parsed[:15],
-            "raw_preview": rows[det["header_row"]: det["header_row"] + 6]}
+            "raw_preview": rows[det["header_row"]: det["header_row"] + 6], "warning": warning}
 
 
 @app.post("/api/bank-import")

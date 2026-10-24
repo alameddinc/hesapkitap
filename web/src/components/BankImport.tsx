@@ -17,6 +17,7 @@ interface Preview {
   verified?: boolean;
   bank?: string;
   chain_bad?: number[];
+  warning?: string | null; // ör. kart dökümü olabilir (harcamalar gelir görünür)
 }
 
 const LABEL: Record<string, string> = {
@@ -134,6 +135,11 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
           </div>
           {pv.profile_saved && <p className="text-xs text-green-700 dark:text-green-400">Bu bankanın biçimi hatırlandı.</p>}
           </>)}
+          {pv.warning && (
+            <p className="rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+              ⚠️ {pv.warning}
+            </p>
+          )}
           <div className="flex flex-wrap gap-1.5 text-xs">
             {Object.entries(pv.counts).map(([k, n]) => (
               <span key={k} className={cx("rounded-full px-2 py-0.5", k === "tekrar" || k === "virman" ? "bg-stone-100 dark:bg-stone-800" : "bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300")}>
