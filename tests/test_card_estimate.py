@@ -69,6 +69,8 @@ def test_salary_estimated_for_months_without_statement(client, tmpdb):
     jan = [r for r in finance.transactions("2026-01") if r["kind"] == "gelir"]
     assert [(r["amount"], r.get("estimated")) for r in jan] == [(210000, None)]  # gerçek maaş var: tahmin yok
     assert finance.summary("2026-02")["totals"]["income"] == 200000
+    trend = {t["month"]: t["income"] for t in finance.summary("2026-02")["trend"]}
+    assert trend["2026-02"] == 200000 and trend["2026-01"] == 210000  # grafikte de tahmin var
 
 
 def test_no_pending_salary_when_actual_exists(client, tmpdb):

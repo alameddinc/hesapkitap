@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, CreditCard, Landmark, Plus, Trash2, Wallet }
 import { useState } from "react";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
-import { useSave } from "./hooks";
+import { useMeta, useSave } from "./hooks";
 import Wallets from "./Wallets";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
@@ -40,8 +40,36 @@ export function ZakatDue() {
   );
 }
 
-export default function NetWorth({ compact = false }: { compact?: boolean }) {
+interface NWAt { as_of: string; cash: number; holdings: number; card_debt: number; receivable: number; payable: number; net: number;
+  unknown_accounts: string[]; prices: boolean }
+
+/** Geçmiş dönem seçiliyse: o dönemin son günündeki net durum (yaklaşık, dökümlerden geriye hesap). */
+function NetWorthAt({ month }: { month: string }) {
   const ui = useUI();
+  const q = useQuery({ queryKey: ["net-worth-at", month], queryFn: () => json<NWAt>("GET", `/api/net-worth/at?month=${month}`) });
+  const d = q.data;
+  return (
+    <button className="card flex w-full items-center gap-3 p-4 text-left" onClick={() => ui.go("hesaplar")}>
+      <Landmark size={18} className="shrink-0 text-stone-500" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs text-stone-500">Net durum · {d ? dateTR(d.as_of) : "…"} itibarıyla (dönem sonu, yaklaşık)</span>
+        {d && <>
+          <span className={cx("block text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</span>
+          <span className="block text-xs text-stone-500">
+            Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
+            {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
+          </span>
+          {d.unknown_accounts.length > 0 && <span className="block text-xs text-amber-600">O tarihte dökümü olmayan: {d.unknown_accounts.join(", ")} (sayılmadı)</span>}
+        </>}
+      </span>
+      <ChevronRight size={16} className="shrink-0 text-stone-400" />
+    </button>
+  );
+}
+
+export default function NetWorth({ compact = false, month }: { compact?: boolean; month?: string }) {
+  const ui = useUI();
+  const meta = useMeta();
   const q = useQuery({ queryKey: ["net-worth"], queryFn: () => json<NW>("GET", "/api/net-worth") });
   const [open, setOpen] = useState(!compact);
   const [adding, setAdding] = useState(false);
@@ -56,6 +84,7 @@ export default function NetWorth({ compact = false }: { compact?: boolean }) {
     () => ui.toast("Bakiye güncellendi"));
   const del = useSave((id: number) => json("DELETE", `/api/accounts/${id}`), () => ui.toast("Silindi"));
   const d = q.data;
+  if (compact && month && meta.data?.current_month && month < meta.data.current_month) return <NetWorthAt month={month} />;
   if (!d) return null;
   const empty = !d.accounts.length && !d.holdings && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
   if (compact) {
