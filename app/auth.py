@@ -93,6 +93,8 @@ def setup_required() -> bool:
 def setup_code() -> str:
     """Yerel ağ dışından ilk kurulum için tek seferlik kod; log'a yazılır."""
     global _setup_code
+    if not _setup_code and os.environ.get("SETUP_CODE"):  # tek tıkla kurulumda panelden okunur (Render/Railway/Fly)
+        _setup_code = os.environ["SETUP_CODE"].strip()
     if not _setup_code:
         _setup_code = f"{secrets.randbelow(10**6):06d}"
         log.warning("HesapKitap ilk kurulum kodu: %s (uzaktan kurulumda istenir)", _setup_code)

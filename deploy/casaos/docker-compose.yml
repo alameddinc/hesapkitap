@@ -1,0 +1,44 @@
+# CasaOS: App Store → "Custom Install" → Import → bu dosyayı yapıştır.
+name: hesapkitap
+services:
+  hesapkitap:
+    image: ghcr.io/alameddinc/hesapkitap:latest
+    container_name: hesapkitap
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Istanbul
+    volumes:
+      - type: bind
+        source: /DATA/AppData/hesapkitap
+        target: /app/data
+    ports:
+      - target: 8000
+        published: "8080"
+        protocol: tcp
+    x-casaos:
+      envs:
+        - container: TZ
+          description: { tr_TR: Saat dilimi, en_us: Time zone }
+      ports:
+        - container: "8000"
+          description: { tr_TR: Web arayüzü, en_us: Web UI }
+      volumes:
+        - container: /app/data
+          description: { tr_TR: Veriler ve yedekler, en_us: Data and backups }
+x-casaos:
+  architectures: [amd64, arm64]
+  main: hesapkitap
+  category: Finance
+  author: alameddinc
+  developer: alameddinc
+  icon: https://raw.githubusercontent.com/alameddinc/hesapkitap/main/docs/logo.png
+  tagline:
+    tr_TR: Kişisel finans — ekstreler, plan, zekât; verin sende
+    en_us: Personal finance for Turkish banks — self-hosted
+  description:
+    tr_TR: Kredi kartı ekstrelerini ve banka dökümlerini oku, harcamalarını gör, ayları planla. Zekât, sadaka, altın, kumbara ve faiz alarmı.
+    en_us: Read credit card statements and bank PDFs, see spending, plan months. Zakat, charity, gold, savings jars and interest alarms.
+  title:
+    en_us: HesapKitap
+  index: /
+  port_map: "8080"

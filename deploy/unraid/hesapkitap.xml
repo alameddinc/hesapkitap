@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- Unraid: Docker → Add Container → Template'e bu dosyanın URL'sini ver ya da /boot/config/plugins/dockerMan/templates-user/ altına kopyala -->
+<Container version="2">
+  <Name>HesapKitap</Name>
+  <Repository>ghcr.io/alameddinc/hesapkitap:latest</Repository>
+  <Registry>https://github.com/alameddinc/hesapkitap/pkgs/container/hesapkitap</Registry>
+  <Network>bridge</Network>
+  <Support>https://github.com/alameddinc/hesapkitap/issues</Support>
+  <Project>https://github.com/alameddinc/hesapkitap</Project>
+  <Overview>Kişisel finans: kredi kartı ekstreleri, banka dökümleri, planlama, zekât ve sadaka, altın, kumbara, faiz alarmı. Verin sende.</Overview>
+  <Category>Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/alameddinc/hesapkitap/main/docs/logo.png</Icon>
+  <Config Name="Web arayüzü" Target="8000" Default="8080" Mode="tcp" Description="Tarayıcıdan açılacak port" Type="Port" Display="always" Required="true">8080</Config>
+  <Config Name="Veri" Target="/app/data" Default="/mnt/user/appdata/hesapkitap" Mode="rw" Description="Veritabanı, yüklenen dosyalar, yedekler" Type="Path" Display="always" Required="true">/mnt/user/appdata/hesapkitap</Config>
+  <Config Name="TZ" Target="TZ" Default="Europe/Istanbul" Description="Saat dilimi" Type="Variable" Display="advanced" Required="false">Europe/Istanbul</Config>
+</Container>

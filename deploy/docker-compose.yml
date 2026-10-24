@@ -1,0 +1,13 @@
+# Derlemeden kurulum: hazır imajla (Synology Container Manager, Portainer, herhangi bir sunucu)
+#   docker compose -f deploy/docker-compose.yml up -d   →  http://SUNUCU:8080
+services:
+  hesapkitap:
+    image: ghcr.io/alameddinc/hesapkitap:latest
+    container_name: hesapkitap
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Istanbul
+    volumes:
+      - ./hesapkitap-data:/app/data
+    ports:
+      - "8080:8000"

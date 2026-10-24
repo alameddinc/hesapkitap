@@ -1,0 +1,32 @@
+# Fly.io — adımlar için docs/KURULUM.md (fly launch --copy-config)
+app = "hesapkitap-ADINI-YAZ"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  COOKIE_SECURE = "1"
+
+[[mounts]]
+  source = "hesapkitap_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"     # hatırlatmalar ve gece yedeği için makine açık kalmalı
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/api/auth/status"
+
+[[vm]]
+  memory = "512mb"
+  cpus = 1
