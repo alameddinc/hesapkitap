@@ -230,8 +230,34 @@ Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin deği
 
 def parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
                    more: list[tuple[bytes, str]] | None = None) -> dict:
-    """Fiş mi fatura mı kendisi anlar; tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri;
-    model her fiş satırını bunlardan birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için)."""
+    """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract)."""
+    from app import ocr
+
+    if not enabled():
+        return _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more)
+    try:
+        return _parse_document_ai(data, mime, categories, split_categories, more)
+    except ReceiptError as e:
+        if not (ocr.available() or mime == "application/pdf"):
+            raise
+        return _local(data, mime, categories, str(e), more)
+
+
+def _local(data: bytes, mime: str, categories: list[str], reason: str, more: list[tuple[bytes, str]] | None = None) -> dict:
+    from app import ocr
+
+    try:
+        doc = ocr.parse(data, mime, categories, more)
+    except ValueError as e:
+        raise ReceiptError(f"{reason}. {e}") from e
+    doc["note"] = reason
+    return doc
+
+
+def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
+                       more: list[tuple[bytes, str]] | None = None) -> dict:
+    """Tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri; model her fiş satırını bunlardan
+    birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için)."""
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
     raw, meta = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
                              max_output_tokens=8000, more=more)

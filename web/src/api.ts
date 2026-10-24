@@ -203,6 +203,7 @@ export interface Meta {
   categories: string[];
   income_categories: string[];
   receipt_enabled: boolean;
+  receipt_engine?: "gemini" | "yerel" | null; // yerel: anahtarsız Tesseract okuma
   current_month: string;
   cycle_start_day: number;
   cycle_mode: "auto" | "manual";

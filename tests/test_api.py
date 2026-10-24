@@ -215,7 +215,9 @@ def test_unified_upload_routes_account_statements(client, monkeypatch):
 
 def test_onboarding_steps(client, tmpdb):
     o = client.get("/api/onboarding").json()
-    assert o["done"] == 0 and o["total"] == 6 and not o["dismissed"]
+    from app import receipt
+
+    assert o["done"] == 0 and o["total"] == (6 if receipt.enabled() else 7) and not o["dismissed"]  # anahtarsızda +isteğe bağlı adım
     assert o["steps"][0]["key"] == "ekstre" and o["steps"][0]["guide"]  # önce ekstre: gerisi ondan dolar
     client.post("/api/accounts", json={"name": "Banka", "kind": "banka", "balance": 10})
     assert next(s for s in client.get("/api/onboarding").json()["steps"] if s["key"] == "hesap")["done"]
