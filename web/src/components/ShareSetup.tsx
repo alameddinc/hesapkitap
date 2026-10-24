@@ -16,6 +16,7 @@ export default function ShareSetup() {
     body: JSON.stringify({ name: "iPhone Paylaş" }) }).then((r) => r.json() as Promise<{ token: string }>), (r) => setToken(r.token));
   const del = useSave((id: number) => fetch(`/api/settings/tokens/${id}`, { method: "DELETE" }), () => ui.toast("Anahtar silindi"));
   const url = `${window.location.origin}/api/share`;
+  const sc = useQuery({ queryKey: ["shortcut"], queryFn: () => fetch("/api/share/shortcut").then((r) => r.json() as Promise<{ available: boolean }>) });
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => ui.toast("Kopyalandı"));
   return (
     <section className="card space-y-3 p-4">
@@ -32,8 +33,27 @@ export default function ShareSetup() {
           <li>Bir PDF ya da fotoğrafta <b>Paylaş</b> → listede <b>HesapKitap</b>'ı seç. Bu kadar.</li>
         </ol>
       </details>
-      <details className="rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
+      <details className="rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700" open>
         <summary className="cursor-pointer font-medium">iPhone (Kısayollar)</summary>
+        {sc.data?.available && (
+          <div className="mt-2 space-y-2 rounded-lg bg-blue-50/60 p-3 dark:bg-blue-950/20">
+            <p className="font-medium">Hızlı kurulum (iPhone'da Safari'den):</p>
+            <ol className="list-decimal space-y-1.5 pl-5 text-stone-700 dark:text-stone-300">
+              <li>
+                <button className="btn-primary px-3 py-1 text-xs" onClick={() => create.mutate(undefined, {
+                  onSuccess: (r) => navigator.clipboard.writeText(r.token).then(() => ui.toast("Anahtar kopyalandı"), () => {}) })}>
+                  Anahtar oluştur ve kopyala
+                </button>
+              </li>
+              <li>
+                <a className="btn-primary inline-flex px-3 py-1 text-xs" href="/hesapkitap.shortcut">Kısayolu ekle</a>
+                <span className="block text-xs text-stone-500">Kısayollar açılır → <b>Kısayol Ekle</b> → anahtar sorulunca yapıştır.</span>
+              </li>
+              <li>Artık PDF ya da fotoğrafta <b>Paylaş → HesapKitap'a gönder</b>.</li>
+            </ol>
+          </div>
+        )}
+        <p className="mt-2 text-xs text-stone-500">{sc.data?.available ? "Olmazsa elle kurulum:" : "Elle kurulum:"}</p>
         <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-stone-600 dark:text-stone-400">
           <li>
             Aşağıdan <b>anahtar oluştur</b> ve kopyala (bir kez gösterilir).

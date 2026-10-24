@@ -1999,6 +1999,24 @@ async def share(request: Request, file: list[UploadFile] = File(...)):
     return {"messages": out}
 
 
+def _shortcut_file() -> str:
+    """İmzalı iOS kısayolu (scripts/make_shortcut.py ile Mac'te üretilir; sunucuya özel adres içerir, repoda yok)."""
+    return os.path.join(os.path.dirname(os.path.abspath(system.SYSTEM_DB)), "shortcuts", "hesapkitap.shortcut")
+
+
+@app.get("/api/share/shortcut")
+def shortcut_info():
+    return {"available": os.path.exists(_shortcut_file())}
+
+
+@app.get("/hesapkitap.shortcut")
+def shortcut_download():
+    """iPhone Safari bu dosyayı açınca "Kısayol Ekle" çıkar. Gizli bilgi içermez (anahtar eklerken sorulur)."""
+    if not os.path.exists(_shortcut_file()):
+        raise HTTPException(404, "Bu sunucuda hazır kısayol yok; Ayarlar'daki adımlarla elle kur")
+    return FileResponse(_shortcut_file(), filename="HesapKitap'a gönder.shortcut", media_type="application/octet-stream")
+
+
 @app.post("/share-target")
 async def share_target(request: Request):
     """Android: yüklü uygulamanın Paylaş hedefi (manifest share_target). Oturum çereziyle; sonra uygulamaya döner."""
