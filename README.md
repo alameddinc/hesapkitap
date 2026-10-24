@@ -29,7 +29,7 @@
   - [Faiz alarmı](#faiz-alarmı)
   - [Telefonda](#telefonda)
   - [Birden fazla kullanıcı](#birden-fazla-kullanıcı)
-- [Hızlı kurulum](#hızlı-kurulum)
+- [Hızlı kurulum](#hızlı-kurulum) · [tek tıkla / evde / VPS rehberi](docs/KURULUM.md)
 - [Gizlilik](#gizlilik)
 - [Geliştirme](#geliştirme)
 - [Lisans](#lisans)
@@ -138,6 +138,17 @@
 </p>
 
 ## Hızlı kurulum
+
+### Tek tıkla, kendi sunucunda
+
+Teknik bilgi gerekmeden kendi HesapKitap'ını kur, telefondan kendi adresinle kullan:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alameddinc/hesapkitap)
+
+Railway, Fly.io, evdeki cihaz (CasaOS, Unraid, Synology, Raspberry Pi — hazır imaj `ghcr.io/alameddinc/hesapkitap`)
+ve kendi VPS'in için adım adım rehber: **[docs/KURULUM.md](docs/KURULUM.md)**
+
+### Bilgisayarında Docker ile
 
 Gereken tek şey [Docker](https://docs.docker.com/get-docker/).
 

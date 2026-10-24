@@ -26,5 +26,7 @@ COPY docker-entrypoint.sh /usr/local/bin/
 VOLUME ["/app/data"]
 # root olarak başlar, data/ sahipliğini düzeltip "app" kullanıcısına geçer (bkz. docker-entrypoint.sh)
 ENTRYPOINT ["docker-entrypoint.sh"]
-HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/auth/status')"
-CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+# PORT: bulut servisleri (Render, Railway, Fly…) kendi portunu verir; yoksa 8000
+ENV PORT=8000
+HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8000\")}/api/auth/status')"
+CMD ["sh", "-c", "exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*"]

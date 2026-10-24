@@ -53,7 +53,8 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
             <label className="label" htmlFor="s-code">Kurulum kodu</label>
             <input id="s-code" className="input tracking-widest" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} />
             <p className="mt-1 text-xs text-stone-500">
-              Uzaktan bağlandığın için güvenlik kodu gerekiyor. Sunucuda: <code>docker compose logs | grep kurulum</code>
+              Uzaktan bağlandığın için güvenlik kodu gerekiyor. Render/Railway/Fly ile kurduysan panelde ortam değişkenlerindeki
+              <code>SETUP_CODE</code>; Docker ile kurduysan: <code>docker compose logs | grep kurulum</code>
             </p>
           </div>
         )}

@@ -1,0 +1,23 @@
+# Render "Deploy to Render" — README'deki düğme bu dosyayı kullanır.
+# Kalıcı disk ücretli planda (Starter) çalışır: veriler /app/data'da, yeniden başlatmada kaybolmaz.
+services:
+  - type: web
+    name: hesapkitap
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /api/auth/status
+    autoDeploy: false
+    disk:
+      name: hesapkitap-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SETUP_CODE        # ilk açılışta istenen kurulum kodu (Environment sekmesinde görünür)
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "1"

@@ -1,0 +1,9 @@
+# Railway — depoyu bağla; kalıcı veri için Volume ekle: mount path /app/data (bkz. docs/KURULUM.md)
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/auth/status"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"

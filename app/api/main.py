@@ -125,7 +125,7 @@ def setup(body: SetupIn, request: Request, response: Response):
             raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
         if body.code != auth.setup_code():
             auth.record_fail(ip)
-            raise HTTPException(403, "Kurulum kodu yanlış. Kodu sunucu log'unda bulabilirsin: docker compose logs | grep kurulum")
+            raise HTTPException(403, "Kurulum kodu yanlış. Tek tıkla kurduysan barındırma panelindeki SETUP_CODE değişkeni; Docker'da: docker compose logs | grep kurulum")
     try:
         u = auth.create_admin(body.username, body.password)
     except ValueError as e:
