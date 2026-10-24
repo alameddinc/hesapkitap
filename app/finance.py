@@ -820,6 +820,24 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
 
+    # 1z) Zekât günü / ek kontrol günü yaklaşıyor
+    try:
+        from app import zakat
+
+        for z in zakat.upcoming_checks():
+            when = "bugün" if z["days_left"] == 0 else f"{z['days_left']} gün sonra" if z["days_left"] > 0 else f"{-z['days_left']} gün önceydi"
+            if z["kind"] == "zekat":
+                out.append({"level": "uyari", "title": f"🌙 {z['name']}: zekât günü {when} ({_tl(z['amount'])})",
+                            "detail": f"{z['date'][8:10]}.{z['date'][5:7]}.{z['date'][:4]} · {z['hijri']}. Verince Zekât sayfasında \"Ödeme ekle\".",
+                            "link": "zekat"})
+            else:
+                out.append({"level": "uyari", "title": f"🌙 {z['name']}: zekât kontrolü {when}",
+                            "detail": f"{z['date'][8:10]}.{z['date'][5:7]}.{z['date'][:4]} · {z['hijri']}. Bugünkü toplamla yeniden hesapla; "
+                                      f"fark {_tl(z['amount'])}" + (" — tamamla." if z["amount"] > 0 else " — ek ödeme gerekmiyor."),
+                            "link": "zekat"})
+    except Exception:  # noqa: BLE001 - zekât (fiyat servisi) özeti bozmasın
+        pass
+
     # 2a) Maaş görünmeyen aylar: ilk ve son maaş arasında boşluk → o aylara ait döküm eksik
     sal = sorted({e["month"] for e in db.list_entries() if e["kind"] == INCOME and e["category"] == "Maaş" and not e["skipped"]})
     if len(sal) >= 2:

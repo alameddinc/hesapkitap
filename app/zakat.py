@@ -93,6 +93,8 @@ def _init(c) -> None:
     if "cost" not in cols:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN cost REAL")
     pcols = {r[1] for r in c.execute("PRAGMA table_info(zakat_people)")}
+    if "check_date" not in pcols:  # ihtiyat: ek kontrol günü (ör. yıl başı belirsizse ikinci olası zekât günü)
+        c.execute("ALTER TABLE zakat_people ADD COLUMN check_date DATE")
     if "is_minor" not in pcols:  # ergenlik öncesi çocuk: Hanefî'de zekât düşmez (varlıkları yine görünür)
         c.execute("ALTER TABLE zakat_people ADD COLUMN is_minor INTEGER NOT NULL DEFAULT 0")
     if "estimated" not in cols:
@@ -379,7 +381,16 @@ def compute(today: date | None = None) -> dict:
                     "due_hijri": to_hijri(due), "days_left": (due - today).days,
                     "progress": min(100.0, round((today - start).days / LUNAR_YEAR_DAYS * 100, 1)),
                     "zakat": zakat, "paid": paid, "remaining": round(max(0.0, zakat - paid), 2)}
+        check = None
+        if p.get("check_date") and not minor:
+            cd = date.fromisoformat(p["check_date"])
+            since = (cd - timedelta(days=LUNAR_YEAR_DAYS)).isoformat()
+            paid_recent = round(sum(x["amount"] for x in p["payments"] if since < x["pay_date"] <= cd.isoformat()), 2)
+            now_zakat = round(total * RATE, 2) if above else 0.0
+            check = {"date": p["check_date"], "hijri": to_hijri(cd), "days_left": (cd - today).days,
+                     "zakat_now": now_zakat, "paid": paid_recent, "difference": round(max(0.0, now_zakat - paid_recent), 2)}
         out.append({"id": p["id"], "name": p["name"], "is_self": bool(p["is_self"]), "note": p["note"], "is_minor": minor,
+                    "check": check,
                     "plus": plus, "minus": minus if st["madhhab"] == "hanefi" else [], "gross": gross, "deduct": deduct,
                     "total": total, "above_nisab": above, "estimate": round(total * RATE, 2) if above else 0.0,
                     "hawl": hawl, "suggest_start": suggest, "payments": p["payments"],
@@ -566,7 +577,7 @@ def add_person(name: str) -> int:
 
 
 def update_person(pid: int, data: dict) -> bool:
-    data = {k: v for k, v in data.items() if k in ("name", "hawl_start", "note", "is_minor")}
+    data = {k: v for k, v in data.items() if k in ("name", "hawl_start", "note", "is_minor", "check_date")}
     if not data:
         return False
     with db.connect() as c:
@@ -645,14 +656,23 @@ def reminders(today: date) -> list[str]:
     msgs = []
     with db.connect() as c:  # yıl başlangıcı girilmemişse fiyat bile çekme
         _init(c)
-        if not c.execute("SELECT 1 FROM zakat_people WHERE hawl_start IS NOT NULL").fetchone():
+        if not c.execute("SELECT 1 FROM zakat_people WHERE hawl_start IS NOT NULL OR check_date IS NOT NULL").fetchone():
             return msgs
     try:
         data = compute(today)
     except Exception:  # noqa: BLE001 - fiyat/hesap hatası diğer hatırlatmaları engellemesin
         log.exception("zekât hesabı")
         return msgs
+    def tl(x: float) -> str:
+        return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
     for p in data["people"]:
+        ck = p.get("check")
+        if ck and ck["days_left"] in (7, 0):
+            when = "BUGÜN" if ck["days_left"] == 0 else "7 gün sonra"
+            msgs.append(f"🌙 <b>Zekât kontrolü</b> · {p['name']}: {date.fromisoformat(ck['date']):%d.%m.%Y} ({ck['hijri']}) — {when}\n"
+                        f"Bugünkü toplamla zekât {tl(ck['zakat_now'])} TL, son bir yılda ödenen {tl(ck['paid'])} TL → "
+                        f"fark: <b>{tl(ck['difference'])} TL</b>")
         h = p["hawl"]
         if not h or h["days_left"] not in (7, 0) or h["remaining"] <= 0:
             continue
@@ -661,3 +681,26 @@ def reminders(today: date) -> list[str]:
         msgs.append(f"🌙 <b>Zekât</b> · {p['name']}: yıl {date.fromisoformat(h['due']):%d.%m.%Y} ({h['due_hijri']}) — {when}\n"
                     f"Güncel hesap: <b>{amount} TL</b> ödenecek")
     return msgs
+
+
+def upcoming_checks(today: date | None = None, window: int = 7) -> list[dict]:
+    """Özet uyarısı: zekât günü ya da ek kontrol günü yaklaşan / yeni geçmiş kişiler (fiyat sadece gerekirse çekilir)."""
+    today = today or date.today()
+    lo, hi = (today - timedelta(days=3)).isoformat(), (today + timedelta(days=window)).isoformat()
+    with db.connect() as c:
+        _init(c)
+        rows = c.execute("SELECT hawl_start, check_date FROM zakat_people WHERE is_minor = 0").fetchall()
+    if not any((r["check_date"] and lo <= r["check_date"] <= hi) or
+               (r["hawl_start"] and lo <= (date.fromisoformat(r["hawl_start"]) + timedelta(days=LUNAR_YEAR_DAYS)).isoformat() <= hi)
+               for r in rows):
+        return []
+    out = []
+    for p in compute(today)["people"]:
+        ck, h = p.get("check"), p.get("hawl")
+        if ck and -3 <= ck["days_left"] <= window:
+            out.append({"name": p["name"], "kind": "kontrol", "date": ck["date"], "hijri": ck["hijri"],
+                        "days_left": ck["days_left"], "amount": ck["difference"]})
+        if h and -3 <= h["days_left"] <= window and h["remaining"] > 0:
+            out.append({"name": p["name"], "kind": "zekat", "date": h["due"], "hijri": h["due_hijri"],
+                        "days_left": h["days_left"], "amount": h["remaining"]})
+    return out
