@@ -1170,10 +1170,7 @@ def net_worth_at(day: date) -> dict:
 
     d = day.isoformat()
     bank, unknown = zakat._bank_at(day)
-    card = 0.0
-    for st in db.list_statements():
-        if st["period_end"] <= d and (not st["paid_at"] or st["paid_at"] > d):
-            card += max(0.0, (st["total_debt"] or 0) - ((st["paid_amount"] or 0) if st["paid_at"] and st["paid_at"] <= d else 0))
+    card = db.card_debt_at(d)
     try:
         px = zakat.historical_prices(day, offline=False)
     except Exception:  # noqa: BLE001 - fiyat yoksa altın/döviz sayılmaz

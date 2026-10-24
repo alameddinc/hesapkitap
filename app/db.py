@@ -1585,6 +1585,23 @@ def interest_charges(period: str) -> list[dict]:
     return out
 
 
+def card_debt_at(d: str) -> float:
+    """O gün kartlara borç: her kartın o tarihe kadar kesilmiş EN SON ekstresi, o gün ödenmemişse (kısmi ödeme düşülür).
+    Eski ekstreler sayılmaz: ödenmeyen kısımları zaten yeni ekstrenin toplamında."""
+    latest: dict[tuple, dict] = {}
+    for st in list_statements():
+        if st["period_end"] <= d:
+            k = (st["bank"], st["card_no"])
+            if k not in latest or st["period_end"] > latest[k]["period_end"]:
+                latest[k] = st
+    total = 0.0
+    for st in latest.values():
+        if st["paid_at"] and st["paid_at"] <= d:
+            continue
+        total += max(0.0, (st["total_debt"] or 0) - (st["paid_amount"] or 0 if st["paid_at"] and st["paid_at"] <= d else 0))
+    return round(total, 2)
+
+
 def card_payments_without_statement() -> list[dict]:
     """Bankadan kart ödemesi yapılmış ama o döneme ait ekstre yüklenmemiş: harcamalar hiç sayılmamış demektir."""
     with connect() as c:
