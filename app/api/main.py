@@ -745,6 +745,11 @@ async def _read_bank_file(file: UploadFile):
         raise HTTPException(422, f"Dosya okunamadı: {e}") from e
     if not rows:
         raise HTTPException(422, "Dosya boş")
+    from app import card_excel
+
+    if card_excel.detect(rows):  # kart işlem dökümü: tutarlar işaretsiz, burada harcamalar gelir sanılırdı
+        raise HTTPException(422, "Bu bir kredi kartı işlem dökümü (hesap hareketi değil). Ekstreler sayfasına bırak; "
+                                 "aylara bölünüp kart harcaması olarak eklenir.")
     return rows
 
 
@@ -1807,8 +1812,19 @@ async def upload_statements(files: list[UploadFile] = File(...), password: str |
         data = await f.read()
         res = {"filename": f.filename}
         name = (f.filename or "").lower()
-        if name.endswith((".xlsx", ".xls", ".csv")):  # tablo dosyası = hesap hareketleri
-            results.append({**res, "status": "account_statement"})
+        if name.endswith((".xlsx", ".xls", ".csv")):  # tablo: kart işlem dökümü mü, hesap hareketleri mi?
+            from app import card_excel
+
+            try:
+                imp = card_excel.import_file(data, f.filename or "kart.xlsx")
+            except Exception:  # noqa: BLE001 - okunamazsa hesap hareketleri akışı denesin
+                imp = None
+            if imp:
+                results.append({**res, "status": "saved", "bank": imp["bank"], "card_no": imp["card_no"],
+                                "card_excel": imp, "txn_count": imp["transactions"],
+                                "message": f"Kart dökümü: {imp['statements']} aylık ekstre, {imp['transactions']} işlem"})
+            else:
+                results.append({**res, "status": "account_statement"})
             continue
         kind = _statement_kind(data, tried)
         if kind == "account":  # vadesiz hesap dökümü: arayüz hesap hareketleri önizlemesine yönlendirir

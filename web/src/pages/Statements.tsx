@@ -6,6 +6,7 @@ import BankImport from "../components/BankImport";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
+import StatementHelp from "../components/StatementHelp";
 
 export default function Statements() {
   const ui = useUI();
@@ -43,6 +44,7 @@ export default function Statements() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ekstreler</h1>
+      <StatementHelp />
 
       <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files); }}
@@ -94,7 +96,14 @@ export default function Statements() {
                 {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500">Zaten yüklü, atlandı.</div>}
                 {r.status === "account_statement" && <div className="text-blue-700 dark:text-blue-400">Hesap dökümü → aşağıda önizle ve içe aktar</div>}
-                {r.status === "saved" && (
+                {r.status === "saved" && r.card_excel && (
+                  <div className="text-stone-500">
+                    Kart dökümü (Excel) · {r.bank} {r.card_no}: <b>{r.card_excel.statements} aylık ekstre</b>, {r.card_excel.transactions} işlem
+                    {r.card_excel.range && ` · ${dateTR(r.card_excel.range[0])} – ${dateTR(r.card_excel.range[1])}`}
+                    <div className="text-xs">PDF ekstresi zaten yüklü olan dönemler atlandı; kesim günü {r.card_excel.cut_day}.</div>
+                  </div>
+                )}
+                {r.status === "saved" && !r.card_excel && (
                   <div className="text-stone-500">
                     {r.bank} {r.card_no} · kesim {dateTR(r.period_end!)} · {r.txn_count} işlem · {tl(r.total_debt!)}
                     {!!r.linked && <div className="text-blue-700 dark:text-blue-400">{r.linked} elle girilen kredi kartı gideri bu ekstreyle eşleşti</div>}
