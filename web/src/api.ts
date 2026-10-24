@@ -230,6 +230,7 @@ export interface UploadResult {
   linked?: number;
   ai?: boolean;
   cycle_day?: number;
+  card_excel?: { statements: number; transactions: number; range: [string, string] | null; cut_day: number }; // kart işlem Excel'i
 }
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
