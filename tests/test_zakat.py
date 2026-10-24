@@ -185,3 +185,18 @@ def test_net_worth_at_past_date(client, tmpdb, monkeypatch):
     tmpdb.create_entry({"entry_date": "2026-06-01", "description": "Kira", "amount": 2000, "kind": "gider", "account_id": acc["id"]})
     r = client.get("/api/net-worth/at", params={"month": "2026-04"}).json()
     assert r["cash"] == 12000 and r["net"] == 12000 and r["as_of"].startswith("2026-04")
+
+
+def test_bank_at_includes_card_payments_and_own_transfers(client, tmpdb):
+    from app import zakat
+
+    client.post("/api/accounts", json={"name": "VakıfBank", "kind": "banka", "balance": 10000})
+    acc = client.get("/api/accounts").json()["accounts"][0]
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET as_of = '2026-10-01' WHERE id = ?", (acc["id"],))
+        c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account) VALUES ('2026-09-20', 3000, '1234', 'VakıfBank')")
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account) VALUES ('2026-09-17', 5000, 'VakıfBank')")
+    # 17 Eylül akşamı (aktarım gelmiş): sonra 3000 karta ödendi → 10000 + 3000
+    assert zakat._bank_at(date(2026, 9, 17)) == (13000.0, [])
+    assert zakat._bank_at(date(2026, 9, 20)) == (10000.0, [])
+    assert zakat._bank_at(date(2026, 9, 16)) == (0.0, ["VakıfBank"])  # ilk hareketten önce: bilinmiyor

@@ -416,15 +416,22 @@ def holdings() -> dict:
 # ---------------------------------------------------------------- geçmiş yıllar (kaza zekâtı)
 
 def _bank_at(day: date) -> tuple[float, list[str]]:
-    """O günkü banka/nakit bakiyeleri: bugünkü çapadan geriye (ya da ileriye) hareketlerle. Hareketi o tarihe
+    """O günkü banka/nakit bakiyeleri: bugünkü çapadan geriye (ya da ileriye) hareketlerle. Hareketler: hesaba bağlı
+    gelir/gider + kendi hesaplar arası aktarımlar + karttan ödemeler (bunlar ayrı tablolarda). Hareketi o tarihe
     uzanmayan hesap bilinmiyor sayılır."""
+    from app.bank_import import short_bank
+
     total, unknown = 0.0, []
+    d = day.isoformat()
     with db.connect() as c:
         accs = db.rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' AND as_of IS NOT NULL"))
+        own = db.rows(c.execute("SELECT transfer_date AS date, amount, account FROM own_transfers"))
+        cps = db.rows(c.execute("SELECT pay_date AS date, -amount AS amount, account FROM card_payments"))
         for a in accs:
-            first = c.execute("SELECT MIN(entry_date) FROM entries WHERE account_id = ? AND skipped = 0",
-                              (a["id"],)).fetchone()[0]
-            d = day.isoformat()
+            extra = [x for x in own + cps if short_bank(x["account"]) == a["name"]]
+            dates = [r[0] for r in c.execute("SELECT entry_date FROM entries WHERE account_id = ? AND skipped = 0", (a["id"],))]
+            dates += [x["date"] for x in extra]
+            first = min(dates) if dates else None
             if d < a["as_of"] and (not first or first > d):
                 unknown.append(a["name"])
                 continue
@@ -432,6 +439,7 @@ def _bank_at(day: date) -> tuple[float, list[str]]:
             flows = c.execute("SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) "
                               "FROM entries WHERE account_id = ? AND skipped = 0 AND entry_date > ? AND entry_date <= ?",
                               (a["id"], lo, hi)).fetchone()[0]
+            flows += sum(x["amount"] for x in extra if lo < x["date"] <= hi)
             debt = sum(r["flow"] * r["amount"] for r in db.debt_rows()
                        if r.get("account_id") == a["id"] and lo < r["date"] <= hi and r["step"] != "vazgecildi")
             total += a["balance"] + sign * (flows + debt)
