@@ -197,7 +197,20 @@ def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
 def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) -> list[dict]:
     done = {e["recurring_id"] for e in entries if e["recurring_id"] and e["month"] == month}
     ov = db.recurring_overrides()
-    return [_pending_row(r, month, ov) for r in recurring if is_active(r, month) and r["id"] not in done]
+    # geçmiş ayda maaş geliri hiç yoksa (maaşın yattığı hesabın dökümü yüklenmemiş): maaş kalemi tahmini gelir sayılır;
+    # o ayın gerçek maaşı (döküm) gelince kendiliğinden kalkar
+    salary_seen = any(e["kind"] == INCOME and e["category"] == "Maaş" and e["month"] == month and not e["skipped"] for e in entries)
+    past = month < current_period()
+    out = []
+    for r in recurring:
+        if not is_active(r, month) or r["id"] in done:
+            continue
+        row = _pending_row(r, month, ov)
+        if past and r["kind"] == INCOME and (r["category"] or "") == "Maaş" and not salary_seen:
+            row = {**row, "pending": False, "estimated": True, "source": "estimate",
+                   "description": f"{r['description']} (tahmini, döküm yok)"}
+        out.append(row)
+    return out
 
 
 @_memo
@@ -802,9 +815,10 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                 gaps.append(m)
             m = add_months(m, 1)
         if gaps:
-            out.append({"level": "uyari", "title": f"{len(gaps)} ayda maaş görünmüyor",
-                        "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında maaş geliri yok; o aylarda gelir eksik "
-                                  "görünür. Maaşın o dönem başka bankaya yattıysa, o hesabın bu aylara ait dökümünü yükle.",
+            out.append({"level": "uyari", "title": f"{len(gaps)} ayda maaş dökümü yok",
+                        "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında dökümde maaş yok. "
+                                  "Maaş kalemin varsa o aylarda tahmini sayılır; kesin tutar için maaşın yattığı hesabın bu aylara "
+                                  "ait dökümünü yükle.",
                         "link": "ekstreler"})
 
     # 2b) Hesaptan kart ödemesi var ama ekstresi yok → o dönemin harcamaları hiç sayılmamış
