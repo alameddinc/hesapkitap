@@ -171,6 +171,14 @@ def _pdfs(msg: Message) -> list[tuple[str, bytes]]:
 
 
 def _looks_like_account_statement(text: str) -> bool:
+    from app.dekont import is_dekont
+
+    if is_dekont(text):  # tek işlemin dekontu: döküm değil (bakiyesi yok)
+        return False
+    return _looks_like_account_statement_inner(text)
+
+
+def _looks_like_account_statement_inner(text: str) -> bool:
     t = text.replace("İ", "i").replace("I", "ı").lower()  # Türkçe büyük harf: "İ".lower() birleşik nokta üretir
     # önce başlık: hesap dökümünün işlem açıklamalarında "kredi kartı … son ödeme" geçebilir (kart borcu ödemesi)
     first_row = re.search(r"^\s*\d{2}[./]\d{2}[./]\d{4}\s+\d{2}:\d{2}", t, re.M)  # ilk hareket satırı
@@ -202,6 +210,13 @@ def handle_pdf(name: str, data: bytes) -> str:
             continue
     if text is None:
         raise MailError(f"{name}: PDF açılamadı; şifresi Ayarlar → PDF şifreleri'nde kayıtlı mı?")
+    from app import dekont
+
+    if dekont.is_dekont(text):
+        d = dekont.import_text(text)
+        if d["status"] == "duplicate":
+            return f"Dekont {d['date']} {d['amount']:,.2f} TL: zaten vardı"
+        return f"🧾 Dekont: {d['amount']:,.2f} TL {d['kind']} ({d['bank'] or 'hesap'}) · bakiye değişmedi"
     if _looks_like_account_statement(text):
         res = bank_pdf.parse_account_pdf(data, passwords)
         owners = [res.get("owner_name") or ""] if res.get("owner_name") else []

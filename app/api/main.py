@@ -1809,11 +1809,15 @@ def _statement_kind(data: bytes, passwords: list[str]) -> str | None:
     from app.mailbox import _looks_like_account_statement
     from app.parsers import extract_text
 
+    from app.dekont import is_dekont
+
     for pw in [None, *passwords]:
         try:
             text = extract_text(data, pw)
         except Exception:  # noqa: BLE001 - şifreli: sıradaki
             continue
+        if is_dekont(text):
+            return "dekont"
         return "account" if _looks_like_account_statement(text) else "card"
     return None
 
@@ -1844,6 +1848,15 @@ async def upload_statements(files: list[UploadFile] = File(...), password: str |
                 results.append({**res, "status": "account_statement"})
             continue
         kind = _statement_kind(data, tried)
+        if kind == "dekont":  # tek işlem: hesaba eklenir, bakiye değişmez
+            from app import mailbox
+
+            try:
+                results.append({**res, "status": "saved", "message": mailbox.handle_pdf(f.filename or "dekont.pdf", data),
+                                "dekont": True})
+            except Exception as e:  # noqa: BLE001
+                results.append({**res, "status": "error", "message": str(e)})
+            continue
         if kind == "account":  # vadesiz hesap dökümü: arayüz hesap hareketleri önizlemesine yönlendirir
             if password and remember:
                 db.remember_pdf_password(password)

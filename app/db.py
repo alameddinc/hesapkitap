@@ -1328,6 +1328,19 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     with connect() as c:
         people |= {n for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL")}
     for r in rows:
+        # dekontla önceden eklenmiş aynı işlem: dökümdeki satırla birleşir (iki kez sayılmaz)
+        if acc_id and r["hash"] not in seen and r.get("amount") is not None:
+            with connect() as c:
+                dk = c.execute("SELECT id FROM entries WHERE import_hash LIKE 'dekont:%' AND account_id = ? AND entry_date = ? "
+                               "AND ABS(amount - ?) < 0.01 AND kind = ? LIMIT 1",
+                               (acc_id, r["date"], abs(r["amount"]), "gelir" if r["amount"] > 0 else "gider")).fetchone()
+                if dk:
+                    c.execute("UPDATE entries SET import_hash = ?, note = 'Hesap hareketi (dekontla eşleşti)' WHERE id = ?",
+                              (r["hash"], dk["id"]))
+            if dk:
+                seen.add(r["hash"])
+                stats["tekrar"] += 1
+                continue
         if r["hash"] in seen or (r["hash"].startswith("mail:") and _already_imported(r, people, owners)):
             stats["tekrar"] += 1
             if acc_id:  # eski yükleme hesapsız kaldıysa: tekrar yüklenince hesabına bağlanır
@@ -1451,7 +1464,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         seen.add(r["hash"])
     # hesabın son bakiyesi: dökümdeki en son satırın bakiyesi (kayıtlar yazıldıktan sonra çapalanır)
     with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
-    if with_bal and account:
+    if with_bal and account:  # (dekontlar bu yola girmez: app/dekont.py, bakiyeye dokunmaz)
         d_, _, bal = max(with_bal)
         set_account_balance(short_bank(account), bal, d_, source="dokum")
     return stats

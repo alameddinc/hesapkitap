@@ -230,6 +230,7 @@ export interface UploadResult {
   linked?: number;
   ai?: boolean;
   cycle_day?: number;
+  dekont?: boolean; // tek işlem dekontu: hesaba eklendi, bakiye değişmedi
   card_excel?: { statements: number; transactions: number; range: [string, string] | null; cut_day: number }; // kart işlem Excel'i
 }
 

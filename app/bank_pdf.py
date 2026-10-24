@@ -96,6 +96,11 @@ def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
             continue
     if text is None:
         raise BankPdfError("PDF açılamadı (şifreli olabilir)")
+    from app.dekont import is_dekont
+
+    if is_dekont(text):
+        raise BankPdfError("Bu bir işlem dekontu (tek işlem), hesap dökümü değil. Ekstreler sayfasına bırak: tek işlem "
+                           "olarak eklenir, bakiye değişmez.")
     ruled = parse_rule_based(text)
     if ruled and ruled["verified"]:
         return ruled
