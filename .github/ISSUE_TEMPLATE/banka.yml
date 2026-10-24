@@ -1,0 +1,26 @@
+name: 🏦 Bankam okunmuyor
+description: Ekstre ya da hesap dökümü okunamadı / yanlış okundu
+labels: [banka]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Belgeyi yükleme.** Gerçek ekstre kişisel veri içerir. Bunun yerine bankayı, belge türünü ve ne olduğunu yaz;
+        mümkünse belgenin **yapısını** (sütun başlıkları, tarih biçimi) tarif et. Gerekirse senden üzeri kapatılmış bir örnek isteriz.
+  - type: input
+    id: banka
+    attributes: { label: Banka, placeholder: "Ör. Garanti BBVA" }
+    validations: { required: true }
+  - type: dropdown
+    id: tur
+    attributes:
+      label: Belge türü
+      options: [Kredi kartı ekstresi (PDF), Hesap dökümü (PDF), Hesap dökümü (Excel/CSV), Kart işlem dökümü (Excel), Dekont, Diğer]
+    validations: { required: true }
+  - type: textarea
+    id: ne
+    attributes: { label: Ne oldu?, placeholder: "Ör. 'Mutabakat farkı 1.250 TL' dedi / hiç işlem çıkmadı / tutarlar ters" }
+    validations: { required: true }
+  - type: textarea
+    id: yapi
+    attributes: { label: Belgenin yapısı (isteğe bağlı), placeholder: "Ör. sütunlar: Tarih | Açıklama | Borç | Alacak | Bakiye; tarih 01.10.2026" }

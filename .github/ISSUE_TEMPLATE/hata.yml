@@ -1,0 +1,26 @@
+name: 🐞 Hata
+description: Bir şey yanlış çalışıyor
+labels: [hata]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Teşekkürler! ⚠️ **Kişisel belge (ekstre, dekont, fiş) ya da ekran görüntüsünde gerçek ad, IBAN, kart no, tutar paylaşma.** Gerekirse üzerini kapat.
+  - type: textarea
+    id: ne
+    attributes: { label: Ne oldu?, placeholder: "Ör. hesap dökümünü yükledim, harcamalar gelir göründü" }
+    validations: { required: true }
+  - type: textarea
+    id: beklenen
+    attributes: { label: Ne bekliyordun? }
+  - type: input
+    id: banka
+    attributes: { label: Banka ve belge türü, placeholder: "Ör. Halkbank · hesap dökümü PDF / Garanti · kart ekstresi" }
+  - type: dropdown
+    id: kurulum
+    attributes:
+      label: Nerede kullanıyorsun?
+      options: [Render, Railway / Fly, Evde (CasaOS, Synology, Raspberry Pi…), Kendi sunucum (Docker), Başkasının sunucusu]
+  - type: input
+    id: surum
+    attributes: { label: Sürüm, description: "Ayarlar'ın en üstünde yazan kısa kod (ör. 5c2e32e)" }

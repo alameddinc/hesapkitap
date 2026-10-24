@@ -21,6 +21,10 @@
 </p>
 
 <p align="center">
+  🧪 <b>Beta</b> — hata görürsen ya da bankan okunmazsa <a href="https://github.com/alameddinc/hesapkitap/issues/new/choose">issue aç</a>, kısa sürede düzeltiyorum.
+</p>
+
+<p align="center">
   <a href="#-hızlı-kurulum"><b>Kurulum</b></a> ·
   <a href="docs/KURULUM.md"><b>Tek tıkla / evde / VPS</b></a> ·
   <a href="#-ekran-görüntüleri"><b>Ekran görüntüleri</b></a> ·

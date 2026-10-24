@@ -1,0 +1,11 @@
+name: 💡 Öneri
+description: Yeni özellik ya da iyileştirme
+labels: [öneri]
+body:
+  - type: textarea
+    id: ne
+    attributes: { label: Ne istiyorsun?, placeholder: "Ör. kumbarada döviz biriktirebilmek" }
+    validations: { required: true }
+  - type: textarea
+    id: neden
+    attributes: { label: Neden işine yarar? }
