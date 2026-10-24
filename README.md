@@ -40,6 +40,7 @@
 
 ### 📄 Ekstreni bırak
 Kart ekstresi, hesap dökümü, fiş, fatura — **kendisi anlar**. Mutabakat ve bakiye zinciriyle kuruşu kuruşuna doğrular.
+Yapay zekâ anahtarı olmadan da çalışır: fişler sunucuda **yerel OCR** ile okunur.
 
 </td>
 <td width="33%" valign="top">
@@ -135,6 +136,8 @@ Ayrıntılar için başlığa dokun.
 - **Fiş ve fatura** — Fotoğraf çek (uzun fişte birkaç kare), tutar, tarih, işyeri, şube, ürün satırları, ödeme şekli,
   **taksit sayısı** ve yemek kartı markası okunur. Kredi kartıyla ödenen fiş ekstre gelince kart işlemiyle eşleşir; iki kez sayılmaz.
   Fişteki marka ile ekstredeki resmi unvan (ör. Espressolab ↔ NEW TASTE GIDA) öğrenilir.
+  **Anahtarsız:** Gemini anahtarı yoksa (ya da kota dolduysa) fiş ve faturalar sunucuda Tesseract (Türkçe) ile okunur —
+  işyeri, tarih, toplam, ödeme şekli, taksit; belge dışarı çıkmaz.
 - **E-posta otomasyonu** — Ayrı bir posta kutusuna yönlendirilen banka mailleri (e-ekstre, işlem bildirimi, hesap özeti) 10 dakikada
   bir içe aktarılır. Sadece banka alan adından gelen ve DKIM imzası doğrulanan mailler işlenir.
 - **Telegram'dan** — Bota gönderilen PDF içe aktarılır (sadece bağlı sohbetten).
@@ -290,6 +293,7 @@ Aynı `docker compose up -d`; önüne HTTPS yapan bir reverse proxy (Caddy, Ngin
 
 - **Kendi sunucunda** tüm veri o sunucuda, SQLite dosyalarında durur. Dışarıya sadece senin açtığın özellikler konuşur:
   - Gemini anahtarı girersen fiş, fatura ve tanınmayan bankaların ekstreleri okunmak için Google'a gider.
+    Anahtar girmezsen fişler sunucuda yerel OCR ile okunur, hiçbir yere gitmez.
     Tanınan bankaların (VakıfBank, Kuveyt Türk) ekstreleri ve VakıfBank hesap dökümü sunucuda okunur, dışarı çıkmaz.
     Google AI Studio'da faturalandırmayı açarsan (ücretli katman) içerik model eğitiminde kullanılmaz.
   - Anlık ve geçmiş altın/döviz fiyatı için sadece fiyat sorgulanır (finans.truncgil.com, Yahoo Finance); kişisel veri gitmez.
