@@ -2276,7 +2276,8 @@ def _shortcut_file(name: str = "hesapkitap.shortcut") -> str:
 
 @app.get("/api/share/shortcut")
 def shortcut_info():
-    return {"available": os.path.exists(_shortcut_file()), "camera": os.path.exists(_shortcut_file("hesapkitap-fis.shortcut"))}
+    cam = os.path.exists(_shortcut_file("hesapkitap-fis.shortcut"))
+    return {"available": os.path.exists(_shortcut_file()), **({"camera": True} if cam else {})}
 
 
 @app.get("/hesapkitap-fis.shortcut")

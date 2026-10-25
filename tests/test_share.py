@@ -64,3 +64,16 @@ def test_shortcut_download(client, tmp_path, monkeypatch):
     assert client.get("/api/share/shortcut").json() == {"available": True}
     r = client.get("/hesapkitap.shortcut")
     assert r.status_code == 200 and r.content == b"AEA1signed"
+
+
+def test_camera_shortcut_download(client):
+    import os
+
+    from app import system
+
+    assert client.get("/hesapkitap-fis.shortcut").status_code == 404
+    d = os.path.join(os.path.dirname(os.path.abspath(system.SYSTEM_DB)), "shortcuts")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "hesapkitap-fis.shortcut"), "wb").write(b"AEA1cam")
+    assert client.get("/api/share/shortcut").json()["camera"] is True
+    assert client.get("/hesapkitap-fis.shortcut").content == b"AEA1cam"
