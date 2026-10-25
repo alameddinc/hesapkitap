@@ -19,6 +19,9 @@ const splitsOf = (r: unknown) =>
   (r && typeof r === "object" && "splits" in r ? (r as { splits?: { category: string; amount: number }[] }).splits : null) ?? [];
 
 /** Elle gelir/gider girişi. recurring=true ise "her ay" sabit kalem olarak kaydeder. */
+const lastCard = () => { try { return localStorage.getItem("hk:lastCard") ?? ""; } catch { return ""; } };
+const rememberCard = (v: string) => { try { localStorage.setItem("hk:lastCard", v); } catch { /* gizli pencere */ } };
+
 export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved }: {
   row?: Row;
   draft?: EntryDraft;
@@ -41,6 +44,11 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
   const [installments, setInstallments] = useState(row?.installments ?? draft?.installments ?? 1);
+  // hangi kredi kartı: fişte yazıyorsa o, yoksa son seçilen (tek kart varsa o)
+  const [cardLast4, setCardLast4] = useState<string>(row ? row.card_last4 ?? "" : draft?.card_last4 ?? lastCard());
+  const statements = useQuery({ queryKey: ["statements"], queryFn: api.statements });
+  const cards = [...new Map((statements.data ?? []).map((s) => [s.card_no.slice(-4), `${s.bank} ··${s.card_no.slice(-4)}`])).entries()];
+  if (cardLast4 && !cards.some(([k]) => k === cardLast4)) cards.push([cardLast4, `··${cardLast4} (fişten)`]);
   const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => fetch("/api/wallets").then((r) => r.json() as Promise<
     { id: number; name: string; card_type: string; current: number }[]>) });
   const [walletId, setWalletId] = useState<number | null>(row?.wallet_id ?? null);
@@ -107,7 +115,9 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
       ...(isRecurring || rec ? { gross_amount: grossMode ? g : null, ...(grossMode ? { advance_pay: advance } : {}) } : {}) };
     if (kind === "gider" && payment === "kart" && !walletId) throw new Error("Hangi karttan ödendiğini seç");
     const pay = kind === "gider" && !isRecurring && !rec
-      ? { payment, wallet_id: payment === "kart" ? walletId : null, installments: payment === "kredi_karti" ? installments : 1 } : {};
+      ? { payment, wallet_id: payment === "kart" ? walletId : null, installments: payment === "kredi_karti" ? installments : 1,
+          card_last4: payment === "kredi_karti" ? (cardLast4 || (cards.length === 1 ? cards[0][0] : null)) : null } : {};
+    if (payment === "kredi_karti" && cardLast4) rememberCard(cardLast4);
     const who = !isRecurring && !rec ? { counterparty: person.trim() || null, location: location.trim() || null } : {};
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
@@ -229,6 +239,12 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             )}
             {payment === "kredi_karti" && (
               <div className="mt-2 flex flex-wrap items-center gap-2">
+                {cards.length > 1 && (
+                  <select className="input w-48" aria-label="Kart" value={cardLast4} onChange={(e) => setCardLast4(e.target.value)}>
+                    <option value="">Hangi kart?</option>
+                    {cards.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                  </select>
+                )}
                 <select className="input w-40" aria-label="Taksit" value={installments} onChange={(e) => setInstallments(Number(e.target.value))}>
                   <option value={1}>Tek çekim</option>
                   {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 24].map((n) => <option key={n} value={n}>{n} taksit</option>)}

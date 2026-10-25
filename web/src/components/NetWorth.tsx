@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, CreditCard, Landmark, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
+import type { CardCycle } from "../api";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { useMeta, useSave } from "./hooks";
 import Wallets from "./Wallets";
+import CycleLine from "./CardCycle";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
@@ -13,7 +15,7 @@ interface NW {
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
   credit_cards: { title: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
-    unpaid: number; next_estimate: number | null; next_due: string | null }[];
+    unpaid: number; next_estimate: number | null; next_due: string | null; cycle: CardCycle | null }[];
   stale: string[];
 }
 
@@ -195,8 +197,9 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                         son ekstre {dateTR(c.last_period_end)} · {tl(c.last_total)}
                         {c.unpaid > 0 ? <span className="text-red-600"> · ödenmedi, son ödeme {c.last_due ? dateTR(c.last_due) : "?"}</span>
                           : c.paid_at ? ` · ödendi ${dateTR(c.paid_at)}` : ""}
-                        {c.next_estimate != null && ` · sonraki ~${tl(c.next_estimate)}${c.next_due ? ` (son ödeme ${dateTR(c.next_due)})` : ""}`}
+                        {c.next_estimate != null && !c.cycle && ` · sonraki ~${tl(c.next_estimate)}${c.next_due ? ` (son ödeme ${dateTR(c.next_due)})` : ""}`}
                       </span>
+                      {c.cycle && <CycleLine c={c.cycle} />}
                     </span>
                     <span className={cx("shrink-0 tabular-nums", c.unpaid > 0 ? "text-red-600" : "text-stone-500")}>
                       {c.unpaid > 0 ? `−${tl(c.unpaid)}` : "borç yok"}

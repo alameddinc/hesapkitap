@@ -29,6 +29,7 @@ export interface DocResult {
   branch?: string | null;
   payment_card?: string | null;
   installments?: number;
+  card_last4?: string | null;
   legal_name?: string | null;
   // fatura
   provider?: string;
@@ -53,6 +54,7 @@ export function docToDraft(r: DocResult): EntryDraft {
         payment: r.payment === "nakit" ? "nakit" : r.payment === "kart" || (r.installments ?? 1) > 1 ? "kredi_karti" : r.payment === "yemek_karti" ? "kart" : undefined,
         wallet_hint: r.payment === "yemek_karti" ? r.payment_card ?? "yemek" : null,
         installments: r.installments && r.installments > 1 ? r.installments : undefined,
+        card_last4: r.card_last4 ?? null,
         legal_name: r.legal_name,
         items: r.items,
         location: r.address ?? null,

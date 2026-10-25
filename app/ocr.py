@@ -158,10 +158,11 @@ def parse(data: bytes, mime: str, categories: list[str], more: list[tuple[bytes,
     payment = "yemek_karti" if any(k in u for k in _MEAL) else \
         "kart" if re.search(r"KRED[İI] KART|K\.KART|BANKA KART|KART\b|POS", u) else \
         "nakit" if re.search(r"NAK[İI]T", u) else "bilinmiyor"
+    card = re.search(r"(?:\d{4,6}|[*X]{4})[\s*X]*[*X]{4,}[\s*X]*(\d{4})\b", u)  # 454360******6081 / **** **** 6081
     inst = re.search(r"(\d{1,2})\s*TAKS[İI]T|TAKS[İI]T\s*(?:SAYISI)?\s*:?\s*(\d{1,2})", u)
     n = int(inst.group(1) or inst.group(2)) if inst else 1
     return {"type": "receipt", "merchant": _merchant(lines), "date": _date(text), "total": _total(lines),
             "payment": payment, "payment_card": next((k.title() for k in _MEAL if k in u), None) if payment == "yemek_karti" else None,
-            "installments": n if 2 <= n <= 36 else 1, "category": "Diğer" if "Diğer" in categories else categories[0],
+            "installments": n if 2 <= n <= 36 else 1, "card_last4": card.group(1) if card else None, "category": "Diğer" if "Diğer" in categories else categories[0],
             "items": _items(lines), "legal_name": None, "address": None, "branch": None, "confidence": "düşük",
             "engine": "yerel"}

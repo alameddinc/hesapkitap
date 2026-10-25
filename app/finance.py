@@ -154,6 +154,7 @@ def _entry_row(e: dict) -> dict:
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
         "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
         "wallet_id": e.get("wallet_id"), "account_id": e.get("account_id"), "installments": e.get("installments") or 1,
+        "card_last4": e.get("card_last4"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
@@ -520,6 +521,75 @@ def card_projection() -> dict:
 
 
 @_memo
+def _next_cut(st: dict) -> tuple[date, date | None]:
+    """Son ekstreden sonraki kesim ve son ödeme günü (ekstrede yazmıyorsa bir ay sonrası)."""
+    pe = date.fromisoformat(st["period_end"])
+    if st.get("next_period_end"):
+        cut = date.fromisoformat(st["next_period_end"])
+    else:
+        y, m = divmod(pe.year * 12 + pe.month, 12)
+        cut = pe.replace(year=y, month=m + 1, day=min(pe.day, 28))
+    due = st.get("next_due_date")
+    if due:
+        return cut, date.fromisoformat(due)
+    if st.get("due_date"):
+        return cut, cut + (date.fromisoformat(st["due_date"]) - pe)
+    return cut, None
+
+
+def open_cycles(today: date | None = None, proj: dict | None = None, entries: list[dict] | None = None) -> dict:
+    """Kesilmemiş ekstre, kart başına: bugüne kadar ne birikti, kesimde tahminen ne olur.
+
+    Bugüne kadar = son ekstreden devreden taksitler + abonelikler + son kesimden beri elle/fişle girilen kart harcamaları.
+    Kesimde = taksit + abonelik + değişken harcama; değişken için geçmiş dönemlerin medyanı ile "şu ana kadarki +
+    kalan günlerin payı"ndan büyüğü alınır (harcama girilmese de tahmin geçmişin altına düşmez).
+    Hangi karttan ödendiği belli olmayan harcamalar en çok kullanılan karta yazılır ve ayrıca gösterilir.
+    """
+    today = today or date.today()
+    proj = card_projection() if proj is None else proj
+    entries = db.list_entries() if entries is None else entries
+    latest = _latest_statement_per_account()
+    out: dict[str, dict] = {}
+    for acc, p in proj.items():
+        st = latest[acc]
+        start = date.fromisoformat(st["period_end"])
+        cut, due = _next_cut(st)
+        if (due or cut + timedelta(days=10)) < today:  # son ödemesi de geçmiş: o ekstre yüklenmemiş, tahmin anlamsız
+            continue
+        nxt = add_months(p["latest_period"], 1)
+        inst = sum(i["amount"] for i in p["installments"] if i["month"] == nxt)
+        subs = sum(x["amount"] for x in p["subscriptions"])
+        out[acc] = {"account": acc, "bank": p["bank"], "start": start.isoformat(), "cut": cut.isoformat(),
+                    "due": due.isoformat() if due else None, "days_left": max(0, (cut - today).days),
+                    "days_total": max(1, (cut - start).days), "installments": _round(inst), "subscriptions": _round(subs),
+                    "spent": 0.0, "unassigned": 0.0, "entries": 0, "variable_avg": p["variable_avg"]}
+    if not out:
+        return {}
+    main = max(out.values(), key=lambda c: c["variable_avg"])["account"]
+    aliases = db.card_aliases()
+    for e in entries:
+        if e["payment"] != "kredi_karti" or e["kind"] != EXPENSE or e["linked_txn_id"] or e["skipped"]:
+            continue
+        last4 = e.get("card_last4")
+        acc = aliases.get(last4) if last4 else None
+        acc = acc if acc in out else None
+        c = out.get(acc or main)
+        if not c or not (c["start"] < e["entry_date"] <= today.isoformat()):
+            continue
+        amt = e["amount"] / max(1, int(e.get("installments") or 1))  # taksitliyse bu ekstreye ilk taksit düşer
+        c["spent"] += amt
+        c["entries"] += 1
+        if not acc:
+            c["unassigned"] += amt
+    for c in out.values():
+        pace = c["variable_avg"] * c["days_left"] / c["days_total"]
+        c["variable_at_cut"] = _round(max(c["variable_avg"], c["spent"] + pace))
+        c["spent"], c["unassigned"] = _round(c["spent"]), _round(c["unassigned"])
+        c["so_far"] = _round(c["installments"] + c["subscriptions"] + c["spent"])
+        c["at_cut"] = _round(c["installments"] + c["subscriptions"] + c["variable_at_cut"])
+    return out
+
+
 def plan(months: int = 6, today: date | None = None) -> dict:
     today = today or date.today()
     start = current_period(today)
@@ -528,6 +598,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
     statements = db.list_statements()
     recurring = db.list_recurring()
     entries = db.list_entries()
+    cycles = open_cycles(today, proj, entries)
     card_rows = db.card_transactions()
     bills = db.list_bills()
     goals = db.list_goals(active_only=True)
@@ -555,7 +626,15 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             for s in p["subscriptions"]:
                 lines.append({"type": "abonelik", "kind": EXPENSE, "amount": s["amount"],
                               "description": s["description"], "account": acc})
-            if p["variable_avg"] > 0:
+            cyc = cycles.get(acc)
+            if cyc and ym(cyc["cut"]) == m:
+                # açık dönem: elle/fişle girilenler zaten tek seferlik satır; burada sadece kalan tahmini pay
+                rest = _round(max(0.0, cyc["variable_at_cut"] - cyc["spent"]))
+                if rest > 0:
+                    lines.append({"type": "degisken", "kind": EXPENSE, "amount": rest, "account": acc,
+                                  "description": f"{acc} kesime kadar tahmini kart harcaması"
+                                                 + (f" (girilen {_round(cyc['spent']):,.0f} ₺ hariç)".replace(",", ".") if cyc["spent"] else "")})
+            elif p["variable_avg"] > 0:
                 lines.append({"type": "degisken", "kind": EXPENSE, "amount": p["variable_avg"],
                               "description": f"{acc} tahmini kart harcaması (son {p['variable_periods']} dönem medyanı)",
                               "account": acc})
@@ -622,15 +701,10 @@ def plan(months: int = 6, today: date | None = None) -> dict:
                 s["paid_amount"] is not None and s["paid_amount"] >= s["total_debt"] - 0.01):
             dues.append({"date": s["due_date"], "account": s["card_no"], "bank": s["bank"],
                          "amount": s["total_debt"], "min_payment": s["min_payment"], "estimated": False})
-    for acc, p in proj.items():
-        if p["next_due_date"] and p["next_due_date"] >= today.isoformat():
-            est_month = ym(p["next_period_end"]) if p["next_period_end"] else add_months(p["latest_period"], 1)
-            est = next((l for mm in result if mm["month"] == est_month for l in [mm]), None)
-            amount = None
-            if est:
-                amount = _round(sum(l["amount"] for l in est["lines"] if l.get("account") == acc))
-            dues.append({"date": p["next_due_date"], "account": acc, "bank": p["bank"],
-                         "amount": amount, "min_payment": None, "estimated": True})
+    for acc, c in cycles.items():
+        if c["due"] and c["due"] >= today.isoformat():
+            dues.append({"date": c["due"], "account": acc, "bank": c["bank"], "amount": c["at_cut"],
+                         "min_payment": None, "estimated": True, "cycle": c})
 
     return {"months": result, "dues": sorted(dues, key=lambda d: d["date"]),
             "projection": list(proj.values()), "recurring": recurring}
@@ -697,7 +771,7 @@ def payables(today: date | None = None) -> list[dict]:
             out.append({"type": "estimate", "id": None, "title": f"{d['bank']} {d['account']}",
                         "subtitle": "Sonraki ekstre (tahmini)", "amount": d["amount"] or 0, "min_payment": None,
                         "due_date": d["date"], "days_left": (date.fromisoformat(d["date"]) - today).days,
-                        "paid_amount": None, "paid_at": None, "status": "tahmini"})
+                        "paid_amount": None, "paid_at": None, "status": "tahmini", "cycle": d.get("cycle")})
     order = {"gecikti": 0, "kismi": 1, "bekliyor": 2, "tahmini": 3, "odendi": 4}
     return sorted(out, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
 
@@ -1156,7 +1230,7 @@ def net_worth(today: date | None = None) -> dict:
         credit_cards.append({"title": title, "bank": st["bank"], "card_no": card_no, "last_period_end": st["period_end"],
                              "last_total": st["total_debt"], "last_due": st["due_date"], "paid_at": st["paid_at"],
                              "unpaid": unpaid, "next_estimate": nxt["amount"] if nxt else None,
-                             "next_due": nxt["due_date"] if nxt else None})
+                             "next_due": nxt["due_date"] if nxt else None, "cycle": nxt.get("cycle") if nxt else None})
     # dökümü daha önce yüklenmiş ama bakiyesi bilinmeyen bankalar (tampon özelliğinden önceki yüklemeler)
     from app.bank_import import short_bank
 

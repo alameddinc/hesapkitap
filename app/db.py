@@ -1,6 +1,7 @@
 """SQLite katmanı. Tek dosya: data/ekstre.db"""
 import hashlib
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -307,6 +308,7 @@ DEFAULT_ITEM_RULE = ("sigara, marlboro, parliament, camel, winston, kent, lucky 
                      "tekel, samsun, maltepe, viceroy, west, davidoff, muratti, iqos, heets, terea, tütün, puro, sarmalık")
 
 MIGRATIONS = [
+    ("entries", "card_last4", "TEXT"),  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
@@ -577,7 +579,8 @@ def _name_score(a: str, b: str) -> float:
 
 def _free_card_txns(c) -> list[dict]:
     return rows(c.execute(
-        """SELECT t.id, t.txn_date, t.description, t.amount, t.category, t.category_manual, t.note, s.card_no AS account
+        """SELECT t.id, t.txn_date, t.description, t.amount, t.category, t.category_manual, t.note, s.card_no AS account,
+                  t.card
            FROM transactions t JOIN statements s ON s.id = t.statement_id
            WHERE t.txn_type = 'harcama' AND t.is_deleted = 0
              AND t.id NOT IN (SELECT linked_txn_id FROM entries WHERE linked_txn_id IS NOT NULL)"""))
@@ -592,6 +595,18 @@ def _apply_link(c, entry: dict, txn: dict) -> None:
                   (entry["category"], note, txn["id"]))
     else:
         c.execute("UPDATE transactions SET note = ? WHERE id = ?", (note, txn["id"]))
+
+
+def card_aliases() -> dict[str, str]:
+    """Kartın son 4 hanesi → ekstrenin kart numarası (ek kartlar da ana karta: eşin kartıyla ödenen fiş o ekstreye düşer)."""
+    out: dict[str, str] = {}
+    with connect() as c:
+        for card_no, card in c.execute("SELECT DISTINCT s.card_no, t.card FROM transactions t "
+                                       "JOIN statements s ON s.id = t.statement_id"):
+            out[card_no[-4:]] = card_no
+            if card and re.search(r"\d{4}$", card):
+                out.setdefault(card[-4:], card_no)
+    return out
 
 
 def auto_link() -> int:
@@ -612,7 +627,9 @@ def auto_link() -> int:
                      and _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS]
             if not cands:
                 continue
-            best = min(cands, key=lambda t: (_days(t["txn_date"], e["entry_date"]),
+            last4 = e.get("card_last4")
+            best = min(cands, key=lambda t: (bool(last4) and last4 not in (t["account"][-4:], (t["card"] or "")[-4:]),
+                                             _days(t["txn_date"], e["entry_date"]),
                                              -_name_score(t["description"], e["description"])))
             _apply_link(c, e, best)
             free.remove(best)
@@ -688,7 +705,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
-                "installments")
+                "installments", "card_last4")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:

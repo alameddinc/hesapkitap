@@ -431,6 +431,7 @@ class EntryIn(BaseModel):
     legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
     account_id: int | None = None  # banka/nakit hesabı
     installments: int = Field(1, ge=1, le=36)  # kredi kartı taksit sayısı
+    card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # hangi kredi kartı (fişte yazıyorsa okunur)
 
 
 class EntryPatch(BaseModel):
@@ -447,6 +448,7 @@ class EntryPatch(BaseModel):
     counterparty: str | None = None  # kişi (Transferler / borç defteri)
     account_id: int | None = None  # banka/nakit hesabı
     installments: int | None = Field(None, ge=1, le=36)
+    card_last4: str | None = Field(None, pattern=r"^\d{4}$")
 
 
 @app.post("/api/entries")
@@ -851,6 +853,8 @@ def _check_wallet(data: dict) -> None:
         data["wallet_id"] = None
     if data.get("payment") == "kredi_karti":
         data["account_id"] = None
+    elif "payment" in data:
+        data["card_last4"] = None  # kart son 4 hanesi sadece kredi kartı ödemesinde anlamlı
     if data.get("account_id") and not any(a["id"] == data["account_id"] for a in db.list_accounts()):
         raise HTTPException(422, "Hesap bulunamadı")
 

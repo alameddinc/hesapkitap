@@ -3,6 +3,7 @@ import { Check, CreditCard, FileText, Receipt, HandCoins } from "lucide-react";
 import { api, type Payable } from "../api";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
+import CycleLine from "./CardCycle";
 
 function DueBadge({ p }: { p: Payable }) {
   if (p.status === "odendi") return <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">✓ Ödendi {p.paid_at && dateTR(p.paid_at).slice(0, 5)}</span>;
@@ -50,6 +51,7 @@ export default function Payables() {
               <div className="mt-0.5 text-xs text-stone-500">
                 {p.subtitle} · son ödeme {dateTR(p.due_date)}
                 {p.min_payment != null && p.min_payment < p.amount && p.status !== "odendi" && ` · asgari ${tl(p.min_payment)}`}
+                {p.cycle && <CycleLine c={p.cycle} />}
                 {p.has_file && p.id && <> · <a className="text-blue-600 underline" href={`/api/bills/${p.id}/file`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>dosya</a></>}
               </div>
             </button>

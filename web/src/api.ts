@@ -16,6 +16,7 @@ export interface Row {
   bank: string | null;
   installment: string | null;
   installments?: number; // elle girilen kart harcamasının taksit sayısı
+  card_last4?: string | null; // hangi kredi kartı (son 4 hane)
   fx: string | null;
   note: string | null;
   deleted: boolean;
@@ -117,6 +118,21 @@ export interface Summary {
 
 export type PlanLineType = "kart_gercek" | "taksit" | "abonelik" | "degisken" | "sabit" | "tek_seferlik" | "fatura" | "tasarruf_notu";
 
+/** Kesilmemiş ekstre: bugüne kadar biriken ve kesimde tahmini (kart başına). */
+export interface CardCycle {
+  account: string;
+  cut: string;
+  due: string | null;
+  days_left: number;
+  installments: number;
+  subscriptions: number;
+  spent: number;
+  unassigned: number;
+  entries: number;
+  so_far: number;
+  at_cut: number;
+}
+
 export interface Payable {
   type: "statement" | "bill" | "estimate" | "debt";
   id: number | null;
@@ -133,6 +149,7 @@ export interface Payable {
   category?: string | null;
   note?: string | null;
   description?: string | null;
+  cycle?: CardCycle | null; // tahmini ekstre: dökümü
 }
 
 export interface BillDraft {

@@ -13,6 +13,7 @@ export interface EntryDraft {
   gross?: boolean; // maaş: brüt seçeneği açık gelsin
   payment?: "kredi_karti" | "nakit" | "havale" | "kart";
   installments?: number; // kredi kartı taksit sayısı (fişte yazıyorsa)
+  card_last4?: string | null; // fişte yazan kart numarasının son 4 hanesi
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[]; // fiş satırları
   location?: string | null; // fişteki işyeri adresi

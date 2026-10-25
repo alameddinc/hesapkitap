@@ -163,6 +163,12 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
                                  "output": usage.get("candidatesTokenCount")}
 
 
+def card_last4(v) -> str | None:
+    """Kartın son 4 hanesi: "6081", "****6081", 6081 → "6081"; okunamadıysa None."""
+    m = re.search(r"(\d{4})\D*$", str(v or ""))
+    return m.group(1) if m else None
+
+
 def _installments(v) -> int:
     try:
         n = int(float(str(v).strip()))
@@ -214,6 +220,7 @@ SADECE şu JSON'u döndür:
   "subscriber_no": "abone/tesisat no veya null",
   "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
   "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
+  "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4543 **** **** 6081 → \"6081\"); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
   "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "amount": 0.00, "split": null}}],
@@ -281,6 +288,7 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
         "payment": raw.get("payment") or "bilinmiyor",
         "payment_card": (raw.get("payment_card") or "").strip()[:40] or None,
         "installments": _installments(raw.get("installments")),
+        "card_last4": card_last4(raw.get("card_last4")),
         "category": category,
         "items": _items(raw),
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
