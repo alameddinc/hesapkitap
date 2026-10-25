@@ -198,7 +198,7 @@ export default function Planning() {
                     </span>
                   </span>
                   <span className={cx("shrink-0 whitespace-nowrap tabular-nums", r.kind === "gelir" && "text-green-700 dark:text-green-400")}>
-                    {r.kind === "gelir" ? "+" : "−"}{tl(r.amount)}
+                    {r.kind === "gelir" ? "+" : "−"}{tl(r.amount_now ?? r.amount)}
                   </span>
                 </button>
               </li>

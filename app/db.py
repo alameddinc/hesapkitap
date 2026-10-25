@@ -100,6 +100,14 @@ CREATE TABLE IF NOT EXISTS recurring_overrides (
     PRIMARY KEY (recurring_id, month)
 );
 -- Maaş değişiklikleri (zam, iş değişikliği): o dönemden itibaren geçerli brüt. Eski aylar eski brütle kalır.
+-- Sabit kalemin tutar değişikliği (kira artışı, aidat zammı): o aydan itibaren yeni tutar; geçmiş aylar eskisiyle kalır
+CREATE TABLE IF NOT EXISTS recurring_changes (
+    id INTEGER PRIMARY KEY,
+    recurring_id INTEGER NOT NULL REFERENCES recurring(id) ON DELETE CASCADE,
+    from_month TEXT NOT NULL,
+    amount REAL NOT NULL CHECK (amount >= 0),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS salary_changes (
     id INTEGER PRIMARY KEY,
     recurring_id INTEGER NOT NULL REFERENCES recurring(id) ON DELETE CASCADE,
@@ -1178,7 +1186,31 @@ def planned_amount(r: dict, month: str, overrides: dict | None = None, changes: 
         year = int(paid[:4])
         grosses, resets = gross_schedule(r, year, changes)
         return net_schedule(year, grosses, resets)["months"][int(paid[5:7]) - 1]["net"]
-    return r["amount"]
+    return amount_at(r, month)
+
+
+def amount_at(r: dict, month: str) -> float:
+    """Brütsüz sabit kalemin o aydaki tutarı: o aya kadarki son tutar değişikliği, yoksa şablon."""
+    past = [c for c in amount_changes(r["id"]) if c["from_month"] <= month]
+    return past[-1]["amount"] if past else r["amount"]
+
+
+def amount_changes(recurring_id: int) -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT id, from_month, amount FROM recurring_changes WHERE recurring_id = ? "
+                              "ORDER BY from_month, id", (recurring_id,)))
+
+
+def add_amount_change(recurring_id: int, from_month: str, amount: float) -> int:
+    with connect() as c:  # aynı aya ikinci değişiklik: öncekinin yerine geçer
+        c.execute("DELETE FROM recurring_changes WHERE recurring_id = ? AND from_month = ?", (recurring_id, from_month))
+        return c.execute("INSERT INTO recurring_changes (recurring_id, from_month, amount) VALUES (?, ?, ?)",
+                         (recurring_id, from_month, amount)).lastrowid
+
+
+def delete_amount_change(cid: int) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM recurring_changes WHERE id = ?", (cid,))
 
 
 # ---------------------------------------------------------------- maaş değişiklikleri

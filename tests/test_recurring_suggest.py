@@ -44,3 +44,21 @@ def test_dismiss(client, tmpdb):
     assert len(s) == 1 and s[0]["amount"] == 1055
     client.post("/api/recurring/suggestions/dismiss", json={"key": s[0]["key"]})
     assert finance.recurring_suggestions(TODAY) == []
+
+
+def test_amount_change_from_month_and_drift(client, tmpdb):
+    rid = client.post("/api/recurring", json={"description": "Kira", "amount": 30000, "kind": "gider", "category": "Kira & Aidat",
+                                              "day_of_month": 17, "start_month": "2026-01"}).json()["id"]
+    r = next(x for x in tmpdb.list_recurring() if x["id"] == rid)
+    # iki ay üst üste 35.000 ödendi → güncelleme önerisi
+    for m in ("2026-08", "2026-09"):
+        client.post("/api/entries", json={"entry_date": f"{m}-17", "description": "Kira", "amount": 35000, "kind": "gider",
+                                          "category": "Kira & Aidat", "payment": "havale"})
+    d = finance.recurring_drift(TODAY)
+    assert d == [{"recurring_id": rid, "description": "Kira", "kind": "gider", "old": 30000, "new": 35000, "from_month": "2026-08"}]
+    client.post(f"/api/recurring/{rid}/changes", json={"from_month": "2026-08", "amount": 35000})
+    assert finance.recurring_drift(TODAY) == []
+    assert tmpdb.planned_amount(r, "2026-07") == 30000 and tmpdb.planned_amount(r, "2026-12") == 35000  # geçmiş aylar eskisi
+    ch = client.get(f"/api/recurring/{rid}/changes").json()
+    client.delete(f"/api/recurring-changes/{ch[0]['id']}")
+    assert tmpdb.planned_amount(r, "2026-12") == 30000

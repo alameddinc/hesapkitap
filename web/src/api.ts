@@ -206,6 +206,7 @@ export interface Recurring {
   advance_pay?: number; // maaş peşin (memur)
   gross_amount?: number | null;
   account_id?: number | null;
+  amount_now?: number; // bu ayki tutar (tutar değişikliği / brütten net sonrası)
 }
 
 export interface Plan {

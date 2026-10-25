@@ -8,6 +8,7 @@ import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
+import AmountChanges from "./AmountChanges";
 import SplitEditor from "./SplitEditor";
 import MarkDonation from "./MarkDonation";
 import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
@@ -316,6 +317,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           </div>
         )}
         {rec && rec.kind === "gelir" && !!rec.gross_amount && <SalaryChanges rid={rec.id} />}
+        {rec && !rec.gross_amount && <AmountChanges rid={rec.id} base={rec.amount} />}
         {isRecurring && !isGross && (
           <p className="rounded-lg bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
             Tutar her ay değişiyorsa (ör. brüt maaşta net) burada ortalama/beklenen tutarı yaz. O ay yatınca "Gerçekleşti"de

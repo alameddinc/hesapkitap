@@ -1951,6 +1951,34 @@ class SuggestionAccept(BaseModel):
     amount: float | None = Field(None, gt=0)
 
 
+class AmountChange(BaseModel):
+    from_month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    amount: float = Field(ge=0)
+
+
+@app.get("/api/recurring/{rid}/changes")
+def list_amount_changes(rid: int):
+    return db.amount_changes(rid)
+
+
+@app.post("/api/recurring/{rid}/changes")
+def add_amount_change(rid: int, body: AmountChange):
+    if not any(r["id"] == rid for r in db.list_recurring()):
+        raise HTTPException(404, "Sabit kalem bulunamadı")
+    return {"id": db.add_amount_change(rid, body.from_month, body.amount)}
+
+
+@app.delete("/api/recurring-changes/{cid}")
+def delete_amount_change(cid: int):
+    db.delete_amount_change(cid)
+    return {"ok": True}
+
+
+@app.get("/api/recurring/drift")
+def recurring_drift():
+    return finance.recurring_drift()
+
+
 @app.get("/api/recurring/suggestions")
 def recurring_suggestions():
     return finance.recurring_suggestions()

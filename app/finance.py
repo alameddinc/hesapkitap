@@ -638,6 +638,34 @@ def recurring_suggestions(today: date | None = None) -> list[dict]:
     return sorted(out, key=lambda x: -x["amount"])
 
 
+def recurring_drift(today: date | None = None) -> list[dict]:
+    """Sabit kalemin son iki gerçekleşen ayı aynı yeni tutarla geldiyse (kira artışı): "güncelleyeyim mi?" önerisi."""
+    today = today or date.today()
+    entries = db.list_entries()
+    out = []
+    for r in db.list_recurring():
+        if r.get("gross_amount") or (r["end_month"] and r["end_month"] < ym(today)):
+            continue
+        by_month: dict[str, float] = defaultdict(float)
+        for e in entries:
+            if e["recurring_id"] == r["id"] and not e["skipped"]:
+                by_month[e["month"]] += e["amount"]
+        last2 = sorted(by_month)[-2:]
+        if len(last2) < 2 or add_months(last2[0], 1) != last2[1]:
+            continue
+        a, b = by_month[last2[0]], by_month[last2[1]]
+        if abs(a - b) > max(1.0, b * 0.01):
+            continue
+        planned = db.amount_at(r, add_months(last2[1], 1))
+        if abs(b - planned) <= planned * 0.03:
+            continue
+        prev = [m for m in sorted(by_month) if abs(by_month[m] - b) > max(1.0, b * 0.01)]
+        start = next((m for m in sorted(by_month) if m > (prev[-1] if prev else "")), last2[0])
+        out.append({"recurring_id": r["id"], "description": r["description"], "kind": r["kind"], "old": _round(planned),
+                    "new": _round(b), "from_month": start})
+    return out
+
+
 def accept_recurring_suggestion(key: str, description: str | None = None, amount: float | None = None) -> int:
     """Öneriyi sabit kaleme çevir; geçmiş hareketleri ona bağla (her ay bir kayıt), yenileri match_key ile bağlanır."""
     s = next((x for x in recurring_suggestions() if x["key"] == key), None)
@@ -678,7 +706,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
     span = [add_months(start, i) for i in range(months)]
     proj = card_projection()
     statements = db.list_statements()
-    recurring = db.list_recurring()
+    recurring = [{**r, "amount_now": db.planned_amount(r, start)} for r in db.list_recurring()]
     entries = db.list_entries()
     cycles = open_cycles(today, proj, entries)
     card_rows = db.card_transactions()
