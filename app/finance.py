@@ -590,6 +590,88 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
     return out
 
 
+def recurring_suggestions(today: date | None = None) -> list[dict]:
+    """Hareketlerde her ay tekrarlayan ama sabit kalem olmayan ödemeler (kira, aidat, kreş, kira geliri…).
+
+    Kural: son verili aya kadar son 4 ayın en az 3'ünde var, son 3 ayın aylık toplamları birbirine %25'ten yakın.
+    Tutar = son ayın toplamı (kira artışı ve ikiye bölünmüş ödeme doğru çıkar), gün = ödeme günlerinin medyanı.
+    """
+    today = today or date.today()
+    entries = [e for e in db.list_entries() if not e["skipped"] and e["amount"] > 0 and not e.get("debt_id")
+               and e["payment"] not in ("kredi_karti", "kart") and e["entry_date"] <= today.isoformat()
+               and e["category"] not in ("Nakit Çekim", "Transfer")]  # ATM'den çekilen para sabit kalem değil
+    recs = db.list_recurring()
+    taken = {r["match_key"] for r in recs if r.get("match_key")}
+    names = {(r["kind"], r["description"].strip().casefold()) for r in recs}
+    dismissed = set(_json_setting("recurring_dismissed", []))
+    groups: dict[tuple, list] = defaultdict(list)
+    for e in entries:
+        groups[(e["kind"], db.recurring_key(e["description"], e["counterparty"]))].append(e)
+    out = []
+    for (kind, key), es in groups.items():
+        if key in ("p:", "m:") or key in taken or f"{kind}:{key}" in dismissed or any(e["recurring_id"] for e in es):
+            continue
+        if any((kind, e["description"].strip().casefold()) in names for e in es):
+            continue
+        by_month: dict[str, float] = defaultdict(float)
+        for e in es:
+            by_month[e["entry_date"][:7]] += e["amount"]
+        last = max(by_month)
+        if last < add_months(ym(today), -2):  # artık ödenmiyor
+            continue
+        window = [add_months(last, -i) for i in range(4)]
+        if sum(m in by_month for m in window) < 3:
+            continue
+        recent = [by_month[m] for m in window[:3] if m in by_month]
+        if min(recent) < 100 or max(recent) > min(recent) * 1.25:
+            continue
+        days = sorted(int(e["entry_date"][8:10]) for e in es if e["entry_date"][:7] in window)
+        cats = [e["category"] for e in es if e["category"] and e["category"] != "Kategorisiz"]
+        cat = max(set(cats), key=cats.count) if cats else None
+        accs = [e["account_id"] for e in es if e["account_id"]]
+        who = next((e["counterparty"] for e in reversed(es) if e["counterparty"]), None)
+        label = (f"{cat.split(' & ')[0]} ({who})" if cat and who else who or cat or es[-1]["description"])[:60]
+        out.append({"key": f"{kind}:{key}", "kind": kind, "description": label, "category": cat,
+                    "amount": _round(by_month[last]), "day_of_month": days[len(days) // 2], "months": len(by_month),
+                    "first_month": min(by_month), "last_month": last, "account_id": max(set(accs), key=accs.count) if accs else None,
+                    "history": [{"month": m, "amount": _round(by_month[m])} for m in sorted(by_month)[-6:]]})
+    return sorted(out, key=lambda x: -x["amount"])
+
+
+def accept_recurring_suggestion(key: str, description: str | None = None, amount: float | None = None) -> int:
+    """Öneriyi sabit kaleme çevir; geçmiş hareketleri ona bağla (her ay bir kayıt), yenileri match_key ile bağlanır."""
+    s = next((x for x in recurring_suggestions() if x["key"] == key), None)
+    if not s:
+        raise KeyError(key)
+    kind, mkey = key.split(":", 1)
+    rid = db.create_recurring({"description": (description or s["description"]).strip(), "amount": amount or s["amount"],
+                               "kind": kind, "category": s["category"], "day_of_month": s["day_of_month"],
+                               "start_month": s["first_month"], "account_id": s["account_id"], "match_key": mkey})
+    seen = set()
+    with db.connect() as c:
+        for e in sorted(db.list_entries(), key=lambda e: (e["entry_date"], -e["amount"])):
+            if e["kind"] != kind or e["recurring_id"] or e["skipped"] or e["payment"] in ("kredi_karti", "kart"):
+                continue
+            if db.recurring_key(e["description"], e["counterparty"]) != mkey or e["month"] in seen:
+                continue
+            seen.add(e["month"])
+            c.execute("UPDATE entries SET recurring_id = ? WHERE id = ?", (rid, e["id"]))
+    return rid
+
+
+def dismiss_recurring_suggestion(key: str) -> None:
+    keys = _json_setting("recurring_dismissed", [])
+    if key not in keys:
+        db.set_setting("recurring_dismissed", __import__("json").dumps([*keys, key]))
+
+
+def _json_setting(key: str, default):
+    import json
+
+    v = db.get_setting(key)
+    return json.loads(v) if v else default
+
+
 def plan(months: int = 6, today: date | None = None) -> dict:
     today = today or date.today()
     start = current_period(today)
@@ -893,6 +975,17 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         elif x["status"] == "kismi":
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
+
+    # 2b) Her ay tekrarlayan ama sabit kalem olmayan ödemeler: planlama gelecek ayları bilmiyor
+    try:
+        sug = recurring_suggestions(today)
+    except Exception:  # noqa: BLE001 - öneri hesabı özet sayfasını bozmasın
+        sug = []
+    if sug:
+        top = ", ".join(f"{(s['category'] or 'ödeme').split(' & ')[0]} {_tl(s['amount'])}" for s in sug[:2])  # kişi adı yok
+        out.append({"level": "bilgi", "title": f"Her ay tekrarlayan {len(sug)} ödeme sabit kalem değil",
+                    "detail": f"{top}{' …' if len(sug) > 2 else ''}. Sabit kalem yaparsan gelecek aylar planlamaya girer.",
+                    "link": "plan"})
 
     # 1z) Zekât günü / ek kontrol günü yaklaşıyor
     try:

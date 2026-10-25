@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, Calculator, ChevronDown, PiggyBank, Plus, Repeat } from "lucide-react";
 import Simulator from "../components/Simulator";
+import RecurringSuggestions from "../components/RecurringSuggestions";
 import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type PlanLineType, type PlanMonth } from "../api";
@@ -176,6 +177,8 @@ export default function Planning() {
           <MonthCard key={m.month} m={m} open={open === m.month} onToggle={() => setOpen(open === m.month ? null : m.month)} />
         ))}
       </ul>
+
+      <RecurringSuggestions />
 
       {p && (
         <section className="card p-3 sm:p-4">

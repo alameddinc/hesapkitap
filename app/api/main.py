@@ -1943,6 +1943,33 @@ def delete_statement(sid: int):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- sabit kalem önerileri
+
+class SuggestionAccept(BaseModel):
+    key: str
+    description: str | None = Field(None, max_length=60)
+    amount: float | None = Field(None, gt=0)
+
+
+@app.get("/api/recurring/suggestions")
+def recurring_suggestions():
+    return finance.recurring_suggestions()
+
+
+@app.post("/api/recurring/suggestions/accept")
+def accept_recurring_suggestion(body: SuggestionAccept):
+    try:
+        return {"id": finance.accept_recurring_suggestion(body.key, body.description, body.amount)}
+    except KeyError as e:
+        raise HTTPException(404, "Öneri bulunamadı") from e
+
+
+@app.post("/api/recurring/suggestions/dismiss")
+def dismiss_recurring_suggestion(body: SuggestionAccept):
+    finance.dismiss_recurring_suggestion(body.key)
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- yüklemeyi geri al
 
 @app.get("/api/imports")

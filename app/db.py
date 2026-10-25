@@ -308,7 +308,8 @@ DEFAULT_ITEM_RULE = ("sigara, marlboro, parliament, camel, winston, kent, lucky 
                      "tekel, samsun, maltepe, viceroy, west, davidoff, muratti, iqos, heets, terea, tütün, puro, sarmalık")
 
 MIGRATIONS = [
-    ("entries", "card_last4", "TEXT"),  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
+    ("entries", "card_last4", "TEXT"),
+    ("recurring", "match_key", "TEXT"),  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
@@ -773,6 +774,17 @@ def _months_around(period: str) -> list[str]:
     return out
 
 
+def recurring_key(description: str | None, counterparty: str | None) -> str:
+    """Tekrarlayan hareketin kimliği: kişiye gidense kişi, değilse işyeri adı (tarih/referans gibi değişen kısımlar atılır)."""
+    from app.categorize import fold_key
+    from app.textnorm import merchant_name
+
+    if counterparty:
+        return "p:" + fold_key(counterparty)
+    words = re.sub(r"[\d/.:*-]+", " ", merchant_name(description or "")).split()[:3]
+    return "m:" + fold_key(" ".join(words))
+
+
 def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
     """Elle girilen kayıt bir sabit kalemle aynı adı taşıyorsa (ör. "Maaş"), tarihine en yakın dönemin
     o sabit kalemine bağla: maaş bir gün erken/geç yatsa da her dönemde tam bir kez sayılır."""
@@ -781,8 +793,10 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
     if data.get("recurring_id") or data.get("skipped"):
         return
     name = (data.get("description") or "").strip().casefold()
+    key = recurring_key(data.get("description"), data.get("counterparty"))
     rec = next((r for r in c.execute("SELECT * FROM recurring").fetchall()
-                if r["kind"] == data.get("kind") and r["description"].strip().casefold() == name), None)
+                if r["kind"] == data.get("kind") and (r["description"].strip().casefold() == name
+                                                       or (r["match_key"] and r["match_key"] == key))), None)
     if not rec:
         return
     d = _date.fromisoformat(str(data["entry_date"])[:10])
@@ -873,7 +887,7 @@ def delete_entry(entry_id: int) -> None:
 # ---------------------------------------------------------------- recurring
 
 RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note", "wallet_id", "account_id",
-                    "gross_amount", "advance_pay")
+                    "gross_amount", "advance_pay", "match_key")
 
 
 def list_recurring() -> list[dict]:
