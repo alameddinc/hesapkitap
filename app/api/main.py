@@ -2269,14 +2269,23 @@ async def share(request: Request, file: list[UploadFile] = File(...)):
     return {"messages": out}
 
 
-def _shortcut_file() -> str:
+def _shortcut_file(name: str = "hesapkitap.shortcut") -> str:
     """İmzalı iOS kısayolu (scripts/make_shortcut.py ile Mac'te üretilir; sunucuya özel adres içerir, repoda yok)."""
-    return os.path.join(os.path.dirname(os.path.abspath(system.SYSTEM_DB)), "shortcuts", "hesapkitap.shortcut")
+    return os.path.join(os.path.dirname(os.path.abspath(system.SYSTEM_DB)), "shortcuts", name)
 
 
 @app.get("/api/share/shortcut")
 def shortcut_info():
-    return {"available": os.path.exists(_shortcut_file())}
+    return {"available": os.path.exists(_shortcut_file()), "camera": os.path.exists(_shortcut_file("hesapkitap-fis.shortcut"))}
+
+
+@app.get("/hesapkitap-fis.shortcut")
+def shortcut_camera_download():
+    """"Fiş çek" kısayolu: kamerayı açar, fişi gönderir."""
+    f = _shortcut_file("hesapkitap-fis.shortcut")
+    if not os.path.exists(f):
+        raise HTTPException(404, "Kısayol bu sunucuda hazır değil")
+    return FileResponse(f, filename="Fiş çek.shortcut", media_type="application/octet-stream")
 
 
 @app.get("/hesapkitap.shortcut")

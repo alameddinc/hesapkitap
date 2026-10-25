@@ -16,7 +16,7 @@ export default function ShareSetup() {
     body: JSON.stringify({ name: "iPhone Paylaş" }) }).then((r) => r.json() as Promise<{ token: string }>), (r) => setToken(r.token));
   const del = useSave((id: number) => fetch(`/api/settings/tokens/${id}`, { method: "DELETE" }), () => ui.toast("Anahtar silindi"));
   const url = `${window.location.origin}/api/share`;
-  const sc = useQuery({ queryKey: ["shortcut"], queryFn: () => fetch("/api/share/shortcut").then((r) => r.json() as Promise<{ available: boolean }>) });
+  const sc = useQuery({ queryKey: ["shortcut"], queryFn: () => fetch("/api/share/shortcut").then((r) => r.json() as Promise<{ available: boolean; camera?: boolean }>) });
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => ui.toast("Kopyalandı"));
   return (
     <section className="card space-y-3 p-4">
@@ -51,6 +51,23 @@ export default function ShareSetup() {
               </li>
               <li>Artık PDF ya da fotoğrafta <b>Paylaş → HesapKitap'a gönder</b>.</li>
             </ol>
+          </div>
+        )}
+        {sc.data?.camera && (
+          <div className="mt-2 space-y-2 rounded-lg bg-green-50/60 p-3 dark:bg-green-950/20">
+            <p className="font-medium">📸 Fiş çek: iki dokunuşla fiş gönder</p>
+            <p className="text-xs text-stone-600 dark:text-stone-400">
+              Kamerayı açar, çektiğin fişi HesapKitap'a gönderir; okunur ve "Telefondan gelenler"e düşer. Aynı anahtarı kullanır
+              (yukarıda oluşturduysan tekrar yapıştır).
+            </p>
+            <a className="btn-primary inline-flex px-3 py-1 text-xs" href="/hesapkitap-fis.shortcut">"Fiş çek" kısayolunu ekle</a>
+            <p className="text-xs text-stone-600 dark:text-stone-400">Sonra en hızlı yere koy:</p>
+            <ul className="list-disc space-y-1 pl-5 text-xs text-stone-600 dark:text-stone-400">
+              <li><b>Eylem düğmesi</b> (iPhone 15 Pro ve sonrası): Ayarlar → Eylem Düğmesi → Kısayol → <b>Fiş çek</b>.</li>
+              <li><b>Kilit ekranı</b>: kilit ekranına basılı tut → Özelleştir → widget ekle → Kısayollar → <b>Fiş çek</b>.</li>
+              <li><b>Ana ekran</b>: boş yere basılı tut → + → Kısayollar widget'ı → <b>Fiş çek</b>.</li>
+              <li><b>Arkaya dokun</b>: Ayarlar → Erişilebilirlik → Dokunma → Arkaya Dokun → İki Kez → <b>Fiş çek</b>.</li>
+            </ul>
           </div>
         )}
         <p className="mt-2 text-xs text-stone-500">{sc.data?.available ? "Olmazsa elle kurulum:" : "Elle kurulum:"}</p>
