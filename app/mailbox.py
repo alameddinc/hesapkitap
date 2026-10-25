@@ -242,6 +242,8 @@ def handle_pdf(name: str, data: bytes) -> str:
         d = dekont.import_text(text)
         if d["status"] == "duplicate":
             return f"Dekont {d['date']} {d['amount']:,.2f} TL: zaten vardı"
+        if d["status"] == "updated":
+            return f"🧾 Dekont {d['amount']:,.2f} TL: önceki kayıt güncellendi ({d['counterparty'] or 'kişi okunamadı'})"
         return f"🧾 Dekont: {d['amount']:,.2f} TL {d['kind']} ({d['bank'] or 'hesap'}) · bakiye değişmedi"
     if _looks_like_account_statement(text):
         res = bank_pdf.parse_account_pdf(data, passwords)

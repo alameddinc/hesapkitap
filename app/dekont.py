@@ -66,19 +66,39 @@ def parse(text: str) -> dict:
     desc = " · ".join(x for x in (who, purpose, kind_txt) if x)[:120] or "Dekont"
     ref = _field(text, "SORGU NO", "REFERANS", "İŞLEM NO") or ""
     return {"date": d.isoformat(), "amount": amount, "kind": "gelir" if incoming else "gider", "counterparty": who,
-            "description": desc, "bank": bank_of(text), "ref": re.sub(r"\W", "", ref)[:30]}
+            "description": desc, "purpose": purpose, "bank": bank_of(text), "ref": re.sub(r"\W", "", ref)[:30]}
+
+
+def _title(name: str) -> str:
+    """'ELİF ŞAHİN' → 'Elif Şahin' (Türkçe i/ı doğru)."""
+    if not name.isupper():
+        return name
+    return " ".join(w[:1] + w[1:].replace("I", "ı").replace("İ", "i").lower() for w in name.split())
 
 
 def import_text(text: str) -> dict:
-    """Dekontu tek işlem olarak ekle (bakiye değişmez). Aynı dekont tekrar yüklenirse eklenmez."""
+    """Dekontu tek işlem olarak ekle (bakiye değişmez). Aynı dekont tekrar yüklenirse eklenmez; aynı gün ve tutardaki
+    eski/eksik dekont kaydı (ör. kişisi okunamamış) yeni kayıt açılmadan güncellenir."""
     p = parse(text)
     acc_id = db.ensure_account(p["bank"]) if p["bank"] else None
     h = f"dekont:{p['date']}:{p['amount']:.2f}:{p['ref']}"
+    who = db.known_counterparty(_title(p["counterparty"])) if p["counterparty"] else None
+    cp = db.get_counterparty(who) if who else None
+    category = (cp or {}).get("category") or "Kategorisiz"
+    desc = " · ".join(x for x in (who, _title(p["purpose"]) if p["purpose"] else None) if x) or p["description"]
     with db.connect() as c:
-        if c.execute("SELECT 1 FROM entries WHERE import_hash = ?", (h,)).fetchone():
-            return {**p, "status": "duplicate"}
-    db.create_entry({"entry_date": p["date"], "description": p["description"], "amount": p["amount"], "kind": p["kind"],
-                     "category": "Kategorisiz", "payment": "havale" if p["kind"] == "gider" else None,
+        old = c.execute("SELECT id, import_hash, counterparty, category FROM entries WHERE import_hash LIKE ? ORDER BY id LIMIT 1",
+                        (f"dekont:{p['date']}:{p['amount']:.2f}:%",)).fetchone()
+        if old and old["import_hash"] == h and old["counterparty"]:
+            return {**p, "counterparty": who, "status": "duplicate"}
+        if old:
+            c.execute("UPDATE entries SET import_hash = ?, description = ?, counterparty = COALESCE(?, counterparty), "
+                      "category = CASE WHEN category IS NULL OR category = 'Kategorisiz' THEN ? ELSE category END, "
+                      "account_id = COALESCE(account_id, ?), payment = COALESCE(payment, ?) WHERE id = ?",
+                      (h, desc[:120], who, category, acc_id, "havale" if p["kind"] == "gider" else None, old["id"]))
+            return {**p, "counterparty": who, "status": "updated"}
+    db.create_entry({"entry_date": p["date"], "description": desc[:120], "amount": p["amount"], "kind": p["kind"],
+                     "category": category, "payment": "havale" if p["kind"] == "gider" else None,
                      "note": "Dekont (bakiye değişmedi; döküm gelince birleşir)", "import_hash": h,
-                     "counterparty": p["counterparty"], "account_id": acc_id})
-    return {**p, "status": "saved"}
+                     "counterparty": who, "account_id": acc_id})
+    return {**p, "counterparty": who, "status": "saved"}

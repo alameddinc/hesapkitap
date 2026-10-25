@@ -46,3 +46,21 @@ def test_dekont_upload_keeps_balance_and_merges_with_statement(client, tmpdb, mo
     with tmpdb.connect() as c:
         assert c.execute("SELECT COUNT(*) FROM entries WHERE ABS(amount - 4850) < 0.01").fetchone()[0] == 1
     assert st["tekrar"] == 1
+
+
+def test_dekont_matches_known_person_and_repairs_old_entry(client, tmpdb, monkeypatch):
+    import app.parsers as parsers
+
+    # kişiye daha önce dökümden havale gitmiş ve kategori verilmiş
+    client.post("/api/entries", json={"entry_date": "2026-10-10", "description": "Ali Örnek", "amount": 4850, "kind": "gider",
+                                      "category": "Sağlık", "payment": "havale", "counterparty": "Ali Örnek"})
+    client.put("/api/transfers/people/Ali Örnek", json={"category": "Sağlık"})
+    # dekont desteğinden önce yüklenmiş, kişisi okunamamış eski kayıt
+    tmpdb.create_entry({"entry_date": "2026-10-24", "description": "PARA TRANSFERİ - GİDEN FAST ...", "amount": 4850,
+                        "kind": "gider", "category": "Kategorisiz", "import_hash": "dekont:2026-10-24:4850.00:eski"})
+    monkeypatch.setattr(parsers, "extract_text", lambda data, pw=None: DEKONT)
+    r = client.post("/api/statements/upload", files={"files": ("Dekont.pdf", b"%PDF", "application/pdf")}).json()[0]
+    assert r["status"] == "saved" and "güncellendi" in r["message"]
+    es = [e for e in tmpdb.list_entries() if e["entry_date"] == "2026-10-24"]
+    assert len(es) == 1
+    assert (es[0]["counterparty"], es[0]["category"], es[0]["description"]) == ("Ali Örnek", "Sağlık", "Ali Örnek · Kira")
