@@ -18,6 +18,8 @@ interface Preview {
   bank?: string;
   chain_bad?: number[];
   warning?: string | null; // ör. kart dökümü olabilir (harcamalar gelir görünür)
+  balance_change?: { account: string; current: number; new: number; date: string } | null;
+  checks?: string[]; // şüpheli değişiklik: içe aktarmadan önce onay istenir
 }
 
 const LABEL: Record<string, string> = {
@@ -57,11 +59,13 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
   const [pv, setPv] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [sure, setSure] = useState(false); // şüpheli değişiklik onayı
 
   const preview = async (f: File, mapping?: Preview["mapping"], headerRow?: number, pw?: string) => {
     setBusy(true);
     setErr(null);
     try {
+      setSure(false);
       setPv(await postForm<Preview>("/api/bank-import/preview", f, {
         ...(mapping ? { mapping: JSON.stringify(mapping), header_row: String(headerRow ?? 0) } : {}),
         ...(pw ?? password ? { password: (pw ?? password)! } : {}),
@@ -135,6 +139,20 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
           </div>
           {pv.profile_saved && <p className="text-xs text-green-700 dark:text-green-400">Bu bankanın biçimi hatırlandı.</p>}
           </>)}
+          {pv.balance_change && !pv.checks?.length && (
+            <p className="text-xs text-stone-500">
+              {pv.balance_change.account} bakiyesi {tl(pv.balance_change.current)} → <b>{tl(pv.balance_change.new)}</b> ({dateTR(pv.balance_change.date)} itibarıyla)
+            </p>
+          )}
+          {!!pv.checks?.length && (
+            <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+              {pv.checks.map((c) => <p key={c}>⚠️ {c}</p>)}
+              <label className="flex items-center gap-2 font-medium">
+                <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
+                Kontrol ettim, içe aktar (yanlışsa Ekstreler → Son yüklemeler'den geri alınır)
+              </label>
+            </div>
+          )}
           {pv.warning && (
             <p className="rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
               ⚠️ {pv.warning}
@@ -162,7 +180,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
             </table>
           </div>
           <div className="flex gap-2">
-            <button className="btn-primary" disabled={!pv.total || run.isPending}
+            <button className="btn-primary" disabled={!pv.total || run.isPending || (!!pv.checks?.length && !sure)}
               onClick={() => run.mutate(undefined, { onError: (e) => setErr(e.message) })}>
               {pv.total} hareketi içe aktar
             </button>

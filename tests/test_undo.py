@@ -76,3 +76,20 @@ def test_failed_upload_partial_writes_are_undoable(tmpdb):
     assert b["label"] == "Bozuk" and b["counts"]["entries"]["added"] == 1
     assert undo.undo(b["id"])["ok"]
     assert not tmpdb.list_entries()
+
+
+def test_balance_check_warns_on_suspicious_changes(tmpdb):
+    from app.api.main import _balance_check
+
+    tmpdb.set_account_balance("Halkbank", 126000, "2026-10-01", "dokum")
+    row = lambda d, bal: {"date": d, "amount": -10, "balance": bal, "description": "x", "type": "gider", "hash": d}
+    ok = _balance_check([row("2026-10-05", 125990), row("2026-10-06", 125980)], "Halkbank")
+    assert ok["checks"] == [] and ok["balance_change"]["new"] == 125980
+    zero = _balance_check([row("2026-10-05", 10), row("2026-10-06", 0)], "Halkbank")
+    assert any("→ 0" in c for c in zero["checks"])
+    jump = _balance_check([row("2026-10-05", 300000), row("2026-10-06", 400000)], "Halkbank")
+    assert any("büyük değişiklik" in c for c in jump["checks"])
+    one = _balance_check([row("2026-10-05", 125990)], "Halkbank")
+    assert any("dekont" in c for c in one["checks"])
+    old = _balance_check([row("2026-09-05", 0), row("2026-09-06", 0)], "Halkbank")  # eski döküm bakiyeyi değiştirmez
+    assert old["checks"] == [] and old["balance_change"] is None

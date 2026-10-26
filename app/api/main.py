@@ -755,6 +755,30 @@ async def _read_bank_file(file: UploadFile):
     return rows
 
 
+def _balance_check(rows: list[dict], account: str) -> dict:
+    """İçe aktarmadan önce: bu döküm hesabın bakiyesini nasıl değiştirecek? Şüpheliyse uyarılar (onay istenir)."""
+    from app.bank_import import short_bank
+
+    warnings = []
+    if len(rows) == 1:
+        warnings.append("Belgede tek hareket var: bu bir dekont olabilir. Dekontsa Ekstreler'e bırak; bakiyeye dokunmadan "
+                        "tek işlem olarak eklenir.")
+    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
+    acc = next((a for a in db.list_accounts() if a["name"] == short_bank(account)), None) if account else None
+    change = None
+    if with_bal and acc and acc["as_of"]:
+        d, _, new = max(with_bal)
+        cur = acc["current"] if acc["current"] is not None else acc["balance"]
+        if d >= acc["as_of"]:  # daha eski döküm bakiyeyi değiştirmez
+            change = {"account": acc["name"], "current": round(cur, 2), "new": round(new, 2), "date": d}
+            if abs(new) < 0.01 and abs(cur) >= 1000:
+                warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → 0 olacak. Belge doğru mu?")
+            elif abs(new - cur) > max(abs(cur) * 0.5, 20000):
+                warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → {new:,.2f} ₺ olacak (büyük değişiklik). "
+                                "Arada yüklenmemiş bir dönem ya da yanlış belge olabilir.")
+    return {"balance_change": change, "checks": warnings}
+
+
 @app.post("/api/bank-import/preview")
 async def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form(None),
                               header_row: int | None = Form(None), password: str | None = Form(None)):
@@ -776,7 +800,8 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
             if r["type"] in ("gelir", "gider"):
                 r["who"] = bank_import.counterparty(r["description"], r["amount"], [meta.get("owner_name")] if meta.get("owner_name") else _owners())
         return {"pdf": True, **meta, "header_row": 0, "columns": [], "mapping": {}, "profile_saved": False,
-                "total": len(parsed), "counts": counts, "sample": parsed[:200], "raw_preview": []}
+                "total": len(parsed), "counts": counts, "sample": parsed[:200], "raw_preview": [],
+                **_balance_check(parsed, meta.get("bank") or "")}
 
     rows = await _read_bank_file(file)
     det = bank_import.detect(rows)
