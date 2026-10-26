@@ -105,3 +105,13 @@ def test_year_summary(client, tmpdb):
     assert y["categories"][0] == {"name": "Kira & Aidat", "amount": 50000, "count": 2, "share": 100}
     assert y["expense_change"] == 400 and y["years"] == [2026, 2025]
     assert client.get("/api/year-summary?year=2025").json()["income"] == 40000
+
+
+def test_year_summary_ignores_future_installments(client, tmpdb, monkeypatch):
+    from app import finance
+
+    monkeypatch.setattr(finance, "current_period", lambda today=None: "2026-10")
+    client.post("/api/entries", json={"entry_date": "2026-10-05", "description": "Telefon", "amount": 12000, "kind": "gider",
+                                      "category": "Elektronik", "payment": "kredi_karti", "installments": 6})
+    y = finance.year_summary(2026)
+    assert y["years"] == [2026] and y["expense"] == 2000 and y["months"] == 1

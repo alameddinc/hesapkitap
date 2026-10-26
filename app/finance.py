@@ -1426,8 +1426,10 @@ def _pct(now: float, before: float) -> str:
 def year_summary(year: int) -> dict:
     """Yıllık özet (İstatistik): toplamlar, aylık ortalama, en yüksek/düşük ay, kategoriler, işyerleri, faiz,
     zekât ve sadaka, geçen yıla göre değişim. Dönemler ay dönümüne göredir."""
+    cur = current_period()
     all_rows = transactions(None)
-    live = [r for r in all_rows if not r.get("skipped") and not r.get("pending") and not r.get("linked")]
+    live = [r for r in all_rows if not r.get("skipped") and not r.get("pending") and not r.get("linked")
+            and r["month"] <= cur]  # gelecek dönemlere düşen taksit parçaları yıllık özete girmez
     years = sorted({int(r["month"][:4]) for r in live}, reverse=True)
 
     def of(y: int) -> list[dict]:
