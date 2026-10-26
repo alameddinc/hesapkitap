@@ -62,6 +62,13 @@ async def require_login(request: Request, call_next):
         # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
         if user["must_change_password"] and path != "/api/settings/password":
             return JSONResponse({"detail": "password_change_required"}, status_code=403)
+        if user.get("member_of"):  # ortak defter üyesi: sahibin kurallarıyla (defterin içinde) sınırlı
+            from app import book
+
+            with db.use_space(system.user_db_path(user), user):
+                why = book.denied(request.method, path)
+            if why:
+                return JSONResponse({"detail": why}, status_code=403)
     if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
         with db.use_space(system.user_db_path(user), user):
             response = await call_next(request)
@@ -191,8 +198,9 @@ def register(body: RegisterIn, request: Request, response: Response):
     if not system.valid_invite(body.code):
         auth.record_fail(ip)
         raise HTTPException(403, "Davet kodu geçersiz, kullanılmış ya da süresi dolmuş")
-    try:
-        u = auth.create_user(body.username, body.password)
+    inv = system.invite(body.code) or {}
+    try:  # ortak defter davetiyse: kayıt olan, daveti oluşturanın defterine üye olur
+        u = auth.create_user(body.username, body.password, member_of=inv.get("member_of"))
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     if not system.use_invite(body.code, u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
@@ -391,14 +399,23 @@ class CardTxnPatch(BaseModel):
     note: str | None = None
     description: str | None = None
     is_deleted: bool | None = None
+    hidden: bool | None = None  # ortak defterde üyeye gösterme (sadece sahip)
     create_rule: bool = False  # kategori değişince aynı işyeri için kural oluştur
 
 
 @app.patch("/api/card-transactions/{txn_id}")
 def patch_card_txn(txn_id: int, body: CardTxnPatch):
+    from app import book
+
     fields = body.model_dump(exclude_unset=True, exclude={"create_rule"})
-    if "is_deleted" in fields:
-        fields["is_deleted"] = int(fields["is_deleted"])
+    if book.member():  # üye: görebildiği işlemde sadece kategori ve not
+        if not book.can_see_txn(txn_id):
+            raise HTTPException(404, "İşlem bulunamadı")
+        fields = {k: v for k, v in fields.items() if k in ("category", "note")}
+        body.create_rule = False
+    for k in ("is_deleted", "hidden"):
+        if k in fields:
+            fields[k] = int(fields[k])
     db.update_card_transaction(txn_id, fields)
     rule = None
     if body.create_rule and body.category:
@@ -449,6 +466,7 @@ class EntryPatch(BaseModel):
     account_id: int | None = None  # banka/nakit hesabı
     installments: int | None = Field(None, ge=1, le=36)
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")
+    hidden: bool | None = None  # ortak defterde üyeye gösterme (sadece sahip)
 
 
 @app.post("/api/entries")
@@ -461,6 +479,8 @@ def create_entry(body: EntryIn):
     if data.get("counterparty"):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     _check_wallet(data)
+    if (u := db.current_user()):
+        data["created_by"] = u["id"]  # ortak defterde kimin eklediği
     eid = db.create_entry(data)
     if body.items and body.kind == "gider":
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
@@ -482,7 +502,19 @@ def create_entry(body: EntryIn):
 
 @app.patch("/api/entries/{entry_id}")
 def patch_entry(entry_id: int, body: EntryPatch):
+    from app import book
+
     data = body.model_dump(exclude_unset=True)
+    if (m := book.member()):  # üye: görebildiği kayıt; başkasının kaydında sadece kategori/not/açıklama
+        if not book.can_see_entry(entry_id):
+            raise HTTPException(404, "Kayıt bulunamadı")
+        with db.connect() as c:
+            owner = c.execute("SELECT created_by FROM entries WHERE id = ?", (entry_id,)).fetchone()[0]
+        data.pop("hidden", None)
+        if owner != m["id"]:
+            data = {k: v for k, v in data.items() if k in book.ENTRY_MEMBER_FIELDS}
+    if "hidden" in data:
+        data["hidden"] = int(bool(data["hidden"]))
     if "entry_date" in data:
         data["entry_date"] = data["entry_date"].isoformat()
     if "skipped" in data:
@@ -1632,6 +1664,10 @@ class ItemRuleIn(BaseModel):
 
 @app.get("/api/splits/{target}/{pid}")
 def get_splits(target: Literal["entry", "card"], pid: int):
+    from app import book
+
+    if book.member() and not (book.can_see_entry(pid) if target == "entry" else book.can_see_txn(pid)):
+        return []
     return db.splits_map().get((target, pid), [])
 
 
@@ -2019,19 +2055,24 @@ def year_summary(year: int | None = None):
     return finance.year_summary(year or date.today().year)
 
 
+def _digest_key(month: str) -> str:
+    u = db.current_user()  # ortak defterde herkes kendi kapatır
+    return f"digest_seen:{month}" + (f":{u['id']}" if u and u.get("member_of") else "")
+
+
 @app.get("/api/digest")
 def digest():
     """Yeni dönemin ilk haftası: biten dönemin özeti (kapatılmadıysa). Başka zaman null."""
     cur = finance.current_period()
     prev = finance.add_months(cur, -1)
-    if (date.today() - finance.period_bounds(cur)[0]).days > 7 or db.get_setting(f"digest_seen:{prev}"):
+    if (date.today() - finance.period_bounds(cur)[0]).days > 7 or db.get_setting(_digest_key(prev)):
         return None
     return finance.month_digest(prev)
 
 
 @app.post("/api/digest/dismiss")
 def digest_dismiss():
-    db.set_setting(f"digest_seen:{finance.add_months(finance.current_period(), -1)}", date.today().isoformat())
+    db.set_setting(_digest_key(finance.add_months(finance.current_period(), -1)), date.today().isoformat())
     return {"ok": True}
 
 
@@ -2052,6 +2093,93 @@ def accept_recurring_suggestion(body: SuggestionAccept):
 def dismiss_recurring_suggestion(body: SuggestionAccept):
     finance.dismiss_recurring_suggestion(body.key)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- ortak defter (eş vb.)
+
+class BookRules(BaseModel):
+    hidden_cards: list[str] | None = None
+    hidden_accounts: list[int] | None = None
+    hide_fees: bool | None = None
+    hidden_pages: list[str] | None = None
+
+
+def _book_owner() -> dict:
+    """Ortak defteri yönetebilen: giriş yapmış ve kendisi üye olmayan kullanıcı."""
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Ortak defter için giriş (kullanıcı hesabı) gerekli")
+    if u.get("member_of"):
+        raise HTTPException(403, "Bu bölüm defter sahibine ait")
+    return u
+
+
+@app.get("/api/book/me")
+def book_me():
+    from app import book
+
+    return book.info()
+
+
+@app.get("/api/book")
+def book_overview():
+    from app import book
+
+    u = _book_owner()
+    cards = {}
+    for s in db.list_statements():
+        cards.setdefault(s["card_no"], {"card_no": s["card_no"], "bank": s["bank"]})
+    return {"members": [{"id": m["id"], "username": m["username"], "last_login": m["last_login"], "disabled": bool(m["disabled"])}
+                        for m in system.members(u["id"])],
+            "invites": [i for i in system.invites() if i.get("member_of") == u["id"] and not i["used_at"]],
+            "rules": book.rules(), "cards": list(cards.values()),
+            "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in db.list_accounts()],
+            "pages": book.PAGE_LABELS}
+
+
+@app.put("/api/book/rules")
+def book_set_rules(body: BookRules):
+    from app import book
+
+    _book_owner()
+    return book.set_rules(body.model_dump(exclude_unset=True))
+
+
+@app.post("/api/book/invites")
+def book_invite(body: InviteIn):
+    u = _book_owner()
+    return system.create_invite(body.note, body.days, member_of=u["id"])
+
+
+@app.delete("/api/book/invites/{code}")
+def book_delete_invite(code: str):
+    u = _book_owner()
+    inv = system.invite(code)
+    if not inv or inv.get("member_of") != u["id"] or not system.delete_invite(code):
+        raise HTTPException(404, "Davet yok ya da kullanılmış")
+    return {"ok": True}
+
+
+@app.delete("/api/book/members/{uid}")
+def book_remove_member(uid: int):
+    """Üyeyi çıkar: hesabı silinir (kendi verisi yok; eklediği kayıtlar defterde kalır)."""
+    u = _book_owner()
+    m = system.user(uid)
+    if not m or m.get("member_of") != u["id"]:
+        raise HTTPException(404, "Üye yok")
+    system.delete_user(uid)
+    return {"ok": True}
+
+
+@app.post("/api/book/members/{uid}/reset-password")
+def book_reset_member_password(uid: int):
+    u = _book_owner()
+    m = system.user(uid)
+    if not m or m.get("member_of") != u["id"]:
+        raise HTTPException(404, "Üye yok")
+    temp = auth.temp_password()
+    auth.set_password(uid, temp, must_change=True)
+    return {"temp_password": temp}
 
 
 # ---------------------------------------------------------------- yüklemeyi geri al

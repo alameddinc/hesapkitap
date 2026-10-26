@@ -17,6 +17,8 @@ export interface Row {
   installment: string | null;
   installments?: number; // elle girilen kart harcamasının taksit sayısı
   card_last4?: string | null; // hangi kredi kartı (son 4 hane)
+  hidden?: boolean; // ortak defterde üyeye gizli
+  created_by?: number | null; // ekleyen kullanıcı (ortak defter)
   fx: string | null;
   note: string | null;
   deleted: boolean;

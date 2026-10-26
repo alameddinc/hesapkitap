@@ -5,7 +5,7 @@ import { api, type Payment, type Recurring, type Row } from "../api";
 import { dateTR, fold, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
-import { useMeta, useSave } from "./hooks";
+import { useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
 import AmountChanges from "./AmountChanges";
@@ -33,6 +33,9 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const meta = useMeta();
   const qc = useQueryClient();
   const editingEntry = row?.source === "manual" ? row : undefined;
+  const member = !!useBook().data?.member; // ortak defter üyesi: silemez, gizleyemez
+  const hasMembers = useHasMembers().data;
+  const [hidden, setHidden] = useState(!!row?.hidden);
   const [kind, setKind] = useState<"gelir" | "gider">(rec?.kind ?? (row?.kind as "gelir" | "gider") ?? draft?.kind ?? "gider");
   const [description, setDescription] = useState(rec?.description ?? row?.description ?? draft?.description ?? "");
   // bölünmüş kayıtta listedeki tutar kalan kısımdır; düzenlerken asıl toplam gösterilir
@@ -123,7 +126,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
-    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date });
+    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date,
+      ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
       items: kind === "gider" ? draft?.items ?? null : null,
       branch: draft?.branch ?? null,
@@ -151,7 +155,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   return (
     <Modal title={title} onClose={onClose} footer={
       <>
-        {(editingEntry || rec) && (
+        {(editingEntry || rec) && !member && (
           <button className="btn-danger" onClick={() => confirm("Silinsin mi?") && del.mutate(undefined)}>
             <Trash2 size={16} /> Sil
           </button>
@@ -287,7 +291,13 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             </ul>
           </div>
         )}
-        {!editingEntry && (
+        {editingEntry && hasMembers && !member && (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />
+            Ortak defterde gizle (üye görmez)
+          </label>
+        )}
+        {!editingEntry && !member && (
           <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
             <input type="checkbox" checked={isRecurring} disabled={!!rec} onChange={(e) => setRecurring(e.target.checked)} />
             <Repeat size={16} className="text-stone-500" />

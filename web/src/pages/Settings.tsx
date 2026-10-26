@@ -12,6 +12,9 @@ import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
 import UpdateNotice from "../components/UpdateNotice";
 import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
+import BookSettings from "../components/BookSettings";
+import { useBook } from "../components/hooks";
+import { LogoutButton } from "./More";
 
 interface ConfigItem {
   name: string;
@@ -219,6 +222,31 @@ function Step({ n, done, children }: { n: number; done: boolean; children: React
 }
 
 export default function Settings() {
+  const book = useBook();
+  if (book.isLoading) return <></>;
+  return book.data?.member ? <MemberSettings owner={book.data.owner ?? ""} /> : <OwnerSettings />;
+}
+
+/** Ortak defter üyesi: sadece kendi şifresi ve telefondan paylaşma. */
+function MemberSettings({ owner }: { owner: string }) {
+  return (
+    <div className="space-y-4">
+      <h1 className="text-xl font-semibold">Ayarlar</h1>
+      <section className="card p-4 text-sm">
+        <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Ortak defter</h2>
+        <p className="mt-1 text-stone-600 dark:text-stone-400">
+          <b>{owner}</b> kullanıcısının defterini görüyorsun. Fiş ve harcama ekleyebilir, kategori düzeltebilirsin; ekstre
+          yükleme, silme ve ayarlar defter sahibinde.
+        </p>
+      </section>
+      <ShareSetup />
+      <PasswordForm />
+      <LogoutButton />
+    </div>
+  );
+}
+
+function OwnerSettings() {
   const ui = useUI();
   const st = useQuery({ queryKey: ["settings"], queryFn: () => fetch("/api/settings").then((r) => r.json() as Promise<SettingsStatus>) });
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
@@ -267,6 +295,8 @@ export default function Settings() {
       <BankTemplates isAdmin={isAdmin} />
 
       <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />
+
+      {auth.data?.user && <BookSettings />}
 
       {isAdmin && <Users />}
 

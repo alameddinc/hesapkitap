@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api, type Row } from "../api";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import CategoryPicker from "./CategoryPicker";
-import { useMeta, useSave } from "./hooks";
+import { useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
 import SplitEditor from "./SplitEditor";
@@ -17,6 +17,9 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   const [description, setDescription] = useState(row.description);
   const [note, setNote] = useState(row.note ?? "");
   const [makeRule, setMakeRule] = useState(true);
+  const [hidden, setHidden] = useState(!!row.hidden);
+  const member = !!useBook().data?.member;
+  const hasMembers = useHasMembers().data;
 
   const save = useSave((body: Record<string, unknown>) => api.patchCard(row.id, body), (r) => {
     onSaved?.(r.rule ? `Kaydedildi · kural: ${r.rule}` : "Kaydedildi");
@@ -34,6 +37,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
     if (kind !== row.kind) body.txn_type = kind;
     if (description !== row.description) body.description = description;
     if (note !== (row.note ?? "")) body.note = note;
+    if (hidden !== !!row.hidden) body.hidden = hidden;
     if (Object.keys(body).length === 0) return onClose();
     save.mutate(body);
   };
@@ -41,9 +45,9 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   return (
     <Modal title="Kart işlemi" onClose={onClose} footer={
       <>
-        <button className={row.deleted ? "btn-ghost" : "btn-danger"} onClick={() => save.mutate({ is_deleted: !row.deleted })}>
+        {!member && <button className={row.deleted ? "btn-ghost" : "btn-danger"} onClick={() => save.mutate({ is_deleted: !row.deleted })}>
           {row.deleted ? <><RotateCcw size={16} /> Geri al</> : <><EyeOff size={16} /> Sil</>}
-        </button>
+        </button>}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
         <button className="btn-primary" onClick={submit} disabled={save.isPending}>Kaydet</button>
@@ -98,6 +102,12 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
             </label>
           )}
         </div>
+        {hasMembers && !member && (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />
+            Ortak defterde gizle (üye görmez)
+          </label>
+        )}
         <div>
           <label className="label" htmlFor="c-desc">Açıklama</label>
           <input id="c-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)} />

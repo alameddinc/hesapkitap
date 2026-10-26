@@ -317,7 +317,10 @@ DEFAULT_ITEM_RULE = ("sigara, marlboro, parliament, camel, winston, kent, lucky 
 
 MIGRATIONS = [
     ("entries", "card_last4", "TEXT"),
-    ("recurring", "match_key", "TEXT"),  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
+    ("recurring", "match_key", "TEXT"),
+    ("entries", "hidden", "INTEGER NOT NULL DEFAULT 0"),       # ortak defterde üyeye görünmez
+    ("transactions", "hidden", "INTEGER NOT NULL DEFAULT 0"),
+    ("entries", "created_by", "INTEGER"),                      # ekleyen kullanıcı (ortak defter)  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
@@ -672,11 +675,13 @@ def link_entry(entry_id: int, txn_id: int | None) -> None:
 
 
 def list_statements() -> list[dict]:
+    from app import book
+
     with connect() as c:
-        return rows(c.execute(
+        return book.filter_statements(rows(c.execute(
             """SELECT s.*, substr(s.period_end, 1, 7) AS period, COUNT(t.id) AS txn_count
                FROM statements s LEFT JOIN transactions t ON t.statement_id = s.id
-               GROUP BY s.id ORDER BY s.period_end DESC"""))
+               GROUP BY s.id ORDER BY s.period_end DESC""")))
 
 
 def delete_statement(statement_id: int) -> None:
@@ -687,16 +692,18 @@ def delete_statement(statement_id: int) -> None:
 # ---------------------------------------------------------------- card transactions
 
 def card_transactions(include_deleted: bool = False) -> list[dict]:
-    """Tüm kart işlemleri; 'period' = ekstre kesim ayı (YYYY-MM)."""
+    """Tüm kart işlemleri; 'period' = ekstre kesim ayı (YYYY-MM). Ortak defter üyesine gizlenenler süzülür."""
+    from app import book
+
     with connect() as c:
-        return rows(c.execute(
+        return book.filter_card_txns(rows(c.execute(
             f"""SELECT t.*, s.bank, s.card_no AS account, s.period_end, substr(s.period_end, 1, 7) AS period
                 FROM transactions t JOIN statements s ON s.id = t.statement_id
                 {'' if include_deleted else 'WHERE t.is_deleted = 0'}
-                ORDER BY t.txn_date DESC, t.id DESC"""))
+                ORDER BY t.txn_date DESC, t.id DESC""")))
 
 
-CARD_EDITABLE = {"category", "txn_type", "note", "is_deleted", "description"}
+CARD_EDITABLE = {"category", "txn_type", "note", "is_deleted", "description", "hidden"}
 
 
 def update_card_transaction(txn_id: int, fields: dict) -> None:
@@ -714,7 +721,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
-                "installments", "card_last4")
+                "installments", "card_last4", "hidden", "created_by")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:
@@ -738,10 +745,12 @@ def installment_entries() -> list[dict]:
 
 
 def list_entries(month: str | None = None) -> list[dict]:
+    from app import book
+
     with connect() as c:
         if month:
-            return rows(c.execute("SELECT * FROM entries WHERE month = ? ORDER BY entry_date DESC, id DESC", (month,)))
-        return rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC"))
+            return book.filter_entries(rows(c.execute("SELECT * FROM entries WHERE month = ? ORDER BY entry_date DESC, id DESC", (month,))))
+        return book.filter_entries(rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC")))
 
 
 def cycle_start_day() -> int:
@@ -1699,7 +1708,9 @@ def card_payments_without_statement() -> list[dict]:
             # ilk ekstreden önceki ödeme: bankalar çoğunlukla son 12 ayı verir, o ekstreler yüklenemeyebilir
             out.append({**p, "before_first": bool(p["card_last4"] and p["card_last4"] in first
                                                  and p["pay_date"] < first[p["card_last4"]])})
-    return out
+    from app import book
+
+    return book.filter_card_payments(out)
 
 
 def _shift_days(d: str, n: int) -> str:
@@ -2196,7 +2207,9 @@ def list_accounts() -> list[dict]:
         accs = rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' ORDER BY kind, name"))
         for a in accs:
             a["current"] = _account_balance(c, a)
-    return accs
+    from app import book
+
+    return book.filter_accounts(accs)
 
 
 def update_account(acc_id: int, data: dict) -> bool:

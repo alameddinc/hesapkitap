@@ -77,8 +77,9 @@ def connect():
     conn = sqlite3.connect(p)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    if p not in _ready:  # şema her dosya için bir kez kurulur
+    if p not in _ready:  # şema (ve göçler) her dosya için bir kez kurulur
         conn.executescript(SCHEMA)
+        _migrate(conn)
         _ready.add(p)
     try:
         yield conn
@@ -87,9 +88,17 @@ def connect():
         conn.close()
 
 
+def _migrate(c) -> None:
+    # ortak defter: üye kendi kullanıcısıyla girer ama sahibin defterini açar
+    for table in ("users", "invites"):
+        if "member_of" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN member_of INTEGER")
+
+
 def init() -> None:
     with connect() as c:
         c.executescript(SCHEMA)
+        _migrate(c)
 
 
 def get(key: str) -> str | None:
@@ -136,24 +145,35 @@ def data_root() -> str:
 
 
 def create_user(username: str, password_hash: str | None, role: str = "user", main_db: bool = False,
-                must_change: bool = False) -> dict:
-    """main_db: yöneticinin eski tek kullanıcılı veritabanını kullanması (db_file NULL)."""
+                must_change: bool = False, member_of: int | None = None) -> dict:
+    """main_db: yöneticinin eski tek kullanıcılı veritabanını kullanması (db_file NULL).
+    member_of: ortak defter üyesi; kendi dosyası olmaz, o kullanıcının defterini açar."""
     name = username.strip()
     if not (3 <= len(name) <= 32) or not all(ch.isalnum() or ch in "._-" for ch in name):
         raise ValueError("Kullanıcı adı 3–32 karakter; harf, rakam, nokta, alt çizgi ya da tire")
     with connect() as c:
         if c.execute("SELECT 1 FROM users WHERE username = ?", (name,)).fetchone():
             raise ValueError("Bu kullanıcı adı alınmış")
-        uid = c.execute("INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, ?)",
-                        (name, password_hash, role, int(must_change))).lastrowid
-        if not main_db:
+        uid = c.execute("INSERT INTO users (username, password_hash, role, must_change_password, member_of) VALUES (?, ?, ?, ?, ?)",
+                        (name, password_hash, role, int(must_change), member_of)).lastrowid
+        if not main_db and not member_of:
             c.execute("UPDATE users SET db_file = ? WHERE id = ?", (os.path.join(str(uid), "ekstre.db"), uid))
     return user(uid)
 
 
 def user_db_path(u: dict) -> str | None:
-    """Kullanıcının finans veritabanı dosyası; None: ana veritabanı (yönetici)."""
+    """Kullanıcının finans veritabanı dosyası; None: ana veritabanı (yönetici). Ortak defter üyesi: sahibinin defteri."""
+    if u.get("member_of"):
+        owner = user(u["member_of"])
+        if owner and not owner.get("member_of"):
+            return user_db_path(owner)
+        return os.path.join(data_root(), str(u["id"]), "ekstre.db")  # sahibi silinmiş: boş, kendine ait defter
     return os.path.join(data_root(), u["db_file"]) if u.get("db_file") else None
+
+
+def members(owner_id: int) -> list[dict]:
+    with connect() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM users WHERE member_of = ? ORDER BY id", (owner_id,))]
 
 
 def update_user(uid: int, **fields) -> None:
@@ -195,11 +215,12 @@ def archive_user_data(u: dict) -> str | None:
 
 # ---------------------------------------------------------------- davetler
 
-def create_invite(note: str | None = None, days: int = 14) -> dict:
+def create_invite(note: str | None = None, days: int = 14, member_of: int | None = None) -> dict:
+    """member_of: ortak defter daveti (kayıt olan o kullanıcının defterine üye olur)."""
     code = "-".join(secrets.token_hex(2).upper() for _ in range(3))
     with connect() as c:
-        c.execute("INSERT INTO invites (code, note, expires_at) VALUES (?, ?, date('now', ?))",
-                  (code, (note or "").strip()[:60] or None, f"+{days} days"))
+        c.execute("INSERT INTO invites (code, note, expires_at, member_of) VALUES (?, ?, date('now', ?), ?)",
+                  (code, (note or "").strip()[:60] or None, f"+{days} days", member_of))
         return dict(c.execute("SELECT * FROM invites WHERE code = ?", (code,)).fetchone())
 
 
@@ -208,6 +229,12 @@ def invites() -> list[dict]:
         return [dict(r) for r in c.execute(
             "SELECT i.*, u.username AS used_by_name FROM invites i LEFT JOIN users u ON u.id = i.used_by "
             "ORDER BY i.created_at DESC")]
+
+
+def invite(code: str) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT * FROM invites WHERE code = ?", (code.strip().upper(),)).fetchone()
+        return dict(r) if r else None
 
 
 def valid_invite(code: str) -> bool:

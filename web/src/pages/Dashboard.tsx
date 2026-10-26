@@ -10,6 +10,7 @@ import Onboarding from "../components/Onboarding";
 import SharedInbox from "../components/SharedInbox";
 import MonthPicker from "../components/MonthPicker";
 import MonthDigest from "../components/MonthDigest";
+import { routeVisible, useBook } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import { tl, tlCompact } from "../format";
@@ -31,6 +32,7 @@ function Section({ title, children, right }: { title: string; children: React.Re
 
 export default function Dashboard() {
   const ui = useUI();
+  const book = useBook().data; // ortak defter üyesi: kapalı bölümler gösterilmez
   const { month, setMonth } = ui;
   const summary = useQuery({ queryKey: ["summary", month], queryFn: () => api.summary(month) });
   const txns = useQuery({ queryKey: ["txns", month], queryFn: () => api.transactions(month) });
@@ -81,13 +83,14 @@ export default function Dashboard() {
               sub={`Kart ${tlCompact(s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense)}`} />
             <Kpi label="Net (bu dönem)" value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"}
               sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${s.totals.debt_flow > 0 ? "+" : ""}${tl(s.totals.debt_flow)}` : "gelir − gider"} />
-            <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
-              sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />
+            {book?.hide_fees ? <Kpi label="İade" value={s.totals.refunds} /> : (
+              <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
+                sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
           </div>
 
           <SharedInbox />
 
-          <Onboarding />
+          {!book?.member && <Onboarding />}
 
           <section>
             <h2 className="mb-2 font-semibold">Dikkat etmen gerekenler</h2>
@@ -98,8 +101,8 @@ export default function Dashboard() {
             }} />
           </section>
 
-          <NetWorth compact month={month} />
-          <ZakatDue />
+          {routeVisible(book, "hesaplar") && <NetWorth compact month={month} />}
+          {routeVisible(book, "zekat") && <ZakatDue />}
 
           {detail && (
             <section className="card overflow-hidden" id="detay">

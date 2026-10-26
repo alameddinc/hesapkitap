@@ -1,4 +1,4 @@
-import { Check, CreditCard, Repeat } from "lucide-react";
+import { Check, CreditCard, EyeOff, Repeat } from "lucide-react";
 import type { Row } from "../api";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import { useUI } from "../ui";
@@ -63,6 +63,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">
                 <span className={cx("truncate font-medium", r.deleted && "line-through")}>{r.description}</span>
+                {r.hidden && <span title="Ortak defterde gizli"><EyeOff size={13} className="shrink-0 text-stone-400" /></span>}
                 <span className={cx("shrink-0 font-semibold tabular-nums", amountClass(r))}>
                   {r.kind === "gelir" || (r.kind === "borc" && (r.flow ?? 0) > 0) ? "+" : r.kind === "borc" ? "−" : ""}{tl(r.amount)}
                 </span>

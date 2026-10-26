@@ -31,7 +31,9 @@ def _db_stamp() -> tuple:
 
 def _memo(fn):
     def wrap(*args, **kwargs):
-        key = (fn.__name__, _db_stamp(), date.today(), repr(args), repr(sorted(kwargs.items())))
+        u = db.current_user()  # ortak defter üyesi süzülmüş veri görür: sonuç sahibininkiyle karışmasın
+        viewer = u["id"] if u and u.get("member_of") else None
+        key = (fn.__name__, _db_stamp(), viewer, date.today(), repr(args), repr(sorted(kwargs.items())))
         if key not in _CACHE:
             if len(_CACHE) > 128:
                 _CACHE.clear()
@@ -133,7 +135,7 @@ def _card_row(t: dict, states: dict | None = None, aliases: dict | None = None) 
         "description": t["description"],
         "merchant": _display_merchant(t["description"], aliases),
         "amount": t["amount"], "kind": t["txn_type"], "category": t["category"],
-        "card": card_label(t), "account": t["account"], "bank": t["bank"],
+        "card": card_label(t), "account": t["account"], "bank": t["bank"], "hidden": bool(t.get("hidden")),
         "installment": inst,
         "fx": f"{t['orig_amount']:g} {t['orig_currency']}" if t["orig_currency"] else None,
         "note": t["note"], "deleted": bool(t["is_deleted"]),
@@ -154,7 +156,7 @@ def _entry_row(e: dict) -> dict:
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
         "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
         "wallet_id": e.get("wallet_id"), "account_id": e.get("account_id"), "installments": e.get("installments") or 1,
-        "card_last4": e.get("card_last4"),
+        "card_last4": e.get("card_last4"), "hidden": bool(e.get("hidden")), "created_by": e.get("created_by"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
         "linked": e["linked_txn_id"] is not None,
         "awaiting_statement": e["payment"] == "kredi_karti" and e["linked_txn_id"] is None and e["kind"] == EXPENSE,
@@ -863,8 +865,11 @@ def payables(today: date | None = None) -> list[dict]:
                     "paid_amount": b["paid_amount"], "paid_at": b["paid_at"], "status": status,
                     "has_file": bool(b["file_name"]), "category": b["category"], "note": b["note"],
                     "description": b["description"]})
-    # Vadeli borçlarım (kişilere): TL ise tutar, değilse birimiyle
-    for d in db.list_debts():
+    # Vadeli borçlarım (kişilere): TL ise tutar, değilse birimiyle (ortak defterde Borç sayfası kapalıysa gösterilmez)
+    from app import book
+
+    rules = book.active()
+    for d in [] if rules and "borclar" in rules["hidden_pages"] else db.list_debts():
         if d["direction"] != "borc" or not d["due_date"] or d["asset"] != "TRY":  # döviz/altın: Transferler + hatırlatma
             continue
         if d["settled_at"] and (today - date.fromisoformat(d["settled_at"])).days > PAYABLE_WINDOW:
@@ -918,6 +923,10 @@ def _fold(s: str) -> str:
 
 def interest_alarm(month: str) -> list[dict]:
     """Faiz alarmı: bu dönem ödenen faiz / vade farkı ve NEDENİ (geç ödeme, eksik ödeme, taksit vade farkı)."""
+    from app import book
+
+    if book.hide_fees():  # ortak defterde faiz gizli
+        return []
     out = []
     for st in db.interest_charges(month):
         card = f"{st['bank']} …{st['card_no'][-4:]}"
@@ -965,6 +974,10 @@ def interest_alarm(month: str) -> list[dict]:
 
 def interest_history(months: int = 24) -> dict:
     """Ekstrelerdeki faiz / vade farkı / faize bağlı vergi, dönem dönem (İstatistik → Faiz alarmı)."""
+    from app import book
+
+    if book.hide_fees():
+        return {"months": [], "total": 0.0, "checked": 0, "hidden": True}
     periods = sorted({st["period_end"][:7] for st in db.list_statements()}, reverse=True)[:months]
     out = []
     for m in periods:

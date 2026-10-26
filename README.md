@@ -248,6 +248,10 @@ Ayrıntılar için başlığa dokun.
   yönetici ekranında sadece kullanıcı adı, son giriş ve yapay zekâ kullanımı görünür, kimsenin harcaması görünmez.
 - Yöneticinin Gemini anahtarı paylaşılır, kişi başı **aylık okuma kotasıyla** (varsayılan 100); kendi anahtarını giren sınırsız.
 - Başlarken rehberi: ekstre yükle → bakiyeleri kontrol et → maaş (net/brüt) → fiş okut → bildirimler.
+- **Ortak defter (eş, aile):** Ayarlar → Ortak defter'den davet et; kendi kullanıcısıyla girer, **senin defterini** görür,
+  fiş ve harcama ekler, kategori düzeltir. Ekstre yükleme, silme ve ayarlar sende. Neyi görmeyeceğini sen seçersin:
+  belirli kartlar ve hesaplar, faiz ve gecikme ücretleri, sayfalar (Zekât, Borçlar…) ya da tek tek işlemler. Gizleme
+  **sunucuda** uygulanır: gizlenen veri ona giden hiçbir yanıtta, toplamda ya da grafikte yer almaz.
 
 </details>
 

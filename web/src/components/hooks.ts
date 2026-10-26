@@ -14,3 +14,23 @@ export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void)
     },
   });
 }
+
+/** Ortak defter: bu kullanıcı başkasının defterinin üyesi mi, neler kapalı (sunucu da ayrıca uygular). */
+export interface BookInfo { member: boolean; owner?: string; hidden_pages?: string[]; hide_fees?: boolean }
+
+export const useBook = () => useQuery({
+  queryKey: ["book-me"], staleTime: 60_000,
+  queryFn: () => fetch("/api/book/me").then((r) => (r.ok ? r.json() : { member: false }) as Promise<BookInfo>),
+});
+
+const MEMBER_HIDDEN = ["kurallar", "ekstreler"]; // yükleme ve kurallar sahibe ait
+
+export const routeVisible = (b: BookInfo | undefined, route: string) =>
+  !b?.member || !(MEMBER_HIDDEN.includes(route) || b.hidden_pages?.includes(route));
+
+/** Sahip ve en az bir üyesi var mı? (işlemde "Ortak defterde gizle" seçeneği o zaman görünür) */
+export const useHasMembers = () => useQuery({
+  queryKey: ["book"], retry: false, staleTime: 60_000,
+  queryFn: () => fetch("/api/book").then((r) => (r.ok ? r.json() : null) as Promise<{ members: unknown[] } | null>),
+  select: (d) => !!d?.members.length,
+});
