@@ -194,6 +194,8 @@ async def scheduler() -> None:
             try:
                 if n := await asyncio.to_thread(telegram.poll_inbox):
                     log.info("telegram inbox: %s mesaj", n)
+            except telegram.TelegramError as e:  # geçici ağ hatası: bir dakika sonra yeniden denenir, traceback gereksiz
+                log.warning("telegram inbox: %s", e)
             except Exception:  # noqa: BLE001
                 log.exception("telegram inbox failed")
         for path, user in spaces():
