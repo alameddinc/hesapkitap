@@ -1004,6 +1004,14 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
 
+    # 2a) Ramazan / fitre / Kurban yaklaşıyor
+    try:
+        from app import zakat as _z
+
+        out += _z.holy_insights(today)
+    except Exception:  # noqa: BLE001
+        pass
+
     # 2b) Her ay tekrarlayan ama sabit kalem olmayan ödemeler: planlama gelecek ayları bilmiyor
     try:
         sug = recurring_suggestions(today)

@@ -240,3 +240,26 @@ def test_check_date_reminder_and_difference(client, tmpdb):
     assert ck["days_left"] == 7 and ck["paid"] == 18000 and ck["difference"] == round(768000 * 0.025 - 18000, 2)
     assert any("Zekât kontrolü" in m for m in jobs.reminders(date(2027, 2, 2)))
     assert zakat.upcoming_checks(date(2027, 2, 5))[0]["kind"] == "kontrol"
+
+
+def test_holy_days_fitre_and_reminders(client, tmpdb):
+    from datetime import date, timedelta
+
+    from app import zakat
+
+    h = zakat.holy(date(2026, 10, 26))
+    d = {x["key"]: date.fromisoformat(x["date"]) for x in h["days"]}
+    # Diyanet: Ramazan 2027 ≈ 8 Şubat, Ramazan Bayramı ≈ 10 Mart, Kurban Bayramı ≈ 16 Mayıs (tablolu takvim ±1 gün)
+    assert abs((d["ramazan"] - date(2027, 2, 8)).days) <= 1
+    assert abs((d["ramazan_bayrami"] - date(2027, 3, 10)).days) <= 1
+    assert abs((d["kurban"] - date(2027, 5, 16)).days) <= 1
+    assert not h["in_ramadan"] and h["fitre"]["amount"] == 0
+    client.put("/api/zakat/settings", json={"fitre_amount": 240, "fitre_people": 4})
+    f = client.get("/api/zakat/holy").json()["fitre"]
+    assert f == {"amount": 240, "people": 4, "total": 960}
+    before = d["ramazan"] - timedelta(days=20)
+    ins = zakat.holy_insights(before)
+    assert ins and "Ramazan'a 20 gün" in ins[0]["title"] and "960" in ins[0]["detail"]
+    assert any("Fitreyi unutma" in m for m in zakat.holy_reminders(d["ramazan_bayrami"] - timedelta(days=10)))
+    assert any("Kurban" in m for m in zakat.holy_reminders(d["kurban"] - timedelta(days=45)))
+    assert zakat.holy_insights(date(2026, 10, 26)) == []

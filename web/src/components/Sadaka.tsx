@@ -7,6 +7,7 @@ import AccountSelect from "./AccountSelect";
 import { useSave } from "./hooks";
 import { DONATION_KINDS } from "./MarkDonation";
 import Modal from "./Modal";
+import HolyDays from "./HolyDays";
 
 interface Item { id: number; kind: string; label: string; amount: number; given_date: string; recipient: string | null; note: string | null }
 interface ZP { id: number; amount: number; pay_date: string; person: string; note: string | null }
@@ -88,6 +89,7 @@ export default function Sadaka() {
 
   return (
     <div className="space-y-4">
+      <HolyDays />
       <section className="card p-4">
         <div className="flex items-start justify-between gap-2">
           <div>

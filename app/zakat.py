@@ -263,6 +263,12 @@ HIJRI_MONTHS = ["Muharrem", "Safer", "Rebiülevvel", "Rebiülahir", "Cemaziyelev
 
 def to_hijri(d: date) -> str:
     """Tablolu (aritmetik) hicri takvim; resmi takvimden 1 gün sapabilir."""
+    day, m, year = hijri_parts(d)
+    return f"{day} {HIJRI_MONTHS[m - 1]} {year}"
+
+
+def hijri_parts(d: date) -> tuple[int, int, int]:
+    """(gün, ay, yıl) — tablolu hicri takvim."""
     jd = d.toordinal() + 1721425 - 1948440 + 10632
     n = (jd - 1) // 10631
     jd = jd - 10631 * n + 354
@@ -271,7 +277,80 @@ def to_hijri(d: date) -> str:
     m = (24 * jd) // 709
     day = jd - (709 * m) // 24
     year = 30 * n + j - 30
-    return f"{day} {HIJRI_MONTHS[m - 1]} {year}"
+    return day, m, year
+
+
+def next_hijri(month: int, day: int, today: date) -> date:
+    """Bugünden itibaren hicri ayın o gününe denk gelen ilk miladi gün."""
+    d = today
+    for _ in range(400):
+        dd, mm, _y = hijri_parts(d)
+        if (mm, dd) == (month, day):
+            return d
+        d += timedelta(days=1)
+    raise ValueError("hicri tarih bulunamadı")
+
+
+# ---------------------------------------------------------------- Ramazan, fitre, kurban
+
+FESTIVALS = [("ramazan", "Ramazan", 9, 1), ("ramazan_bayrami", "Ramazan Bayramı", 10, 1), ("kurban", "Kurban Bayramı", 12, 10)]
+
+
+def holy(today: date | None = None) -> dict:
+    """Yaklaşan Ramazan / bayramlar (yaklaşık, ±1 gün) ve fitre: kişi başı tutar × kişi sayısı."""
+    today = today or date.today()
+    days = []
+    for key, name, m, d in FESTIVALS:
+        when = next_hijri(m, d, today)
+        days.append({"key": key, "name": name, "date": when.isoformat(), "days_left": (when - today).days,
+                     "hijri": to_hijri(when)})
+    amount = float(db.get_setting("zakat:fitre_amount") or 0)
+    with db.connect() as c:
+        _init(c)
+        family = c.execute("SELECT COUNT(*) FROM zakat_people").fetchone()[0]
+    people = int(db.get_setting("zakat:fitre_people") or 0) or max(1, family)
+    return {"days": days, "in_ramadan": hijri_parts(today)[1] == 9,
+            "fitre": {"amount": amount, "people": people, "total": round(amount * people, 2)}}
+
+
+def _tl0(x: float) -> str:
+    return f"{x:,.0f}".replace(",", ".")
+
+
+def holy_insights(today: date | None = None) -> list[dict]:
+    """Özet uyarıları: Ramazan'a 30 gün kala ve Ramazan boyunca fitre; Kurban'a 45 gün kala hisse için para ayır."""
+    h = holy(today)
+    d = {x["key"]: x for x in h["days"]}
+    f = h["fitre"]
+    fitre = (f"{f['people']} kişi × {_tl0(f['amount'])} ₺ = <b>{_tl0(f['total'])} ₺</b>" if f["amount"]
+             else "Diyanet'in açıkladığı kişi başı tutarı Zekât → Sadaka'da gir")
+    out = []
+    if h["in_ramadan"]:
+        out.append({"level": "bilgi", "title": f"Fitreyi bayramdan önce ver (bayrama {d['ramazan_bayrami']['days_left']} gün)",
+                    "detail": f"Fitre: {fitre}.".replace("<b>", "").replace("</b>", ""), "link": "zekat"})
+    elif d["ramazan"]["days_left"] <= 30:
+        out.append({"level": "bilgi", "title": f"Ramazan'a {d['ramazan']['days_left']} gün (≈ {d['ramazan']['date'][8:10]}.{d['ramazan']['date'][5:7]})",
+                    "detail": f"Fitre: {fitre}.".replace("<b>", "").replace("</b>", ""), "link": "zekat"})
+    if d["kurban"]["days_left"] <= 45:
+        out.append({"level": "bilgi", "title": f"Kurban Bayramı'na {d['kurban']['days_left']} gün (≈ {d['kurban']['date'][8:10]}.{d['kurban']['date'][5:7]})",
+                    "detail": "Kurban hissesi için şimdiden para ayırmak istersen bir kumbara aç.", "link": "hesaplar"})
+    return out
+
+
+def holy_reminders(today: date) -> list[str]:
+    """Telegram: Ramazan'a 30 ve 7 gün; bayrama 10 gün kala fitre; Kurban'a 45 ve 14 gün."""
+    h = holy(today)
+    d = {x["key"]: x for x in h["days"]}
+    f = h["fitre"]
+    fitre = f"{f['people']} kişi × {_tl0(f['amount'])} ₺ = <b>{_tl0(f['total'])} ₺</b>" if f["amount"] else "tutarı Zekât → Sadaka'da gir"
+    msgs = []
+    if d["ramazan"]["days_left"] in (30, 7):
+        msgs.append(f"🌙 <b>Ramazan'a {d['ramazan']['days_left']} gün</b> (≈ {d['ramazan']['date'][8:10]}.{d['ramazan']['date'][5:7]}) · fitre: {fitre}")
+    if h["in_ramadan"] and d["ramazan_bayrami"]["days_left"] == 10:
+        msgs.append(f"🌙 <b>Fitreyi unutma</b> · bayrama 10 gün · {fitre}")
+    if d["kurban"]["days_left"] in (45, 14):
+        msgs.append(f"🐑 <b>Kurban Bayramı'na {d['kurban']['days_left']} gün</b> (≈ {d['kurban']['date'][8:10]}.{d['kurban']['date'][5:7]})")
+    return msgs
 
 
 # ---------------------------------------------------------------- hesap

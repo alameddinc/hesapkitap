@@ -1322,6 +1322,8 @@ class ZakatSettingsIn(BaseModel):
     include_app: bool | None = None
     include_receivables: bool | None = None
     manual_gram: float | None = Field(None, ge=0)  # 0: elle fiyatı kaldır
+    fitre_amount: float | None = Field(None, ge=0)  # kişi başı fitre (Diyanet her yıl açıklar)
+    fitre_people: int | None = Field(None, ge=0, le=30)  # 0: aile üyesi sayısı kadar
 
 
 @app.get("/api/holdings")
@@ -1382,7 +1384,15 @@ def zakat_settings(body: ZakatSettingsIn):
             db.set_setting(f"zakat:{k}", "1" if d[k] else "0")
     if "manual_gram" in d:
         db.set_setting("zakat:manual_gram", str(d["manual_gram"]) if d["manual_gram"] else None)
+    for k in ("fitre_amount", "fitre_people"):
+        if k in d:
+            db.set_setting(f"zakat:{k}", str(d[k]) if d[k] else None)
     return {"ok": True}
+
+
+@app.get("/api/zakat/holy")
+def zakat_holy():
+    return zakat.holy()
 
 
 @app.post("/api/zakat/prices/refresh")

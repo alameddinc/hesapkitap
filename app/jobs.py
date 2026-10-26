@@ -127,6 +127,7 @@ def reminders(today: date) -> list[str]:
     from app import zakat
 
     msgs += zakat.reminders(today)
+    msgs += zakat.holy_reminders(today)
     return msgs
 
 
