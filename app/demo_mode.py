@@ -19,7 +19,7 @@ from app import db
 TTL = int(os.environ.get("HESAPKITAP_DEMO_TTL", "3600"))  # saniye
 MAX_SANDBOXES = 500
 COOKIE = "hk_demo"
-ANCHOR = (2026, 10)  # app.demo verisinin yazıldığı ay
+ANCHOR = date(2026, 10, 20)  # app.demo verisinin "bugünü": son ödemeler önümüzde, taksitler yaklaşan
 CLOSED = ("/api/statements/upload", "/api/bank-import", "/api/receipts/parse", "/api/bills/parse", "/api/share",
           "/api/documents/parse",
           "/api/settings", "/api/admin", "/api/book", "/api/mail", "/api/templates")
@@ -42,26 +42,28 @@ def _base() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(db.DB_PATH)), "demo")
 
 
-def months_since_anchor(today: date | None = None) -> int:
-    t = today or date.today()
-    return (t.year * 12 + t.month) - (ANCHOR[0] * 12 + ANCHOR[1])
+def days_since_anchor(today: date | None = None) -> int:
+    return ((today or date.today()) - ANCHOR).days
 
 
-def _shift(v: str, months: int) -> str:
-    """'2026-10-05…' / '2026-10' → n ay sonrası (gün ay sonuna sığdırılır)."""
+def _shift(v: str, days: int) -> str:
+    """'2026-10-05…' → n gün sonrası; '2026-10' (dönem) → ayın ortası n gün kaydırılınca düştüğü ay."""
+    from datetime import timedelta
+
     m = re.match(r"^(\d{4})-(\d{2})(?:-(\d{2}))?", v)
     if not m:
         return v
-    y, mo = divmod(int(m.group(1)) * 12 + int(m.group(2)) - 1 + months, 12)
-    head = f"{y:04d}-{mo + 1:02d}"
-    if m.group(3):
-        head += f"-{min(int(m.group(3)), 28 if mo + 1 == 2 else 30 if mo + 1 in (4, 6, 9, 11) else 31):02d}"
-    return head + v[m.end():]
+    try:
+        if m.group(3):
+            return (date(int(m.group(1)), int(m.group(2)), int(m.group(3))) + timedelta(days=days)).isoformat() + v[m.end():]
+        return (date(int(m.group(1)), int(m.group(2)), 15) + timedelta(days=days)).isoformat()[:7] + v[m.end():]
+    except ValueError:
+        return v
 
 
-def shift_db(path: str, months: int) -> None:
+def shift_db(path: str, days: int) -> None:
     """Veritabanındaki bütün tarih/ay değerlerini kaydır (demo verisi bugüne gelsin)."""
-    if not months:
+    if not days:
         return
     c = sqlite3.connect(path)
     try:
@@ -71,28 +73,31 @@ def shift_db(path: str, months: int) -> None:
                 rows = c.execute(f'SELECT rowid, "{col}" FROM "{t}" WHERE typeof("{col}") = \'text\' '
                                  f'AND "{col}" GLOB \'[12][0-9][0-9][0-9]-[01][0-9]*\'').fetchall()
                 for rid, v in rows:
-                    c.execute(f'UPDATE "{t}" SET "{col}" = ? WHERE rowid = ?', (_shift(v, months), rid))
+                    c.execute(f'UPDATE "{t}" SET "{col}" = ? WHERE rowid = ?', (_shift(v, days), rid))
         c.commit()
     finally:
         c.close()
 
 
-def shift_text(text: str, months: int) -> str:
+def shift_text(text: str, days: int) -> str:
     """Örnek ekstre metnindeki gg.aa.yyyy / gg/aa/yyyy tarihlerini kaydır."""
     def rep(m):
         d, mo, y, sep = int(m.group(1)), int(m.group(3)), int(m.group(4)), m.group(2)
-        iso = _shift(f"{y:04d}-{mo:02d}-{d:02d}", months)
+        iso = _shift(f"{y:04d}-{mo:02d}-{d:02d}", days)
         return f"{iso[8:10]}{sep}{iso[5:7]}{sep}{iso[0:4]}"
-    return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if months else text
+    return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if days else text
 
 
 def template() -> str:
-    """Bu ayın şablon veritabanı (yoksa üret)."""
-    months = months_since_anchor()
-    path = os.path.join(_base(), f"template-{months}.db")
+    """Bugünün şablon veritabanı (yoksa üret; eski günlerinkini sil)."""
+    days = days_since_anchor()
+    path = os.path.join(_base(), f"template-{days}.db")
     if os.path.exists(path):
         return path
     os.makedirs(_base(), exist_ok=True)
+    for n in os.listdir(_base()):
+        if n.startswith("template-") and n.endswith(".db"):
+            os.remove(os.path.join(_base(), n))
     tmp = path + f".{os.getpid()}.tmp"
     for p in (tmp,):
         if os.path.exists(p):
@@ -106,7 +111,7 @@ def template() -> str:
             demo.seed(("vakifbank_a.txt", "kuveytturk.txt"))  # vakifbank_b "örnek ekstre yükle" için
     finally:
         templates.sync_community = real_sync
-    shift_db(tmp, months)
+    shift_db(tmp, days)
     os.replace(tmp, path)
     return path
 
@@ -172,7 +177,7 @@ def sample_text(key: str) -> str:
     else:
         with open(os.path.join(ROOT, "tests", "fixtures", s["file"]), encoding="utf-8") as f:
             text = f.read()
-    return shift_text(text, months_since_anchor())
+    return shift_text(text, days_since_anchor())
 
 
 def sample_image(key: str) -> bytes:

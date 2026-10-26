@@ -19,17 +19,17 @@ def demo(tmp_path, monkeypatch, tmpdb):
 
 
 def test_shift_helpers():
-    assert demo_mode._shift("2026-10-31", 4) == "2027-02-28" and demo_mode._shift("2026-10", -10) == "2025-12"
-    assert demo_mode._shift("2026-10-05 12:00:00", 1) == "2026-11-05 12:00:00" and demo_mode._shift("x", 3) == "x"
-    assert demo_mode.shift_text("13.10.2026 ve 14/09/2026", 2) == "13.12.2026 ve 14/11/2026"
+    assert demo_mode._shift("2026-10-31", 1) == "2026-11-01" and demo_mode._shift("2026-10", 20) == "2026-11"
+    assert demo_mode._shift("2026-10-05 12:00:00", 1) == "2026-10-06 12:00:00" and demo_mode._shift("x", 3) == "x"
+    assert demo_mode.shift_text("13.10.2026 ve 14/09/2026", 30) == "12.11.2026 ve 14/10/2026"
 
 
 def test_visitor_gets_private_copy_with_current_dates(demo):
     assert demo.get("/api/auth/status").json()["demo"] is True
     r = demo.get("/api/statements")
     assert r.status_code == 200 and len(r.json()) == 2  # VakıfBank + Kuveyt; diğer VakıfBank örnek yükleme için
-    months = demo_mode.months_since_anchor()
-    assert max(s["period_end"] for s in r.json())[:7] == demo_mode._shift("2026-10", months)
+    days = demo_mode.days_since_anchor()
+    assert max(s["period_end"] for s in r.json()) == demo_mode._shift("2026-10-15", days)  # Kuveyt kesimi
     sid = demo.cookies.get(demo_mode.COOKIE)
     assert sid and demo.get("/api/demo").json()["expires_at"] == demo_mode.expires_at(sid)
     # başka ziyaretçi: ayrı kopya
