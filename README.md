@@ -135,6 +135,8 @@ Ayrıntılar için başlığa dokun.
   - Diğer bankalar: **genel okuyucu**, yapay zekâsız. Etiketlerden ("Hesap Kesim Tarihi", "Dönem Borcu"…) ve tarihli
     satırlardan okur; sonuç **ekstre denklemiyle** (önceki borç − ödemeler + harcamalar = dönem borcu) doğrulanırsa o bankanın
     kuralı öğrenilir ve toplulukla paylaşılır. Tutmazsa Gemini anahtarı varsa **yapay zekâyla okunur**.
+  - Bankan okunmuyorsa: `python -m app.card_reader ekstre.pdf` nerede takıldığını yazar (kişisel veri yazmaz);
+    `--anonim` yapıyı koruyup kişisel veriyi maskeler. Çıktıyı ["Bankam okunmuyor"](https://github.com/alameddinc/hesapkitap/issues/new/choose) ile paylaş.
 - **Hesap dökümleri (vadesiz)** — Her satır **bakiye zinciriyle** doğrulanır (önceki bakiye + tutar = bakiye).
   VakıfBank "Hesap Hareketleri" yapay zekâsız, kuralla okunur (yıllarca hareket, ücretsiz). Diğer bankalarda **şablon**
   denenir: kayıtlı ya da topluluktan gelen bir kural, yoksa bakiye zincirini tutturan kural **kendiliğinden öğrenilir**

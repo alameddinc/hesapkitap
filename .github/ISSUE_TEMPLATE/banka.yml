@@ -5,8 +5,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        ⚠️ **Belgeyi yükleme.** Gerçek ekstre kişisel veri içerir. Bunun yerine bankayı, belge türünü ve ne olduğunu yaz;
-        mümkünse belgenin **yapısını** (sütun başlıkları, tarih biçimi) tarif et. Gerekirse senden üzeri kapatılmış bir örnek isteriz.
+        ⚠️ **Belgeyi yükleme.** Gerçek ekstre kişisel veri içerir. Bunun yerine bankayı, belge türünü ve ne olduğunu yaz.
+
+        **Kart ekstresi için en büyük yardım** (repoyu indirdiysen, kendi bilgisayarında):
+        ```
+        python -m app.card_reader ekstre.pdf            # teşhis: nerede takıldığını yazar; isim/kart no/tutar yazmaz
+        python -m app.card_reader ekstre.pdf --anonim   # yapıyı koruyup isim, açıklama, kart/TC/hesap no'yu maskeler
+        ```
+        Teşhis çıktısını aşağıya yapıştır. Anonim çıktıyı paylaşmadan önce **göz at**: tutarlar korunur (denklem test
+        edilebilsin diye); istersen onları da değiştirebilirsin.
   - type: input
     id: banka
     attributes: { label: Banka, placeholder: "Ör. Garanti BBVA" }
@@ -21,6 +28,9 @@ body:
     id: ne
     attributes: { label: Ne oldu?, placeholder: "Ör. 'Mutabakat farkı 1.250 TL' dedi / hiç işlem çıkmadı / tutarlar ters" }
     validations: { required: true }
+  - type: textarea
+    id: teshis
+    attributes: { label: Teşhis çıktısı (isteğe bağlı), description: "python -m app.card_reader ekstre.pdf", render: json }
   - type: textarea
     id: yapi
     attributes: { label: Belgenin yapısı (isteğe bağlı), placeholder: "Ör. sütunlar: Tarih | Açıklama | Borç | Alacak | Bakiye; tarih 01.10.2026" }

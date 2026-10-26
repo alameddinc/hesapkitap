@@ -261,3 +261,87 @@ def read(text: str) -> Statement | None:
             templates.share_async(spec)
         return st
     return None
+
+
+# ---------------------------------------------------------------- teşhis (gönüllüler için; kişisel veri yazmaz)
+
+def diagnose(text: str) -> dict:
+    """Okunamayan ekstre için: hangi etiketler bulundu, kaç tarihli satır var, en yakın deneme ne kadar tuttu.
+    Çıktıda isim, kart numarası, açıklama ya da tutar yoktur (sadece evet/hayır, sayılar ve fark yüzdesi)."""
+    bank = bank_of(text)
+    learned = learn(text, bank)
+    out = {"banka": bank or "tanınmadı", "okundu": bool(learned)}
+    if learned:
+        spec, st = learned
+        out.update({"işlem": len(st.transactions), "kural": {k: spec[k] for k in ("date", "num", "amount_idx", "credit")}})
+        return out
+    out["tarihli_satır"] = {f"{o}{s}": len(re.findall(r"(?m)^\s*" + p, text)) for (o, s), p in _DATES.items()}
+    best = None
+    for fmt in ("tr", "us"):
+        h = header(text, fmt)
+        found = {k: h[k] is not None for k in LABELS} | {"denklem_satırı": "equation" in h, "kart_no": bool(h["card_no"])}
+        for (order, sep) in _DATES:
+            for idx in (-1, 0, -2, 1):
+                for credit in ("minus", "plus"):
+                    spec = {"v": 1, "kind": "card", "bank": bank, "keywords": [], "date": {"sep": sep, "order": order},
+                            "num": fmt, "amount_idx": idx, "credit": credit}
+                    try:
+                        res = apply(text, spec, bank)
+                    except Exception:  # noqa: BLE001
+                        res = None
+                    if not res or not res[0].total_debt:
+                        continue
+                    st = res[0]
+                    charges = sum(t.amount for t in st.transactions if t.txn_type != PAYMENT)
+                    diff = abs(st.previous_balance - st.payments + charges - st.total_debt) / st.total_debt * 100
+                    if best is None or diff < best[0]:
+                        best = (diff, fmt, found, len(st.transactions))
+        if best is None or best[1] != fmt:
+            out.setdefault("etiketler_" + fmt, found)
+    if best:
+        out.update({"en_yakın_fark_%": round(best[0], 2), "sayı_biçimi": best[1], "etiketler": best[2], "işlem_adayı": best[3]})
+    return out
+
+
+def anonymize(text: str) -> str:
+    """Yapıyı koruyarak kişisel veriyi maskele: etiket sözlüğü ve tarih/tutar düzeni kalır; isimler, açıklamalar,
+    kart/hesap/TC numaraları değişir. Tutarlar korunur (denklem test edilebilsin); istersen elle değiştir."""
+    stems = set()
+    words = [*LABELS.values(), *KEYWORDS, _PREV_LINE.pattern, _PAY_WORDS.pattern, _FEE_WORDS.pattern,
+             *(p for p, _ in BANK_HINTS), "taksit taksidi iade toplam tutar tarih işlem açıklama tl usd eur son kalan kredi "
+             "kartı kart limit puan bonus ekstre hesap özet sonraki bir"]
+    for w in words:
+        stems |= {x for x in re.findall(r"[a-z]+", _fold(w)) if len(x) >= 2}
+    names: dict[str, str] = {}
+
+    def word(m):
+        w = _fold(m.group(0))
+        if w in stems or any(len(st) >= 4 and w.startswith(st) for st in stems):  # "borcunuz" ← "borcu"
+            return m.group(0)
+        return names.setdefault(w, f"W{len(names) + 1}")
+
+    out = []
+    for ln in text.splitlines():
+        ln = _CARD.sub(lambda m: "1111******2222", ln)
+        ln = re.sub(r"TR\s?\d{2}(?:\s?\d{4}){5}\s?\d{0,2}", "TR00 0000 0000 0000 0000 0000 00", ln)
+        ln = re.sub(r"\S+@\S+", "eposta@ornek.com", ln)
+        ln = re.sub(r"(?<![\d.,])\d{6,}(?![\d.,])", lambda m: "9" * len(m.group(0)), ln)  # TCKN, müşteri/hesap/tel no
+        ln = re.sub(r"[A-Za-zÇĞİÖŞÜçğıöşü]{2,}", word, ln)
+        out.append(ln)
+    return "\n".join(out)
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+
+    from app.parsers import extract_text
+
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
+        sys.exit("Kullanım: python -m app.card_reader ekstre.pdf [pdf-şifresi] [--anonim]")
+    txt = extract_text(open(args[0], "rb").read(), args[1] if len(args) > 1 else None)
+    if "--anonim" in sys.argv:
+        print(anonymize(txt))
+    else:
+        print(json.dumps(diagnose(txt), ensure_ascii=False, indent=2))
