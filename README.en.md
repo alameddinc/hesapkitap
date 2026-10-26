@@ -11,6 +11,10 @@
 </p>
 
 <p align="center">
+  <a href="https://hesapkitap.alameddinc.com"><b>🧪 Live demo</b></a> — try it without installing: sample data, your own private copy for 1 hour
+</p>
+
+<p align="center">
   <a href="README.md">🇹🇷 Türkçe</a> · <b>🇬🇧 English</b> ·
   <a href="docs/KURULUM.md">Install guide (TR)</a> ·
   <a href="https://github.com/alameddinc/hesapkitap/issues/new/choose">Report an issue</a>

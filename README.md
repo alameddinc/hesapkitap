@@ -30,6 +30,10 @@
 </p>
 
 <p align="center">
+  <a href="https://hesapkitap.alameddinc.com"><b>🧪 Canlı demo</b></a> — kurmadan dene: uydurma verilerle, sana özel 1 saatlik kopya
+</p>
+
+<p align="center">
   <a href="#-hızlı-kurulum"><b>Kurulum</b></a> ·
   <a href="docs/KURULUM.md"><b>Tek tıkla / evde / VPS</b></a> ·
   <a href="#-ekran-görüntüleri"><b>Ekran görüntüleri</b></a> ·
