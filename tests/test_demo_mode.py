@@ -105,3 +105,15 @@ def test_stats_track_sessions_without_storing_ip(demo):
     assert {"ozet", "planlama", "zekat", "ornek"} <= set(s["bölümler"])
     raw = sqlite3.connect(demo_mode.os.path.join(demo_mode._base(), "stats.db")).execute("SELECT * FROM sessions").fetchall()
     assert "203.0.113.7" not in str(raw)  # IP saklanmaz
+
+
+def test_stats_endpoint_needs_key_and_does_not_create_sandbox(demo, monkeypatch):
+    import os
+
+    assert demo.get("/api/demo/stats").status_code == 404  # anahtar tanımlı değil
+    monkeypatch.setenv("DEMO_STATS_KEY", "gizli-anahtar")
+    assert demo.get("/api/demo/stats", headers={"x-stats-key": "yanlis"}).status_code == 404
+    r = demo.get("/api/demo/stats?days=30", headers={"x-stats-key": "gizli-anahtar"})
+    assert r.status_code == 200 and "oturum" in r.json() and "son_oturumlar" in r.json()
+    assert not demo.cookies.get(demo_mode.COOKIE)
+    assert not os.path.isdir(demo_mode._sandbox_dir()) or os.listdir(demo_mode._sandbox_dir()) == []

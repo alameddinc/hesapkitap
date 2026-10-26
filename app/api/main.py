@@ -72,6 +72,8 @@ async def require_login(request: Request, call_next):
     user = None
     from app import demo_mode
 
+    if demo_mode.enabled() and path == "/api/demo/stats":  # yönetici paneli çeker (anahtarla); sandbox açmaz, sayılmaz
+        return await call_next(request)
     if demo_mode.enabled() and path.startswith("/api/") and path != "/api/auth/status":
         return await _demo_request(request, call_next)
     if demo_mode.enabled() and request.method == "GET" and "." not in path.rsplit("/", 1)[-1]:
@@ -2231,6 +2233,36 @@ def demo_info():
         raise HTTPException(404, "Demo değil")
     return {"expires_at": u["expires_at"], "ttl": demo_mode.TTL,
             "samples": [{"key": k, "label": v["label"], "kind": v["kind"]} for k, v in demo_mode.SAMPLES.items()]}
+
+
+@app.get("/api/demo/stats")
+def demo_stats(request: Request, days: int = 7):
+    """Demo kullanım istatistikleri: sadece DEMO_STATS_KEY bilen (canlı uygulamanın yönetici paneli) okur."""
+    import hmac
+
+    from app import demo_mode
+
+    key = os.environ.get("DEMO_STATS_KEY", "")
+    if not demo_mode.enabled() or not key or not hmac.compare_digest(request.headers.get("x-stats-key", ""), key):
+        raise HTTPException(404, "Yok")
+    return demo_mode.stats(max(1, min(days, 365)))
+
+
+@app.get("/api/admin/demo-stats")
+def admin_demo_stats(days: int = 7):
+    """Yönetici: canlı demonun istatistikleri (demo container'ından, sunucu içinden çekilir)."""
+    import httpx
+
+    _require_admin()
+    url, key = os.environ.get("DEMO_STATS_URL"), os.environ.get("DEMO_STATS_KEY")
+    if not url or not key:
+        return {"configured": False}
+    try:
+        r = httpx.get(url, params={"days": days}, headers={"x-stats-key": key}, timeout=10)
+        r.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Demoya ulaşılamadı: {e}") from e
+    return {"configured": True, **r.json()}
 
 
 @app.post("/api/demo/reset")

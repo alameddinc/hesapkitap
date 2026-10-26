@@ -258,6 +258,9 @@ def stats(days: int = 7) -> dict:
         "örnek_deneyen": sum(1 for r in human if r[7]), "kayıt_ekleyen": sum(1 for r in human if r[8]),
         "bölümler": dict(areas.most_common()),
         "günlük": {d: {"oturum": by_day[d], "ziyaretçi": visitors_by_day[d]} for d in sorted(by_day)},
+        "son_oturumlar": [{"başlangıç": time.strftime("%Y-%m-%d %H:%M", time.localtime(r[0])), "süre_sn": max(0, r[1] - r[0]),
+                           "istek": r[2], "mobil": bool(r[4]), "bölümler": [a for a in (r[6] or "").split(",") if a],
+                           "örnek": r[7], "kayıt": r[8]} for r in sorted(human, key=lambda r: -r[0])[:25]],
     }
 
 
