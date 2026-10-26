@@ -11,3 +11,4 @@ web/dist/
 .playwright-mcp/
 *.tsbuildinfo
 app/VERSION
+docker-compose.demo.yml
