@@ -11,6 +11,7 @@ import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
 import UpdateNotice from "../components/UpdateNotice";
+import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
 
 interface ConfigItem {
   name: string;
@@ -231,6 +232,7 @@ export default function Settings() {
   const disconnect = useSave(() => post("/api/settings/telegram/disconnect"), () => ui.toast("Bağlantı kaldırıldı"));
   const report = useSave(() => post<{ month: string }>("/api/settings/telegram/report"), () => ui.toast("Rapor Telegram'a gönderildi"));
   const backupNow = useSave(() => post<{ path: string }>("/api/settings/backup/now"), (r) => ui.toast(`Yedek alındı: ${r.path}`));
+  const backTo = useSave((name: string) => restoreNamed(name), (r) => ui.toast(restoredMsg(r)));
   const s = st.data;
   const cfg = useQuery({ queryKey: ["config"], queryFn: () => fetch("/api/settings/config").then((r) => r.json() as Promise<ConfigItem[]>) });
   const auth = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
@@ -336,6 +338,7 @@ export default function Settings() {
             ? " Şifreli kopyası Telegram'a gönderiliyor."
             : " Sunucu dışı şifreli kopya için Telegram'ı bağla ve yukarıda yedek şifresi belirle."}
         </p>
+        <BackupTools />
         <button className="btn-primary" disabled={backupNow.isPending} onClick={() => backupNow.mutate(undefined, onErr)}>
           Şimdi yedek al
         </button>
@@ -343,7 +346,12 @@ export default function Settings() {
           {s?.backup.files.map((f) => (
             <li key={f.name} className="flex items-center justify-between gap-2 py-2">
               <span>{dateTR(f.created)} <span className="text-xs text-stone-500">· {(f.size / 1024).toFixed(0)} KB</span></span>
-              <a className="btn-ghost px-2 py-1" href={`/api/settings/backup/${f.name}`} download><Download size={14} /> İndir</a>
+              <span className="flex gap-1">
+                <button className="btn-ghost px-2 py-1 text-xs" disabled={backTo.isPending}
+                  onClick={() => confirm(`${dateTR(f.created)} yedeğine dönülsün mü? Şu anki kayıtların yerini alır (önce şu anki hal yedeklenir).`)
+                    && backTo.mutate(f.name, onErr)}>Bu yedeğe dön</button>
+                <a className="btn-ghost px-2 py-1" href={`/api/settings/backup/${f.name}`} download><Download size={14} /> İndir</a>
+              </span>
             </li>
           ))}
           {s && !s.backup.files.length && <li className="py-2 text-stone-500">Henüz yedek yok</li>}

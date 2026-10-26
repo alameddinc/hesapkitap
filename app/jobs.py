@@ -24,10 +24,15 @@ def _tl(x: float) -> str:
 
 # ---------------------------------------------------------------- yedek
 
+def _main_space() -> bool:
+    """Yöneticinin (ana) veritabanı mı? Telegram yönetici kanalıdır: başka kullanıcının verisi oraya gitmez."""
+    return os.path.abspath(db.db_path()) == os.path.abspath(db.DB_PATH)
+
+
 def run_backup(today: date) -> str:
     path = backup.make_backup(today)
     pw = backup.passphrase()
-    if telegram.enabled() and pw:
+    if telegram.enabled() and pw and _main_space():
         with open(path, "rb") as f:
             blob = backup.encrypt(f.read(), pw)
         telegram.send_document(os.path.basename(path) + ".enc", blob,
@@ -143,12 +148,26 @@ def run_wallet_loads(today: date) -> int:
 
 
 JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads)]
+MAIN_ONLY = {"remind"}  # Telegram'a yazan işler sadece yöneticinin alanında
 
 
 def due_jobs(now: datetime) -> list[tuple[str, callable]]:
     today = now.date().isoformat()
+    main = _main_space()
     return [(name, fn) for name, hour, fn in JOBS
-            if now.hour >= hour and db.get_setting(f"job:{name}") != today]
+            if (main or name not in MAIN_ONLY) and now.hour >= hour and db.get_setting(f"job:{name}") != today]
+
+
+def spaces() -> list[tuple[str | None, dict | None]]:
+    """Zamanlanmış işlerin çalışacağı alanlar: ana veritabanı + kendi veritabanı olan her etkin kullanıcı."""
+    from app import system
+
+    out: list[tuple[str | None, dict | None]] = [(None, None)]
+    try:
+        out += [(system.user_db_path(u), u) for u in system.users() if u.get("db_file") and not u.get("disabled")]
+    except Exception:  # noqa: BLE001 - sistem veritabanı yoksa (tek kullanıcı) sadece ana alan
+        log.exception("kullanıcı listesi okunamadı")
+    return out
 
 
 def mail_due(now: datetime) -> bool:
@@ -178,12 +197,14 @@ async def scheduler() -> None:
                     log.info("telegram inbox: %s mesaj", n)
             except Exception:  # noqa: BLE001
                 log.exception("telegram inbox failed")
-        for name, fn in due_jobs(now):
-            try:
-                result = await asyncio.to_thread(fn, now.date())
-                log.info("job %s ok: %s", name, result)
-            except Exception:  # noqa: BLE001 - bir iş patlarsa diğerleri sürsün
-                log.exception("job %s failed", name)
-            finally:
-                db.set_setting(f"job:{name}", now.date().isoformat())
+        for path, user in spaces():
+            with db.use_space(path, user):  # her kullanıcının işi kendi veritabanında (to_thread bağlamı taşır)
+                for name, fn in due_jobs(now):
+                    try:
+                        result = await asyncio.to_thread(fn, now.date())
+                        log.info("job %s %s ok: %s", name, (user or {}).get("username", "ana"), result)
+                    except Exception:  # noqa: BLE001 - bir iş patlarsa diğerleri sürsün
+                        log.exception("job %s failed", name)
+                    finally:
+                        db.set_setting(f"job:{name}", now.date().isoformat())
         await asyncio.sleep(60)

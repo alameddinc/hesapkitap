@@ -2647,6 +2647,46 @@ def backup_now():
         raise HTTPException(502, f"Yedek alındı ama Telegram'a gönderilemedi: {e}") from e
 
 
+@app.get("/api/settings/export.zip")
+def export_zip():
+    """Tüm veri tek zip: veritabanı + ekstre PDF'leri + faturalar (taşıma ve geri yükleme için)."""
+    from starlette.background import BackgroundTask
+
+    path = backup.export_zip()
+    return FileResponse(path, filename=f"hesapkitap-{date.today():%Y%m%d}.zip", media_type="application/zip",
+                        background=BackgroundTask(os.remove, path))
+
+
+@app.get("/api/settings/export.xlsx")
+def export_xlsx():
+    from fastapi.responses import Response
+
+    from app import export
+
+    return Response(export.workbook(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="hesapkitap-{date.today():%Y%m%d}.xlsx"'})
+
+
+@app.post("/api/settings/backup/restore")
+async def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(None)):
+    try:
+        return backup.restore(await file.read(), file.filename or "", passphrase)
+    except backup.RestoreError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.post("/api/settings/backup/{name}/restore")
+def backup_restore_named(name: str):
+    if name not in {b["name"] for b in backup.list_backups()}:
+        raise HTTPException(404)
+    with open(os.path.join(backup.backup_dir(), name), "rb") as f:
+        data = f.read()
+    try:
+        return backup.restore(data, name)
+    except backup.RestoreError as e:
+        raise HTTPException(422, str(e)) from e
+
+
 @app.get("/api/settings/backup/{name}")
 def backup_download(name: str):
     if name not in {b["name"] for b in backup.list_backups()}:
