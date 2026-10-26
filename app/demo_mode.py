@@ -183,3 +183,89 @@ def sample_text(key: str) -> str:
 def sample_image(key: str) -> bytes:
     with open(os.path.join(ROOT, "docs", "demo", SAMPLES[key]["file"]), "rb") as f:
         return f.read()
+
+
+# ---------------------------------------------------------------- istatistik (gizliliğe saygılı)
+# Oturum = sandbox. IP saklanmaz: ziyaretçi, IP + tarayıcıdan GÜNLÜK değişen tuzla üretilen kısa bir parmak izidir
+# (o gün kaç farklı kişi geldiği bilinir, kimse günler arasında izlenemez).
+
+AREAS = {"/api/summary": "ozet", "/api/digest": "ozet", "/api/transactions": "islemler", "/api/plan": "planlama",
+         "/api/compare": "istatistik", "/api/year-summary": "istatistik", "/api/zakat": "zekat", "/api/donations": "zekat",
+         "/api/net-worth": "hesaplar", "/api/jars": "hesaplar", "/api/statements": "ekstreler", "/api/prices": "fiyatlar",
+         "/api/savings": "tasarruf", "/api/debts": "borclar", "/api/transfers": "transferler", "/api/demo/sample": "ornek",
+         "/api/entries": "kayit"}
+BOT = re.compile(r"bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp|telegram|curl|python|headless", re.I)
+
+
+def _stats_db() -> sqlite3.Connection:
+    os.makedirs(_base(), exist_ok=True)
+    c = sqlite3.connect(os.path.join(_base(), "stats.db"))
+    c.execute("""CREATE TABLE IF NOT EXISTS sessions (sid TEXT PRIMARY KEY, created INTEGER, last_seen INTEGER,
+                 requests INTEGER DEFAULT 0, visitor TEXT, mobile INTEGER, bot INTEGER, areas TEXT DEFAULT '',
+                 samples INTEGER DEFAULT 0, writes INTEGER DEFAULT 0)""")
+    return c
+
+
+def _visitor(ip: str, ua: str) -> str:
+    import hashlib
+
+    salt = date.today().isoformat() + os.environ.get("SECRET_KEY", "")
+    return hashlib.sha256(f"{salt}|{ip}|{ua}".encode()).hexdigest()[:12]
+
+
+def track(sid: str, path: str, method: str, ip: str, ua: str) -> None:
+    """Her demo isteğinde: oturumun son görülme zamanı, gezdiği bölümler, örnek/yazma sayısı."""
+    try:
+        now = int(time.time())
+        area = next((a for p, a in AREAS.items() if path.startswith(p)), None)
+        c = _stats_db()
+        c.execute("INSERT OR IGNORE INTO sessions (sid, created, last_seen, visitor, mobile, bot) VALUES (?, ?, ?, ?, ?, ?)",
+                  (sid, int(sid.split("-")[0]), now, _visitor(ip, ua), int(bool(re.search(r"Mobi|Android|iPhone", ua))),
+                   int(bool(BOT.search(ua)))))
+        c.execute("UPDATE sessions SET last_seen = ?, requests = requests + 1, "
+                  "areas = CASE WHEN ? IS NULL OR instr(',' || areas || ',', ',' || ? || ',') > 0 THEN areas "
+                  "ELSE trim(areas || ',' || ?, ',') END, samples = samples + ?, writes = writes + ? WHERE sid = ?",
+                  (now, area, area, area, int(path.startswith("/api/demo/sample")),
+                   int(method in ("POST", "PUT", "PATCH", "DELETE") and not path.startswith("/api/demo")), sid))
+        c.commit()
+        c.close()
+    except Exception:  # noqa: BLE001 - istatistik demoyu asla bozmasın
+        pass
+
+
+def stats(days: int = 7) -> dict:
+    since = int(time.time()) - days * 86400
+    c = _stats_db()
+    rows = c.execute("SELECT created, last_seen, requests, visitor, mobile, bot, areas, samples, writes FROM sessions "
+                     "WHERE created >= ?", (since,)).fetchall()
+    c.close()
+    human = [r for r in rows if not r[5]]
+    durs = sorted(max(0, r[1] - r[0]) for r in human)
+    from collections import Counter
+
+    areas = Counter(a for r in human for a in (r[6] or "").split(",") if a)
+    by_day = Counter(time.strftime("%Y-%m-%d", time.localtime(r[0])) for r in human)
+    visitors_by_day = Counter()
+    for d in by_day:
+        visitors_by_day[d] = len({r[3] for r in human if time.strftime("%Y-%m-%d", time.localtime(r[0])) == d})
+    med = durs[len(durs) // 2] if durs else 0
+    return {
+        "gün": days, "oturum": len(human), "bot_oturum": len(rows) - len(human),
+        "tekil_ziyaretçi_günlük_toplam": sum(visitors_by_day.values()),
+        "mobil_%": round(100 * sum(r[4] for r in human) / len(human)) if human else 0,
+        "süre_medyan_sn": med, "süre_ort_sn": round(sum(durs) / len(durs)) if durs else 0,
+        "1dk+_kalan": sum(d >= 60 for d in durs), "5dk+_kalan": sum(d >= 300 for d in durs),
+        "örnek_deneyen": sum(1 for r in human if r[7]), "kayıt_ekleyen": sum(1 for r in human if r[8]),
+        "bölümler": dict(areas.most_common()),
+        "günlük": {d: {"oturum": by_day[d], "ziyaretçi": visitors_by_day[d]} for d in sorted(by_day)},
+    }
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "stats":
+        print(json.dumps(stats(int(sys.argv[2]) if len(sys.argv) > 2 else 7), ensure_ascii=False, indent=2))
+    else:
+        print("Kullanım: python -m app.demo_mode stats [gün]")

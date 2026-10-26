@@ -1215,6 +1215,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             out.append({"level": "uyari", "title": f"{sub['merchant'].title()} paketi düşmemiş görünüyor",
                         "detail": f"Yeni paket {_tl(sub['new_amount'])} olmalıydı; {_tl(sub['overcharged'])} fazla çekildi.",
                         "link": "tasarruf"})
+    # 7a) Aynı abonelik satıcısına kısa sürede benzer tutarlı birden çok ödeme: çift üyelik / çift çekim olabilir
+    out += duplicate_charges(today)
     subs = [s for acc in p["projection"] for s in acc["subscriptions"]]
     if subs:
         total = sum(s["amount"] for s in subs)
@@ -1442,6 +1444,34 @@ def _pct(now: float, before: float) -> str:
         return ""
     p = round((now - before) / before * 100)
     return f" ({'+' if p > 0 else ''}{p}%)" if p else " (aynı)"
+
+
+def duplicate_charges(today: date | None = None, days: int = 7, lookback: int = 180) -> list[dict]:
+    """Abonelik kategorisinde aynı satıcıya `days` gün içinde benzer tutarlı (±%5) 2+ çekim (son `lookback` gün)."""
+    today = today or date.today()
+    since = (today - timedelta(days=lookback)).isoformat()
+    rows = [t for t in db.card_transactions() if t["txn_type"] == PURCHASE and t["category"] in SUBSCRIPTION_CATEGORIES
+            and t["txn_date"] >= since and t["amount"] >= 50]
+    by: dict[str, list] = defaultdict(list)
+    for t in rows:
+        by[merchant_name(t["description"])].append(t)
+    out = []
+    for m, ts in by.items():
+        ts.sort(key=lambda t: t["txn_date"])
+        for i, a in enumerate(ts):
+            near = [b for b in ts[i + 1:] if (date.fromisoformat(b["txn_date"]) - date.fromisoformat(a["txn_date"])).days <= days
+                    and abs(b["amount"] - a["amount"]) <= a["amount"] * 0.05]
+            if near:
+                group = [a, *near]
+                cards = sorted({f"··{(t.get('card') or t['account'])[-4:]}" for t in group})
+                out.append({"level": "uyari", "title": f"{m.title()}: {len(group)} benzer çekim {days} gün içinde",
+                            "detail": f"{date.fromisoformat(a['txn_date']):%d.%m.%Y} itibarıyla "
+                                      + ", ".join(_tl(t['amount']) for t in group)
+                                      + (f" ({', '.join(cards)} kartlarından)" if len(cards) > 1 else "")
+                                      + ". Aynı üyelik iki kez alınmış ya da iki hesap açılmış olabilir; satıcıdan kontrol et, "
+                                        "gerekirse iade iste.", "link": "tasarruf"})
+                break
+    return out
 
 
 def year_summary(year: int) -> dict:

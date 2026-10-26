@@ -88,3 +88,20 @@ def test_page_load_sets_sandbox_cookie_once(demo):
         demo.get(path)
     assert demo.cookies.get(demo_mode.COOKIE) == sid
     assert os.listdir(demo_mode._sandbox_dir()) == [sid]
+
+
+def test_stats_track_sessions_without_storing_ip(demo):
+    import sqlite3
+
+    ua = {"user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Mobile"}
+    demo.get("/", headers=ua)
+    for p in ("/api/summary", "/api/plan", "/api/zakat"):
+        demo.get(p, headers={**ua, "x-real-ip": "203.0.113.7"})
+    demo.post("/api/demo/sample/genel", headers=ua)
+    bot = TestClient(demo.app)
+    bot.get("/api/summary", headers={"user-agent": "Googlebot/2.1"})
+    s = demo_mode.stats(1)
+    assert s["oturum"] == 1 and s["bot_oturum"] == 1 and s["mobil_%"] == 100 and s["örnek_deneyen"] == 1
+    assert {"ozet", "planlama", "zekat", "ornek"} <= set(s["bölümler"])
+    raw = sqlite3.connect(demo_mode.os.path.join(demo_mode._base(), "stats.db")).execute("SELECT * FROM sessions").fetchall()
+    assert "203.0.113.7" not in str(raw)  # IP saklanmaz

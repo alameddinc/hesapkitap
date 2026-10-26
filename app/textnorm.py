@@ -25,6 +25,9 @@ def merchant_name(description: str) -> str:
     import re
 
     norm = normalize(description)
+    # Satıcı adına tahsilat yapan aracılar (merchant of record): asıl satıcı yıldızdan sonra
+    # 'PADDLE.NET* GEOGUESSR/0808…' -> 'GEOGUESSR', 'FS *SUBLIME HQ' -> 'SUBLIME HQ'
+    norm = re.sub(r"^(PADDLE\.NET|PADDLE|FS|2CO\.COM|2CO|LEMSQZY|XSOLLA|DLOCAL)\s*\*\s*", "", norm)
     # Pazar yeri önekleri: 'GOOGLE *Google One' / 'GOOGLE*CLOUD' -> 'GOOGLE ONE' / 'GOOGLE CLOUD'
     norm = re.sub(r"^(GOOGLE|APPLE|PAYPAL|AMZN|MICROSOFT|MSFT)\s*\*\s*", r"\1 ", norm)
     norm = re.sub(r"^(\w+) \1\b", r"\1", norm)  # 'GOOGLE GOOGLE ONE' -> 'GOOGLE ONE'

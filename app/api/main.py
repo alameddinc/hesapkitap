@@ -56,6 +56,8 @@ async def _demo_request(request: Request, call_next):
     db_file, user = demo_mode.space(sid)
     with db.use_space(db_file, user):
         response = await call_next(request)
+    demo_mode.track(sid, path, request.method, request.headers.get("x-real-ip") or (request.client.host if request.client else ""),
+                    request.headers.get("user-agent", ""))
     if new:
         https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
         response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
