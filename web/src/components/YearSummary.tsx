@@ -38,10 +38,10 @@ export default function YearSummary() {
           <Kpi label="Gelir" value={y.income} tone="green" sub={chg(y.income_change, "geçen yıla göre") ?? `${y.months} ay`} />
           <Kpi label="Gider" value={y.expense} sub={chg(y.expense_change, "geçen yıla göre") ?? undefined} />
           <Kpi label="Kalan" value={y.net} tone={y.net < 0 ? "red" : "green"} sub={y.savings_rate != null ? `gelirin %${y.savings_rate}'i` : undefined} />
-          <Kpi label="Aylık ortalama gider" value={y.avg_expense} sub={`${y.months} dönem`} />
+          <Kpi label="Aylık ortalama gider" value={y.avg_expense} sub="tamamlanan dönemler" />
         </div>
         <ul className="space-y-1 text-sm">
-          {y.highest && y.lowest && y.months > 1 && (
+          {y.highest && y.lowest && y.highest.month !== y.lowest.month && (
             <li>En çok harcanan ay <b>{monthLabel(y.highest.month)}</b> ({tl(y.highest.expense)}), en az <b>{monthLabel(y.lowest.month)}</b> ({tl(y.lowest.expense)})</li>
           )}
           <li>{y.fees ? <span className="text-red-600">Faiz ve ücretlere <b>{tl(y.fees)}</b> gitti</span> : <span className="text-green-700 dark:text-green-400">Bu yıl faiz ödemedin ✓</span>}</li>

@@ -1440,6 +1440,7 @@ def year_summary(year: int) -> dict:
     t = _totals(rows)
     per = [{"month": m, **{k: v for k, v in _totals([r for r in rows if r["month"] == m]).items() if k in ("income", "expense", "net")}}
            for m in months]
+    done = [m for m in per if m["month"] < cur]
     expenses = [r for r in rows if r["kind"] in (*CARD_SPEND, FEE, EXPENSE)]
     cats = _group(expenses, "category")
     total_exp = sum(c["amount"] for c in cats) or 1
@@ -1451,10 +1452,11 @@ def year_summary(year: int) -> dict:
     return {
         "year": year, "years": years, "months": len(months),
         "income": _round(t["income"]), "expense": _round(t["expense"]), "net": _round(t["net"]), "fees": _round(t["fees"]),
-        "avg_expense": _round(t["expense"] / len(months)) if months else 0.0,
+        # ortalama ve en yüksek/düşük ay: sadece tamamlanmış dönemler (içinde bulunulan yarım dönem yanıltır)
+        "avg_expense": _round(sum(m["expense"] for m in done) / len(done)) if done else _round(t["expense"]),
         "savings_rate": round(t["net"] / t["income"] * 100) if t["income"] > 0 else None,
-        "highest": max(per, key=lambda m: m["expense"]) if per else None,
-        "lowest": min(per, key=lambda m: m["expense"]) if per else None,
+        "highest": max(done, key=lambda m: m["expense"]) if done else None,
+        "lowest": min(done, key=lambda m: m["expense"]) if done else None,
         "per_month": per,
         "categories": [{**c, "share": round(c["amount"] / total_exp * 100)} for c in cats[:8]],
         "merchants": _group([r for r in rows if r["kind"] in CARD_SPEND or r["kind"] == EXPENSE], "merchant")[:5],
