@@ -22,7 +22,7 @@ COOKIE = "hk_demo"
 ANCHOR = (2026, 10)  # app.demo verisinin yazıldığı ay
 CLOSED = ("/api/statements/upload", "/api/bank-import", "/api/receipts/parse", "/api/bills/parse", "/api/share",
           "/api/documents/parse",
-          "/api/settings", "/api/admin", "/api/book", "/api/inbox", "/api/mail", "/api/templates")
+          "/api/settings", "/api/admin", "/api/book", "/api/mail", "/api/templates")
 OPEN = ("/api/book/me",)
 SAMPLES = {
     "vakifbank": {"label": "Örnek VakıfBank ekstresi", "kind": "statement", "file": "vakifbank_b.txt"},

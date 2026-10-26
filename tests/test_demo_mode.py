@@ -75,3 +75,16 @@ def test_expired_sandbox_and_reset(demo, monkeypatch):
     demo.post("/api/demo/reset")
     demo.get("/api/summary")
     assert demo.cookies.get(demo_mode.COOKIE) not in (None, sid2)
+
+
+def test_page_load_sets_sandbox_cookie_once(demo):
+    """Sayfa açılışında çerez verilir; ardından gelen API istekleri aynı kopyayı kullanır (yeni kopya açılmaz)."""
+    import os
+
+    demo.get("/")
+    sid = demo.cookies.get(demo_mode.COOKIE)
+    assert sid
+    for path in ("/api/summary", "/api/transactions", "/api/statements"):
+        demo.get(path)
+    assert demo.cookies.get(demo_mode.COOKIE) == sid
+    assert os.listdir(demo_mode._sandbox_dir()) == [sid]

@@ -72,6 +72,15 @@ async def require_login(request: Request, call_next):
 
     if demo_mode.enabled() and path.startswith("/api/") and path != "/api/auth/status":
         return await _demo_request(request, call_next)
+    if demo_mode.enabled() and request.method == "GET" and "." not in path.rsplit("/", 1)[-1]:
+        # sayfa açılışı: sandbox çerezi HTML ile birlikte verilir; yoksa aynı anda giden ilk API istekleri
+        # her biri ayrı kopya açardı
+        sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE))
+        response = await call_next(request)
+        if new:
+            https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+            response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
+        return response
     public = path.startswith("/api/auth/") or path == "/api/templates/submit"  # şablon gönderimi: oturumsuz (hub)
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
