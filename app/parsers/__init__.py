@@ -38,7 +38,7 @@ def _text_with_passwords(data: bytes, passwords: list[str]) -> tuple[str, str | 
     raise PasswordRequired("PDF şifreli; şifre gerekli" if not passwords else "Şifre yanlış")
 
 
-SUPPORTED = "VakıfBank, Kuveyt Türk"
+SUPPORTED = "VakıfBank, Kuveyt Türk; diğerleri ekstre denklemi tutarsa genel okuyucuyla"
 
 
 def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | None = None) -> Statement:
@@ -53,7 +53,11 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
     for detect, parse in DETECTORS:
         if detect(text):
             return parse(text)
-    from app import receipt
+    from app import card_reader, receipt
+
+    # hazır okuyucu yok: genel okuyucu (kayıtlı/topluluk şablonu ya da yeni öğrenilen; ekstre denklemi tutmalı)
+    if st := card_reader.read(text):
+        return st
 
     if allow_ai and receipt.enabled():
         from app.parsers.ai import parse_pdf_with_ai

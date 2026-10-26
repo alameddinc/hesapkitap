@@ -62,7 +62,7 @@ export default function Statements() {
         <div className="font-medium">{upload.isPending ? "İşleniyor…" : "Ekstre ya da hesap dökümü bırak veya seç"}</div>
         <div className="text-xs text-stone-500">
           Kredi kartı ekstresi (PDF) ya da vadesiz hesap dökümü (PDF, Excel, CSV) — hangisi olduğunu kendisi anlar ·
-          birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri yapay zekâ ile)
+          birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri genel okuyucu, olmazsa yapay zekâ ile)
         </div>
         <input ref={input} type="file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>

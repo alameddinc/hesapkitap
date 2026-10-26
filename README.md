@@ -132,7 +132,9 @@ Ayrıntılar için başlığa dokun.
 - **Kart ekstreleri** — İşlemler, taksitler (kaçıncı taksit, kalan), dövizli harcamalar, faiz/BSMV/KKDF, vade farkı ayrıştırılır.
   Her ekstre **mutabakat kontrolünden** geçer: okunan işlemlerin toplamı ekstre özetiyle kuruşu kuruşuna tutmalı.
   - Hazır okuyucu: **VakıfBank**, **Kuveyt Türk**
-  - Diğer bankalar: Gemini anahtarı varsa **yapay zekâyla okunur** (aynı mutabakat kontrolüyle)
+  - Diğer bankalar: **genel okuyucu**, yapay zekâsız. Etiketlerden ("Hesap Kesim Tarihi", "Dönem Borcu"…) ve tarihli
+    satırlardan okur; sonuç **ekstre denklemiyle** (önceki borç − ödemeler + harcamalar = dönem borcu) doğrulanırsa o bankanın
+    kuralı öğrenilir ve toplulukla paylaşılır. Tutmazsa Gemini anahtarı varsa **yapay zekâyla okunur**.
 - **Hesap dökümleri (vadesiz)** — Her satır **bakiye zinciriyle** doğrulanır (önceki bakiye + tutar = bakiye).
   VakıfBank "Hesap Hareketleri" yapay zekâsız, kuralla okunur (yıllarca hareket, ücretsiz). Diğer bankalarda **şablon**
   denenir: kayıtlı ya da topluluktan gelen bir kural, yoksa bakiye zincirini tutturan kural **kendiliğinden öğrenilir**

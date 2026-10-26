@@ -156,6 +156,10 @@ def matches(text: str, spec: dict) -> bool:
 def is_safe(spec: dict) -> bool:
     """Şablon sadece izin verilen alanları, sabit sözlük kelimelerini ve küçük indeksleri içerebilir — belgeden
     metin (isim, IBAN, tutar) taşıyamaz, kod çalıştıramaz."""
+    if isinstance(spec, dict) and spec.get("kind") == "card":
+        from app.card_reader import is_safe as card_safe
+
+        return card_safe(spec)
     try:
         if set(spec) - {"v", "kind", "bank", "keywords", "date", "amount_idx", "balance_idx", "scope"}:
             return False
@@ -201,7 +205,7 @@ def read(text: str) -> dict | None:
     """Kayıtlı şablonlardan biri bu belgeyi zinciri tutturarak okuyorsa sonucu; yoksa yeni kural öğrenmeyi dene."""
     sync_community()
     for t in all_templates():
-        if not matches(text, t["spec"]):
+        if t["spec"].get("kind", "account") != "account" or not matches(text, t["spec"]):
             continue
         res = apply(text, t["spec"])
         if res and res["verified"]:

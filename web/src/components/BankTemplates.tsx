@@ -4,7 +4,8 @@ import { dateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
-interface Spec { bank: string; keywords: string[]; date: { sep: string; order: string }; amount_idx: number; balance_idx: number; scope?: string }
+interface Spec { kind?: "account" | "card"; bank: string; keywords: string[]; date: { sep: string; order: string }; amount_idx: number;
+  balance_idx?: number; scope?: string; num?: string; credit?: string }
 interface Tpl { id: number; bank: string; spec: Spec; source: "learned" | "community"; uses: number; created_at: string; shared_at: string | null }
 interface Sub { id: number; bank: string; spec: Spec; count: number; status: "bekliyor" | "onaylandi" | "reddedildi"; received_at: string }
 interface Data { templates: Tpl[]; sharing: boolean; is_hub: boolean; submissions: Sub[] }
@@ -18,7 +19,7 @@ const call = async (method: string, url: string, body?: unknown) => {
 const slug = (s: string) => s.toLowerCase().replace(/ı/g, "i").replace(/ş/g, "s").replace(/ğ/g, "g").replace(/ü/g, "u")
   .replace(/ö/g, "o").replace(/ç/g, "c").replace(/[^a-z0-9]+/g, "-");
 // GitHub'da dosya oluşturma ekranı (önceden doldurulmuş): onaylanan şablon depoya eklenir, tüm sunucular çeker
-const ghNew = (s: Sub) => `https://github.com/alameddinc/hesapkitap/new/main/templates?filename=${slug(s.bank)}-hesap-${s.id}.json`
+const ghNew = (s: Sub) => `https://github.com/alameddinc/hesapkitap/new/main/templates?filename=${slug(s.bank)}-${s.spec.kind === "card" ? "kart" : "hesap"}-${s.id}.json`
   + `&value=${encodeURIComponent(JSON.stringify([s.spec], null, 2))}`;
 
 /** Ayarlar: banka dökümü şablonları (yapay zekâsız okuma), topluluk paylaşımı, hub'da gelen şablonların onayı. */
@@ -36,23 +37,25 @@ export default function BankTemplates({ isAdmin }: { isAdmin: boolean }) {
     <section className="card space-y-3 p-4">
       <h2 className="flex items-center gap-2 font-semibold"><Layers size={18} /> Banka şablonları</h2>
       <p className="text-sm text-stone-500">
-        Hesap dökümlerini yapay zekâsız okumak için öğrenilen kurallar. Yeni bir banka gelince kural bakiye zinciri tutarsa
-        kendiliğinden öğrenilir; topluluk deposundaki kurallar da günde bir kez çekilir.
+        Hesap dökümlerini ve kart ekstrelerini yapay zekâsız okumak için öğrenilen kurallar. Yeni bir banka gelince kural
+        doğrulanırsa (dökümde bakiye zinciri, ekstrede "önceki borç − ödemeler + harcamalar = dönem borcu") kendiliğinden
+        öğrenilir; topluluk deposundaki kurallar da günde bir kez çekilir.
       </p>
       {isAdmin && (
         <label className="flex cursor-pointer items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={d.sharing} onChange={(e) => sharing.mutate(e.target.checked, onErr)} />
           <span><b>Uygulamanın gelişmesine destek ol</b> — yeni öğrenilen kuralları toplulukla paylaş.
-            <span className="block text-xs text-stone-500">Gönderilen sadece banka adı ve satır düzeni (tarih biçimi, hangi sütunun tutar/bakiye olduğu); isim, IBAN, tutar, açıklama gitmez.</span>
+            <span className="block text-xs text-stone-500">Gönderilen sadece banka adı ve satır düzeni (tarih ve sayı biçimi, hangi sütunun tutar/bakiye olduğu); isim, IBAN, kart no, tutar, açıklama gitmez.</span>
           </span>
         </label>
       )}
       <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
         {d.templates.map((t) => (
           <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-            <span><b>{t.bank}</b> <span className="text-xs text-stone-500">· {t.source === "community" ? "topluluktan" : "bu sunucuda öğrenildi"} · {t.uses} kez kullanıldı
+            <span><b>{t.bank}</b> <span className="text-xs text-stone-500">· {t.spec.kind === "card" ? "kart ekstresi" : "hesap dökümü"} · {t.source === "community" ? "topluluktan" : "bu sunucuda öğrenildi"} · {t.uses} kez kullanıldı
               {t.shared_at && ` · paylaşıldı ${dateTR(t.shared_at.slice(0, 10))}`}</span></span>
-            <code className="text-xs text-stone-500">{t.spec.date.order}{t.spec.date.sep} · tutar #{t.spec.amount_idx} · bakiye #{t.spec.balance_idx}</code>
+            <code className="text-xs text-stone-500">{t.spec.date.order}{t.spec.date.sep} · tutar #{t.spec.amount_idx}
+              {t.spec.kind === "card" ? ` · ${t.spec.num} · ödeme ${t.spec.credit === "minus" ? "−" : "+"}` : ` · bakiye #${t.spec.balance_idx}`}</code>
           </li>
         ))}
         {!d.templates.length && <li className="py-2 text-stone-500">Henüz şablon yok.</li>}
