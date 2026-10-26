@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Eye, EyeOff, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { dateTR, parseAmount, tl } from "../format";
+import { dateTR, parseAmount, tlShown } from "../format";
 import { useUI } from "../ui";
 import AccountSelect from "./AccountSelect";
 import { useSave } from "./hooks";
@@ -84,7 +84,7 @@ export default function Sadaka() {
     () => ui.toast("Kaydedildi"));
   const del = useSave((id: number) => call("DELETE", `/api/donations/${id}`));
   const d = q.data;
-  const m = (x: number) => (show ? tl(x) : MASK);
+  const m = (x: number) => (show ? tlShown(x) : MASK); // bu sayfanın gözü genel gizlemeden bağımsız
   if (!d) return null;
 
   return (

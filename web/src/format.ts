@@ -9,6 +9,8 @@ export const setAmountsHidden = (v: boolean) => { amountsHidden = v; };
 export const areAmountsHidden = () => amountsHidden;
 
 export const tl = (x: number) => (amountsHidden ? MASK : tlFmt.format(x));
+/** Genel gizlemeyi yok sayar: kullanıcı o bölümde gözle açıkça "göster" dediyse. */
+export const tlShown = (x: number) => tlFmt.format(x);
 /** Sunucudan gelen metinlerdeki tutarları da maskele ("16.793,18 ₺ taksit…" → "•••• ₺ taksit…"). */
 export const maskText = (s: string) =>
   amountsHidden ? s.replace(/[-+]?₺?\s?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?\s?₺|₺\s?[-+]?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?/g, MASK) : s;
