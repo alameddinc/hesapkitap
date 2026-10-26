@@ -2244,10 +2244,37 @@ def product_key(name: str) -> str:
     return " ".join(n.split())[:60]
 
 
+# Fiş satırı türleri: fiyat karşılaştırmasına sadece "ürün" girer.
+_GROUP_LINES = {"ICECEK", "ICECEKLER", "SICAK ICECEK", "SICAK ICECEKLER", "SOGUK ICECEK", "SOGUK ICECEKLER", "MESRUBAT",
+                "YIYECEK", "YIYECEKLER", "GIDA", "TEMEL GIDA", "GIDA URUNLERI", "TATLI", "TATLILAR", "YEMEK", "YEMEKLER",
+                "MUHTELIF", "CESITLI", "DIGER", "URUN", "URUNLER", "MAL", "HIZMET", "REYON", "KDV", "TOPLAM", "ARA TOPLAM",
+                "SATIS", "SARKUTERI", "MANAV", "KASAP", "FIRIN", "UNLU MAMUL", "UNLU MAMULLER", "TEMIZLIK", "KOZMETIK"}
+_SERVICE = r"OTOPARK|\bPARK\b|PARKING|\bVALE\b|SERVIS UCRETI|HIZMET BEDELI|\bKUVER\b|GARSONIYE|TESLIMAT|KARGO"
+_DISCOUNT = r"INDIRIM|ISKONTO|KAMPANYA|KUPON|PUAN KULLAN|HEDIYE CEK|\bPROMOSYON\b"
+
+
+def item_kind(name: str, product: str | None = None, amount: float | None = None) -> str:
+    """product | group (kasanın reyon/grup satırı: 'İÇECEK' — içinde ne olduğu belli değil) |
+    service (süreye/kullanıma göre: otopark, vale, servis ücreti) | discount (indirim satırı ya da eksi tutar)."""
+    import re as _re
+
+    keys = [product_key(x) for x in (name, product) if x]
+    bare = [_re.sub(r"\b\d+\b", " ", k).split() for k in keys]
+    texts = [" ".join(b) for b in bare]
+    if (isinstance(amount, (int, float)) and amount < 0) or any(_re.search(_DISCOUNT, t) for t in texts):
+        return "discount"
+    if any(_re.search(_SERVICE, t) for t in texts):
+        return "service"
+    if any(t in _GROUP_LINES for t in texts if t):
+        return "group"
+    return "product"
+
+
 def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str, total: float | None = None,
                        branch: str | None = None) -> int:
     """Fiş satırlarını sakla. Tek bir satırın fiyatı okunamadıysa ve toplam belliyse: toplam − diğerleri (tahmini)."""
-    good = [it for it in items if (it.get("name") or "").strip() and product_key(it.get("product") or it["name"])]
+    good = [it for it in items if (it.get("name") or "").strip() and product_key(it.get("product") or it["name"])
+            and item_kind(it["name"], it.get("product"), it.get("amount")) != "discount"]  # indirim satırı ürün değil
     missing = [it for it in good if not isinstance(it.get("amount"), (int, float)) or it["amount"] <= 0]
     known_sum = sum(it["amount"] for it in good if it not in missing)
     inferred = None
@@ -2285,6 +2312,8 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
     mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka."""
     with connect() as c:
         items = rows(c.execute("SELECT * FROM receipt_items ORDER BY purchased_at, id"))
+    # grup satırı (İÇECEK), hizmet (otopark) ve indirim fiyat karşılaştırmasına girmez
+    items = [it for it in items if item_kind(it["name"], it["product"], it["amount"]) == "product"]
     names: dict[str, str] = {}
     for it in items:  # gösterim adı: küçük harf içeren (fişteki BÜYÜK HARF yerine) son yazılış
         k, n = _store_key(it["merchant"]), (it["merchant"] or "?").strip()

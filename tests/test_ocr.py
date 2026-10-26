@@ -46,3 +46,17 @@ def test_fallback_when_no_key(client, monkeypatch):
     r = client.post("/api/documents/parse", files={"file": ("f.jpg", b"\xff\xd8x", "image/jpeg")})
     assert r.status_code == 200 and r.json()["total"] == 1287.40 and r.json()["engine"] == "yerel"
     assert client.get("/api/meta").json()["receipt_engine"] == "yerel"
+
+
+def test_item_kind_keeps_only_real_products():
+    from app.db import item_kind
+
+    assert item_kind("İÇECEK", "İçecek", 810) == "group"
+    assert item_kind("TEMEL GIDA %1", None, 150) == "group"
+    assert item_kind("OTOPARK %20", "Otopark Hizmeti", 180) == "service"
+    assert item_kind("otopark", None, 160) == "service"
+    assert item_kind("Satış İndirimi", "İndirim", 0) == "discount"
+    assert item_kind("KAMPANYA", None, -20) == "discount"
+    assert item_kind("Harras Günlük Süt 1 L", None, 59) == "product"
+    assert item_kind("Latte 16 Oz", "Latte", 140) == "product"
+    assert item_kind("Sıcak çikolata", None, 120) == "product"
