@@ -1423,6 +1423,46 @@ def _pct(now: float, before: float) -> str:
     return f" ({'+' if p > 0 else ''}{p}%)" if p else " (aynı)"
 
 
+def _change(now: float, before: float) -> int | None:
+    return round((now - before) / before * 100) if before > 0 else None
+
+
+def month_digest(month: str, today: date | None = None) -> dict:
+    """Biten dönemin özeti (veri): Özet'teki kart ve Telegram mesajı aynı rakamları kullanır."""
+    today = today or date.today()
+    s, prev = summary(month, today=today), summary(add_months(month, -1), today=today)
+    t, pt = s["totals"], prev["totals"]
+    before = {c["name"]: c["amount"] for c in prev["by_category"]}
+    top = [{"name": c["name"], "amount": c["amount"], "change": _change(c["amount"], before.get(c["name"], 0))}
+           for c in s["by_category"][:5]]
+    rising = [c["name"] for c in s["by_category"] if before.get(c["name"], 0) > 500 and c["amount"] > before[c["name"]] * 1.3][:3]
+    upcoming = [p for p in payables(today) if p["status"] in ("bekliyor", "gecikti", "kismi", "tahmini") and p["days_left"] <= 30]
+    try:
+        from app import zakat
+
+        zk = zakat.upcoming_checks(today, window=30)
+    except Exception:  # noqa: BLE001 - fiyat servisine ulaşılamazsa özet yine çıksın
+        zk = []
+    try:
+        sug = len(recurring_suggestions(today)) + len(recurring_drift(today))
+    except Exception:  # noqa: BLE001
+        sug = 0
+    y, m = map(int, month.split("-"))
+    return {
+        "month": month, "label": f"{_AY[m - 1]} {y}",
+        "income": _round(t["income"]), "expense": _round(t["expense"]), "net": _round(t["net"]),
+        "expense_change": _change(t["expense"], pt["expense"]),
+        "savings_rate": round(t["net"] / t["income"] * 100) if t["income"] > 0 else None,
+        "fees": _round(t["fees"]), "top": top, "rising": rising,
+        "budgets_over": [{"category": b["category"], "spent": b["spent"], "limit": b["limit"]} for b in s["budgets"] if b["spent"] > b["limit"]],
+        "upcoming": {"count": len(upcoming), "total": _round(sum(p["amount"] - (p["paid_amount"] or 0) for p in upcoming)),
+                     "items": [{"title": p["title"], "amount": p["amount"], "due_date": p["due_date"], "estimated": p["status"] == "tahmini"}
+                               for p in sorted(upcoming, key=lambda p: p["due_date"])[:5]]},
+        "zakat": [{"name": z["name"], "kind": z["kind"], "date": z["date"], "days_left": z["days_left"], "amount": z["amount"]} for z in zk],
+        "suggestions": sug, "net_worth": net_worth(today)["net"] if db.list_accounts() else None,
+    }
+
+
 def period_report(month: str) -> str:
     """Biten dönemin kısa özeti (HTML, Telegram için)."""
     import html
@@ -1454,6 +1494,19 @@ def period_report(month: str) -> str:
     nw = net_worth()
     if nw["accounts"]:
         lines.append(f"🏦 Net durum {_tl(nw['net'])} (bankada {_tl(nw['cash'])})")
+    d = month_digest(month)
+    lines.append(f"⚠️ Faiz ve ücret: <b>{_tl(d['fees'])}</b>" if d["fees"] else "✅ Faiz ödemedin")
+    if d["savings_rate"] is not None:
+        lines.append(f"💰 Gelirinin %{d['savings_rate']}'i kaldı" if d["savings_rate"] > 0 else "💸 Gider geliri aştı")
+    if d["upcoming"]["count"]:
+        lines.append(f"\n<b>Önümüzdeki 30 gün</b>: {d['upcoming']['count']} ödeme · {_tl(d['upcoming']['total'])}")
+        lines += [f"• {html.escape(i['title'])} {'~' if i['estimated'] else ''}{_tl(i['amount'])} · {i['due_date'][8:10]}.{i['due_date'][5:7]}"
+                  for i in d["upcoming"]["items"]]
+    for z in d["zakat"]:
+        lines.append(f"🌙 {html.escape(z['name'])}: {'zekât günü' if z['kind'] == 'zekat' else 'ek kontrol'} "
+                     f"{z['date'][8:10]}.{z['date'][5:7]} ({z['days_left']} gün)")
+    if d["suggestions"]:
+        lines.append(f"🔁 Planlama'da {d['suggestions']} sabit kalem önerisi bekliyor")
     return "\n".join(lines)
 
 

@@ -1979,6 +1979,22 @@ def recurring_drift():
     return finance.recurring_drift()
 
 
+@app.get("/api/digest")
+def digest():
+    """Yeni dönemin ilk haftası: biten dönemin özeti (kapatılmadıysa). Başka zaman null."""
+    cur = finance.current_period()
+    prev = finance.add_months(cur, -1)
+    if (date.today() - finance.period_bounds(cur)[0]).days > 7 or db.get_setting(f"digest_seen:{prev}"):
+        return None
+    return finance.month_digest(prev)
+
+
+@app.post("/api/digest/dismiss")
+def digest_dismiss():
+    db.set_setting(f"digest_seen:{finance.add_months(finance.current_period(), -1)}", date.today().isoformat())
+    return {"ok": True}
+
+
 @app.get("/api/recurring/suggestions")
 def recurring_suggestions():
     return finance.recurring_suggestions()

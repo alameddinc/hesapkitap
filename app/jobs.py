@@ -116,10 +116,8 @@ def reminders(today: date) -> list[str]:
     # 3) Yeni dönemin ilk günü (ay dönümü): biten dönemin özeti + yeni dönemin planı
     if finance.current_period(today) != finance.current_period(today - timedelta(days=1)):
         prev = finance.add_months(finance.current_period(today), -1)
-        t = finance.summary(prev, today=today)["totals"]
         plan = finance.plan(1, today=today)["months"][0]
         msgs.append(finance.period_report(prev)
-                    + (f"\nFaiz/ücret: {_tl(t['fees'])}" if t["fees"] else "")
                     + f"\n\nBu ay plan: gelir {_tl(plan['income'])}, gider {_tl(plan['expense'])} → net <b>{_tl(plan['net'])}</b>"
                     + "".join(f"\n{'✅' if m['status'] == 'tuttu' else '❌'} {g['name']}: {_tl(m['spent'])} / hedef {_tl(g['target'])}"
                               for g in finance.goals_review(today) if g["active"]

@@ -59,3 +59,34 @@ def test_period_report_on_cycle_day(tmpdb):
     msg = next(m for m in jobs.reminders(date(2026, 10, 20)) if "dönemi bitti" in m)
     assert "Ekim 2026" in msg and "Market" in msg and "Bu ay plan" in msg
     assert finance.period_report("2026-10").count("\n") >= 3
+
+
+def test_month_digest_and_card(client, tmpdb, monkeypatch):
+    from datetime import date
+
+    from app import finance
+
+    client.post("/api/entries", json={"entry_date": "2026-09-10", "description": "Maaş", "amount": 50000, "kind": "gelir"})
+    client.post("/api/entries", json={"entry_date": "2026-09-12", "description": "Market", "amount": 5000, "kind": "gider",
+                                      "category": "Market & Gıda", "payment": "nakit"})
+    client.post("/api/entries", json={"entry_date": "2026-08-12", "description": "Market", "amount": 4000, "kind": "gider",
+                                      "category": "Market & Gıda", "payment": "nakit"})
+    d = finance.month_digest("2026-09", today=date(2026, 10, 2))
+    assert (d["income"], d["expense"], d["savings_rate"], d["fees"]) == (50000, 5000, 90, 0)
+    assert d["top"][0] == {"name": "Market & Gıda", "amount": 5000, "change": 25} and d["label"] == "Eylül 2026"
+    report = finance.period_report("2026-09")
+    assert "Faiz ödemedin" in report and "%90" in report
+
+    # Özet kartı: yeni dönemin ilk haftası, kapatılınca gelmez
+    import app.api.main as m
+
+    class D(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 10, 3)
+
+    monkeypatch.setattr(m, "date", D)
+    monkeypatch.setattr(finance, "current_period", lambda today=None: "2026-10")
+    assert client.get("/api/digest").json()["month"] == "2026-09"
+    client.post("/api/digest/dismiss")
+    assert client.get("/api/digest").json() is None

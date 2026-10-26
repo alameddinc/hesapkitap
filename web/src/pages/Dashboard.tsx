@@ -9,6 +9,7 @@ import NetWorth, { ZakatDue } from "../components/NetWorth";
 import Onboarding from "../components/Onboarding";
 import SharedInbox from "../components/SharedInbox";
 import MonthPicker from "../components/MonthPicker";
+import MonthDigest from "../components/MonthDigest";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import { tl, tlCompact } from "../format";
@@ -65,6 +66,8 @@ export default function Dashboard() {
         <h1 className="text-xl font-semibold">Özet</h1>
         <MonthPicker value={month} onChange={(m) => { setMonth(m); setSel(null); setInsightFilter(null); }} />
       </header>
+
+      <MonthDigest />
 
       {summary.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
       {summary.error && <p className="text-sm text-red-600">{(summary.error as Error).message}</p>}
