@@ -249,6 +249,10 @@ def is_hub() -> bool:
 
 
 def sharing_enabled() -> bool:
+    from app import demo_mode
+
+    if demo_mode.enabled():  # demoda öğrenilen kurallar topluluğa gönderilmez
+        return False
     return system.get("share_templates") != "0"  # varsayılan açık
 
 

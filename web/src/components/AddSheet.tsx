@@ -1,7 +1,7 @@
 import { Camera, FileText, Loader2, Minus, Plus, Repeat } from "lucide-react";
 import type { BillDraft } from "../api";
 import { useRef, useState } from "react";
-import { useMeta } from "./hooks";
+import { useMeta, useDemo } from "./hooks";
 import Modal from "./Modal";
 import type { EntryDraft } from "../ui";
 
@@ -69,6 +69,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   onBill: (d: BillDraft) => void;
 }) {
   const meta = useMeta();
+  const demo = useDemo().data;
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -86,20 +87,38 @@ export default function AddSheet({ onClose, onPick, onBill }: {
       const fd = new FormData();
       parts.slice(0, 4).forEach((p) => fd.append("file", p.blob, p.name));
       const res = await fetch("/api/documents/parse", { method: "POST", body: fd });
-      const r = (await res.json()) as DocResult & { detail?: string };
-      if (!res.ok) throw new Error(r.detail ?? "Belge okunamadı");
-      if (r.type === "bill") {
-        onBill({ provider: r.provider, amount: r.amount, due_date: r.due_date, category: r.category,
-          description: r.description, file_name: r.file_name, confidence: r.confidence });
-        return;
-      }
-      onPick(docToDraft(r));
+      await handle(res);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
       setPages([]);
     }
+  }
+
+  /** Demo: örnek fiş, gerçek okuma yolundan (yerel OCR). */
+  async function sample(key: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await handle(await fetch(`/api/demo/sample/${key}`, { method: "POST" }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Okunan belge: faturaysa fatura formu, fişse gider formu (taslakla). */
+  async function handle(res: Response) {
+    const r = (await res.json()) as DocResult & { detail?: string };
+    if (!res.ok) throw new Error(r.detail ?? "Belge okunamadı");
+    if (r.type === "bill") {
+      onBill({ provider: r.provider, amount: r.amount, due_date: r.due_date, category: r.category,
+        description: r.description, file_name: r.file_name, confidence: r.confidence });
+      return;
+    }
+    onPick(docToDraft(r));
   }
 
   /** Kamera: her fotoğraf parçalara eklenir; "Bitti, oku" ile hepsi birlikte okunur. */
@@ -141,6 +160,19 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   return (
     <Modal title="Ekle" onClose={onClose}>
       <div className="space-y-2">
+        {demo && (
+          <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900 dark:bg-blue-950/30">
+            <div className="text-sm"><b>Örnek fiş okut</b> <span className="text-stone-500">· demoda kendi fotoğrafın yüklenmez; anahtarsız yerel okuma</span></div>
+            <div className="flex flex-wrap gap-2">
+              {demo.samples.filter((x) => x.kind === "receipt").map((x) => (
+                <button key={x.key} className="btn-primary px-3 py-1.5 text-sm" disabled={busy} onClick={() => sample(x.key)}>
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />} {x.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!demo && <>
         <Opt icon={busy ? <Loader2 className="animate-spin" size={20} /> : <Camera size={20} className="text-blue-600" />}
           title={busy ? "Okunuyor…" : "Fiş / fatura çek"}
           sub={meta.data?.receipt_enabled === false ? "Bu sunucuda fiş okuma yok (Gemini anahtarı ya da Tesseract gerekli)"
@@ -168,6 +200,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           onClick={() => fileRef.current?.click()} disabled={busy || meta.data?.receipt_enabled === false} />
         <input ref={fileRef} type="file" accept="application/pdf,image/*" multiple className="hidden"
           onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+        </>}
         <Opt icon={<Minus size={20} className="text-red-600" />} title="Gider" sub="Psikolog, nakit ödeme, havale…"
           onClick={() => onPick({ kind: "gider" })} />
         <Opt icon={<Plus size={20} className="text-green-600" />} title="Gelir" sub="Maaş, ek gelir…"

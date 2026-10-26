@@ -12,12 +12,14 @@ from app.parsers import kuveytturk, vakifbank
 FIX = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
 
-def seed() -> None:
+def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "kuveytturk.txt")) -> None:
+    """statements: yüklenecek örnek ekstreler (canlı demoda biri "örnek yükle" düğmesine bırakılır)."""
     db.init_db()
     if db.list_statements():
         print("Veritabanı boş değil; demo verisi eklenmedi.")
         return
-    for name, mod in (("vakifbank_a.txt", vakifbank), ("vakifbank_b.txt", vakifbank), ("kuveytturk.txt", kuveytturk)):
+    mods = {"vakifbank_a.txt": vakifbank, "vakifbank_b.txt": vakifbank, "kuveytturk.txt": kuveytturk}
+    for name, mod in ((n, mods[n]) for n in statements):
         text = (FIX / name).read_text(encoding="utf-8")
         db.save_statement(f"demo:{name}".encode(), name.replace(".txt", ".pdf"), mod.parse_text(text))
     db.auto_link()

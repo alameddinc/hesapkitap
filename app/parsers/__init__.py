@@ -41,6 +41,16 @@ def _text_with_passwords(data: bytes, passwords: list[str]) -> tuple[str, str | 
 SUPPORTED = "VakıfBank, Kuveyt Türk; diğerleri ekstre denklemi tutarsa genel okuyucuyla"
 
 
+def parse_text(text: str) -> Statement | None:
+    """Yapay zekâsız okuma: bankaya özel okuyucu, yoksa genel okuyucu (ekstre denklemi tutmalı). Okunamazsa None."""
+    for detect, parse in DETECTORS:
+        if detect(text):
+            return parse(text)
+    from app import card_reader
+
+    return card_reader.read(text)
+
+
 def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | None = None) -> Statement:
     """Önce bankaya özel parser (kesin, ücretsiz); tanınmazsa ve GEMINI_API_KEY varsa yapay zekâ ile okuma.
     Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired."""
@@ -50,14 +60,9 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
         raise
     except Exception as e:  # noqa: BLE001 - bozuk PDF
         raise ValueError(f"PDF açılamadı: {e}") from e
-    for detect, parse in DETECTORS:
-        if detect(text):
-            return parse(text)
-    from app import card_reader, receipt
-
-    # hazır okuyucu yok: genel okuyucu (kayıtlı/topluluk şablonu ya da yeni öğrenilen; ekstre denklemi tutmalı)
-    if st := card_reader.read(text):
+    if st := parse_text(text):
         return st
+    from app import receipt
 
     if allow_ai and receipt.enabled():
         from app.parsers.ai import parse_pdf_with_ai

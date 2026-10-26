@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { api, type DocKind, type UploadResult } from "../api";
 import BankImport from "../components/BankImport";
 import RecentImports from "../components/RecentImports";
+import { useDemo } from "../components/hooks";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
@@ -43,6 +44,13 @@ export default function Statements() {
     });
   const del = useSave((id: number) => api.deleteStatement(id), () => ui.toast("Ekstre silindi"));
 
+  const demo = useDemo().data;
+  const sample = useSave((key: string) => fetch(`/api/demo/sample/${key}`, { method: "POST" }).then(async (r) => {
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail ?? "Okunamadı");
+    return j as UploadResult[];
+  }), (res) => setResults(res));
+
   const send = (files: FileList | null) => {
     const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
     if (ok.length) sendFiles(ok);
@@ -53,6 +61,21 @@ export default function Statements() {
       <h1 className="text-xl font-semibold">Ekstreler</h1>
       <StatementHelp />
 
+      {demo ? (
+        <div className="card space-y-3 border-2 border-dashed p-6 text-center">
+          <FileUp className="mx-auto text-blue-600" />
+          <div className="font-medium">Demoda kendi dosyan yüklenmez — örnek bir ekstreyi okut</div>
+          <div className="flex flex-wrap justify-center gap-2">
+            {demo.samples.filter((s) => s.kind === "statement").map((s) => (
+              <button key={s.key} className="btn-primary" disabled={sample.isPending} onClick={() => sample.mutate(s.key, { onError: (e) => ui.toast(e.message) })}>
+                {sample.isPending && sample.variables === s.key ? <Loader2 size={16} className="animate-spin" /> : <FileUp size={16} />} {s.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-stone-500">Gerçek yükleme yolundan geçer: okunur, mutabakat yapılır, işlemler kategorilenir; Garanti örneği hazır
+            okuyucusu olmayan bankalar için genel okuyucuyu gösterir.</p>
+        </div>
+      ) : (
       <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files); }}
         onClick={() => input.current?.click()} role="button" tabIndex={0}
@@ -66,6 +89,7 @@ export default function Statements() {
         </div>
         <input ref={input} type="file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>
+      )}
       {upload.error && <p className="text-sm text-red-600">{(upload.error as Error).message}</p>}
 
       {locked.length > 0 && (

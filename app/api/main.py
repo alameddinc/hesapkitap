@@ -45,10 +45,33 @@ from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB; API yanıtları da küçülür
 
 
+async def _demo_request(request: Request, call_next):
+    """Canlı demo: giriş yok; her ziyaretçi örnek verinin kendi kopyasında (1 saat), yükleme/ayarlar kapalı."""
+    from app import demo_mode
+
+    path = request.url.path
+    if demo_mode.closed(path):
+        return JSONResponse({"detail": "Demoda kapalı — kendi sunucuna kurunca açılır"}, status_code=403)
+    sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE))
+    db_file, user = demo_mode.space(sid)
+    with db.use_space(db_file, user):
+        response = await call_next(request)
+    if new:
+        https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
+    response.headers.setdefault("Cache-Control", "no-store")
+    response.headers.setdefault("X-Robots-Tag", "noindex")
+    return response
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
     user = None
+    from app import demo_mode
+
+    if demo_mode.enabled() and path.startswith("/api/") and path != "/api/auth/status":
+        return await _demo_request(request, call_next)
     public = path.startswith("/api/auth/") or path == "/api/templates/submit"  # şablon gönderimi: oturumsuz (hub)
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
@@ -110,6 +133,10 @@ def _start_session(request: Request, response: Response, user: dict) -> None:
 
 @app.get("/api/auth/status")
 def auth_status(request: Request):
+    from app import demo_mode
+
+    if demo_mode.enabled():
+        return {"required": False, "authenticated": True, "setup_required": False, "demo": True}
     if not auth.enabled():
         return {"required": False, "authenticated": True, "setup_required": False}
     if auth.setup_required():
@@ -2182,6 +2209,56 @@ def book_reset_member_password(uid: int):
     return {"temp_password": temp}
 
 
+# ---------------------------------------------------------------- canlı demo
+
+@app.get("/api/demo")
+def demo_info():
+    from app import demo_mode
+
+    u = db.current_user()
+    if not demo_mode.enabled() or not (u and u.get("demo")):
+        raise HTTPException(404, "Demo değil")
+    return {"expires_at": u["expires_at"], "ttl": demo_mode.TTL,
+            "samples": [{"key": k, "label": v["label"], "kind": v["kind"]} for k, v in demo_mode.SAMPLES.items()]}
+
+
+@app.post("/api/demo/reset")
+def demo_reset(response: Response):
+    from app import demo_mode
+
+    if not demo_mode.enabled():
+        raise HTTPException(404, "Demo değil")
+    response.delete_cookie(demo_mode.COOKIE, path="/")  # sonraki istek yeni ve temiz bir kopya açar
+    return {"ok": True}
+
+
+@app.post("/api/demo/sample/{key}")
+def demo_sample(key: str):
+    """Örnek ekstre / fiş: gerçek yükleme yolundan geçer (hazır okuyucu, genel okuyucu, yerel OCR)."""
+    from app import demo_mode, undo
+    from app.parsers import parse_text
+
+    if not demo_mode.enabled() or key not in demo_mode.SAMPLES:
+        raise HTTPException(404, "Örnek yok")
+    s = demo_mode.SAMPLES[key]
+    if s["kind"] == "receipt":  # demoda anahtar yok: yerel OCR (Tesseract)
+        return _read_document(demo_mode.sample_image(key), "image/jpeg")
+    st = parse_text(demo_mode.sample_text(key))
+    if not st:
+        raise HTTPException(422, "Örnek okunamadı")
+    data = f"demo-sample:{key}".encode()
+    res = {"filename": s["label"], "bank": st.bank, "card_no": st.card_no, "period_end": st.period_end.isoformat(),
+           "total_debt": st.total_debt, "txn_count": len(st.transactions), "reconciliation_diff": st.reconciliation_diff(),
+           "ai": False}
+    if db.statement_exists(data, st):
+        return [{**res, "status": "duplicate"}]
+    with undo.batch(f"Ekstre: {s['label']}"):
+        db.save_statement(data, s["label"], st)
+        linked = db.auto_link()
+        db.auto_mark_paid()
+    return [{**res, "status": "saved", "linked": linked}]
+
+
 # ---------------------------------------------------------------- yüklemeyi geri al
 
 @app.get("/api/imports")
@@ -2556,6 +2633,10 @@ async def parse_document(file: list[UploadFile] = File(...)):
     if mime not in BILL_TYPES or any((f.content_type or "") not in BILL_TYPES for f in files[1:]):
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
     more = [(await f.read(), f.content_type or "") for f in files[1:]]
+    return _read_document(data, mime, more)
+
+
+def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
         doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)

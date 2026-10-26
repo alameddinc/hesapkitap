@@ -31,6 +31,7 @@ import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 import { routeVisible, useBook } from "./components/hooks";
+import DemoBanner from "./components/DemoBanner";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
   ozet: Dashboard,
@@ -180,6 +181,7 @@ function Shell() {
 
   return (
     <UIContext.Provider value={ui}>
+      <DemoBanner />
       <div className="md:flex">
         {/* Masaüstü yan menü */}
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-stone-200 bg-white p-3 md:flex dark:border-stone-800 dark:bg-stone-900">

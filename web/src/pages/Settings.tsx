@@ -13,7 +13,7 @@ import BankTemplates from "../components/BankTemplates";
 import UpdateNotice from "../components/UpdateNotice";
 import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
 import BookSettings from "../components/BookSettings";
-import { useBook } from "../components/hooks";
+import { useBook, useDemo } from "../components/hooks";
 import { LogoutButton } from "./More";
 
 interface ConfigItem {
@@ -223,8 +223,29 @@ function Step({ n, done, children }: { n: number; done: boolean; children: React
 
 export default function Settings() {
   const book = useBook();
-  if (book.isLoading) return <></>;
+  const demo = useDemo();
+  if (book.isLoading || demo.isLoading) return <></>;
+  if (demo.data) return <DemoSettings />;
   return book.data?.member ? <MemberSettings owner={book.data.owner ?? ""} /> : <OwnerSettings />;
+}
+
+/** Canlı demo: ayarlar kapalı; ne olduğunu ve nasıl kurulacağını anlat. */
+function DemoSettings() {
+  return (
+    <div className="space-y-4">
+      <h1 className="text-xl font-semibold">Ayarlar</h1>
+      <section className="card space-y-2 p-4 text-sm">
+        <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Demoda ayarlar kapalı</h2>
+        <p className="text-stone-600 dark:text-stone-400">
+          Kendi sunucuna kurunca burada: yapay zekâ anahtarı (isteğe bağlı), Telegram bildirimleri, e-postadan otomatik ekstre,
+          yedekler ve geri yükleme, ortak defter (eşinle), telefondan paylaş kısayolu, PDF şifreleri, ay dönümü günü.
+        </p>
+        <a className="btn-primary inline-flex" href="https://github.com/alameddinc/hesapkitap#-hızlı-kurulum" target="_blank" rel="noreferrer">
+          Kendi sunucuna kur
+        </a>
+      </section>
+    </div>
+  );
 }
 
 /** Ortak defter üyesi: sadece kendi şifresi ve telefondan paylaşma. */

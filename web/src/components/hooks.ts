@@ -34,3 +34,11 @@ export const useHasMembers = () => useQuery({
   queryFn: () => fetch("/api/book").then((r) => (r.ok ? r.json() : null) as Promise<{ members: unknown[] } | null>),
   select: (d) => !!d?.members.length,
 });
+
+/** Canlı demo: süre ve örnek dosyalar (demo değilse null). */
+export interface DemoInfo { expires_at: number; ttl: number; samples: { key: string; label: string; kind: "statement" | "receipt" }[] }
+
+export const useDemo = () => useQuery({
+  queryKey: ["demo"], staleTime: Infinity, retry: false,
+  queryFn: () => fetch("/api/demo").then((r) => (r.ok ? r.json() : null) as Promise<DemoInfo | null>),
+});
