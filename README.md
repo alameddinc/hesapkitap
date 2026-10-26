@@ -25,6 +25,10 @@
 </p>
 
 <p align="center">
+  <b>🇹🇷 Türkçe</b> · <a href="README.en.md">🇬🇧 English</a>
+</p>
+
+<p align="center">
   <a href="#-hızlı-kurulum"><b>Kurulum</b></a> ·
   <a href="docs/KURULUM.md"><b>Tek tıkla / evde / VPS</b></a> ·
   <a href="#-ekran-görüntüleri"><b>Ekran görüntüleri</b></a> ·
