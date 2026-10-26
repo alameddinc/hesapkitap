@@ -1423,6 +1423,46 @@ def _pct(now: float, before: float) -> str:
     return f" ({'+' if p > 0 else ''}{p}%)" if p else " (aynı)"
 
 
+def year_summary(year: int) -> dict:
+    """Yıllık özet (İstatistik): toplamlar, aylık ortalama, en yüksek/düşük ay, kategoriler, işyerleri, faiz,
+    zekât ve sadaka, geçen yıla göre değişim. Dönemler ay dönümüne göredir."""
+    all_rows = transactions(None)
+    live = [r for r in all_rows if not r.get("skipped") and not r.get("pending") and not r.get("linked")]
+    years = sorted({int(r["month"][:4]) for r in live}, reverse=True)
+
+    def of(y: int) -> list[dict]:
+        return [r for r in live if r["month"].startswith(f"{y}-")]
+
+    rows = of(year)
+    months = sorted({r["month"] for r in rows})
+    t = _totals(rows)
+    per = [{"month": m, **{k: v for k, v in _totals([r for r in rows if r["month"] == m]).items() if k in ("income", "expense", "net")}}
+           for m in months]
+    expenses = [r for r in rows if r["kind"] in (*CARD_SPEND, FEE, EXPENSE)]
+    cats = _group(expenses, "category")
+    total_exp = sum(c["amount"] for c in cats) or 1
+    prev = _totals(of(year - 1)) if of(year - 1) else None
+    from app import donations
+
+    dn = next((y for y in donations.summary()["years"] if y["year"] == str(year)), {"sadaka": 0.0, "zekat": 0.0})
+    subs = [x for x in subscriptions() if x["status"] == "aktif"]
+    return {
+        "year": year, "years": years, "months": len(months),
+        "income": _round(t["income"]), "expense": _round(t["expense"]), "net": _round(t["net"]), "fees": _round(t["fees"]),
+        "avg_expense": _round(t["expense"] / len(months)) if months else 0.0,
+        "savings_rate": round(t["net"] / t["income"] * 100) if t["income"] > 0 else None,
+        "highest": max(per, key=lambda m: m["expense"]) if per else None,
+        "lowest": min(per, key=lambda m: m["expense"]) if per else None,
+        "per_month": per,
+        "categories": [{**c, "share": round(c["amount"] / total_exp * 100)} for c in cats[:8]],
+        "merchants": _group([r for r in rows if r["kind"] in CARD_SPEND or r["kind"] == EXPENSE], "merchant")[:5],
+        "expense_change": _change(t["expense"], prev["expense"]) if prev else None,
+        "income_change": _change(t["income"], prev["income"]) if prev else None,
+        "zakat": dn["zekat"], "sadaka": dn["sadaka"],
+        "subscriptions_yearly": _round(sum(x["monthly"] for x in subs) * 12),
+    }
+
+
 def _change(now: float, before: float) -> int | None:
     return round((now - before) / before * 100) if before > 0 else None
 

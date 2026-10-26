@@ -5,6 +5,7 @@ import { api, type Insight } from "../api";
 import BarList from "../components/BarList";
 import Compare from "../components/Compare";
 import MonthPicker from "../components/MonthPicker";
+import YearSummary from "../components/YearSummary";
 import { monthLabel, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
 
@@ -88,6 +89,8 @@ export default function Stats() {
           <p className="mt-1 text-xs text-stone-500">Bir aya tıklayınca o ay seçilir. Bir ayda gelir görünmüyorsa maaşın yattığı hesabın o aylara ait dökümü eksik olabilir.</p>
         </Section>
       )}
+
+      <YearSummary />
 
       {s && s.by_card.length > 0 && (
         <Section title="Kart bazında (bu dönem)">

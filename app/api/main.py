@@ -2004,6 +2004,11 @@ def recurring_drift():
     return finance.recurring_drift()
 
 
+@app.get("/api/year-summary")
+def year_summary(year: int | None = None):
+    return finance.year_summary(year or date.today().year)
+
+
 @app.get("/api/digest")
 def digest():
     """Yeni dönemin ilk haftası: biten dönemin özeti (kapatılmadıysa). Başka zaman null."""

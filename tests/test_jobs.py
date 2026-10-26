@@ -90,3 +90,18 @@ def test_month_digest_and_card(client, tmpdb, monkeypatch):
     assert client.get("/api/digest").json()["month"] == "2026-09"
     client.post("/api/digest/dismiss")
     assert client.get("/api/digest").json() is None
+
+
+def test_year_summary(client, tmpdb):
+    from app import finance
+
+    for m, inc, exp in (("2025-06", 40000, 10000), ("2026-02", 50000, 20000), ("2026-03", 50000, 30000)):
+        client.post("/api/entries", json={"entry_date": f"{m}-10", "description": "Maaş", "amount": inc, "kind": "gelir"})
+        client.post("/api/entries", json={"entry_date": f"{m}-12", "description": "Kira", "amount": exp, "kind": "gider",
+                                          "category": "Kira & Aidat", "payment": "havale"})
+    y = finance.year_summary(2026)
+    assert (y["income"], y["expense"], y["months"], y["avg_expense"], y["savings_rate"]) == (100000, 50000, 2, 25000, 50)
+    assert y["highest"]["month"] == "2026-03" and y["lowest"]["month"] == "2026-02"
+    assert y["categories"][0] == {"name": "Kira & Aidat", "amount": 50000, "count": 2, "share": 100}
+    assert y["expense_change"] == 400 and y["years"] == [2026, 2025]
+    assert client.get("/api/year-summary?year=2025").json()["income"] == 40000
