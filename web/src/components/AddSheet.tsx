@@ -63,6 +63,22 @@ export function docToDraft(r: DocResult): EntryDraft {
   };
 }
 
+/** Ekle ekranındaki seçenek kartı. */
+function Opt({ icon, title, sub, onClick, disabled }: {
+  icon: React.ReactNode; title: string; sub: string; onClick: () => void; disabled?: boolean;
+}) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className="flex w-full items-center gap-3 rounded-xl border border-stone-200 p-3 text-left hover:bg-stone-50 disabled:opacity-50 dark:border-stone-700 dark:hover:bg-stone-800">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-100 dark:bg-stone-800">{icon}</span>
+      <span>
+        <span className="block font-medium">{title}</span>
+        <span className="block text-xs text-stone-500">{sub}</span>
+      </span>
+    </button>
+  );
+}
+
 export default function AddSheet({ onClose, onPick, onBill }: {
   onClose: () => void;
   onPick: (d: EntryDraft) => void;
@@ -144,18 +160,6 @@ export default function AddSheet({ onClose, onPick, onBill }: {
     }
   }
 
-  const Opt = ({ icon, title, sub, onClick, disabled }: {
-    icon: React.ReactNode; title: string; sub: string; onClick: () => void; disabled?: boolean;
-  }) => (
-    <button onClick={onClick} disabled={disabled}
-      className="flex w-full items-center gap-3 rounded-xl border border-stone-200 p-3 text-left hover:bg-stone-50 disabled:opacity-50 dark:border-stone-700 dark:hover:bg-stone-800">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-100 dark:bg-stone-800">{icon}</span>
-      <span>
-        <span className="block font-medium">{title}</span>
-        <span className="block text-xs text-stone-500">{sub}</span>
-      </span>
-    </button>
-  );
 
   return (
     <Modal title="Ekle" onClose={onClose}>

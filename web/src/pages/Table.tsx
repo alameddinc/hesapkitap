@@ -123,7 +123,7 @@ export default function Table() {
     }
   };
 
-  const Th = ({ k, children, right }: { k: SortKey; children: React.ReactNode; right?: boolean }) => (
+  const th = (k: SortKey, children: React.ReactNode, right?: boolean) => (
     <th className={cx("sticky top-0 cursor-pointer bg-stone-100 px-2 py-2 font-medium whitespace-nowrap select-none dark:bg-stone-800", right && "text-right")}
       onClick={() => setSort({ key: k, dir: sort.key === k ? (-sort.dir as 1 | -1) : k === "amount" || k === "date" ? -1 : 1 })}>
       <span className="inline-flex items-center gap-1">{children}
@@ -236,8 +236,8 @@ export default function Table() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left">
-                  <Th k="date">Tarih</Th><Th k="month">Ekstre ayı</Th><Th k="description">Açıklama</Th>
-                  <Th k="category">Kategori</Th><Th k="card">Kart</Th><Th k="kind">Tür</Th><Th k="amount" right>Tutar</Th>
+                  {th("date", "Tarih")}{th("month", "Ekstre ayı")}{th("description", "Açıklama")}
+                  {th("category", "Kategori")}{th("card", "Kart")}{th("kind", "Tür")}{th("amount", "Tutar", true)}
                 </tr>
               </thead>
               <tbody>

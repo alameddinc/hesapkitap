@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { History, Undo2 } from "lucide-react";
+import { useState } from "react";
 import { api, type ImportBatch } from "../api";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
@@ -39,9 +40,10 @@ export default function RecentImports() {
   };
 
   const items = (q.data ?? []).slice(0, 8);
+  const [openedAt] = useState(() => Date.now()); // son 1 saatte yükleme varsa açık başlar
   if (!items.length) return null;
   return (
-    <details className="card p-3 text-sm" open={items.some((b) => !b.undone_at && Date.now() - Date.parse(b.created_at + "Z") < 3600e3)}>
+    <details className="card p-3 text-sm" open={items.some((b) => !b.undone_at && openedAt - Date.parse(b.created_at + "Z") < 3600e3)}>
       <summary className="flex cursor-pointer items-center gap-2 font-medium">
         <History size={16} className="text-stone-500" /> Son yüklemeler
         <span className="text-xs font-normal text-stone-500">yanlış bir şey mi yükledin? geri al</span>

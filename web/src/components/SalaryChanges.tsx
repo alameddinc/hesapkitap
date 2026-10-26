@@ -42,6 +42,7 @@ const json = async <T,>(method: string, url: string, body?: unknown): Promise<T>
 /** Brüt maaşta zam / iş değişikliği: o dönemden itibaren yeni brüt; geçmiş aylar eski brütle kalır. */
 export default function SalaryChanges({ rid }: { rid: number }) {
   const ui = useUI();
+  const [thisYear] = useState(() => new Date().getFullYear());
   const list = useQuery({ queryKey: ["salary-changes", rid], queryFn: () => json<Change[]>("GET", `/api/recurring/${rid}/salary-changes`) });
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<Draft["reason"]>("zam");
@@ -59,7 +60,7 @@ export default function SalaryChanges({ rid }: { rid: number }) {
     pay_day: reason === "is_degisikligi" && Number(payDay) >= 1 && Number(payDay) <= 31 ? Number(payDay) : null,
     employer: reason === "is_degisikligi" && employer.trim() ? employer.trim() : null,
   } : null;
-  const year = Number(from.slice(0, 4)) || new Date().getFullYear();
+  const year = Number(from.slice(0, 4)) || thisYear;
   const preview = useQuery({
     queryKey: ["payroll-plan", rid, year, draft],
     queryFn: () => json<Schedule>("POST", `/api/recurring/${rid}/payroll`, { year, draft }),

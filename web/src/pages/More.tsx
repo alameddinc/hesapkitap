@@ -5,19 +5,22 @@ import InstallApp from "../components/InstallApp";
 import { routeVisible, useBook } from "../components/hooks";
 import type { Route } from "../ui";
 
-export default function More() {
-  const ui = useUI();
-  const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
-  const book = useBook();
-  const Item = ({ icon, label, onClick, route }: { icon: React.ReactNode; label: string; onClick: () => void; route?: Route }) =>
-    route && !routeVisible(book.data, route) ? null : (
+function Item({ icon, label, onClick, route }: { icon: React.ReactNode; label: string; onClick: () => void; route?: Route }) {
+  const book = useBook(); // ortak defter üyesine kapalı sayfalar listelenmez
+  if (route && !routeVisible(book.data, route)) return null;
+  return (
     <li>
       <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={onClick}>
         {icon}<span className="flex-1">{label}</span><ChevronRight size={16} className="text-stone-400" />
       </button>
     </li>
   );
+}
+
+export default function More() {
+  const ui = useUI();
+  const qc = useQueryClient();
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Diğer</h1>

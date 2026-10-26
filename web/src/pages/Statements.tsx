@@ -79,6 +79,7 @@ export default function Statements() {
       <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files); }}
         onClick={() => input.current?.click()} role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.current?.click(); } }}
         className={cx("card flex cursor-pointer flex-col items-center gap-2 border-2 border-dashed p-8 text-center",
           drag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30")}>
         {upload.isPending ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}

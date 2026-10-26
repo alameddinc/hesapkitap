@@ -121,7 +121,7 @@ function Shell() {
     try { sessionStorage.setItem("hk-revealed", next ? "0" : "1"); } catch { /* özel mod */ }
     setHidden(next);
   };
-  const EyeBtn = ({ className }: { className?: string }) => (
+  const eyeBtn = (className?: string) => (
     <button onClick={toggleHidden} aria-label={hidden ? "Tutarları göster" : "Tutarları gizle"} aria-pressed={!hidden}
       className={cx("btn-ghost p-2", className)}>
       {hidden ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -190,7 +190,7 @@ function Shell() {
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-stone-200 bg-white p-3 md:flex dark:border-stone-800 dark:bg-stone-900">
           <div className="mb-4 flex items-center gap-2 px-2 py-1 text-lg font-semibold">
             <img src="/icons/logo-mark.png" alt="" className="size-7" /> <span className="flex-1">HesapKitap</span>
-            <EyeBtn className="-mr-2" />
+            {eyeBtn("-mr-2")}
           </div>
           {book.data?.member && <p className="-mt-3 mb-3 px-2 text-xs text-stone-500">Ortak defter · {book.data.owner}</p>}
           <button className="btn-primary mb-3 justify-center py-2" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>
@@ -210,7 +210,7 @@ function Shell() {
         <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-stone-200 bg-white/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur md:hidden dark:border-stone-800 dark:bg-stone-900/90">
           <img src="/icons/logo-mark.png" alt="" className="size-6" />
           <span className="flex-1 py-2 font-semibold">HesapKitap</span>
-          <EyeBtn className="-mr-2" />
+          {eyeBtn("-mr-2")}
         </div>
         <main className={cx("mx-auto w-full min-w-0 px-4 pt-4 pb-28 md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
           <Page />

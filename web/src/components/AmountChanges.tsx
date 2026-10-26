@@ -19,7 +19,7 @@ export default function AmountChanges({ rid, base }: { rid: number; base: number
   const ui = useUI();
   const list = useQuery({ queryKey: ["amount-changes", rid], queryFn: () => json<Change[]>("GET", `/api/recurring/${rid}/changes`) });
   const [open, setOpen] = useState(false);
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [amount, setAmount] = useState("");
   const add = useSave(() => json("POST", `/api/recurring/${rid}/changes`, { from_month: month, amount: parseAmount(amount) }), () => {
     setOpen(false); setAmount(""); ui.toast("Tutar değişikliği kaydedildi");

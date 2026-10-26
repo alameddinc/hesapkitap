@@ -18,7 +18,7 @@ const chg = (p: number | null, label: string) => (p == null ? null : `${label} $
 
 /** İstatistik → yıllık özet: "bu yıl nereye gitti". */
 export default function YearSummary() {
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(() => new Date().getFullYear());
   const q = useQuery({ queryKey: ["year-summary", year], queryFn: () => fetch(`/api/year-summary?year=${year}`).then((r) => r.json() as Promise<Year>) });
   const y = q.data;
   if (!y || (!y.months && y.years.length === 0)) return null;

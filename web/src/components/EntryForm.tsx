@@ -44,7 +44,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [category, setCategory] = useState(rec?.category ?? row?.category ?? draft?.category ?? "");
   const [note, setNote] = useState(rec?.note ?? row?.note ?? draft?.note ?? "");
   const [isRecurring, setRecurring] = useState(!!rec || !!draft?.recurring);
-  const [day, setDay] = useState(String(rec?.day_of_month ?? new Date().getDate()));
+  const [day, setDay] = useState(() => String(rec?.day_of_month ?? new Date().getDate()));
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
   const [installments, setInstallments] = useState(row?.installments ?? draft?.installments ?? 1);

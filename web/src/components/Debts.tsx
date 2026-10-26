@@ -68,7 +68,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
     () => ui.toast("Hesap kaydedildi"));
   const [openId, setOpenId] = useState<number | null>(null);
 
-  const Accounts = ({ d }: { d: Debt }) => (
+  const accountsOf = (d: Debt) => (
     <div className="mt-1 space-y-1 rounded-md bg-stone-50 p-2 text-xs dark:bg-stone-800/50">
       {(
         <label className="flex items-center gap-2">
@@ -92,12 +92,14 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
     </div>
   );
 
-  const Row = ({ d }: { d: Debt }) => {
+  const row = (d: Debt) => {
     const late = !d.settled_at && d.due_date && d.due_date < today();
     return (
-      <li className={cx("py-2", d.settled_at && "opacity-60")}>
+      <li key={d.id} className={cx("py-2", d.settled_at && "opacity-60")}>
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => d.asset === "TRY" && setOpenId(openId === d.id ? null : d.id)}>
+        <div className="min-w-0 flex-1 cursor-pointer" role="button" tabIndex={0} aria-expanded={openId === d.id}
+          onClick={() => d.asset === "TRY" && setOpenId(openId === d.id ? null : d.id)}
+          onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && d.asset === "TRY") { e.preventDefault(); setOpenId(openId === d.id ? null : d.id); } }}>
           <div className="text-sm">
             <b>{maskText(d.person)}</b>{" "}
             <span className={cx("rounded-full px-1.5 py-0.5 text-xs",
@@ -137,7 +139,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
           <Trash2 size={14} />
         </button>
       </div>
-      {openId === d.id && <Accounts d={d} />}
+      {openId === d.id && accountsOf(d)}
       </li>
     );
   };
@@ -155,7 +157,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
       {adding && <DebtForm people={people} onDone={() => setAdding(false)} />}
       {paying && <PayDebt d={paying} onDone={() => setPaying(null)} />}
       <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-        {open.map((d) => <Row key={d.id} d={d} />)}
+        {open.map(row)}
         {!open.length && !adding && <li className="py-3 text-sm text-stone-500">Açık borç ya da alacak yok.</li>}
       </ul>
       {closed.length > 0 && (
@@ -163,7 +165,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
           <button className="mt-2 text-xs text-stone-500 underline" onClick={() => setShowClosed(!showClosed)}>
             {showClosed ? "Kapananları gizle" : `Kapananlar (${closed.length})`}
           </button>
-          {showClosed && <ul className="divide-y divide-stone-100 dark:divide-stone-800">{closed.map((d) => <Row key={d.id} d={d} />)}</ul>}
+          {showClosed && <ul className="divide-y divide-stone-100 dark:divide-stone-800">{closed.map(row)}</ul>}
         </>
       )}
     </section>
