@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, Calculator, ChevronDown, PiggyBank, Plus, Repeat } from "lucide-react";
+import { CalendarClock, Calculator, ChevronDown, Coins, Plus, Repeat } from "lucide-react";
 import Simulator from "../components/Simulator";
 import RecurringSuggestions from "../components/RecurringSuggestions";
 import { useState } from "react";
@@ -167,7 +167,7 @@ export default function Planning() {
           <Plus size={16} /> İleri tarihli gider
         </button>
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => ui.go("tasarruf")}>
-          <PiggyBank size={16} /> Kısma hedefi / abonelik iptali
+          <Coins size={16} /> Kısma hedefi / abonelik iptali
         </button>
       </div>
 

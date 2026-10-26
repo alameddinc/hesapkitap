@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Minus, PiggyBank, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Minus, Coins, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -123,7 +123,7 @@ export default function Jars() {
     <section className="card p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
-          <h2 className="flex items-center gap-2 font-semibold"><PiggyBank size={18} /> Kumbaralar</h2>
+          <h2 className="flex items-center gap-2 font-semibold"><Coins size={18} /> Kumbaralar</h2>
           {active.length > 0 && <p className="text-xs text-stone-500">Toplam ayrılan {tl(total)}</p>}
         </div>
         <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setForm({})}><Plus size={16} /> Kumbara</button>

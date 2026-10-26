@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, PiggyBank, Settings2, Sheet, Tags } from "lucide-react";
+import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
 import { routeVisible, useBook } from "../components/hooks";
@@ -25,7 +25,7 @@ export default function More() {
       <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
         <Item icon={<BarChart3 size={18} />} label="İstatistik: karşılaştırma, aylık grafik, faiz alarmı" onClick={() => ui.go("istatistik")} route="istatistik" />
         <Item icon={<Sheet size={18} />} label="Tablo: filtreler, pivot, Excel" onClick={() => ui.go("tablo")} route="tablo" />
-        <Item icon={<PiggyBank size={18} />} label="Tasarruf: kumbaralar, abonelikler, kısma hedefleri" onClick={() => ui.go("tasarruf")} route="tasarruf" />
+        <Item icon={<Coins size={18} />} label="Tasarruf: kumbaralar, abonelikler, kısma hedefleri" onClick={() => ui.go("tasarruf")} route="tasarruf" />
         <Item icon={<Landmark size={18} />} label="Hesaplar ve kartlar: banka, nakit, kumbara" onClick={() => ui.go("hesaplar")} route="hesaplar" />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} route="borclar" />
         <Item icon={<Moon size={18} />} label="Zekât ve Sadaka: nisap, kameri yıl, bağışlar" onClick={() => ui.go("zekat")} route="zekat" />

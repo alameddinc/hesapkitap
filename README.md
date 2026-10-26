@@ -68,7 +68,7 @@ Brütten nete maaş, taksitler, sabit giderler — **3–12 ay plan**. "Alırsam
 <tr>
 <td valign="top">
 
-### 🐷 Kumbara ve altın
+### 💰 Kumbara ve altın
 Hedef için para ayır, harcanabilir bakiyenden düşsün. Altın/döviz anlık fiyatla; **ne zaman, kaça aldığın**.
 
 </td>

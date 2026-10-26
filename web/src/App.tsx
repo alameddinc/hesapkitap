@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, PiggyBank, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -56,7 +56,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "istatistik", label: "İstatistik", icon: BarChart3 },
   { route: "tablo", label: "Tablo", icon: Sheet },
   { route: "plan", label: "Planlama", icon: CalendarRange },
-  { route: "tasarruf", label: "Tasarruf", icon: PiggyBank },
+  { route: "tasarruf", label: "Tasarruf", icon: Coins },
   { route: "transferler", label: "Transferler", icon: ArrowLeftRight },
   { route: "hesaplar", label: "Hesaplar", icon: Landmark },
   { route: "borclar", label: "Borç / Alacak", icon: HandCoins },
