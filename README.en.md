@@ -6,8 +6,8 @@
 
 <p align="center">
   <b>Drop your bank statement, HesapKitap does the rest — and your data stays with you.</b><br>
-  Self-hosted personal finance built for Turkish banks: credit card statements, bank exports, receipts,<br>
-  budgets and forecasts, gold, savings jars, zakat and charity.
+  Self-hosted personal finance built for Turkish banks: statement reading, snap-a-receipt, budgets and forecasts,<br>
+  price tracking, savings jars, interest alarm, a shared household book — and zakat too.
 </p>
 
 <p align="center">
@@ -42,21 +42,25 @@ and turns them into a monthly picture, a forecast and reminders — on your own 
   - Other banks: a generic reader tries date and number formats, amount columns and payment signs until the equation
     holds, then saves that layout as a small template (no personal data) and can share it with the community.
   - Optional Gemini fallback.
-- **Receipts without sending them anywhere** — local OCR (Tesseract, Turkish), or Gemini if you add a key. Picks up the
-  merchant, total, installments and the card's last 4 digits.
+- **Snap a receipt, done** — merchant, total, line items, installments and the card's last 4 digits are filled in for
+  you. Works with local OCR (Tesseract, Turkish) so the photo never leaves your server, or with Gemini if you add a key.
+- **Smart shopping**
+  - Price tracking from your receipts: where you bought it cheapest, how prices moved.
+  - *"What if I buy it?"* simulator: installment and surcharge cost, effect on the coming months.
+  - Subscription audit and savings goals.
 - **Plan ahead**
   - Open card cycle: what you've spent so far and the likely amount at cut-off.
   - Installment schedule and recurring items (rent, salary from gross to net with Turkish payroll tax).
   - Suggestions for payments that repeat every month, and a cash-flow forecast.
 - **Interest alarm** — explains *why* you were charged interest (late payment, partial payment, installment surcharge).
-- **Zakat and charity**
-  - Per-person nisab on the lunar year, gold and foreign currency, missed past years.
-  - Ramadan, fitra and Qurban reminders.
 - **Shared household book** — invite your spouse to the same book; hide specific cards, accounts, interest, pages or
   single transactions from them. Hiding is enforced on the server, not just in the UI.
 - **Phone-first**
   - Installable PWA and the share sheet on Android/iOS.
   - A one-tap *"Snap receipt"* iOS shortcut (lock screen, Action button, Back Tap).
+- **Zakat and charity**
+  - Per-person nisab on the lunar year, gold and foreign currency, missed past years.
+  - Ramadan, fitra and Qurban reminders.
 - **Undo any upload**, a suspicious-change check (balance dropping to zero, huge jumps), a month-end digest and a
   yearly summary.
 - **Your data**

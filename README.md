@@ -6,7 +6,8 @@
 
 <p align="center">
   <b>Ekstreni bırak, gerisini HesapKitap yapsın — verin sende kalır.</b><br>
-  Kredi kartı ekstreleri, banka dökümleri, fişler, plan, altın, kumbara, zekât ve sadaka.<br>
+  Ekstre ve döküm okuma, fişi çekince kendiliğinden kayıt, bütçe ve tahmin, fiyat takibi, kumbara, faiz alarmı,<br>
+  ortak defter — zekât ve sadaka da dahil.<br>
   Türkiye'deki bankalar ve alışkanlıklar için, kendi sunucunda çalışan kişisel finans uygulaması.
 </p>
 
