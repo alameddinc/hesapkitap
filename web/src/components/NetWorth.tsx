@@ -115,7 +115,8 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
         ) : (
           <span className="min-w-0 flex-1">
             <Headline d={d} />
-            <span className="block text-xs text-stone-500">
+            {/* döküm telefonda gizli: karta dokununca Hesaplar'da tamamı */}
+            <span className="hidden text-xs text-stone-500 sm:block">
               Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
               {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
               {d.zakat_due ? ` · zekât borcu −${tl(d.zakat_due)}` : ""}

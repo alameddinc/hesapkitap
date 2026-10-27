@@ -47,7 +47,8 @@
 
 html,
 body {
-  overflow-x: hidden; /* mobilde yana kayma olmasın */
+  /* mobilde yana kayma olmasın. hidden değil clip: hidden gövdeyi ayrı kaydırma kutusu yapar, yapışkan üst çubuk kayar */
+  overflow-x: clip;
 }
 html {
   -webkit-tap-highlight-color: transparent; /* dokununca gri kutu yanmasın */

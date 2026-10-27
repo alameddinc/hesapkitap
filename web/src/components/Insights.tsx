@@ -23,7 +23,7 @@ export default function Insights({ items, onClick }: { items: Insight[]; onClick
               <s.icon size={18} className={cx("mt-0.5 shrink-0", s.ic)} aria-label={s.label} />
               <span className="min-w-0">
                 <span className="block text-sm font-medium">{maskText(i.title)}</span>
-                <span className="mt-0.5 block text-xs text-stone-600 dark:text-stone-400">{maskText(i.detail)}</span>
+                <span className="mt-0.5 line-clamp-2 text-xs text-stone-600 sm:line-clamp-none dark:text-stone-400">{maskText(i.detail)}</span>
               </span>
             </button>
           </li>
