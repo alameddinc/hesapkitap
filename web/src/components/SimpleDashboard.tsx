@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
-import { dateTR, monthLabel, tl } from "../format";
+import { addMonths, dateTR, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
 import { useUiPrefs } from "./hooks";
 
@@ -10,6 +10,8 @@ export default function SimpleDashboard() {
   const ui = useUI();
   const { save } = useUiPrefs();
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
+  const prevMonth = addMonths(ui.month, -1);
+  const prev = useQuery({ queryKey: ["summary", prevMonth], queryFn: () => api.summary(prevMonth) });
   const payables = useQuery({ queryKey: ["payables"], queryFn: api.payables });
   const t = summary.data?.totals;
   const due = (payables.data ?? []).filter((p) => p.status !== "odendi").slice(0, 4);
@@ -18,6 +20,7 @@ export default function SimpleDashboard() {
       <section className="card p-6 text-center">
         <div className="text-lg text-stone-500">{monthLabel(ui.month)} · bu ay harcadığın</div>
         <div className="mt-1 text-5xl font-bold tabular-nums tracking-tight">{t ? tl(t.expense) : "…"}</div>
+        {prev.data && <div className="mt-1 text-base text-stone-500">Geçen ay ({monthLabel(prevMonth)}): {tl(prev.data.totals.expense)}</div>}
         {t && (
           <div className="mt-4 grid grid-cols-2 gap-3 text-left">
             <div className="rounded-xl bg-green-50 p-3 dark:bg-green-950/30">
@@ -34,10 +37,9 @@ export default function SimpleDashboard() {
       </section>
 
       <div className="grid grid-cols-2 gap-3">
-        <button className="btn-primary justify-center py-5 text-xl" onClick={ui.openAdd}><Camera size={26} /> Ekle</button>
-        <button className="btn-ghost justify-center border border-stone-300 py-5 text-xl dark:border-stone-700" onClick={() => ui.go("islemler")}>
-          <List size={26} /> Harcamalar
-        </button>
+        <button className="btn-primary flex-col justify-center gap-1 py-4 text-lg" onClick={ui.openAdd}><Camera size={26} /> Ekle</button>
+        <button className="btn-ghost flex-col justify-center gap-1 whitespace-nowrap border border-stone-300 py-4 text-lg dark:border-stone-700"
+          onClick={() => ui.go("islemler")}><List size={26} /> Harcamalar</button>
       </div>
 
       {due.length > 0 && (
