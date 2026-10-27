@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarCheck, X } from "lucide-react";
+import { CalendarCheck, ChevronDown, X } from "lucide-react";
+import { useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
@@ -20,10 +21,11 @@ export default function MonthDigest() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["digest"], queryFn: () => fetch("/api/digest").then((r) => r.json() as Promise<Digest | null>) });
   const dismiss = useSave(() => fetch("/api/digest/dismiss", { method: "POST" }));
+  const [open, setOpen] = useState(false); // ayrıntılar dokununca: Özet'te yazı kalabalığı olmasın
   const d = q.data;
   if (!d) return null;
   return (
-    <section className="card relative space-y-3 border-blue-200 p-4 dark:border-blue-900">
+    <section className="card relative space-y-3 border-blue-200 p-4 pb-2 dark:border-blue-900">
       <button className="btn-ghost absolute right-2 top-2 p-1.5" aria-label="Kapat" onClick={() => dismiss.mutate(undefined)}><X size={16} /></button>
       <h2 className="flex items-center gap-2 font-semibold"><CalendarCheck size={18} className="text-blue-600" /> {d.label} özeti</h2>
       <div className="grid grid-cols-3 gap-2 text-sm">
@@ -32,6 +34,11 @@ export default function MonthDigest() {
         <div><div className="text-xs text-stone-500">Kalan</div>
           <div className={cx("font-semibold tabular-nums", d.net < 0 && "text-red-600")}>{tl(d.net)}{d.savings_rate != null && d.savings_rate > 0 && <span className="text-xs font-normal text-stone-500"> · %{d.savings_rate}</span>}</div></div>
       </div>
+      <button className="flex w-full items-center justify-center gap-1 rounded-lg py-1 text-xs text-stone-500 active:bg-stone-100 dark:active:bg-stone-800"
+        onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? "Daha az" : "Ayrıntılar"} <ChevronDown size={14} className={cx("transition-transform", open && "rotate-180")} />
+      </button>
+      {open && <>
       <ul className="space-y-1 text-sm">
         <li>{d.fees ? <span className="text-red-600">⚠️ Faiz ve ücret: <b>{tl(d.fees)}</b></span> : <span className="text-green-700 dark:text-green-400">✅ Faiz ödemedin</span>}</li>
         {d.top.slice(0, 3).map((c) => (
@@ -57,6 +64,7 @@ export default function MonthDigest() {
           🔁 Planlama'da {d.suggestions} sabit kalem önerisi bekliyor
         </button>
       )}
+      </>}
     </section>
   );
 }

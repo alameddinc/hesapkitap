@@ -5,6 +5,24 @@ import "./components/InstallApp"; // beforeinstallprompt erken yakalansın
 import App from "./App";
 import "./index.css";
 
+// Mağaza uygulaması (Capacitor): <html class="in-app">. Android'de kenardan kenara çizilir; güvenli alan değerleri
+// hiç gelmezse (eski WebView, eklenti değişkenleri yok) saat ve hareket çubuğu için makul bir boşluk bırak.
+if (/HesapKitapApp\//.test(navigator.userAgent)) {
+  const root = document.documentElement;
+  root.classList.add("in-app");
+  if (/Android/.test(navigator.userAgent)) {
+    requestAnimationFrame(() => {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:fixed;visibility:hidden;padding-top:var(--sat);padding-bottom:var(--sab)";
+      document.body.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      if (parseFloat(cs.paddingTop) === 0) root.style.setProperty("--sat", "28px");
+      if (parseFloat(cs.paddingBottom) === 0) root.style.setProperty("--sab", "20px");
+      probe.remove();
+    });
+  }
+}
+
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: false, retry: 1 } },
 });

@@ -29,7 +29,7 @@ export default function DemoBanner() {
   const ss = String(left % 60).padStart(2, "0");
   return (
     <>
-      <div className="relative z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-blue-600 px-3 py-1.5 pt-[max(0.375rem,env(safe-area-inset-top))] text-xs text-white sm:text-sm">
+      <div className="relative z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-blue-600 px-3 py-1.5 text-xs text-white sm:text-sm">
         <span className="flex items-center gap-1 font-medium"><FlaskConical size={14} /> Demo · uydurma verilerle</span>
         {left > 0 ? (
           <span className="flex items-center gap-1 tabular-nums" title="Süre bitince yeni ve temiz bir demo başlar">

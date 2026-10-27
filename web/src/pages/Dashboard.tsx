@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Plus, Settings2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Settings2, Type, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Insight, type Row } from "../api";
 import BarList from "../components/BarList";
@@ -21,7 +21,7 @@ import { InterestHistory, TrendChart } from "./Stats";
 import { routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
-import { tl, tlCompact } from "../format";
+import { cx, tl, tlCompact } from "../format";
 import { useUI, type Route } from "../ui";
 
 type Sel = { by: "category" | "merchant" | "card"; name: string } | null;
@@ -74,6 +74,7 @@ export default function Dashboard() {
   const [sel, setSel] = useState<Sel>(null);
   const [insightFilter, setInsightFilter] = useState<Insight | null>(null);
   const [editBudgets, setEditBudgets] = useState(false);
+  const [allInsights, setAllInsights] = useState(false);
 
   const detail = useMemo(() => {
     const rows = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme");
@@ -125,8 +126,32 @@ export default function Dashboard() {
   const render = (id: string): React.ReactNode => {
     if (!s) return null;
     switch (id) {
-      case "kartlar": return (
-        <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+      case "kartlar": return (<>
+        {/* telefon: tek büyük rakam + üç küçük; ayrıntılar masaüstündeki kartlarda */}
+        <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 p-5 text-white shadow-lg shadow-blue-600/20 sm:hidden">
+          <div aria-hidden className="pointer-events-none absolute -top-16 -right-10 size-48 rounded-full bg-white/10 blur-2xl" />
+          <div aria-hidden className="pointer-events-none absolute -bottom-20 -left-10 size-40 rounded-full bg-emerald-300/20 blur-2xl" />
+          <div className="relative text-sm text-blue-100">Bu dönem harcadığın</div>
+          <div className="relative mt-1 font-display text-[2.6rem] leading-none font-semibold tracking-tight tabular-nums">{tl(s.totals.expense)}</div>
+          {s.totals.savings > 0 && <div className="relative mt-1 text-xs text-blue-100">+ birikime {tl(s.totals.savings)} (gider sayılmaz)</div>}
+          <div className="relative mt-5 grid grid-cols-3 gap-2 border-t border-white/15 pt-3">
+            <div>
+              <div className="text-[11px] tracking-wide text-blue-100 uppercase">Gelen</div>
+              <div className="font-semibold tabular-nums">{tlCompact(s.totals.income)}</div>
+              {s.pending.income > 0 && <div className="text-[11px] text-blue-100">+{tlCompact(s.pending.income)} bekliyor</div>}
+            </div>
+            <div>
+              <div className="text-[11px] tracking-wide text-blue-100 uppercase">Kalan</div>
+              <div className={cx("font-semibold tabular-nums", s.totals.net < 0 && "text-rose-200")}>{tlCompact(s.totals.net)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] tracking-wide text-blue-100 uppercase">{book?.hide_fees ? "İade" : "Faiz"}</div>
+              <div className={cx("font-semibold tabular-nums", !book?.hide_fees && s.totals.fees > 0 && "text-amber-200")}>
+                {tlCompact(book?.hide_fees ? s.totals.refunds : s.totals.fees)}</div>
+            </div>
+          </div>
+        </section>
+        <div className="hidden grid-cols-2 gap-2 sm:grid sm:gap-3 lg:grid-cols-4">
           <Kpi label="Gelir" value={s.totals.income} tone="green"
             sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
@@ -136,17 +161,25 @@ export default function Dashboard() {
           {book?.hide_fees ? <Kpi label="İade" value={s.totals.refunds} /> : (
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
-        </div>);
+        </div>
+      </>);
       case "gelenler": return <SharedInbox />;
       case "baslarken": return book?.member ? null : <Onboarding />;
       case "uyarilar": return (
         <section>
-          <h2 className="mb-2 font-semibold">Dikkat etmen gerekenler</h2>
-          <Insights items={s.insights} onClick={(i) => {
+          <h2 className="mb-2 font-display text-lg font-semibold tracking-tight">Dikkat etmen gerekenler</h2>
+          <Insights items={allInsights ? s.insights : s.insights.slice(0, 3)} onClick={(i) => {
             if (i.link) return ui.go(i.link as Route);
             setSel(null);
             setInsightFilter(insightFilter === i ? null : i);
           }} />
+          {s.insights.length > 3 && (
+            <button className="mt-2 flex w-full items-center justify-center gap-1 rounded-xl py-2 text-sm text-stone-600 active:bg-stone-100 dark:text-stone-400 dark:active:bg-stone-800"
+              onClick={() => setAllInsights(!allInsights)}>
+              {allInsights ? "Daha az göster" : `${s.insights.length - 3} uyarı daha`}
+              <ChevronDown size={16} className={cx("transition-transform", allInsights && "rotate-180")} />
+            </button>
+          )}
         </section>);
       case "net": return <NetWorth compact month={month} />;
       case "zekat": return <ZakatDue />;
@@ -164,9 +197,9 @@ export default function Dashboard() {
           <BarList items={s.by_merchant} selected={sel?.by === "merchant" ? sel.name : null} onSelect={select("merchant")} limit={10} />
         </Section>);
       case "istatistik-link": return (
-        <button className="card flex w-full items-center justify-between p-3 text-left text-sm" onClick={() => ui.go("istatistik")}>
-          <span>📊 <b>İstatistik</b> · geçen dönemlerle karşılaştırma, aylara göre gelir/gider, kartlar, faiz</span>
-          <span className="text-stone-400">›</span>
+        <button className="card flex w-full items-center justify-between p-3 text-left text-sm active:bg-stone-50 dark:active:bg-stone-800" onClick={() => ui.go("istatistik")}>
+          <span>📊 <b>İstatistik</b><span className="hidden sm:inline"> · geçen dönemlerle karşılaştırma, aylara göre gelir/gider, kartlar, faiz</span></span>
+          <ChevronRight size={16} className="text-stone-400" />
         </button>);
       case "odemeler": return <Payables />;
       case "trend": return s.trend.length ? <Section title="Aylara göre gelir ve gider"><TrendChart trend={s.trend} onPick={setMonth} /></Section> : null;
@@ -188,11 +221,13 @@ export default function Dashboard() {
   return (
     <div className="space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="flex items-center gap-3 text-xl font-semibold">Özet
-          <button className="btn-ghost border border-stone-300 px-2 py-0.5 text-xs font-normal dark:border-stone-700"
-            title="Büyük yazı, sadece önemli rakamlar" onClick={() => savePrefs.mutate({ simple: true })}>Sade görünüm</button>
-          <button className={editing ? "btn-primary px-2 py-0.5 text-xs font-normal" : "btn-ghost border border-stone-300 px-2 py-0.5 text-xs font-normal dark:border-stone-700"}
-            onClick={() => setEditing(!editing)}><Settings2 size={12} /> {editing ? "Bitti" : "Düzenle"}</button>
+        <h1 className="flex items-center gap-1 text-2xl font-semibold">Özet
+          <button className="btn-ghost ml-1 p-2 font-sans text-xs font-normal" aria-label="Sade görünüm"
+            title="Sade görünüm: büyük yazı, sadece önemli rakamlar" onClick={() => savePrefs.mutate({ simple: true })}>
+            <Type size={16} /><span className="hidden sm:inline">Sade görünüm</span></button>
+          <button className={cx("p-2 font-sans text-xs font-normal", editing ? "btn-primary" : "btn-ghost")} aria-label={editing ? "Bitti" : "Özeti düzenle"}
+            title="Özeti düzenle: bileşenleri taşı, ekle, kaldır" onClick={() => setEditing(!editing)}>
+            <Settings2 size={16} /><span className={editing ? "" : "hidden sm:inline"}>{editing ? "Bitti" : "Düzenle"}</span></button>
         </h1>
         <MonthPicker value={month} onChange={(m) => { setMonth(m); setSel(null); setInsightFilter(null); }} />
       </header>

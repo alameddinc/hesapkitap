@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
+import { cx } from "../format";
 
 /** Mobilde alttan açılan panel, masaüstünde ortada modal. */
 export default function Modal({ title, onClose, children, footer }: {
@@ -22,16 +23,16 @@ export default function Modal({ title, onClose, children, footer }: {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/40" role="presentation" onClick={onClose} /* Esc ile de kapanır */ />
-      <div className="relative flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:max-w-lg sm:rounded-2xl dark:bg-stone-900">
+      <div className="relative flex max-h-[calc(100dvh-var(--sat)-0.5rem)] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:max-w-lg sm:rounded-2xl dark:bg-stone-900">
         <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3 dark:border-stone-800">
           <h2 className="font-semibold">{title}</h2>
           <button className="btn-ghost -mr-2 p-2" onClick={onClose} aria-label="Kapat">
             <X size={18} />
           </button>
         </div>
-        <div className="overflow-y-auto px-4 py-4">{children}</div>
+        <div className={cx("overflow-y-auto px-4 pt-4", footer ? "pb-4" : "pb-[max(1rem,var(--sab))]")}>{children}</div>
         {footer && (
-          <div className="flex items-center gap-2 border-t border-stone-200 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dark:border-stone-800">
+          <div className="flex items-center gap-2 border-t border-stone-200 px-4 py-3 pb-[max(0.75rem,var(--sab))] dark:border-stone-800">
             {footer}
           </div>
         )}

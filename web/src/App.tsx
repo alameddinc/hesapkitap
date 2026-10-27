@@ -189,7 +189,7 @@ function Shell() {
 
   return (
     <UIContext.Provider value={ui}>
-      <DemoBanner />
+      <div className="hidden md:block"><DemoBanner /></div>
       <div className="md:flex">
         {/* Masaüstü yan menü */}
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-stone-200 bg-white p-3 md:flex dark:border-stone-800 dark:bg-stone-900">
@@ -212,31 +212,35 @@ function Shell() {
         </aside>
 
         {/* mobil üst çubuk: logo + tutarları göster/gizle */}
-        <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-stone-200 bg-white/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur md:hidden dark:border-stone-800 dark:bg-stone-900/90">
-          <img src="/icons/logo-mark.png" alt="" className="size-6" />
-          <span className="flex-1 py-2 font-semibold">HesapKitap</span>
-          {eyeBtn("-mr-2")}
+        {/* saat/çentik alanının altından başlar; demo şeridi de (geri sayım) burada, kaydırınca kaybolmaz */}
+        <div className="sticky top-0 z-30 border-b border-stone-200/70 bg-stone-50/85 pt-[var(--sat)] backdrop-blur-xl md:hidden dark:border-stone-800/70 dark:bg-stone-950/85">
+          <div className="flex h-11 items-center gap-2 px-4">
+            <img src="/icons/logo-mark.png" alt="" className="size-6" />
+            <span className="flex-1 font-display text-[17px] font-semibold tracking-tight">HesapKitap</span>
+            {eyeBtn("-mr-2")}
+          </div>
+          <DemoBanner />
         </div>
-        <main className={cx("mx-auto w-full min-w-0 px-4 pt-4 pb-28 md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
+        <main className={cx("mx-auto w-full min-w-0 px-4 pt-3 pb-[calc(6.5rem+var(--sab))] md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
           <Page />
         </main>
       </div>
 
       {/* Mobil alt menü */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden dark:border-stone-800 dark:bg-stone-900/95">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200/70 bg-white/90 pb-[max(var(--sab),0.25rem)] backdrop-blur-xl md:hidden dark:border-stone-800/70 dark:bg-stone-900/90">
         <div className="grid grid-cols-5 items-end">
           {[nav("ozet"), nav("islemler"), null, nav(prefs.simple ? "ayarlar" : canSee("plan") ? "plan" : "istatistik"), { route: "diger" as Route, label: "Diğer", icon: Menu }].map((n, i) =>
             n ? (
               <a key={n.route} href={`#/${n.route}`}
-                className={cx("flex flex-col items-center gap-0.5 py-2 text-[11px]",
+                className={cx("flex flex-col items-center gap-0.5 pt-2 pb-1 text-[11px] transition-colors active:opacity-60",
                   route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik"].includes(route))
-                    ? "text-blue-600" : "text-stone-500")}>
+                    ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>
             ) : (
               <div key={i} className="flex justify-center">
                 <button onClick={ui.openAdd} aria-label="Ekle"
-                  className="-mt-5 flex size-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg active:scale-95">
+                  className="-mt-6 flex size-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/30 ring-4 ring-stone-50 transition-transform active:scale-90 dark:ring-stone-950">
                   <Plus size={26} />
                 </button>
               </div>
@@ -259,7 +263,7 @@ function Shell() {
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
 
       {toastMsg && (
-        <div className="fixed inset-x-0 bottom-24 z-[60] flex justify-center px-4 md:bottom-6" role="status">
+        <div className="fixed inset-x-0 bottom-[calc(6rem+var(--sab))] z-[60] flex justify-center px-4 md:bottom-6" role="status">
           <div className="rounded-full bg-stone-900 px-4 py-2 text-sm text-white shadow-lg dark:bg-stone-100 dark:text-stone-900">{toastMsg}</div>
         </div>
       )}

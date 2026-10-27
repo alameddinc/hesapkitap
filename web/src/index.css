@@ -1,4 +1,10 @@
 @import "tailwindcss";
+/* başlıklar ve büyük rakamlar: uygulamanın içinde gömülü (dışarıdan yazı tipi isteği yok) */
+@import "@fontsource-variable/bricolage-grotesque";
+
+@theme {
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+}
 
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
@@ -32,15 +38,38 @@
   }
 }
 
+/* Telefonun güvenli alanları (saat/çentik üstte, hareket çubuğu altta). Android WebView < 140 env() değerini 0 verir;
+   Capacitor 8 doğrusunu --safe-area-inset-* olarak verir, önce o. main.tsx uygulama içinde son çare değer koyar. */
+:root {
+  --sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
+
 html,
 body {
   overflow-x: hidden; /* mobilde yana kayma olmasın */
+}
+html {
+  -webkit-tap-highlight-color: transparent; /* dokununca gri kutu yanmasın */
+  -webkit-text-size-adjust: 100%;
 }
 body {
   @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
   font-feature-settings: "tnum";
   /* "0000000000917532563 police" gibi bölünemeyen uzun açıklamalar ekranı genişletmesin */
   overflow-wrap: anywhere;
+  overscroll-behavior-y: none; /* sayfa sonunda lastik gibi esneyip arkadaki boşluğu göstermesin */
+}
+/* düğmeler ve menü: uzun basınca metin seçilmesin, çift dokunuşta yakınlaşma olmasın (uygulama hissi) */
+button,
+nav a,
+[role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+h1 {
+  @apply font-display tracking-tight;
 }
 
 @utility card {
