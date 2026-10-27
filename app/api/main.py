@@ -1362,6 +1362,20 @@ def buy_into_jar(jid: int, body: JarBuy):
         raise HTTPException(422, str(e)) from e
 
 
+class JarMovePatch(BaseModel):
+    quantity: float | None = Field(None, gt=0)
+    cost: float | None = Field(None, gt=0)
+    move_date: date | None = None
+
+
+@app.patch("/api/jar-moves/{mid}")
+def patch_jar_purchase(mid: int, body: JarMovePatch):
+    """Altın/döviz kumbarası alımını düzelt (kuyumcuda ödenen farklıysa)."""
+    if not db.update_jar_purchase(mid, body.quantity, body.cost, body.move_date.isoformat() if body.move_date else None):
+        raise HTTPException(404, "Alım bulunamadı")
+    return {"ok": True}
+
+
 @app.delete("/api/jar-moves/{mid}")
 def delete_jar_move(mid: int):
     if not db.delete_jar_move(mid):

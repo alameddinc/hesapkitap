@@ -642,7 +642,8 @@ def auto_link() -> int:
         for e in sorted(pending, key=lambda e: e["entry_date"]):
             n = int(e.get("installments") or 1)
             target = e["amount"] / n  # taksitli: ekstreye ilk taksit yansır
-            cands = [t for t in free if abs(t["amount"] - target) <= (0.05 if n == 1 else 0.02 * n)
+            tol = max(0.05 if n == 1 else 0.02 * n, target * 0.10 if e.get("category") == JAR_BUY_CATEGORY else 0)
+            cands = [t for t in free if abs(t["amount"] - target) <= tol
                      and (n == 1 or (t.get("installment_no") or 1) == 1)
                      and _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS]
             if not cands:
@@ -652,6 +653,8 @@ def auto_link() -> int:
                                              _days(t["txn_date"], e["entry_date"]),
                                              -_name_score(t["description"], e["description"])))
             _apply_link(c, e, best)
+            if e.get("category") == JAR_BUY_CATEGORY and abs(best["amount"] - target) >= 0.01:
+                _sync_jar_purchase(c, e["id"], best["amount"])  # kumbara alımı: ekstredeki gerçek tutar
             free.remove(best)
             linked += 1
     return linked
@@ -1467,17 +1470,22 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         desc = r["description"]
         # daha önce elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog) → yeni kayıt açma, bağla
         with connect() as c:
+            # kumbaradan altın/döviz alımı tahmini fiyatla yazılmış olabilir: ±%10 içinde eşleşir, gerçek tutara güncellenir
             cands = [dict(x) for x in c.execute(
-                """SELECT id, entry_date, description, note, counterparty FROM entries
+                """SELECT id, entry_date, description, note, counterparty, amount, category FROM entries
                    WHERE (import_hash IS NULL OR (import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti'))
-                   AND import_hash IS NOT ? AND wallet_id IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
+                   AND import_hash IS NOT ? AND wallet_id IS NULL AND kind = ?
+                   AND (ABS(amount - ?) < 0.01 OR (category = ? AND ABS(amount - ?) <= ? * 0.10))
                    AND entry_date BETWEEN ? AND ?""",
-                (r["hash"], kind, amount, (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
+                (r["hash"], kind, amount, JAR_BUY_CATEGORY, amount, amount,
+                 (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
             who_here = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
             dup = _pick_manual(cands, who_here, people, d)
             if dup:
                 c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?), "
                           "account_id = COALESCE(account_id, ?) WHERE id = ?", (r["hash"], who_here, acc_id, dup["id"]))
+                if abs(dup["amount"] - amount) >= 0.01:  # kumbara alımı: bankadaki gerçek tutar
+                    _sync_jar_purchase(c, dup["id"], amount)
                 matched = c.execute("SELECT counterparty FROM entries WHERE id = ?", (dup["id"],)).fetchone()[0]
         if dup:  # bağlantı yazıldıktan sonra (ayrı bağlantı açan borç kapatma kilitlenmesin)
             if link_debt_movement(matched, kind, amount, r["date"], dup["id"]):
@@ -2537,6 +2545,42 @@ def delete_jar_move(mid: int) -> bool:
         return c.execute("DELETE FROM jar_moves WHERE id = ?", (mid,)).rowcount > 0
 
 
+JAR_BUY_CATEGORY = "Altın & Döviz Birikimi"
+
+
+def _sync_jar_purchase(c, entry_id: int, cost: float) -> None:
+    """Kumbara alımının gerçek tutarı belli oldu (banka/kart/düzeltme): kayıt, kumbara hareketi ve varlığın maliyeti."""
+    c.execute("UPDATE entries SET amount = ? WHERE id = ?", (round(cost, 2), entry_id))
+    m = c.execute("SELECT id, asset_id FROM jar_moves WHERE entry_id = ?", (entry_id,)).fetchone()
+    if m:
+        c.execute("UPDATE jar_moves SET cost = ? WHERE id = ?", (round(cost, 2), m["id"]))
+        if m["asset_id"]:
+            c.execute("UPDATE zakat_assets SET cost = ? WHERE id = ?", (round(cost, 2), m["asset_id"]))
+
+
+def update_jar_purchase(mid: int, quantity: float | None = None, cost: float | None = None, on: str | None = None) -> bool:
+    """Kumbara alımını düzelt: miktar / ödenen / tarih → varlığa ve gider kaydına da yansır."""
+    with connect() as c:
+        m = c.execute("SELECT * FROM jar_moves WHERE id = ?", (mid,)).fetchone()
+        if not m or m["cost"] is None:
+            return False
+        if quantity is not None:
+            c.execute("UPDATE jar_moves SET amount = ? WHERE id = ?", (quantity, mid))
+            if m["asset_id"]:
+                c.execute("UPDATE zakat_assets SET quantity = ? WHERE id = ?", (quantity, m["asset_id"]))
+        if cost is not None and m["entry_id"]:
+            _sync_jar_purchase(c, m["entry_id"], cost)
+        elif cost is not None:
+            c.execute("UPDATE jar_moves SET cost = ? WHERE id = ?", (cost, mid))
+        if on:
+            c.execute("UPDATE jar_moves SET move_date = ? WHERE id = ?", (on, mid))
+            if m["asset_id"]:
+                c.execute("UPDATE zakat_assets SET acquired = ? WHERE id = ?", (on, m["asset_id"]))
+    if on and m["entry_id"]:
+        update_entry(m["entry_id"], {"entry_date": on})
+    return True
+
+
 def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: int | None, payment: str,
                  note: str | None = None) -> int:
     """Altın/döviz kumbarası: alım = senin adına varlık (alış tarihi + bedeli) + ödemenin gider kaydı + kumbara hareketi.
@@ -2555,7 +2599,7 @@ def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: in
     label = zakat.KINDS[j["unit"]][0]
     aid = zakat.add_asset(me["id"], j["unit"], quantity, False, f"Kumbara: {j['name']}", on, cost)
     eid = create_entry({"entry_date": on, "description": f"{label} alımı · {j['name']}", "amount": cost, "kind": "gider",
-                        "category": "Altın & Döviz Birikimi", "payment": payment,
+                        "category": JAR_BUY_CATEGORY, "payment": payment,
                         "account_id": account_id if payment in ("nakit", "havale") else None,
                         "note": "Kumbara alımı (varlık olarak da eklendi)"})
     with connect() as c:

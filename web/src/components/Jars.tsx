@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Minus, Coins, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Camera, ChevronDown, Minus, Coins, Pencil, Plus, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import AccountSelect from "./AccountSelect";
@@ -136,6 +136,27 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10));
   const [payment, setPayment] = useState<"havale" | "nakit" | "kredi_karti">("havale");
   const [account, setAccount] = useState<number | null>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const [reading, setReading] = useState(false);
+  // kuyumcu fişi: gerçek ödenen tutar ve tarih (yerel OCR ya da yapay zekâ)
+  const readReceipt = async (f: File | undefined) => {
+    if (!f) return;
+    setReading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f, f.name);
+      const r = await fetch("/api/documents/parse", { method: "POST", body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail ?? "Fiş okunamadı");
+      if (d.total) setCost(String(d.total));
+      if (d.date) setDay(d.date);
+      ui.toast(d.total ? `Fişten ${tl(d.total)} okundu; kontrol et` : "Tutar okunamadı; elle yaz");
+    } catch (e) {
+      ui.toast((e as Error).message);
+    } finally {
+      setReading(false);
+    }
+  };
   const save = useSave(() => json("POST", `/api/jars/${jar.id}/buy`, {
     quantity: parseAmount(amount), cost: parseAmount(cost) || Math.round(est * 100) / 100, buy_date: day, payment,
     account_id: payment === "kredi_karti" ? null : account,
@@ -153,12 +174,47 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
             <input className="input mt-1 text-right" inputMode="decimal" placeholder={est ? tl(est) : ""} value={cost} onChange={(e) => setCost(e.target.value)} />
           </label>
         </div>
-        {est > 0 && !cost && <p className="text-xs text-stone-500">Boş bırakırsan bugünkü fiyatla {tl(est)} yazılır.</p>}
+        {est > 0 && !cost && <p className="text-xs text-stone-500">Boş bırakırsan bugünkü fiyatla {tl(est)} yazılır.
+          Banka/kart ekstresi gelince gerçek ödenen tutara kendiliğinden düzelir.</p>}
+        <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-sm dark:border-stone-700" disabled={reading}
+          onClick={() => file.current?.click()}><Camera size={14} /> {reading ? "Okunuyor…" : "Fişi okut (tutar ve tarih dolsun)"}</button>
+        <input ref={file} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
+          onChange={(e) => { readReceipt(e.target.files?.[0]); e.target.value = ""; }} />
         <input type="date" className="input" value={day} onChange={(e) => setDay(e.target.value)} aria-label="Alış tarihi" />
         <select className="input" value={payment} onChange={(e) => setPayment(e.target.value as typeof payment)} aria-label="Ödeme">
           <option value="havale">Havale / banka kartı</option><option value="nakit">Nakit</option><option value="kredi_karti">Kredi kartı</option>
         </select>
         {payment !== "kredi_karti" && <AccountSelect id="b-acc" label="Hangi hesaptan?" value={account} onChange={setAccount} />}
+      </div>
+    </Modal>
+  );
+}
+
+/** Kumbara alımını düzelt: kuyumcuda ödenen / alınan miktar farklıysa; varlığa ve gider kaydına da yansır. */
+function EditPurchase({ jar, move, onClose }: { jar: Jar; move: Move; onClose: () => void }) {
+  const ui = useUI();
+  const s = jar.unit_symbol ?? sym(jar.unit);
+  const [amount, setAmount] = useState(String(move.amount));
+  const [cost, setCost] = useState(String(move.cost ?? ""));
+  const [day, setDay] = useState(move.move_date);
+  const save = useSave(() => json("PATCH", `/api/jar-moves/${move.id}`, {
+    quantity: parseAmount(amount), cost: parseAmount(cost), move_date: day,
+  }), () => { ui.toast("Düzeltildi"); onClose(); });
+  return (
+    <Modal title={`${jar.name} · alımı düzelt`} onClose={onClose} footer={
+      <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0) || save.isPending}
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs">Miktar ({s})
+            <input className="input mt-1 text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </label>
+          <label className="text-xs">Ödenen (₺)
+            <input className="input mt-1 text-right" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} />
+          </label>
+        </div>
+        <input type="date" className="input" value={day} onChange={(e) => setDay(e.target.value)} aria-label="Alış tarihi" />
+        <p className="text-xs text-stone-500">Altın ve döviz listesindeki kayıt ve ödemenin gider kaydı da güncellenir.</p>
       </div>
     </Modal>
   );
@@ -171,6 +227,7 @@ export default function Jars() {
   const [form, setForm] = useState<{ jar?: Jar } | null>(null);
   const [move, setMove] = useState<{ jar: Jar; dir: "yatir" | "cek" } | null>(null);
   const [buy, setBuy] = useState<Jar | null>(null);
+  const [fix, setFix] = useState<{ jar: Jar; move: Move } | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [showClosed, setShowClosed] = useState(false);
   const patch = useSave((a: { id: number; body: object }) => json("PATCH", `/api/jars/${a.id}`, a.body));
@@ -255,6 +312,10 @@ export default function Jars() {
                           {m.amount > 0 ? "+" : "−"}{isUnit(j) ? qty(Math.abs(m.amount), j.unit_symbol ?? sym(j.unit)) : tl(Math.abs(m.amount))}
                           {m.cost != null && <span className="text-stone-500"> · {tl(m.cost)}</span>}
                         </span>
+                        {m.cost != null && (
+                          <button className="btn-ghost p-0.5 text-stone-400 hover:text-blue-600" aria-label="Alımı düzelt"
+                            onClick={() => setFix({ jar: j, move: m })}><Pencil size={12} /></button>
+                        )}
                         <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Hareketi sil"
                           onClick={() => window.confirm("Bu hareket silinsin mi?") && delMove.mutate(m.id)}><Trash2 size={12} /></button>
                       </span>
@@ -282,6 +343,7 @@ export default function Jars() {
       {form && <JarForm jar={form.jar} onClose={() => setForm(null)} />}
       {move && <MoveForm jar={move.jar} dir={move.dir} onClose={() => setMove(null)} />}
       {buy && <BuyForm jar={buy} onClose={() => setBuy(null)} />}
+      {fix && <EditPurchase jar={fix.jar} move={fix.move} onClose={() => setFix(null)} />}
     </section>
   );
 }

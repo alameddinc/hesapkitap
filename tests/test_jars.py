@@ -76,3 +76,55 @@ def test_gold_jar_monthly_buy_adds_asset_entry_and_reminder(client, tmpdb, monke
     # TL kumbarasına "aldım" denmez
     tl = client.post("/api/jars", json={"name": "Tatil"}).json()["id"]
     assert client.post(f"/api/jars/{tl}/buy", json={"quantity": 1, "cost": 10}).status_code == 422
+
+
+def _gold_jar(client, tmpdb, monkeypatch):
+    from app import zakat
+
+    monkeypatch.setattr(zakat, "prices", lambda: {"prices": {"GRA": 6422.0}})
+    return client.post("/api/jars", json={"name": "Altın", "unit": "ALTIN_24", "monthly": 1, "auto_day": 1}).json()["id"]
+
+
+def _state(tmpdb):
+    from app import zakat
+
+    e = [x for x in tmpdb.list_entries() if x["category"] == "Altın & Döviz Birikimi"]
+    a = [x for p in zakat.people() for x in p["assets"] if (x["note"] or "").startswith("Kumbara")]
+    return e, a
+
+
+def test_bank_statement_corrects_estimated_gold_price(client, tmpdb, monkeypatch):
+    jid = _gold_jar(client, tmpdb, monkeypatch)
+    client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6422, "buy_date": "2026-10-20", "payment": "havale"})
+    rows = [{"date": "2026-10-21", "description": "ORNEK KUYUMCU EFT", "amount": -6550.0, "balance": 1000.0,
+             "type": "gider", "hash": "k1"}]
+    st = tmpdb.import_bank_rows(rows, account="", owners=[])
+    e, a = _state(tmpdb)
+    assert st["eslesen_elle"] == 1 and len(e) == 1 and e[0]["amount"] == 6550  # çift sayılmadı, gerçek tutar
+    assert a[0]["cost"] == 6550
+    assert client.get("/api/jars").json()[0]["cost"] == 6550
+    # %10'dan fazla farklı bir ödeme eşleşmez (başka bir harcama)
+    client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6422, "buy_date": "2026-11-20", "payment": "havale"})
+    tmpdb.import_bank_rows([{"date": "2026-11-20", "description": "MARKET", "amount": -9000.0, "balance": 1, "type": "gider",
+                             "hash": "k2"}], account="", owners=[])
+    e, _ = _state(tmpdb)
+    assert sorted(x["amount"] for x in e) == [6422, 6550]
+
+
+def test_card_statement_corrects_and_manual_edit(client, tmpdb, monkeypatch):
+    jid = _gold_jar(client, tmpdb, monkeypatch)
+    client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6422, "buy_date": "2026-09-15", "payment": "kredi_karti"})
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end) VALUES ('g', 'VakıfBank', '4543***1234', '2026-10-13')")
+        sid = c.execute("SELECT id FROM statements").fetchone()[0]
+        c.execute("INSERT INTO transactions (statement_id, txn_date, description, amount, txn_type) "
+                  "VALUES (?, '2026-09-15', 'ORNEK KUYUMCU', 6380.0, 'harcama')", (sid,))
+    tmpdb.auto_link()
+    e, a = _state(tmpdb)
+    assert e[0]["linked_txn_id"] and e[0]["amount"] == 6380 and a[0]["cost"] == 6380
+    # elle düzeltme: miktar ve tarih varlığa da yansır
+    mid = client.get("/api/jars").json()[0]["moves"][0]["id"]
+    assert client.patch(f"/api/jar-moves/{mid}", json={"quantity": 1.05, "cost": 6400, "move_date": "2026-09-16"}).status_code == 200
+    e, a = _state(tmpdb)
+    assert (a[0]["quantity"], a[0]["cost"], a[0]["acquired"]) == (1.05, 6400, "2026-09-16")
+    assert e[0]["amount"] == 6400 and e[0]["entry_date"] == "2026-09-16"
