@@ -188,11 +188,12 @@ export default function Dashboard() {
           onSelect={(c) => { setInsightFilter(null); setSel({ by: "category", name: c }); }} />
         {editBudgets && <BudgetForm month={month} onClose={() => setEditBudgets(false)} onSaved={ui.toast} />}
       </>);
-      case "kategoriler": return (
+      // dönem başında boş: aynı "henüz harcama yok" yazısı iki kartta tekrarlanmasın
+      case "kategoriler": return !s.by_category.length ? null : (
         <Section title="Kategoriye göre">
           <BarList items={s.by_category} selected={sel?.by === "category" ? sel.name : null} onSelect={select("category")} />
         </Section>);
-      case "isyerleri": return (
+      case "isyerleri": return !s.by_merchant.length ? null : (
         <Section title="En çok harcanan yerler">
           <BarList items={s.by_merchant} selected={sel?.by === "merchant" ? sel.name : null} onSelect={select("merchant")} limit={10} />
         </Section>);
