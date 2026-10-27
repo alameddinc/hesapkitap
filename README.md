@@ -379,5 +379,8 @@ gömmek vb.) için yazardan ayrıca izin/lisans gerekir.
 
 Bu değişiklikten önce MIT ile yayımlanmış sürümler MIT lisansıyla kalır; yeni lisans bundan sonraki sürümler içindir.
 
+"HesapKitap" adı ve logosu proje sahibine aittir; lisans bunların kullanım hakkını vermez. Kendi kopyanı dağıtacaksan
+farklı bir ad ve logo kullan.
+
 </details>
 

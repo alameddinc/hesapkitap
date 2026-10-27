@@ -123,3 +123,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 [PolyForm Noncommercial 1.0.0](LICENSE): free for personal and other noncommercial use. Commercial use requires
 permission.
+
+The "HesapKitap" name and logo belong to the project owner and are not covered by the license; forks that are
+distributed must use a different name and logo.
