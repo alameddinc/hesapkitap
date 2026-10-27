@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, FlaskConical, Server, Timer } from "lucide-react";
+import { Bell, FlaskConical, LogOut, Server, Timer } from "lucide-react";
 import { useEffect, useState } from "react";
+import { inApp, toLauncher } from "./AppServer";
 import { useDemo } from "./hooks";
 import Waitlist from "./Waitlist";
 
@@ -37,8 +38,13 @@ export default function DemoBanner() {
         ) : (
           <button className="rounded bg-white/20 px-2 py-0.5 font-medium" onClick={restart}>Süre doldu · yeni demo başlat</button>
         )}
-        <a className="flex items-center gap-1 rounded bg-white px-2 py-0.5 font-medium text-blue-700" href={`${REPO}#-hızlı-kurulum`}
-          target="_blank" rel="noreferrer"><Server size={14} /> Kendi sunucuna kur</a>
+        {inApp() ? (
+          <button className="flex items-center gap-1 rounded bg-white px-2 py-0.5 font-medium text-blue-700" onClick={toLauncher}>
+            <LogOut size={14} /> Demodan çık</button>
+        ) : (
+          <a className="flex items-center gap-1 rounded bg-white px-2 py-0.5 font-medium text-blue-700" href={`${REPO}#-hızlı-kurulum`}
+            target="_blank" rel="noreferrer"><Server size={14} /> Kendi sunucuna kur</a>
+        )}
         <button className="flex items-center gap-1 rounded bg-amber-300 px-2 py-0.5 font-medium text-stone-900" onClick={() => setWl(true)}>
           <Bell size={14} /> Kurulumsuz sürüm: haber ver</button>
       </div>
