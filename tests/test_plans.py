@@ -134,3 +134,30 @@ def test_delete_my_account_removes_data(hosted):
     assert c.post("/api/me/delete", json={"password": "ayse-sifre-12345"}).status_code == 200
     assert system.user(u["id"]) is None and not os.path.exists(folder)
     assert c.get("/api/summary").status_code == 401  # oturum da düştü
+
+
+def test_hosted_zakat_off_by_default_and_needs_consent(hosted):
+    import json
+
+    from app import db, system
+
+    c, u = _user(hosted)
+    meta = c.get("/api/meta").json()
+    assert meta["modules"]["zekat"] is False and "zekat" in meta["module_consent"]
+    assert meta["modules"]["plan"] is True
+    r = c.put("/api/settings/modules", json={"modules": {"zekat": True}})
+    assert r.status_code == 422 and "rıza" in r.json()["detail"]
+    assert c.put("/api/settings/modules", json={"modules": {"zekat": True}, "consent": ["zekat"]}).status_code == 200
+    assert c.get("/api/meta").json()["modules"]["zekat"] is True
+    with db.use_space(system.user_db_path(u), u):
+        rec = json.loads(db.get_setting("consent:zekat"))
+    assert rec["version"] == "1" and rec["user"] == u["id"] and rec["at"]
+    # kapatınca rıza geri alınır
+    c.put("/api/settings/modules", json={"modules": {"zekat": False}})
+    with db.use_space(system.user_db_path(u), u):
+        assert db.get_setting("consent:zekat") is None
+
+
+def test_self_hosted_zakat_on_without_consent(client):
+    meta = client.get("/api/meta").json()
+    assert meta["modules"]["zekat"] is True and meta["module_consent"] == {}

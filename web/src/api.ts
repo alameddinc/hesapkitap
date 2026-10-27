@@ -232,6 +232,7 @@ export interface Meta {
   modules?: Record<string, boolean>; // açık özellikler (defter bazında)
   modules_chosen?: boolean;
   module_labels?: Record<string, { label: string; desc: string }>;
+  module_consent?: Record<string, string>; // hazır sürüm: açarken açık rıza isteyen özellikler (metin)
   ui?: { simple: boolean; layout: string[] | null }; // kişisel görünüm
   plan?: PlanInfo; // paket (barındırılan sürüm); kendi sunucunda "self": her şey açık
 }

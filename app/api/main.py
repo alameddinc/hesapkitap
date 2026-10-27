@@ -485,18 +485,23 @@ def meta():
         "suggested_cycle_day": db.suggested_cycle_day(),
         "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": prefs.ui(),
         "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
+        "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
         "plan": plans.info(db.current_user()),
     }
 
 
 class ModulesIn(BaseModel):
     modules: dict[str, bool]
+    consent: list[str] = []  # barındırılan sürüm: açık rıza verilen özellikler (ör. zekat)
 
 
 @app.put("/api/settings/modules")
 def put_modules(body: ModulesIn):
     """Hangi özellikler açık (defter sahibi; ortak defterde herkes için)."""
-    return prefs.set_modules(body.modules)
+    try:
+        return prefs.set_modules(body.modules, body.consent)
+    except prefs.ConsentRequired as e:
+        raise HTTPException(422, f"{prefs.MODULES[str(e)][0]} için açık rıza gerekli") from e
 
 
 class UiIn(BaseModel):

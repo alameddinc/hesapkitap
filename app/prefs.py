@@ -25,20 +25,51 @@ LINK_MODULE = {"zekat": "zekat", "plan": "plan", "tasarruf": "tasarruf", "borcla
                "hesaplar": "hesaplar", "istatistik": "istatistik", "fiyatlar": "fiyatlar"}
 
 
+# Barındırılan sürümde açık rıza isteyen özellikler (KVKK özel nitelikli veri): varsayılan kapalı, açarken onay.
+CONSENT = {"zekat": "Zekât, sadaka, fitre ve kurban kayıtların dini inancına dair bilgi verebilir (özel nitelikli kişisel "
+                    "veri). Bu bilgiler yalnızca senin hesabında, hesaplama ve hatırlatma için işlenir; kimseyle paylaşılmaz, "
+                    "anonim istatistiklere girmez. Özelliği kapatınca rızan geri alınmış olur."}
+CONSENT_VERSION = "1"
+
+
+def _consent_needed() -> set[str]:
+    from app import plans
+
+    return set(CONSENT) if plans.hosted() else set()
+
+
 def modules() -> dict[str, bool]:
     try:
         saved = json.loads(db.get_setting("modules") or "{}")
     except ValueError:
         saved = {}
-    return {k: bool(saved.get(k, True)) for k in MODULES}
+    need = _consent_needed()
+    return {k: bool(saved.get(k, k not in need)) for k in MODULES}
+
+
+class ConsentRequired(Exception):
+    pass
 
 
 def modules_chosen() -> bool:
     return db.get_setting("modules") is not None
 
 
-def set_modules(data: dict) -> dict[str, bool]:
-    m = {**modules(), **{k: bool(v) for k, v in data.items() if k in MODULES}}
+def set_modules(data: dict, consent: list[str] | None = None) -> dict[str, bool]:
+    from datetime import datetime, timezone
+
+    before = modules()
+    m = {**before, **{k: bool(v) for k, v in data.items() if k in MODULES}}
+    for k in _consent_needed():
+        if m[k] and not before[k]:
+            if k not in (consent or []):
+                raise ConsentRequired(k)
+            u = db.current_user() or {}
+            db.set_setting(f"consent:{k}", json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                      "version": CONSENT_VERSION, "user": u.get("id"), "text": CONSENT[k]},
+                                                     ensure_ascii=False))
+        elif before[k] and not m[k]:
+            db.set_setting(f"consent:{k}", None)  # rıza geri alındı
     db.set_setting("modules", json.dumps(m))
     return m
 
