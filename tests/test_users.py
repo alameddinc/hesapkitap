@@ -119,3 +119,23 @@ def system_space(uid):
 
     u = system.user(uid)
     return db.use_space(system.user_db_path(u), u)
+
+
+def test_existing_user_db_gets_new_columns(tmp_path, tmpdb):
+    """Eski sürümde açılmış kullanıcı veritabanı: ilk kullanımda göçler uygulanır (yeni kolonlar eklenir)."""
+    import sqlite3
+
+    from app import db
+
+    p = str(tmp_path / "eski" / "ekstre.db")
+    (tmp_path / "eski").mkdir()
+    old = sqlite3.connect(p)
+    old.executescript("CREATE TABLE entries (id INTEGER PRIMARY KEY, entry_date DATE NOT NULL, month TEXT NOT NULL, "
+                      "description TEXT NOT NULL, amount REAL NOT NULL, kind TEXT NOT NULL, category TEXT);")
+    old.close()
+    db._ready_dbs.discard(p)
+    with db.use_space(p, {"id": 9, "username": "eski", "role": "user"}):
+        eid = db.create_entry({"entry_date": "2026-10-01", "description": "x", "amount": 5, "kind": "gider",
+                               "card_last4": "1234", "created_by": 9, "hidden": 0})
+        cols = {r[1] for r in sqlite3.connect(p).execute("PRAGMA table_info(entries)")}
+    assert eid and {"card_last4", "hidden", "created_by"} <= cols

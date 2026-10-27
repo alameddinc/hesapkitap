@@ -22,6 +22,23 @@ db.init_db()
 auth.ensure_admin()
 
 
+def _migrate_user_dbs() -> None:
+    """Açılışta her kullanıcının veritabanına göçleri uygula (yeni kolonlar; kullanıcı giriş yapmasını beklemeden)."""
+    import logging
+
+    for u in system.users():
+        path = system.user_db_path(u) if u.get("db_file") else None
+        if path and os.path.exists(path):
+            try:
+                with db.use_space(path, u):
+                    pass  # use_space ilk kullanımda init_db çalıştırır
+            except Exception:  # noqa: BLE001 - bir kullanıcının dosyası diğerlerini engellemesin
+                logging.getLogger("ekstre").exception("kullanıcı veritabanı göçü: %s", u.get("username"))
+
+
+_migrate_user_dbs()
+
+
 @asynccontextmanager
 async def lifespan(_app):
     task = asyncio.create_task(jobs.scheduler()) if os.environ.get("JOBS_ENABLED", "1") == "1" else None

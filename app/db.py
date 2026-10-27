@@ -364,6 +364,7 @@ MIGRATIONS = [
 # Her istek (ve zamanlanmış iş) giriş yapan kullanıcının veritabanında çalışır. Bağlam boşsa ana veritabanı
 # (DB_PATH: yönetici / tek kullanıcılı kurulum / testler).
 _space: ContextVar[dict | None] = ContextVar("hesapkitap_space", default=None)
+_ready_dbs: set[str] = set()  # bu süreçte şeması/göçleri uygulanmış kullanıcı veritabanları
 
 
 def db_path() -> str:
@@ -388,7 +389,8 @@ def current_user() -> dict | None:
 
 @contextmanager
 def use_space(db_file: str | None, user: dict | None = None):
-    """db_file None: ana veritabanı. Kullanıcı klasöründe ilk kullanımda şema kurulur."""
+    """db_file None: ana veritabanı (açılışta init_db). Kullanıcı veritabanı bu süreçte ilk kullanıldığında şema kurulur
+    ve göçler uygulanır: yeni sürümdeki kolonlar eski kullanıcı dosyalarına da eklenir."""
     if db_file:
         base = os.path.dirname(os.path.abspath(db_file))
         space = {"db": db_file, "uploads": os.path.join(base, "uploads"), "bills": os.path.join(base, "bills"), "user": user}
@@ -396,8 +398,10 @@ def use_space(db_file: str | None, user: dict | None = None):
         space = {"db": DB_PATH, "uploads": UPLOAD_DIR, "bills": BILL_DIR, "user": user}
     token = _space.set(space)
     try:
-        if db_file and not os.path.exists(db_file):
+        key = os.path.abspath(db_file) if db_file else None
+        if key and key not in _ready_dbs:
             init_db()
+            _ready_dbs.add(key)
         yield
     finally:
         _space.reset(token)
