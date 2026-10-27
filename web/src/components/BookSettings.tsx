@@ -4,6 +4,7 @@ import { useState } from "react";
 import { dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import { usePlan } from "./Plan";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
 interface Book {
@@ -25,6 +26,7 @@ const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x
 /** Ayarlar → Ortak defter: eşini davet et, neyi göremeyeceğini seç. */
 export default function BookSettings() {
   const ui = useUI();
+  const plan = usePlan();
   const q = useQuery({ queryKey: ["book"], queryFn: () => call<Book>("/api/book"), retry: false });
   const [note, setNote] = useState("");
   const [shown, setShown] = useState<{ title: string; text: string } | null>(null);
@@ -50,10 +52,15 @@ export default function BookSettings() {
       </p>
 
       <div className="space-y-2">
+        {plan?.features.ortak_defter === false ? (
+          <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            Davet etmek <b>Aile</b> paketinde. Ayarlar → Paketin bölümüne bak.</p>
+        ) : (
         <div className="flex flex-wrap gap-2">
           <input className="input min-w-0 flex-1" placeholder="Not (ör. Eşim)" value={note} onChange={(e) => setNote(e.target.value)} />
           <button className="btn-primary" disabled={invite.isPending} onClick={() => invite.mutate(undefined, onErr)}>Davet oluştur</button>
         </div>
+        )}
         {shown && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm dark:border-amber-800 dark:bg-amber-950/40">
             {shown.title}

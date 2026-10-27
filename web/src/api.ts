@@ -233,6 +233,18 @@ export interface Meta {
   modules_chosen?: boolean;
   module_labels?: Record<string, { label: string; desc: string }>;
   ui?: { simple: boolean; layout: string[] | null }; // kişisel görünüm
+  plan?: PlanInfo; // paket (barındırılan sürüm); kendi sunucunda "self": her şey açık
+}
+
+export interface PlanInfo {
+  plan: "self" | "free" | "premium" | "aile";
+  label: string;
+  hosted: boolean;
+  until: string | null;
+  features: Record<string, boolean>;
+  feature_labels: Record<string, string>;
+  ai_docs: number | null; // ayda yapay zekâ ile okuma; null: sınırsız
+  member: boolean;
 }
 
 export interface Rule {

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, donations, finance, jobs, ocr, prefs, receipt, system, telegram, zakat
+from app import auth, backup, config, db, donations, finance, jobs, ocr, plans, prefs, receipt, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -115,6 +115,9 @@ async def require_login(request: Request, call_next):
         # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
         if user["must_change_password"] and path != "/api/settings/password":
             return JSONResponse({"detail": "password_change_required"}, status_code=403)
+        feature = plans.gate_for(path)
+        if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
+            return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
         if user.get("member_of"):  # ortak defter üyesi: sahibin kurallarıyla (defterin içinde) sınırlı
             from app import book
 
@@ -403,6 +406,22 @@ def _by_usage(cats: set[str]) -> list[str]:
     return sorted(cats, key=lambda c: (-usage.get(c, 0), c))
 
 
+@app.post("/api/billing/revenuecat")
+async def revenuecat_webhook(request: Request):
+    """App Store / Google Play aboneliği (RevenueCat webhook). Yetki: RevenueCat panelinde girilen Authorization değeri."""
+    import hmac
+
+    secret = os.environ.get("REVENUECAT_WEBHOOK_AUTH", "")
+    if not plans.hosted() or not secret or not hmac.compare_digest(request.headers.get("authorization", ""), secret):
+        raise HTTPException(404, "Yok")
+    body = await request.json()
+    res = plans.apply_revenuecat(body.get("event") or {})
+    import logging
+
+    logging.getLogger("ekstre").info("revenuecat %s %s", (body.get("event") or {}).get("type"), res)
+    return {"ok": True}
+
+
 @app.get("/api/meta")
 def meta():
     return {
@@ -419,6 +438,7 @@ def meta():
         "suggested_cycle_day": db.suggested_cycle_day(),
         "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": prefs.ui(),
         "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
+        "plan": plans.info(db.current_user()),
     }
 
 

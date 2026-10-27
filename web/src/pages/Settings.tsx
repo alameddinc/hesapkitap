@@ -14,6 +14,7 @@ import UpdateNotice from "../components/UpdateNotice";
 import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
 import BookSettings from "../components/BookSettings";
 import AppServer from "../components/AppServer";
+import PlanSettings from "../components/Plan";
 import DemoStats from "../components/DemoStats";
 import Features from "../components/Features";
 import { useBook, useDemo, useUiPrefs } from "../components/hooks";
@@ -350,6 +351,8 @@ function OwnerSettings() {
       {isAdmin && <DemoStats />}
 
       <AppServer />
+
+      <PlanSettings />
 
       {isAdmin && <section className="card space-y-3 p-4">
         <h2 className="flex items-center gap-2 font-semibold"><Bell size={18} /> Telegram hatırlatmaları</h2>

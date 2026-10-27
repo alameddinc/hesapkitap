@@ -93,6 +93,11 @@ def _migrate(c) -> None:
     for table in ("users", "invites"):
         if "member_of" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
             c.execute(f"ALTER TABLE {table} ADD COLUMN member_of INTEGER")
+    # paket (barındırılan sürüm): free / premium / aile, bitiş (ISO, UTC), kaynak (revenuecat / elle)
+    have = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+    for col in ("plan", "plan_until", "plan_source"):
+        if col not in have:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
 
 
 def init() -> None:
@@ -177,7 +182,8 @@ def members(owner_id: int) -> list[dict]:
 
 
 def update_user(uid: int, **fields) -> None:
-    allowed = {"username", "password_hash", "disabled", "last_login", "must_change_password", "ai_quota", "role"}
+    allowed = {"username", "password_hash", "disabled", "last_login", "must_change_password", "ai_quota", "role",
+               "plan", "plan_until", "plan_source"}
     data = {k: v for k, v in fields.items() if k in allowed}
     if not data:
         return
@@ -271,9 +277,13 @@ def ai_add(uid: int) -> None:
 
 
 def ai_quota(u: dict) -> int | None:
-    """None: sınırsız (yönetici)."""
+    """None: sınırsız (yönetici). Barındırılan sürümde paketin kotası (ücretsiz 3, premium/aile sınırsız)."""
     if u["role"] == "admin":
         return None
+    from app import plans
+
+    if plans.hosted():
+        return plans.ai_limit(u)
     if u.get("ai_quota") is not None:
         return u["ai_quota"]
     v = get("ai_default_quota")
