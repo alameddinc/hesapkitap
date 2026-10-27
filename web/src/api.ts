@@ -103,6 +103,7 @@ export interface Summary {
     net: number;
     carry_in: number; // önceki dönemlerden devreden artı
     debt_flow: number; // borç verip almanın eldeki paraya etkisi
+    savings: number; // kumbaraya altın/döviz alımı: gider değil, eldeki paradan çıkar
     cash_net: number; // net + borç hareketleri
     receivable: number; // açık TL alacak
     payable: number; // açık TL borç

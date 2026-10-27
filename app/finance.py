@@ -66,6 +66,16 @@ def _debt_row(d: dict) -> dict:
     return {**base, "kind": DEBT, "flow": d["flow"], "amount": d["amount"], "category": "Borç / Alacak",
             "description": f"{d['person']} · {_DEBT_STEP[d['step']]}"}
 CARD_SPEND = (PURCHASE, REFUND)
+SAVINGS_CATEGORY = db.JAR_BUY_CATEGORY  # kumbaraya altın/döviz alımı: para harcanmadı, birikime gitti → gider sayılmaz
+
+
+def _saving(r: dict) -> bool:
+    return r.get("category") == SAVINGS_CATEGORY and r["kind"] in (*CARD_SPEND, EXPENSE)
+
+
+def _spends(r: dict, kinds: tuple = ()) -> bool:
+    """Gider sayılan satır (birikim hariç)."""
+    return r["kind"] in (kinds or (*CARD_SPEND, FEE, EXPENSE)) and not _saving(r)
 SUBSCRIPTION_CATEGORIES = {"Dijital Abonelik", "AI & Yazılım Abonelik"}
 VARIABLE_LOOKBACK = 6  # değişken harcama tahmini için son kaç dönem (medyan: tek uç ay tahmini şişirmesin)
 
@@ -290,6 +300,8 @@ def _apply_splits(rows: list[dict]) -> list[dict]:
 def _totals(rows: list[dict]) -> dict:
     live = [r for r in rows if not r.get("deleted") and not r.get("skipped") and not r.get("pending") and not r.get("linked")]
     income = sum(r["amount"] for r in live if r["kind"] == INCOME)
+    savings = sum(r["amount"] for r in live if _saving(r))
+    live = [r for r in live if not _saving(r)]
     card_spend = sum(r["amount"] for r in live if r["kind"] in CARD_SPEND)
     fees = sum(r["amount"] for r in live if r["kind"] == FEE)
     manual = sum(r["amount"] for r in live if r["kind"] == EXPENSE)
@@ -299,7 +311,7 @@ def _totals(rows: list[dict]) -> dict:
     debt_flow = sum(r["flow"] * r["amount"] for r in live if r["kind"] == DEBT) + sum(r.get("debt_flow", 0) for r in live)
     return {k: _round(v) for k, v in dict(income=income, card_spend=card_spend, fees=fees, manual_expense=manual,
                                           refunds=refunds, expense=expense, net=income - expense, debt_flow=debt_flow,
-                                          cash_net=income - expense + debt_flow).items()}
+                                          savings=savings, cash_net=income - expense - savings + debt_flow).items()}
 
 
 def _group(rows: list[dict], key: str) -> list[dict]:
@@ -326,8 +338,8 @@ def available_months() -> list[str]:
 def summary(month: str, today: date | None = None) -> dict:
     rows = transactions(month)
     live = [r for r in rows if not r.get("skipped") and not r.get("pending") and not r.get("linked")]
-    expenses = [r for r in live if r["kind"] in (*CARD_SPEND, FEE, EXPENSE)]
-    spend = [r for r in live if r["kind"] in CARD_SPEND]
+    expenses = [r for r in live if _spends(r)]
+    spend = [r for r in live if _spends(r, CARD_SPEND)]
 
     statements = [s for s in db.list_statements() if s["period"] == month]
     pending = [r for r in rows if r.get("pending")]
@@ -365,7 +377,7 @@ def summary(month: str, today: date | None = None) -> dict:
             "count": len(pending),
         },
         "by_category": by_category,
-        "by_merchant": _group(spend + [r for r in live if r["kind"] == EXPENSE], "merchant")[:15],
+        "by_merchant": _group(spend + [r for r in live if _spends(r, (EXPENSE,))], "merchant")[:15],
         "by_card": _group(spend, "card"),
         "statements": statements,
         "trend": trend,
@@ -412,7 +424,7 @@ def subscriptions() -> list[dict]:
 
 def _spend_for(kind: str, name: str, month: str) -> float:
     rows = [r for r in transactions(month) if not r.get("pending") and not r.get("skipped") and not r.get("linked")
-            and not r.get("deleted") and r["kind"] in (*CARD_SPEND, EXPENSE)]
+            and not r.get("deleted") and _spends(r, (*CARD_SPEND, EXPENSE))]
     key = "category" if kind == "category" else "merchant"
     return _round(sum(r["amount"] for r in rows if r[key] == name))
 
@@ -441,7 +453,7 @@ def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
         return []
     if by_category is None:
         live = [r for r in transactions(month) if not r.get("pending") and not r.get("skipped") and not r.get("linked")]
-        by_category = _group([r for r in live if r["kind"] in (*CARD_SPEND, FEE, EXPENSE)], "category")
+        by_category = _group([r for r in live if _spends(r)], "category")
     spent = {g["name"]: g["amount"] for g in by_category}
     out = []
     for cat, limit in limits.items():
@@ -1216,8 +1228,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     accounts_prev = {st["card_no"] for st in statements if st["period"] == prev}
     # Ekstre kapsamı farklıysa (ör. önceki ayın ekstresi yüklenmemiş) kıyas yanıltıcı olur
     if prev_rows and accounts_now == accounts_prev:
-        cur_c = {g["name"]: g["amount"] for g in _group([r for r in live if r["kind"] in (*CARD_SPEND, EXPENSE)], "category")}
-        prev_c = {g["name"]: g["amount"] for g in _group([r for r in prev_rows if r["kind"] in (*CARD_SPEND, EXPENSE)], "category")}
+        cur_c = {g["name"]: g["amount"] for g in _group([r for r in live if _spends(r, (*CARD_SPEND, EXPENSE))], "category")}
+        prev_c = {g["name"]: g["amount"] for g in _group([r for r in prev_rows if _spends(r, (*CARD_SPEND, EXPENSE))], "category")}
         for cat, amt in sorted(cur_c.items(), key=lambda x: -x[1]):
             base = prev_c.get(cat, 0)
             if base > 500 and amt > base * 1.3 and amt - base > 1000:
@@ -1517,7 +1529,7 @@ def year_summary(year: int) -> dict:
     per = [{"month": m, **{k: v for k, v in _totals([r for r in rows if r["month"] == m]).items() if k in ("income", "expense", "net")}}
            for m in months]
     done = [m for m in per if m["month"] < cur]
-    expenses = [r for r in rows if r["kind"] in (*CARD_SPEND, FEE, EXPENSE)]
+    expenses = [r for r in rows if _spends(r)]
     cats = _group(expenses, "category")
     total_exp = sum(c["amount"] for c in cats) or 1
     prev = _totals(of(year - 1)) if of(year - 1) else None
@@ -1535,7 +1547,7 @@ def year_summary(year: int) -> dict:
         "lowest": min(done, key=lambda m: m["expense"]) if done else None,
         "per_month": per,
         "categories": [{**c, "share": round(c["amount"] / total_exp * 100)} for c in cats[:8]],
-        "merchants": _group([r for r in rows if r["kind"] in CARD_SPEND or r["kind"] == EXPENSE], "merchant")[:5],
+        "merchants": _group([r for r in rows if _spends(r, (*CARD_SPEND, EXPENSE))], "merchant")[:5],
         "expense_change": _change(t["expense"], prev["expense"]) if prev else None,
         "income_change": _change(t["income"], prev["income"]) if prev else None,
         "zakat": dn["zekat"], "sadaka": dn["sadaka"],
@@ -1696,7 +1708,7 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
     for r in transactions(None):
         if r.get("deleted") or r.get("skipped") or r.get("pending") or r.get("linked"):
             continue
-        if r["kind"] not in (PURCHASE, REFUND, FEE, EXPENSE):
+        if not _spends(r):
             continue
         if variable_only and (r.get("recurring_id") or r["category"] in _FIXED_CATEGORIES or r.get("installment")):
             continue
@@ -1793,7 +1805,7 @@ def day_detail(d: str, variable_only: bool = False) -> dict:
     for r in transactions(None):
         if str(r["date"])[:10] != d or r.get("deleted") or r.get("skipped") or r.get("pending") or r.get("linked"):
             continue
-        if r["kind"] not in (PURCHASE, REFUND, FEE, EXPENSE):
+        if not _spends(r):
             continue
         fixed = bool(r.get("recurring_id") or r["category"] in _FIXED_CATEGORIES or r.get("installment"))
         if variable_only and fixed:

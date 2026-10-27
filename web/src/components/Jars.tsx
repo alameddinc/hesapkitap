@@ -278,13 +278,13 @@ export default function Jars() {
               <span>
                 {j.closed_at ? `kapandı ${dateTR(j.closed_at)}`
                   : j.goal && (j.left ?? 0) <= 0 ? "Hedefe ulaştın 🎉"
-                  : [j.deadline && `son tarih ${dateTR(j.deadline)}`, j.need_per_month && `ayda ${tl(j.need_per_month)} ayırmalısın`,
+                  : [j.deadline && `son tarih ${dateTR(j.deadline)}`, j.need_per_month && (isUnit(j) ? `ayda ${qty(j.need_per_month, j.unit_symbol ?? sym(j.unit))} almalısın` : `ayda ${tl(j.need_per_month)} ayırmalısın`),
                     j.monthly && (isUnit(j) ? `her ayın ${j.auto_day}. günü ${qty(j.monthly, j.unit_symbol ?? sym(j.unit))} al`
                       : `her ayın ${j.auto_day}. günü ${tl(j.monthly)} otomatik`), j.account_name && `yeri: ${j.account_name}`]
                     .filter(Boolean).join(" · ")}
                 {!j.closed_at && j.goal && (j.left ?? 0) > 0 && (
                   <span className={cx("block", j.eta ? (j.on_track === false ? "text-amber-600" : "text-green-700 dark:text-green-400") : "text-stone-500")}>
-                    {j.eta ? `Bu hızla (ayda ${tl(j.pace)}) ${monthLabel(j.eta)}'de ulaşırsın${j.on_track === false ? ", son tarihe yetişmiyor" : ""}`
+                    {j.eta ? `Bu hızla (ayda ${isUnit(j) ? qty(j.pace, j.unit_symbol ?? sym(j.unit)) : tl(j.pace)}) ${monthLabel(j.eta)}'de ulaşırsın${j.on_track === false ? ", son tarihe yetişmiyor" : ""}`
                       : "Son 3 ayda ayırma yok; ayır ya da otomatik ayırmayı aç"}
                   </span>
                 )}

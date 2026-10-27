@@ -128,3 +128,17 @@ def test_card_statement_corrects_and_manual_edit(client, tmpdb, monkeypatch):
     e, a = _state(tmpdb)
     assert (a[0]["quantity"], a[0]["cost"], a[0]["acquired"]) == (1.05, 6400, "2026-09-16")
     assert e[0]["amount"] == 6400 and e[0]["entry_date"] == "2026-09-16"
+
+
+def test_gold_buy_is_savings_not_expense(client, tmpdb, monkeypatch):
+    from app import finance
+
+    jid = _gold_jar(client, tmpdb, monkeypatch)
+    client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6422, "payment": "havale"})
+    client.post("/api/entries", json={"kind": "gider", "amount": 500, "description": "Market", "category": "Market",
+                                      "entry_date": __import__("datetime").date.today().isoformat()})
+    s = finance.summary(finance.current_period())
+    t = s["totals"]
+    assert (t["expense"], t["savings"]) == (500, 6422)
+    assert t["cash_net"] == -6922  # eldeki paradan yine çıkar
+    assert "Altın & Döviz Birikimi" not in {c["name"] for c in s["by_category"]}

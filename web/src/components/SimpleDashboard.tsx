@@ -29,10 +29,11 @@ export default function SimpleDashboard() {
             </div>
             <div className="rounded-xl bg-stone-50 p-3 dark:bg-stone-800/50">
               <div className="text-base text-stone-500">Kalan</div>
-              <div className={`text-2xl font-semibold tabular-nums ${t.net < 0 ? "text-red-600" : ""}`}>{tl(t.net)}</div>
+              <div className={`text-2xl font-semibold tabular-nums ${t.net - t.savings < 0 ? "text-red-600" : ""}`}>{tl(t.net - t.savings)}</div>
             </div>
           </div>
         )}
+        {!!t?.savings && <p className="mt-3 text-lg text-amber-700 dark:text-amber-400">Birikime giden (altın/döviz): {tl(t.savings)}</p>}
         {!!t?.fees && <p className="mt-3 text-lg text-red-600">Bu ay {tl(t.fees)} faiz / ücret ödendi</p>}
       </section>
 

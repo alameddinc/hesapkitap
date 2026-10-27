@@ -33,7 +33,8 @@ export default function Transactions() {
       (!needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle)));
   }, [txns.data, tab, q]);
 
-  const spend = rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && r.kind !== "gelir" && r.kind !== "odeme" && r.kind !== "borc")
+  const spend = rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && r.kind !== "gelir" && r.kind !== "odeme" && r.kind !== "borc"
+    && r.category !== "Altın & Döviz Birikimi")
     .reduce((a, r) => a + r.amount, 0);
 
   return (
