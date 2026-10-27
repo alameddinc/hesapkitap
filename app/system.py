@@ -203,6 +203,16 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))  # id ileride yeniden verilebilir
 
 
+def purge_user_data(u: dict) -> None:
+    """Kullanıcı kendi hesabını sildi: klasörü kalıcı olarak silinir (KVKK); günlük yedeklerden 30 günde düşer."""
+    import shutil
+
+    if u.get("db_file"):
+        src = os.path.join(data_root(), os.path.dirname(u["db_file"]))
+        if os.path.isdir(src) and os.path.abspath(src) != os.path.abspath(data_root()):
+            shutil.rmtree(src)
+
+
 def archive_user_data(u: dict) -> str | None:
     """Silinen kullanıcının klasörünü users/_silinen/ altına taşı (geri dönüş için; elle temizlenir)."""
     import shutil

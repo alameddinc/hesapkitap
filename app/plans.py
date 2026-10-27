@@ -16,7 +16,7 @@ FEATURES = {
     "ortak_defter": {FAMILY},            # eş / aile üyesi davet etmek
 }
 # Verini indirmek (zip/Excel) ve hesabı silmek her pakette serbest: KVKK erişim ve taşınabilirlik hakkı.
-AI_DOCS = {FREE: 3, PREMIUM: None, FAMILY: None}  # ayda yapay zekâ ile belge okuma; None: sınırsız
+AI_DOCS = {FREE: 10, PREMIUM: None, FAMILY: None}  # ayda yapay zekâ ile belge okuma; None: sınırsız
 LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi sunucun"}
 FEATURE_LABELS = {"fiyatlar": "Fiyat takibi", "ortak_defter": "Ortak defter (aile)"}
 # API yolu → özellik (paket yoksa 402)
@@ -35,6 +35,11 @@ def _needs(feature: str) -> str:
 
 def hosted() -> bool:
     return os.environ.get("HESAPKITAP_HOSTED") == "1"
+
+
+def open_signup() -> bool:
+    """Barındırılan sürümde herkes davet kodu olmadan hesap açabilir."""
+    return hosted() and os.environ.get("HESAPKITAP_OPEN_SIGNUP") == "1"
 
 
 def _owner(u: dict) -> dict:

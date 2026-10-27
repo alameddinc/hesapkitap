@@ -40,9 +40,17 @@ def _system_value(name: str) -> str | None:
     return system.get(f"cfg:{name}")
 
 
+def locked() -> bool:
+    """Barındırılan sürümde kullanıcı anahtar/entegrasyon ayarı görmez ve giremez (Gemini, Telegram, e-posta kutusu):
+    yapay zekâ paketin kotasıyla sunucunun anahtarından gelir."""
+    from app import plans
+
+    return plans.hosted() and not is_admin()
+
+
 def own_ai_key() -> str | None:
-    """Yönetici olmayan kullanıcının kendi Gemini anahtarı (varsa)."""
-    return None if is_admin() else db.get_setting("cfg:GEMINI_API_KEY")
+    """Yönetici olmayan kullanıcının kendi Gemini anahtarı (varsa). Barındırılan sürümde yok."""
+    return None if is_admin() or locked() else db.get_setting("cfg:GEMINI_API_KEY")
 
 
 def get(name: str) -> str | None:
@@ -69,7 +77,7 @@ def source(name: str) -> str:
 def set_value(name: str, value: str | None) -> None:
     if name not in EDITABLE:
         raise KeyError(name)
-    if not is_admin() and name in ADMIN_ONLY:
+    if not is_admin() and (name in ADMIN_ONLY or locked()):
         raise PermissionError(name)
     v = value.strip() if value and value.strip() else None
     if name in GLOBAL and is_admin():
@@ -81,6 +89,8 @@ def set_value(name: str, value: str | None) -> None:
 
 
 def describe() -> list[dict]:
+    if locked():
+        return []
     out = []
     admin = is_admin()
     for name, meta in EDITABLE.items():

@@ -178,7 +178,8 @@ def auth_status(request: Request):
             auth.setup_code()  # log'a yazılsın
         return {"required": True, "authenticated": False, "setup_required": True, "setup_code_needed": not local}
     u = auth.token_user(request.cookies.get(auth.COOKIE))
-    return {"required": True, "authenticated": bool(u), "setup_required": False,
+    return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
+            "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
             "user": {"username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
 
@@ -239,9 +240,22 @@ def change_password(body: PasswordChange, request: Request, response: Response):
 
 
 class RegisterIn(BaseModel):
-    code: str
+    code: str | None = None  # barındırılan sürümde (açık kayıt) gerekmez
     username: str
     password: str
+
+
+_signups: dict[str, list[float]] = {}
+
+
+def _signup_limited(ip: str) -> bool:
+    """Açık kayıt: aynı adresten saatte en fazla 5 hesap (toplu sahte hesap açılmasın)."""
+    import time
+
+    now = time.time()
+    recent = [t for t in _signups.get(ip, []) if now - t < 3600]
+    _signups[ip] = recent
+    return len(recent) >= 5
 
 
 @app.get("/api/auth/invite/{code}")
@@ -255,7 +269,19 @@ def register(body: RegisterIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
-    if not system.valid_invite(body.code):
+    if not body.code and plans.open_signup():
+        if _signup_limited(ip):
+            raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
+        try:
+            u = auth.create_user(body.username, body.password)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        import time
+
+        _signups.setdefault(ip, []).append(time.time())
+        _start_session(request, response, u)
+        return {"ok": True}
+    if not body.code or not system.valid_invite(body.code):
         auth.record_fail(ip)
         raise HTTPException(403, "Davet kodu geçersiz, kullanılmış ya da süresi dolmuş")
     inv = system.invite(body.code) or {}
@@ -384,6 +410,27 @@ def my_ai():
     own = bool(config.own_ai_key())
     return {"used": system.ai_used(u["id"]), "quota": None if own else system.ai_quota(u), "own_key": own,
             "shared_available": bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))}
+
+
+class DeleteMeIn(BaseModel):
+    password: str
+
+
+@app.post("/api/me/delete")
+def delete_me(body: DeleteMeIn, response: Response):
+    """Kendi hesabını ve tüm verini kalıcı olarak sil (şifreyle onay). Ortak defterin sahibiysen üyelerin de silinir."""
+    u = db.current_user()
+    if not u or u["role"] == "admin":
+        raise HTTPException(403, "Yönetici hesabı buradan silinemez")
+    if not auth.check_password(u, body.password):
+        raise HTTPException(403, "Şifre yanlış")
+    for m in system.members(u["id"]):
+        system.delete_user(m["id"])
+    system.delete_user(u["id"])
+    if not u.get("member_of"):
+        system.purge_user_data(u)
+    response.delete_cookie(auth.COOKIE, path="/")
+    return {"ok": True}
 
 
 @app.post("/api/auth/logout")

@@ -49,8 +49,8 @@ def test_free_user_is_limited_and_store_purchase_unlocks(hosted):
 
     c, u = _user(hosted)
     p = c.get("/api/meta").json()["plan"]
-    assert (p["plan"], p["ai_docs"], p["features"]["fiyatlar"]) == ("free", 3, False)
-    assert system.ai_quota(u) == 3
+    assert (p["plan"], p["ai_docs"], p["features"]["fiyatlar"]) == ("free", 10, False)
+    assert system.ai_quota(u) == 10
     r = c.get("/api/prices")
     assert r.status_code == 402 and r.json()["plan_required"] == "fiyatlar"
     assert c.get("/api/settings/export.zip").status_code == 200  # verini indirmek her pakette serbest
@@ -94,3 +94,43 @@ def test_family_plan_covers_members(hosted):
     member = next(x for x in system.users() if x["username"] == "esim")
     assert plans.plan_of(member) == "aile"  # üye sahibin paketini kullanır
     assert m.get("/api/prices").status_code == 200
+
+
+def test_open_signup_only_when_enabled(hosted, monkeypatch):
+    from app.api.main import app
+
+    c = TestClient(app)
+    assert c.get("/api/auth/status").json()["open_signup"] is False
+    assert c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"}).status_code == 403
+    monkeypatch.setenv("HESAPKITAP_OPEN_SIGNUP", "1")
+    assert c.get("/api/auth/status").json()["open_signup"] is True
+    assert c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"}).status_code == 200
+    assert c.get("/api/meta").json()["plan"]["plan"] == "free"
+    # aynı adresten saatte en fazla 5 hesap
+    codes = [TestClient(app).post("/api/auth/register", json={"username": f"yeni{i}", "password": "yeni-sifre-12345"}).status_code
+             for i in range(6)]
+    assert codes[:4] == [200] * 4 and codes[-1] == 429
+
+
+def test_hosted_user_sees_no_keys_and_cannot_set_own(hosted):
+    c, _ = _user(hosted)
+    assert c.get("/api/settings/config").json() == []
+    r = c.put("/api/settings/config", json={"name": "GEMINI_API_KEY", "value": "kendi-anahtarim"})
+    assert r.status_code == 403
+    assert c.get("/api/me/ai").json()["own_key"] is False
+
+
+def test_delete_my_account_removes_data(hosted):
+    import os
+
+    from app import system
+
+    c, u = _user(hosted)
+    c.post("/api/entries", json={"entry_date": "2026-10-02", "description": "Market", "amount": 100, "kind": "gider",
+                                 "category": "Market & Gıda", "payment": "nakit"})
+    folder = os.path.dirname(system.user_db_path(u))
+    assert os.path.isdir(folder)
+    assert c.post("/api/me/delete", json={"password": "yanlis"}).status_code == 403
+    assert c.post("/api/me/delete", json={"password": "ayse-sifre-12345"}).status_code == 200
+    assert system.user(u["id"]) is None and not os.path.exists(folder)
+    assert c.get("/api/summary").status_code == 401  # oturum da düştü

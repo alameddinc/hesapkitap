@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import { inApp, toLauncher } from "../components/AppServer";
@@ -9,6 +9,8 @@ export default function Login() {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const open = !!status.data?.open_signup; // barındırılan sürüm: herkes hesap açabilir
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,7 +35,7 @@ export default function Login() {
         <div className="mb-5 flex flex-col items-center gap-2 text-center">
           <img src="/icons/icon-192.png" alt="" className="size-16 rounded-2xl shadow-sm" />
           <h1 className="text-lg font-semibold">HesapKitap</h1>
-          <p className="flex items-center gap-1 text-xs text-stone-500"><LockKeyhole size={12} /> Kişisel finans · kendi sunucunda</p>
+          <p className="flex items-center gap-1 text-xs text-stone-500"><LockKeyhole size={12} /> {open ? "Ekstre ve fiş at, gerisini o yapsın" : "Kişisel finans · kendi sunucunda"}</p>
         </div>
         <label className="label" htmlFor="user">Kullanıcı adı</label>
         <input id="user" className="input mb-3" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false}
@@ -45,7 +47,11 @@ export default function Login() {
         <button className="btn-primary mt-4 w-full justify-center py-2" disabled={busy || !pw}>
           {busy ? "Giriş yapılıyor…" : "Giriş"}
         </button>
-        <a href="#/kayit" className="mt-3 block text-center text-xs text-stone-500 underline">Davet kodun var mı? Hesap aç</a>
+        {open ? (
+          <a href="#/kayit" className="btn-ghost mt-3 w-full justify-center border border-stone-300 py-2 dark:border-stone-700">Yeni misin? Ücretsiz hesap aç</a>
+        ) : (
+          <a href="#/kayit" className="mt-3 block text-center text-xs text-stone-500 underline">Davet kodun var mı? Hesap aç</a>
+        )}
         {inApp() && (
           <button type="button" className="mt-2 block w-full text-center text-xs text-stone-500 underline" onClick={toLauncher}>
             Demoyu dene ya da başka sunucuya bağlan
