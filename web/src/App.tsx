@@ -213,7 +213,7 @@ function Shell() {
 
         {/* mobil üst çubuk: logo + tutarları göster/gizle */}
         {/* saat/çentik alanının altından başlar; demo şeridi de (geri sayım) burada, kaydırınca kaybolmaz */}
-        <div className="sticky top-0 z-30 border-b border-stone-200/70 bg-stone-50/85 pt-[var(--sat)] backdrop-blur-xl md:hidden dark:border-stone-800/70 dark:bg-stone-950/85">
+        <div className="sticky top-0 z-30 border-b border-stone-200/70 bg-stone-50/95 pt-[var(--sat)] md:hidden dark:border-stone-800/70 dark:bg-stone-950/95">
           <div className="flex h-11 items-center gap-2 px-4">
             <img src="/icons/logo-mark.png" alt="" className="size-6" />
             <span className="flex-1 font-display text-[17px] font-semibold tracking-tight">HesapKitap</span>
@@ -227,7 +227,7 @@ function Shell() {
       </div>
 
       {/* Mobil alt menü */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200/70 bg-white/90 pb-[max(var(--sab),0.25rem)] backdrop-blur-xl md:hidden dark:border-stone-800/70 dark:bg-stone-900/90">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200/70 bg-white/95 pb-[max(var(--sab),0.25rem)] md:hidden dark:border-stone-800/70 dark:bg-stone-900/95">
         <div className="grid grid-cols-5 items-end">
           {[nav("ozet"), nav("islemler"), null, nav(prefs.simple ? "ayarlar" : canSee("plan") ? "plan" : "istatistik"), { route: "diger" as Route, label: "Diğer", icon: Menu }].map((n, i) =>
             n ? (

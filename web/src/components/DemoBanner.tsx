@@ -15,7 +15,8 @@ export default function DemoBanner() {
   // README / paylaşımdaki "?haberver" bağlantısı formu doğrudan açar
   const [wl, setWl] = useState(() => new URLSearchParams(window.location.search).has("haberver"));
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    // dakika yeter: saniyelik yenileme telefonda üst çubuğu her saniye yeniden çizdiriyordu (pil, ısınma)
+    const t = setInterval(() => setNow(Date.now() / 1000), 15_000);
     return () => clearInterval(t);
   }, []);
   if (!demo) return null;
@@ -25,15 +26,14 @@ export default function DemoBanner() {
     qc.clear();
     window.location.reload();
   };
-  const mm = String(Math.floor(left / 60)).padStart(2, "0");
-  const ss = String(left % 60).padStart(2, "0");
+  const mins = Math.ceil(left / 60);
   return (
     <>
       <div className="relative z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-blue-600 px-3 py-1.5 text-xs text-white sm:text-sm">
         <span className="flex items-center gap-1 font-medium"><FlaskConical size={14} /> Demo · uydurma verilerle</span>
         {left > 0 ? (
           <span className="flex items-center gap-1 tabular-nums" title="Süre bitince yeni ve temiz bir demo başlar">
-            <Timer size={14} /> {mm}:{ss}
+            <Timer size={14} /> {mins} dk
           </span>
         ) : (
           <button className="rounded bg-white/20 px-2 py-0.5 font-medium" onClick={restart}>Süre doldu · yeni demo başlat</button>
