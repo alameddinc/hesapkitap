@@ -228,6 +228,10 @@ export interface Meta {
   cycle_start_day: number;
   cycle_mode: "auto" | "manual";
   suggested_cycle_day: number | null;
+  modules?: Record<string, boolean>; // açık özellikler (defter bazında)
+  modules_chosen?: boolean;
+  module_labels?: Record<string, { label: string; desc: string }>;
+  ui?: { simple: boolean; layout: string[] | null }; // kişisel görünüm
 }
 
 export interface Rule {

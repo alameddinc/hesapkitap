@@ -1303,6 +1303,10 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                     "filter": {"pending": True}})
 
     order = {"kritik": 0, "uyari": 1, "bilgi": 2, "iyi": 3}
+    from app import prefs
+
+    mods = prefs.modules()  # kapatılan özelliğin uyarıları gösterilmez
+    out = [i for i in out if mods.get(prefs.LINK_MODULE.get(i.get("link") or "", ""), True)]
     return sorted(out, key=lambda i: order[i["level"]])
 
 
@@ -1404,7 +1408,9 @@ def net_worth(today: date | None = None) -> dict:
     from app import zakat
 
     hold = zakat.holdings()  # altın/döviz: sadece "Ben"inkiler net duruma girer
-    zakat_due = zakat.self_due()  # ödenmemiş geçmiş yıl zekâtı: borç
+    from app import prefs
+
+    zakat_due = zakat.self_due() if prefs.enabled("zekat") else 0.0  # ödenmemiş geçmiş yıl zekâtı: borç
     jars = db.jar_reserved(today)
     for a in accounts:
         a["reserved"] = jars["by_account"].get(a["id"], 0.0)

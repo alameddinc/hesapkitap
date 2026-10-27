@@ -14,7 +14,8 @@ import UpdateNotice from "../components/UpdateNotice";
 import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
 import BookSettings from "../components/BookSettings";
 import DemoStats from "../components/DemoStats";
-import { useBook, useDemo } from "../components/hooks";
+import Features from "../components/Features";
+import { useBook, useDemo, useUiPrefs } from "../components/hooks";
 import { LogoutButton } from "./More";
 
 interface ConfigItem {
@@ -230,6 +231,24 @@ export default function Settings() {
   return book.data?.member ? <MemberSettings owner={book.data.owner ?? ""} /> : <OwnerSettings />;
 }
 
+/** Kişisel görünüm: sade mod (büyük yazı), Özet düzenini sıfırla. */
+function ViewPrefs() {
+  const { ui, save } = useUiPrefs();
+  return (
+    <section className="card space-y-2 p-4">
+      <h2 className="font-semibold">Görünüm</h2>
+      <label className="flex cursor-pointer items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={ui.simple} onChange={(e) => save.mutate({ simple: e.target.checked })} />
+        <span><b>Sade görünüm</b> — büyük yazı; Özet'te sadece "bu ay ne kadar harcadım", gelen, kalan ve yaklaşan ödemeler.
+          <span className="block text-xs text-stone-500">Bu ayar sana özel; aynı defteri kullanan diğer kişiyi etkilemez.</span></span>
+      </label>
+      {ui.layout && (
+        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => save.mutate({ reset_layout: true })}>Özet düzenini varsayılana döndür</button>
+      )}
+    </section>
+  );
+}
+
 /** Canlı demo: ayarlar kapalı; ne olduğunu ve nasıl kurulacağını anlat. */
 function DemoSettings() {
   return (
@@ -261,6 +280,7 @@ function MemberSettings({ owner }: { owner: string }) {
           yükleme, silme ve ayarlar defter sahibinde.
         </p>
       </section>
+      <ViewPrefs />
       <ShareSetup />
       <PasswordForm />
       <LogoutButton />
@@ -294,6 +314,10 @@ function OwnerSettings() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ayarlar</h1>
       {isAdmin && <UpdateNotice />}
+
+      <Features />
+
+      <ViewPrefs />
 
       <section className="card p-4">
         <h2 className="flex items-center gap-2 font-semibold"><KeyRound size={18} /> Anahtarlar</h2>

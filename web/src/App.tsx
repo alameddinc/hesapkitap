@@ -30,7 +30,7 @@ import Accounts from "./pages/Accounts";
 import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
-import { routeVisible, useBook } from "./components/hooks";
+import { routeVisible, useBook, useUiPrefs } from "./components/hooks";
 import DemoBanner from "./components/DemoBanner";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
@@ -130,6 +130,11 @@ function Shell() {
   const [route, setRoute] = useState<Route>(readRoute);
   const meta = useMeta();
   const book = useBook();
+  const { ui: prefs } = useUiPrefs();
+  // sade görünüm: her şey orantılı büyür (rem), menüde sadece temel sayfalar
+  useEffect(() => { document.documentElement.style.fontSize = prefs.simple ? "19px" : ""; }, [prefs.simple]);
+  const SIMPLE = ["ozet", "islemler", "ayarlar", "diger"];
+  const canSee = (r: Route) => (prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   // açılışta içinde bulunulan dönem (ay dönümü ayarına göre; ör. 19 Ekim → Kasım dönemi)
   const [monthInit, setMonthInit] = useState(false);
@@ -179,7 +184,7 @@ function Shell() {
     toast: setToast,
   }), [month]);
 
-  const Page = PAGES[routeVisible(book.data, route) ? route : "ozet"]; // ortak defterde kapalı sayfa: Özet
+  const Page = PAGES[canSee(route) ? route : "ozet"]; // ortak defterde kapalı sayfa: Özet
   const rec = modal?.type === "recurring" ? recurring.data?.find((r) => r.id === modal.id) : undefined;
 
   return (
@@ -195,7 +200,7 @@ function Shell() {
           {book.data?.member && <p className="-mt-3 mb-3 px-2 text-xs text-stone-500">Ortak defter · {book.data.owner}</p>}
           <button className="btn-primary mb-3 justify-center py-2" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>
           <nav className="space-y-0.5">
-            {NAV.filter((n) => routeVisible(book.data, n.route)).map((n) => (
+            {NAV.filter((n) => canSee(n.route)).map((n) => (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                   route === n.route ? "bg-stone-100 font-medium dark:bg-stone-800" : "text-stone-600 hover:bg-stone-50 dark:text-stone-400 dark:hover:bg-stone-800/50")}>
@@ -220,7 +225,7 @@ function Shell() {
       {/* Mobil alt menü */}
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden dark:border-stone-800 dark:bg-stone-900/95">
         <div className="grid grid-cols-5 items-end">
-          {[nav("ozet"), nav("islemler"), null, nav(routeVisible(book.data, "plan") ? "plan" : "istatistik"), { route: "diger" as Route, label: "Diğer", icon: Menu }].map((n, i) =>
+          {[nav("ozet"), nav("islemler"), null, nav(prefs.simple ? "ayarlar" : canSee("plan") ? "plan" : "istatistik"), { route: "diger" as Route, label: "Diğer", icon: Menu }].map((n, i) =>
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 py-2 text-[11px]",

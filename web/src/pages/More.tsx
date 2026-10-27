@@ -2,12 +2,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
-import { routeVisible, useBook } from "../components/hooks";
+import { routeVisible, useBook, useMeta } from "../components/hooks";
 import type { Route } from "../ui";
 
 function Item({ icon, label, onClick, route }: { icon: React.ReactNode; label: string; onClick: () => void; route?: Route }) {
-  const book = useBook(); // ortak defter üyesine kapalı sayfalar listelenmez
-  if (route && !routeVisible(book.data, route)) return null;
+  const book = useBook(); // ortak defter üyesine kapalı sayfalar ve kapatılan özellikler listelenmez
+  const meta = useMeta();
+  if (route && (meta.data?.ui?.simple ? route !== "ayarlar" : !routeVisible(book.data, route, meta.data?.modules))) return null;
   return (
     <li>
       <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={onClick}>

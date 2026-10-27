@@ -34,7 +34,7 @@ MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
     ("POST", r"/api/receipts/parse"), ("POST", r"/api/bills/parse"), ("POST", r"/api/splits/propose"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
-    ("POST", r"/api/settings/password"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
+    ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",
                  "/api/bank-import", "/api/onboarding", "/api/mail")

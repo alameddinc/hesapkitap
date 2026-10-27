@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, donations, finance, jobs, ocr, receipt, system, telegram, zakat
+from app import auth, backup, config, db, donations, finance, jobs, ocr, prefs, receipt, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -417,7 +417,34 @@ def meta():
         "cycle_start_day": db.cycle_start_day(),
         "cycle_mode": db.cycle_mode(),
         "suggested_cycle_day": db.suggested_cycle_day(),
+        "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": prefs.ui(),
+        "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
     }
+
+
+class ModulesIn(BaseModel):
+    modules: dict[str, bool]
+
+
+@app.put("/api/settings/modules")
+def put_modules(body: ModulesIn):
+    """Hangi özellikler açık (defter sahibi; ortak defterde herkes için)."""
+    return prefs.set_modules(body.modules)
+
+
+class UiIn(BaseModel):
+    simple: bool | None = None
+    layout: list[str] | None = None
+    reset_layout: bool = False
+
+
+@app.put("/api/me/ui")
+def put_ui(body: UiIn):
+    """Kişisel görünüm: sade mod, Özet düzeni (herkes kendi)."""
+    data = body.model_dump(exclude_unset=True, exclude={"reset_layout"})
+    if body.reset_layout:
+        data["layout"] = None
+    return prefs.set_ui(data)
 
 
 @app.get("/api/summary")

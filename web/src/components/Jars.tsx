@@ -205,6 +205,8 @@ export default function Jars() {
                   {j.goal ? <span className="text-stone-500"> / {qty(j.goal, j.unit_symbol ?? sym(j.unit))}</span> : null}
                   {j.value != null && j.balance > 0 && <span className="block text-xs text-stone-500">≈ {tl(j.value)}
                     {j.gain != null && <span className={j.gain >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600"}> · {j.gain >= 0 ? "+" : ""}{tl(j.gain)}</span>}</span>}
+                  {!!j.cost && j.balance > 0 && <span className="block text-xs text-stone-500">
+                    ortalama {tl(j.cost / j.balance)}/{j.unit_symbol ?? sym(j.unit)}{j.unit_price ? ` · bugün ${tl(j.unit_price)}` : ""}</span>}
                 </span>
               ) : (
                 <span className="text-sm tabular-nums">{tl(j.balance)}{j.goal ? <span className="text-stone-500"> / {tl(j.goal)}</span> : null}</span>

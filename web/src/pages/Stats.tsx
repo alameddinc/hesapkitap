@@ -19,7 +19,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /** Faiz alarmı geçmişi: hangi dönemde ne kadar faiz / vade farkı, nedeniyle. */
-function InterestHistory() {
+export function InterestHistory() {
   const q = useQuery({ queryKey: ["interest-history"], queryFn: () => fetch("/api/interest-history").then((r) => r.json() as Promise<{
     months: { month: string; total: number; alarms: Insight[] }[]; total: number; checked: number }>) });
   const d = q.data;
@@ -48,6 +48,36 @@ function InterestHistory() {
   );
 }
 
+/** Aylara göre gelir ve gider (İstatistik ve, eklenirse, Özet). */
+export function TrendChart({ trend, onPick }: { trend: { month: string; income: number; expense: number }[]; onPick: (m: string) => void }) {
+  return (
+    <>
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={trend} barGap={2} onClick={(e) => {
+          const m = (e as { activeLabel?: string } | null)?.activeLabel;
+          if (m) onPick(String(m));
+        }}>
+          <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+          <XAxis dataKey="month" tickFormatter={(m: string) => monthLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
+            axisLine={false} tickLine={false} />
+          <YAxis tickFormatter={(v: number) => tlCompact(v)} tick={{ fill: "var(--chart-text)", fontSize: 11 }}
+            axisLine={false} tickLine={false} width={64} />
+          <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => monthLabel(String(m))}
+            cursor={{ fill: "var(--chart-grid)", opacity: 0.5 }}
+            contentStyle={{ background: "var(--chart-surface)", border: "1px solid var(--chart-grid)", borderRadius: 8 }} />
+          <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }}
+            formatter={(v) => <span style={{ color: "var(--chart-text)" }}>{v}</span>} />
+          <Bar dataKey="income" name="Gelir" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+          <Bar dataKey="expense" name="Gider" fill="var(--series-2)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+    <p className="mt-1 text-xs text-stone-500">Bir aya tıklayınca o ay seçilir. Bir ayda gelir görünmüyorsa maaşın yattığı hesabın o aylara ait dökümü eksik olabilir.</p>
+    </>
+  );
+}
+
 /** İstatistik: karşılaştırmalar ve uzun dönem grafikleri (Özet sade kalsın diye burada). */
 export default function Stats() {
   const ui = useUI();
@@ -65,28 +95,7 @@ export default function Stats() {
 
       {s && s.trend.length > 0 && (
         <Section title="Aylara göre gelir ve gider">
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={s.trend} barGap={2} onClick={(e) => {
-                const m = (e as { activeLabel?: string } | null)?.activeLabel;
-                if (m) setMonth(String(m));
-              }}>
-                <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-                <XAxis dataKey="month" tickFormatter={(m: string) => monthLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
-                  axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={(v: number) => tlCompact(v)} tick={{ fill: "var(--chart-text)", fontSize: 11 }}
-                  axisLine={false} tickLine={false} width={64} />
-                <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => monthLabel(String(m))}
-                  cursor={{ fill: "var(--chart-grid)", opacity: 0.5 }}
-                  contentStyle={{ background: "var(--chart-surface)", border: "1px solid var(--chart-grid)", borderRadius: 8 }} />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }}
-                  formatter={(v) => <span style={{ color: "var(--chart-text)" }}>{v}</span>} />
-                <Bar dataKey="income" name="Gelir" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="expense" name="Gider" fill="var(--series-2)" radius={[4, 4, 0, 0]} maxBarSize={28} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <p className="mt-1 text-xs text-stone-500">Bir aya tıklayınca o ay seçilir. Bir ayda gelir görünmüyorsa maaşın yattığı hesabın o aylara ait dökümü eksik olabilir.</p>
+          <TrendChart trend={s.trend} onPick={setMonth} />
         </Section>
       )}
 
