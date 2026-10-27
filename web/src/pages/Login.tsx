@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { LockKeyhole } from "lucide-react";
 import { useState } from "react";
+import { inApp, toLauncher } from "../components/AppServer";
 
 export default function Login() {
   const qc = useQueryClient();
@@ -45,6 +46,11 @@ export default function Login() {
           {busy ? "Giriş yapılıyor…" : "Giriş"}
         </button>
         <a href="#/kayit" className="mt-3 block text-center text-xs text-stone-500 underline">Davet kodun var mı? Hesap aç</a>
+        {inApp() && (
+          <button type="button" className="mt-2 block w-full text-center text-xs text-stone-500 underline" onClick={toLauncher}>
+            Demoyu dene ya da başka sunucuya bağlan
+          </button>
+        )}
       </form>
     </div>
   );
