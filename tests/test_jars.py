@@ -142,3 +142,14 @@ def test_gold_buy_is_savings_not_expense(client, tmpdb, monkeypatch):
     assert (t["expense"], t["savings"]) == (500, 6422)
     assert t["cash_net"] == -6922  # eldeki paradan yine çıkar
     assert "Altın & Döviz Birikimi" not in {c["name"] for c in s["by_category"]}
+
+
+def test_gold_buy_by_transfer_needs_account(client, tmpdb, monkeypatch):
+    jid = _gold_jar(client, tmpdb, monkeypatch)
+    client.post("/api/accounts", json={"name": "Banka", "kind": "banka", "balance": 50000})
+    acc = next(a for a in tmpdb.list_accounts() if a["name"] == "Banka")
+    # hesap seçilmeden havale: bakiye düşmez, net durum altın kadar şişerdi → istenir
+    r = client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6400, "payment": "havale"})
+    assert r.status_code == 422 and "hesap" in r.json()["detail"]
+    client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6400, "payment": "havale", "account_id": acc["id"]})
+    assert next(a for a in tmpdb.list_accounts() if a["name"] == "Banka")["current"] == acc["current"] - 6400

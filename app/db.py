@@ -2595,6 +2595,10 @@ def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: in
         raise ValueError("Bu bir TL kumbarası; para ayır / çek kullan")
     if j["closed_at"]:
         raise ValueError("Kumbara kapalı; önce yeniden aç")
+    if payment == "havale" and not account_id:
+        account_id = j["account_id"]
+        if not account_id and any(a["as_of"] for a in list_accounts()):  # yoksa para hiçbir bankadan düşmez
+            raise ValueError("Hangi hesaptan ödediğini seç")
     me = next((p for p in zakat.people() if p["is_self"]), None) or {"id": zakat.add_person("Ben")}
     label = zakat.KINDS[j["unit"]][0]
     aid = zakat.add_asset(me["id"], j["unit"], quantity, False, f"Kumbara: {j['name']}", on, cost)

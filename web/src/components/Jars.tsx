@@ -3,7 +3,7 @@ import { Camera, ChevronDown, Minus, Coins, Pencil, Plus, Trash2 } from "lucide-
 import { useRef, useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
-import AccountSelect from "./AccountSelect";
+import AccountSelect, { useAccounts } from "./AccountSelect";
 import { useSave } from "./hooks";
 import Modal from "./Modal";
 
@@ -135,7 +135,11 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   const [cost, setCost] = useState("");
   const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10));
   const [payment, setPayment] = useState<"havale" | "nakit" | "kredi_karti">("havale");
-  const [account, setAccount] = useState<number | null>(null);
+  const accs = useAccounts().data?.accounts ?? [];
+  // havale: para bir bankadan çıkar; seçilmezse bakiye düşmez ve net durum altın kadar şişer
+  const [picked, setAccount] = useState<number | null>(null);
+  const account = picked ?? jar.account_id ?? (accs.length === 1 ? accs[0].id : null);
+  const needAccount = payment === "havale" && !account && accs.some((a) => a.current != null);
   const file = useRef<HTMLInputElement>(null);
   const [reading, setReading] = useState(false);
   // kuyumcu fişi: gerçek ödenen tutar ve tarih (yerel OCR ya da yapay zekâ)
@@ -163,7 +167,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   }), () => { ui.toast(`${qty(parseAmount(amount), s)} eklendi`); onClose(); });
   return (
     <Modal title={`${jar.name} · aldım`} onClose={onClose} footer={
-      <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0 || est > 0) || save.isPending}
+      <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0 || est > 0) || needAccount || save.isPending}
         onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
@@ -185,6 +189,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
           <option value="havale">Havale / banka kartı</option><option value="nakit">Nakit</option><option value="kredi_karti">Kredi kartı</option>
         </select>
         {payment !== "kredi_karti" && <AccountSelect id="b-acc" label="Hangi hesaptan?" value={account} onChange={setAccount} />}
+        {needAccount && <p className="text-xs text-amber-700 dark:text-amber-400">Hangi hesaptan ödediğini seç; yoksa para bankandan düşmez.</p>}
       </div>
     </Modal>
   );
