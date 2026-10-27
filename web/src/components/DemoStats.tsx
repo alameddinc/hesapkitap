@@ -9,6 +9,8 @@ interface Stats {
   "süre_medyan_sn"?: number; "süre_ort_sn"?: number; "1dk+_kalan"?: number; "5dk+_kalan"?: number; "örnek_deneyen"?: number;
   "kayıt_ekleyen"?: number; "bölümler"?: Record<string, number>; "günlük"?: Record<string, { oturum: number; "ziyaretçi": number }>;
   son_oturumlar?: Session[];
+  bekleme_listesi?: number; "bekleme_dönemde"?: number;
+  bekleyenler?: { "e-posta": string; tarih: string; platform: string | null; not: string | null }[];
 }
 
 const LABELS: Record<string, string> = {
@@ -30,6 +32,7 @@ export default function DemoStats() {
     ["Oturum", String(s.oturum ?? 0)], ["Ziyaretçi (günlük tekil)", String(s["tekil_ziyaretçi_günlük_toplam"] ?? 0)],
     ["Ortanca süre", dur(s["süre_medyan_sn"] ?? 0)], ["1 dk+ kalan", String(s["1dk+_kalan"] ?? 0)],
     ["Örnek deneyen", String(s["örnek_deneyen"] ?? 0)], ["Mobil", `%${s["mobil_%"] ?? 0}`],
+    ["Bekleme listesi", `${s.bekleme_listesi ?? 0}${s["bekleme_dönemde"] ? ` (+${s["bekleme_dönemde"]})` : ""}`],
   ];
   const areas = Object.entries(s["bölümler"] ?? {});
   const max = Math.max(1, ...areas.map(([, n]) => n));
@@ -69,6 +72,21 @@ export default function DemoStats() {
                 <span className="tabular-nums font-medium">{dur(o["süre_sn"])}</span>
                 {o.mobil && <Smartphone size={12} className="text-stone-400" />}
                 <span className="text-stone-500">{o["bölümler"].map((b) => LABELS[b] ?? b).join(", ") || "—"}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {!!s.bekleyenler?.length && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-stone-600 dark:text-stone-400">Kurulumsuz sürümü bekleyenler ({s.bekleyenler.length})</summary>
+          <ul className="mt-2 divide-y divide-stone-100 dark:divide-stone-800">
+            {s.bekleyenler.map((w) => (
+              <li key={w["e-posta"]} className="flex flex-wrap items-center gap-x-3 py-1.5 text-xs">
+                <span className="tabular-nums text-stone-500">{w.tarih.slice(5)}</span>
+                <span className="font-medium">{w["e-posta"]}</span>
+                {w.platform && <span className="text-stone-500">{w.platform}</span>}
+                {w.not && <span className="w-full text-stone-500">“{w.not}”</span>}
               </li>
             ))}
           </ul>

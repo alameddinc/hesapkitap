@@ -11,7 +11,8 @@
 </p>
 
 <p align="center">
-  <a href="https://hesapkitap.alameddinc.com"><b>🧪 Live demo</b></a> — try it without installing: sample data, your own private copy for 1 hour
+  <a href="https://hesapkitap.alameddinc.com"><b>🧪 Live demo</b></a> — try it without installing: sample data, your own private copy for 1 hour<br>
+  🔔 Don't want to run a server? A hosted version is coming: <a href="https://hesapkitap.alameddinc.com/?haberver"><b>get notified</b></a>
 </p>
 
 <p align="center">

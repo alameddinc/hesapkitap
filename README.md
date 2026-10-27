@@ -30,7 +30,8 @@
 </p>
 
 <p align="center">
-  <a href="https://hesapkitap.alameddinc.com"><b>🧪 Canlı demo</b></a> — kurmadan dene: uydurma verilerle, sana özel 1 saatlik kopya
+  <a href="https://hesapkitap.alameddinc.com"><b>🧪 Canlı demo</b></a> — kurmadan dene: uydurma verilerle, sana özel 1 saatlik kopya<br>
+  🔔 Sunucu kurmadan kullanmak mı istiyorsun? Kurulumsuz sürüm geliyor: <a href="https://hesapkitap.alameddinc.com/?haberver"><b>haber ver</b></a>
 </p>
 
 <p align="center">

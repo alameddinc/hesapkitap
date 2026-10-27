@@ -2376,6 +2376,26 @@ def demo_reset(response: Response):
     return {"ok": True}
 
 
+class WaitlistIn(BaseModel):
+    email: str
+    platform: str | None = None
+    note: str | None = None
+
+
+@app.post("/api/demo/waitlist")
+def demo_waitlist(body: WaitlistIn, request: Request):
+    """Demo: kurulumsuz (hazır) sürüm açılınca haber ver listesine yazıl."""
+    from app import demo_mode
+
+    if not demo_mode.enabled():
+        raise HTTPException(404, "Yok")
+    try:
+        new = demo_mode.join_waitlist(request.cookies.get(demo_mode.COOKIE) or "", body.email, body.platform, body.note)
+    except demo_mode.WaitlistError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"ok": True, "new": new}
+
+
 @app.post("/api/demo/sample/{key}")
 def demo_sample(key: str):
     """Örnek ekstre / fiş: gerçek yükleme yolundan geçer (hazır okuyucu, genel okuyucu, yerel OCR)."""

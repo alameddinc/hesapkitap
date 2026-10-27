@@ -117,3 +117,19 @@ def test_stats_endpoint_needs_key_and_does_not_create_sandbox(demo, monkeypatch)
     assert r.status_code == 200 and "oturum" in r.json() and "son_oturumlar" in r.json()
     assert not demo.cookies.get(demo_mode.COOKIE)
     assert not os.path.isdir(demo_mode._sandbox_dir()) or os.listdir(demo_mode._sandbox_dir()) == []
+
+
+
+def test_demo_waitlist(demo):
+    demo.get("/")
+    r = demo.post("/api/demo/waitlist", json={"email": " Ali@Ornek.com ", "platform": "telefon", "note": "kart ekstreleri"})
+    assert r.json() == {"ok": True, "new": True}
+    assert demo.post("/api/demo/waitlist", json={"email": "ali@ornek.com"}).json()["new"] is False  # tekrar yazılmaz
+    assert demo.post("/api/demo/waitlist", json={"email": "gecersiz"}).status_code == 422
+    for i in range(2):
+        demo.post("/api/demo/waitlist", json={"email": f"k{i}@ornek.com"})
+    assert demo.post("/api/demo/waitlist", json={"email": "k9@ornek.com"}).status_code == 422  # oturum başı en fazla 3
+    s = demo_mode.stats(7)
+    assert s["bekleme_listesi"] == 3
+    assert s["bekleyenler"][-1] == {"e-posta": "ali@ornek.com", "tarih": s["bekleyenler"][-1]["tarih"], "platform": "telefon",
+                                    "not": "kart ekstreleri"}
