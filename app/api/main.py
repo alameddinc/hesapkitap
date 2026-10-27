@@ -2400,6 +2400,7 @@ class WaitlistIn(BaseModel):
     email: str
     platform: str | None = None
     note: str | None = None
+    tester: bool = False  # Android kapalı testine katılır (Play'de 12 kişi × 14 gün şartı)
 
 
 @app.post("/api/demo/waitlist")
@@ -2410,7 +2411,7 @@ def demo_waitlist(body: WaitlistIn, request: Request):
     if not demo_mode.enabled():
         raise HTTPException(404, "Yok")
     try:
-        new = demo_mode.join_waitlist(request.cookies.get(demo_mode.COOKIE) or "", body.email, body.platform, body.note)
+        new = demo_mode.join_waitlist(request.cookies.get(demo_mode.COOKIE) or "", body.email, body.platform, body.note, body.tester)
     except demo_mode.WaitlistError as e:
         raise HTTPException(422, str(e)) from e
     return {"ok": True, "new": new}

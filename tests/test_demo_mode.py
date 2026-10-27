@@ -132,4 +132,7 @@ def test_demo_waitlist(demo):
     s = demo_mode.stats(7)
     assert s["bekleme_listesi"] == 3
     assert s["bekleyenler"][-1] == {"e-posta": "ali@ornek.com", "tarih": s["bekleyenler"][-1]["tarih"], "platform": "telefon",
-                                    "not": "kart ekstreleri"}
+                                    "not": "kart ekstreleri", "testçi": False}
+    # önce haber ver demişti, sonra Android testine de katılıyor
+    demo.post("/api/demo/waitlist", json={"email": "ali@ornek.com", "tester": True})
+    assert demo_mode.stats(7)["testçi"] == 1

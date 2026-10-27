@@ -10,7 +10,8 @@ interface Stats {
   "kayıt_ekleyen"?: number; "bölümler"?: Record<string, number>; "günlük"?: Record<string, { oturum: number; "ziyaretçi": number }>;
   son_oturumlar?: Session[];
   bekleme_listesi?: number; "bekleme_dönemde"?: number;
-  bekleyenler?: { "e-posta": string; tarih: string; platform: string | null; not: string | null }[];
+  bekleyenler?: { "e-posta": string; tarih: string; platform: string | null; not: string | null; "testçi"?: boolean }[];
+  "testçi"?: number;
 }
 
 const LABELS: Record<string, string> = {
@@ -33,6 +34,7 @@ export default function DemoStats() {
     ["Ortanca süre", dur(s["süre_medyan_sn"] ?? 0)], ["1 dk+ kalan", String(s["1dk+_kalan"] ?? 0)],
     ["Örnek deneyen", String(s["örnek_deneyen"] ?? 0)], ["Mobil", `%${s["mobil_%"] ?? 0}`],
     ["Bekleme listesi", `${s.bekleme_listesi ?? 0}${s["bekleme_dönemde"] ? ` (+${s["bekleme_dönemde"]})` : ""}`],
+    ["Android testçi", `${s["testçi"] ?? 0} / 12`],
   ];
   const areas = Object.entries(s["bölümler"] ?? {});
   const max = Math.max(1, ...areas.map(([, n]) => n));
@@ -86,11 +88,17 @@ export default function DemoStats() {
                 <span className="tabular-nums text-stone-500">{w.tarih.slice(5)}</span>
                 <span className="font-medium">{w["e-posta"]}</span>
                 {w.platform && <span className="text-stone-500">{w.platform}</span>}
+                {w["testçi"] && <span className="rounded bg-green-100 px-1.5 text-green-800 dark:bg-green-950 dark:text-green-300">testçi</span>}
                 {w.not && <span className="w-full text-stone-500">“{w.not}”</span>}
               </li>
             ))}
           </ul>
         </details>
+      )}
+      {!!s["testçi"] && (
+        <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+          onClick={() => navigator.clipboard.writeText((s.bekleyenler ?? []).filter((w) => w["testçi"]).map((w) => w["e-posta"]).join(", "))}>
+          Testçi e-postalarını kopyala (Play Console → Test kullanıcıları)</button>
       )}
       <p className="text-xs text-stone-500">
         Oturum = ziyaretçinin 1 saatlik demo kopyası. IP saklanmaz; ziyaretçi günlük değişen bir parmak iziyle sayılır.

@@ -9,10 +9,11 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState("");
   const [platform, setPlatform] = useState("ikisi");
   const [note, setNote] = useState("");
+  const [tester, setTester] = useState(() => new URLSearchParams(window.location.search).has("test"));
   const send = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/demo/waitlist", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, platform, note }) });
+        body: JSON.stringify({ email, platform, note, tester }) });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? "Kaydedilemedi");
       return r.json() as Promise<{ new: boolean }>;
     },
@@ -22,8 +23,8 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
       <Modal title="Listedesin" onClose={onClose}>
         <div className="space-y-2 py-4 text-center">
           <CheckCircle2 size={40} className="mx-auto text-green-600" />
-          <p className="font-medium">{send.data.new ? "Teşekkürler, hazır sürüm açılınca ilk sen öğreneceksin." : "Bu e-posta zaten listede."}</p>
-          <p className="text-sm text-stone-500">Arada başka e-posta göndermeyiz.</p>
+          <p className="font-medium">{send.data.new || tester ? "Teşekkürler, hazır sürüm açılınca ilk sen öğreneceksin." : "Bu e-posta zaten listede."}</p>
+          <p className="text-sm text-stone-500">{tester ? "Android test daveti birkaç gün içinde bu adrese gelecek." : "Arada başka e-posta göndermeyiz."}</p>
         </div>
       </Modal>
     );
@@ -52,9 +53,15 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
           <input id="wl-note" className="input" maxLength={300} placeholder="ör. kart ekstrelerim, fişler, eşimle ortak bütçe"
             value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+        <label className="flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 p-3 text-sm dark:border-green-900 dark:bg-green-950/30">
+          <input type="checkbox" className="mt-0.5 size-4 accent-green-600" checked={tester} onChange={(e) => setTester(e.target.checked)} />
+          <span><b>Android testine katılırım.</b> Uygulamayı Google Play'den ücretsiz kurup <b>14 gün</b> telefonumda tutarım.
+            <span className="block text-xs text-stone-500">Google Play'de kullandığın e-postayı yaz (genelde Gmail).</span></span>
+        </label>
         {send.error && <p className="text-sm text-red-600">{(send.error as Error).message}</p>}
         <p className="text-xs text-stone-500">
-          E-postanı yalnızca bu sürüm açıldığında sana haber vermek için kullanırız; kimseyle paylaşmayız. Listeden çıkmak
+          E-postanı yalnızca bu sürüm açıldığında sana haber vermek için kullanırız; kimseyle paylaşmayız. Teste katılırsan
+          e-postan yalnızca test daveti için Google Play'in test listesine eklenir. Listeden çıkmak
           için <a className="underline" href="https://github.com/alameddinc/hesapkitap/issues/new/choose" target="_blank" rel="noreferrer">bize yaz</a>.
         </p>
       </div>

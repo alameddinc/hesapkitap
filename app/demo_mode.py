@@ -205,6 +205,8 @@ def _stats_db() -> sqlite3.Connection:
                  samples INTEGER DEFAULT 0, writes INTEGER DEFAULT 0)""")
     c.execute("""CREATE TABLE IF NOT EXISTS waitlist (email TEXT PRIMARY KEY, created INTEGER, sid TEXT,
                  platform TEXT, note TEXT)""")
+    if "tester" not in {r[1] for r in c.execute("PRAGMA table_info(waitlist)")}:  # Android kapalı testine gönüllü
+        c.execute("ALTER TABLE waitlist ADD COLUMN tester INTEGER NOT NULL DEFAULT 0")
     return c
 
 
@@ -217,7 +219,7 @@ class WaitlistError(ValueError):
     pass
 
 
-def join_waitlist(sid: str, email: str, platform: str | None = None, note: str | None = None) -> bool:
+def join_waitlist(sid: str, email: str, platform: str | None = None, note: str | None = None, tester: bool = False) -> bool:
     """Kurulumsuz (hazır) sürüm açılınca haber verilecekler. True: yeni kayıt, False: zaten listedeydi."""
     email = (email or "").strip().lower()
     if not EMAIL.match(email):
@@ -225,12 +227,16 @@ def join_waitlist(sid: str, email: str, platform: str | None = None, note: str |
     c = _stats_db()
     try:
         if c.execute("SELECT 1 FROM waitlist WHERE email = ?", (email,)).fetchone():
+            if tester:  # önce sadece haber ver demişti, şimdi teste de katılıyor
+                c.execute("UPDATE waitlist SET tester = 1 WHERE email = ?", (email,))
+                c.commit()
             return False
         if c.execute("SELECT COUNT(*) FROM waitlist WHERE sid = ?", (sid,)).fetchone()[0] >= 3 or \
                 c.execute("SELECT COUNT(*) FROM waitlist").fetchone()[0] >= WAITLIST_MAX:
             raise WaitlistError("Şu an kaydedilemedi, biraz sonra tekrar dene")
-        c.execute("INSERT INTO waitlist (email, created, sid, platform, note) VALUES (?, ?, ?, ?, ?)",
-                  (email, int(time.time()), sid, platform if platform in PLATFORMS else None, (note or "").strip()[:300] or None))
+        c.execute("INSERT INTO waitlist (email, created, sid, platform, note, tester) VALUES (?, ?, ?, ?, ?, ?)",
+                  (email, int(time.time()), sid, platform if platform in PLATFORMS else None, (note or "").strip()[:300] or None,
+                   int(bool(tester))))
         c.commit()
         return True
     finally:
@@ -269,7 +275,7 @@ def stats(days: int = 7) -> dict:
     c = _stats_db()
     rows = c.execute("SELECT created, last_seen, requests, visitor, mobile, bot, areas, samples, writes FROM sessions "
                      "WHERE created >= ?", (since,)).fetchall()
-    wl = c.execute("SELECT email, created, platform, note FROM waitlist ORDER BY created DESC, rowid DESC").fetchall()
+    wl = c.execute("SELECT email, created, platform, note, tester FROM waitlist ORDER BY created DESC, rowid DESC").fetchall()
     c.close()
     human = [r for r in rows if not r[5]]
     durs = sorted(max(0, r[1] - r[0]) for r in human)
@@ -296,8 +302,9 @@ def stats(days: int = 7) -> dict:
         # bekleme listesi dönemden bağımsız: hepsi
         "bekleme_listesi": len(wl),
         "bekleme_dönemde": sum(1 for w in wl if w[1] >= since),
+        "testçi": sum(1 for w in wl if w[4]),
         "bekleyenler": [{"e-posta": w[0], "tarih": time.strftime("%Y-%m-%d %H:%M", time.localtime(w[1])), "platform": w[2],
-                         "not": w[3]} for w in wl[:200]],
+                         "not": w[3], "testçi": bool(w[4])} for w in wl[:500]],
     }
 
 
