@@ -40,3 +40,39 @@ def test_targets_migrate_to_jars_and_pace(client, tmpdb):
     client.post(f"/api/jars/{jid}/moves", json={"amount": 3000})
     j = client.get("/api/jars").json()[0]
     assert j["pace"] == 1000 and j["eta"]  # son 3 ayda 3000 → ayda 1000
+
+
+def test_gold_jar_monthly_buy_adds_asset_entry_and_reminder(client, tmpdb, monkeypatch):
+    from datetime import date
+
+    from app import finance, zakat
+
+    monkeypatch.setattr(zakat, "prices", lambda: {"prices": {"GRA": 4000.0, "CEYREKALTIN": 7000.0}})
+    client.post("/api/accounts", json={"name": "Banka", "kind": "banka", "balance": 50000})
+    acc = next(a["id"] for a in tmpdb.list_accounts() if a["name"] == "Banka")
+    jid = client.post("/api/jars", json={"name": "Düğün altını", "unit": "ALTIN_24", "goal": 50, "monthly": 1,
+                                         "auto_day": 1}).json()["id"]
+    # alım günü geldi, alınmadı → Özet'te hatırlatma; otomatik hareket yok
+    ins = [i for i in finance.insights(finance.current_period(), today=date.today()) if "alma günü" in i["title"]]
+    assert ins and "1 gr" in ins[0]["title"] and "4.000" in ins[0]["title"]
+    assert client.get("/api/jars").json()[0]["balance"] == 0
+    # aldım
+    r = client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 3900, "payment": "havale", "account_id": acc})
+    assert r.status_code == 200
+    j = client.get("/api/jars").json()[0]
+    assert (j["balance"], j["cost"], j["value"], j["gain"], j["unit_symbol"], j["buy_due"]) == (1, 3900, 4000, 100, "gr", False)
+    a = next(x for p in zakat.people() for x in p["assets"] if x["note"] == "Kumbara: Düğün altını")
+    assert (a["kind"], a["quantity"], a["cost"], a["acquired"]) == ("ALTIN_24", 1, 3900, date.today().isoformat())
+    e = next(x for x in tmpdb.list_entries() if x["category"] == "Altın & Döviz Birikimi")
+    assert e["amount"] == 3900 and e["account_id"] == acc
+    # altın kumbarası "serbest"ten düşmez (para ayırma değil)
+    assert tmpdb.jar_reserved()["total"] == 0
+    assert not [i for i in finance.insights(finance.current_period(), today=date.today()) if "alma günü" in i["title"]]
+    # alımı silmek varlığı ve gider kaydını da siler
+    mid = j["moves"][0]["id"]
+    client.delete(f"/api/jar-moves/{mid}")
+    assert not [x for p in zakat.people() for x in p["assets"] if x["note"] == "Kumbara: Düğün altını"]
+    assert not [x for x in tmpdb.list_entries() if x["category"] == "Altın & Döviz Birikimi"]
+    # TL kumbarasına "aldım" denmez
+    tl = client.post("/api/jars", json={"name": "Tatil"}).json()["id"]
+    assert client.post(f"/api/jars/{tl}/buy", json={"quantity": 1, "cost": 10}).status_code == 422

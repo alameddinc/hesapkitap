@@ -374,7 +374,7 @@ def logout(response: Response):
 Kind = Literal["gelir", "gider"]
 Payment = Literal["kredi_karti", "nakit", "havale", "kart"]  # kart: ön ödemeli (yemek/hediye/giyim), wallet_id ile
 CardKind = Literal["harcama", "iade", "faiz_ucret", "odeme"]
-EXPENSE_CATEGORIES = ["Kira & Aidat", "Faturalar", "Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Sağlık",
+EXPENSE_CATEGORIES = ["Altın & Döviz Birikimi", "Kira & Aidat", "Faturalar", "Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Sağlık",
                       "Eğitim", "Ulaşım & Araç", "Market & Gıda", "Kredi & Borç", "Bağış & Sadaka", "Diğer"]
 INCOME_CATEGORIES = ["Maaş", "Ek Gelir", "Kira Geliri", "Yatırım", "Diğer Gelir"]
 
@@ -1174,7 +1174,20 @@ def onboarding_dismiss():
     return {"ok": True}
 
 
+JarUnit = Literal["TRY", "ALTIN_24", "ALTIN_22", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS", "USD", "EUR", "GBP"]
+
+
+class JarBuy(BaseModel):
+    quantity: float = Field(gt=0)
+    cost: float = Field(gt=0)          # ödenen TL
+    buy_date: date | None = None
+    payment: Literal["havale", "nakit", "kredi_karti"] = "havale"
+    account_id: int | None = None
+    note: str | None = None
+
+
 class JarIn(BaseModel):
+    unit: JarUnit = "TRY"
     name: str = Field(min_length=1, max_length=60)
     goal: float | None = Field(None, gt=0)
     deadline: date | None = None
@@ -1209,6 +1222,24 @@ def _jar_view(j: dict, today: date) -> dict:
     from datetime import timedelta
 
     out = {**j}
+    unit = j.get("unit") or "TRY"
+    if unit != "TRY":  # altın/döviz: miktar, bugünkü değer, ödenen, kâr/zarar, bu ayki alım
+        from app import zakat
+
+        label, _, sym = zakat.KINDS[unit]
+        try:
+            px = zakat.prices()["prices"]
+            out["value"] = zakat._value_at(unit, j["balance"], px)
+            out["unit_price"] = zakat._value_at(unit, 1, px)
+        except Exception:  # noqa: BLE001 - fiyat servisine ulaşılamazsa değer boş kalır
+            out["value"] = out["unit_price"] = None
+        cost = round(sum(m["cost"] or 0 for m in j["moves"]), 2)
+        out.update(unit_label=label, unit_symbol=sym, cost=cost,
+                   gain=round(out["value"] - cost, 2) if out["value"] is not None and cost else None)
+        month = today.strftime("%Y-%m")
+        out["bought_this_month"] = round(sum(m["amount"] for m in j["moves"] if m["move_date"][:7] == month and m["cost"]), 3)
+        out["buy_due"] = bool(j["monthly"] and j["auto_day"] and not j["closed_at"] and today.day >= j["auto_day"]
+                              and out["bought_this_month"] < j["monthly"] - 1e-9)
     since = (today - timedelta(days=90)).isoformat()
     recent = sum(m["amount"] for m in j["moves"] if m["move_date"] >= since
                  and m["note"] not in ("Başlangıç", "Hedeften aktarıldı"))
@@ -1269,6 +1300,18 @@ def add_jar_move(jid: int, body: JarMoveIn):
     amt = body.amount if body.direction == "yatir" else -body.amount
     try:
         return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note)}
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.post("/api/jars/{jid}/buy")
+def buy_into_jar(jid: int, body: JarBuy):
+    """Altın/döviz kumbarası: aldım → varlık + gider kaydı + kumbara hareketi."""
+    try:
+        return {"id": db.buy_into_jar(jid, body.quantity, body.cost, (body.buy_date or date.today()).isoformat(),
+                                      body.account_id, body.payment, body.note)}
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except ValueError as e:

@@ -320,7 +320,11 @@ MIGRATIONS = [
     ("recurring", "match_key", "TEXT"),
     ("entries", "hidden", "INTEGER NOT NULL DEFAULT 0"),       # ortak defterde üyeye görünmez
     ("transactions", "hidden", "INTEGER NOT NULL DEFAULT 0"),
-    ("entries", "created_by", "INTEGER"),                      # ekleyen kullanıcı (ortak defter)  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
+    ("entries", "created_by", "INTEGER"),                      # ekleyen kullanıcı (ortak defter)
+    ("jars", "unit", "TEXT NOT NULL DEFAULT 'TRY'"),           # TRY: para ayırma · ALTIN_24/CEYREK/USD…: her ay alım
+    ("jar_moves", "cost", "REAL"),                             # birimli kumbara: ödenen TL
+    ("jar_moves", "asset_id", "INTEGER"),                      # birimli kumbara: eklenen varlık (Altın ve döviz)
+    ("jar_moves", "entry_id", "INTEGER"),                      # birimli kumbara: ödemenin gider kaydı  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
     ("transactions", "is_deleted", "INTEGER NOT NULL DEFAULT 0"),
@@ -2414,8 +2418,9 @@ def _auto_start(today: date, day: int) -> str:
 
 
 def _apply_auto_jar(c, j: dict, today: date) -> None:
-    """Otomatik aylık ayırma: günü gelmiş her ay için bir kez (istek anında; zamanlayıcı gerekmez)."""
-    if not j["monthly"] or not j["auto_day"] or j["closed_at"] or not j["last_auto"]:
+    """Otomatik aylık ayırma: günü gelmiş her ay için bir kez (istek anında; zamanlayıcı gerekmez).
+    Birimli kumbarada (altın, döviz) otomatik hareket yok: gerçek alım gerekir, Özet'te hatırlatılır."""
+    if (j.get("unit") or "TRY") != "TRY" or not j["monthly"] or not j["auto_day"] or j["closed_at"] or not j["last_auto"]:
         return
     m, last = _next_month(j["last_auto"]), None
     while True:
@@ -2461,11 +2466,13 @@ def jar_reserved(today: date | None = None) -> dict:
     """Açık kumbaralarda ayrılan toplam ve hesap bazında dağılım."""
     by_acc: dict[int | None, float] = {}
     for j in list_jars(today, include_closed=False):
+        if (j.get("unit") or "TRY") != "TRY":  # altın/döviz kumbarası para ayırmaz: alınan varlık net durumda görünür
+            continue
         by_acc[j["account_id"]] = round(by_acc.get(j["account_id"], 0) + j["balance"], 2)
     return {"total": round(sum(by_acc.values()), 2), "by_account": by_acc}
 
 
-JAR_FIELDS = ("name", "goal", "deadline", "account_id", "monthly", "auto_day", "note", "closed_at")
+JAR_FIELDS = ("name", "goal", "deadline", "account_id", "monthly", "auto_day", "note", "closed_at", "unit")
 
 
 def create_jar(data: dict, initial: float = 0, today: date | None = None) -> int:
@@ -2514,8 +2521,42 @@ def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = Non
 
 
 def delete_jar_move(mid: int) -> bool:
+    """Birimli kumbaradaki alım silinirse eklenen varlık ve gider kaydı da silinir."""
     with connect() as c:
+        m = c.execute("SELECT asset_id, entry_id FROM jar_moves WHERE id = ?", (mid,)).fetchone()
+        if not m:
+            return False
+        if m["asset_id"]:
+            c.execute("DELETE FROM zakat_assets WHERE id = ?", (m["asset_id"],))
+        if m["entry_id"]:
+            c.execute("DELETE FROM entries WHERE id = ?", (m["entry_id"],))
         return c.execute("DELETE FROM jar_moves WHERE id = ?", (mid,)).rowcount > 0
+
+
+def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: int | None, payment: str,
+                 note: str | None = None) -> int:
+    """Altın/döviz kumbarası: alım = senin adına varlık (alış tarihi + bedeli) + ödemenin gider kaydı + kumbara hareketi.
+    Gider kaydı, banka dökümü gelince aynı ödemeyle eşleşir (iki kez sayılmaz)."""
+    from app import zakat
+
+    with connect() as c:
+        j = c.execute("SELECT * FROM jars WHERE id = ?", (jid,)).fetchone()
+    if not j:
+        raise LookupError("Kumbara yok")
+    if (j["unit"] or "TRY") == "TRY":
+        raise ValueError("Bu bir TL kumbarası; para ayır / çek kullan")
+    if j["closed_at"]:
+        raise ValueError("Kumbara kapalı; önce yeniden aç")
+    me = next((p for p in zakat.people() if p["is_self"]), None) or {"id": zakat.add_person("Ben")}
+    label = zakat.KINDS[j["unit"]][0]
+    aid = zakat.add_asset(me["id"], j["unit"], quantity, False, f"Kumbara: {j['name']}", on, cost)
+    eid = create_entry({"entry_date": on, "description": f"{label} alımı · {j['name']}", "amount": cost, "kind": "gider",
+                        "category": "Altın & Döviz Birikimi", "payment": payment,
+                        "account_id": account_id if payment in ("nakit", "havale") else None,
+                        "note": "Kumbara alımı (varlık olarak da eklendi)"})
+    with connect() as c:
+        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, cost, asset_id, entry_id) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)", (jid, on, quantity, (note or "").strip() or None, cost, aid, eid)).lastrowid
 
 
 def delete_target(tid: int) -> bool:

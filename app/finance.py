@@ -1017,6 +1017,25 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
 
+    # 2-) Altın/döviz kumbarası: bu ayın alım günü geldi, henüz alınmadı
+    for j in db.list_jars(today, include_closed=False):
+        if (j.get("unit") or "TRY") == "TRY" or not j["monthly"] or not j["auto_day"] or today.day < j["auto_day"]:
+            continue
+        if sum(m["amount"] for m in j["moves"] if m["move_date"][:7] == today.strftime("%Y-%m") and m["cost"]) >= j["monthly"] - 1e-9:
+            continue
+        from app import zakat
+
+        label, _, sym = zakat.KINDS[j["unit"]]
+        try:
+            approx = zakat._value_at(j["unit"], j["monthly"], zakat.prices()["prices"])
+        except Exception:  # noqa: BLE001
+            approx = None
+        qty = f"{j['monthly']:g} {sym}" if sym in ("gr", "adet") else f"{sym}{j['monthly']:g}"
+        out.append({"level": "bilgi", "title": f"{j['name']}: bu ay {qty} {label.lower()} alma günü"
+                    + (f" (≈ {_tl(approx)})" if approx else ""),
+                    "detail": "Aldıktan sonra Hesaplar → Kumbaralar'da \"Aldım\" de; altın varlıklarına alış tarihiyle eklenir.",
+                    "link": "hesaplar"})
+
     # 2a) Ramazan / fitre / Kurban yaklaşıyor
     try:
         from app import zakat as _z
