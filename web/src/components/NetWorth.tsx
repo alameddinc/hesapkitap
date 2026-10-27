@@ -10,7 +10,7 @@ import CycleLine from "./CardCycle";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
-  reserved: number; free: number; holdings: number; family_holdings: number; zakat_due: number;
+  reserved: number; free: number; spendable: number; holdings: number; family_holdings: number; zakat_due: number;
   accounts: (Account & { reserved: number })[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
@@ -69,6 +69,23 @@ function NetWorthAt({ month }: { month: string }) {
   );
 }
 
+/** İki rakam: harcanabilir TL (ödenecekler ve kumbara düşülmüş, altın/döviz hariç) ve net durum (her şey dahil). */
+function Headline({ d }: { d: NW }) {
+  const tone = (x: number) => (x < 0 ? "text-red-600" : "text-green-700 dark:text-green-400");
+  return (
+    <span className="mb-1 grid grid-cols-2 gap-3">
+      <span title="Bankada + kartlarda − ödenecek kart ekstresi − borçların − kumbaraya ayrılan. Altın/döviz ve alacak dahil değil.">
+        <span className="block text-xs text-stone-500">Harcanabilir TL</span>
+        <span className={cx("block text-lg font-semibold tabular-nums", tone(d.spendable))}>{tl(d.spendable)}</span>
+      </span>
+      <span title="Sahip olduğun her şey: bankada + altın/döviz + kartlarda − kart borcu ± borç/alacak">
+        <span className="block text-xs text-stone-500">Net durum{d.holdings ? " (altın/döviz dahil)" : ""}</span>
+        <span className={cx("block text-lg font-semibold tabular-nums", tone(d.net))}>{tl(d.net)}</span>
+      </span>
+    </span>
+  );
+}
+
 export default function NetWorth({ compact = false, month }: { compact?: boolean; month?: string }) {
   const ui = useUI();
   const meta = useMeta();
@@ -97,16 +114,13 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
           <span className="flex-1 text-sm text-stone-500">Hesaplarını, nakdini ve yemek/hediye kartlarını ekle: gerçek durumunu görürsün.</span>
         ) : (
           <span className="min-w-0 flex-1">
-            <span className="block text-xs text-stone-500">Net durum · gerçek paran (bankalar, kartlar, borç/alacak)</span>
-            <span className={cx("block text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</span>
+            <Headline d={d} />
             <span className="block text-xs text-stone-500">
               Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
               {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
               {d.zakat_due ? ` · zekât borcu −${tl(d.zakat_due)}` : ""}
             </span>
-            {d.reserved > 0 && (
-              <span className="block text-xs text-stone-500">Kumbaralarda {tl(d.reserved)} · harcanabilir <b>{tl(d.free)}</b></span>
-            )}
+            {d.reserved > 0 && <span className="block text-xs text-stone-500">Kumbaralarda ayrılan {tl(d.reserved)}</span>}
             {d.unknown_banks.length > 0 && (
               <span className="block text-xs text-amber-600">Bakiyesi girilmemiş: {d.unknown_banks.join(", ")}</span>
             )}
@@ -121,15 +135,12 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
       <button className="flex w-full items-center gap-3 p-4 text-left" onClick={() => setOpen(!open)}>
         <Landmark size={18} className="shrink-0 text-stone-500" />
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-stone-500">Net durum (bankada + altın/döviz + kartlarda − kart borcu ± borç/alacak)</div>
-          <div className={cx("text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</div>
+          <Headline d={d} />
           <div className="text-xs text-stone-500">
             Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
             {d.card_estimated ? ` · kesilecek ekstreler ~${tl(d.card_estimated)}` : ""}
           </div>
-          {d.reserved > 0 && (
-            <div className="text-xs text-stone-500">Kumbaralarda ayrılan {tl(d.reserved)} · harcanabilir <b>{tl(d.free)}</b></div>
-          )}
+          {d.reserved > 0 && <div className="text-xs text-stone-500">Kumbaralarda ayrılan {tl(d.reserved)}</div>}
         </div>
         <ChevronDown size={16} className={cx("text-stone-400 transition-transform", open && "rotate-180")} />
       </button>

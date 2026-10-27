@@ -153,3 +153,19 @@ def test_gold_buy_by_transfer_needs_account(client, tmpdb, monkeypatch):
     assert r.status_code == 422 and "hesap" in r.json()["detail"]
     client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6400, "payment": "havale", "account_id": acc["id"]})
     assert next(a for a in tmpdb.list_accounts() if a["name"] == "Banka")["current"] == acc["current"] - 6400
+
+
+def test_spendable_excludes_gold_and_reserved(client, tmpdb, monkeypatch):
+    from app import finance
+
+    from app import zakat
+
+    jid = _gold_jar(client, tmpdb, monkeypatch)
+    monkeypatch.setattr(zakat, "prices", lambda: {"prices": {"GRA": 6422.0}, "updated": None})
+    client.post("/api/accounts", json={"name": "Banka", "kind": "banka", "balance": 50000})
+    acc = next(a["id"] for a in tmpdb.list_accounts() if a["name"] == "Banka")
+    client.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 6422, "payment": "havale", "account_id": acc})
+    client.post("/api/jars", json={"name": "Tatil", "account_id": acc, "initial": 3000})
+    nw = finance.net_worth()
+    assert nw["net"] == 50000  # nakit altına döndü: toplam aynı
+    assert nw["spendable"] == 50000 - 6422 - 3000  # altın ve kumbaraya ayrılan harcanamaz
