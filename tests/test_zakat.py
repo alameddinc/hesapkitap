@@ -74,7 +74,10 @@ def test_hijri():
     assert to_hijri(date(2026, 2, 19)).endswith("Ramazan 1447")  # Ramazan 1447 ≈ 18/19 Şubat 2026
 
 
-def test_acquired_date_suggest_and_safii(client, tmpdb):
+def test_acquired_date_suggest_and_safii(client, tmpdb, monkeypatch):
+    from app import zakat as _z
+
+    monkeypatch.setattr(_z, "_roll_years", lambda today: None)  # geçmiş bir yılı sınıyor: yeni yıla geçmesin
     me = _person(client.get("/api/zakat").json(), "Ben")["id"]
     client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 20, "acquired": "2025-03-01"})
     client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 40, "acquired": "2025-09-01"})
@@ -263,3 +266,18 @@ def test_holy_days_fitre_and_reminders(client, tmpdb):
     assert any("Fitreyi unutma" in m for m in zakat.holy_reminders(d["ramazan_bayrami"] - timedelta(days=10)))
     assert any("Kurban" in m for m in zakat.holy_reminders(d["kurban"] - timedelta(days=45)))
     assert zakat.holy_insights(date(2026, 10, 26)) == []
+
+
+def test_new_zakat_year_starts_automatically(tmpdb):
+    from datetime import date, timedelta
+
+    from app import zakat
+
+    pid = zakat.add_person("Test Kişi")
+    start = date(2025, 1, 10)
+    zakat.update_person(pid, {"hawl_start": start.isoformat()})
+    due = start + timedelta(days=zakat.LUNAR_YEAR_DAYS)
+    zakat.compute(today=due - timedelta(days=1))
+    assert next(p for p in zakat.people() if p["id"] == pid)["hawl_start"] == start.isoformat()  # henüz dolmadı
+    zakat.compute(today=due)
+    assert next(p for p in zakat.people() if p["id"] == pid)["hawl_start"] == due.isoformat()  # yeni yıl başladı

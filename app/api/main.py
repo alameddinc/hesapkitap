@@ -656,6 +656,11 @@ def create_entry(body: EntryIn):
     if data.get("counterparty"):
         data["counterparty"] = db.known_counterparty(data["counterparty"].strip())
     _check_wallet(data)
+    if data.get("payment") == "nakit" and not data.get("account_id") and not data.get("wallet_id"):
+        # tek nakit hesabı (cüzdan) varsa nakit harcama/gelir ondan düşer/ona eklenir; birden fazlaysa kullanıcı seçer
+        cash = [a for a in db.list_accounts() if a["kind"] == "nakit"]
+        if len(cash) == 1:
+            data["account_id"] = cash[0]["id"]
     if (u := db.current_user()):
         data["created_by"] = u["id"]  # ortak defterde kimin eklediği
     eid = db.create_entry(data)

@@ -402,8 +402,23 @@ def _app_lines(pr: dict, st: dict, today: date) -> tuple[list[dict], list[dict]]
     return plus, minus
 
 
+def _roll_years(today: date) -> None:
+    """Kameri yıl dolduysa yeni zekât yılı kendiliğinden başlar (bitiş günü = yeni başlangıç). Önceki yılın ödemeleri
+    kendi yıl başlangıcıyla kayıtlı kalır; ödenmemiş geçmiş yıl ayrıca uyarılır (missed_years)."""
+    with db.connect() as c:
+        _init(c)
+        for p in c.execute("SELECT id, hawl_start FROM zakat_people WHERE hawl_start IS NOT NULL").fetchall():
+            start = date.fromisoformat(p["hawl_start"])
+            nxt = start
+            while nxt + timedelta(days=LUNAR_YEAR_DAYS) <= today:
+                nxt += timedelta(days=LUNAR_YEAR_DAYS)
+            if nxt != start:
+                c.execute("UPDATE zakat_people SET hawl_start = ? WHERE id = ?", (nxt.isoformat(), p["id"]))
+
+
 def compute(today: date | None = None) -> dict:
     today = today or date.today()
+    _roll_years(today)
     st = _settings()
     pd = prices()
     pr = pd["prices"]
