@@ -13,7 +13,6 @@ from app import db
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
-import os as _os
 
 # Hesap önbelleği: aynı veritabanı durumu için ağır hesaplar (tüm işlemler, plan, ödemeler) bir kez yapılır.
 # Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur.
@@ -21,12 +20,7 @@ _CACHE: dict = {}
 
 
 def _db_stamp() -> tuple:
-    try:
-        path = db.db_path()
-        st = _os.stat(path)
-        return path, st.st_mtime_ns, st.st_size
-    except OSError:
-        return db.db_path(), 0, 0
+    return db.stamp()
 
 
 def _memo(fn):

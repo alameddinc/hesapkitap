@@ -61,6 +61,18 @@ from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB; API yanıtları da küçülür
 
+# Mobil uygulama (Capacitor): arayüz telefonun içinde (capacitor://localhost, https://localhost), API bu sunucuda.
+# Çerez yok: oturum anahtarı X-Session-Token başlığıyla gelir, Authorization: Bearer ile geri gönderilir.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+APP_ORIGINS = ["capacitor://localhost", "https://localhost", "http://localhost"] + [
+    o.strip() for o in os.environ.get("HESAPKITAP_APP_ORIGINS", "").split(",") if o.strip()]
+
+
+def _bearer(request: Request) -> str | None:
+    h = request.headers.get("authorization", "")
+    return h[7:].strip() if h.lower().startswith("bearer ") else None
+
 
 async def _demo_request(request: Request, call_next):
     """Canlı demo: giriş yok; her ziyaretçi örnek verinin kendi kopyasında (1 saat), yükleme/ayarlar kapalı."""
@@ -69,10 +81,12 @@ async def _demo_request(request: Request, call_next):
     path = request.url.path
     if demo_mode.closed(path):
         return JSONResponse({"detail": "Demoda kapalı — kendi sunucuna kurunca açılır"}, status_code=403)
-    sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE))
+    # mobil uygulama çerez tutmaz: demo kopyasının kimliği X-Demo-Sid başlığıyla gider gelir
+    sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE) or request.headers.get("x-demo-sid"))
     db_file, user = demo_mode.space(sid)
     with db.use_space(db_file, user):
         response = await call_next(request)
+    response.headers["X-Demo-Sid"] = sid
     demo_mode.track(sid, path, request.method, request.headers.get("x-real-ip") or (request.client.host if request.client else ""),
                     request.headers.get("user-agent", ""))
     if new:
@@ -107,9 +121,10 @@ async def require_login(request: Request, call_next):
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)
         user = auth.token_user(request.cookies.get(auth.COOKIE))
+        if not user and _bearer(request):  # mobil uygulama: oturum anahtarı başlıkta
+            user = auth.token_user(_bearer(request))
         if not user and path == "/api/share":  # telefondan Paylaş (iOS Kısayollar): kişisel anahtar, sadece bu uçta
-            bearer = request.headers.get("authorization", "")
-            user = system.token_owner(bearer[7:].strip()) if bearer.lower().startswith("bearer ") else None
+            user = system.token_owner(_bearer(request) or "") if _bearer(request) else None
         if not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
         # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
@@ -160,7 +175,11 @@ class PasswordChange(BaseModel):
 def _start_session(request: Request, response: Response, user: dict) -> None:
     # HTTPS arkasındaysa (doğrudan ya da proxy başlığıyla) çerez otomatik Secure olur
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    response.set_cookie(auth.COOKIE, auth.make_token(system.user(user["id"])), max_age=auth.SESSION_DAYS * 86400,
+    token = auth.make_token(system.user(user["id"]))
+    if request.headers.get("x-hk-client") == "mobile":  # mobil uygulama: anahtarı kendisi saklar (Keychain)
+        response.headers["X-Session-Token"] = token
+        return
+    response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
                         httponly=True, secure=auth.cookie_secure() or https, samesite="lax", path="/")
 
 
@@ -177,7 +196,7 @@ def auth_status(request: Request):
         if not local:
             auth.setup_code()  # log'a yazılsın
         return {"required": True, "authenticated": False, "setup_required": True, "setup_code_needed": not local}
-    u = auth.token_user(request.cookies.get(auth.COOKIE))
+    u = auth.token_user(request.cookies.get(auth.COOKIE) or _bearer(request))
     return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
@@ -3214,3 +3233,9 @@ if WEB_DIST and os.path.isdir(WEB_DIST):
             headers = {"Cache-Control": "no-cache"} if path in ("sw.js", "manifest.webmanifest") else None
             return FileResponse(f, headers=headers)
         return FileResponse(os.path.join(_dist, "index.html"), headers={"Cache-Control": "no-cache"})
+
+
+# en dışta olmalı (en son eklenen en dışta çalışır): ön istek (OPTIONS) ve 401 yanıtları da CORS başlığı alsın
+app.add_middleware(CORSMiddleware, allow_origins=APP_ORIGINS, allow_credentials=False, allow_methods=["*"],
+                   allow_headers=["Authorization", "Content-Type", "X-HK-Client", "X-Demo-Sid"],
+                   expose_headers=["X-Session-Token", "X-Demo-Sid"], max_age=86400)

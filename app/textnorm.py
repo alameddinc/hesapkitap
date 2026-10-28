@@ -1,4 +1,5 @@
 """Türkçe metin normalizasyonu: kural eşleştirmede büyük/küçük harf ve aksan farkını yok eder."""
+import functools
 
 _TR_MAP = str.maketrans({
     "İ": "I", "ı": "I", "i": "I",
@@ -20,6 +21,7 @@ def parse_amount(raw: str) -> float:
     return float(raw.replace(",", "").replace("+", ""))
 
 
+@functools.lru_cache(maxsize=16384)  # aynı açıklama tek istekte yüzlerce kez geliyor; saf fonksiyon
 def merchant_name(description: str) -> str:
     """İşyeri gruplaması için kısa ad: 'FACEBK *ABC123XYZ9/Dublin' -> 'FACEBK', 'Uber Eats Yemek' -> 'UBER EATS YEMEK'"""
     import re

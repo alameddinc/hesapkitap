@@ -407,6 +407,30 @@ def use_space(db_file: str | None, user: dict | None = None):
         _space.reset(token)
 
 
+# Okuma önbelleği: veritabanı dosyası değişmediyse aynı sorgu tekrar çalışmaz. Anahtar = dosyanın zamanı + boyutu +
+# bu süreçteki yazma sayacı (dosya zamanı birkaç ms hassasiyette; art arda iki yazma aynı zamanı taşıyabilir).
+_WRITES: dict[str, int] = {}
+_READ_CACHE: dict = {}
+
+
+def stamp() -> tuple:
+    path = db_path()
+    try:
+        st = os.stat(path)
+        return path, st.st_mtime_ns, st.st_size, _WRITES.get(path, 0)
+    except OSError:
+        return path, 0, 0, _WRITES.get(path, 0)
+
+
+def _cached(name: str, fn, *key):
+    k = (name, stamp(), *key)
+    if k not in _READ_CACHE:
+        if len(_READ_CACHE) > 256:
+            _READ_CACHE.clear()
+        _READ_CACHE[k] = fn()
+    return _READ_CACHE[k]
+
+
 @contextmanager
 def connect():
     path = db_path()
@@ -416,6 +440,8 @@ def connect():
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
+        if conn.total_changes:
+            _WRITES[path] = _WRITES.get(path, 0) + 1  # önbellekler bu dosya için geçersiz
         conn.commit()
     finally:
         conn.close()
@@ -519,10 +545,16 @@ def _backfill_statements(c) -> None:
                   (_iso(st.next_period_end), _iso(st.next_due_date), r["id"]))
 
 
+def _all_settings() -> dict[str, str]:
+    def load():
+        with connect() as c:
+            return {r[0]: r[1] for r in c.execute("SELECT key, value FROM settings")}
+    return _cached("settings", load)
+
+
 def get_setting(key: str) -> str | None:
-    with connect() as c:
-        r = c.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return r[0] if r else None
+    # tek istekte yüzlerce kez okunuyor (dönem hesabı her tarihte ay dönümü gününe bakar): tek sorgu, önbellekten
+    return _all_settings().get(key)
 
 
 def set_setting(key: str, value: str | None) -> None:
@@ -706,12 +738,17 @@ def card_transactions(include_deleted: bool = False) -> list[dict]:
     """Tüm kart işlemleri; 'period' = ekstre kesim ayı (YYYY-MM). Ortak defter üyesine gizlenenler süzülür."""
     from app import book
 
-    with connect() as c:
-        return book.filter_card_txns(rows(c.execute(
-            f"""SELECT t.*, s.bank, s.card_no AS account, s.period_end, substr(s.period_end, 1, 7) AS period
-                FROM transactions t JOIN statements s ON s.id = t.statement_id
-                {'' if include_deleted else 'WHERE t.is_deleted = 0'}
-                ORDER BY t.txn_date DESC, t.id DESC""")))
+    def load():
+        with connect() as c:
+            return book.filter_card_txns(rows(c.execute(
+                f"""SELECT t.*, s.bank, s.card_no AS account, s.period_end, substr(s.period_end, 1, 7) AS period
+                    FROM transactions t JOIN statements s ON s.id = t.statement_id
+                    {'' if include_deleted else 'WHERE t.is_deleted = 0'}
+                    ORDER BY t.txn_date DESC, t.id DESC""")))
+    u = current_user()
+    viewer = u["id"] if u and u.get("member_of") else None  # ortak defter üyesi süzülmüş görür
+    # tek istekte birkaç kez okunuyor; çağıran satırı değiştirebilir: kopyası döner
+    return [dict(r) for r in _cached("card_txns", load, include_deleted, viewer)]
 
 
 CARD_EDITABLE = {"category", "txn_type", "note", "is_deleted", "description", "hidden"}
