@@ -177,6 +177,12 @@ class PasswordChange(BaseModel):
     new: str
 
 
+def _reset_enabled() -> bool:
+    from app import reset
+
+    return reset.enabled()
+
+
 def _start_session(request: Request, response: Response, user: dict) -> None:
     # HTTPS arkasındaysa (doğrudan ya da proxy başlığıyla) çerez otomatik Secure olur
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
@@ -203,7 +209,8 @@ def auth_status(request: Request):
         return {"required": True, "authenticated": False, "setup_required": True, "setup_code_needed": not local}
     u = auth.token_user(request.cookies.get(auth.COOKIE) or _bearer(request))
     return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
-            "login": "email" if plans.hosted() else "username",  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
+            "login": "email" if plans.hosted() else "username",
+            "reset": _reset_enabled(),  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
             "user": {"id": u.get("id"), "username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
@@ -286,6 +293,63 @@ def _signup_limited(ip: str) -> bool:
 @app.get("/api/auth/invite/{code}")
 def invite_check(code: str):
     return {"valid": system.valid_invite(code)}
+
+
+class ForgotIn(BaseModel):
+    email: str
+
+
+class ResetIn(BaseModel):
+    email: str
+    code: str
+    password: str
+
+
+_forgots: dict[str, list[float]] = {}
+
+
+@app.post("/api/auth/forgot")
+def forgot_password(body: ForgotIn, request: Request):
+    """Şifremi unuttum: e-postaya 6 haneli kod. Hesap olsun olmasın aynı yanıt (kimin üye olduğu anlaşılmasın)."""
+    import logging
+    import time
+
+    from app import reset
+
+    if not reset.enabled():
+        raise HTTPException(404, "Bu sunucuda şifre sıfırlama kapalı; sunucu yöneticisine sor")
+    ip, now = client_ip(request), time.time()
+    _forgots[ip] = [t for t in _forgots.get(ip, []) if now - t < 3600]
+    if len(_forgots[ip]) >= 10:
+        raise HTTPException(429, "Çok fazla istek. Bir saat sonra tekrar dene.")
+    _forgots[ip].append(now)
+    try:
+        reset.request(body.email)
+    except Exception:  # noqa: BLE001 - posta sunucusu hatası dışarıya hesap bilgisi sızdırmasın
+        logging.getLogger("hesapkitap.reset").exception("sıfırlama kodu gönderilemedi")
+        raise HTTPException(503, "Şu an mail gönderilemiyor, biraz sonra tekrar dene") from None
+    return {"ok": True}
+
+
+@app.post("/api/auth/reset")
+def reset_password(body: ResetIn, request: Request, response: Response):
+    """Kod doğruysa yeni şifre; eski oturumlar düşer, bu cihazda oturum açılır."""
+    from app import reset
+
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    try:
+        auth._check_strength(body.password)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    u = reset.verify(body.email, body.code)
+    if not u:
+        auth.record_fail(ip)
+        raise HTTPException(400, "Kod yanlış ya da süresi dolmuş")
+    auth.set_password(u["id"], body.password)
+    _start_session(request, response, system.user(u["id"]))
+    return {"ok": True}
 
 
 @app.post("/api/auth/register")
