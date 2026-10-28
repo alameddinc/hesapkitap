@@ -28,6 +28,9 @@ def test_open_cycle_counts_receipts_since_last_cut(client, upload):
     c = finance.open_cycles(TODAY)[acc]
     assert c["spent"] == 900 and c["unassigned"] == 300 and c["entries"] == 2
     assert c["so_far"] == round(base["so_far"] + 900, 2)
+    # bugüne kadar kalemlerle açıklanır: taksitler + abonelikler + girilen harcamalar = so_far
+    assert round(sum(i["amount"] for i in c["items"]), 2) == c["so_far"]
+    assert sum(1 for i in c["items"] if i["type"] == "harcama") == 2
     pace = c["variable_avg"] * c["days_left"] / c["days_total"]
     assert c["at_cut"] == round(c["installments"] + c["subscriptions"] + max(c["variable_avg"], 900 + pace), 2)
     # ödenecekler ve net durum aynı rakamı kullanır
@@ -63,3 +66,4 @@ def test_auto_link_prefers_receipt_card(client, upload, tmpdb):
     eid = _entry(client, "2026-09-20", 777.77, last4=target[1][-4:])
     e = next(x for x in tmpdb.list_entries() if x["id"] == eid)
     assert e["linked_txn_id"] == target[0]
+

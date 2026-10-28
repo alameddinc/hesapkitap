@@ -575,12 +575,18 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         if (due or cut + timedelta(days=10)) < today:  # son ödemesi de geçmiş: o ekstre yüklenmemiş, tahmin anlamsız
             continue
         nxt = add_months(p["latest_period"], 1)
-        inst = sum(i["amount"] for i in p["installments"] if i["month"] == nxt)
+        inst_items = [i for i in p["installments"] if i["month"] == nxt]
+        inst = sum(i["amount"] for i in inst_items)
         subs = sum(x["amount"] for x in p["subscriptions"])
+        # "bugüne kadar"ın kalemleri: ekran toplamı bunlarla açıklar (ekstre kesilmeden işlem listesi yok)
+        items = ([{"type": "taksit", "description": i["description"], "amount": _round(i["amount"]),
+                   "installment": i.get("installment")} for i in inst_items]
+                 + [{"type": "abonelik", "description": x["description"], "amount": _round(x["amount"])}
+                    for x in p["subscriptions"]])
         out[acc] = {"account": acc, "bank": p["bank"], "start": start.isoformat(), "cut": cut.isoformat(),
                     "due": due.isoformat() if due else None, "days_left": max(0, (cut - today).days),
                     "days_total": max(1, (cut - start).days), "installments": _round(inst), "subscriptions": _round(subs),
-                    "spent": 0.0, "unassigned": 0.0, "entries": 0, "variable_avg": p["variable_avg"]}
+                    "spent": 0.0, "unassigned": 0.0, "entries": 0, "variable_avg": p["variable_avg"], "items": items}
     if not out:
         return {}
     main = max(out.values(), key=lambda c: c["variable_avg"])["account"]
@@ -597,6 +603,8 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         amt = e["amount"] / max(1, int(e.get("installments") or 1))  # taksitliyse bu ekstreye ilk taksit düşer
         c["spent"] += amt
         c["entries"] += 1
+        c["items"].append({"type": "harcama", "description": e["description"], "amount": _round(amt), "date": e["entry_date"],
+                           "entry_id": e["id"], "unassigned": not acc})
         if not acc:
             c["unassigned"] += amt
     for c in out.values():
