@@ -2,6 +2,8 @@ fastapi==0.148.0
 uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 httpx==0.28.1
+# gelen postada (Cloudflare Email Worker) DKIM imzasını sunucu doğrular
+dkimpy==1.1.8
 pdfplumber==0.11.10
 # banka hesap hareketleri (Excel) içe aktarma
 openpyxl==3.1.5

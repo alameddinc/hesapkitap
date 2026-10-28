@@ -116,7 +116,8 @@ async def require_login(request: Request, call_next):
             https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
             response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
         return response
-    public = path.startswith("/api/auth/") or path == "/api/templates/submit"  # şablon gönderimi: oturumsuz (hub)
+    # şablon gönderimi (hub) ve gelen posta (Cloudflare Email Worker, kendi gizli anahtarıyla): oturumsuz
+    public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound")
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)
@@ -491,6 +492,51 @@ async def revenuecat_webhook(request: Request):
 
     logging.getLogger("ekstre").info("revenuecat %s %s", (body.get("event") or {}).get("type"), res)
     return {"ok": True}
+
+
+@app.post("/api/mail/inbound")
+async def mail_inbound(request: Request):
+    """Cloudflare Email Worker: deftere özel adrese gelen ham mail (message/rfc822). Yetki: HESAPKITAP_INBOUND_SECRET."""
+    import hmac
+
+    from app import inbound
+
+    secret = os.environ.get("HESAPKITAP_INBOUND_SECRET", "")
+    if not secret or not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {secret}"):
+        raise HTTPException(404, "Yok")
+    raw = await request.body()
+    if len(raw) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Mail çok büyük")
+    try:
+        r = inbound.handle(raw, request.headers.get("x-hk-to", ""))
+    except LookupError as e:
+        raise HTTPException(404, "Adres yok") from e
+    return {"status": r["status"], "kind": r["kind"]}
+
+
+@app.get("/api/mail/address")
+def mail_address():
+    """Defterin e-posta adresi (yoksa oluşturulur). Paketinde yoksa adres verilmez, kilit bilgisi döner."""
+    from app import inbound
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Posta adresi için giriş (kullanıcı hesabı) gerekli")
+    if not plans.allows(u, "posta"):
+        return {"locked": True, "address": None}
+    return {"locked": False, "address": inbound.address(u), "log": db.mail_log(20)}
+
+
+@app.post("/api/mail/address/regenerate")
+def mail_address_regenerate():
+    from app import inbound
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Posta adresi için giriş gerekli")
+    if not plans.allows(u, "posta"):
+        raise HTTPException(402, detail=str(plans.PlanRequired("posta")), headers={"X-Plan-Required": "posta"})
+    return {"address": inbound.regenerate(u)}
 
 
 @app.get("/api/meta")

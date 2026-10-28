@@ -19,6 +19,7 @@ FEATURES = {
     "gecmis": {PREMIUM, FAMILY},         # HISTORY_MONTHS'tan eski dönemler
     "uzun_plan": {PREMIUM, FAMILY},      # 1 aydan uzun planlama
     "butce": {PREMIUM, FAMILY},          # FREE_BUDGETS'tan fazla bütçe
+    "posta": {PREMIUM, FAMILY},          # deftere özel e-posta adresi: ekstre, döküm, bildirim, fatura otomatik
     "ortak_defter": {FAMILY},            # eş / aile üyesi davet etmek
 }
 FREE_HISTORY_MONTHS = 1  # ücretsiz: bu dönem + geçen dönem
@@ -31,6 +32,7 @@ AI_DOCS = {FREE: 10, PREMIUM: 300, FAMILY: 300}
 LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi sunucun"}
 FEATURE_LABELS = {"fiyatlar": "Fiyat takibi", "istatistik": "Geçmişle karşılaştırma", "alsam_mi": "Alsam mı?",
                   "kumbara": "Kumbara", "gecmis": "Geçmiş aylar", "uzun_plan": "Uzun planlama", "butce": "Sınırsız bütçe",
+                  "posta": "Postadan otomatik okuma",
                   "ortak_defter": "Ortak defter (aile)"}
 # (yöntem, API yolu öneki) → özellik (paket yoksa 402). Yöntem None: hepsi.
 GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/book/invites", "ortak_defter"),
