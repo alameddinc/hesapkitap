@@ -10,7 +10,10 @@ def hosted(client, monkeypatch):
     monkeypatch.delenv("HESAPKITAP_NO_AUTH", raising=False)
     monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
     monkeypatch.setenv("REVENUECAT_WEBHOOK_AUTH", "Bearer rc-gizli")
+    from app.api import main
+
     auth._fails.clear()
+    main._signups.clear()  # adres başı kayıt sınırı testler arasında taşınmasın
     auth.create_admin("admin", "yonetici-sifre-1")
     assert client.post("/api/auth/login", json={"username": "admin", "password": "yonetici-sifre-1"}).status_code == 200
     return client
@@ -161,3 +164,17 @@ def test_hosted_zakat_off_by_default_and_needs_consent(hosted):
 def test_self_hosted_zakat_on_without_consent(client):
     meta = client.get("/api/meta").json()
     assert meta["modules"]["zekat"] is True and meta["module_consent"] == {}
+
+
+def test_signup_with_email(hosted, monkeypatch):
+    from app.api.main import app
+
+    monkeypatch.setenv("HESAPKITAP_OPEN_SIGNUP", "1")
+    c = TestClient(app)
+    r = c.post("/api/auth/register", json={"username": "Deniz.Yilmaz@Ornek.com", "password": "deniz-sifre-12345"},
+               headers={"X-HK-Client": "mobile"})
+    assert r.status_code == 200 and r.headers["x-session-token"]
+    assert TestClient(app).post("/api/auth/login", json={"username": "deniz.yilmaz@ornek.com",
+                                                         "password": "deniz-sifre-12345"}).status_code == 200
+    bad = TestClient(app).post("/api/auth/register", json={"username": "deniz@", "password": "deniz-sifre-12345"})
+    assert bad.status_code == 422
