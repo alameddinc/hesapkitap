@@ -178,3 +178,45 @@ def test_signup_with_email(hosted, monkeypatch):
                                                          "password": "deniz-sifre-12345"}).status_code == 200
     bad = TestClient(app).post("/api/auth/register", json={"username": "deniz@", "password": "deniz-sifre-12345"})
     assert bad.status_code == 422
+
+
+def test_free_plan_limits_and_premium_unlocks(hosted):
+    from app import finance
+
+    c, u = _user(hosted)
+    cur = finance.current_period()
+    old = finance.add_months(cur, -3)
+    lim = c.get("/api/meta").json()["plan"]["limits"]
+    assert lim == {"history_months": 1, "plan_months": 1, "budgets": 2}
+    # geçmiş: bu dönem + geçen dönem serbest, daha eskisi Premium
+    assert c.get(f"/api/summary?month={finance.add_months(cur, -1)}").status_code == 200
+    r = c.get(f"/api/summary?month={old}")
+    assert r.status_code == 402 and r.headers["x-plan-required"] == "gecmis"
+    assert c.get(f"/api/transactions?month={old}").status_code == 402
+    # planlama 1 ay, Alsam mı ve yıl özeti kilitli
+    assert len(c.get("/api/plan?months=6").json()["months"]) == 1
+    assert c.post("/api/plan/simulate", json={"amount": 1000, "installments": 3}).status_code == 402
+    assert c.get("/api/year-summary").status_code == 402
+    # bütçe: 2 serbest, 3. kilitli; var olanı değiştirmek serbest
+    assert c.put("/api/budgets", json={"category": "Market & Gıda", "monthly_limit": 4000}).status_code == 200
+    assert c.put("/api/budgets", json={"category": "Ulaşım & Araç", "monthly_limit": 2000}).status_code == 200
+    assert c.put("/api/budgets", json={"category": "Kafe & Restoran", "monthly_limit": 1500}).status_code == 402
+    assert c.put("/api/budgets", json={"category": "Market & Gıda", "monthly_limit": 4500}).status_code == 200
+    # kumbara: yeni açmak kilitli
+    assert c.post("/api/jars", json={"name": "Tatil"}).status_code == 402
+    # Premium: hepsi açılır
+    _rc(hosted, "INITIAL_PURCHASE", u["id"])
+    assert c.get(f"/api/summary?month={old}").status_code == 200
+    assert len(c.get("/api/plan?months=6").json()["months"]) == 6
+    assert c.put("/api/budgets", json={"category": "Kafe & Restoran", "monthly_limit": 1500}).status_code == 200
+    jid = c.post("/api/jars", json={"name": "Tatil"}).json()["id"]
+    assert c.post(f"/api/jars/{jid}/moves", json={"amount": 100}).status_code == 200
+
+
+def test_self_hosted_has_no_limits(client):
+    from app import finance
+
+    old = finance.add_months(finance.current_period(), -6)
+    assert client.get(f"/api/summary?month={old}").status_code == 200
+    assert len(client.get("/api/plan?months=6").json()["months"]) == 6
+    assert client.get("/api/meta").json()["plan"]["limits"] == {"history_months": None, "plan_months": None, "budgets": None}

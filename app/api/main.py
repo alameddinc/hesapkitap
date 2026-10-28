@@ -130,7 +130,7 @@ async def require_login(request: Request, call_next):
         # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
         if user["must_change_password"] and path != "/api/settings/password":
             return JSONResponse({"detail": "password_change_required"}, status_code=403)
-        feature = plans.gate_for(path)
+        feature = plans.gate_for(path, request.method)
         if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
             return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
         if user.get("member_of"):  # ortak defter üyesi: sahibin kurallarıyla (defterin içinde) sınırlı
@@ -539,20 +539,32 @@ def put_ui(body: UiIn):
     return prefs.set_ui(data)
 
 
+def _history_gate(month: str | None) -> None:
+    """Barındırılan sürüm, ücretsiz paket: bu dönem + geçen dönem; daha eskisi Premium."""
+    if not plans.history_ok(db.current_user(), month):
+        raise HTTPException(402, detail=str(plans.PlanRequired("gecmis")), headers={"X-Plan-Required": "gecmis"})
+
+
 @app.get("/api/summary")
 def summary(month: str | None = None):
     """month verilmezse içinde bulunulan dönem (mobil uygulama ayı beklemeden ister)."""
+    _history_gate(month)
     return finance.summary(month or finance.current_period())
 
 
 @app.get("/api/transactions")
 def transactions(month: str | None = None, include_deleted: bool = False):
-    return finance.transactions(month, include_deleted)
+    _history_gate(month)
+    rows = finance.transactions(month, include_deleted)
+    u = db.current_user()
+    if month is None and not plans.allows(u, "gecmis"):  # tüm aylar istendi: ücretsizde görünür pencereyle sınırlı
+        rows = [r for r in rows if plans.history_ok(u, r["month"])]
+    return rows
 
 
 @app.get("/api/plan")
 def plan(months: int = 6):
-    return finance.plan(max(1, min(months, 24)))
+    return finance.plan(plans.plan_months(db.current_user(), max(1, min(months, 24))))  # ücretsiz: 1 ay
 
 
 class SimulateIn(BaseModel):
@@ -2704,6 +2716,11 @@ def list_budgets(month: str | None = None):
 
 @app.put("/api/budgets")
 def put_budget(body: BudgetIn):
+    limits = db.list_budgets()
+    u = db.current_user()
+    if body.monthly_limit and body.category not in limits and not plans.allows(u, "butce") \
+            and len(limits) >= plans.FREE_BUDGETS:
+        raise HTTPException(402, detail=str(plans.PlanRequired("butce")), headers={"X-Plan-Required": "butce"})
     db.set_budget(body.category, body.monthly_limit)
     return {"ok": True}
 
