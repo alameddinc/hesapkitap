@@ -177,6 +177,12 @@ class PasswordChange(BaseModel):
     new: str
 
 
+def _google_enabled() -> bool:
+    from app import social
+
+    return social.google_enabled()
+
+
 def _reset_enabled() -> bool:
     from app import reset
 
@@ -210,7 +216,8 @@ def auth_status(request: Request):
     u = auth.token_user(request.cookies.get(auth.COOKIE) or _bearer(request))
     return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
             "login": "email" if plans.hosted() else "username",
-            "reset": _reset_enabled(),  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
+            "reset": _reset_enabled(),
+            "google": _google_enabled(),  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
             "user": {"id": u.get("id"), "username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
@@ -293,6 +300,46 @@ def _signup_limited(ip: str) -> bool:
 @app.get("/api/auth/invite/{code}")
 def invite_check(code: str):
     return {"valid": system.valid_invite(code)}
+
+
+class SocialIn(BaseModel):
+    id_token: str
+
+
+@app.post("/api/auth/google")
+def google_login(body: SocialIn, request: Request, response: Response):
+    """Google ile giriş: doğrulanmış e-postayla hesap varsa ona girer, yoksa (açık kayıtta) yeni hesap açar."""
+    import secrets
+
+    from app import social
+
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    try:
+        who = social.verify_google(body.id_token)
+    except social.SocialError as e:
+        auth.record_fail(ip)
+        raise HTTPException(401, str(e)) from e
+    u = system.user_by_name(who["email"])
+    created = False
+    if u and u["disabled"]:
+        raise HTTPException(403, "Bu hesap kapatılmış")
+    if not u:
+        if not plans.open_signup():
+            raise HTTPException(403, "Bu e-postayla bir hesap yok")
+        if _signup_limited(ip):
+            raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
+        import time
+
+        # şifresiz hesap olmasın (boş şifre eski tek kullanıcılı girişe düşerdi): kimsenin bilmediği rastgele şifre;
+        # isterse "Şifremi unuttum" ile kendi şifresini koyar
+        u = auth.create_user(who["email"], secrets.token_urlsafe(32))
+        _signups.setdefault(ip, []).append(time.time())
+        created = True
+    system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
+    _start_session(request, response, system.user(u["id"]))
+    return {"ok": True, "created": created}
 
 
 class ForgotIn(BaseModel):
