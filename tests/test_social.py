@@ -50,8 +50,12 @@ def test_google_creates_then_logs_in(google):
 
     c = TestClient(app)
     assert c.get("/api/auth/status").json()["google"] is True
+    # yeni hesap: önce iki onay istenir, uygulama sorup aynı belgeyle yeniden dener
     r = c.post("/api/auth/google", json={"id_token": google()})
+    assert r.status_code == 409 and r.json()["detail"] == "consent_required"
+    r = c.post("/api/auth/google", json={"id_token": google(), "consent": ["kosullar", "acik_riza"]})
     assert r.status_code == 200 and r.json()["created"] is True
+    assert system.get(f"consent:{system.user_by_name('ayse@gmail.com')['id']}")
     assert c.get("/api/auth/status").json()["user"]["username"] == "ayse@gmail.com"
     # aynı e-posta: yeni hesap açılmaz, aynı hesaba girer
     r = TestClient(app).post("/api/auth/google", json={"id_token": google(email="Ayse@Gmail.com")})

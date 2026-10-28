@@ -217,7 +217,8 @@ def auth_status(request: Request):
     return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
             "login": "email" if plans.hosted() else "username",
             "reset": _reset_enabled(),
-            "google": _google_enabled(),  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
+            "google": _google_enabled(),
+            "consent": sorted(CONSENT_ITEMS) if plans.hosted() else [],  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
             "user": {"id": u.get("id"), "username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
@@ -282,6 +283,25 @@ class RegisterIn(BaseModel):
     code: str | None = None  # barındırılan sürümde (açık kayıt) gerekmez
     username: str
     password: str
+    consent: list[str] | None = None  # hazır sürümde: ["kosullar", "acik_riza"]
+
+
+CONSENT_VERSION = "2026-10-28"  # hukuk metinlerinin sürümü; metin değişirse güncellenir
+CONSENT_ITEMS = {"kosullar", "acik_riza"}  # Koşullar + Aydınlatma okundu · Açık rıza (yurt dışı sağlayıcılar dahil)
+
+
+def _consent_ok(items: list[str] | None) -> bool:
+    return not plans.hosted() or CONSENT_ITEMS <= set(items or [])
+
+
+def _record_consent(uid: int, request: Request) -> None:
+    """KVKK: onayın ne zaman, hangi metin sürümüne verildiği ispat edilebilmeli."""
+    if plans.hosted():
+        import json
+        import time
+
+        system.put(f"consent:{uid}", json.dumps({"version": CONSENT_VERSION, "items": sorted(CONSENT_ITEMS),
+                                                  "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "ip": client_ip(request)}))
 
 
 _signups: dict[str, list[float]] = {}
@@ -304,6 +324,7 @@ def invite_check(code: str):
 
 class SocialIn(BaseModel):
     id_token: str
+    consent: list[str] | None = None  # yeni hesap açılacaksa hazır sürümde gerekli
 
 
 @app.post("/api/auth/google")
@@ -328,6 +349,8 @@ def google_login(body: SocialIn, request: Request, response: Response):
     if not u:
         if not plans.open_signup():
             raise HTTPException(403, "Bu e-postayla bir hesap yok")
+        if not _consent_ok(body.consent):  # uygulama iki onayı sorup aynı belgeyle yeniden dener
+            raise HTTPException(409, "consent_required")
         if _signup_limited(ip):
             raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
         import time
@@ -336,6 +359,7 @@ def google_login(body: SocialIn, request: Request, response: Response):
         # isterse "Şifremi unuttum" ile kendi şifresini koyar
         u = auth.create_user(who["email"], secrets.token_urlsafe(32))
         _signups.setdefault(ip, []).append(time.time())
+        _record_consent(u["id"], request)
         created = True
     system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
     _start_session(request, response, system.user(u["id"]))
@@ -405,6 +429,8 @@ def register(body: RegisterIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    if not _consent_ok(body.consent):
+        raise HTTPException(422, "Devam etmek için iki onay kutusunu da işaretle")
     if not body.code and plans.open_signup():
         if _signup_limited(ip):
             raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
@@ -415,6 +441,7 @@ def register(body: RegisterIn, request: Request, response: Response):
         import time
 
         _signups.setdefault(ip, []).append(time.time())
+        _record_consent(u["id"], request)
         _start_session(request, response, u)
         return {"ok": True}
     if not body.code or not system.valid_invite(body.code):
@@ -428,6 +455,7 @@ def register(body: RegisterIn, request: Request, response: Response):
     if not system.use_invite(body.code, u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
         system.delete_user(u["id"])
         raise HTTPException(409, "Davet kodu az önce kullanıldı")
+    _record_consent(u["id"], request)
     _start_session(request, response, u)
     return {"ok": True}
 

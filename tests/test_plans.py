@@ -2,6 +2,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
+CONSENT = ["kosullar", "acik_riza"]
+
 
 @pytest.fixture()
 def hosted(client, monkeypatch):
@@ -24,7 +26,7 @@ def _user(admin, name="ayse"):
 
     inv = admin.post("/api/admin/invites", json={}).json()
     c = TestClient(app)
-    r = c.post("/api/auth/register", json={"code": inv["code"], "username": f"{name}@ornek.com", "password": f"{name}-sifre-12345"})
+    r = c.post("/api/auth/register", json={"consent": CONSENT, "code": inv["code"], "username": f"{name}@ornek.com", "password": f"{name}-sifre-12345"})
     assert r.status_code == 200
     from app import system
 
@@ -96,7 +98,7 @@ def test_family_plan_covers_members(hosted):
     inv = c.post("/api/book/invites", json={"note": "Eşim"})
     assert inv.status_code == 200
     m = TestClient(app)
-    assert m.post("/api/auth/register", json={"code": inv.json()["code"], "username": "esim@ornek.com",
+    assert m.post("/api/auth/register", json={"consent": CONSENT, "code": inv.json()["code"], "username": "esim@ornek.com",
                                               "password": "esim-sifre-12345"}).status_code == 200
     member = next(x for x in system.users() if x["username"] == "esim@ornek.com")
     assert plans.plan_of(member) == "aile"  # üye sahibin paketini kullanır
@@ -114,17 +116,17 @@ def test_open_signup_only_when_enabled(hosted, monkeypatch):
 
     c = TestClient(app)
     assert c.get("/api/auth/status").json()["open_signup"] is False
-    assert c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"}).status_code == 403
+    assert c.post("/api/auth/register", json={"consent": CONSENT, "username": "yeni", "password": "yeni-sifre-12345"}).status_code == 403
     monkeypatch.setenv("HESAPKITAP_OPEN_SIGNUP", "1")
     assert c.get("/api/auth/status").json()["open_signup"] is True
     st = c.get("/api/auth/status").json()
     assert st["login"] == "email"
-    r = c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"})
+    r = c.post("/api/auth/register", json={"consent": CONSENT, "username": "yeni", "password": "yeni-sifre-12345"})
     assert r.status_code == 422 and "E-posta" in r.json()["detail"]  # hazır sürümde kullanıcı adıyla hesap yok
-    assert c.post("/api/auth/register", json={"username": "yeni@ornek.com", "password": "yeni-sifre-12345"}).status_code == 200
+    assert c.post("/api/auth/register", json={"consent": CONSENT, "username": "yeni@ornek.com", "password": "yeni-sifre-12345"}).status_code == 200
     assert c.get("/api/meta").json()["plan"]["plan"] == "free"
     # aynı adresten saatte en fazla 5 hesap
-    codes = [TestClient(app).post("/api/auth/register", json={"username": f"yeni{i}@ornek.com", "password": "yeni-sifre-12345"}).status_code
+    codes = [TestClient(app).post("/api/auth/register", json={"consent": CONSENT, "username": f"yeni{i}@ornek.com", "password": "yeni-sifre-12345"}).status_code
              for i in range(6)]
     assert codes[:4] == [200] * 4 and codes[-1] == 429
 
@@ -185,12 +187,12 @@ def test_signup_with_email(hosted, monkeypatch):
 
     monkeypatch.setenv("HESAPKITAP_OPEN_SIGNUP", "1")
     c = TestClient(app)
-    r = c.post("/api/auth/register", json={"username": "Deniz.Yilmaz@Ornek.com", "password": "deniz-sifre-12345"},
+    r = c.post("/api/auth/register", json={"consent": CONSENT, "username": "Deniz.Yilmaz@Ornek.com", "password": "deniz-sifre-12345"},
                headers={"X-HK-Client": "mobile"})
     assert r.status_code == 200 and r.headers["x-session-token"]
     assert TestClient(app).post("/api/auth/login", json={"username": "deniz.yilmaz@ornek.com",
                                                          "password": "deniz-sifre-12345"}).status_code == 200
-    bad = TestClient(app).post("/api/auth/register", json={"username": "deniz@", "password": "deniz-sifre-12345"})
+    bad = TestClient(app).post("/api/auth/register", json={"consent": CONSENT, "username": "deniz@", "password": "deniz-sifre-12345"})
     assert bad.status_code == 422
 
 
@@ -234,3 +236,21 @@ def test_self_hosted_has_no_limits(client):
     assert client.get(f"/api/summary?month={old}").status_code == 200
     assert len(client.get("/api/plan?months=6").json()["months"]) == 6
     assert client.get("/api/meta").json()["plan"]["limits"] == {"history_months": None, "plan_months": None, "budgets": None, "family_seats": None}
+
+
+def test_hosted_signup_needs_both_consents_and_records_them(hosted, monkeypatch):
+    import json
+
+    from app import system
+    from app.api.main import app
+
+    monkeypatch.setenv("HESAPKITAP_OPEN_SIGNUP", "1")
+    c = TestClient(app)
+    assert c.get("/api/auth/status").json()["consent"] == ["acik_riza", "kosullar"]
+    body = {"username": "onay@ornek.com", "password": "onay-sifre-12345"}
+    for missing in (None, ["kosullar"], ["acik_riza"]):
+        r = c.post("/api/auth/register", json={**body, "consent": missing})
+        assert r.status_code == 422 and "onay" in r.json()["detail"]
+    assert c.post("/api/auth/register", json={**body, "consent": CONSENT}).status_code == 200
+    rec = json.loads(system.get(f"consent:{system.user_by_name('onay@ornek.com')['id']}"))
+    assert rec["version"] and rec["items"] == ["acik_riza", "kosullar"] and rec["at"]
