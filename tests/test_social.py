@@ -92,3 +92,15 @@ def test_google_existing_account_links_and_off_when_not_configured(google, monke
     assert r.status_code == 200 and r.json()["created"] is False
     monkeypatch.delenv("HESAPKITAP_GOOGLE_CLIENT_IDS")
     assert TestClient(app).post("/api/auth/google", json={"id_token": google()}).status_code == 401
+
+
+def test_google_account_without_password_can_delete_itself(google):
+    from app import system
+    from app.api.main import app
+
+    c = TestClient(app)
+    c.post("/api/auth/google", json={"id_token": google(), "consent": ["kosullar", "acik_riza"]})
+    assert c.get("/api/auth/status").json()["user"]["password_set"] is False
+    assert c.post("/api/me/delete", json={"confirm": "hayır"}).status_code == 403
+    assert c.post("/api/me/delete", json={"confirm": "sil"}).status_code == 200
+    assert system.user_by_name("ayse@gmail.com") is None

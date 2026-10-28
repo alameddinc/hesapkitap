@@ -729,8 +729,15 @@ def list_statements() -> list[dict]:
 
 
 def delete_statement(statement_id: int) -> None:
+    """Ekstreyi ve (başka ekstre aynı dosyayı kullanmıyorsa) saklanan PDF'ini sil."""
     with connect() as c:
+        r = c.execute("SELECT file_hash FROM statements WHERE id = ?", (statement_id,)).fetchone()
         c.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
+        still_used = r and c.execute("SELECT 1 FROM statements WHERE file_hash = ?", (r["file_hash"],)).fetchone()
+    if r and not still_used and re.fullmatch(r"[0-9a-f]{64}", r["file_hash"] or ""):
+        path = os.path.join(upload_dir(), f"{r['file_hash']}.pdf")
+        if os.path.isfile(path):
+            os.remove(path)
 
 
 # ---------------------------------------------------------------- card transactions

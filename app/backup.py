@@ -45,14 +45,24 @@ def make_backup(today: date | None = None) -> str:
     return path
 
 
+_DATED = __import__("re").compile(r"-(\d{8})(?=[-.T]|$)")
+
+
 def prune(today: date | None = None) -> list[str]:
+    """Adında tarih (-YYYYMMDD) olan yedekler KEEP_DAYS gün sonra silinir: günlük ekstre-*.db'ler, geri yükleme öncesi
+    kopyalar ve sunucu yöneticisinin elle aldığı predeploy-*-system.db gibi kopyalar. Takvim günüyle: bugün dahil en
+    fazla KEEP_DAYS günlük kopya kalır."""
     today = today or date.today()
     removed = []
     for name in os.listdir(backup_dir()):
-        if not (name.startswith("ekstre-") and name[7:15].isdigit()):
+        m = _DATED.search(name)
+        if not m or not name.endswith((".db", ".enc")):
             continue
-        d = datetime.strptime(name[7:15], "%Y%m%d").date()
-        if today - d > timedelta(days=KEEP_DAYS):
+        try:
+            d = datetime.strptime(m[1], "%Y%m%d").date()
+        except ValueError:
+            continue
+        if today - d >= timedelta(days=KEEP_DAYS):
             os.remove(os.path.join(backup_dir(), name))
             removed.append(name)
     return removed

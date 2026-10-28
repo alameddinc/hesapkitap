@@ -136,9 +136,15 @@ def temp_password() -> str:
     return "-".join("".join(secrets.choice(abc) for _ in range(4)) for _ in range(3))
 
 
+def password_unset(uid: int | None) -> bool:
+    """Google/Apple ile açılmış, kendi şifresini hiç koymamış hesap."""
+    return bool(uid) and system.get(f"pw_unset:{uid}") == "1"
+
+
 def set_password(uid: int, pw: str, must_change: bool = False) -> None:
     _check_strength(pw)
     system.update_user(uid, password_hash=_hash(pw), must_change_password=int(must_change))
+    system.put(f"pw_unset:{uid}", None)
     system.bump_session(uid)  # eski oturumlar düşsün
 
 

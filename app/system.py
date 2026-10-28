@@ -169,9 +169,15 @@ def create_user(username: str, password_hash: str | None, role: str = "user", ma
     with connect() as c:
         if c.execute("SELECT 1 FROM users WHERE username = ?", (name,)).fetchone():
             raise ValueError("Bu kullanıcı adı alınmış")
-        uid = c.execute("INSERT INTO users (username, password_hash, role, must_change_password, member_of, book_role) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (name, password_hash, role, int(must_change), member_of, book_role if member_of else None)).lastrowid
+        # id hiçbir zaman yeniden verilmez (silinen son kullanıcının id'si de): klasör users/<id>/, erişim anahtarları ve
+        # ortak defter davetleri id'ye bağlı; yeniden kullanım eski hesabın artığını yeni hesaba bağlayabilirdi.
+        last = c.execute("SELECT value FROM sys_settings WHERE key = 'last_user_id'").fetchone()
+        top = c.execute("SELECT COALESCE(MAX(id), 0) FROM users").fetchone()[0]
+        uid = max(top, int(last[0]) if last and str(last[0]).isdigit() else 0) + 1
+        c.execute("INSERT INTO users (id, username, password_hash, role, must_change_password, member_of, book_role) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  (uid, name, password_hash, role, int(must_change), member_of, book_role if member_of else None))
+        c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('last_user_id', ?)", (str(uid),))
         if not main_db and not member_of:
             c.execute("UPDATE users SET db_file = ? WHERE id = ?", (os.path.join(str(uid), "ekstre.db"), uid))
     return user(uid)
@@ -216,33 +222,81 @@ def bump_session(uid: int) -> None:
 def delete_user(uid: int) -> None:
     with connect() as c:
         if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
-            c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))  # id ileride yeniden verilebilir
+            c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
+            c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
+            c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
+
+
+def user_dirs(u: dict) -> list[str]:
+    """Kullanıcıya ait klasörler: users/<id>/ (kendi defteri; ortak defter üyesinin "Benim" defteri de burada) ve
+    db_file başka bir klasörü gösteriyorsa o. Kökün kendisi ya da _silinen asla dönmez."""
+    root = os.path.abspath(data_root())
+    cands = [os.path.join(root, str(int(u["id"])))]
+    if u.get("db_file"):
+        cands.append(os.path.join(root, os.path.dirname(u["db_file"])))
+    out = []
+    for p in map(os.path.abspath, cands):
+        if p.startswith(root + os.sep) and os.path.basename(p) != "_silinen" and p not in out and os.path.isdir(p):
+            out.append(p)
+    return out
 
 
 def purge_user_data(u: dict) -> None:
-    """Kullanıcı kendi hesabını sildi: klasörü kalıcı olarak silinir (KVKK); günlük yedeklerden 30 günde düşer."""
+    """Kullanıcı kendi hesabını sildi: klasörü (veritabanı, PDF'ler, faturalar, kendi günlük yedekleri) hemen ve kalıcı
+    olarak silinir (KVKK). Sunucu yedeklerindeki kopyalar en geç 30 gün içinde düşer (app/cloud_backup.py)."""
     import shutil
 
-    if u.get("db_file"):
-        src = os.path.join(data_root(), os.path.dirname(u["db_file"]))
-        if os.path.isdir(src) and os.path.abspath(src) != os.path.abspath(data_root()):
-            shutil.rmtree(src)
+    for p in user_dirs(u):
+        shutil.rmtree(p)
+
+
+DELETED_DIR = "_silinen"
 
 
 def archive_user_data(u: dict) -> str | None:
-    """Silinen kullanıcının klasörünü users/_silinen/ altına taşı (geri dönüş için; elle temizlenir)."""
+    """Silinen kullanıcının klasörünü users/_silinen/ altına taşı (geri dönüş için). purge_archived süresi dolanı siler."""
+    import re
     import shutil
     import time
 
-    if not u.get("db_file"):
-        return None
-    src = os.path.join(data_root(), os.path.dirname(u["db_file"]))
-    if not os.path.isdir(src):
-        return None
-    dst = os.path.join(data_root(), "_silinen", f"{u['id']}-{u['username']}-{int(time.time())}")
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.move(src, dst)
+    dst = None
+    safe = re.sub(r"[^A-Za-z0-9._@-]", "_", u["username"])[:80]  # e-posta adında "/" olabilir: yol dışına çıkmasın
+    for i, src in enumerate(user_dirs(u)):
+        dst = os.path.join(data_root(), DELETED_DIR, f"{u['id']}-{safe}-{int(time.time())}" + (f"-{i}" if i else ""))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src, dst)
     return dst
+
+
+def deleted_keep_days() -> int:
+    """users/_silinen/ saklama süresi (gün). 0: kendiliğinden silinmez."""
+    v = os.environ.get("HESAPKITAP_DELETED_KEEP_DAYS", "30")
+    return int(v) if v.isdigit() else 30
+
+
+def purge_archived(days: int | None = None, now: float | None = None) -> list[str]:
+    """users/_silinen/ altında `days` günden eski klasörleri kalıcı sil. Ad: <id>-<kullanıcı>-<unix zamanı>[-n];
+    zaman okunamazsa klasörün değişme zamanı esas alınır."""
+    import re
+    import shutil
+    import time
+    from datetime import datetime
+
+    days = deleted_keep_days() if days is None else days
+    base = os.path.join(data_root(), DELETED_DIR)
+    if not days or not os.path.isdir(base):
+        return []
+    now = time.time() if now is None else now
+    removed = []
+    for name in sorted(os.listdir(base)):
+        p = os.path.join(base, name)
+        m = re.search(r"-(\d{9,11})(?:-\d+)?$", name)
+        ts = int(m[1]) if m else os.path.getmtime(p)
+        # takvim günüyle (yedeklerle aynı kural): taşındığı gün + days. gün çalışan temizlikte düşer
+        if (datetime.fromtimestamp(now).date() - datetime.fromtimestamp(ts).date()).days >= days:
+            shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+            removed.append(name)
+    return removed
 
 
 # ---------------------------------------------------------------- davetler

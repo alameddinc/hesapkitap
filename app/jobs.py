@@ -179,6 +179,21 @@ def mail_due(now: datetime) -> bool:
     return not last or (now - datetime.fromisoformat(last)).total_seconds() >= mailbox.POLL_MINUTES * 60
 
 
+PURGE_HOUR = 4
+
+
+def run_global(now: datetime) -> list[str] | None:
+    """Sunucu geneli günlük iş (kullanıcı alanından bağımsız): users/_silinen/ altında süresi dolan silinmiş hesap
+    klasörlerini kalıcı sil. Günde bir kez; çalıştığı gün sistem veritabanına yazılır. Çalışmadıysa None."""
+    from app import system
+
+    today = now.date().isoformat()
+    if now.hour < PURGE_HOUR or system.get("job:purge_deleted") == today:
+        return None
+    system.put("job:purge_deleted", today)
+    return system.purge_archived(now=now.timestamp())
+
+
 async def scheduler() -> None:
     from app import mailbox
 
@@ -198,6 +213,11 @@ async def scheduler() -> None:
                 log.warning("telegram inbox: %s", e)
             except Exception:  # noqa: BLE001
                 log.exception("telegram inbox failed")
+        try:
+            if removed := await asyncio.to_thread(run_global, now):
+                log.info("silinmiş hesap klasörleri temizlendi: %s", removed)
+        except Exception:  # noqa: BLE001
+            log.exception("purge_deleted failed")
         for path, user in spaces():
             with db.use_space(path, user):  # her kullanıcının işi kendi veritabanında (to_thread bağlamı taşır)
                 for name, fn in due_jobs(now):

@@ -313,6 +313,13 @@ Aynı `docker compose up -d`; önüne HTTPS yapan bir reverse proxy (Caddy, Ngin
 - Sunucu yöneticileri ayarları `.env` ile de verebilir (bkz. [`.env.example`](.env.example)); `.env` uygulama içindekinden önceliklidir.
 - Veri: `./data` — `system.db` (kullanıcılar, davetler), `ekstre.db` (yönetici), `users/<id>/` (diğer kullanıcılar),
   yüklenen dosyalar ve gece yedekleri. Yedeklemek için bu klasörü kopyalaman yeterli.
+- **Sunucu yedeği (çok kullanıcılı):** `python -m app.cloud_backup run` bütün veri klasörünü (her kullanıcının
+  veritabanı çalışırken tutarlı kopyayla + dosyalar) tek, AES-256-GCM şifreli arşive yazar; isteğe bağlı S3 uyumlu
+  bir depoya (Cloudflare R2, Backblaze B2, MinIO…) gönderir; 30 günden eski arşivleri ve `users/_silinen/` altındaki
+  silinmiş hesapları temizler. Ayarlar: `HESAPKITAP_BACKUP_KEY`, `HESAPKITAP_BACKUP_DIR` (veri klasörünün dışında),
+  isteğe bağlı `BACKUP_S3_ENDPOINT/BUCKET/KEY/SECRET`. Host'ta günlük cron ile, ayrı bir container'da çalıştır:
+  `docker run --rm --env-file backup.env -v $PWD/data:/app/data -v $PWD/backups:/backups hesapkitap:latest python -m app.cloud_backup run`.
+  Doğrulama / geri açma: `python -m app.cloud_backup verify|extract <arşiv> …` (kullanım: modülün başındaki açıklama).
 - **iPhone kısayolu** kendi adresin için (macOS gerekir): `python3 scripts/make_shortcut.py https://alanadin` →
   çıkan dosyayı `data/shortcuts/hesapkitap.shortcut` olarak koy; Ayarlar'daki "Kısayolu ekle" düğmesi onu verir.
 

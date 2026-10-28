@@ -221,7 +221,7 @@ def auth_status(request: Request):
             "consent": sorted(CONSENT_ITEMS) if plans.hosted() else [],  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
-            "user": {"id": u.get("id"), "username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
+            "user": {"id": u.get("id"), "username": u["username"], "password_set": not auth.password_unset(u.get("id")), "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
 
 
 @app.post("/api/auth/setup")
@@ -358,6 +358,7 @@ def google_login(body: SocialIn, request: Request, response: Response):
         # şifresiz hesap olmasın (boş şifre eski tek kullanıcılı girişe düşerdi): kimsenin bilmediği rastgele şifre;
         # isterse "Şifremi unuttum" ile kendi şifresini koyar
         u = auth.create_user(who["email"], secrets.token_urlsafe(32))
+        system.put(f"pw_unset:{u['id']}", "1")  # şifresini bilmiyor: silme "SİL" yazarak onaylanır
         _signups.setdefault(ip, []).append(time.time())
         _record_consent(u["id"], request)
         created = True
@@ -542,7 +543,7 @@ def admin_reset_password(uid: int):
 
 @app.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: int):
-    """Hesabı siler; veri dosyası hemen silinmez, kenara (users/_silinen) taşınır."""
+    """Hesabı siler; veri dosyası hemen silinmez, kenara (users/_silinen) taşınır, 30 gün sonra kalıcı silinir."""
     _require_admin()
     u = system.user(uid)
     if not u or u["role"] == "admin":
@@ -578,7 +579,8 @@ def my_ai():
 
 
 class DeleteMeIn(BaseModel):
-    password: str
+    password: str | None = None
+    confirm: str | None = None  # şifresi olmayan (Google/Apple ile açılmış) hesap: "SİL" yazarak onaylar
 
 
 @app.post("/api/me/delete")
@@ -587,13 +589,18 @@ def delete_me(body: DeleteMeIn, response: Response):
     u = db.current_user()
     if not u or u["role"] == "admin":
         raise HTTPException(403, "Yönetici hesabı buradan silinemez")
-    if not auth.check_password(u, body.password):
+    if auth.password_unset(u["id"]):
+        if (body.confirm or "").strip().upper().replace("I", "İ") != "SİL":
+            raise HTTPException(403, "Onay için SİL yaz")
+    elif not auth.check_password(u, body.password or ""):
         raise HTTPException(403, "Şifre yanlış")
     for m in system.members(u["id"]):
         system.delete_user(m["id"])
+        system.purge_user_data(m)  # üyenin kendi ("Benim") defteri de
     system.delete_user(u["id"])
-    if not u.get("member_of"):
-        system.purge_user_data(u)
+    system.purge_user_data(u)  # üye kendini silerse yalnız kendi klasörü (users/<id>); sahibin defteri kalır
+    for k in ("consent", "pw_unset"):  # KVKK: hesapla birlikte onay kaydı (IP içerir) de gider
+        system.put(f"{k}:{u['id']}", None)
     response.delete_cookie(auth.COOKIE, path="/")
     return {"ok": True}
 
@@ -2651,12 +2658,14 @@ def book_delete_invite(code: str):
 
 @app.delete("/api/book/members/{uid}")
 def book_remove_member(uid: int):
-    """Üyeyi çıkar: hesabı silinir (kendi verisi yok; eklediği kayıtlar defterde kalır)."""
+    """Üyeyi çıkar: hesabı silinir (eklediği kayıtlar defterde kalır). Üyenin kendi ("Benim") defteri sahipsiz kalmasın
+    diye users/_silinen altına taşınır; 30 gün sonra kendiliğinden silinir."""
     u = _book_owner()
     m = system.user(uid)
     if not m or m.get("member_of") != u["id"]:
         raise HTTPException(404, "Üye yok")
     system.delete_user(uid)
+    system.archive_user_data(m)
     return {"ok": True}
 
 
