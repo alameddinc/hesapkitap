@@ -526,6 +526,7 @@ def put_modules(body: ModulesIn):
 class UiIn(BaseModel):
     simple: bool | None = None
     layout: list[str] | None = None
+    layout_mobile: list[str] | None = None  # mobil uygulamanın Özet düzeni
     reset_layout: bool = False
 
 

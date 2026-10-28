@@ -84,19 +84,21 @@ def _ui_key() -> str:
 
 
 def ui() -> dict:
-    """{simple: bool, layout: [bileşen, …] | None}"""
+    """{simple, layout: web Özet düzeni, layout_mobile: mobil uygulamanın Özet düzeni (ayrı: biri öbürünü ezmesin)}"""
+    base = {"simple": False, "layout": None, "layout_mobile": None}
     try:
-        return {"simple": False, "layout": None, **json.loads(db.get_setting(_ui_key()) or "{}")}
+        return {**base, **json.loads(db.get_setting(_ui_key()) or "{}")}
     except ValueError:
-        return {"simple": False, "layout": None}
+        return base
 
 
 def set_ui(data: dict) -> dict:
     cur = ui()
     if "simple" in data:
         cur["simple"] = bool(data["simple"])
-    if "layout" in data:
-        lay = data["layout"]
-        cur["layout"] = [str(x)[:40] for x in lay][:40] if isinstance(lay, list) else None
+    for k in ("layout", "layout_mobile"):
+        if k in data:
+            lay = data[k]
+            cur[k] = [str(x)[:40] for x in lay][:40] if isinstance(lay, list) else None
     db.set_setting(_ui_key(), json.dumps(cur, ensure_ascii=False))
     return cur
