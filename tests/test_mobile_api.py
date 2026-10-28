@@ -68,3 +68,14 @@ def test_summary_without_month_is_current_period(client):
     from app import finance
 
     assert client.get("/api/summary").json()["month"] == finance.current_period()
+
+
+def test_site_pages_served_from_data_dir(client, tmp_path, monkeypatch):
+    """Tanıtım ve hukuk sayfaları: sunucu sahibi koyduysa açılır, koymadıysa 404 (oturum gerekmez)."""
+    monkeypatch.setenv("HESAPKITAP_SITE_DIR", str(tmp_path))
+    monkeypatch.delenv("HESAPKITAP_NO_AUTH", raising=False)
+    assert client.get("/gizlilik").status_code == 404
+    (tmp_path / "gizlilik.html").write_text("<h1>Gizlilik</h1>", encoding="utf-8")
+    r = client.get("/gizlilik")
+    assert r.status_code == 200 and "Gizlilik" in r.text and r.headers["content-type"].startswith("text/html")
+    assert client.get("/hakkinda").status_code == 404

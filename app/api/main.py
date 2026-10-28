@@ -3402,10 +3402,34 @@ def backup_download(name: str):
     return FileResponse(os.path.join(backup.backup_dir(), name), filename=name, media_type="application/octet-stream")
 
 
+# ---------------------------------------------------------------- tanıtım ve hukuk sayfaları (isteğe bağlı)
+
+WEB_DIST = os.environ.get("WEB_DIST")
+SITE_PAGES = {"hakkinda": "index.html", "gizlilik": "gizlilik.html", "kosullar": "kosullar.html", "acik-riza": "acik-riza.html"}
+
+
+def _site_dir() -> str:
+    """Sunucu sahibinin koyduğu sayfalar: <veri klasörü>/site/*.html (hazır sürümde tanıtım, gizlilik, koşullar)."""
+    return os.environ.get("HESAPKITAP_SITE_DIR") or os.path.join(os.path.dirname(system.SYSTEM_DB), "site")
+
+
+def _site_route(page: str):
+    def serve():
+        f = os.path.join(_site_dir(), SITE_PAGES[page])
+        if not os.path.isfile(f):
+            raise HTTPException(404)
+        return FileResponse(f, media_type="text/html", headers={"Cache-Control": "public, max-age=300"})
+
+    app.add_api_route(f"/{page}", serve, methods=["GET"], include_in_schema=False)
+
+
+for _page in SITE_PAGES:
+    _site_route(_page)
+
+
 # ---------------------------------------------------------------- frontend (production)
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")
-WEB_DIST = os.environ.get("WEB_DIST")
 if WEB_DIST and os.path.isdir(WEB_DIST):
     _dist = os.path.realpath(WEB_DIST)
     app.mount("/assets", StaticFiles(directory=os.path.join(_dist, "assets")), name="assets")
