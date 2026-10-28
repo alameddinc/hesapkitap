@@ -1,7 +1,7 @@
 """Giden posta (SMTP): şifre sıfırlama kodu gibi sistem mailleri.
 
 Ayarlanmazsa kapalıdır; kendi sunucusunu kuran istediği SMTP'yi (Gmail uygulama şifresi, Resend, Brevo…) verebilir.
-SMTP_HOST, SMTP_PORT (465 = SSL, 587 = STARTTLS), SMTP_USER, SMTP_PASSWORD, MAIL_FROM ("HesapKitap <noreply@…>").
+SMTP_HOST, SMTP_PORT (465/2465 = SSL, 587/2587 = STARTTLS; bazı sunucu firmaları 465'i kapatır, 587 kullan), SMTP_USER, SMTP_PASSWORD, MAIL_FROM ("HesapKitap <noreply@…>").
 """
 import logging
 import os
@@ -29,7 +29,7 @@ def send(to: str, subject: str, text: str, html: str | None = None) -> None:
     host, port = os.environ["SMTP_HOST"], int(os.environ.get("SMTP_PORT") or 465)
     user, pw = os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASSWORD")
     ctx = ssl.create_default_context()
-    if port == 465:
+    if port in (465, 2465):
         with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as s:
             if user:
                 s.login(user, pw or "")
