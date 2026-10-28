@@ -11,6 +11,7 @@ import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
 import { cx, setAmountsHidden } from "./format";
 import Dashboard from "./pages/Dashboard";
+import ForgotPassword from "./pages/ForgotPassword";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
 import Register from "./pages/Register";
@@ -102,13 +103,15 @@ export default function App() {
   }, []);
   if (auth.isLoading) return null;
   if (auth.data?.setup_required) return <Setup codeNeeded={!!auth.data.setup_code_needed} />;
-  if (auth.data && !auth.data.authenticated) return hash.startsWith("#/kayit") ? <Register /> : <Login />;
+  if (auth.data && !auth.data.authenticated) return hash.startsWith("#/kayit") ? <Register /> : hash.startsWith("#/sifre") ? <ForgotPassword /> : <Login />;
   if (auth.data?.user?.must_change_password) return <ChangePassword username={auth.data.user.username} />;
   if (auth.data?.demo) {  // demoda tutarlar açık başlar (veri uydurma); göz ikonu yine çalışır
     try { if (sessionStorage.getItem("hk-revealed") === null) sessionStorage.setItem("hk-revealed", "1"); } catch { /* özel mod */ }
   }
   return <Shell />;
 }
+
+const readFlash = () => { try { return sessionStorage.getItem("hk-flash"); } catch { return null; } };
 
 // Açılışta tutarlar gizli (cihaz ayarı); göz ikonuyla bu oturum için açılır
 const hideOnOpen = () => { try { return localStorage.getItem("hk-hide-on-open") !== "0"; } catch { return true; } };
@@ -147,7 +150,9 @@ function Shell() {
     }
   }, [meta.data, monthInit]);
   const [modal, setModal] = useState<ModalState>(null);
-  const [toastMsg, setToast] = useState<string | null>(null);
+  // girişten önce bırakılan kısa bildirim (ör. şifre yenileme sonrası "Şifren yenilendi")
+  const [toastMsg, setToast] = useState<string | null>(readFlash);
+  useEffect(() => { try { sessionStorage.removeItem("hk-flash"); } catch { /* özel mod */ } }, []); // StrictMode'da başlatıcı iki kez çalışır: silme burada
   const recurring = useQuery({ queryKey: ["recurring"], queryFn: api.recurring, enabled: modal?.type === "recurring" });
 
   // Ana ekran kısayolu: #/islemler?ekle=1 → Ekle panelini aç

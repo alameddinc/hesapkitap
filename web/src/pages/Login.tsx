@@ -13,6 +13,7 @@ export default function Login() {
   const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
   const open = !!status.data?.open_signup; // barındırılan sürüm: herkes hesap açabilir
   const email = loginKind(status.data) === "email"; // hazır sürüm: giriş e-postayla
+  const canReset = !!status.data?.reset; // sunucuda e-posta ayarlı: kodla şifre yenileme (#/sifre)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,10 +45,23 @@ export default function Login() {
         <input id="user" className="input mb-3" type={email ? "email" : "text"} inputMode={email ? "email" : undefined}
           autoComplete={email ? "email username" : "username"} autoCapitalize="none" autoCorrect="off" spellCheck={false}
           placeholder={email ? "ornek@gmail.com" : "ör. ayse"} value={user} onChange={(e) => setUser(e.target.value)} autoFocus={!user} />
-        <label className="label" htmlFor="pw">Şifre</label>
+        <div className="flex items-baseline justify-between">
+          <label className="label" htmlFor="pw">Şifre</label>
+          {canReset && (
+            <a href="#/sifre" className="mb-1 text-xs text-blue-600 hover:underline dark:text-blue-400"
+              onClick={() => { try { if (isEmail(user)) sessionStorage.setItem("hk-reset-email", user.trim()); } catch { /* özel mod */ } }}>
+              Şifremi unuttum
+            </a>
+          )}
+        </div>
         <input id="pw" type="password" className="input" autoFocus={!!user} autoComplete="current-password"
           value={pw} onChange={(e) => setPw(e.target.value)} />
         {err && <p className="mt-2 text-sm text-red-600">{err}</p>}
+        {status.data && !canReset && (
+          <p className="mt-2 text-xs text-stone-500">
+            {email ? "Şifreni mi unuttun? alameddinc@gmail.com adresine yaz." : "Şifreni unuttuysan sunucu yöneticisine sor."}
+          </p>
+        )}
         <button className="btn-primary mt-4 w-full justify-center py-2" disabled={busy || !pw}>
           {busy ? "Giriş yapılıyor…" : "Giriş"}
         </button>
