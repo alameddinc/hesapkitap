@@ -2496,6 +2496,8 @@ def book_patch_member(uid: int, body: BookMemberPatch):
 @app.post("/api/book/invites")
 def book_invite(body: InviteIn):
     u = _book_owner()
+    if plans.seats_left(u["id"]) == 0:
+        raise HTTPException(409, f"Aile paketi {plans.FAMILY_SEATS} kişilik; yer açmak için bir üyeyi ya da bekleyen daveti kaldır")
     return system.create_invite(body.note, body.days, member_of=u["id"], book_role=body.book_role)
 
 

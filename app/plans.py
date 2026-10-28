@@ -5,7 +5,7 @@ Paket defter sahibinindir; ortak deftere davet edilen üye sahibin paketini kull
 Abonelik mağazadan (App Store / Google Play) RevenueCat üzerinden gelir: plan + bitiş tarihi kullanıcıya yazılır.
 """
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app import system
 
@@ -126,12 +126,24 @@ def plan_months(u: dict | None, months: int) -> int:
     return months if allows(u, "uzun_plan") else min(months, FREE_PLAN_MONTHS)
 
 
+FAMILY_SEATS = 4  # aile paketi: sahibi + 3 üye (4 kişiye kadar Premium)
+
+
+def seats_left(owner_id: int) -> int | None:
+    """Ortak defterde kalan yer (bekleyen davetler de yer tutar). None = sınırsız (kendi sunucusu)."""
+    if not hosted():
+        return None
+    pending = [i for i in system.invites() if i.get("member_of") == owner_id and not i.get("used_at")
+               and (not i.get("expires_at") or i["expires_at"] >= date.today().isoformat())]
+    return max(0, FAMILY_SEATS - 1 - len(system.members(owner_id)) - len(pending))
+
+
 def limits(u: dict | None) -> dict:
     """Arayüz için: None = sınırsız."""
     p = plan_of(u)
     full = p in (SELF, PREMIUM, FAMILY)
     return {"history_months": None if full else FREE_HISTORY_MONTHS, "plan_months": None if full else FREE_PLAN_MONTHS,
-            "budgets": None if full else FREE_BUDGETS}
+            "budgets": None if full else FREE_BUDGETS, "family_seats": FAMILY_SEATS if hosted() else None}
 
 
 def ai_limit(u: dict) -> int | None:

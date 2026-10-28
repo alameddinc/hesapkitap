@@ -101,6 +101,12 @@ def test_family_plan_covers_members(hosted):
     member = next(x for x in system.users() if x["username"] == "esim@ornek.com")
     assert plans.plan_of(member) == "aile"  # üye sahibin paketini kullanır
     assert m.get("/api/prices").status_code == 200
+    # 4 kişiye kadar: sahibi + 3 üye; bekleyen davet de yer tutar
+    assert c.get("/api/meta").json()["plan"]["limits"]["family_seats"] == 4
+    codes = [c.post("/api/book/invites", json={"note": f"Kişi {i}"}) for i in range(3)]
+    assert [r.status_code for r in codes] == [200, 200, 409] and "4 kişilik" in codes[-1].json()["detail"]
+    assert c.delete(f"/api/book/invites/{codes[0].json()['code']}").status_code == 200
+    assert c.post("/api/book/invites", json={"note": "Yeniden"}).status_code == 200
 
 
 def test_open_signup_only_when_enabled(hosted, monkeypatch):
@@ -195,7 +201,7 @@ def test_free_plan_limits_and_premium_unlocks(hosted):
     cur = finance.current_period()
     old = finance.add_months(cur, -3)
     lim = c.get("/api/meta").json()["plan"]["limits"]
-    assert lim == {"history_months": 1, "plan_months": 1, "budgets": 2}
+    assert lim == {"history_months": 1, "plan_months": 1, "budgets": 2, "family_seats": 4}
     # geçmiş: bu dönem + geçen dönem serbest, daha eskisi Premium
     assert c.get(f"/api/summary?month={finance.add_months(cur, -1)}").status_code == 200
     r = c.get(f"/api/summary?month={old}")
@@ -227,4 +233,4 @@ def test_self_hosted_has_no_limits(client):
     old = finance.add_months(finance.current_period(), -6)
     assert client.get(f"/api/summary?month={old}").status_code == 200
     assert len(client.get("/api/plan?months=6").json()["months"]) == 6
-    assert client.get("/api/meta").json()["plan"]["limits"] == {"history_months": None, "plan_months": None, "budgets": None}
+    assert client.get("/api/meta").json()["plan"]["limits"] == {"history_months": None, "plan_months": None, "budgets": None, "family_seats": None}
