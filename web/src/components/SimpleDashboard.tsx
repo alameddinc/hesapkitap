@@ -3,12 +3,13 @@ import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
 import { addMonths, dateTR, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
-import { useUiPrefs } from "./hooks";
+import { isViewer, useBook, useUiPrefs } from "./hooks";
 
 /** Sade görünüm: büyük yazı, tek bakışta "bu ay ne kadar harcadım" (kuruşu kuruşuna), yaklaşan ödemeler, iki düğme. */
 export default function SimpleDashboard() {
   const ui = useUI();
   const { save } = useUiPrefs();
+  const viewer = isViewer(useBook().data); // ortak defterde sadece görür
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
   const prevMonth = addMonths(ui.month, -1);
   const prev = useQuery({ queryKey: ["summary", prevMonth], queryFn: () => api.summary(prevMonth) });
@@ -38,7 +39,7 @@ export default function SimpleDashboard() {
       </section>
 
       <div className="grid grid-cols-2 gap-3">
-        <button className="btn-primary flex-col justify-center gap-1 py-4 text-lg" onClick={ui.openAdd}><Camera size={26} /> Ekle</button>
+        <button className="btn-primary flex-col justify-center gap-1 py-4 text-lg" disabled={viewer} onClick={ui.openAdd}><Camera size={26} /> Ekle</button>
         <button className="btn-ghost flex-col justify-center gap-1 whitespace-nowrap border border-stone-300 py-4 text-lg dark:border-stone-700"
           onClick={() => ui.go("islemler")}><List size={26} /> Harcamalar</button>
       </div>

@@ -30,7 +30,8 @@ import Accounts from "./pages/Accounts";
 import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
-import { routeVisible, useBook, useUiPrefs } from "./components/hooks";
+import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks";
+import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
@@ -134,6 +135,7 @@ function Shell() {
   // sade görünüm: her şey orantılı büyür (rem), menüde sadece temel sayfalar
   useEffect(() => { document.documentElement.style.fontSize = prefs.simple ? "19px" : ""; }, [prefs.simple]);
   const SIMPLE = ["ozet", "islemler", "ayarlar", "diger"];
+  const viewer = isViewer(book.data); // ortak defterde "Sadece görür": ekleme düğmeleri yok
   const canSee = (r: Route) => (prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   // açılışta içinde bulunulan dönem (ay dönümü ayarına göre; ör. 19 Ekim → Kasım dönemi)
@@ -174,7 +176,7 @@ function Shell() {
       window.location.hash = `/${r}`;
       window.scrollTo(0, 0);
     },
-    openAdd: () => setModal({ type: "add" }),
+    openAdd: () => { if (!viewer) setModal({ type: "add" }); },
     openEntry: (row, draft) => setModal({ type: "entry", row, draft }),
     openCardTxn: (row) => setModal({ type: "card", row }),
     openRecurring: (id) => setModal({ type: "recurring", id }),
@@ -182,7 +184,7 @@ function Shell() {
     openPay: (p) => setModal({ type: "pay", p }),
     openRecurringMonth: (r) => setModal({ type: "rmonth", r }),
     toast: setToast,
-  }), [month]);
+  }), [month, viewer]);
 
   const Page = PAGES[canSee(route) ? route : "ozet"]; // ortak defterde kapalı sayfa: Özet
   const rec = modal?.type === "recurring" ? recurring.data?.find((r) => r.id === modal.id) : undefined;
@@ -197,8 +199,8 @@ function Shell() {
             <img src="/icons/logo-mark.png" alt="" className="size-7" /> <span className="flex-1">HesapKitap</span>
             {eyeBtn("-mr-2")}
           </div>
-          {book.data?.member && <p className="-mt-3 mb-3 px-2 text-xs text-stone-500">Ortak defter · {book.data.owner}</p>}
-          <button className="btn-primary mb-3 justify-center py-2" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>
+          {book.data?.member && <div className="-mt-2 mb-3"><BookSwitch /></div>}
+          {!viewer && <button className="btn-primary mb-3 justify-center py-2" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>}
           <nav className="space-y-0.5">
             {NAV.filter((n) => canSee(n.route)).map((n) => (
               <a key={n.route} href={`#/${n.route}`}
@@ -217,6 +219,7 @@ function Shell() {
           <div className="flex h-11 items-center gap-2 px-4">
             <img src="/icons/logo-mark.png" alt="" className="size-6" />
             <span className="flex-1 font-display text-[17px] font-semibold tracking-tight">HesapKitap</span>
+            <BookSwitch compact />
             {eyeBtn("-mr-2")}
           </div>
           <DemoBanner />
@@ -237,7 +240,7 @@ function Shell() {
                     ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>
-            ) : (
+            ) : viewer ? <div key={i} /> : (
               <div key={i} className="flex justify-center">
                 <button onClick={ui.openAdd} aria-label="Ekle"
                   className="-mt-6 flex size-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/30 ring-4 ring-stone-50 transition-transform active:scale-90 dark:ring-stone-950">

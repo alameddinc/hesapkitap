@@ -15,19 +15,67 @@ export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void)
   });
 }
 
-/** Ortak defter: bu kullanıcı başkasının defterinin üyesi mi, neler kapalı (sunucu da ayrıca uygular). */
-export interface BookInfo { member: boolean; owner?: string; hidden_pages?: string[]; hide_fees?: boolean }
+/** Ortak defter: bu kullanıcı başkasının defterinin üyesi mi, hangi defter açık, yetkisi, neler kapalı (sunucu da ayrıca uygular). */
+export type BookRole = "viewer" | "editor" | "full";
+export interface BookPerson { id: number; name: string; owner: boolean; role: BookRole | null }
+export interface BookInfo {
+  member: boolean; me?: number | null; owner?: string; role?: BookRole; role_label?: string; book?: "ortak" | "kendi"; can_switch?: boolean;
+  people?: BookPerson[]; hidden_pages?: string[]; hide_fees?: boolean;
+}
 
 export const useBook = () => useQuery({
   queryKey: ["book-me"], staleTime: 60_000,
   queryFn: () => fetch("/api/book/me").then((r) => (r.ok ? r.json() : { member: false }) as Promise<BookInfo>),
 });
 
-const MEMBER_HIDDEN = ["kurallar", "ekstreler"]; // yükleme ve kurallar sahibe ait
+/** Üye ortak defterde mi? (kendi defterinde kısıt yok) */
+export const inSharedBook = (b?: BookInfo) => !!b?.member && b.book !== "kendi";
+/** Ortak defterde "Sadece görür": ekleme yok. */
+export const isViewer = (b?: BookInfo) => inSharedBook(b) && b?.role === "viewer";
+/** Silme, gizleme gibi sahip işleri kapalı mı? (tam yetkili üye yapabilir) */
+export const isLimited = (b?: BookInfo) => inSharedBook(b) && b?.role !== "full";
+
+export const BOOK_COOKIE = "hk_book";
+/** Üye: ortak defter ile kendi defteri arasında geçiş. Çerez her isteğe gider; önbellek boşaltılır, veri yeniden gelir. */
+export function useSwitchBook() {
+  const qc = useQueryClient();
+  return (to: "ortak" | "kendi") => {
+    document.cookie = to === "kendi" ? `${BOOK_COOKIE}=kendi; path=/; max-age=31536000; SameSite=Lax`
+      : `${BOOK_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
+    window.location.hash = "/ozet";
+    // önbelleği boşalt (clear gibi) ama ekrandaki sorgular bağlı kalsın: veri yoktan, yeni defterden yeniden gelir
+    // (oturum bilgisi kişiye ait, defterle değişmez: sıfırlanırsa tüm ekran yeniden kurulurdu)
+    const book = (q: { queryKey: readonly unknown[] }) => q.queryKey[0] !== "auth";
+    qc.removeQueries({ type: "inactive", predicate: book });
+    qc.getMutationCache().clear();
+    qc.resetQueries({ predicate: book });
+  };
+}
+
+/** Kayıtlarda "kim ekledi": defterde birden çok kişi varken kişi adları (üyenin kendi defterinde gerekmez). */
+export function usePeople() {
+  const b = useBook().data;
+  const auth = useQuery({
+    queryKey: ["auth"], staleTime: 60_000,
+    queryFn: () => fetch("/api/auth/status").then((r) => r.json() as Promise<{ user?: { username: string } | null }>),
+  });
+  const people = b?.book === "kendi" ? [] : b?.people ?? [];
+  // sunucu "me" verir; eski sunucuda ada göre tahmin
+  const myName = auth.data?.user?.username.split("@")[0];
+  const meId = b?.me ?? (b?.member ? people.find((p) => p.name === myName) : people.find((p) => p.owner))?.id;
+  const ownerId = people.find((p) => p.owner)?.id;
+  const multi = people.length > 1;
+  /** created_by boşsa (eski kayıt) sahibin kaydıdır. */
+  const person = (id?: number | null) => people.find((p) => p.id === (id ?? ownerId));
+  return { multi, people, meId, person, isMe: (id?: number | null) => (id ?? ownerId) === meId };
+}
+
+const MEMBER_HIDDEN = ["kurallar", "ekstreler"]; // yükleme ve kurallar sahibe ait (tam yetkiliye açık)
 
 /** Sayfa menüde görünsün mü: ortak defter kuralları + kullanıcının kapattığı özellikler. */
 export const routeVisible = (b: BookInfo | undefined, route: string, modules?: Record<string, boolean>) =>
-  (!b?.member || !(MEMBER_HIDDEN.includes(route) || b.hidden_pages?.includes(route))) && modules?.[route] !== false;
+  (!inSharedBook(b) || !((isLimited(b) && MEMBER_HIDDEN.includes(route)) || b?.hidden_pages?.includes(route)))
+  && modules?.[route] !== false;
 
 /** Sahip ve en az bir üyesi var mı? (işlemde "Ortak defterde gizle" seçeneği o zaman görünür) */
 export const useHasMembers = () => useQuery({

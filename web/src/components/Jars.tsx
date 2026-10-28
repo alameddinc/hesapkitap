@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import AccountSelect, { useAccounts } from "./AccountSelect";
-import { useSave } from "./hooks";
+import { usePeople, useSave } from "./hooks";
 import Modal from "./Modal";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
@@ -15,6 +15,7 @@ interface Jar {
   monthly: number | null; auto_day: number | null; note: string | null; closed_at: string | null;
   balance: number; moves: Move[]; pct?: number; left?: number; need_per_month?: number;
   pace: number; eta?: string; on_track?: boolean;
+  contributions?: { user_id: number | null; amount: number }[]; // ortak kumbara: kim ne kadar ayırdı
 }
 
 // TL dışı kumbara: her ay altın/döviz alımı (varlık olarak eklenir)
@@ -229,6 +230,15 @@ function EditPurchase({ jar, move, onClose }: { jar: Jar; move: Move; onClose: (
 export default function Jars() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["jars"], queryFn: () => json<Jar[]>("GET", "/api/jars") });
+  const people = usePeople(); // defterde birden çok kişi: kişi başı katkı
+  const shares = (j: Jar) => {
+    if (!people.multi) return null;
+    const parts = (j.contributions ?? []).filter((c) => Math.abs(c.amount) > 0.001)
+      .sort((a, b) => Number(people.isMe(b.user_id)) - Number(people.isMe(a.user_id)) || b.amount - a.amount)
+      .map((c) => `${people.isMe(c.user_id) ? "Sen" : people.person(c.user_id)?.name ?? "Eski üye"} ${
+        isUnit(j) ? qty(c.amount, j.unit_symbol ?? sym(j.unit)) : tl(c.amount)}`);
+    return parts.length ? parts.join(" · ") : null;
+  };
   const [form, setForm] = useState<{ jar?: Jar } | null>(null);
   const [move, setMove] = useState<{ jar: Jar; dir: "yatir" | "cek" } | null>(null);
   const [buy, setBuy] = useState<Jar | null>(null);
@@ -274,6 +284,7 @@ export default function Jars() {
                 <span className="text-sm tabular-nums">{tl(j.balance)}{j.goal ? <span className="text-stone-500"> / {tl(j.goal)}</span> : null}</span>
               )}
             </div>
+            {shares(j) && <p className="text-xs text-stone-500">{shares(j)}</p>}
             {j.goal != null && (
               <div className="mt-1 h-2 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800">
                 <div className="h-full rounded-full bg-green-600" style={{ width: `${j.pct ?? 0}%` }} />

@@ -13,6 +13,7 @@ import BankTemplates from "../components/BankTemplates";
 import UpdateNotice from "../components/UpdateNotice";
 import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
 import BookSettings from "../components/BookSettings";
+import BookSwitch from "../components/BookSwitch";
 import AppServer from "../components/AppServer";
 import PlanSettings from "../components/Plan";
 import DeleteAccount from "../components/DeleteAccount";
@@ -231,7 +232,9 @@ export default function Settings() {
   const demo = useDemo();
   if (book.isLoading || demo.isLoading) return <></>;
   if (demo.data) return <DemoSettings />;
-  return book.data?.member ? <MemberSettings owner={book.data.owner ?? ""} /> : <OwnerSettings />;
+  const b = book.data;
+  if (b?.member && b.book !== "kendi") return <MemberSettings owner={b.owner ?? ""} role={b.role} roleLabel={b.role_label} />;
+  return <OwnerSettings ownBook={!!b?.member} />;
 }
 
 /** Kişisel görünüm: sade mod (büyük yazı), Özet düzenini sıfırla. */
@@ -272,16 +275,22 @@ function DemoSettings() {
 }
 
 /** Ortak defter üyesi: sadece kendi şifresi ve telefondan paylaşma. */
-function MemberSettings({ owner }: { owner: string }) {
+const ROLE_TEXT: Record<string, string> = {
+  viewer: "Her şeyi görebilirsin; ekleme ve değiştirme defter sahibinde.",
+  editor: "Fiş ve harcama ekleyebilir, kategori düzeltebilirsin; ekstre yükleme, silme ve ayarlar defter sahibinde.",
+  full: "Ekleyebilir, yükleyebilir, düzenleyip silebilirsin; defter ayarları ve üyeler defter sahibinde.",
+};
+
+function MemberSettings({ owner, role, roleLabel }: { owner: string; role?: string; roleLabel?: string }) {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ayarlar</h1>
-      <section className="card p-4 text-sm">
+      <section className="card space-y-2 p-4 text-sm">
         <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Ortak defter</h2>
-        <p className="mt-1 text-stone-600 dark:text-stone-400">
-          <b>{owner}</b> kullanıcısının defterini görüyorsun. Fiş ve harcama ekleyebilir, kategori düzeltebilirsin; ekstre
-          yükleme, silme ve ayarlar defter sahibinde.
+        <p className="text-stone-600 dark:text-stone-400">
+          <b>{owner}</b> kullanıcısının defterini görüyorsun{roleLabel ? <> · yetkin: <b>{roleLabel}</b></> : null}. {ROLE_TEXT[role ?? "editor"]}
         </p>
+        <MyBookNote />
       </section>
       <ViewPrefs />
       <ShareSetup />
@@ -291,7 +300,18 @@ function MemberSettings({ owner }: { owner: string }) {
   );
 }
 
-function OwnerSettings() {
+/** Üye: kendi defterine geçiş (yalnız onun; sahip göremez). */
+function MyBookNote() {
+  return (
+    <div className="space-y-1 border-t border-stone-100 pt-2 dark:border-stone-800">
+      <p className="text-xs text-stone-500">Bir de <b>kendi defterin</b> var: sadece sen görürsün, orada her şeyi yapabilirsin.</p>
+      <BookSwitch />
+    </div>
+  );
+}
+
+/** Sahip ya da üyenin kendi defteri (ownBook: ortak defter ayarı yok, geçiş var). */
+function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
   const ui = useUI();
   const st = useQuery({ queryKey: ["settings"], queryFn: () => fetch("/api/settings").then((r) => r.json() as Promise<SettingsStatus>) });
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
@@ -318,6 +338,13 @@ function OwnerSettings() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ayarlar</h1>
+      {ownBook && (
+        <section className="card space-y-2 p-4 text-sm">
+          <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Benim defterim</h2>
+          <p className="text-stone-600 dark:text-stone-400">Bu defter sadece senin; ortak defterin sahibi göremez. Ortak deftere buradan dönebilirsin.</p>
+          <BookSwitch />
+        </section>
+      )}
       {isAdmin && <UpdateNotice />}
 
       <Features />
@@ -353,7 +380,7 @@ function OwnerSettings() {
 
       {!locked && <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />}
 
-      {auth.data?.user && <BookSettings />}
+      {auth.data?.user && !ownBook && <BookSettings />}
 
       {isAdmin && <Users />}
 

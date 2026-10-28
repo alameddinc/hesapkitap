@@ -5,7 +5,7 @@ import { api, type Payment, type Recurring, type Row } from "../api";
 import { dateTR, fold, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
-import { useBook, useHasMembers, useMeta, useSave } from "./hooks";
+import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
 import AmountChanges from "./AmountChanges";
@@ -33,7 +33,9 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const meta = useMeta();
   const qc = useQueryClient();
   const editingEntry = row?.source === "manual" ? row : undefined;
-  const member = !!useBook().data?.member; // ortak defter üyesi: silemez, gizleyemez
+  const bookInfo = useBook().data;
+  const member = isLimited(bookInfo); // ortak defter üyesi (tam yetkili değil): silemez, gizleyemez
+  const viewer = isViewer(bookInfo); // sadece görür: kaydedemez
   const hasMembers = useHasMembers().data;
   const [hidden, setHidden] = useState(!!row?.hidden);
   const [kind, setKind] = useState<"gelir" | "gider">(rec?.kind ?? (row?.kind as "gelir" | "gider") ?? draft?.kind ?? "gider");
@@ -162,7 +164,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
         )}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
-        <button className="btn-primary" disabled={save.isPending}
+        <button className="btn-primary" disabled={save.isPending || viewer} title={viewer ? "Sadece görme yetkin var" : undefined}
           onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>
           Kaydet
         </button>

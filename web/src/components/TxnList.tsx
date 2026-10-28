@@ -3,6 +3,7 @@ import type { Row } from "../api";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import { useUI } from "../ui";
 import { useAccounts } from "./AccountSelect";
+import { usePeople } from "./hooks";
 
 const BADGE: Record<string, string> = {
   iade: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
@@ -33,12 +34,25 @@ function PendingActions({ r }: { r: Row }) {
   );
 }
 
+/** Kim ekledi: baş harf rozeti, üstüne gelince "Ayşe ekledi". */
+function AddedBy({ name, initial }: { name: string | null; initial: string }) {
+  const label = name ? `${name} ekledi` : "Sen ekledin";
+  return (
+    <span title={label} aria-label={label}
+      className="flex size-4 items-center justify-center rounded-full bg-blue-100 text-[10px] font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+      {initial.charAt(0).toLocaleUpperCase("tr")}
+    </span>
+  );
+}
+
 export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; empty?: string }) {
   const ui = useUI();
   const accounts = useAccounts();
   const accName = (id?: number | null) => (id ? accounts.data?.accounts.find((a) => a.id === id)?.name
     ?? undefined : undefined);
   const walletName = (id?: number | null) => (id ? accounts.data?.wallets.find((a) => a.id === id)?.name : undefined);
+  const people = usePeople(); // ortak defterde birden çok kişi: "kim ekledi" baş harfi
+  const addedBy = (r: Row) => (people.multi && r.created_by ? people.person(r.created_by) : undefined);
   if (!rows.length) return <p className="py-8 text-center text-sm text-stone-500">{empty}</p>;
 
   const open = (row: Row) => {
@@ -69,6 +83,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
                 </span>
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-stone-500">
+                {addedBy(r) && <AddedBy name={people.isMe(r.created_by) ? null : addedBy(r)!.name} initial={addedBy(r)!.name} />}
                 <span>{dateTR(r.date)}</span>
                 <span>· {r.category}</span>
                 {r.installment && <span>· {r.installment} taksit</span>}

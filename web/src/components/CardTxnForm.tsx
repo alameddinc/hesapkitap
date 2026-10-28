@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api, type Row } from "../api";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import CategoryPicker from "./CategoryPicker";
-import { useBook, useHasMembers, useMeta, useSave } from "./hooks";
+import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
 import SplitEditor from "./SplitEditor";
@@ -18,7 +18,9 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   const [note, setNote] = useState(row.note ?? "");
   const [makeRule, setMakeRule] = useState(true);
   const [hidden, setHidden] = useState(!!row.hidden);
-  const member = !!useBook().data?.member;
+  const bookInfo = useBook().data;
+  const member = isLimited(bookInfo); // ortak defter üyesi (tam yetkili değil): silemez, gizleyemez
+  const viewer = isViewer(bookInfo); // sadece görür: kaydedemez
   const hasMembers = useHasMembers().data;
 
   const save = useSave((body: Record<string, unknown>) => api.patchCard(row.id, body), (r) => {
@@ -50,7 +52,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
         </button>}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
-        <button className="btn-primary" onClick={submit} disabled={save.isPending}>Kaydet</button>
+        <button className="btn-primary" onClick={submit} disabled={save.isPending || viewer} title={viewer ? "Sadece görme yetkin var" : undefined}>Kaydet</button>
       </>
     }>
       <div className="space-y-3">

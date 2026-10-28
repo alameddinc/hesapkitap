@@ -41,6 +41,7 @@ export default function More() {
         {status.data?.required && (
           <Item icon={<LogOut size={18} />} label="Çıkış yap" onClick={async () => {
             await fetch("/api/auth/logout", { method: "POST" });
+            document.cookie = "hk_book=; path=/; max-age=0; SameSite=Lax"; // ortak/kendi defter seçimi kişiye ait
             qc.invalidateQueries();
           }} />
         )}
@@ -56,6 +57,7 @@ export function LogoutButton() {
   return (
     <button className="btn-ghost w-full" onClick={async () => {
       await fetch("/api/auth/logout", { method: "POST" });
+      document.cookie = "hk_book=; path=/; max-age=0; SameSite=Lax"; // ortak/kendi defter seçimi kişiye ait
       qc.invalidateQueries();
     }}>
       <LogOut size={16} /> Çıkış{status.data?.user?.username ? ` (${status.data.user.username})` : ""}

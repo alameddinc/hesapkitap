@@ -227,11 +227,11 @@ def info() -> dict:
     u = db.current_user()
     if not u or not u.get("member_of"):
         ppl = people() if u else []
-        return {"member": False, "people": ppl if len(ppl) > 1 else []}
+        return {"member": False, "me": u["id"] if u else None, "people": ppl if len(ppl) > 1 else []}
     from app import system
 
     owner = system.user(u["member_of"]) or {}
-    base = {"member": True, "owner": owner.get("username"), "role": role(u), "role_label": ROLE_LABELS[role(u)],
+    base = {"member": True, "me": u["id"], "owner": owner.get("username"), "role": role(u), "role_label": ROLE_LABELS[role(u)],
             "book": "kendi" if u.get("own_book") else "ortak", "can_switch": True, "people": people()}
     if u.get("own_book"):
         return {**base, "hidden_pages": [], "hide_fees": False}

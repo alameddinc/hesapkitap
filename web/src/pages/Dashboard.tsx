@@ -18,7 +18,7 @@ import YearSummary from "../components/YearSummary";
 import Jars from "../components/Jars";
 import Holdings from "../components/Holdings";
 import { InterestHistory, TrendChart } from "./Stats";
-import { routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
+import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import { cx, tl, tlCompact } from "../format";
@@ -164,7 +164,7 @@ export default function Dashboard() {
         </div>
       </>);
       case "gelenler": return <SharedInbox />;
-      case "baslarken": return book?.member ? null : <Onboarding />;
+      case "baslarken": return inSharedBook(book) ? null : <Onboarding />;
       case "uyarilar": return (
         <section>
           <h2 className="mb-2 font-display text-lg font-semibold tracking-tight">Dikkat etmen gerekenler</h2>
@@ -233,7 +233,7 @@ export default function Dashboard() {
         <MonthPicker value={month} onChange={(m) => { setMonth(m); setSel(null); setInsightFilter(null); }} />
       </header>
 
-      {meta && meta.modules_chosen === false && !book?.member && !demo && <Features intro />}
+      {meta && meta.modules_chosen === false && !inSharedBook(book) && !demo && <Features intro />}
 
       <MonthDigest />
 
