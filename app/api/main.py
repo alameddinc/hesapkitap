@@ -540,8 +540,9 @@ def put_ui(body: UiIn):
 
 
 @app.get("/api/summary")
-def summary(month: str):
-    return finance.summary(month)
+def summary(month: str | None = None):
+    """month verilmezse içinde bulunulan dönem (mobil uygulama ayı beklemeden ister)."""
+    return finance.summary(month or finance.current_period())
 
 
 @app.get("/api/transactions")

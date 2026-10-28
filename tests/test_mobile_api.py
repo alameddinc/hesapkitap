@@ -62,3 +62,9 @@ def test_demo_sandbox_via_header(tmp_path, monkeypatch, tmpdb):
     rows = b.get("/api/transactions", headers={"X-Demo-Sid": sid}).json()
     assert any(x["description"] == "Mobil test" for x in rows)
     assert b.get("/api/summary").headers["x-demo-sid"] != sid  # başlıksız: yeni kopya
+
+
+def test_summary_without_month_is_current_period(client):
+    from app import finance
+
+    assert client.get("/api/summary").json()["month"] == finance.current_period()

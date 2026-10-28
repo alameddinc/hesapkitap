@@ -329,6 +329,7 @@ def available_months() -> list[str]:
     return sorted(ms, reverse=True)
 
 
+@_memo  # veri değişmedikçe (dosya damgası) ve gün dönmedikçe tekrar hesaplanmaz
 def summary(month: str, today: date | None = None) -> dict:
     rows = transactions(month)
     live = [r for r in rows if not r.get("skipped") and not r.get("pending") and not r.get("linked")]
@@ -1556,6 +1557,7 @@ def _change(now: float, before: float) -> int | None:
     return round((now - before) / before * 100) if before > 0 else None
 
 
+@_memo  # veri değişmedikçe (dosya damgası) ve gün dönmedikçe tekrar hesaplanmaz
 def month_digest(month: str, today: date | None = None) -> dict:
     """Biten dönemin özeti (veri): Özet'teki kart ve Telegram mesajı aynı rakamları kullanır."""
     today = today or date.today()
