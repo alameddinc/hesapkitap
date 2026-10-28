@@ -39,7 +39,7 @@ def test_cors_preflight_and_401_carry_headers(client, monkeypatch):
     _admin(client, monkeypatch)
     c = TestClient(app)
     pre = c.options("/api/summary", headers={"Origin": APP, "Access-Control-Request-Method": "GET",
-                                             "Access-Control-Request-Headers": "authorization"})
+                                             "Access-Control-Request-Headers": "authorization,x-hk-book"})
     assert pre.status_code == 200 and pre.headers["access-control-allow-origin"] == APP
     r = c.get("/api/summary", headers={"Origin": APP})
     assert r.status_code == 401 and r.headers["access-control-allow-origin"] == APP  # uygulama 401'i görebilsin

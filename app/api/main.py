@@ -3299,5 +3299,5 @@ if WEB_DIST and os.path.isdir(WEB_DIST):
 
 # en dışta olmalı (en son eklenen en dışta çalışır): ön istek (OPTIONS) ve 401 yanıtları da CORS başlığı alsın
 app.add_middleware(CORSMiddleware, allow_origins=APP_ORIGINS, allow_credentials=False, allow_methods=["*"],
-                   allow_headers=["Authorization", "Content-Type", "X-HK-Client", "X-Demo-Sid"],
+                   allow_headers=["Authorization", "Content-Type", "X-HK-Client", "X-Demo-Sid", "X-HK-Book"],
                    expose_headers=["X-Session-Token", "X-Demo-Sid"], max_age=86400)
