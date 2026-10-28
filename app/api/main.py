@@ -203,6 +203,7 @@ def auth_status(request: Request):
         return {"required": True, "authenticated": False, "setup_required": True, "setup_code_needed": not local}
     u = auth.token_user(request.cookies.get(auth.COOKIE) or _bearer(request))
     return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
+            "login": "email" if plans.hosted() else "username",  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
             "user": {"id": u.get("id"), "username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}

@@ -24,11 +24,11 @@ def _user(admin, name="ayse"):
 
     inv = admin.post("/api/admin/invites", json={}).json()
     c = TestClient(app)
-    r = c.post("/api/auth/register", json={"code": inv["code"], "username": name, "password": f"{name}-sifre-12345"})
+    r = c.post("/api/auth/register", json={"code": inv["code"], "username": f"{name}@ornek.com", "password": f"{name}-sifre-12345"})
     assert r.status_code == 200
     from app import system
 
-    return c, next(u for u in system.users() if u["username"] == name)
+    return c, next(u for u in system.users() if u["username"] == f"{name}@ornek.com")
 
 
 def _rc(admin, kind, uid, ents=("premium",), exp_ms=4102444800000):
@@ -96,9 +96,9 @@ def test_family_plan_covers_members(hosted):
     inv = c.post("/api/book/invites", json={"note": "Eşim"})
     assert inv.status_code == 200
     m = TestClient(app)
-    assert m.post("/api/auth/register", json={"code": inv.json()["code"], "username": "esim",
+    assert m.post("/api/auth/register", json={"code": inv.json()["code"], "username": "esim@ornek.com",
                                               "password": "esim-sifre-12345"}).status_code == 200
-    member = next(x for x in system.users() if x["username"] == "esim")
+    member = next(x for x in system.users() if x["username"] == "esim@ornek.com")
     assert plans.plan_of(member) == "aile"  # üye sahibin paketini kullanır
     assert m.get("/api/prices").status_code == 200
 
@@ -111,10 +111,14 @@ def test_open_signup_only_when_enabled(hosted, monkeypatch):
     assert c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"}).status_code == 403
     monkeypatch.setenv("HESAPKITAP_OPEN_SIGNUP", "1")
     assert c.get("/api/auth/status").json()["open_signup"] is True
-    assert c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"}).status_code == 200
+    st = c.get("/api/auth/status").json()
+    assert st["login"] == "email"
+    r = c.post("/api/auth/register", json={"username": "yeni", "password": "yeni-sifre-12345"})
+    assert r.status_code == 422 and "E-posta" in r.json()["detail"]  # hazır sürümde kullanıcı adıyla hesap yok
+    assert c.post("/api/auth/register", json={"username": "yeni@ornek.com", "password": "yeni-sifre-12345"}).status_code == 200
     assert c.get("/api/meta").json()["plan"]["plan"] == "free"
     # aynı adresten saatte en fazla 5 hesap
-    codes = [TestClient(app).post("/api/auth/register", json={"username": f"yeni{i}", "password": "yeni-sifre-12345"}).status_code
+    codes = [TestClient(app).post("/api/auth/register", json={"username": f"yeni{i}@ornek.com", "password": "yeni-sifre-12345"}).status_code
              for i in range(6)]
     assert codes[:4] == [200] * 4 and codes[-1] == 429
 
