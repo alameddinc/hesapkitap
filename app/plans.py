@@ -25,7 +25,9 @@ FREE_HISTORY_MONTHS = 1  # ücretsiz: bu dönem + geçen dönem
 FREE_PLAN_MONTHS = 1
 FREE_BUDGETS = 2
 # Verini indirmek (zip/Excel) ve hesabı silmek her pakette serbest: KVKK erişim ve taşınabilirlik hakkı.
-AI_DOCS = {FREE: 10, PREMIUM: None, FAMILY: None}  # ayda yapay zekâ ile belge okuma; None: sınırsız
+# ayda yapay zekâ ile belge okuma. Premium/Aile: adil kullanım (normal kullanıcı ~30-50 okur; kötüye kullanım kapanır).
+# Ortak defterde sahip + üyeler aynı havuzdan düşer (system.ai_used_pool).
+AI_DOCS = {FREE: 10, PREMIUM: 300, FAMILY: 300}
 LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi sunucun"}
 FEATURE_LABELS = {"fiyatlar": "Fiyat takibi", "istatistik": "Geçmişle karşılaştırma", "alsam_mi": "Alsam mı?",
                   "kumbara": "Kumbara", "gecmis": "Geçmiş aylar", "uzun_plan": "Uzun planlama", "butce": "Sınırsız bütçe",

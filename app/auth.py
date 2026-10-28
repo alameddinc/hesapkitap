@@ -120,9 +120,10 @@ def create_admin(username: str, pw: str) -> dict:
     return system.create_user(username or "admin", _hash(pw), role="admin", main_db=True)
 
 
-def create_user(username: str, pw: str, must_change: bool = False, member_of: int | None = None) -> dict:
+def create_user(username: str, pw: str, must_change: bool = False, member_of: int | None = None,
+                book_role: str | None = None) -> dict:
     _check_strength(pw)
-    return system.create_user(username, _hash(pw), must_change=must_change, member_of=member_of)
+    return system.create_user(username, _hash(pw), must_change=must_change, member_of=member_of, book_role=book_role)
 
 
 def temp_password() -> str:

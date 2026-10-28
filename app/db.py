@@ -324,6 +324,7 @@ MIGRATIONS = [
     ("jars", "unit", "TEXT NOT NULL DEFAULT 'TRY'"),           # TRY: para ayırma · ALTIN_24/CEYREK/USD…: her ay alım
     ("jar_moves", "cost", "REAL"),                             # birimli kumbara: ödenen TL
     ("jar_moves", "asset_id", "INTEGER"),                      # birimli kumbara: eklenen varlık (Altın ve döviz)
+    ("jar_moves", "created_by", "INTEGER"),                    # ortak kumbara: kim koydu / çekti
     ("jar_moves", "entry_id", "INTEGER"),                      # birimli kumbara: ödemenin gider kaydı  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
@@ -2508,6 +2509,11 @@ def list_jars(today: date | None = None, include_closed: bool = True) -> list[di
         for j in js:
             j["moves"] = rows(c.execute("SELECT * FROM jar_moves WHERE jar_id = ? ORDER BY move_date DESC, id DESC", (j["id"],)))
             j["balance"] = round(sum(m["amount"] for m in j["moves"]), 2)
+            # ortak kumbara: kişi başı katkı (kullanıcı id → toplam; None = eski kayıtlar ya da tek kullanıcı)
+            contrib: dict = {}
+            for m in j["moves"]:
+                contrib[m.get("created_by")] = round(contrib.get(m.get("created_by"), 0) + m["amount"], 2)
+            j["contributions"] = [{"user_id": k, "amount": v} for k, v in contrib.items()]
     return [j for j in js if include_closed or not j["closed_at"]]
 
 
@@ -2565,8 +2571,9 @@ def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = Non
         bal = c.execute("SELECT COALESCE(SUM(amount), 0) FROM jar_moves WHERE jar_id = ?", (jid,)).fetchone()[0]
         if amount < 0 and bal + amount < -0.005:
             raise ValueError(f"Kumbarada {bal:.2f} var; daha fazlası çekilemez")
-        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note) VALUES (?, ?, ?, ?)",
-                         (jid, move_date, amount, (note or "").strip() or None)).lastrowid
+        u = current_user()
+        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, created_by) VALUES (?, ?, ?, ?, ?)",
+                         (jid, move_date, amount, (note or "").strip() or None, u.get("id") if u else None)).lastrowid
 
 
 def delete_jar_move(mid: int) -> bool:
@@ -2644,8 +2651,10 @@ def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: in
                         "account_id": account_id if payment in ("nakit", "havale") else None,
                         "note": "Kumbara alımı (varlık olarak da eklendi)"})
     with connect() as c:
-        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, cost, asset_id, entry_id) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?)", (jid, on, quantity, (note or "").strip() or None, cost, aid, eid)).lastrowid
+        u = current_user()
+        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, cost, asset_id, entry_id, created_by) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (jid, on, quantity, (note or "").strip() or None, cost, aid, eid,
+                                                             u.get("id") if u else None)).lastrowid
 
 
 def delete_target(tid: int) -> bool:

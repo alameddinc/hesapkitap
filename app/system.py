@@ -98,6 +98,10 @@ def _migrate(c) -> None:
     for col in ("plan", "plan_until", "plan_source"):
         if col not in have:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+    # ortak defter v2: üyenin yetkisi (viewer | editor | full); davette seçilir
+    for table in ("users", "invites"):
+        if "book_role" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN book_role TEXT")
 
 
 def init() -> None:
@@ -150,7 +154,7 @@ def data_root() -> str:
 
 
 def create_user(username: str, password_hash: str | None, role: str = "user", main_db: bool = False,
-                must_change: bool = False, member_of: int | None = None) -> dict:
+                must_change: bool = False, member_of: int | None = None, book_role: str | None = None) -> dict:
     """main_db: yöneticinin eski tek kullanıcılı veritabanını kullanması (db_file NULL).
     member_of: ortak defter üyesi; kendi dosyası olmaz, o kullanıcının defterini açar."""
     name = username.strip()
@@ -165,8 +169,9 @@ def create_user(username: str, password_hash: str | None, role: str = "user", ma
     with connect() as c:
         if c.execute("SELECT 1 FROM users WHERE username = ?", (name,)).fetchone():
             raise ValueError("Bu kullanıcı adı alınmış")
-        uid = c.execute("INSERT INTO users (username, password_hash, role, must_change_password, member_of) VALUES (?, ?, ?, ?, ?)",
-                        (name, password_hash, role, int(must_change), member_of)).lastrowid
+        uid = c.execute("INSERT INTO users (username, password_hash, role, must_change_password, member_of, book_role) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (name, password_hash, role, int(must_change), member_of, book_role if member_of else None)).lastrowid
         if not main_db and not member_of:
             c.execute("UPDATE users SET db_file = ? WHERE id = ?", (os.path.join(str(uid), "ekstre.db"), uid))
     return user(uid)
@@ -182,6 +187,11 @@ def user_db_path(u: dict) -> str | None:
     return os.path.join(data_root(), u["db_file"]) if u.get("db_file") else None
 
 
+def own_db_path(u: dict) -> str:
+    """Ortak defter üyesinin kendine ait (özel) defteri: "Benim" seçiliyken açılır."""
+    return os.path.join(data_root(), str(u["id"]), "ekstre.db")
+
+
 def members(owner_id: int) -> list[dict]:
     with connect() as c:
         return [dict(r) for r in c.execute("SELECT * FROM users WHERE member_of = ? ORDER BY id", (owner_id,))]
@@ -189,7 +199,7 @@ def members(owner_id: int) -> list[dict]:
 
 def update_user(uid: int, **fields) -> None:
     allowed = {"username", "password_hash", "disabled", "last_login", "must_change_password", "ai_quota", "role",
-               "plan", "plan_until", "plan_source"}
+               "plan", "plan_until", "plan_source", "book_role"}
     data = {k: v for k, v in fields.items() if k in allowed}
     if not data:
         return
@@ -237,12 +247,12 @@ def archive_user_data(u: dict) -> str | None:
 
 # ---------------------------------------------------------------- davetler
 
-def create_invite(note: str | None = None, days: int = 14, member_of: int | None = None) -> dict:
-    """member_of: ortak defter daveti (kayıt olan o kullanıcının defterine üye olur)."""
+def create_invite(note: str | None = None, days: int = 14, member_of: int | None = None, book_role: str | None = None) -> dict:
+    """member_of: ortak defter daveti (kayıt olan o kullanıcının defterine üye olur); book_role: üyenin yetkisi."""
     code = "-".join(secrets.token_hex(2).upper() for _ in range(3))
     with connect() as c:
-        c.execute("INSERT INTO invites (code, note, expires_at, member_of) VALUES (?, ?, date('now', ?), ?)",
-                  (code, (note or "").strip()[:60] or None, f"+{days} days", member_of))
+        c.execute("INSERT INTO invites (code, note, expires_at, member_of, book_role) VALUES (?, ?, date('now', ?), ?, ?)",
+                  (code, (note or "").strip()[:60] or None, f"+{days} days", member_of, book_role if member_of else None))
         return dict(c.execute("SELECT * FROM invites WHERE code = ?", (code,)).fetchone())
 
 
@@ -283,6 +293,13 @@ def ai_used(uid: int, month: str | None = None) -> int:
     with connect() as c:
         r = c.execute("SELECT count FROM ai_usage WHERE user_id = ? AND month = ?", (uid, month)).fetchone()
         return r[0] if r else 0
+
+
+def ai_used_pool(u: dict, month: str | None = None) -> int:
+    """Ortak defterde okuma hakkı ailenin ortak havuzu: sahip + bütün üyeler."""
+    owner_id = u.get("member_of") or u["id"]
+    ids = [owner_id] + [m["id"] for m in members(owner_id)]
+    return sum(ai_used(i, month) for i in ids)
 
 
 def ai_add(uid: int) -> None:

@@ -67,10 +67,13 @@ def _check_quota() -> None:
     u = _shared_key_user()
     if not u:
         return
-    quota, used = system.ai_quota(u), system.ai_used(u["id"])
+    quota, used = system.ai_quota(u), system.ai_used_pool(u)  # ortak defterde ailenin ortak havuzu
     if quota is not None and used >= quota:
-        raise ReceiptError(f"Bu ayki ücretsiz yapay zekâ okuma hakkın doldu ({used}/{quota}). Ay başında yenilenir; "
-                           "beklemek istemezsen Ayarlar'dan kendi Gemini anahtarını girebilirsin.")
+        from app import plans
+
+        hint = ("Ay başında yenilenir." if plans.hosted()
+                else "Ay başında yenilenir; beklemek istemezsen Ayarlar'dan kendi Gemini anahtarını girebilirsin.")
+        raise ReceiptError(f"Bu ayki yapay zekâ okuma hakkın doldu ({used}/{quota}). {hint}")
 
 
 def _count_usage() -> None:

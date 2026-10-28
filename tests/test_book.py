@@ -16,12 +16,13 @@ def owner(client, monkeypatch):
     return client
 
 
-def _member(owner):
+def _member(owner, name="esim", role=None):
     from app.api.main import app
 
-    inv = owner.post("/api/book/invites", json={"note": "Eşim"}).json()
+    body = {"note": name} | ({"book_role": role} if role else {})
+    inv = owner.post("/api/book/invites", json=body).json()
     m = TestClient(app)
-    assert m.post("/api/auth/register", json={"code": inv["code"], "username": "esim", "password": "esim-sifre-12345"}).status_code == 200
+    assert m.post("/api/auth/register", json={"code": inv["code"], "username": name, "password": f"{name}-sifre-12345"}).status_code == 200
     return m
 
 
@@ -128,3 +129,77 @@ def test_member_cannot_reach_raw_data_around_rules(owner):
     assert not any(p["type"] == "debt" for p in m.get("/api/payables").json())
     assert any(p["type"] == "debt" for p in owner.get("/api/payables").json())
     assert not any(p["title"].endswith(kuveyt) for p in m.get("/api/payables").json())
+
+
+ENTRY = {"entry_date": "2026-10-05", "description": "Fırın", "amount": 45, "kind": "gider", "category": "Market & Gıda",
+         "payment": "nakit"}
+
+
+def test_member_roles(owner):
+    _setup_book(owner)
+    viewer = _member(owner, "cocuk", "viewer")
+    full = _member(owner, "esim", "full")
+    assert viewer.get("/api/book/me").json()["role"] == "viewer"
+    # sadece görür: okur, yazamaz (kendi şifresi hariç)
+    assert viewer.get("/api/transactions").status_code == 200
+    assert viewer.post("/api/entries", json=ENTRY).status_code == 403
+    assert viewer.put("/api/me/ui", json={"simple": True}).status_code == 200
+    # tam yetki: yükler, siler, sabit kalem ekler; ama defter yönetimi sahibin
+    up = full.post("/api/statements/upload", files=[("files", ("b.pdf", fixture_bytes("vakifbank_b.txt"), "application/pdf"))])
+    assert up.status_code == 200
+    eid = full.post("/api/entries", json=ENTRY).json()["id"]
+    assert full.delete(f"/api/entries/{eid}").status_code == 200
+    assert full.post("/api/recurring", json={"description": "Aidat", "amount": 1850, "kind": "gider", "day_of_month": 10,
+                                             "start_month": "2026-10"}).status_code == 200
+    assert full.put("/api/book/rules", json={"hide_fees": True}).status_code == 403
+    assert full.post("/api/book/invites", json={}).status_code == 403
+    # sahip yetkiyi değiştirir
+    vid = next(x["id"] for x in owner.get("/api/book").json()["members"] if x["username"] == "cocuk")
+    assert owner.patch(f"/api/book/members/{vid}", json={"book_role": "editor"}).status_code == 200
+    assert viewer.post("/api/entries", json=ENTRY).status_code == 200
+
+
+def test_rules_per_member(owner):
+    _setup_book(owner)
+    a = _member(owner, "esim")
+    b = _member(owner, "cocuk")
+    owner.put("/api/book/rules", json={"hidden_pages": ["borclar"]})  # ortak kural
+    bid = next(x["id"] for x in owner.get("/api/book").json()["members"] if x["username"] == "cocuk")
+    owner.put(f"/api/book/rules?member={bid}", json={"hidden_pages": ["zekat", "borclar"], "hide_fees": True})
+    assert a.get("/api/zakat").status_code == 200 and a.get("/api/debts").status_code == 403
+    assert b.get("/api/zakat").status_code == 403 and b.get("/api/book/me").json()["hide_fees"] is True
+    ov = {x["username"]: x for x in owner.get("/api/book").json()["members"]}
+    assert ov["cocuk"]["own_rules"] and not ov["esim"]["own_rules"]
+    # kişiye özel kuralı kaldır: ortak kurala döner
+    owner.delete(f"/api/book/members/{bid}/rules")
+    assert b.get("/api/zakat").status_code == 200
+
+
+def test_member_own_book(owner):
+    _setup_book(owner)
+    m = _member(owner, "esim", "viewer")
+    own = {"X-HK-Book": "kendi"}
+    assert m.get("/api/book/me", headers=own).json()["book"] == "kendi"
+    assert m.get("/api/transactions", headers=own).json() == []  # sahibin verisi yok
+    assert m.post("/api/entries", json=ENTRY, headers=own).status_code == 200  # kendi defterinde tam yetki
+    assert [r["description"] for r in m.get("/api/transactions", headers=own).json()] == ["Fırın"]
+    assert not any(r["description"] == "Fırın" for r in owner.get("/api/transactions").json())  # ortak defter etkilenmez
+    assert m.get("/api/book/me").json()["book"] == "ortak"
+
+
+def test_book_people_ai_pool_and_jar_contributions(owner):
+    from app import system
+
+    m = _member(owner, "esim")
+    ppl = owner.get("/api/book/me").json()["people"]
+    assert {p["name"] for p in ppl} == {"admin", "esim"} and next(p for p in ppl if p["owner"])["name"] == "admin"
+    me = system.user_by_name("esim")
+    system.ai_add(me["id"])
+    system.ai_add(system.user_by_name("admin")["id"])
+    assert system.ai_used_pool(me) == 2  # ailenin ortak havuzu
+    jid = owner.post("/api/jars", json={"name": "Tatil", "goal": 30000}).json()["id"]
+    owner.post(f"/api/jars/{jid}/moves", json={"amount": 1000})
+    assert m.post(f"/api/jars/{jid}/moves", json={"amount": 500}).status_code == 200  # ortak kumbaraya üye de koyar
+    jar = next(j for j in owner.get("/api/jars").json() if j["id"] == jid)
+    by = {c["user_id"]: c["amount"] for c in jar["contributions"]}
+    assert by[me["id"]] == 500 and by[system.user_by_name("admin")["id"]] == 1000

@@ -133,15 +133,19 @@ async def require_login(request: Request, call_next):
         feature = plans.gate_for(path, request.method)
         if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
             return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
-        if user.get("member_of"):  # ortak defter üyesi: sahibin kurallarıyla (defterin içinde) sınırlı
+        db_file = system.user_db_path(user)
+        if user.get("member_of") and (request.headers.get("x-hk-book") == "kendi" or request.cookies.get("hk_book") == "kendi"):
+            # ortak defter üyesi kendi özel defterinde: kurallar yok, tam yetki; paket yine defter sahibinden
+            user, db_file = {**user, "own_book": True}, system.own_db_path(user)
+        elif user.get("member_of"):  # ortak defter üyesi: yetkisi ve sahibin kurallarıyla sınırlı
             from app import book
 
-            with db.use_space(system.user_db_path(user), user):
+            with db.use_space(db_file, user):
                 why = book.denied(request.method, path)
             if why:
                 return JSONResponse({"detail": why}, status_code=403)
     if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
-        with db.use_space(system.user_db_path(user), user):
+        with db.use_space(db_file, user):
             response = await call_next(request)
     else:
         response = await call_next(request)
@@ -305,7 +309,7 @@ def register(body: RegisterIn, request: Request, response: Response):
         raise HTTPException(403, "Davet kodu geçersiz, kullanılmış ya da süresi dolmuş")
     inv = system.invite(body.code) or {}
     try:  # ortak defter davetiyse: kayıt olan, daveti oluşturanın defterine üye olur
-        u = auth.create_user(body.username, body.password, member_of=inv.get("member_of"))
+        u = auth.create_user(body.username, body.password, member_of=inv.get("member_of"), book_role=inv.get("book_role"))
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     if not system.use_invite(body.code, u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
@@ -343,6 +347,7 @@ class AdminUserPatch(BaseModel):
 class InviteIn(BaseModel):
     note: str | None = None
     days: int = Field(14, ge=1, le=90)
+    book_role: Literal["viewer", "editor", "full"] = "editor"  # ortak defter daveti: üyenin yetkisi
 
 
 @app.get("/api/admin/users")
@@ -427,7 +432,7 @@ def my_ai():
     if not u or u["role"] == "admin":
         return {"used": None, "quota": None, "own_key": False}
     own = bool(config.own_ai_key())
-    return {"used": system.ai_used(u["id"]), "quota": None if own else system.ai_quota(u), "own_key": own,
+    return {"used": system.ai_used_pool(u), "quota": None if own else system.ai_quota(u), "own_key": own,
             "shared_available": bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))}
 
 
@@ -2380,26 +2385,59 @@ def book_overview():
     cards = {}
     for s in db.list_statements():
         cards.setdefault(s["card_no"], {"card_no": s["card_no"], "bank": s["bank"]})
-    return {"members": [{"id": m["id"], "username": m["username"], "last_login": m["last_login"], "disabled": bool(m["disabled"])}
+    return {"members": [{"id": m["id"], "username": m["username"], "last_login": m["last_login"], "disabled": bool(m["disabled"]),
+                         "role": book.role(m), "own_rules": book.has_own_rules(m["id"]), "rules": book.rules(m["id"])}
                         for m in system.members(u["id"])],
             "invites": [i for i in system.invites() if i.get("member_of") == u["id"] and not i["used_at"]],
             "rules": book.rules(), "cards": list(cards.values()),
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in db.list_accounts()],
-            "pages": book.PAGE_LABELS}
+            "pages": book.PAGE_LABELS, "roles": book.ROLE_LABELS}
+
+
+def _my_member(uid: int) -> dict:
+    u = _book_owner()
+    m = system.user(uid)
+    if not m or m.get("member_of") != u["id"]:
+        raise HTTPException(404, "Üye yok")
+    return m
 
 
 @app.put("/api/book/rules")
-def book_set_rules(body: BookRules):
+def book_set_rules(body: BookRules, member: int | None = None):
+    """Gizleme kuralları: member verilirse o üyeye özel, yoksa ortak (kendine özel kuralı olmayan herkes)."""
     from app import book
 
     _book_owner()
-    return book.set_rules(body.model_dump(exclude_unset=True))
+    if member is not None:
+        _my_member(member)
+    return book.set_rules(body.model_dump(exclude_unset=True), member)
+
+
+@app.delete("/api/book/members/{uid}/rules")
+def book_clear_member_rules(uid: int):
+    """Üyenin kişiye özel kurallarını kaldır: ortak kurallara döner."""
+    from app import book
+
+    _my_member(uid)
+    book.clear_rules(uid)
+    return {"ok": True}
+
+
+class BookMemberPatch(BaseModel):
+    book_role: Literal["viewer", "editor", "full"]
+
+
+@app.patch("/api/book/members/{uid}")
+def book_patch_member(uid: int, body: BookMemberPatch):
+    _my_member(uid)
+    system.update_user(uid, book_role=body.book_role)
+    return {"ok": True, "role": body.book_role}
 
 
 @app.post("/api/book/invites")
 def book_invite(body: InviteIn):
     u = _book_owner()
-    return system.create_invite(body.note, body.days, member_of=u["id"])
+    return system.create_invite(body.note, body.days, member_of=u["id"], book_role=body.book_role)
 
 
 @app.delete("/api/book/invites/{code}")

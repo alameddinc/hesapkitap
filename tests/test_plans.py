@@ -62,9 +62,9 @@ def test_free_user_is_limited_and_store_purchase_unlocks(hosted):
     assert hosted.post("/api/billing/revenuecat", headers={"Authorization": "x"}, json={}).status_code == 404
     assert _rc(hosted, "INITIAL_PURCHASE", u["id"]).status_code == 200
     p = c.get("/api/meta").json()["plan"]
-    assert (p["plan"], p["ai_docs"]) == ("premium", None) and p["until"].startswith("2100-01-01")
+    assert (p["plan"], p["ai_docs"]) == ("premium", 300) and p["until"].startswith("2100-01-01")
     assert c.get("/api/prices").status_code == 200
-    assert system.ai_quota(system.user(u["id"])) is None
+    assert system.ai_quota(system.user(u["id"])) == 300  # adil kullanım
     # premium aileye davet edemez
     assert c.post("/api/book/invites", json={"note": "Eşim"}).status_code == 402
 
