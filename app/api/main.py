@@ -524,7 +524,19 @@ def mail_address():
         raise HTTPException(409, "Posta adresi için giriş (kullanıcı hesabı) gerekli")
     if not plans.allows(u, "posta"):
         return {"locked": True, "address": None}
-    return {"locked": False, "address": inbound.address(u), "log": db.mail_log(20)}
+    return {"locked": False, "address": inbound.address(u), "senders": inbound.senders(), "log": db.mail_log(20)}
+
+
+class SendersIn(BaseModel):
+    senders: list[str] = Field(default_factory=list, max_length=10)
+
+
+@app.put("/api/mail/senders")
+def mail_senders(body: SendersIn):
+    """Güvendiğin e-posta adreslerin: bunlardan elle iletilen ekstre/fatura kabul edilir (imza yine doğrulanır)."""
+    from app import inbound
+
+    return {"senders": inbound.set_senders(body.senders)}
 
 
 @app.post("/api/mail/address/regenerate")

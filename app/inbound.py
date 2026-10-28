@@ -172,8 +172,31 @@ def _bill(name: str, data: bytes, mime: str) -> str:
 
 
 def _people_emails(owner_id: int) -> list[str]:
+    """Defterdeki kişilerin e-postası (kullanıcı adı e-postaysa) + defterin "güvendiğin adresler" listesi."""
     ids = [owner_id] + [m["id"] for m in system.members(owner_id)]
-    return [u["username"].lower() for i in ids if (u := system.user(i)) and "@" in u["username"]]
+    return [u["username"].lower() for i in ids if (u := system.user(i)) and "@" in u["username"]] + senders()
+
+
+EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s.]{2,24}$")
+
+
+def senders() -> list[str]:
+    """Bu defterin güvendiği gönderenler (kullanıcının kendi Gmail'i vb.): elle ilettiği belgeler kabul edilir.
+    İmza (DKIM) yine zorunlu: başkası bu adres adına mail atamaz."""
+    import json
+
+    try:
+        return [s for s in json.loads(db.get_setting("posta:senders") or "[]") if isinstance(s, str)]
+    except ValueError:
+        return []
+
+
+def set_senders(emails: list[str]) -> list[str]:
+    import json
+
+    clean = sorted({e.strip().lower() for e in emails if EMAIL.match(e.strip().lower())})[:10]
+    db.set_setting("posta:senders", json.dumps(clean))
+    return clean
 
 
 def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:

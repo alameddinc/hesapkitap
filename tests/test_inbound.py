@@ -117,3 +117,17 @@ def test_real_dkim_rejects_unsigned():
     from app import inbound
 
     assert inbound._dkim_domains(_raw()) == set()  # imzasız mail: doğrulanan alan adı yok
+
+
+def test_trusted_sender_list(owner):
+    from app import db, inbound, system
+
+    to = inbound.address(owner)
+    raw = _raw("ali.gmail@gmail.com", pdf=fixture_bytes("vakifbank_a.txt"), mid="<g1@x>")
+    assert inbound.handle(raw, to, verify=signed("gmail.com"))["status"] == "skip"  # tanımsız gönderen
+    with db.use_space(system.user_db_path(owner), owner):
+        assert inbound.set_senders(["Ali.Gmail@gmail.com", "bozuk"]) == ["ali.gmail@gmail.com"]
+    raw2 = _raw("ali.gmail@gmail.com", pdf=fixture_bytes("vakifbank_a.txt"), mid="<g2@x>")
+    assert inbound.handle(raw2, to, verify=signed("gmail.com"))["status"] == "ok"
+    raw3 = _raw("ali.gmail@gmail.com", pdf=fixture_bytes("vakifbank_b.txt"), mid="<g3@x>")
+    assert inbound.handle(raw3, to, verify=signed("kotu.com"))["status"] == "skip"  # imza tutmazsa yine reddedilir
