@@ -3,7 +3,12 @@ from email.message import EmailMessage
 
 import pytest
 
-from tests.conftest import fixture_bytes
+from tests.conftest import fixture_bytes as _fixture
+
+
+def fixture_bytes(name: str) -> bytes:
+    """Gelen posta yalnız gerçek PDF başlığı taşıyan ekleri okur."""
+    return b"%PDF-1.4\n" + _fixture(name)
 
 
 def _raw(sender="bildirim@vakifbank.com.tr", body="Bildirim", pdf: bytes | None = None, mid="<1@x>") -> bytes:
@@ -131,3 +136,23 @@ def test_trusted_sender_list(owner):
     assert inbound.handle(raw2, to, verify=signed("gmail.com"))["status"] == "ok"
     raw3 = _raw("ali.gmail@gmail.com", pdf=fixture_bytes("vakifbank_b.txt"), mid="<g3@x>")
     assert inbound.handle(raw3, to, verify=signed("kotu.com"))["status"] == "skip"  # imza tutmazsa yine reddedilir
+
+
+def test_fake_big_or_many_attachments_not_read(owner, monkeypatch):
+    """PDF gibi gösterilen başka dosya, çok büyük ek ve fazla ek okunmaz; sel günlük sınırda durur."""
+    from app import db, inbound, system
+
+    to = inbound.address(owner)
+    sig = signed("vakifbank.com.tr")
+    r = inbound.handle(_raw(pdf=b"MZ\x90\x00 virus.exe", mid="<v1@x>"), to, verify=sig)
+    assert r["status"] == "skip" and "PDF değil" in r["detail"]
+    monkeypatch.setattr(inbound, "MAX_PDF", 100)
+    r = inbound.handle(_raw(pdf=b"%PDF-1.4\n" + b"0" * 200, mid="<v2@x>"), to, verify=sig)
+    assert r["status"] == "skip" and "çok büyük" in r["detail"]
+    with db.use_space(system.user_db_path(owner), owner):
+        assert db.list_statements() == [] and db.list_bills() == []
+    calls = []
+    monkeypatch.setattr(inbound, "DAILY_LIMIT", 3)  # 2 satır yazıldı; 3. işlenir, sonrası hiç denenmez
+    inbound.handle(_raw(mid="<v3@x>"), to, verify=lambda raw: calls.append(1) or {"vakifbank.com.tr"})
+    r = inbound.handle(_raw(mid="<v4@x>"), to, verify=lambda raw: calls.append(1) or {"vakifbank.com.tr"})
+    assert "sınırı" in r["detail"] and len(calls) == 1

@@ -26,6 +26,10 @@ log = logging.getLogger("hesapkitap.inbound")
 
 ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # karışan harf yok (l/1, o/0)
 CODE_LEN = 6
+MAX_PDF = 10 * 1024 * 1024  # tek ek: ekstreler birkaç yüz KB
+MAX_PDFS = 5  # bir maildeki ek sayısı
+DAILY_LIMIT = 60  # bir adrese günde işlenen mail (fazlası günlüğe bile yazılmaz)
+LOG_KEEP = 300  # günlükte tutulan son satır
 PREFIX = "fatura-"
 LOCAL = re.compile(rf"^{PREFIX}([a-z0-9]{{6,16}})$")
 
@@ -171,6 +175,21 @@ def _bill(name: str, data: bytes, mime: str) -> str:
     return f"🧾 {parsed['provider']} faturası: {parsed['amount']:,.2f} TL · son ödeme {parsed['due_date'][8:]}.{parsed['due_date'][5:7]}{change}"
 
 
+def _safe_pdfs(pdfs: list[tuple[str, bytes]]) -> tuple[list[tuple[str, bytes]], list[str]]:
+    """Yalnız gerçek PDF'ler (dosya başı %PDF-), makul boyutta ve sayıda. Gerisi okunmaz, saklanmaz; nedeni günlüğe."""
+    ok, notes = [], []
+    for name, data in pdfs:
+        if len(ok) >= MAX_PDFS:
+            notes.append(f"⏭ {name}: bir mailde en çok {MAX_PDFS} ek okunur")
+        elif len(data) > MAX_PDF:
+            notes.append(f"⏭ {name}: çok büyük ({len(data) // 1048576} MB)")
+        elif b"%PDF-" not in data[:1024]:
+            notes.append(f"⏭ {name}: PDF değil, okunmadı")
+        else:
+            ok.append((name, data))
+    return ok, notes
+
+
 def _people_emails(owner_id: int) -> list[str]:
     """Defterdeki kişilerin e-postası (kullanıcı adı e-postaysa) + defterin "güvendiğin adresler" listesi."""
     ids = [owner_id] + [m["id"] for m in system.members(owner_id)]
@@ -221,6 +240,8 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
     with db.use_space(db_file, ctx):
         if db.mail_seen(mid):
             return {**entry, "kind": "-", "status": "skip", "detail": "Bu mail zaten işlendi"}
+        if db.mail_count_today() >= DAILY_LIMIT:  # sel: imza kontrolüne, okumaya, günlüğe hiç girme
+            return {**entry, "kind": "-", "status": "skip", "detail": "Günlük posta sınırı doldu"}
         if not plans.allows(ctx, "posta"):
             r = {**entry, "kind": "-", "status": "skip", "detail": "Postadan otomatik okuma Premium paketinde"}
             db.log_mail(r)
@@ -232,10 +253,11 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             db.log_mail(r)
             return r
         try:
-            pdfs = mailbox._pdfs(msg)
-            details = []
-            if kind == "fatura":
-                details = [_bill(n, d, "application/pdf") for n, d in pdfs] or \
+            pdfs, details = _safe_pdfs(mailbox._pdfs(msg))
+            if details and not pdfs:  # ekler vardı ama hiçbiri uygun değil: hiçbir şey okunmaz
+                r = {**entry, "kind": "-", "status": "skip", "detail": "\n".join(details)}
+            elif kind == "fatura":
+                details += [_bill(n, d, "application/pdf") for n, d in pdfs] or \
                           [_bill("mail", mailbox._body_text(msg).encode(), "text/plain")]
                 r = {**entry, "kind": "fatura", "status": "ok", "detail": "\n".join(details)}
             elif pdfs:
@@ -255,4 +277,5 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             log.exception("gelen posta %s işlenemedi", mid)
             r = {**entry, "kind": "-", "status": "error", "detail": str(e)[:300]}
         db.log_mail(r)
+        db.trim_mail_log(LOG_KEEP)
         return r

@@ -2025,6 +2025,17 @@ def log_mail(r: dict) -> None:
                                                   r.get("subject"), r.get("kind"), r.get("status"), r.get("detail")))
 
 
+def mail_count_today() -> int:
+    with connect() as c:
+        return c.execute("SELECT COUNT(*) FROM mail_log WHERE processed_at >= date('now')").fetchone()[0]
+
+
+def trim_mail_log(keep: int) -> None:
+    with connect() as c:
+        c.execute("DELETE FROM mail_log WHERE message_id NOT IN "
+                  "(SELECT message_id FROM mail_log ORDER BY processed_at DESC LIMIT ?)", (keep,))
+
+
 def mail_log(limit: int = 50) -> list[dict]:
     with connect() as c:
         return rows(c.execute("SELECT * FROM mail_log ORDER BY processed_at DESC, received_at DESC LIMIT ?", (limit,)))
