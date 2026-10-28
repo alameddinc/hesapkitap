@@ -117,7 +117,7 @@ async def require_login(request: Request, call_next):
             response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
         return response
     # şablon gönderimi (hub) ve gelen posta (Cloudflare Email Worker, kendi gizli anahtarıyla): oturumsuz
-    public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound")
+    public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound", "/api/billing/revenuecat")
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)

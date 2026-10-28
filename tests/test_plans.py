@@ -32,7 +32,10 @@ def _user(admin, name="ayse"):
 
 
 def _rc(admin, kind, uid, ents=("premium",), exp_ms=4102444800000):
-    return admin.post("/api/billing/revenuecat", headers={"Authorization": "Bearer rc-gizli"},
+    from app.api.main import app
+
+    # RevenueCat oturumsuz gelir: giriş duvarına takılmamalı
+    return TestClient(app).post("/api/billing/revenuecat", headers={"Authorization": "Bearer rc-gizli"},
                       json={"event": {"type": kind, "app_user_id": str(uid), "entitlement_ids": list(ents),
                                       "expiration_at_ms": exp_ms}})
 
