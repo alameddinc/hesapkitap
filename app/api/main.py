@@ -65,7 +65,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB;
 # Çerez yok: oturum anahtarı X-Session-Token başlığıyla gelir, Authorization: Bearer ile geri gönderilir.
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-APP_ORIGINS = ["capacitor://localhost", "https://localhost", "http://localhost"] + [
+APP_ORIGINS = ["capacitor://localhost", "https://localhost", "http://localhost", "http://localhost:5174"] + [
     o.strip() for o in os.environ.get("HESAPKITAP_APP_ORIGINS", "").split(",") if o.strip()]
 
 
