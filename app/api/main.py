@@ -3489,7 +3489,8 @@ def backup_download(name: str):
 # ---------------------------------------------------------------- tanıtım ve hukuk sayfaları (isteğe bağlı)
 
 WEB_DIST = os.environ.get("WEB_DIST")
-SITE_PAGES = {"hakkinda": "index.html", "gizlilik": "gizlilik.html", "kosullar": "kosullar.html", "acik-riza": "acik-riza.html"}
+SITE_PAGES = {"hakkinda": "index.html", "gizlilik": "gizlilik.html", "kosullar": "kosullar.html", "acik-riza": "acik-riza.html",
+              "hesap-sil": "hesap-sil.html"}
 
 
 def _site_dir() -> str:
