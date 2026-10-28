@@ -1430,9 +1430,10 @@ def net_worth(today: date | None = None) -> dict:
     jars = db.jar_reserved(today)
     for a in accounts:
         a["reserved"] = jars["by_account"].get(a["id"], 0.0)
-    # harcanabilir TL: elindeki para − ödenecek kart ekstresi − TL borçlar − kumbaraya ayrılan − zekât borcu.
-    # altın/döviz (varlık, hemen harcanmaz) ve alacak (henüz elde değil) dahil değil.
-    spendable = cash + in_wallets - card_debt - payable - jars["total"] - zakat_due
+    # harcanabilir TL: bankadaki/nakit para − ödenecek kart ekstresi − TL borçlar − kumbaraya ayrılan − zekât borcu.
+    # altın/döviz (varlık, hemen harcanmaz), alacak (henüz elde değil) ve yemek/hediye kartı (sadece o işte harcanır)
+    # dahil değil; net durumda hepsi var.
+    spendable = cash - card_debt - payable - jars["total"] - zakat_due
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "spendable": _round(spendable), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
             "wallets": wallets, "in_wallets": _round(in_wallets), "credit_cards": credit_cards, "unknown_banks": seen_banks,

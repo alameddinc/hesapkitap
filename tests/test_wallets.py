@@ -78,3 +78,13 @@ def test_load_dated_before_wallet_creation_not_double_counted(client, tmpdb):
     tmpdb.auto_load_wallets(date.today())
     w = db.get_wallet(wid)
     assert w["current"] == 4000 and db.recurring_done(w["schedule"]["id"], db.period_of(date.today()))
+
+
+def test_meal_card_not_in_spendable(client, tmpdb):
+    from app import finance
+
+    client.post("/api/accounts", json={"name": "Banka", "kind": "banka", "balance": 10000})
+    client.post("/api/wallets", json={"name": "Multinet", "card_type": "yemek", "balance": 1500})
+    nw = finance.net_worth()
+    assert nw["spendable"] == 10000  # yemek kartı sadece yemekte harcanır: harcanabilir TL'ye katılmaz
+    assert nw["net"] == 11500  # net durumda var

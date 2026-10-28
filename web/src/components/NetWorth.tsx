@@ -74,7 +74,7 @@ function Headline({ d }: { d: NW }) {
   const tone = (x: number) => (x < 0 ? "text-red-600" : "text-green-700 dark:text-green-400");
   return (
     <span className="mb-1 grid grid-cols-2 gap-3">
-      <span title="Bankada + kartlarda − ödenecek kart ekstresi − borçların − kumbaraya ayrılan. Altın/döviz ve alacak dahil değil.">
+      <span title="Bankada − ödenecek kart ekstresi − borçların − kumbaraya ayrılan. Altın/döviz, alacak ve yemek/hediye kartı dahil değil.">
         <span className="block text-xs text-stone-500">Harcanabilir TL</span>
         <span className={cx("block text-lg font-semibold tabular-nums", tone(d.spendable))}>{tl(d.spendable)}</span>
       </span>
