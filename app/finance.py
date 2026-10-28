@@ -13,10 +13,13 @@ from app import db
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
+import threading
 
 # Hesap önbelleği: aynı veritabanı durumu için ağır hesaplar (tüm işlemler, plan, ödemeler) bir kez yapılır.
 # Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur.
 _CACHE: dict = {}
+_LOCKS: dict = {}
+_LOCKS_GUARD = threading.Lock()
 
 
 def _db_stamp() -> tuple:
@@ -29,9 +32,15 @@ def _memo(fn):
         viewer = u["id"] if u and u.get("member_of") else None
         key = (fn.__name__, _db_stamp(), viewer, date.today(), repr(args), repr(sorted(kwargs.items())))
         if key not in _CACHE:
-            if len(_CACHE) > 128:
-                _CACHE.clear()
-            _CACHE[key] = fn(*args, **kwargs)
+            # aynı anda gelen istekler (Özet + ay özeti) aynı ağır hesabı ikişer kez yapmasın: ikincisi birinciyi bekler
+            with _LOCKS_GUARD:
+                lock = _LOCKS.setdefault(key, threading.Lock())
+            with lock:
+                if key not in _CACHE:
+                    if len(_CACHE) > 128:
+                        _CACHE.clear()
+                        _LOCKS.clear()
+                    _CACHE[key] = fn(*args, **kwargs)
         hit = _CACHE[key]
         # çağıran sonucu değiştirse de önbellek bozulmasın
         if isinstance(hit, list) and all(isinstance(x, dict) for x in hit):
