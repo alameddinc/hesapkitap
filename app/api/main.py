@@ -205,7 +205,7 @@ def auth_status(request: Request):
     return {"required": True, "authenticated": bool(u), "setup_required": False, "open_signup": plans.open_signup(),
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
-            "user": {"username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
+            "user": {"id": u.get("id"), "username": u["username"], "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
 
 
 @app.post("/api/auth/setup")

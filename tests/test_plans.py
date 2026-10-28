@@ -54,6 +54,7 @@ def test_free_user_is_limited_and_store_purchase_unlocks(hosted):
     from app import system
 
     c, u = _user(hosted)
+    assert c.get("/api/auth/status").json()["user"]["id"] == u["id"]  # mağaza (RevenueCat) app_user_id
     p = c.get("/api/meta").json()["plan"]
     assert (p["plan"], p["ai_docs"], p["features"]["fiyatlar"]) == ("free", 10, False)
     assert system.ai_quota(u) == 10
