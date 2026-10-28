@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserPlus } from "lucide-react";
 import { useState } from "react";
 import DataPrivacy from "../components/DataPrivacy";
+import { isEmail, loginKind } from "../components/hooks";
 
 const codeFromHash = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("kod") ?? "";
 
@@ -21,9 +22,11 @@ export default function Register() {
   const askCode = !open || !!codeFromHash();
   const legal: { terms?: string; privacy?: string } = status.data?.legal ?? {};
   const needAgree = !!(legal.terms || legal.privacy);
+  const email = loginKind(status.data) === "email"; // hazır sürüm: her hesap e-postayla açılır
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (email && !isEmail(user)) return setErr("Geçerli bir e-posta yaz");
     if (pw !== pw2) return setErr("Şifreler aynı değil");
     setBusy(true);
     setErr(null);
@@ -53,9 +56,11 @@ export default function Register() {
           <input id="code" className="input mb-3 font-mono uppercase" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
             placeholder="XXXX-XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} />
         </>}
-        <label className="label" htmlFor="user">Kullanıcı adı</label>
-        <input id="user" className="input mb-3" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-          placeholder="ör. ayse" value={user} onChange={(e) => setUser(e.target.value)} autoFocus={!!code} />
+        <label className="label" htmlFor="user">{email ? "E-posta" : "Kullanıcı adı"}</label>
+        <input id="user" className={email ? "input mb-3" : "input"} type={email ? "email" : "text"} inputMode={email ? "email" : undefined}
+          autoComplete={email ? "email username" : "username"} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+          placeholder={email ? "ornek@gmail.com" : "ör. ayse"} value={user} onChange={(e) => setUser(e.target.value)} autoFocus={!!code} />
+        {!email && <p className="mb-3 mt-1 text-xs text-stone-500">İstersen e-posta adresini de yazabilirsin.</p>}
         <label className="label" htmlFor="pw">Şifre (en az 10 karakter)</label>
         <input id="pw" type="password" className="input mb-3" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} />
         <label className="label" htmlFor="pw2">Şifre (tekrar)</label>

@@ -3,7 +3,7 @@ import { Copy, Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR } from "../format";
 import { useUI } from "../ui";
-import { useSave } from "./hooks";
+import { isEmail, useLoginKind, useSave } from "./hooks";
 
 interface UserRow {
   id: number; username: string; role: "admin" | "user"; created_at: string; last_login: string | null;
@@ -29,12 +29,13 @@ export default function Users() {
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const [note, setNote] = useState("");
   const [name, setName] = useState("");
+  const email = useLoginKind() === "email"; // hazır sürüm: hesap e-postayla açılır
   const [secret, setSecret] = useState<{ title: string; text: string } | null>(null);
   const invite = useSave(() => call<Invite>("/api/admin/invites", "POST", { note }), (i) => {
     setNote("");
     setSecret({ title: "Davet bağlantısı (14 gün geçerli, tek kullanımlık)", text: inviteLink(i.code) });
   });
-  const create = useSave(() => call<{ temp_password: string }>("/api/admin/users", "POST", { username: name }), (r) => {
+  const create = useSave(() => call<{ temp_password: string }>("/api/admin/users", "POST", { username: name.trim() }), (r) => {
     setSecret({ title: `${name} için geçici şifre (ilk girişte değiştirecek)`, text: r.temp_password });
     setName("");
   });
@@ -61,8 +62,10 @@ export default function Users() {
           <button className="btn-primary" disabled={invite.isPending} onClick={() => invite.mutate(undefined, onErr)}>Davet oluştur</button>
         </div>
         <div className="flex gap-2">
-          <input className="input min-w-0 flex-1" placeholder="Kullanıcı adı" autoCapitalize="none" value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={name.trim().length < 3}
+          <input className="input min-w-0 flex-1" type={email ? "email" : "text"} aria-label={email ? "E-posta" : "Kullanıcı adı"}
+            placeholder={email ? "E-posta (ornek@gmail.com)" : "Kullanıcı adı"} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            value={name} onChange={(e) => setName(e.target.value)} />
+          <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={email ? !isEmail(name) : name.trim().length < 3}
             onClick={() => create.mutate(undefined, onErr)}><UserPlus size={14} /> Hesap aç</button>
         </div>
       </div>

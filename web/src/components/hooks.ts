@@ -52,6 +52,18 @@ export function useSwitchBook() {
   };
 }
 
+/** Giriş alanı türü: hazır sürümde "email", kendi sunucusunda "username" (eski sunucu alanı vermez → "username"). */
+export type LoginKind = "email" | "username";
+export const loginKind = (status?: { login?: string } | null): LoginKind => (status?.login === "email" ? "email" : "username");
+export const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+export function useLoginKind(): LoginKind {
+  const auth = useQuery({
+    queryKey: ["auth"], staleTime: 60_000,
+    queryFn: () => fetch("/api/auth/status").then((r) => r.json() as Promise<{ login?: string }>),
+  });
+  return loginKind(auth.data);
+}
+
 /** Kayıtlarda "kim ekledi": defterde birden çok kişi varken kişi adları (üyenin kendi defterinde gerekmez). */
 export function usePeople() {
   const b = useBook().data;

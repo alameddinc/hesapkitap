@@ -3,7 +3,7 @@ import { ChevronDown, Copy, EyeOff, KeyRound, Trash2, Users2 } from "lucide-reac
 import { useState } from "react";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
-import { type BookRole, useSave } from "./hooks";
+import { type BookRole, useLoginKind, useSave } from "./hooks";
 import { usePlan } from "./Plan";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
@@ -150,6 +150,7 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
 export default function BookSettings() {
   const ui = useUI();
   const plan = usePlan();
+  const email = useLoginKind() === "email"; // hazır sürüm: üye e-postayla girer
   const q = useQuery({ queryKey: ["book"], queryFn: () => call<Book>("/api/book"), retry: false });
   const [note, setNote] = useState("");
   const [role, setRole] = useState<BookRole>("editor");
@@ -168,7 +169,7 @@ export default function BookSettings() {
     <section className="card space-y-3 p-4">
       <h2 className="flex items-center gap-2 font-semibold"><Users2 size={18} /> Ortak defter</h2>
       <p className="text-sm text-stone-500">
-        Eşini (ya da aileden birini) davet et: kendi kullanıcı adı ve şifresiyle girer, <b>bu defteri</b> görür. Ne
+        Eşini (ya da aileden birini) davet et: kendi {email ? "e-posta adresi" : "kullanıcı adı"} ve şifresiyle girer, <b>bu defteri</b> görür. Ne
         yapabileceğini yetkisi belirler. Gizlediklerin ona hiç görünmez; toplamlara da girmez. Ayrıca kendine ait özel bir defteri olur.
       </p>
 
