@@ -14,7 +14,7 @@ const ROWS: [string, string, string, string][] = [
   ["Ekstre, fiş, özet, plan, kumbara, zekât", "✓", "✓", "✓"],
 ];
 
-function Upgrade({ need }: { need?: string }) {
+export function Upgrade({ need }: { need?: string }) {
   return (
     <p className="text-sm text-stone-600 dark:text-stone-400">
       {need ? <><b>{need}</b> paketinde var. </> : null}

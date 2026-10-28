@@ -168,6 +168,34 @@ export interface BillDraft {
   error?: string;
 }
 
+export interface Bill {
+  id: number;
+  provider: string;
+  description?: string | null;
+  amount: number;
+  due_date: string;
+  category?: string | null;
+  note?: string | null;
+  file_name?: string | null;
+  paid_at?: string | null;
+}
+
+export interface MailLogItem {
+  message_id: string;
+  received_at: string;
+  sender: string;
+  subject: string;
+  kind: string;
+  status: "ok" | "skip" | "error";
+  detail: string;
+  processed_at?: string;
+}
+
+/** Defterin e-posta adresi (hazır sürüm, Premium/Aile). locked: paketinde yok. */
+export type MailAddress =
+  | { locked: true; address: null }
+  | { locked: false; address: string; senders: string[]; log: MailLogItem[] };
+
 export interface PlanLine {
   type: PlanLineType;
   kind: "gelir" | "gider" | "bilgi";
@@ -357,6 +385,10 @@ export const api = {
   payBill: (id: number, amount: number, paid_at: string, payment: Payment) =>
     req("POST", `/api/bills/${id}/pay`, { amount, paid_at, payment }),
   unpayBill: (id: number) => req("DELETE", `/api/bills/${id}/pay`),
+  bills: () => req<Bill[]>("GET", "/api/bills"),
+  mailAddress: () => req<MailAddress>("GET", "/api/mail/address"),
+  regenerateMailAddress: () => req<{ address: string }>("POST", "/api/mail/address/regenerate"),
+  setMailSenders: (senders: string[]) => req<{ senders: string[] }>("PUT", "/api/mail/senders", { senders }),
 
   statements: () => req<Statement[]>("GET", "/api/statements"),
   upload: (files: File[], password?: string, remember?: boolean, kind?: DocKind) => {

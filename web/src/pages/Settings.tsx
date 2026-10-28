@@ -16,6 +16,7 @@ import BookSettings from "../components/BookSettings";
 import BookSwitch from "../components/BookSwitch";
 import AppServer from "../components/AppServer";
 import PlanSettings from "../components/Plan";
+import MailAddress from "../components/MailAddress";
 import DeleteAccount from "../components/DeleteAccount";
 import DemoStats from "../components/DemoStats";
 import Features from "../components/Features";
@@ -377,6 +378,9 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       <ShareSetup />
 
       {!locked && <BankTemplates isAdmin={isAdmin} />}
+
+      {/* hazır sürüm: deftere özel posta adresi (kendi sunucunda yerine IMAP e-posta kutusu) */}
+      <MailAddress />
 
       {!locked && <MailSection keys={cfg.data?.filter((c) => MAIL_KEYS.includes(c.name)) ?? []} />}
 

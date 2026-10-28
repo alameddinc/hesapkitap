@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Settings2, Type, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Insight, type Row } from "../api";
 import BarList from "../components/BarList";
@@ -21,8 +21,42 @@ import { InterestHistory, TrendChart } from "./Stats";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
-import { cx, tl, tlCompact } from "../format";
+import { addMonths, cx, monthLabel, tl, tlCompact } from "../format";
 import { useUI, type Route } from "../ui";
+
+/** Dönemin tarih aralığı (ay dönümü günü 1 değilse önceki ayın o gününden başlar). */
+function periodBounds(month: string, startDay: number): [string, string] {
+  if (startDay <= 1) return [`${month}-01`, `${month}-31`];
+  const d = (n: number) => String(n).padStart(2, "0");
+  return [`${addMonths(month, -1)}-${d(startDay)}`, `${month}-${d(startDay - 1)}`];
+}
+
+/** Hazır sürüm (posta adresi açık): bu dönem son ödemeli faturaların toplamı; dokununca Ödemeler'e kayar. */
+function BillsLine({ month }: { month: string }) {
+  const ui = useUI();
+  const meta = useMeta().data;
+  const on = !!meta?.plan?.hosted && meta.plan.features.posta !== false;
+  const q = useQuery({ queryKey: ["bills"], queryFn: api.bills, enabled: on });
+  if (!on || !q.data) return null;
+  const [from, to] = periodBounds(month, meta?.cycle_start_day ?? 1);
+  const items = q.data.filter((b) => b.due_date >= from && b.due_date <= to);
+  if (!items.length) return null;
+  const total = items.reduce((a, b) => a + b.amount, 0);
+  const current = meta?.current_month === month;
+  return (
+    <button className="card flex w-full items-center gap-2 p-3 text-left text-sm active:bg-stone-50 dark:active:bg-stone-800"
+      onClick={() => {
+        const el = document.getElementById("w-odemeler");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        else ui.toast("Ödemeler Özet'te kapalı; Düzenle'den ekleyebilirsin");
+      }}>
+      <Receipt size={16} className="shrink-0 text-stone-500" />
+      <span className="min-w-0 flex-1">{current ? "Bu ay gelen faturalar" : `${monthLabel(month)} faturaları`}:{" "}
+        <b className="tabular-nums">{tl(total)}</b> <span className="text-stone-500">({items.length})</span></span>
+      <ChevronRight size={16} className="text-stone-400" />
+    </button>
+  );
+}
 
 type Sel = { by: "category" | "merchant" | "card"; name: string } | null;
 
@@ -237,6 +271,8 @@ export default function Dashboard() {
 
       <MonthDigest />
 
+      <BillsLine month={month} />
+
       {summary.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
       {summary.error && <p className="text-sm text-red-600">{(summary.error as Error).message}</p>}
 
@@ -249,7 +285,7 @@ export default function Dashboard() {
             if (!body) return null;
             const i = layout.indexOf(id);
             return (
-              <div key={id} className={editing ? "relative rounded-xl ring-2 ring-blue-300 ring-offset-2 dark:ring-blue-800 dark:ring-offset-stone-950" : undefined}>
+              <div key={id} id={`w-${id}`} className={editing ? "relative rounded-xl ring-2 ring-blue-300 ring-offset-2 dark:ring-blue-800 dark:ring-offset-stone-950" : undefined}>
                 {editing && (
                   <div className="mb-1 flex items-center gap-1 text-xs">
                     <span className="mr-auto font-medium text-blue-700 dark:text-blue-400">{w.title}</span>
