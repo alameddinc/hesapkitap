@@ -286,7 +286,7 @@ class RegisterIn(BaseModel):
     consent: list[str] | None = None  # hazır sürümde: ["kosullar", "acik_riza"]
 
 
-CONSENT_VERSION = "2026-10-28"  # hukuk metinlerinin sürümü; metin değişirse güncellenir
+CONSENT_VERSION = "2026-10-29"  # hukuk metinlerinin sürümü; metin değişirse güncellenir
 CONSENT_ITEMS = {"kosullar", "acik_riza"}  # Koşullar + Aydınlatma okundu · Açık rıza (yurt dışı sağlayıcılar dahil)
 
 
