@@ -7,11 +7,15 @@ S3 hata kodu (NoSuchKey, AccessDenied...) bulunur; nesne anahtarı yalnız `deta
 """
 import hashlib
 import hmac
+import logging
 import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from urllib.parse import quote, urlsplit
+
+# httpx her isteği INFO düzeyinde adresiyle loglar: depo adresi (hesap kimliği) loglara düşmesin
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 CHUNK = 1 << 20
 EMPTY_SHA = hashlib.sha256(b"").hexdigest()
