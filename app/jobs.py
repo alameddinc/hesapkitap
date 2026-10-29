@@ -30,6 +30,11 @@ def _main_space() -> bool:
 
 
 def run_backup(today: date) -> str:
+    try:  # gece bakımı: hiçbir kayda bağlanmamış (okunup kaydedilmemiş) fiş/fatura dosyalarını sil
+        if removed := db.gc_files():
+            log.info("bağsız dosya temizliği: %d", len(removed))
+    except Exception:  # noqa: BLE001 - temizlik yedeği engellemesin
+        log.exception("bağsız dosya temizliği başarısız")
     path = backup.make_backup(today)
     pw = backup.passphrase()
     if telegram.enabled() and pw and _main_space():

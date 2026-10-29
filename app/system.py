@@ -241,13 +241,37 @@ def user_dirs(u: dict) -> list[str]:
     return out
 
 
+def user_prefixes(u: dict) -> list[str]:
+    """Kullanıcının nesne deposundaki önekleri (app/storage.py): users/<id>/ ve db_file başka klasördeyse o."""
+    import re
+
+    out = [f"users/{int(u['id'])}/"]
+    if u.get("db_file"):
+        rel = os.path.dirname(u["db_file"]).replace(os.sep, "/")
+        if re.fullmatch(r"[0-9A-Za-z_-]{1,64}(?:/[0-9A-Za-z_-]{1,64})*", rel) and rel.split("/")[0] != DELETED_DIR:
+            out.append(f"users/{rel}/")
+    return list(dict.fromkeys(out))
+
+
+def _s3_files() -> bool:
+    from app import storage
+
+    return storage.s3_enabled()
+
+
 def purge_user_data(u: dict) -> None:
     """Kullanıcı kendi hesabını sildi: klasörü (veritabanı, PDF'ler, faturalar, kendi günlük yedekleri) hemen ve kalıcı
-    olarak silinir (KVKK). Sunucu yedeklerindeki kopyalar en geç 30 gün içinde düşer (app/cloud_backup.py)."""
+    olarak silinir (KVKK); dosyalar nesne deposundaysa users/<id>/ öneki de. Sunucu yedeklerindeki kopyalar en geç
+    30 gün içinde düşer (app/cloud_backup.py)."""
     import shutil
 
     for p in user_dirs(u):
         shutil.rmtree(p)
+    if _s3_files():
+        from app import storage
+
+        for prefix in user_prefixes(u):
+            storage.delete_prefix(prefix)
 
 
 DELETED_DIR = "_silinen"
@@ -261,10 +285,16 @@ def archive_user_data(u: dict) -> str | None:
 
     dst = None
     safe = re.sub(r"[^A-Za-z0-9._@-]", "_", u["username"])[:80]  # e-posta adında "/" olabilir: yol dışına çıkmasın
+    ts = int(time.time())
     for i, src in enumerate(user_dirs(u)):
-        dst = os.path.join(data_root(), DELETED_DIR, f"{u['id']}-{safe}-{int(time.time())}" + (f"-{i}" if i else ""))
+        dst = os.path.join(data_root(), DELETED_DIR, f"{u['id']}-{safe}-{ts}" + (f"-{i}" if i else ""))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.move(src, dst)
+    if _s3_files():  # nesneler deleted/<id>-<zaman>/ altına (kullanıcı adı anahtara girmez); 30 gün sonra silinir
+        from app import storage
+
+        for i, prefix in enumerate(user_prefixes(u)):
+            storage.move_prefix(prefix, f"deleted/{int(u['id'])}-{ts}" + (f"-{i}" if i else "") + "/")
     return dst
 
 
@@ -284,8 +314,10 @@ def purge_archived(days: int | None = None, now: float | None = None) -> list[st
 
     days = deleted_keep_days() if days is None else days
     base = os.path.join(data_root(), DELETED_DIR)
-    if not days or not os.path.isdir(base):
+    if not days:
         return []
+    if not os.path.isdir(base):
+        return _purge_archived_objects(days, time.time() if now is None else now)
     now = time.time() if now is None else now
     removed = []
     for name in sorted(os.listdir(base)):
@@ -296,6 +328,25 @@ def purge_archived(days: int | None = None, now: float | None = None) -> list[st
         if (datetime.fromtimestamp(now).date() - datetime.fromtimestamp(ts).date()).days >= days:
             shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
             removed.append(name)
+    return removed + _purge_archived_objects(days, now)
+
+
+def _purge_archived_objects(days: int, now: float) -> list[str]:
+    """Nesne deposunda deleted/<id>-<unix zamanı>[-n]/ önekleri: aynı takvim günü kuralı."""
+    import re
+    from datetime import datetime
+
+    if not days or not _s3_files():
+        return []
+    from app import storage
+
+    groups = {k.split("/")[1] for k in storage.backend().list("deleted/") if k.count("/") >= 2}
+    removed = []
+    for g in sorted(groups):
+        m = re.fullmatch(r"(\d+)-(\d{9,11})(?:-\d+)?", g)
+        if m and (datetime.fromtimestamp(now).date() - datetime.fromtimestamp(int(m[2])).date()).days >= days:
+            storage.delete_prefix(f"deleted/{g}/")
+            removed.append(f"deleted/{g}/")
     return removed
 
 

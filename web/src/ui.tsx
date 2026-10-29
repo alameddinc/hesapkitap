@@ -15,6 +15,7 @@ export interface EntryDraft {
   installments?: number; // kredi kartı taksit sayısı (fişte yazıyorsa)
   card_last4?: string | null; // fişte yazan kart numarasının son 4 hanesi
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
+  receipt_file?: string | null; // saklanan fiş fotoğrafı (okuma yanıtından; sunucu doğrular)
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[]; // fiş satırları
   location?: string | null; // fişteki işyeri adresi
   branch?: string | null; // fişteki şube/semt

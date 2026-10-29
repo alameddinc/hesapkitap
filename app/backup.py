@@ -84,6 +84,8 @@ README = """HesapKitap yedeği
 hesapkitap.db : tüm kayıtlar (SQLite)
 uploads/      : yüklenen ekstre PDF'leri
 bills/        : fatura dosyaları
+receipts/     : fiş fotoğrafları (konum bilgisi silinmiş)
+statements-bank/ : içe aktarılan hesap dökümleri
 
 Geri yüklemek için: HesapKitap → Ayarlar → Yedekler → "Yedekten geri yükle" ile bu zip'i seç.
 Bu dosya kişisel finans verini içerir; güvenli bir yerde sakla.
@@ -110,12 +112,13 @@ def export_zip() -> str:
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(snap, DB_NAME)
             z.writestr("OKUBENI.txt", README)
-            for arc, folder in (("uploads", db.upload_dir()), ("bills", db.bill_dir())):
-                if os.path.isdir(folder):
-                    for name in sorted(os.listdir(folder)):
-                        p = os.path.join(folder, name)
-                        if os.path.isfile(p):
-                            z.write(p, f"{arc}/{name}")
+            from app import storage
+
+            for kind in storage.KINDS:  # yerel disk ya da nesne deposu: aynı yol (app/storage.py)
+                for name in db.list_files(kind):
+                    data = db.read_file(kind, name)
+                    if data is not None:
+                        z.writestr(f"{kind}/{name}", data)
     return out
 
 
@@ -150,7 +153,9 @@ def restore(data: bytes, filename: str = "", passphrase: str | None = None) -> d
         raw = z.read(DB_NAME)
         for n in z.namelist():
             top, _, name = n.partition("/")
-            if top in ("uploads", "bills") and name and "/" not in name and not name.startswith("."):
+            from app import storage
+
+            if top in storage.KINDS and storage.valid_name(top, name):  # yalnız hash adlı dosyalar (yol kaçışı yok)
                 files.append((n, z.read(n)))
     elif data.startswith(MAGIC):
         if not passphrase:
@@ -176,14 +181,12 @@ def restore(data: bytes, filename: str = "", passphrase: str | None = None) -> d
         finally:
             dst.close()
             src.close()
+    db.init_db()  # eski sürümden gelen yedek: göçler uygulanır
+    saved = 0
     for n, blob in files:
         top, _, name = n.partition("/")
-        folder = db.upload_dir() if top == "uploads" else db.bill_dir()
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, os.path.basename(name)), "wb") as f:
-            f.write(blob)
-    db.init_db()  # eski sürümden gelen yedek: göçler uygulanır
-    return {**counts, "files": len(files), "before": os.path.basename(before)}
+        saved += db.store_file(top, name, blob)  # hazır sürümde alan sınırına tabi
+    return {**counts, "files": saved, "before": os.path.basename(before)}
 
 
 def _fernet(passphrase: str, salt: bytes) -> Fernet:

@@ -131,6 +131,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date,
       ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
+      receipt_file: kind === "gider" ? draft?.receipt_file ?? null : null,
       items: kind === "gider" ? draft?.items ?? null : null,
       branch: draft?.branch ?? null,
       splits: kind === "gider" && (parts?.length || shares.length) ? [

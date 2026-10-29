@@ -73,8 +73,13 @@ def test_run_creates_encrypted_archive_that_verifies(server):
     names = _names(path)
     u1, u2 = (u["id"] for u in server["users"])
     for n in ("data/system.db", "data/isolated.db", f"data/users/{u1}/ekstre.db", f"data/users/{u2}/ekstre.db",
-              f"data/users/{u1}/uploads/ayse.pdf", f"data/users/{u2}/bills/fatura.jpg", "manifest.json"):
+              "manifest.json"):
         assert n in names
+    # belgeler tar'a girmez: içerik adlı, şifreli blob olarak bir kez (artımlı); manifest yolu ve özeti tutar
+    assert not any("/uploads/" in n or "/bills/" in n for n in names)
+    blobs = os.listdir(server["out"] / "files")
+    # iki kullanıcının aynı içerikli fatura.jpg'si tek blob (içerik adı)
+    assert len([b for b in blobs if b.endswith(".hkenc")]) == 3 and "index.json" in blobs
     assert not any("/backups/" in n or n.startswith("data/backups") or "_silinen" in n or n.endswith("-journal")
                    for n in names)
 

@@ -297,6 +297,26 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS ix_entries_month ON entries(month);
 -- Her ay tekrarlayan kalemler (maaş, kira, aidat...)
+-- Saklanan dosyaların dizini (alan sınırı, temizlik, dışa aktarma). legacy=1: bu dizinden önce yazılmış, kendiliğinden silinmez
+CREATE TABLE IF NOT EXISTS stored_files (
+    kind TEXT NOT NULL,              -- uploads | bills | receipts | statements-bank (app/storage.py)
+    name TEXT NOT NULL,              -- <hash>.<uzantı>
+    size INTEGER NOT NULL,
+    legacy INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (kind, name)
+);
+-- İçe aktarılan hesap dökümü dosyaları (entries.bank_doc_id bunu gösterir)
+CREATE TABLE IF NOT EXISTS bank_documents (
+    id INTEGER PRIMARY KEY,
+    file_name TEXT NOT NULL,         -- statements-bank/<sha256>.<uzantı>; alan sınırı aşıldıysa dosya yok (stored = 0)
+    filename TEXT,                   -- kullanıcının yüklediği dosyanın adı
+    bank TEXT,
+    account_id INTEGER,
+    size INTEGER,
+    stored INTEGER NOT NULL DEFAULT 1,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS recurring (
     id INTEGER PRIMARY KEY,
     description TEXT NOT NULL,
@@ -358,6 +378,8 @@ MIGRATIONS = [
     ("receipt_items", "brand", "TEXT"),         # ürün markası (Ülker) ya da kafenin kendisi           # ortak harcamada kişinin payı → alacak
     ("debts", "split_id", "INTEGER"),           # alacak bir harcamanın payından doğduysa (veriliş = o harcama)
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
+    ("entries", "receipt_file", "TEXT"),        # saklanan fiş fotoğrafı: receipts/<sha256>.jpg (app/storage.py)
+    ("entries", "bank_doc_id", "INTEGER"),      # hangi hesap dökümünden geldi (bank_documents)
 ]
 
 
@@ -388,6 +410,32 @@ def current_user() -> dict | None:
     return s.get("user") if s else None
 
 
+def _files_scope(db_file: str | None) -> tuple[str | None, str | None]:
+    """(depolama öneki, yerel kök). Ana veritabanı → "main/"; data/users/<klasör>/ altındaki defter → "users/<klasör>/";
+    başka yerdeki defter (demo kopyası, testler) → (None, kendi klasörü): her zaman yerel diskte, yanında."""
+    if not db_file:
+        return "main/", None
+    from app import system
+
+    base = os.path.dirname(os.path.abspath(db_file))
+    root = os.path.abspath(system.data_root())
+    if base.startswith(root + os.sep):
+        rel = os.path.relpath(base, root).replace(os.sep, "/")
+        if rel.split("/")[0] != system.DELETED_DIR and re.fullmatch(r"[0-9A-Za-z_-]{1,64}(?:/[0-9A-Za-z_-]{1,64})*", rel):
+            return f"users/{rel}/", None
+    return None, base
+
+
+def files_scope() -> tuple[str | None, str | None]:
+    """Açık defterin dosya alanı (app/storage.py). Bağlam yoksa ana veritabanı."""
+    s = _space.get()
+    if not s:
+        return "main/", None
+    if "files" not in s:
+        s["files"] = _files_scope(None if s["db"] == DB_PATH and s.get("main") else s["db"])
+    return s["files"]
+
+
 @contextmanager
 def use_space(db_file: str | None, user: dict | None = None):
     """db_file None: ana veritabanı (açılışta init_db). Kullanıcı veritabanı bu süreçte ilk kullanıldığında şema kurulur
@@ -396,7 +444,7 @@ def use_space(db_file: str | None, user: dict | None = None):
         base = os.path.dirname(os.path.abspath(db_file))
         space = {"db": db_file, "uploads": os.path.join(base, "uploads"), "bills": os.path.join(base, "bills"), "user": user}
     else:
-        space = {"db": DB_PATH, "uploads": UPLOAD_DIR, "bills": BILL_DIR, "user": user}
+        space = {"db": DB_PATH, "uploads": UPLOAD_DIR, "bills": BILL_DIR, "user": user, "main": True}
     token = _space.set(space)
     try:
         key = os.path.abspath(db_file) if db_file else None
@@ -461,6 +509,7 @@ def init_db() -> None:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         _migrate_subscription_state(c)
         _backfill_statements(c)
+        index_local_files(c)
         if not c.execute("SELECT 1 FROM settings WHERE key = 'item_rules_seeded'").fetchone():
             # hazır örnek: kullanıcı silebilir/değiştirebilir, bir kez eklenir
             c.execute("INSERT INTO item_rules (keywords, category) VALUES (?, ?)", (DEFAULT_ITEM_RULE, "Sigara"))
@@ -533,17 +582,24 @@ def _backfill_statements(c) -> None:
     """Sonradan eklenen ekstre alanlarını saklanan PDF'ten yeniden okuyup doldur."""
     from app.parsers import parse_statement
 
+    from app import storage
+
+    remote = storage.book()[0].name != "local"
+    if remote and c.execute("SELECT 1 FROM settings WHERE key = 'statements_backfilled'").fetchone():
+        return  # nesne deposunda her açılışta indirip yeniden okumak pahalı: bir kez denenir
     for r in c.execute("SELECT id, file_hash FROM statements WHERE next_due_date IS NULL").fetchall():
-        path = os.path.join(upload_dir(), f"{r['file_hash']}.pdf")
-        if not os.path.exists(path):
-            continue
+        name = f"{r['file_hash']}.pdf"
         try:
-            with open(path, "rb") as f:
-                st = parse_statement(f.read())
+            data = storage.book_get("uploads", name)
+            if data is None:
+                continue
+            st = parse_statement(data)
         except Exception:  # noqa: BLE001 - backfill best effort
             continue
         c.execute("UPDATE statements SET next_period_end = ?, next_due_date = ? WHERE id = ?",
                   (_iso(st.next_period_end), _iso(st.next_due_date), r["id"]))
+    if remote:
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('statements_backfilled', '1')")
 
 
 def _all_settings() -> dict[str, str]:
@@ -605,9 +661,7 @@ def save_statement(data: bytes, filename: str, stmt: Statement) -> int:
             row["statement_id"] = sid
             cols = ", ".join(row)
             c.execute(f"INSERT INTO transactions ({cols}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
-    os.makedirs(upload_dir(), exist_ok=True)
-    with open(os.path.join(upload_dir(), f"{file_hash(data)}.pdf"), "wb") as out:
-        out.write(data)
+    _store_quietly("uploads", f"{file_hash(data)}.pdf", data, "application/pdf")  # sınır/depo hatası: kayıt var, dosya yok
     return sid
 
 
@@ -735,9 +789,7 @@ def delete_statement(statement_id: int) -> None:
         c.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
         still_used = r and c.execute("SELECT 1 FROM statements WHERE file_hash = ?", (r["file_hash"],)).fetchone()
     if r and not still_used and re.fullmatch(r"[0-9a-f]{64}", r["file_hash"] or ""):
-        path = os.path.join(upload_dir(), f"{r['file_hash']}.pdf")
-        if os.path.isfile(path):
-            os.remove(path)
+        remove_file("uploads", f"{r['file_hash']}.pdf")
 
 
 # ---------------------------------------------------------------- card transactions
@@ -777,7 +829,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
-                "installments", "card_last4", "hidden", "created_by")
+                "installments", "card_last4", "hidden", "created_by", "receipt_file")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:
@@ -953,8 +1005,14 @@ def update_entry(entry_id: int, data: dict) -> None:
 
 
 def delete_entry(entry_id: int) -> None:
+    """Kaydı sil; fiş fotoğrafı başka kayıtta kullanılmıyorsa o da gider."""
     with connect() as c:
+        r = c.execute("SELECT receipt_file FROM entries WHERE id = ?", (entry_id,)).fetchone()
         c.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        name = r[0] if r else None
+        used = name and c.execute("SELECT 1 FROM entries WHERE receipt_file = ?", (name,)).fetchone()
+    if name and not used:
+        remove_file("receipts", name)
 
 
 # ---------------------------------------------------------------- recurring
@@ -1118,10 +1176,10 @@ def delete_bill(bid: int) -> None:
             c.execute("DELETE FROM entries WHERE id = ?", (b["entry_id"],))
         c.execute("DELETE FROM bills WHERE id = ?", (bid,))
     if b["file_name"]:
-        try:
-            os.remove(os.path.join(bill_dir(), b["file_name"]))
-        except OSError:
-            pass
+        with connect() as c:
+            used = c.execute("SELECT 1 FROM bills WHERE file_name = ?", (b["file_name"],)).fetchone()
+        if not used:  # aynı belge başka faturada da kullanılıyorsa kalır
+            remove_file("bills", b["file_name"])
 
 
 def pay_bill(bid: int, amount: float, paid_at: str, payment: str | None) -> int:
@@ -1151,12 +1209,204 @@ def unpay_bill(bid: int) -> None:
         c.execute("UPDATE bills SET paid_at = NULL, paid_amount = NULL, entry_id = NULL WHERE id = ?", (bid,))
 
 
-def save_bill_file(data: bytes, ext: str) -> str:
-    os.makedirs(bill_dir(), exist_ok=True)
+def save_bill_file(data: bytes, ext: str) -> str | None:
+    """Fatura belgesini sakla; adı döner. Hazır sürümde alan sınırı aşıldıysa saklanmaz: None."""
     name = f"{file_hash(data)[:24]}{ext}"
-    with open(os.path.join(bill_dir(), name), "wb") as f:
-        f.write(data)
-    return name
+    return name if _store_quietly("bills", name, data) else None
+
+
+def _store_quietly(kind: str, name: str, data: bytes, ctype: str | None = None) -> bool:
+    """store_file; depo geçici olarak yoksa belge yine okunup kaydedilir, yalnız dosyası saklanmaz (günlüğe yazılır)."""
+    from app import storage
+
+    try:
+        return store_file(kind, name, data, ctype)
+    except storage.StorageError:
+        import logging
+
+        logging.getLogger("ekstre.storage").error("%s dosyası saklanamadı (depo hatası)", kind)
+        return False
+
+
+# ---------------------------------------------------------------- saklanan dosyalar (app/storage.py)
+# Dosyanın kendisi depoda (yerel disk ya da S3), dizini (ad + boyut) defterin veritabanında: alan sınırı, temizlik ve
+# dışa aktarma S3'te listelemeye dayanmaz.
+
+STORAGE_FULL_MSG = ("Dosya alanın doldu: belge okundu ve kaydedildi ama dosyası saklanmadı. "
+                    "Eski belgeleri silerek ya da paketini yükselterek yer açabilirsin.")
+
+
+def storage_used() -> int:
+    with connect() as c:
+        return c.execute("SELECT COALESCE(SUM(size), 0) FROM stored_files").fetchone()[0]
+
+
+def file_indexed(kind: str, name: str) -> bool:
+    with connect() as c:
+        return c.execute("SELECT 1 FROM stored_files WHERE kind = ? AND name = ?", (kind, name)).fetchone() is not None
+
+
+def store_file(kind: str, name: str, data: bytes, ctype: str | None = None) -> bool:
+    """Açık defterin dosyasını sakla ve dizine yaz. Hazır sürümde defterin alan sınırı aşılacaksa saklamaz (False) ve
+    kullanıcıya bir kez uyarı bırakır (take_storage_warning). Aynı içerik zaten varsa yeniden sayılmaz."""
+    from app import plans, storage
+
+    if not storage.valid_name(kind, name):
+        raise ValueError("geçersiz dosya adı")
+    known = file_indexed(kind, name)
+    limit = plans.storage_limit(current_user())
+    if not known and limit is not None and storage_used() + len(data) > limit:
+        s = _space.get()
+        if s is not None and not get_setting("storage:full_warned"):
+            set_setting("storage:full_warned", date.today().isoformat())
+            s["storage_warning"] = STORAGE_FULL_MSG
+        import logging
+
+        logging.getLogger("ekstre.storage").info("alan sınırı: %s saklanmadı (%d bayt)", kind, len(data))
+        return False
+    storage.book_put(kind, name, data, ctype)
+    with connect() as c:
+        c.execute("INSERT INTO stored_files (kind, name, size) VALUES (?, ?, ?) "
+                  "ON CONFLICT(kind, name) DO UPDATE SET size = excluded.size", (kind, name, len(data)))
+    if get_setting("storage:full_warned"):
+        set_setting("storage:full_warned", None)  # yer açıldı: bir dahaki dolmada yine uyarılır
+    return True
+
+
+def take_storage_warning() -> str | None:
+    """Bu istekte alan sınırı yüzünden saklanmayan dosya olduysa (ve kullanıcı daha önce uyarılmadıysa) mesaj; bir kez."""
+    s = _space.get()
+    return s.pop("storage_warning", None) if s else None
+
+
+def read_file(kind: str, name: str | None) -> bytes | None:
+    """Açık defterin dosyası; yoksa None. Arka uç hatası: storage.StorageError (genel mesaj)."""
+    from app import storage
+
+    return storage.book_get(kind, name) if storage.valid_name(kind, name) else None
+
+
+def remove_file(kind: str, name: str | None) -> None:
+    from app import storage
+
+    if not storage.valid_name(kind, name):
+        return
+    storage.book_delete(kind, name)
+    with connect() as c:
+        c.execute("DELETE FROM stored_files WHERE kind = ? AND name = ?", (kind, name))
+
+
+def list_files(kind: str) -> list[str]:
+    """Defterdeki dosya adları: dizindekiler + (yerelde) klasördekiler. Dışa aktarma için."""
+    from app import storage
+
+    with connect() as c:
+        names = {r[0] for r in c.execute("SELECT name FROM stored_files WHERE kind = ?", (kind,))}
+    d = storage.local_dir(kind)
+    if storage.book()[0].name == "local" and d and os.path.isdir(d):
+        names |= {n for n in os.listdir(d) if os.path.isfile(os.path.join(d, n)) and not n.startswith(".")}
+    return sorted(n for n in names if storage.valid_name(kind, n))
+
+
+def index_local_files(c=None) -> int:
+    """Bu dizinden önce yazılmış yerel dosyaları dizine ekle (legacy=1: temizlik dokunmaz). Defter başına bir kez."""
+    from app import storage
+
+    if c is None:
+        with connect() as conn:
+            return index_local_files(conn)
+    if c.execute("SELECT 1 FROM settings WHERE key = 'files_indexed'").fetchone():
+        return 0
+    n = 0
+    for kind in storage.KINDS:
+        d = storage.local_dir(kind)
+        if d and os.path.isdir(d):
+            for name in os.listdir(d):
+                p = os.path.join(d, name)
+                if storage.valid_name(kind, name) and os.path.isfile(p):
+                    n += c.execute("INSERT OR IGNORE INTO stored_files (kind, name, size, legacy) VALUES (?, ?, ?, 1)",
+                                   (kind, name, os.path.getsize(p))).rowcount
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('files_indexed', '1')")
+    return n
+
+
+def _pending_inbox_docs(c) -> str:
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'shared_inbox'").fetchone():
+        return ""
+    return "\n".join(r[0] for r in c.execute("SELECT doc FROM shared_inbox WHERE status = 'bekliyor'"))
+
+
+def gc_files(min_age_hours: int = 24) -> list[str]:
+    """Hiçbir kayda bağlanmamış dosyaları sil: okunup kaydedilmeyen fiş/fatura (kullanıcı vazgeçti), geri alınan
+    döküm. Yalnız bu dizinle yazılmış (legacy=0) ve min_age_hours'tan eski dosyalar; bekleyen paylaşımlar korunur."""
+    with connect() as c:
+        cands = c.execute("SELECT kind, name FROM stored_files WHERE legacy = 0 AND created_at < datetime('now', ?)",
+                          (f"-{int(min_age_hours)} hours",)).fetchall()
+        if not cands:
+            return []
+        refs = {
+            "uploads": {r[0] + ".pdf" for r in c.execute("SELECT file_hash FROM statements")},
+            "bills": {r[0] for r in c.execute("SELECT file_name FROM bills WHERE file_name IS NOT NULL")},
+            "receipts": {r[0] for r in c.execute("SELECT receipt_file FROM entries WHERE receipt_file IS NOT NULL")},
+            "statements-bank": {r[0] for r in c.execute("SELECT file_name FROM bank_documents WHERE stored = 1")},
+        }
+        pending = _pending_inbox_docs(c)
+    removed = []
+    for kind, name in cands:
+        if name not in refs.get(kind, set()) and name not in pending:
+            remove_file(kind, name)
+            removed.append(f"{kind}/{name}")
+    return removed
+
+
+# ---------------------------------------------------------------- hesap dökümü dosyaları
+
+BANK_DOC_TYPES = {".pdf": ".pdf", ".xlsx": ".xlsx", ".xls": ".xls", ".csv": ".csv"}
+
+
+def save_bank_document(data: bytes, filename: str, bank: str | None = None) -> int | None:
+    """İçe aktarılan dökümün dosyası. Döner: bank_documents id (dosya alan sınırı yüzünden saklanmadıysa da kayıt
+    oluşur, stored = 0). Uzantı tanınmıyorsa None."""
+    ext = BANK_DOC_TYPES.get(os.path.splitext(filename or "")[1].lower())
+    if not ext:
+        return None
+    name = f"{file_hash(data)}{ext}"
+    stored = store_file("statements-bank", name, data)
+    acc = None
+    if bank:
+        from app.bank_import import short_bank
+
+        with connect() as c:
+            r = c.execute("SELECT id FROM accounts WHERE name = ?", (short_bank(bank),)).fetchone()
+            acc = r[0] if r else None
+    with connect() as c:
+        return c.execute("INSERT INTO bank_documents (file_name, filename, bank, account_id, size, stored) "
+                         "VALUES (?, ?, ?, ?, ?, ?)", (name, (filename or "")[:200] or None, bank or None, acc,
+                                                     len(data), int(stored))).lastrowid
+
+
+def link_bank_document(doc_id: int, hashes: list[str]) -> int:
+    """Dökümden gelen (yeni ya da eşleşen) kayıtlar dosyayı göstersin."""
+    hashes = [h for h in hashes if h]
+    n = 0
+    with connect() as c:
+        for i in range(0, len(hashes), 500):
+            part = hashes[i:i + 500]
+            n += c.execute(f"UPDATE entries SET bank_doc_id = ? WHERE bank_doc_id IS NULL AND import_hash IN "
+                           f"({','.join('?' * len(part))})", (doc_id, *part)).rowcount
+    return n
+
+
+def list_bank_documents() -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT id, filename, bank, account_id, size, stored, uploaded_at FROM bank_documents "
+                              "ORDER BY id DESC"))
+
+
+def get_bank_document(doc_id: int) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT * FROM bank_documents WHERE id = ?", (doc_id,)).fetchone()
+        return dict(r) if r else None
 
 
 # ---------------------------------------------------------------- bütçeler

@@ -122,7 +122,10 @@ def test_salary_import_teaches_recurring_account(client, tmpdb):
 
 def test_cash_entry_goes_to_single_wallet(client, tmpdb):
     client.post("/api/accounts", json={"name": "Cüzdan", "kind": "nakit", "balance": 1000})
-    client.post("/api/entries", json={"entry_date": "2026-10-28", "description": "Simit", "amount": 40, "kind": "gider",
+    from datetime import date
+
+    # bakiye bugünün tarihiyle girilir; harcama da bugün olmalı (önceki gün bakiyeye zaten dahil sayılır)
+    client.post("/api/entries", json={"entry_date": date.today().isoformat(), "description": "Simit", "amount": 40, "kind": "gider",
                                       "category": "Kafe & Restoran", "payment": "nakit"})
     acc = next(a for a in tmpdb.list_accounts() if a["name"] == "Cüzdan")
     assert acc["current"] == 960

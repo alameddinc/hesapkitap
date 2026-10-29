@@ -203,7 +203,8 @@ def test_free_plan_limits_and_premium_unlocks(hosted):
     cur = finance.current_period()
     old = finance.add_months(cur, -3)
     lim = c.get("/api/meta").json()["plan"]["limits"]
-    assert lim == {"history_months": 1, "plan_months": 1, "budgets": 2, "family_seats": 4}
+    assert lim == {"history_months": 1, "plan_months": 1, "budgets": 2, "family_seats": 4,
+                   "storage_bytes": 200 * 1024 * 1024, "storage_used": 0}  # dosya alanı: yalnız hazır sürümde
     # geçmiş: bu dönem + geçen dönem serbest, daha eskisi Premium
     assert c.get(f"/api/summary?month={finance.add_months(cur, -1)}").status_code == 200
     r = c.get(f"/api/summary?month={old}")

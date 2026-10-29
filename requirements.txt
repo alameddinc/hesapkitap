@@ -5,6 +5,9 @@ httpx==0.28.1
 # gelen postada (Cloudflare Email Worker) DKIM imzasını sunucu doğrular
 dkimpy==1.1.8
 pdfplumber==0.11.10
+# fiş/fatura fotoğrafı: yön, küçültme, EXIF/konum silme (app/images.py) ve yerel OCR ön işleme. pdfplumber zaten
+# getiriyor; doğrudan kullanıldığı için sürümü sabit (pdfplumber bağımlılığını değiştirirse sessizce kırılmasın)
+pillow==12.3.0
 # banka hesap hareketleri (Excel) içe aktarma
 openpyxl==3.1.5
 xlrd==2.0.2

@@ -61,16 +61,21 @@ def process(name: str, data: bytes, mime: str) -> dict:
             return {"status": "hata", "message": str(e)}
     if not is_pdf and mime not in IMAGE_TYPES:
         return {"status": "hata", "message": f"{name}: sadece PDF ya da fotoğraf paylaşılabilir"}
-    from app.api.main import BILL_TYPES, CATEGORIES, EXPENSE_CATEGORIES
+    from app.api.main import BILL_TYPES, CATEGORIES, EXPENSE_CATEGORIES, _prepare_photo, _store_receipt
 
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
+    # fotoğraf: küçült + EXIF/konum sil; okuma ve saklama bu hazırlanmış görüntüyle (app/images.py)
+    read, read_mime, photo = (data, "application/pdf", None) if is_pdf else _prepare_photo(data, mime)
     try:
-        doc = receipt.parse_document(data, "application/pdf" if is_pdf else mime, cats,
-                                     sorted({r["category"] for r in db.list_item_rules()}))
+        doc = receipt.parse_document(read, read_mime, cats, sorted({r["category"] for r in db.list_item_rules()}))
     except receipt.ReceiptError as e:
         return {"status": "hata", "message": str(e)}
-    if doc["type"] == "bill" and (is_pdf or mime in BILL_TYPES):
+    if doc["type"] == "bill" and photo:
+        doc["file_name"] = db.save_bill_file(photo, ".jpg")
+    elif doc["type"] == "bill" and (is_pdf or mime in BILL_TYPES):
         doc["file_name"] = db.save_bill_file(data, BILL_TYPES.get("application/pdf" if is_pdf else mime, ".pdf"))
+    elif doc["type"] == "receipt":
+        doc["receipt_file"] = _store_receipt(photo)
     with db.connect() as c:
         _init(c)
         iid = c.execute("INSERT INTO shared_inbox (filename, kind, doc) VALUES (?, ?, ?)",
@@ -79,7 +84,10 @@ def process(name: str, data: bytes, mime: str) -> dict:
         what = f"Fatura: {doc.get('provider') or '?'} {doc.get('amount') or ''} TL"
     else:
         what = f"Fiş: {doc.get('merchant') or '?'} {doc.get('total') or ''} TL"
-    return {"status": "bekliyor", "message": f"{what} · uygulamada onayla", "id": iid}
+    out = {"status": "bekliyor", "message": f"{what} · uygulamada onayla", "id": iid}
+    if warn := db.take_storage_warning():
+        out["storage_warning"] = warn
+    return out
 
 
 def inbox() -> list[dict]:

@@ -31,6 +31,8 @@ export interface DocResult {
   installments?: number;
   card_last4?: string | null;
   legal_name?: string | null;
+  receipt_file?: string | null; // saklanan fiş fotoğrafının içerik adı: kayda bağlanır
+  storage_warning?: string;
   // fatura
   provider?: string;
   amount?: number | null;
@@ -56,6 +58,7 @@ export function docToDraft(r: DocResult): EntryDraft {
         installments: r.installments && r.installments > 1 ? r.installments : undefined,
         card_last4: r.card_last4 ?? null,
         legal_name: r.legal_name,
+        receipt_file: r.receipt_file ?? null,
         items: r.items,
         location: r.address ?? null,
         branch: r.branch ?? null,

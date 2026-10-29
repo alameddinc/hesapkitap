@@ -146,6 +146,17 @@ def limits(u: dict | None) -> dict:
             "budgets": None if full else FREE_BUDGETS, "family_seats": FAMILY_SEATS if hosted() else None}
 
 
+# defter başına saklanan dosyaların (ekstre PDF'i, fatura, fiş fotoğrafı, hesap dökümü) toplam boyutu
+STORAGE_BYTES = {FREE: 200 * 1024 * 1024, PREMIUM: 2 * 1024 ** 3, FAMILY: 2 * 1024 ** 3}
+
+
+def storage_limit(u: dict | None) -> int | None:
+    """Bayt; None = sınırsız (kendi sunucusu, yönetici). Ortak defterde sahibin paketi (defter onundur)."""
+    if not hosted() or (u and u.get("role") == "admin"):
+        return None
+    return STORAGE_BYTES[plan_of(u)]
+
+
 def ai_limit(u: dict) -> int | None:
     """Barındırılan sürümde paketin kotası; elle verilmiş kişisel kota her zaman önce gelir."""
     if u.get("ai_quota") is not None:

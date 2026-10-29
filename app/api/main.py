@@ -715,8 +715,17 @@ def meta():
         "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": prefs.ui(),
         "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
         "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
-        "plan": plans.info(db.current_user()),
+        "plan": _plan_info(),
     }
+
+
+def _plan_info() -> dict:
+    """Paket bilgisi; hazır sürümde dosya alanı da (kendi sunucusunda sınır yok, alan gösterilmez)."""
+    u = db.current_user()
+    info = plans.info(u)
+    if plans.hosted():
+        info["limits"] = {**info["limits"], "storage_bytes": plans.storage_limit(u), "storage_used": db.storage_used()}
+    return info
 
 
 class ModulesIn(BaseModel):
@@ -848,6 +857,7 @@ class EntryIn(BaseModel):
     account_id: int | None = None  # banka/nakit hesabı
     installments: int = Field(1, ge=1, le=36)  # kredi kartı taksit sayısı
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # hangi kredi kartı (fişte yazıyorsa okunur)
+    receipt_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.jpg$")  # okuma yanıtındaki fiş fotoğrafı
 
 
 class EntryPatch(BaseModel):
@@ -885,6 +895,8 @@ def create_entry(body: EntryIn):
             data["account_id"] = cash[0]["id"]
     if (u := db.current_user()):
         data["created_by"] = u["id"]  # ortak defterde kimin eklediği
+    if data.get("receipt_file") and not db.file_indexed("receipts", data["receipt_file"]):
+        data["receipt_file"] = None  # bu defterde saklanmış bir fotoğraf değil: bağlanmaz
     eid = db.create_entry(data)
     if body.items and body.kind == "gider":
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
@@ -941,6 +953,18 @@ def patch_entry(entry_id: int, body: EntryPatch):
 
 class LinkIn(BaseModel):
     txn_id: int | None  # None = eşleşmeyi kaldır
+
+
+@app.get("/api/entries/{entry_id}/receipt")
+def entry_receipt(entry_id: int):
+    """Kaydın fiş fotoğrafı. Kayıt bu defterden okunur; ortak defter üyesi göremediği (gizli) kaydın fotoğrafını da göremez."""
+    from app import book
+
+    with db.connect() as c:
+        r = c.execute("SELECT id, entry_date, receipt_file FROM entries WHERE id = ?", (entry_id,)).fetchone()
+    if not r or not r["receipt_file"] or (book.member() and not book.can_see_entry(entry_id)):
+        raise HTTPException(404, "Fotoğraf yok")
+    return _stored_file("receipts", r["receipt_file"], f"fis-{r['entry_date']}-{entry_id}.jpg", inline=True)
 
 
 @app.get("/api/entries/{entry_id}/candidates")
@@ -1294,11 +1318,47 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
         raise HTTPException(422, "İçe aktarılacak satır bulunamadı; sütun eşlemesini kontrol et")
     from app import undo
 
+    await file.seek(0)
+    raw = await file.read()
     with undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
         stats = db.import_bank_rows(parsed, account=account, owners=owners)
         db.auto_link()
+        # dökümün kendisi de saklanır (kayıtların detayından indirilir); geri alınınca bağ kopar, gece temizliği siler
+        try:
+            doc_id = db.save_bank_document(raw, file.filename or "", account or None)
+        except Exception:  # noqa: BLE001 - dosya saklanamasa da içe aktarma geçerli
+            import logging
+
+            logging.getLogger("ekstre.storage").exception("hesap dökümü dosyası saklanamadı")
+            doc_id = None
+        if doc_id:
+            db.link_bank_document(doc_id, [r.get("hash") for r in parsed])
         b["summary"] = stats
+    if warn := db.take_storage_warning():
+        stats["storage_warning"] = warn
     return stats
+
+
+@app.get("/api/bank-import/documents")
+def bank_documents():
+    return [d for d in db.list_bank_documents() if _bank_doc_visible(d)]
+
+
+def _bank_doc_visible(d: dict) -> bool:
+    """Ortak defterde (tam yetkili üye) gizli hesabın dökümü görünmez."""
+    from app import book
+
+    r = book.active()
+    return not (r and d.get("account_id") in set(r["hidden_accounts"]))
+
+
+@app.get("/api/bank-import/documents/{doc_id}/file")
+def bank_document_file(doc_id: int):
+    d = db.get_bank_document(doc_id)
+    if not d or not d["stored"] or not _bank_doc_visible(d):
+        raise HTTPException(404, "Dosya yok")
+    base = os.path.splitext(d["filename"] or "")[0] or f"hesap-dokumu-{doc_id}"
+    return _stored_file("statements-bank", d["file_name"], base)
 
 
 # ---------------------------------------------------------------- ön ödemeli kartlar
@@ -2466,7 +2526,19 @@ async def _upload_statements(files: list[UploadFile], password: str | None, reme
     changed = db.auto_update_cycle()
     if changed and results:
         results[-1]["cycle_day"] = changed  # arayüz "ay dönümü X'e güncellendi" der
+    if (warn := db.take_storage_warning()) and results:
+        results[-1]["storage_warning"] = warn
     return results
+
+
+@app.get("/api/statements/{sid}/file")
+def statement_file(sid: int):
+    """Ekstrenin saklanan PDF'i. Kayıt bu defterden okunur; ortak defterde gizli kartın ekstresi yok sayılır."""
+    s = next((x for x in db.list_statements() if x["id"] == sid), None)  # list_statements üye kurallarıyla süzer
+    if not s:
+        raise HTTPException(404, "Ekstre bulunamadı")
+    name = f"{s['file_hash']}.pdf"
+    return _stored_file("uploads", name, f"{s['bank']}-{s['card_no'][-4:]}-{s['period_end']}.pdf")
 
 
 @app.delete("/api/statements/{sid}")
@@ -2869,11 +2941,89 @@ async def parse_receipt(file: UploadFile = File(...)):
     mime = file.content_type or "image/jpeg"
     if not mime.startswith("image/"):
         raise HTTPException(422, "Sadece fotoğraf yüklenebilir")
+    data, mime, photo = _prepare_photo(data, mime)
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
-        return receipt.parse_receipt(data, mime, cats)
+        out = receipt.parse_receipt(data, mime, cats)
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
+    out["receipt_file"] = _store_receipt(photo)
+    if warn := db.take_storage_warning():
+        out["storage_warning"] = warn
+    return out
+
+
+# ---------------------------------------------------------------- saklanan dosyalar: fotoğraf hazırlama ve güvenli yanıt
+
+def _prepare_photo(data: bytes, mime: str) -> tuple[bytes, str, bytes | None]:
+    """Fotoğrafı küçült, yönünü düzelt, EXIF/konumu sil (app/images.py). (okunacak veri, türü, saklanacak JPEG|None).
+    Açılamazsa (ör. HEIC) özgün veriyle okunur, saklanmaz."""
+    from app import images
+
+    if not mime.startswith("image/"):
+        return data, mime, None
+    small = images.prepare(data)
+    if small is None:
+        import logging
+
+        logging.getLogger("ekstre.storage").warning("fotoğraf açılamadı (%s, %d bayt): okunuyor, saklanmıyor", mime, len(data))
+        return data, mime, None
+    return small, "image/jpeg", small
+
+
+def _store_receipt(photo: bytes | None) -> str | None:
+    """Hazırlanmış fiş fotoğrafını sakla; istemciye dönen yalnız içerik adıdır (<sha256>.jpg), depo adresi/anahtarı değil."""
+    if not photo:
+        return None
+    name = f"{db.file_hash(photo)}.jpg"
+    try:
+        return name if db.store_file("receipts", name, photo, "image/jpeg") else None
+    except Exception:  # noqa: BLE001 - depo geçici olarak yoksa okuma yine sonuç versin
+        import logging
+
+        logging.getLogger("ekstre.storage").exception("fiş fotoğrafı saklanamadı")
+        return None
+
+
+SAFE_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+
+
+def _safe_filename(name: str) -> tuple[str, str]:
+    """(ASCII yedeği, RFC 5987 UTF-8 hali) — tırnak, satır sonu, yol ayıracı yok."""
+    from urllib.parse import quote
+
+    clean = re.sub(r'[\x00-\x1f\x7f"\\/;:*?<>|]+', "_", name).strip(" .") or "dosya"
+    clean = clean[:120]
+    tr = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
+    ascii_ = re.sub(r"[^A-Za-z0-9._-]+", "_", clean.translate(tr)).strip("_") or "dosya"
+    return ascii_, quote(clean, safe="")
+
+
+def file_response(data: bytes, ctype: str, filename: str, inline: bool = False) -> Response:
+    """Saklanan dosyayı akıt: izinli türler dışında her şey indirme (octet-stream). Önbelleğe alınmaz."""
+    if ctype not in SAFE_TYPES:
+        ctype, inline = "application/octet-stream", False
+    a, u = _safe_filename(filename)
+    return Response(data, media_type=ctype, headers={
+        "Content-Disposition": f"{'inline' if inline else 'attachment'}; filename=\"{a}\"; filename*=UTF-8''{u}",
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+        "Content-Security-Policy": "default-src 'none'; sandbox"})
+
+
+def _stored_file(kind: str, name: str | None, filename: str, inline: bool = False) -> Response:
+    """Açık defterin dosyası (anahtar oturumdan + kaydın kendi alanından türetilir). Yoksa 404, depo hatası 503."""
+    from app import storage
+
+    if not storage.valid_name(kind, name):
+        raise HTTPException(404, "Dosya yok")
+    try:
+        data = db.read_file(kind, name)
+    except storage.StorageError as e:
+        raise HTTPException(503, "Dosya şu an alınamadı") from e
+    if data is None:
+        raise HTTPException(404, "Dosya yok")
+    ext = os.path.splitext(name)[1].lower()
+    return file_response(data, storage.content_type(name), filename + ("" if filename.lower().endswith(ext) else ext), inline)
 
 
 # ---------------------------------------------------------------- tasarruf
@@ -3027,12 +3177,14 @@ async def parse_bill(file: UploadFile = File(...)):
     mime = file.content_type or ""
     if mime not in BILL_TYPES:
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
-    name = db.save_bill_file(data, BILL_TYPES[mime])
+    read, read_mime, photo = _prepare_photo(data, mime)
+    name = db.save_bill_file(photo, ".jpg") if photo else db.save_bill_file(data, BILL_TYPES[mime])
     try:
-        parsed = receipt.parse_bill(data, mime) if receipt.enabled() else {}
+        parsed = receipt.parse_bill(read, read_mime) if receipt.enabled() else {}
     except receipt.ReceiptError as e:
         parsed = {"error": str(e)}
-    return {**parsed, "file_name": name}
+    warn = db.take_storage_warning()
+    return {**parsed, "file_name": name, **({"storage_warning": warn} if warn else {})}
 
 
 # ---------------------------------------------------------------- telefondan Paylaş
@@ -3052,6 +3204,8 @@ async def share(request: Request, file: list[UploadFile] = File(...)):
             continue
         res = await asyncio.to_thread(share_mod.process, f.filename or "dosya", data, f.content_type or "")
         out.append(res["message"])
+        if res.get("storage_warning"):
+            out.append(res["storage_warning"])
     if "text/plain" in request.headers.get("accept", "") or "json" not in request.headers.get("accept", ""):
         return PlainTextResponse("\n".join(out) or "Dosya yok")
     return {"messages": out}
@@ -3164,6 +3318,10 @@ async def parse_document(file: list[UploadFile] = File(...)):
 
 
 def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
+    """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır."""
+    original, original_mime = data, mime
+    data, mime, photo = _prepare_photo(data, mime)
+    more = [_prepare_photo(d, m)[:2] for d, m in (more or [])] or None
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
         doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)
@@ -3181,7 +3339,12 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
                 doc["category"] = cat
                 break
     if doc["type"] == "bill":
-        doc["file_name"] = db.save_bill_file(data, BILL_TYPES[mime])
+        doc["file_name"] = db.save_bill_file(photo, ".jpg") if photo else \
+            db.save_bill_file(original, BILL_TYPES.get(original_mime, ".pdf"))
+    else:
+        doc["receipt_file"] = _store_receipt(photo)
+    if warn := db.take_storage_warning():
+        doc["storage_warning"] = warn
     return doc
 
 
@@ -3231,10 +3394,7 @@ def bill_file(bid: int):
     b = db.get_bill(bid)
     if not b or not b["file_name"]:
         raise HTTPException(404)
-    path = os.path.join(db.bill_dir(), b["file_name"])
-    if not os.path.isfile(path):
-        raise HTTPException(404)
-    return FileResponse(path, filename=f"{b['provider']}-{b['due_date']}{os.path.splitext(path)[1]}")
+    return _stored_file("bills", b["file_name"], f"{b['provider']}-{b['due_date']}")
 
 
 # ---------------------------------------------------------------- ayarlar: telegram + yedek
