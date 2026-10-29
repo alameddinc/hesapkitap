@@ -8,6 +8,7 @@ import Insights from "../components/Insights";
 import Kpi from "../components/Kpi";
 import NetWorth, { ZakatDue } from "../components/NetWorth";
 import Onboarding from "../components/Onboarding";
+import Reminders from "../components/Reminders";
 import SharedInbox from "../components/SharedInbox";
 import MonthPicker from "../components/MonthPicker";
 import MonthDigest from "../components/MonthDigest";
@@ -198,7 +199,8 @@ export default function Dashboard() {
         </div>
       </>);
       case "gelenler": return <SharedInbox />;
-      case "baslarken": return inSharedBook(book) ? null : <Onboarding />;
+      // Başlarken (sahibin kurulumu) ve altında Yapılacaklar (belge hatırlatmaları; üyede görebildikleri)
+      case "baslarken": return <>{!inSharedBook(book) && <Onboarding />}<Reminders /></>;
       case "uyarilar": return (
         <section>
           <h2 className="mb-2 font-display text-lg font-semibold tracking-tight">Dikkat etmen gerekenler</h2>

@@ -104,3 +104,20 @@ def test_google_account_without_password_can_delete_itself(google):
     assert c.post("/api/me/delete", json={"confirm": "hayır"}).status_code == 403
     assert c.post("/api/me/delete", json={"confirm": "sil"}).status_code == 200
     assert system.user_by_name("ayse@gmail.com") is None
+
+
+def test_apple_login_same_rules(google, monkeypatch):
+    """Apple: yayıncı appleid.apple.com, aud = bundle ID; e-posta "true" metniyle gelir."""
+    from app import social
+    from app.api.main import app
+
+    monkeypatch.setattr(social, "_apple_keys", social._google_keys)  # aynı sahte anahtar
+    monkeypatch.setenv("HESAPKITAP_APPLE_CLIENT_IDS", "com.alameddinc.hesapkitap")
+    t = lambda **k: google(iss="https://appleid.apple.com", aud="com.alameddinc.hesapkitap",
+                           email="x1@privaterelay.appleid.com", email_verified="true", **k)
+    c = TestClient(app)
+    assert c.get("/api/auth/status").json()["apple"] is True
+    assert c.post("/api/auth/apple", json={"id_token": t()}).status_code == 409  # yeni hesap: önce onay
+    r = c.post("/api/auth/apple", json={"id_token": t(), "consent": ["kosullar", "acik_riza"]})
+    assert r.status_code == 200 and r.json()["created"] is True
+    assert TestClient(app).post("/api/auth/apple", json={"id_token": google()}).status_code == 401  # Google belgesi geçmez

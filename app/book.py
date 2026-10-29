@@ -53,7 +53,8 @@ ROLE_LABELS = {"viewer": "Sadece görür", "editor": "Görür ve ekler", "full":
 FULL_CLOSED = ("/api/settings", "/api/admin", "/api/book/")
 # yetkisi ne olursa olsun kişinin kendi hesabıyla ilgili yazmalar
 PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"),
-                   ("DELETE", r"/api/settings/tokens/\d+"), ("POST", r"/api/me/delete"), ("POST", r"/api/digest/dismiss")]
+                   ("DELETE", r"/api/settings/tokens/\d+"), ("POST", r"/api/me/delete"), ("POST", r"/api/digest/dismiss"),
+                   ("POST", r"/api/reminders/[^/]+/(snooze|dismiss)")]  # hatırlatma durumu kişiye özel
 
 
 def member() -> dict | None:

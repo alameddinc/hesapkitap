@@ -15,7 +15,10 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 GOOGLE_CERTS = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+APPLE_KEYS = "https://appleid.apple.com/auth/keys"
+APPLE_ISSUER = "https://appleid.apple.com"
 _jwks: dict = {"at": 0.0, "keys": {}}
+_apple_jwks: dict = {"at": 0.0, "keys": {}}
 
 
 class SocialError(Exception):
@@ -30,6 +33,15 @@ def google_enabled() -> bool:
     return bool(google_client_ids())
 
 
+def apple_client_ids() -> list[str]:
+    """Apple'da aud = uygulamanın bundle ID'si (iOS'tan giriş). HESAPKITAP_APPLE_CLIENT_IDS, virgülle."""
+    return [x.strip() for x in os.environ.get("HESAPKITAP_APPLE_CLIENT_IDS", "").split(",") if x.strip()]
+
+
+def apple_enabled() -> bool:
+    return bool(apple_client_ids())
+
+
 def _b64(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
@@ -40,6 +52,14 @@ def _google_keys(force: bool = False) -> dict:
         _jwks["keys"] = {k["kid"]: k for k in data.get("keys", []) if k.get("kty") == "RSA"}
         _jwks["at"] = time.time()
     return _jwks["keys"]
+
+
+def _apple_keys(force: bool = False) -> dict:
+    if force or time.time() - _apple_jwks["at"] > 3600 or not _apple_jwks["keys"]:
+        data = httpx.get(APPLE_KEYS, timeout=10).json()
+        _apple_jwks["keys"] = {k["kid"]: k for k in data.get("keys", []) if k.get("kty") == "RSA"}
+        _apple_jwks["at"] = time.time()
+    return _apple_jwks["keys"]
 
 
 def _verify_rs256(token: str, keys_for) -> dict:
@@ -77,3 +97,22 @@ def verify_google(id_token: str, keys_for=None) -> dict:
     if not c.get("email") or c.get("email_verified") not in (True, "true"):
         raise SocialError("Google hesabının e-postası doğrulanmamış")
     return {"email": c["email"].strip().lower(), "name": c.get("name") or ""}
+
+
+def verify_apple(id_token: str, keys_for=None) -> dict:
+    """Apple kimlik belgesi → {"email", "name": ""}. E-posta "Hide My Email" ile gizli aktarma adresi olabilir; o da
+    kalıcıdır ve kişiye ulaşır, hesap onunla açılır. Ad belgede yoktur (yalnız ilk girişte uygulamaya verilir)."""
+    ids = apple_client_ids()
+    if not ids:
+        raise SocialError("Apple ile giriş bu sunucuda kapalı")
+    c = _verify_rs256(id_token, keys_for or _apple_keys)
+    now = time.time()
+    if c.get("iss") != APPLE_ISSUER:
+        raise SocialError("Belge Apple'dan değil")
+    if c.get("aud") not in ids:
+        raise SocialError("Belge bu uygulama için değil")
+    if not (c.get("exp", 0) > now - 60 and c.get("iat", now) < now + 300):
+        raise SocialError("Belgenin süresi dolmuş")
+    if not c.get("email") or c.get("email_verified") not in (True, "true"):
+        raise SocialError("Apple hesabının e-postası alınamadı; Ayarlar'dan e-posta paylaşımına izin ver")
+    return {"email": c["email"].strip().lower(), "name": ""}

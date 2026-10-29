@@ -177,6 +177,12 @@ class PasswordChange(BaseModel):
     new: str
 
 
+def _apple_enabled() -> bool:
+    from app import social
+
+    return social.apple_enabled()
+
+
 def _google_enabled() -> bool:
     from app import social
 
@@ -218,6 +224,7 @@ def auth_status(request: Request):
             "login": "email" if plans.hosted() else "username",
             "reset": _reset_enabled(),
             "google": _google_enabled(),
+            "apple": _apple_enabled(),
             "consent": sorted(CONSENT_ITEMS) if plans.hosted() else [],  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
@@ -330,6 +337,20 @@ class SocialIn(BaseModel):
 @app.post("/api/auth/google")
 def google_login(body: SocialIn, request: Request, response: Response):
     """Google ile giriş: doğrulanmış e-postayla hesap varsa ona girer, yoksa (açık kayıtta) yeni hesap açar."""
+    from app import social
+
+    return _social_login(social.verify_google, body, request, response)
+
+
+@app.post("/api/auth/apple")
+def apple_login(body: SocialIn, request: Request, response: Response):
+    """Apple ile giriş: Google ile aynı kurallar (e-posta eşleşmesi, yeni hesapta onay)."""
+    from app import social
+
+    return _social_login(social.verify_apple, body, request, response)
+
+
+def _social_login(verify, body: SocialIn, request: Request, response: Response):
     import secrets
 
     from app import social
@@ -338,7 +359,7 @@ def google_login(body: SocialIn, request: Request, response: Response):
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
     try:
-        who = social.verify_google(body.id_token)
+        who = verify(body.id_token)
     except social.SocialError as e:
         auth.record_fail(ip)
         raise HTTPException(401, str(e)) from e
@@ -1529,9 +1550,13 @@ def set_debt_payment_account(pid: int, body: PaymentAccount):
 
 
 @app.get("/api/onboarding")
-def onboarding():
-    """Başlarken: hangi adımlar tamam (Özet'teki rehber kartı)."""
+def onboarding(v: int = 1):
+    """Başlarken: hangi adımlar tamam (Özet'teki rehber kartı). v=2: mobil sırası (hesap → gelir → kart → sabit
+    gider → posta → bütçe); v=1 (web) olduğu gibi."""
     from app import mailbox, telegram
+
+    if v >= 2:
+        return _onboarding_v2()
 
     with db.connect() as c:
         one = lambda q: bool(c.execute(q).fetchone())  # noqa: E731
@@ -1592,10 +1617,104 @@ def onboarding():
             "dismissed": db.get_setting("onboarding_dismissed") == "1"}
 
 
+def _onboarding_v2() -> dict:
+    """Mobil Başlarken: kurulum sırası. Ortak defter üyesinde adım yok (kurulum defter sahibinin işi)."""
+    from app import book, inbound
+
+    dismissed = db.get_setting("onboarding_dismissed") == "1"
+    if book.member():
+        return {"steps": [], "done": 0, "total": 0, "dismissed": True, "member": True}
+    u = db.current_user()
+    with db.connect() as c:
+        one = lambda q: bool(c.execute(q).fetchone())  # noqa: E731
+        steps = [
+            {"key": "hesap", "done": one("SELECT 1 FROM accounts WHERE kind <> 'kart' AND as_of IS NOT NULL"),
+             "route": "hesaplar", "action": "account", "cta": "Hesap ekle",
+             "title": "Hesaplarını ekle",
+             "text": "Banka hesaplarını ve nakdini bugünkü bakiyesiyle ekle; harcanabilir paran buna göre hesaplanır.",
+             "guide": ["Hesaplar'da + ile bankanı ya da nakit cüzdanını ekle.",
+                       "Bugünkü bakiyesini yaz; sonraki hareketler bunun üstüne işlenir.",
+                       "Hesap dökümü yüklersen bakiye kendiliğinden güncellenir."]},
+            {"key": "maas", "done": one("SELECT 1 FROM recurring WHERE kind = 'gelir'"),
+             "route": "plan", "action": "salary", "cta": "Maaşımı gir",
+             "title": "Maaşını ve düzenli gelirlerini gir",
+             "text": "Maaş, kira geliri, burs… Her ay gelen para planı ileriye taşır.",
+             "guide": ["Net tutarı yaz; 'Her ay tekrarlansın' açık kalsın.",
+                       "Yattığı günü seç; plan gelecek ayları buna göre kurar.",
+                       "Brütünü biliyorsan 'Brüt'ü seç: net her ay vergi dilimine göre hesaplanır."]},
+            {"key": "kart", "done": one("SELECT 1 FROM statements"),
+             "route": "ekstreler", "action": "upload", "cta": "Ekstre yükle",
+             "title": "Kredi kartlarını ekle",
+             "text": "İlk ekstreni yükle; kartın, harcamaların ve son ödeme tarihin kendiliğinden gelir.",
+             "guide": ["Bankanın uygulaması → Kartlar → Ekstreler → son ekstre → PDF olarak paylaş.",
+                       "+ → Ekstre yükle ile PDF'i seç; hangi kart olduğunu kendisi anlar.",
+                       "Şifreliyse (çoğu bankada TC kimlik no'nun bir kısmı) bir kez sorar."]},
+            {"key": "sabit", "done": one("SELECT 1 FROM recurring WHERE kind = 'gider'"),
+             "route": "plan", "action": "fixed", "cta": "Sabit gider ekle",
+             "title": "Sabit giderlerini gir",
+             "text": "Kira, aidat, abonelik, fatura… Her ay ödediklerin ay sonunu doğru gösterir.",
+             "guide": ["Adını ve tutarını yaz, ödeme gününü seç.",
+                       "Tutarı değişen faturalarda ortalamayı yaz; fatura gelince düzeltirsin.",
+                       "Bitiş ayı olan kalemler (taksitli kredi gibi) o ay kendiliğinden biter."]},
+        ]
+        if u and plans.hosted() and plans.allows(u, "posta"):
+            steps.append({"key": "posta", "done": one("SELECT 1 FROM mail_log"), "route": "ayarlar", "action": "posta",
+                          "cta": "Adresimi göster", "title": "Posta adresini kur",
+                          "text": "Bankanın e-ekstre ve fatura maillerini sana özel adrese ilet; kendiliğinden okunsun.",
+                          "guide": ["Posta'da sana özel adresi kopyala.",
+                                    "Bankanın e-ekstre ayarında ya da mail kutunda bu adrese yönlendirme kur.",
+                                    "İlk mail gelince bu adım tamamlanır."],
+                          "address": bool(inbound.address(u, create=False))})
+        steps.append({"key": "butce", "done": one("SELECT 1 FROM budgets"), "route": "ozet", "action": "budget",
+                      "cta": "Bütçe koy", "title": "İlk bütçeni koy",
+                      "text": "Market, yemek gibi bir kategoriye aylık sınır koy; yaklaşınca haber verelim.",
+                      "guide": ["Bir kategori seç (en çok harcadığın iyi bir başlangıç).",
+                                "Aylık sınırı yaz; sınıra yaklaşınca Özet'te uyarırız.",
+                                "Ay dönünce bütçe kendiliğinden sıfırlanır."]})
+    return {"steps": steps, "done": sum(s_["done"] for s_ in steps), "total": len(steps), "dismissed": dismissed}
+
+
 @app.post("/api/onboarding/dismiss")
 def onboarding_dismiss():
     db.set_setting("onboarding_dismissed", "1")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- hatırlatmalar (Yapılacaklar; ileride push)
+
+REMINDER_ID = r"^(ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?$"
+
+
+class SnoozeIn(BaseModel):
+    days: int = Field(default=1, ge=1, le=31)
+
+
+@app.get("/api/reminders")
+def reminders_list():
+    """Yapılacaklar: [{id, kind, title, text, cta, route, action, due, severity, tag, period, ...}]; id döneme bağlı, kararlı."""
+    from app import reminders
+
+    return reminders.build()
+
+
+def _reminder_id(rid: str) -> str:
+    if not re.match(REMINDER_ID, rid):
+        raise HTTPException(422, "Geçersiz hatırlatma")
+    return rid
+
+
+@app.post("/api/reminders/{rid}/snooze")
+def reminders_snooze(rid: str, body: SnoozeIn | None = None):
+    from app import reminders
+
+    return reminders.snooze(_reminder_id(rid), (body or SnoozeIn()).days)
+
+
+@app.post("/api/reminders/{rid}/dismiss")
+def reminders_dismiss(rid: str):
+    from app import reminders
+
+    return reminders.dismiss(_reminder_id(rid))
 
 
 JarUnit = Literal["TRY", "ALTIN_24", "ALTIN_22", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS", "USD", "EUR", "GBP"]
