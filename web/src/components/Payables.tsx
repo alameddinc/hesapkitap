@@ -45,7 +45,7 @@ export default function Payables() {
               onClick={() => p.type === "bill" && ui.openBill({ id: p.id!, provider: p.title, amount: p.amount, due_date: p.due_date,
                 category: p.category, note: p.note, description: p.description })}>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="truncate font-medium">{p.title}</span>
+                <span className="font-medium break-words">{p.title}</span>
                 <DueBadge p={p} />
               </div>
               <div className="mt-0.5 text-xs text-stone-500">
