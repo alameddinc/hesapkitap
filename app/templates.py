@@ -55,17 +55,96 @@ def _date_re(spec: dict) -> re.Pattern:
     return re.compile(r"^\s*" + _DATE_RES[(spec["date"]["order"], spec["date"]["sep"])] + r"\b")
 
 
+_PAGE_NO = re.compile(r"^(sayfa|page)\s*(no)?\s*[:.]?\s*\d+\s*(/|of|-)\s*\d+$", re.I)
+_EDGE = 6  # sayfanın ilk/son bu kadar satırı başlık/altlık bölgesi
+
+
+def _shape(ln: str) -> str:
+    """Sayfadan sayfaya yalnız rakamı değişen satırlar ('Sayfa No:4 / 5') aynı sayılsın."""
+    return re.sub(r"\d+", "#", ln)
+
+
+def _pages(text: str) -> list[list[str]] | None:
+    """Metnin sayfaları (satır listeleri): PDF'ten okunduysa gerçek sayfa sınırları, değilse 'Sayfa 2 / 5' satırları."""
+    from app.parsers import pages_of
+
+    pages = pages_of(text)
+    if pages:
+        return [[ln.strip() for ln in p.splitlines() if ln.strip()] for p in pages]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    marks = [i for i, ln in enumerate(lines) if _PAGE_NO.match(ln)]
+    if len(marks) < 2:
+        return None
+    out, start = [], 0
+    for i in marks:
+        out.append(lines[start:i + 1])
+        start = i + 1
+    if start < len(lines):
+        out.append(lines[start:])
+    return out
+
+
+def noise_lines(text: str, dre: re.Pattern) -> set[str]:
+    """Sayfa başlığı/altlığı satırları (biçimleri; _shape). Sayfa sınırları biliniyorsa yalnız sayfa kenarında tekrar
+    edenler — açıklamanın sık tekrarlanan devam satırları ('…,Ayşe Yılmaz,Tür' / 'kiye Vakiflar Bankasi…') sayfa
+    ortasında da geçtiği için korunur. Sınır bilinmiyorsa eski kural: üç ve daha çok tekrar eden satır."""
+    pages = _pages(text)
+    if not pages or len(pages) < 2:
+        counts = Counter(ln.strip() for ln in text.splitlines() if ln.strip())
+        return {_shape(ln) for ln, n in counts.items() if n >= 3 and not dre.match(ln)}
+    total: Counter = Counter()
+    edge: Counter = Counter()
+    edge_pages: Counter = Counter()
+    for p in pages:
+        zone = set(range(min(_EDGE, len(p)))) | set(range(max(0, len(p) - _EDGE), len(p)))
+        seen: set[str] = set()
+        for i, ln in enumerate(p):
+            if dre.match(ln):
+                continue
+            s = _shape(ln)
+            total[s] += 1
+            if i in zone:
+                edge[s] += 1
+                seen.add(s)
+        edge_pages.update(seen)
+    need = max(2, (len(pages) + 1) // 2)
+    out = {s for s, n in edge_pages.items() if n >= need and edge[s] >= 0.7 * total[s]}
+    return out | {s for s in total if _PAGE_NO.match(s.replace("#", "1"))}
+
+
+_REF_TAIL = re.compile(r"\s+[A-Z]?\d{6,}[-/]\d+(?:[-/]\d+)*$")  # satır sonundaki dekont/işlem no (M20990101-120000-000001/01)
+
+
+_SMALL_WORDS = {"ve", "ile", "veya", "ya", "de", "da", "ki", "için"}
+
+
+def _join(parts: list[str]) -> str:
+    """Açıklama satırlarını birleştir. Bazı bankalar (Halkbank) sütunu sabit genişlikte keser: 'Tür' + 'kiye',
+    'TARAFI' + 'NDAN'. Harfle biten satırın devamı küçük harfle başlıyorsa kelime bölünmüştür: boşluksuz birleşir."""
+    out = ""
+    for p in parts:
+        p = _REF_TAIL.sub("", MONEY.sub(" ", p)).strip()
+        if not p:
+            continue
+        if out and ((out[-1].isalpha() and p[0].isalpha() and p[0].islower() and p.split()[0] not in _SMALL_WORDS)
+                    or (p[0].isdigit() and re.search(r"TR\d+$", out))):  # IBAN da bölünür: 'TR12000150' + '0158…'
+            out += p
+        else:
+            out = f"{out} {p}" if out else p
+    out = re.sub(r"\bTARAF(I\s+NDAN|IN\s+DAN|INDA\s+N)\b", "TARAFINDAN", out)
+    return re.sub(r"\s+", " ", out).strip()
+
+
 def apply(text: str, spec: dict) -> dict | None:
     """Şablonla oku → bank_pdf ile aynı sonuç sözlüğü (rows + zincir kontrolü) ya da None."""
     from app.bank_pdf import verify_chain
 
     dre = _date_re(spec)
     lines = [ln.strip() for ln in text.splitlines()]
-    counts = Counter(ln for ln in lines if ln)
-    noise = {ln for ln, n in counts.items() if n >= 3 and not dre.match(ln)}  # sayfa başlığı/altlığı
+    noise = noise_lines(text, dre)  # sayfa başlığı/altlığı
     blocks: list[tuple[str, list[str]]] = []
     for ln in lines:
-        if not ln or ln in noise:
+        if not ln or (_shape(ln) in noise and not dre.match(ln)):
             continue
         m = dre.match(ln)
         if m:
@@ -87,8 +166,7 @@ def apply(text: str, spec: dict) -> dict | None:
             amt, bal = _money(vals[ai]), _money(vals[bi])
         except (ValueError, IndexError):
             continue
-        desc = " ".join(MONEY.sub(" ", p) for p in parts)
-        rows.append({"date": d, "amount": amt, "balance": bal, "description": re.sub(r"\s+", " ", desc).strip()[:500]})
+        rows.append({"date": d, "amount": amt, "balance": bal, "description": _join(parts)[:500]})
     if len(rows) < 2:
         return None
 
