@@ -36,7 +36,7 @@ export interface UI {
   toast: (msg: string) => void;
 }
 
-export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "diger";
+export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger";
 
 export const UIContext = createContext<UI | null>(null);
 

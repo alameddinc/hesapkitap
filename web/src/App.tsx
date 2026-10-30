@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, Tags, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, Tags, Zap, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -30,6 +30,7 @@ import Prices from "./pages/Prices";
 import Accounts from "./pages/Accounts";
 import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
+import Bills from "./pages/Bills";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks";
 import BookSwitch from "./components/BookSwitch";
@@ -50,6 +51,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   hesaplar: Accounts,
   zekat: Zakat,
   istatistik: Stats,
+  faturalar: Bills,
   diger: More,
 };
 
@@ -62,6 +64,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "tasarruf", label: "Tasarruf", icon: Coins },
   { route: "transferler", label: "Transferler", icon: ArrowLeftRight },
   { route: "hesaplar", label: "Hesaplar", icon: Landmark },
+  { route: "faturalar", label: "Faturalar", icon: Zap },
   { route: "borclar", label: "Borç / Alacak", icon: HandCoins },
   { route: "zekat", label: "Zekât ve Sadaka", icon: Moon },
   { route: "fiyatlar", label: "Fiyatlar", icon: Tag },
@@ -241,7 +244,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 pt-2 pb-1 text-[11px] transition-colors active:opacity-60",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik", "faturalar"].includes(route))
                     ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>

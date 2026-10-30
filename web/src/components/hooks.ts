@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Row } from "../api";
-import { periodOf } from "../format";
+import { addMonths, periodOf } from "../format";
 
 export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta });
 
@@ -119,18 +119,25 @@ export function useUiPrefs() {
   return { ui, save };
 }
 
-/** Elle kaydı (entries.id) düzenleme penceresinde aç: o dönemin işlem listesinden satırı bulur (Transferler, Faturalar).
+/** Kaydı düzenleme penceresinde aç: o dönemin işlem listesinden satırı uid ile bulur ("m12" elle kayıt, "c34" kart
+ *  işlemi). Kart işleminin dönemi ekstreye göre kayabilir: tarihin dönemi, takvim ayı ve sonraki dönem denenir.
  *  Bulamazsa (ör. silinmiş) false döner. */
-export function useOpenEntry() {
+export function useOpenRow() {
   const qc = useQueryClient();
   const meta = useMeta().data;
-  return async (id: number, date: string, open: (row: Row) => void) => {
+  return async (uid: string, date: string, open: (row: Row) => void) => {
     const month = periodOf(date, meta?.cycle_start_day ?? 1);
-    for (const m of [month, date.slice(0, 7)]) {
+    for (const m of [...new Set([month, date.slice(0, 7), addMonths(month, 1)])]) {
       const rows = await qc.fetchQuery({ queryKey: ["txns", m], queryFn: () => api.transactions(m), staleTime: 10_000 });
-      const row = rows.find((r) => r.uid === `m${id}`);
+      const row = rows.find((r) => r.uid === uid);
       if (row) { open(row); return true; }
     }
     return false;
   };
+}
+
+/** Elle kaydı (entries.id) düzenleme penceresinde aç (Transferler). */
+export function useOpenEntry() {
+  const openRow = useOpenRow();
+  return (id: number, date: string, open: (row: Row) => void) => openRow(`m${id}`, date, open);
 }
