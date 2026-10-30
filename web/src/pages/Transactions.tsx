@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { api, type Row } from "../api";
 import MonthPicker from "../components/MonthPicker";
 import TxnList from "../components/TxnList";
+import { EstimateSection, splitEstimates } from "../components/Estimates";
 import { cx, fold, tl } from "../format";
 import { useUI } from "../ui";
 
@@ -24,14 +25,14 @@ export default function Transactions() {
   const ui = useUI();
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
-  const txns = useQuery({ queryKey: ["txns", ui.month, "all"], queryFn: () => api.transactions(ui.month, true) });
-
-  const rows = useMemo(() => {
-    const t = TABS.find((x) => x.key === tab)!;
-    const needle = fold(q.trim());
-    return (txns.data ?? []).filter((r) => t.test(r) &&
-      (!needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle)));
-  }, [txns.data, tab, q]);
+  const txns = useQuery({ queryKey: ["txns", ui.month, "all", "est"], queryFn: () => api.transactions(ui.month, true, true) });
+  // tahmini satırlar ana listede ve sekme sayılarında yok; başta ayrı, katlanır bölümde
+  const [real, estimates] = useMemo(() => splitEstimates(txns.data ?? []), [txns.data]);
+  const needle = fold(q.trim());
+  const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle);
+  const active = TABS.find((x) => x.key === tab)!;
+  const rows = real.filter((r) => active.test(r) && match(r));
+  const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
   const spend = rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && r.kind !== "gelir" && r.kind !== "odeme" && r.kind !== "borc"
     && r.category !== "Altın & Döviz Birikimi")
@@ -54,7 +55,7 @@ export default function Transactions() {
 
       <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0">
         {TABS.map((t) => {
-          const n = (txns.data ?? []).filter(t.test).length;
+          const n = real.filter(t.test).length;
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={cx("shrink-0 rounded-full border px-3 py-1 text-sm",
@@ -64,6 +65,8 @@ export default function Transactions() {
           );
         })}
       </div>
+
+      <EstimateSection rows={estShown} />
 
       <div className="card overflow-hidden">
         <div className="border-b border-stone-100 px-3 py-2 text-xs text-stone-500 dark:border-stone-800">

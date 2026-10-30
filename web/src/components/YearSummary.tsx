@@ -12,6 +12,7 @@ interface Year {
   avg_expense: number; savings_rate: number | null; highest: MonthTotal | null; lowest: MonthTotal | null;
   categories: (Group & { share: number })[]; merchants: Group[]; expense_change: number | null; income_change: number | null;
   zakat: number; sadaka: number; subscriptions_yearly: number;
+  estimated_expense?: number; // tahmini (ekstre bekleniyor): giderde ve kategorilerde YOK
 }
 
 const chg = (p: number | null, label: string) => (p == null ? null : `${label} ${p > 0 ? "+" : ""}${p}%`);
@@ -52,6 +53,13 @@ export default function YearSummary() {
           <div>
             <h3 className="mb-1 text-sm font-medium">Nereye gitti</h3>
             <BarList items={y.categories.map((c) => ({ ...c, name: `${c.name} · %${c.share}` }))} />
+            {!!y.estimated_expense && (
+              <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-dashed border-stone-300 px-2.5 py-1.5 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-400"
+                data-testid="year-estimate">
+                <span>Tahmini (ekstre bekleniyor) <span className="text-stone-500">· gidere ve paylara katılmadı</span></span>
+                <span className="shrink-0 tabular-nums">~{tl(y.estimated_expense)}</span>
+              </div>
+            )}
           </div>
           <div>
             <h3 className="mb-1 text-sm font-medium">En çok harcanan yerler</h3>

@@ -3,6 +3,7 @@ import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
 import { addMonths, dateTR, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
+import { EstimateNote } from "./Estimates";
 import { isViewer, useBook, useUiPrefs } from "./hooks";
 
 /** Sade görünüm: büyük yazı, tek bakışta "bu ay ne kadar harcadım" (kuruşu kuruşuna), yaklaşan ödemeler, iki düğme. */
@@ -22,6 +23,7 @@ export default function SimpleDashboard() {
         <div className="text-lg text-stone-500">{monthLabel(ui.month)} · bu ay harcadığın</div>
         <div className="mt-1 text-5xl font-bold tabular-nums tracking-tight">{t ? tl(t.expense) : "…"}</div>
         {prev.data && <div className="mt-1 text-base text-stone-500">Geçen ay ({monthLabel(prevMonth)}): {tl(prev.data.totals.expense)}</div>}
+        {summary.data && <div className="text-left"><EstimateNote summary={summary.data} /></div>}
         {t && (
           <div className="mt-4 grid grid-cols-2 gap-3 text-left">
             <div className="rounded-xl bg-green-50 p-3 dark:bg-green-950/30">

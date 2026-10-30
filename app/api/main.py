@@ -896,9 +896,11 @@ def summary(month: str | None = None):
 
 
 @app.get("/api/transactions")
-def transactions(month: str | None = None, include_deleted: bool = False):
+def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False):
+    """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
+    include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz."""
     _history_gate(month)
-    rows = finance.transactions(month, include_deleted)
+    rows = finance.transactions(month, include_deleted, include_estimates)
     u = db.current_user()
     if month is None and not plans.allows(u, "gecmis"):  # tüm aylar istendi: ücretsizde görünür pencereyle sınırlı
         rows = [r for r in rows if plans.history_ok(u, r["month"])]

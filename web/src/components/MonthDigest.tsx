@@ -12,6 +12,7 @@ interface Digest {
   upcoming: { count: number; total: number; items: { title: string; amount: number; due_date: string; estimated: boolean }[] };
   zakat: { name: string; kind: string; date: string; days_left: number; amount: number }[];
   suggestions: number;
+  estimated_expense?: number; estimated_count?: number; // ekstresi beklenen kart ödemeleri: giderde değil
 }
 
 const pct = (p: number | null) => (p == null ? "" : p === 0 ? " · aynı" : ` · ${p > 0 ? "+" : ""}${p}%`);
@@ -34,6 +35,12 @@ export default function MonthDigest() {
         <div><div className="text-xs text-stone-500">Kalan</div>
           <div className={cx("font-semibold tabular-nums", d.net < 0 && "text-red-600")}>{tl(d.net)}{d.savings_rate != null && d.savings_rate > 0 && <span className="text-xs font-normal text-stone-500"> · %{d.savings_rate}</span>}</div></div>
       </div>
+      {!!d.estimated_expense && (
+        <p className="rounded-lg border border-dashed border-stone-300 px-2.5 py-1.5 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-400">
+          {d.estimated_count ? `${d.estimated_count} kart ödemesinin` : "Bazı kart ödemelerinin"} ekstresi yok · tahmini ~{tl(d.estimated_expense)} (gidere katılmadı){" "}
+          <button className="font-medium text-blue-700 underline dark:text-blue-400" onClick={() => ui.go("ekstreler")}>Ekstreyi yükle</button>
+        </p>
+      )}
       <button className="flex w-full items-center justify-center gap-1 rounded-lg py-1 text-xs text-stone-500 active:bg-stone-100 dark:active:bg-stone-800"
         onClick={() => setOpen(!open)} aria-expanded={open}>
         {open ? "Daha az" : "Ayrıntılar"} <ChevronDown size={14} className={cx("transition-transform", open && "rotate-180")} />

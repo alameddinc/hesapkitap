@@ -19,6 +19,7 @@ import YearSummary from "../components/YearSummary";
 import Jars from "../components/Jars";
 import Holdings from "../components/Holdings";
 import { InterestHistory, TrendChart } from "./Stats";
+import { EstimateNote, isEstimate } from "../components/Estimates";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
@@ -112,14 +113,14 @@ export default function Dashboard() {
   const [allInsights, setAllInsights] = useState(false);
 
   const detail = useMemo(() => {
-    const rows = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme");
+    const rows = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme" && !isEstimate(r));
     if (sel) {
       const pick = (r: Row) => (sel.by === "category" ? r.category : sel.by === "merchant" ? r.merchant : r.card);
       return rows.filter((r) => pick(r) === sel.name && r.kind !== "gelir");
     }
     const f = insightFilter?.filter;
     if (f) {
-      return (txns.data ?? []).filter((r) =>
+      return (txns.data ?? []).filter((r) => !isEstimate(r) &&
         (f.kind ? r.kind === f.kind : true) && (f.category ? r.category === f.category : true) &&
         (f.fx ? !!r.fx : true) && (f.pending ? !!r.pending : true) && (f.awaiting ? !!r.awaiting_statement : true));
     }
@@ -169,6 +170,7 @@ export default function Dashboard() {
           <div className="relative text-sm text-blue-100">Bu dönem harcadığın</div>
           <div className="relative mt-1 font-display text-[2.6rem] leading-none font-semibold tracking-tight tabular-nums">{tl(s.totals.expense)}</div>
           {s.totals.savings > 0 && <div className="relative mt-1 text-xs text-blue-100">+ birikime {tl(s.totals.savings)} (gider sayılmaz)</div>}
+          <div className="relative"><EstimateNote summary={s} tone="hero" /></div>
           <div className="relative mt-5 grid grid-cols-3 gap-2 border-t border-white/15 pt-3">
             <div>
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">Gelen</div>
@@ -197,6 +199,7 @@ export default function Dashboard() {
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
         </div>
+        <div className="hidden sm:block"><EstimateNote summary={s} /></div>
       </>);
       case "gelenler": return <SharedInbox />;
       // Başlarken (sahibin kurulumu) ve altında Yapılacaklar (belge hatırlatmaları; üyede görebildikleri)
@@ -246,7 +249,7 @@ export default function Dashboard() {
       case "kumbaralar": return <Jars />;
       case "altin": return <Holdings />;
       case "son-islemler": {
-        const recent = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme")
+        const recent = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme" && !isEstimate(r))
           .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
         return recent.length ? <Section title="Son işlemler"><TxnList rows={recent} /></Section> : null;
       }

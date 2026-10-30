@@ -6,6 +6,7 @@ import MultiSelect from "../components/MultiSelect";
 import Segmented from "../components/Segmented";
 import { cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
+import { isEstimate } from "../components/Estimates";
 
 type View = "liste" | "pivot";
 type PivotBy = "category" | "merchant" | "card";
@@ -63,7 +64,8 @@ export default function Table() {
   }, [f]);
   const set = (p: Partial<Filters>) => { setF({ ...f, ...p }); setDrill(null); };
 
-  const data = (all.data ?? []).filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked);
+  // tahmini satırlar (ekstresiz kart ödemesi) gerçek değil: tabloya/pivota girmez (eski sunucu listede verirse de)
+  const data = (all.data ?? []).filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && !isEstimate(r));
   const months = useMemo(() => [...new Set(data.map((r) => r.month))].sort(), [data]);
   const categories = useMemo(() => [...new Set(data.map((r) => r.category))].sort((a, b) => a.localeCompare(b, "tr")), [data]);
   const cards = useMemo(() => [...new Set(data.map((r) => r.card ?? "Elle girilen"))].sort(), [data]);

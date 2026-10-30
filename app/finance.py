@@ -188,14 +188,31 @@ def _entry_row(e: dict) -> dict:
 CARD_ESTIMATE_CATEGORY = "Kart harcaması (ekstresiz)"
 
 
-def _card_payment_estimate_row(p: dict, month: str) -> dict:
+def _expected_period(p: dict, cut_days: dict[str, int]) -> str:
+    """Bu ödemenin karşılığı olan (beklenen) ekstrenin dönemi (kesim ayı, YYYY-MM).
+    Kartın yüklü ekstresi varsa kesim gününden: ödeme gününden önceki son kesim; yoksa ödemeden ~10 gün önce."""
+    d = date.fromisoformat(p["pay_date"][:10])
+    day = cut_days.get(p.get("card_last4") or "")
+    if day:
+        y, m = d.year, d.month
+        for _ in range(3):
+            last = (date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)).day
+            cut = date(y, m, min(day, last))
+            if cut <= d:
+                return ym(cut)
+            y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return ym(d - timedelta(days=10))
+
+
+def _card_payment_estimate_row(p: dict, month: str, cut_days: dict[str, int] | None = None) -> dict:
     bank = re.sub(r"\s+(KATILIM\s+)?BANKASI.*$", "", p.get("account") or "", flags=re.I).strip()
     card = f"{bank} …{p['card_last4']}".strip() if p.get("card_last4") else (bank or "Kredi kartı")
     return {"uid": f"cp{p['id']}", "source": "estimate", "id": p["id"], "date": p["pay_date"], "month": month,
             "description": f"{card} ödemesi (ekstre yok, tahmini harcama)", "merchant": card, "amount": p["amount"],
             "kind": EXPENSE, "category": CARD_ESTIMATE_CATEGORY, "card": card, "account": None, "bank": bank or None,
             "installment": None, "fx": None, "note": None, "recurring_id": None, "skipped": False, "deleted": False,
-            "estimated": True}
+            "estimated": True, "estimate_kind": "card_payment", "card_last4": p.get("card_last4"),
+            "expected_period": _expected_period(p, cut_days or {})}
 
 
 def _installment_row(e: dict, k: int, month: str, amount: float) -> dict:
@@ -235,14 +252,43 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
         if r["kind"] == INCOME and is_salary and salary_seen:  # o ayın maaşı dökümden gelmiş: "bekliyor" gösterme
             continue
         if past and r["kind"] == INCOME and is_salary and not salary_seen:
-            row = {**row, "pending": False, "estimated": True, "source": "estimate",
+            # maaş tahmini GERÇEK gelire sayılır (ayrılmaz): dökümü yüklenmemiş/elle giren kullanıcıda geçmiş aylar
+            # gelirsiz görünmesin. Ayrılan yalnız ekstresiz kart ödemesi tahmini (gider şişmesin). Kullanıcı kararı 30.10.
+            row = {**row, "pending": False, "estimated": False, "salary_estimate": True, "source": "estimate",
                    "description": f"{r['description']} (tahmini, döküm yok)"}
         out.append(row)
     return out
 
 
+def transactions(month: str | None, include_deleted: bool = False, include_estimates: bool = False) -> list[dict]:
+    """Birleşik işlem listesi. TAHMİNİ satırlar (ekstresiz kart ödemesi, dökümü olmayan ayın maaşı) gerçek değildir:
+    varsayılan listede ve hiçbir gerçek toplamda (özet, bütçe, istatistik, kıyas, dönem özeti) yer almaz;
+    ayrı gösterilmek için include_estimates=True ya da estimates()."""
+    rows = _all_rows(month, include_deleted)
+    return rows if include_estimates else [r for r in rows if not r.get("estimated")]
+
+
+def estimates(month: str | None) -> list[dict]:
+    """Sadece tahmini satırlar (en yeni önce)."""
+    return [r for r in _all_rows(month, False) if r.get("estimated")]
+
+
+def estimate_item(r: dict) -> dict:
+    """Özet/istatistik yanıtındaki tahmini kalem: ne, ne kadar, hangi ekstre bekleniyor."""
+    card = r.get("estimate_kind") == "card_payment"
+    return {"uid": r["uid"], "source": "card_payment" if card else "recurring", "kind": r["kind"],
+            "title": r["card"] if card else r["merchant"], "amount": r["amount"], "date": r["date"], "month": r["month"],
+            "card": r.get("card") if card else None, "card_last4": r.get("card_last4"), "bank": r.get("bank"),
+            "expected_period": r.get("expected_period"), "recurring_id": r.get("recurring_id")}
+
+
+def _estimate_totals(rows: list[dict]) -> dict:
+    return {"estimated_expense": _round(sum(r["amount"] for r in rows if r["kind"] == EXPENSE)),
+            "estimated_income": _round(sum(r["amount"] for r in rows if r["kind"] == INCOME))}
+
+
 @_memo
-def transactions(month: str | None, include_deleted: bool = False) -> list[dict]:
+def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
     states, aliases = db.subscription_states(), db.merchant_aliases()
     card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
     entries = db.list_entries(month)
@@ -258,12 +304,18 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
             if e["linked_txn_id"] and k > 0:  # ekstreyle eşleşti: sonraki taksitler ekstrelerden gelir
                 continue
             rows.append(_installment_row(e, k, m, amt))
-    # ekstresi olmayan dönemlerin kart ödemesi: o dönemin kart harcaması yerine ödeme tutarı (tahmini) sayılır;
-    # ekstre yüklenince kendiliğinden kalkar
+    # ekstresi olmayan dönemlerin kart ödemesi: o dönemin kart harcaması bilinmiyor, ödeme tutarı TAHMİNİ satır olur
+    # (gerçek toplamlara girmez, ayrı gösterilir); ekstre yüklenince kendiliğinden kalkar.
+    # Kartın yüklenen ilk ekstresinden eski ödemeler (before_first: bankanın arşivi, çoğunlukla 12 aydan eski) hiç gösterilmez.
+    cut_days: dict[str, int] = {}
+    for st in db.list_statements():  # en yeni önce: kartın son kesim günü
+        cut_days.setdefault(st["card_no"][-4:], int(st["period_end"][8:10]))
     for p in db.card_payments_without_statement():
+        if p.get("before_first"):
+            continue
         pm = db.period_of(p["pay_date"])
         if not month or pm == month:
-            rows.append(_card_payment_estimate_row(p, pm))
+            rows.append(_card_payment_estimate_row(p, pm, cut_days))
     out = _apply_splits(card + rows) + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
         out += pending_recurring(month, db.list_recurring(), entries)
@@ -276,7 +328,7 @@ def transactions(month: str | None, include_deleted: bool = False) -> list[dict]
         starts = [r["start_month"] for r in recs if r["kind"] == INCOME]
         m = min(starts) if starts else cur
         while m < cur:
-            out += [r for r in pending_recurring(m, recs, by_m.get(m, [])) if r.get("estimated")]
+            out += [r for r in pending_recurring(m, recs, by_m.get(m, [])) if r.get("estimated") or r.get("salary_estimate")]
             m = add_months(m, 1)
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
 
@@ -362,8 +414,13 @@ def summary(month: str, today: date | None = None) -> dict:
     by_month: dict[str, list] = defaultdict(list)
     for r in all_rows:
         by_month[r["month"]].append(r)
-    trend_months = sorted(by_month)[-12:]
-    trend = [{"month": m, **{k: v for k, v in _totals(by_month[m]).items() if k in ("income", "expense", "net")}}
+    # tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş) gerçek toplamlara girmez; ayrı katman olarak gelir
+    est_by_month: dict[str, list] = defaultdict(list)
+    for r in estimates(None):
+        est_by_month[r["month"]].append(r)
+    trend_months = sorted(set(by_month) | set(est_by_month))[-12:]
+    trend = [{"month": m, **{k: v for k, v in _totals(by_month.get(m, [])).items() if k in ("income", "expense", "net")},
+              **_estimate_totals(est_by_month.get(m, []))}
              for m in trend_months]
 
     # Önceki dönemlerden artan para bu döneme devreder (eksi devretmez: açık, kart borcu olarak zaten görünür)
@@ -378,11 +435,15 @@ def summary(month: str, today: date | None = None) -> dict:
     open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
     totals["receivable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "alacak"))
     totals["payable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "borc"))
+    est = estimates(month)
+    totals.update(_estimate_totals(est))
 
     by_category = _group(expenses, "category")
     return {
         "month": month,
         "totals": totals,
+        # gerçek toplamlara (expense, by_category, budgets, trend.expense) GİRMEYEN tahmini kalemler: ekstre bekleniyor
+        "estimated_items": [estimate_item(r) for r in sorted(est, key=lambda r: (r["date"], r["uid"]))],
         "budgets": budgets(month, by_category),
         "pending": {
             "income": _round(sum(r["amount"] for r in pending if r["kind"] == INCOME)),
@@ -1117,30 +1178,24 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         if gaps:
             out.append({"level": "uyari", "title": f"{len(gaps)} ayda maaş dökümü yok",
                         "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında dökümde maaş yok. "
-                                  "Maaş kalemin varsa o aylarda tahmini sayılır; kesin tutar için maaşın yattığı hesabın bu aylara "
+                                  "Maaş kalemin varsa o aylarda tahmini olarak ayrı gösterilir (gelire katılmaz); kesin tutar için maaşın yattığı hesabın bu aylara "
                                   "ait dökümünü yükle.",
                         "link": "ekstreler"})
 
     # 2b) Hesaptan kart ödemesi var ama ekstresi yok → o dönemin harcamaları hiç sayılmamış
+    # (kartın yüklenen ilk ekstresinden eski ödemeler — bankanın arşivi — hiç gösterilmez)
     missing: dict[str, list] = defaultdict(list)
-    archived = []
     for x in db.card_payments_without_statement():
-        (archived if x["before_first"] else missing[x["card_last4"] or "?"]).append(x)
-    archived = [x for x in archived if db.period_of(x["pay_date"]) == month]
-    if archived:
-        out.append({"level": "bilgi",
-                    "title": f"Bu ayın kart harcaması tahmini ({_tl(sum(x['amount'] for x in archived))})",
-                    "detail": "Bu ödemeler kartların yüklenen ilk ekstresinden eski (bankalar genelde son 12 ayı verir). "
-                              "O ayların kart harcaması, ödenen tutar kadar \"" + CARD_ESTIMATE_CATEGORY + "\" olarak sayıldı. "
-                              "Eski ekstreyi bulursan yükle; tahmin kendiliğinden kalkar."})
+        if not x["before_first"]:
+            missing[x["card_last4"] or "?"].append(x)
     for last4, ps in missing.items():
         bank = next((x["account"] for x in ps if x["account"]), "")
         bank = re.sub(r"\s+(KATILIM\s+)?BANKASI.*$", "", bank, flags=re.I).strip()
         card = f"{bank} …{last4}" if last4 != "?" else "Bir kart"
         out.append({"level": "uyari",
                     "title": f"{card}: {len(ps)} ödemenin ekstresi yüklenmemiş ({_tl(sum(x['amount'] for x in ps))})",
-                    "detail": "Hesabından bu karta ödeme yapılmış ama o döneme ait kart ekstresi yok; şimdilik ödenen tutar "
-                              "o ayın tahmini kart harcaması sayıldı. Ödemeler: "
+                    "detail": "Hesabından bu karta ödeme yapılmış ama o döneme ait kart ekstresi yok; o dönemin kart harcaması "
+                              "bilinmiyor. Ödenen tutar harcamana katılmadı, \"tahmini\" olarak ayrı gösteriliyor. Ödemeler: "
                               + ", ".join(f"{x['pay_date'][8:10]}.{x['pay_date'][5:7]} {_tl(x['amount'])}" for x in ps)
                               + ". Ekstreler sayfasından o ayların kart ekstresini yükle.",
                     "link": "ekstreler"})
@@ -1549,11 +1604,18 @@ def year_summary(year: int) -> dict:
         return [r for r in live if r["month"].startswith(f"{y}-")]
 
     rows = of(year)
-    months = sorted({r["month"] for r in rows})
+    real_months = {r["month"] for r in rows}
     t = _totals(rows)
-    per = [{"month": m, **{k: v for k, v in _totals([r for r in rows if r["month"] == m]).items() if k in ("income", "expense", "net")}}
+    est = [r for r in estimates(None) if r["month"].startswith(f"{year}-") and r["month"] <= cur]
+    est_m: dict[str, list] = defaultdict(list)
+    for r in est:
+        est_m[r["month"]].append(r)
+    months = sorted(real_months | set(est_m))  # yalnız tahmini olan ay da grafikte (gerçek 0 + tahmin katmanı)
+    per = [{"month": m, **{k: v for k, v in _totals([r for r in rows if r["month"] == m]).items() if k in ("income", "expense", "net")},
+            **_estimate_totals(est_m.get(m, []))}
            for m in months]
-    done = [m for m in per if m["month"] < cur]
+    # ortalama / en yüksek / en düşük: gerçek verisi olan tamamlanmış dönemler
+    done = [m for m in per if m["month"] < cur and m["month"] in real_months]
     expenses = [r for r in rows if _spends(r)]
     cats = _group(expenses, "category")
     total_exp = sum(c["amount"] for c in cats) or 1
@@ -1563,7 +1625,7 @@ def year_summary(year: int) -> dict:
     dn = next((y for y in donations.summary()["years"] if y["year"] == str(year)), {"sadaka": 0.0, "zekat": 0.0})
     subs = [x for x in subscriptions() if x["status"] == "aktif"]
     return {
-        "year": year, "years": years, "months": len(months),
+        "year": year, "years": years, "months": len(real_months),
         "income": _round(t["income"]), "expense": _round(t["expense"]), "net": _round(t["net"]), "fees": _round(t["fees"]),
         # ortalama ve en yüksek/düşük ay: sadece tamamlanmış dönemler (içinde bulunulan yarım dönem yanıltır)
         "avg_expense": _round(sum(m["expense"] for m in done) / len(done)) if done else _round(t["expense"]),
@@ -1577,6 +1639,8 @@ def year_summary(year: int) -> dict:
         "income_change": _change(t["income"], prev["income"]) if prev else None,
         "zakat": dn["zekat"], "sadaka": dn["sadaka"],
         "subscriptions_yearly": _round(sum(x["monthly"] for x in subs) * 12),
+        # tahmini (ekstre bekleniyor): giderde, kategorilerde, ortalamada yok; ayrı katman
+        **_estimate_totals(est), "estimated_items": [estimate_item(r) for r in sorted(est, key=lambda r: r["date"])],
     }
 
 
@@ -1609,6 +1673,8 @@ def month_digest(month: str, today: date | None = None) -> dict:
     return {
         "month": month, "label": f"{_AY[m - 1]} {y}",
         "income": _round(t["income"]), "expense": _round(t["expense"]), "net": _round(t["net"]),
+        # gider gerçek harcama; ekstresi beklenen kart ödemeleri ayrı (giderde değil)
+        "estimated_expense": t["estimated_expense"], "estimated_count": sum(1 for i in s["estimated_items"] if i["kind"] == EXPENSE),
         "expense_change": _change(t["expense"], pt["expense"]),
         "savings_rate": round(t["net"] / t["income"] * 100) if t["income"] > 0 else None,
         "fees": _round(t["fees"]), "top": top, "rising": rising,
@@ -1632,6 +1698,9 @@ def period_report(month: str) -> str:
     lines = [f"📊 <b>{_AY[m - 1]} {y} dönemi bitti</b>",
              f"Gelir {_tl(t['income'])} · Gider {_tl(t['expense'])}{_pct(t['expense'], pt['expense'])}",
              f"Net <b>{_tl(t['net'])}</b>" + (f" · borç hareketi {_tl(t['debt_flow'])}" if t.get("debt_flow") else "")]
+    if t.get("estimated_expense"):
+        n = sum(1 for i in s["estimated_items"] if i["kind"] == EXPENSE)
+        lines.append(f"🧾 {n} kart ödemesinin ekstresi yok · tahmini ~{_tl(t['estimated_expense'])} (gidere katılmadı)")
     before = {c["name"]: c["amount"] for c in prev["by_category"]}
     top = s["by_category"][:5]
     if top:
@@ -1808,6 +1877,11 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
         return [{"date": (bounds[m][0] + timedelta(days=i)).isoformat(), "amount": _round(daily[m].get(i, 0.0))} for i in range(n)]
 
     cur_days, prev_days = daily_list(month, upto), daily_list(prev, prev_len)
+    # tahmini satırlar (ekstresiz kart ödemesi) kıyasa girmez; ödeme gününe göre ayrı toplam
+    def est_in(m: str, n: int) -> float:
+        a_, b_ = bounds[m][0], bounds[m][0] + timedelta(days=n - 1)
+        return _round(sum(r["amount"] for r in estimates(None) if r["kind"] == EXPENSE
+                          and a_ <= date.fromisoformat(str(r["date"])[:10]) <= b_))
     # olağandışı gün: son 3 dönemin günlük ortalamasının 2,5 katından fazla
     base = sum(sum(daily[m].values()) for m in months[1:]) / max(1, sum(lens[m] for m in months[1:]))
     for dd in cur_days + prev_days:
@@ -1818,6 +1892,7 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
             "daily": {"current": cur_days, "prev": prev_days, "avg_per_day": _round(base)},
             "top_days": [t for t in top if t["amount"] > 0],
             "variable_only": variable_only,
+            "estimated_expense": {"current": est_in(month, upto) if upto else 0.0, "prev": est_in(prev, prev_len)},
             "current": cur_c, "prev": prev_c[:length], "avg3": avg_c,
             "at_day": {"current": cur_v, "prev": prev_v, "avg3": avg_v,
                        "vs_prev": pct(cur_v, prev_v), "vs_avg3": pct(cur_v, avg_v)},

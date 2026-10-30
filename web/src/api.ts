@@ -41,6 +41,27 @@ export interface Row {
   account_id?: number | null; // banka/nakit hesabı
   debt_id?: number | null;
   match?: EntryMatch | null; // elle girilen kayıt dökümle/ekstreyle eşleşti (app/sync.py)
+  /** TAHMİNİ satır (ekstresiz kart ödemesi / dökümsüz maaş): gerçek değil, hiçbir toplama girmez.
+   *  Sunucu varsayılan listede vermez; /api/transactions?include_estimates=1 ile gelir. */
+  estimated?: boolean;
+  estimate_kind?: "card_payment" | "recurring";
+  expected_period?: string | null; // beklenen ekstrenin dönemi (YYYY-MM)
+}
+
+/** Özet/yıllık özetteki tahmini kalem: gerçek toplamlara girmez, ayrı gösterilir. */
+export interface EstimateItem {
+  uid: string;
+  source: "card_payment" | "recurring";
+  kind: "gider" | "gelir";
+  title: string;
+  amount: number;
+  date: string;
+  month: string;
+  card: string | null;
+  card_last4: string | null;
+  bank: string | null;
+  expected_period: string | null;
+  recurring_id: number | null;
 }
 
 /** Elle girilen kaydın bankadaki karşılığı: "Dökümle eşleşti · Garanti · 28 Eki". */
@@ -156,14 +177,17 @@ export interface Summary {
     receivable: number; // açık TL alacak
     payable: number; // açık TL borç
     balance: number; // devreden + net
+    estimated_expense?: number; // tahmini (ekstre bekleniyor): expense'e dahil DEĞİL
+    estimated_income?: number; // tahmini maaş (döküm yok): income'a dahil DEĞİL
   };
+  estimated_items?: EstimateItem[];
   pending: { income: number; expense: number; count: number };
   budgets: Budget[];
   by_category: Group[];
   by_merchant: Group[];
   by_card: Group[];
   statements: Statement[];
-  trend: { month: string; income: number; expense: number; net: number }[];
+  trend: { month: string; income: number; expense: number; net: number; estimated_expense?: number; estimated_income?: number }[];
   insights: Insight[];
 }
 
@@ -403,8 +427,8 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
 export const api = {
   meta: () => req<Meta>("GET", "/api/meta"),
   summary: (month: string) => req<Summary>("GET", `/api/summary${q({ month })}`),
-  transactions: (month?: string, includeDeleted = false) =>
-    req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted })}`),
+  transactions: (month?: string, includeDeleted = false, includeEstimates = false) =>
+    req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted, include_estimates: includeEstimates || undefined })}`),
   plan: (months: number) => req<Plan>("GET", `/api/plan${q({ months })}`),
 
   patchCard: (id: number, body: Record<string, unknown>) =>
