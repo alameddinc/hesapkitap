@@ -70,15 +70,6 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
 
   const accountsOf = (d: Debt) => (
     <div className="mt-1 space-y-1 rounded-md bg-stone-50 p-2 text-xs dark:bg-stone-800/50">
-      {(
-        <label className="flex items-center gap-2">
-          <span className="w-28 shrink-0 text-stone-500">{d.direction === "alacak" ? "Verildiği hesap" : "Geldiği hesap"}</span>
-          <select className="input py-1" value={d.account_id ?? ""} onChange={(e) => setAcc.mutate({ url: `/api/debts/${d.id}`, id: e.target.value ? Number(e.target.value) : null })}>
-            <option value="">Nakit / belirtme</option>
-            {accounts.data?.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </label>
-      )}
       {d.payments.filter((p) => !p.entry_id).map((p) => (
         <label key={p.id} className="flex items-center gap-2">
           <span className="w-28 shrink-0 text-stone-500">{dateTR(p.paid_at)} · {fmtAsset(p.amount, d.asset)}</span>
@@ -98,11 +89,12 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
       <li key={d.id} className={cx("py-2", d.settled_at && "opacity-60")}>
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1 cursor-pointer" role="button" tabIndex={0} aria-expanded={openId === d.id}
-          onClick={() => d.asset === "TRY" && setOpenId(openId === d.id ? null : d.id)}
-          onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && d.asset === "TRY") { e.preventDefault(); setOpenId(openId === d.id ? null : d.id); } }}>
+          aria-label={`${d.person} ${d.direction === "borc" ? "borcu" : "alacağı"}: düzenle`}
+          onClick={() => setOpenId(openId === d.id ? null : d.id)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenId(openId === d.id ? null : d.id); } }}>
           <div className="text-sm">
             <b>{maskText(d.person)}</b>{" "}
-            <span className={cx("rounded-full px-1.5 py-0.5 text-xs",
+            <span className={cx("rounded-full px-1.5 py-0.5 text-xs whitespace-nowrap",
               d.direction === "borc" ? "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
                 : "bg-green-50 text-green-800 dark:bg-green-950/40 dark:text-green-300")}>
               {d.direction === "borc" ? "borcum" : "alacağım"}
@@ -117,7 +109,9 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
             {d.asset === "TRY" && (accName(d.account_id) ? ` · ${accName(d.account_id)}` : " · hesap?")}
           </div>
         </div>
-        <span className="text-right text-sm font-semibold tabular-nums">{fmtAsset(d.settled_at ? d.amount : d.remaining, d.asset)}</span>
+        <span className="shrink-0 text-right text-sm font-semibold tabular-nums">{fmtAsset(d.settled_at ? d.amount : d.remaining, d.asset)}</span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center justify-end gap-2">
         {d.settled_at ? (
           <button className="btn-ghost p-1.5 text-stone-400" aria-label="Yeniden aç" onClick={() => unpay.mutate(d.id)}><RotateCcw size={14} /></button>
         ) : (
@@ -139,7 +133,15 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
           <Trash2 size={14} />
         </button>
       </div>
-      {openId === d.id && accountsOf(d)}
+      {openId === d.id && (
+        <div className="mt-2 space-y-2">
+          <DebtForm people={people} debt={d} onDone={() => setOpenId(null)} />
+          {d.payments.some((p) => !p.entry_id) && d.asset === "TRY" && (<>
+            <div className="text-xs font-medium text-stone-500">Önceki ödemelerin hesabı</div>
+            {accountsOf({ ...d, payments: d.payments })}
+          </>)}
+        </div>
+      )}
       </li>
     );
   };
@@ -172,26 +174,30 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
   );
 }
 
-function DebtForm({ people, onDone }: { people: string[]; onDone: () => void }) {
+/** Yeni borç/alacak ya da (debt verilirse) var olanı düzenle: PATCH /api/debts/{id}. */
+function DebtForm({ people, onDone, debt }: { people: string[]; onDone: () => void; debt?: Debt }) {
   const ui = useUI();
-  const [direction, setDirection] = useState<Debt["direction"]>("borc");
-  const [person, setPerson] = useState("");
-  const [asset, setAsset] = useState("TRY");
-  const [custom, setCustom] = useState("");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(today());
-  const [due, setDue] = useState("");
-  const [note, setNote] = useState("");
-  const [accountId, setAccountId] = useState<number | null>(null);
+  const known = !debt || ASSETS.some((a) => a.value === debt.asset);
+  const [direction, setDirection] = useState<Debt["direction"]>(debt?.direction ?? "borc");
+  const [person, setPerson] = useState(debt?.person ?? "");
+  const [asset, setAsset] = useState(debt ? (known ? debt.asset : "_") : "TRY");
+  const [custom, setCustom] = useState(debt && !known ? debt.asset : "");
+  const [amount, setAmount] = useState(debt ? String(debt.amount).replace(".", ",") : "");
+  const [date, setDate] = useState(debt?.debt_date ?? today());
+  const [due, setDue] = useState(debt?.due_date ?? "");
+  const [note, setNote] = useState(debt?.note ?? "");
+  const [accountId, setAccountId] = useState<number | null>(debt?.account_id ?? null);
   const [err, setErr] = useState<string | null>(null);
   const save = useSave(async () => {
     const a = parseAmount(amount);
     if (!person.trim() || !(a > 0)) throw new Error("Kişi ve miktar gerekli");
     const unit = asset === "_" ? custom.trim() : asset;
     if (!unit) throw new Error("Birim yaz (ör. 22 ayar bilezik)");
-    return json("POST", "/api/debts", { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
-      due_date: due || null, note: note.trim() || null, account_id: unit === "TRY" ? accountId : null });
-  }, () => { ui.toast("Kaydedildi"); onDone(); });
+    if (debt && a + 1e-9 < debt.paid_amount) throw new Error(`Bu kayda ${fmtAsset(debt.paid_amount, debt.asset)} ödeme yapılmış; miktar bundan az olamaz`);
+    const body = { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
+      due_date: due || null, note: note.trim() || null, account_id: unit === "TRY" ? accountId : null };
+    return debt ? json("PATCH", `/api/debts/${debt.id}`, body) : json("POST", "/api/debts", body);
+  }, () => { ui.toast(debt ? "Güncellendi" : "Kaydedildi"); onDone(); });
 
   return (
     <div className="mb-3 space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
@@ -233,10 +239,13 @@ function DebtForm({ people, onDone }: { people: string[]; onDone: () => void }) 
           label={direction === "alacak" ? "Hangi hesaptan verdin? (nakitse boş bırak)" : "Hangi hesaba geldi? (nakitse boş bırak)"} />
       )}
       <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
-      {err && <p className="text-xs text-red-600">{err}</p>}
+      {debt && debt.payments.some((p) => p.entry_id) && (
+        <p className="text-xs text-stone-500 dark:text-stone-400">Bu kayda havaleyle bağlanmış ödeme var; kişiyi ya da miktarı değiştirirsen bağlantı korunur, kalan yeniden hesaplanır.</p>
+      )}
+      {err && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{err}</p>}
       <div className="flex gap-2">
         <button className="btn-primary" disabled={save.isPending}
-          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>Kaydet</button>
+          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>{debt ? "Güncelle" : "Kaydet"}</button>
         <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
       </div>
     </div>

@@ -44,7 +44,7 @@ function DayPanel({ date, all, onClose }: { date: string; all: boolean; onClose:
         {d?.rows.map((r) => (
           <li key={r.uid} className="flex items-start justify-between gap-2 py-1.5">
             <span className="min-w-0">
-              <span className="block truncate">{maskText(r.description)}</span>
+              <span className="block break-words">{maskText(r.description)}</span>
               <span className="block text-xs text-stone-500">{r.category}{r.card ? ` · ${r.card}` : r.source === "manual" ? " · elle" : ""}{r.fixed ? " · sabit" : ""}</span>
             </span>
             <span className={cx("shrink-0 tabular-nums", r.amount < 0 && "text-green-700")}>{tl(r.amount)}</span>

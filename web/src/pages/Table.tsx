@@ -249,9 +249,9 @@ export default function Table() {
                     <td className="px-2 py-1.5 whitespace-nowrap">{dateTR(r.date)}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap text-stone-500">{monthLabel(r.month, true)}</td>
                     <td className="max-w-72 px-2 py-1.5">
-                      <div className="truncate">{r.description}</div>
+                      <div className="break-words">{r.description}</div>
                       {(r.installment || r.fx || r.note) && (
-                        <div className="truncate text-xs text-stone-500">{[r.installment && `${r.installment} taksit`, r.fx, r.note].filter(Boolean).join(" · ")}</div>
+                        <div className="text-xs break-words text-stone-500">{[r.installment && `${r.installment} taksit`, r.fx, r.note].filter(Boolean).join(" · ")}</div>
                       )}
                     </td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{r.category}</td>

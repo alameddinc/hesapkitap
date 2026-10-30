@@ -80,7 +80,7 @@ function WalletRow({ w }: { w: Wallet }) {
           <ul className="text-stone-500">
             {w.recent.map((e) => (
               <li key={e.id} className="flex justify-between gap-2">
-                <span className="truncate">{dateTR(e.entry_date)} · {e.description}</span>
+                <span className="break-words">{dateTR(e.entry_date)} · {e.description}</span>
                 <span className={cx("tabular-nums", e.kind === "gelir" && "text-green-700")}>{e.kind === "gelir" ? "+" : "−"}{tl(e.amount)}</span>
               </li>
             ))}

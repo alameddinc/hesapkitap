@@ -29,7 +29,7 @@ export function BudgetList({ items, onSelect, onEdit }: { items: Budget[]; onSel
             <li key={b.category}>
               <button className="w-full text-left" onClick={() => onSelect(b.category)}>
                 <div className="flex items-baseline justify-between gap-2 text-sm">
-                  <span className="flex items-center gap-1.5 truncate">
+                  <span className="flex items-center gap-1.5 break-words">
                     <st.icon size={14} className={st.text} aria-label={st.label} /> {b.category}
                   </span>
                   <span className="shrink-0 tabular-nums">
@@ -82,7 +82,7 @@ export function BudgetForm({ month, onClose, onSaved }: { month: string; onClose
         {cats.map((c) => (
           <li key={c} className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm">{c}</div>
+              <div className="break-words text-sm">{c}</div>
               {last[c] ? <div className="text-xs text-stone-500">son ekstre ayı {tl(last[c])}</div> : null}
             </div>
             <input className="input w-32 text-right" inputMode="decimal" aria-label={`${c} limiti`}

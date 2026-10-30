@@ -124,7 +124,7 @@ function Question({ r, a }: { r: Reminder; a: ReturnType<typeof useAnswers> }) {
         <Badge r={r} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span id={titleId} className="truncate text-sm font-semibold">{r.title}</span>
+            <span id={titleId} className="break-words text-sm font-semibold">{r.title}</span>
             {r.tag && <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium", TAG[r.severity])}>{r.tag}</span>}
           </div>
           {r.kind === "esles" && r.pair ? (
@@ -191,10 +191,10 @@ export default function Reminders() {
             <Badge r={r} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-semibold">{r.title}</span>
+                <span className="break-words text-sm font-semibold">{r.title}</span>
                 {r.tag && <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium", TAG[r.severity])}>{r.tag}</span>}
               </div>
-              <p className="truncate text-xs text-stone-500 dark:text-stone-400" title={r.text}>{r.text}</p>
+              <p className="break-words text-xs text-stone-500 dark:text-stone-400" title={r.text}>{r.text}</p>
             </div>
             <button className="btn-primary shrink-0 px-3" onClick={() => run(r)}>
               {r.action === "upload" ? <><FileText size={14} />Yükle</> : "Bak"}</button>

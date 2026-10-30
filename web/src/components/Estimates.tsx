@@ -96,7 +96,7 @@ export function EstimateSection({ rows }: { rows: Row[] }) {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-stone-600 dark:text-stone-300">{r.kind === "gelir" ? r.merchant : (r.card ?? r.merchant)}</span>
+                    <span className="break-words text-sm font-medium text-stone-600 dark:text-stone-300">{r.kind === "gelir" ? r.merchant : (r.card ?? r.merchant)}</span>
                     <span className={cx("shrink-0 text-sm tabular-nums text-stone-500", r.kind === "gelir" && "text-green-700/80 dark:text-green-400/80")}>
                       {r.kind === "gelir" ? "+" : ""}~{tl(r.amount)}</span>
                   </span>
