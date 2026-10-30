@@ -1201,13 +1201,13 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                     "link": "ekstreler"})
 
     # 2c) Ödemeler kartında görünmeyen açık borçlar (vadesiz ya da döviz/altın)
-    open_debt = [d for d in db.list_debts(open_only=True) if d["direction"] == "borc"
+    open_debt = [d for d in db.list_debts(open_only=True) if d["direction"] == "borc" and d["remaining"] > 0
                  and (d["asset"] != "TRY" or not d["due_date"])]
     if open_debt:
         out.append({"level": "bilgi", "title": f"{len(open_debt)} açık borcun var",
                     "detail": " · ".join(f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
                                          + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else "")
-                                         for d in open_debt) + ".", "link": "transferler"})
+                                         for d in open_debt) + ". Borç / Alacak sayfasından takip et.", "link": "borclar"})
 
     # 2e) Fiyatı belirgin artan ürünler (fişlerden; son 120 gün içinde alınmış olanlar)
     recent = (today - timedelta(days=120)).isoformat()
@@ -1218,7 +1218,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                                          for p in up) + ".", "link": "fiyatlar"})
 
     # 2d) Bekleyen alacaklar (sana borçlu olanlar)
-    open_rec = [d for d in db.list_debts(open_only=True) if d["direction"] == "alacak"]
+    # kapanmış (settled_at) ya da kalanı sıfır olan (tamamı tahsil edilmiş / vazgeçilmiş) alacak sayılmaz
+    open_rec = [d for d in db.list_debts(open_only=True) if d["direction"] == "alacak" and d["remaining"] > 0]
     if open_rec:
         parts = [f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
                  + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else
@@ -1226,8 +1227,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         overdue = any(d["due_date"] and d["due_date"] < today.isoformat() for d in open_rec)
         out.append({"level": "uyari" if overdue else "bilgi",
                     "title": f"{len(open_rec)} alacağın var" + (" — vadesi geçen var" if overdue else ""),
-                    "detail": " · ".join(parts) + ". Transferler sayfasından takip et; havale gelince TL alacaklar "
-                              "kendiliğinden kapanır.", "link": "transferler"})
+                    "detail": " · ".join(parts) + ". Borç / Alacak sayfasından takip et; havale gelince TL alacaklar "
+                              "kendiliğinden kapanır.", "link": "borclar"})
 
     # 3) Açık veren aylar
     has_income = any(r["kind"] == INCOME for r in p["recurring"]) or any(
