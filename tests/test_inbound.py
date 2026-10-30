@@ -111,7 +111,19 @@ def test_inbound_endpoint_and_premium(client, owner, monkeypatch):
     h = {"Authorization": "Bearer s3", "X-HK-To": to}
     assert client.post("/api/mail/inbound", content=raw, headers={**h, "Authorization": "Bearer yanlis"}).status_code == 404
     assert client.post("/api/mail/inbound", content=raw, headers={**h, "X-HK-To": "fatura-yok999@x"}).status_code == 404
-    assert client.post("/api/mail/inbound", content=raw, headers=h).json()["status"] == "skip"
+    # mail hemen kabul edilir, okuma arka planda (sunucu çok ekli mailde kilitlenmesin)
+    assert client.post("/api/mail/inbound", content=raw, headers=h).json()["status"] == "accepted"
+    import threading
+    import time
+
+    for _ in range(100):
+        if not any(t.name == "inbound" for t in threading.enumerate()):
+            break
+        time.sleep(0.05)
+    from app import db, system
+
+    with db.use_space(system.user_db_path(owner), owner):
+        assert db.mail_log(5)[0]["status"] == "skip"
     # hazır sürüm, ücretsiz paket: işlenmez
     monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
     r = inbound.handle(_raw(mid="<p1@x>"), to, verify=signed("vakifbank.com.tr"))

@@ -233,6 +233,14 @@ def set_senders(emails: list[str]) -> list[str]:
     return clean
 
 
+def message_key(raw: bytes, to: str) -> str:
+    """Aynı mailin aynı adrese tekrar gelişini tanımak için (Message-ID, yoksa içeriğin özeti)."""
+    import hashlib
+
+    mid = (message_from_bytes(raw[:65536]).get("Message-ID") or "").strip()
+    return f"{to.lower()}|{mid or hashlib.sha256(raw).hexdigest()}"
+
+
 def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
     """Bir maili işle. Dönen: posta günlüğü satırı (+ 'user' anahtarı yok). Adres yoksa LookupError."""
     from app import doc_reads, mailbox, plans

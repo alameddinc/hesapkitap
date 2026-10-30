@@ -1,6 +1,8 @@
 """FastAPI JSON API. Frontend (web/) /api altından konuşur.
 Production'da WEB_DIST tanımlıysa derlenmiş React uygulamasını da aynı porttan sunar."""
 import asyncio
+import logging
+import threading
 import mimetypes
 import os
 import re
@@ -688,11 +690,33 @@ async def mail_inbound(request: Request):
     raw = await request.body()
     if len(raw) > 20 * 1024 * 1024:
         raise HTTPException(413, "Mail çok büyük")
-    try:
-        r = inbound.handle(raw, request.headers.get("x-hk-to", ""))
-    except LookupError as e:
-        raise HTTPException(404, "Adres yok") from e
-    return {"status": r["status"], "kind": r["kind"]}
+    to = request.headers.get("x-hk-to", "")
+    if not inbound.resolve(to):
+        raise HTTPException(404, "Adres yok")
+    # Belgeleri okumak dakikalar sürebilir (çok ekli mail, yapay zekâ): mail hemen kabul edilir, okuma ayrı iş
+    # parçacığında yapılır. Hem sunucu diğer isteklere yanıt vermeye devam eder hem de Cloudflare beklerken zaman
+    # aşımına düşüp maili yeniden göndermez. Aynı mail işlenirken tekrar gelirse ikinci kez başlatılmaz.
+    key = inbound.message_key(raw, to)
+    with _inbound_lock:
+        if key in _inbound_busy:
+            return {"status": "processing"}
+        _inbound_busy.add(key)
+
+    def work():
+        try:
+            inbound.handle(raw, to)
+        except Exception:  # noqa: BLE001 - arka planda: günlüğe yaz, sunucuyu düşürme
+            logging.getLogger("hesapkitap.inbound").exception("gelen posta işlenemedi")
+        finally:
+            with _inbound_lock:
+                _inbound_busy.discard(key)
+
+    threading.Thread(target=work, name="inbound", daemon=True).start()
+    return {"status": "accepted"}
+
+
+_inbound_lock = threading.Lock()
+_inbound_busy: set[str] = set()
 
 
 @app.get("/api/mail/address")
