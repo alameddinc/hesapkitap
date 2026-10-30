@@ -40,3 +40,18 @@ def test_api_returns_fees_for_saved_statement(client, tmpdb):
     s = client.get("/api/statements").json()[0]
     assert s["fees"] == 540.00 and s["reconciliation_diff"] == 0
     assert round(s["previous_balance"] - s["payments"] + s["period_activity"] + s["fees"], 2) == s["total_debt"]
+
+
+def test_confirm_statement_clears_check(client, tmpdb):
+    st = _st(15000.00, 15540.00)
+    st.transactions.pop(0)  # denklem tutmuyor
+    sid = tmpdb.save_statement(b"x-confirm", "v.pdf", st)
+    s = client.get("/api/statements").json()[0]
+    assert s["needs_check"] and s["confirmed_at"] is None
+    r = client.post(f"/api/statements/{sid}/confirm").json()
+    assert r["ok"] and r["confirmed_at"]
+    s = client.get("/api/statements").json()[0]
+    assert not s["needs_check"] and s["confirmed_at"]
+    assert client.delete(f"/api/statements/{sid}/confirm").json()["confirmed_at"] is None
+    assert client.get("/api/statements").json()[0]["needs_check"]
+    assert client.post("/api/statements/999/confirm").status_code == 404

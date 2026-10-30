@@ -434,6 +434,8 @@ MIGRATIONS = [
     ("accounts", "origin", "TEXT"),             # elle | dokum: hesabı kim açtı (eski hesaplarda boş)
     ("entries", "bill_provider", "TEXT"),       # dökümdeki fatura tahsilatı: kurum (Vodafone, İGDAŞ…) — Faturalar özeti
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
+    ("own_transfers", "note", "TEXT"),          # kullanıcının notu
+    ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
 ]
 
 
@@ -880,10 +882,19 @@ def list_statements() -> list[dict]:
         s["fees"] = 0.0 if hide else statement_fees(s["interest_fees"], s.pop("fee_txns"))
         s.pop("fee_txns", None)
         parsed = s.pop("parsed_total")
+        s["needs_check"] = False  # aşağıda: denklem tutmuyor ve kullanıcı onaylamadı
         s["reconciliation_diff"] = (reconciliation_diff(parsed, s["period_activity"], s["interest_fees"], s["fees"],
                                                         s["previous_balance"], s["payments"], s["total_debt"])
                                     if s["period_activity"] is not None else None)
+        s["needs_check"] = bool(s["reconciliation_diff"]) and abs(s["reconciliation_diff"]) >= 1 and not s.get("confirmed_at")
     return out
+
+
+def confirm_statement(statement_id: int, on: bool = True) -> bool:
+    """Kullanıcı ekstreyi PDF'le karşılaştırıp doğru dedi (denklem tutmasa da): 'Kontrol et' uyarısı çıkmaz."""
+    with connect() as c:
+        return c.execute("UPDATE statements SET confirmed_at = " + ("CURRENT_TIMESTAMP" if on else "NULL") + " WHERE id = ?",
+                         (statement_id,)).rowcount > 0
 
 
 def delete_statement(statement_id: int) -> None:
