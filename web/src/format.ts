@@ -33,6 +33,20 @@ export function dateTR(iso: string) {
   return `${d}.${m}.${y}`;
 }
 
+/** Sunucu zaman damgası (SQLite CURRENT_TIMESTAMP: UTC, saat dilimsiz "2026-10-30 13:07:14") → Date. Saat dilimi
+ *  yazılıysa (Z / +03:00) olduğu gibi; yalnız tarihse yerel gece yarısı. Sözleşme: *_at / last_* alanları UTC'dir. */
+export function parseTs(ts: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return new Date(`${ts}T00:00:00`);
+  const iso = ts.replace(" ", "T");
+  return new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
+}
+
+/** Zaman damgasının yerel (TSİ) tarihi: gece yarısına yakın UTC saatleri doğru güne düşer. */
+export function tsDateTR(ts: string) {
+  const d = parseTs(ts);
+  return isNaN(d.getTime()) ? dateTR(ts) : d.toLocaleDateString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
 export function addMonths(ym: string, n: number) {
   const [y, m] = ym.split("-").map(Number);
   const t = y * 12 + (m - 1) + n;

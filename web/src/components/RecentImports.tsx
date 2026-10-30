@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, type ImportBatch } from "../api";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import { parseTs } from "../format";
 
 const NAMES: Record<string, string> = {
   entries: "kayıt", transactions: "kart işlemi", statements: "ekstre", accounts: "hesap",
@@ -43,7 +44,7 @@ export default function RecentImports() {
   const [openedAt] = useState(() => Date.now()); // son 1 saatte yükleme varsa açık başlar
   if (!items.length) return null;
   return (
-    <details className="card p-3 text-sm" open={items.some((b) => !b.undone_at && openedAt - Date.parse(b.created_at + "Z") < 3600e3)}>
+    <details className="card p-3 text-sm" open={items.some((b) => !b.undone_at && openedAt - parseTs(b.created_at).getTime() < 3600e3)}>
       <summary className="flex cursor-pointer items-center gap-2 font-medium">
         <History size={16} className="text-stone-500" /> Son yüklemeler
         <span className="text-xs font-normal text-stone-500">yanlış bir şey mi yükledin? geri al</span>
@@ -54,7 +55,7 @@ export default function RecentImports() {
             <div className={b.undone_at ? "min-w-0 flex-1 text-stone-400 line-through" : "min-w-0 flex-1"}>
               <div className="truncate">{b.label}</div>
               <div className="text-xs text-stone-500">
-                {new Date(b.created_at + "Z").toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" })} · {describe(b)}
+                {parseTs(b.created_at).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" })} · {describe(b)}
               </div>
             </div>
             {b.undone_at ? <span className="text-xs text-stone-500">geri alındı</span> : (
