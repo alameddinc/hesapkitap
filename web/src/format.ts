@@ -53,6 +53,20 @@ export function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Dönemin tarih aralığı (ay dönümü günü 1 değilse önceki ayın o gününden başlar). */
+export function periodBounds(month: string, startDay: number): [string, string] {
+  if (startDay <= 1) return [`${month}-01`, `${month}-31`];
+  const d = (n: number) => String(n).padStart(2, "0");
+  return [`${addMonths(month, -1)}-${d(startDay)}`, `${month}-${d(startDay - 1)}`];
+}
+
+/** Tarihin dönemi (sunucu db.period_of): ay dönümü gününden itibaren bir sonraki ayın dönemi. */
+export function periodOf(date: string, startDay: number): string {
+  const y = Number(date.slice(0, 4)), m = Number(date.slice(5, 7)), d = Number(date.slice(8, 10));
+  if (startDay > 1 && d >= startDay) return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+  return date.slice(0, 7);
+}
+
 export function addMonths(ym: string, n: number) {
   const [y, m] = ym.split("-").map(Number);
   const t = y * 12 + (m - 1) + n;
