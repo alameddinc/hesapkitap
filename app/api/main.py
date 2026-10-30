@@ -2409,6 +2409,29 @@ def zakat_add_payment(pid: int, body: ZakatPaymentIn):
         raise HTTPException(422, str(e)) from e
 
 
+class ZakatPaymentPatch(BaseModel):
+    amount: float | None = Field(None, gt=0)
+    pay_date: date | None = None
+    note: str | None = None
+    year_start: date | None = None
+
+
+@app.patch("/api/zakat/payments/{pay_id}")
+def zakat_update_payment(pay_id: int, body: ZakatPaymentPatch):
+    """Ödemeyi tek işlemde düzenle; yalnız gönderilen alanlar değişir. Dönüş: güncel ödeme."""
+    data = body.model_dump(exclude_unset=True)
+    for k in ("pay_date", "year_start"):
+        if data.get(k):
+            data[k] = data[k].isoformat()
+    try:
+        r = zakat.update_payment(pay_id, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if r is None:
+        raise HTTPException(404, "Ödeme yok")
+    return r
+
+
 @app.delete("/api/zakat/payments/{pay_id}")
 def zakat_delete_payment(pay_id: int):
     if not zakat.delete_payment(pay_id):
