@@ -27,7 +27,8 @@ log = logging.getLogger("hesapkitap.inbound")
 ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # karışan harf yok (l/1, o/0)
 CODE_LEN = 6
 MAX_PDF = 10 * 1024 * 1024  # tek ek: ekstreler birkaç yüz KB
-MAX_PDFS = 5  # bir maildeki ek sayısı
+MAX_PDFS = 5  # bir maildeki ek sayısı (banka / kurum)
+MAX_PDFS_OWN = {"free": 10, "premium": 50, "aile": 50}  # kendi / güvendiğin adresinden toplu iletim
 DAILY_LIMIT = 60  # bir adrese günde işlenen mail (fazlası günlüğe bile yazılmaz)
 LOG_KEEP = 300  # günlükte tutulan son satır
 PREFIX = "fatura-"
@@ -179,12 +180,22 @@ def _bill(name: str, data: bytes, mime: str) -> str:
     return f"🧾 {parsed['provider']} faturası: {parsed['amount']:,.2f} TL · son ödeme {parsed['due_date'][8:]}.{parsed['due_date'][5:7]}{change}"
 
 
-def _safe_pdfs(pdfs: list[tuple[str, bytes]]) -> tuple[list[tuple[str, bytes]], list[str]]:
+def _max_pdfs(kind: str | None, ctx: dict) -> int:
+    """Banka mailinde 5; kullanıcının kendi (ya da güvendiği) adresinden toplu iletimde pakete göre 10 / 50."""
+    from app import plans
+
+    if kind != "kendi":
+        return MAX_PDFS
+    p = plans.plan_of(ctx)
+    return MAX_PDFS_OWN.get(p, 50 if p == plans.SELF else MAX_PDFS_OWN["free"])
+
+
+def _safe_pdfs(pdfs: list[tuple[str, bytes]], limit: int = MAX_PDFS) -> tuple[list[tuple[str, bytes]], list[str]]:
     """Yalnız gerçek PDF'ler (dosya başı %PDF-), makul boyutta ve sayıda. Gerisi okunmaz, saklanmaz; nedeni günlüğe."""
     ok, notes = [], []
     for name, data in pdfs:
-        if len(ok) >= MAX_PDFS:
-            notes.append(f"⏭ {name}: bir mailde en çok {MAX_PDFS} ek okunur")
+        if len(ok) >= limit:
+            notes.append(f"⏭ {name}: bir mailde en çok {limit} ek okunur")
         elif len(data) > MAX_PDF:
             notes.append(f"⏭ {name}: çok büyük ({len(data) // 1048576} MB)")
         elif b"%PDF-" not in data[:1024]:
@@ -261,7 +272,7 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             db.log_mail(r)
             return r
         try:
-            pdfs, details = _safe_pdfs(mailbox._pdfs(msg))
+            pdfs, details = _safe_pdfs(mailbox._pdfs(msg), _max_pdfs(kind, ctx))
             if details and not pdfs:  # ekler vardı ama hiçbiri uygun değil: hiçbir şey okunmaz
                 r = {**entry, "kind": "-", "status": "skip", "detail": "\n".join(details)}
             elif kind == "fatura":

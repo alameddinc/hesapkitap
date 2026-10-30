@@ -156,3 +156,16 @@ def test_fake_big_or_many_attachments_not_read(owner, monkeypatch):
     inbound.handle(_raw(mid="<v3@x>"), to, verify=lambda raw: calls.append(1) or {"vakifbank.com.tr"})
     r = inbound.handle(_raw(mid="<v4@x>"), to, verify=lambda raw: calls.append(1) or {"vakifbank.com.tr"})
     assert "sınırı" in r["detail"] and len(calls) == 1
+
+
+def test_own_address_bulk_forward_limits(owner, monkeypatch):
+    """Banka mailinde 5 ek; kendi adresinden toplu iletimde ücretsiz 10, Premium 50."""
+    from app import inbound, plans
+
+    monkeypatch.setattr(plans, "plan_of", lambda u: "premium")
+    assert inbound._max_pdfs("kendi", owner) == 50
+    assert inbound._max_pdfs("banka", owner) == 5
+    monkeypatch.setattr(plans, "plan_of", lambda u: "free")
+    assert inbound._max_pdfs("kendi", owner) == 10
+    ok, notes = inbound._safe_pdfs([(f"e{i}.pdf", b"%PDF-1.4\n") for i in range(12)], 10)
+    assert len(ok) == 10 and len(notes) == 2 and "en çok 10" in notes[0]
