@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Copy, Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR } from "../format";
+import { cx, dateTR, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { isEmail, useLoginKind, useSave } from "./hooks";
 
@@ -96,7 +96,7 @@ export default function Users() {
                 {u.must_change_password && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">şifre bekliyor</span>}
               </span>
               <span className="text-xs text-stone-500">
-                {u.last_login ? `son giriş ${dateTR(u.last_login.slice(0, 10))}` : "hiç girmedi"}
+                {u.last_login ? `son giriş ${tsDateTR(u.last_login)}` : "hiç girmedi"}
                 {u.ai_quota !== null && <> · {d?.hosted ? "belge okuma" : "yapay zekâ"} {u.ai_used}/{u.ai_quota}</>}
                 {u.plan && u.plan !== "free" && u.role !== "admin" && (
                   <> · <b className="text-amber-700 dark:text-amber-400">{u.plan === "aile" ? "Aile" : "Premium"}</b>

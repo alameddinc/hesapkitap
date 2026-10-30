@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Copy, EyeOff, KeyRound, Trash2, Users2 } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR, maskText } from "../format";
+import { cx, dateTR, maskText, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { type BookRole, useLoginKind, useSave } from "./hooks";
 import { usePlan } from "./Plan";
@@ -99,7 +99,7 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
           <span className="min-w-0">
             <b className="break-all">{maskText(m.username)}</b>
             <span className="block text-xs text-stone-500">
-              {m.last_login ? `son giriş ${dateTR(m.last_login.slice(0, 10))}` : "henüz girmedi"}
+              {m.last_login ? `son giriş ${tsDateTR(m.last_login)}` : "henüz girmedi"}
               {" · "}{m.own_rules ? "kendine özel kural" : "ortak kurallar"}{n ? ` (${n} gizli)` : ""}
             </span>
           </span>
