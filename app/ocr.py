@@ -129,8 +129,16 @@ def _company(lines: list[str]) -> str | None:
 
 
 def _items(lines: list[str]) -> list[dict]:
+    """Ürün satırları. Türk fişinde miktar satırı ("2 ad X 2,90") ürünün ÜSTÜNDE ayrı satırdır: altındaki ürüne verilir."""
+    from app.receipt import QTY_LINE, _qty_of
+
     out = []
+    pending = None
     for line in lines:
+        q = QTY_LINE.match(line)
+        if q and not re.search(r"[^\W\d_]{3,}", line[q.end():]):  # yalnız miktar (ad yok)
+            pending = _qty_of(q)
+            continue
         m = re.match(rf"^\s*(.+?)\s+[*xX%]?\s*{AMOUNT}\s*$", line)
         if not m:
             continue
@@ -138,7 +146,12 @@ def _items(lines: list[str]) -> list[dict]:
         u = _up(name)
         if len(name) < 2 or any(k in u for k in ("TOPLAM", "KDV", "NAKIT", "NAKİT", "KART", "PARA", "TUTAR", "INDIRIM", "İNDİRİM")):
             continue
-        out.append({"name": name[:60], "product": None, "brand": None, "qty": 1, "unit": "adet",
+        qty, unit = 1, "adet"
+        if pending:
+            n, unit, _ = pending
+            qty = int(n) if unit == "adet" and float(n).is_integer() else n
+            pending = None
+        out.append({"name": name[:60], "product": None, "brand": None, "qty": qty, "unit": unit,
                     "amount": _num(m.group(2)), "split": None})
     return out[:40]
 

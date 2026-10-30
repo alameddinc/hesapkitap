@@ -20,6 +20,14 @@ ITEM_RULES = """items (sadece fiş, en fazla 40 satır, fişteki sırayla):
   (ör. Kahve Dünyası); bilinmiyorsa null.
 - "2Adt x 230,00 Latte" → qty=2, unit="adet", amount=460 (satır toplamı).
 - Tartılı ürün "0,750 KG x 89,90" → qty=0.75, unit="kg", amount=67.43; litre ise unit="lt".
+- Türk yazar kasa fişinde MİKTAR SATIRI ("2 ad X 2,90", "2 AD X 44.90", "0,750 KG X 89,90") ÜRÜN SATIRINDAN ÖNCE, kendi
+  satırında gelir ve ALTINDAKİ ürüne aittir; o ürünün satırında sağda toplam yazar ("*5,80" = 2 × 2,90). Miktar satırını
+  AYRI ÜRÜN olarak YAZMA ve adını ürün adına katma; qty ve unit'i altındaki ürüne ver. Her ürünün amount'u KENDİ satırının
+  sağındaki tutardır (bir alttaki ya da üstteki ürünün tutarı değil). Örnek:
+    2 ad X 2,90
+    K. CANTA ORTA BOY        *5,80
+    KIZILAY 6X200 SADE      *66,00
+  → [{{"name": "K. CANTA ORTA BOY", "qty": 2, "amount": 5.80}}, {{"name": "KIZILAY 6X200 SADE", "qty": 1, "amount": 66.00}}]
 - Bir ürünün hemen altındaki İNDİRİM/KAMPANYA satırı o ürünün amount'undan düşülür; hangi ürüne ait olduğu belli olmayan genel
   indirimleri item olarak yazma.
 - Fiyatı okunamayan ürünü amount null ile yine yaz.
@@ -181,9 +189,76 @@ def _installments(v) -> int:
     return n if 2 <= n <= 36 else 1
 
 
+# miktar satırı: "2 ad X 2.90", "2 AD x 44,90", "0,750 KG X 89,90" (ardından ürün adı gelebilir: model birleştirmiş)
+QTY_LINE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(AD|ADT|ADET|KG|GR|LT|L)\.?\s*[xX×*]\s*(\d+(?:[.,]\d{1,3})?)\s*", re.I)
+
+
+def _qty_of(m: re.Match) -> tuple[float, str, float]:
+    n, unit, price = float(m.group(1).replace(",", ".")), m.group(2).upper(), float(m.group(3).replace(",", "."))
+    return n, ("kg" if unit in ("KG", "GR") else "lt" if unit in ("LT", "L") else "adet"), price
+
+
+def fix_qty_lines(items: list[dict]) -> list[dict]:
+    """Model miktar satırını ("2 ad X 2.90") ayrı ürün yazdıysa ya da ürün adına kattıysa düzelt.
+
+    Türk fişinde miktar satırı ürün satırının ÜSTÜNDEDİR. Model onu ayrı ürün yazıp ürünün tutarını ona verince sonraki
+    adlar bir aşağı kayar ("2× 2 ad X 2.90 5,80", "K. CANTA ORTA BOY 66,00"…): tutarların sırası doğru, adlar kaymış.
+    O noktadan sonra adlar (miktar satırları çıkarılarak) tutarlarla yeniden eşlenir; ad kalmayan son tutar 'Okunamayan
+    ürün' olur (toplam korunur). Miktar (adet × birim) toplamı tutan ilk satıra verilir: '2 ad X 44.90' → 89,80'lik ürün."""
+    toks = []
+    for it in items:
+        m = QTY_LINE.match(it.get("name") or "")
+        q = _qty_of(m) if m else None
+        rest = (it["name"][m.end():] if m else it.get("name") or "").strip(" -*")
+        toks.append({**it, "_q": q, "_rest": rest})
+    if not any(t["_q"] for t in toks):
+        return items
+
+    def total(q):
+        return round(q[0] * q[2], 2)
+
+    def near(a, b):
+        return a is not None and abs(a - b) <= 0.02
+
+    # tutar yuvası kaplayan (kaydıran) ayrı miktar satırı: tutarı adet × birim ve bir sonraki satırın tutarı değil
+    shift_at = next((k for k, t in enumerate(toks) if t["_q"] and not t["_rest"] and near(t.get("amount"), total(t["_q"]))
+                     and not (k + 1 < len(toks) and near(toks[k + 1].get("amount"), total(t["_q"])))), None)
+    head = [t for t in toks[: shift_at if shift_at is not None else len(toks)] if t["_rest"]]
+    out = [{**t, "name": t["_rest"]} for t in head]
+    if shift_at is not None:
+        tail = toks[shift_at:]
+        names = [t for t in tail if t["_rest"]]
+        amounts = [t.get("amount") for t in tail if t["_rest"] or near(t.get("amount"), total(t["_q"]))]
+        for i in range(max(len(names), len(amounts))):
+            if i < len(names):
+                out.append({**names[i], "name": names[i]["_rest"], "amount": amounts[i] if i < len(amounts) else None,
+                            "qty": 1, "unit": "adet"})
+            elif amounts[i] is not None:
+                out.append({"name": "Okunamayan ürün", "product": None, "brand": None, "qty": 1, "unit": "adet",
+                            "amount": amounts[i], "split": None})
+    # miktarlar: miktar satırından sonraki (birleşikse kendisi) ilk üç ürün içinde tutarı adet × birim olana
+    taken: set[int] = set()
+    seen_names = 0
+    for t in toks:
+        if t["_q"]:
+            n, unit, _ = t["_q"]
+            for j in range(min(seen_names, len(out) - 1), min(seen_names + 3, len(out))):
+                if j not in taken and near(out[j].get("amount"), total(t["_q"])):
+                    out[j] = {**out[j], "qty": int(n) if unit == "adet" and float(n).is_integer() else n, "unit": unit}
+                    taken.add(j)
+                    break
+        if t["_rest"]:
+            seen_names += 1
+    for o in out:
+        o.pop("_q", None)
+        o.pop("_rest", None)
+    return out
+
+
 def _items(raw: dict) -> list[dict]:
     """Ürün satırları; "2Adt x 230,00" gibi adetler qty olarak gelir."""
     out = []
+    raw = {**raw, "items": fix_qty_lines([i for i in (raw.get("items") or [])[:40] if isinstance(i, dict) and i.get("name")])}
     for i in (raw.get("items") or [])[:40]:
         if not isinstance(i, dict) or not i.get("name"):
             continue
