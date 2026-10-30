@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags } from "lucide-react";
+import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
 import { inSharedBook, routeVisible, useBook, useMeta } from "../components/hooks";
@@ -53,6 +53,7 @@ export default function More() {
         <Item icon={<Sheet size={18} />} label="Tablo: filtreler, pivot, Excel" onClick={() => ui.go("tablo")} route="tablo" />
         <Item icon={<Coins size={18} />} label="Tasarruf: kumbaralar, abonelikler, kısma hedefleri" onClick={() => ui.go("tasarruf")} route="tasarruf" />
         <Item icon={<Landmark size={18} />} label="Hesaplar ve kartlar: banka, nakit, kumbara" onClick={() => ui.go("hesaplar")} route="hesaplar" />
+        <Item icon={<Zap size={18} />} label="Faturalar: kurum kurum aylık tutar, değişim" onClick={() => ui.go("faturalar")} route="faturalar" />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} route="borclar" />
         <ZakatItem />
         <Item icon={<ArrowLeftRight size={18} />} label="Transferler: kime ne gitti" onClick={() => ui.go("transferler")} route="transferler" />
