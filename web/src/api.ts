@@ -164,6 +164,15 @@ export interface Statement {
   /** okunan işlemler − ekstre özeti, faiz ve ücret dahil (0 = tuttu) */
   reconciliation_diff?: number | null;
   txn_count: number;
+  previous_balance?: number | null;
+  payments?: number | null;
+  period_activity?: number | null;
+  paid_amount?: number | null;
+  paid_at?: string | null;
+  /** kullanıcı "rakamlar doğru" dedi (POST /api/statements/{id}/confirm) */
+  confirmed_at?: string | null;
+  /** okunan işlemler ekstre özetiyle tutmuyor ve onay yok */
+  needs_check?: boolean;
 }
 
 export interface Summary {
@@ -494,6 +503,8 @@ export const api = {
   undoImport: (id: string, force = false) =>
     req<{ ok: boolean; conflicts?: string[]; already?: boolean }>("POST", `/api/imports/${id}/undo${force ? "?force=true" : ""}`),
   deleteStatement: (id: number) => req("DELETE", `/api/statements/${id}`),
+  confirmStatement: (id: number) => req<{ ok: boolean; confirmed_at: string | null }>("POST", `/api/statements/${id}/confirm`),
+  unconfirmStatement: (id: number) => req<{ ok: boolean }>("DELETE", `/api/statements/${id}/confirm`),
 
   rules: () => req<Rule[]>("GET", "/api/rules"),
   createRule: (body: Omit<Rule, "id">) => req("POST", "/api/rules", body),
