@@ -85,11 +85,13 @@ def test_reread_does_not_charge_and_is_limited(hosted, reread_ai):  # noqa: F811
     c, u = _user(hosted)
     r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
     assert _used(u["id"]) == 1 and r["receipt_file"] and "check" in r
+    # ilk okuma fişi tutmadı: aynı istekte güçlü modelle bir kez daha okundu, daha iyi olduğu için o kullanıldı
+    assert r["reread"] == {"tried": True, "used": True, "model": "gemini-3.5-flash"} and r["check"]["ok"]
     out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 309.6})
     assert out.status_code == 200, out.text
     out = out.json()
-    assert out["check"]["ok"] and len(out["items"]) == 5 and out["model"] == "gemini-3.1-flash"
-    assert "GENEL TOPLAMI 309.60" in reread_ai[-1][1] and "gemini-3.1-flash:" in reread_ai[-1][0]
+    assert out["check"]["ok"] and len(out["items"]) == 5 and out["model"] == "gemini-3.5-flash"
+    assert "GENEL TOPLAMI 309.60" in reread_ai[-1][1] and "gemini-3.5-flash:" in reread_ai[-1][0]
     assert _used(u["id"]) == 1  # yeniden okuma belge hakkı düşürmez
     eid = c.post("/api/entries", json={"entry_date": "2026-10-29", "description": "File", "amount": 309.6,
                                        "kind": "gider", "category": "Market & Gıda",
@@ -100,3 +102,57 @@ def test_reread_does_not_charge_and_is_limited(hosted, reread_ai):  # noqa: F811
     assert c.post(f"/api/entries/{eid}/receipt-reread").status_code == 429  # günde 3
     assert _used(u["id"]) == 1
     assert c.post("/api/receipts/reread", json={"receipt_file": "0" * 64 + ".jpg"}).status_code == 404
+
+
+def _ai(monkeypatch, first, second=None, fail=False):
+    from app import receipt
+
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaTEST0000")
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
+        calls.append(url)
+        again = "yeniden oku" in json["contents"][0]["parts"][0]["text"]
+        if again and fail:
+            return httpx.Response(500, json={"error": {"message": "model yok"}})
+        body = second if again else first
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": _dump(body)}]}}]})
+
+    monkeypatch.setattr(receipt.httpx, "post", fake_post)
+    return calls
+
+
+_FIS = {"doc_type": "fis", "merchant": "File", "total": 100.0, "category": "Market & Gıda", "confidence": "orta"}
+
+
+def test_auto_reread_skipped_when_ok(client, monkeypatch):
+    from tests.test_doc_reads import _jpeg as jpeg
+
+    calls = _ai(monkeypatch, {**_FIS, "items": [{"name": "A", "amount": 60.0}, {"name": "B", "amount": 40.0}]})
+    r = client.post("/api/receipts/parse", files={"file": ("f.jpg", jpeg(), "image/jpeg")}).json()
+    assert r["check"]["ok"] and "reread" not in r and len(calls) == 1
+
+
+def test_auto_reread_worse_keeps_first_and_error_is_silent(client, monkeypatch):
+    from tests.test_doc_reads import _jpeg as jpeg
+
+    first = {**_FIS, "items": [{"name": "A", "amount": 60.0}, {"name": "B", "amount": 30.0}]}  # 10 eksik
+    _ai(monkeypatch, first, {"total": 100, "items": [{"name": "A", "amount": 10.0}]})
+    r = client.post("/api/receipts/parse", files={"file": ("f.jpg", jpeg(), "image/jpeg")}).json()
+    assert r["reread"] == {"tried": True, "used": False, "model": "gemini-3.5-flash"} and r["check"]["diff"] == 10
+    assert [i["amount"] for i in r["items"]] == [60.0, 30.0]
+    _ai(monkeypatch, first, fail=True)
+    r = client.post("/api/documents/parse", files=[("file", ("f.jpg", jpeg(), "image/jpeg"))])
+    assert r.status_code == 200 and r.json()["reread"]["used"] is False and len(r.json()["items"]) == 2
+
+
+def test_auto_reread_daily_cap(client, monkeypatch):
+    from app.api import main
+    from tests.test_doc_reads import _jpeg as jpeg
+
+    monkeypatch.setattr(main, "_AUTO_REREAD_PER_DAY", 1)
+    calls = _ai(monkeypatch, {**_FIS, "items": [{"name": "A", "amount": 1.0}]}, {"total": 100, "items": [{"name": "A", "amount": 1.0}]})
+    client.post("/api/receipts/parse", files={"file": ("f.jpg", jpeg(), "image/jpeg")})
+    assert len(calls) == 2
+    r = client.post("/api/receipts/parse", files={"file": ("g.jpg", jpeg(), "image/jpeg")}).json()
+    assert len(calls) == 3 and "reread" not in r  # sınır doldu: yalnız ilk okuma

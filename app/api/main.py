@@ -3433,6 +3433,7 @@ def parse_receipt(file: UploadFile = File(...)):
         raise HTTPException(502, str(e)) from e
     doc_reads.charge(original)
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
+    _auto_reread(out, data, mime)
     out["receipt_file"] = _store_receipt(photo)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
@@ -3849,12 +3850,58 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
     else:
         doc["receipt_file"] = _store_receipt(photo)
         doc["check"] = receipt_check.check(doc.get("items") or [], doc.get("total"))
+        _auto_reread(doc, data, mime, more)
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
 
 
 # ---------------------------------------------------------------- kayıtlı fişin kalemleri ve yeniden okuma
+
+_AUTO_REREAD_PER_DAY = 30  # kullanıcı başına günlük otomatik yeniden okuma (maliyet sınırı; belge hakkı düşmez)
+
+
+def _check_score(chk: dict) -> tuple[int, float]:
+    return sum(1 for i in chk["items"] if i["mismatch"]), abs(chk["diff"]) if chk["diff"] is not None else 0.0
+
+
+def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) -> None:
+    """Kademeli okuma: kalemler fişi tutmuyorsa (check.ok false) aynı istekte bir kez daha güçlü modelle oku; daha iyiyse
+    onun kalemlerini kullan. Belge hakkı düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
+    doc['reread'] = {tried, used, model}."""
+    import json as _json
+    from datetime import date as _date
+
+    from app import system
+
+    chk = doc.get("check") or {}
+    if chk.get("ok", True) or not doc.get("items") or not receipt.enabled():
+        return
+    u = db.current_user()
+    key = f"receipt_auto_reread:{u['id'] if u else 0}"
+    try:
+        st = _json.loads(system.get(key) or "{}")
+    except ValueError:
+        st = {}
+    today = _date.today().isoformat()
+    used = st.get("n", 0) if st.get("day") == today else 0
+    if used >= _AUTO_REREAD_PER_DAY:
+        return
+    system.put(key, _json.dumps({"day": today, "n": used + 1}))
+    model = receipt.reread_model()
+    doc["reread"] = {"tried": True, "used": False, "model": model}
+    try:
+        again = receipt.reread_items(data, mime, doc.get("total"), more)
+    except Exception:  # noqa: BLE001 - yeniden okuma olmadıysa ilk okuma geçerli
+        import logging
+
+        logging.getLogger("ekstre.receipt").warning("otomatik yeniden okuma başarısız", exc_info=True)
+        return
+    chk2 = receipt_check.check(again["items"], doc.get("total"))
+    (m1, d1), (m2, d2) = _check_score(chk), _check_score(chk2)
+    if again["items"] and ((m2 < m1 and d2 <= d1) or (m2 <= m1 and d2 < d1)):
+        doc["items"], doc["check"] = again["items"], chk2
+        doc["reread"]["used"] = True
 
 _REREAD_PER_DAY = 3  # aynı fotoğraf için günde (yeniden okuma belge hakkı düşürmez; yapay zekâ maliyeti sınırlı kalsın)
 
