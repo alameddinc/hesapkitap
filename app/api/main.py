@@ -3017,6 +3017,23 @@ def statement_file(sid: int):
     return _stored_file("uploads", name, f"{s['bank']}-{s['card_no'][-4:]}-{s['period_end']}.pdf")
 
 
+@app.post("/api/statements/{sid}/confirm")
+def confirm_statement(sid: int):
+    """'Denklem tutmasa da rakamlar doğru': confirmed_at yazılır, needs_check false olur. Geri alma: DELETE aynı yol."""
+    if not any(x["id"] == sid for x in db.list_statements()):
+        raise HTTPException(404, "Ekstre bulunamadı")
+    db.confirm_statement(sid, True)
+    return {"ok": True, "confirmed_at": next(x["confirmed_at"] for x in db.list_statements() if x["id"] == sid)}
+
+
+@app.delete("/api/statements/{sid}/confirm")
+def unconfirm_statement(sid: int):
+    if not any(x["id"] == sid for x in db.list_statements()):
+        raise HTTPException(404, "Ekstre bulunamadı")
+    db.confirm_statement(sid, False)
+    return {"ok": True, "confirmed_at": None}
+
+
 @app.delete("/api/statements/{sid}")
 def delete_statement(sid: int):
     db.delete_statement(sid)
