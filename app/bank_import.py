@@ -444,7 +444,8 @@ def describe(raw: str, amount: float, owners: list[str] | None = None) -> dict:
     elif amount < 0 and re.search(r"PARA CEK", norm):  # ATM'den nakit
         payment = "nakit"
         branch = re.search(r"NO LU (.+?) ATM", norm)
-        where = _pretty_words(branch.group(1), raw) if branch else ("diğer banka" if "DIGER BANKA" in norm else None)
+        where = (_pretty_words(branch.group(1), raw) if branch and re.search(r"[A-Z]{3}", branch.group(1))
+                 else "diğer banka" if "DIGER BANKA" in norm else None)  # şube yerine terminal no yazıyorsa atla
         desc = "ATM para çekme" + (f" · {where}" if where else "")
     if desc == raw and len(desc) > 120:
         desc = desc[:120]
