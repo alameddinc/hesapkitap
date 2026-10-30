@@ -23,15 +23,8 @@ import { EstimateNote, isEstimate } from "../components/Estimates";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
-import { addMonths, cx, monthLabel, tl, tlCompact } from "../format";
+import { cx, monthLabel, periodBounds, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
-
-/** Dönemin tarih aralığı (ay dönümü günü 1 değilse önceki ayın o gününden başlar). */
-function periodBounds(month: string, startDay: number): [string, string] {
-  if (startDay <= 1) return [`${month}-01`, `${month}-31`];
-  const d = (n: number) => String(n).padStart(2, "0");
-  return [`${addMonths(month, -1)}-${d(startDay)}`, `${month}-${d(startDay - 1)}`];
-}
 
 /** Hazır sürüm (posta adresi açık): bu dönem son ödemeli faturaların toplamı; dokununca Ödemeler'e kayar. */
 function BillsLine({ month }: { month: string }) {

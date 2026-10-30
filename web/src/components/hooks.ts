@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, type Row } from "../api";
+import { periodOf } from "../format";
 
 export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta });
 
@@ -116,4 +117,20 @@ export function useUiPrefs() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["meta"] }),
   });
   return { ui, save };
+}
+
+/** Elle kaydı (entries.id) düzenleme penceresinde aç: o dönemin işlem listesinden satırı bulur (Transferler, Faturalar).
+ *  Bulamazsa (ör. silinmiş) false döner. */
+export function useOpenEntry() {
+  const qc = useQueryClient();
+  const meta = useMeta().data;
+  return async (id: number, date: string, open: (row: Row) => void) => {
+    const month = periodOf(date, meta?.cycle_start_day ?? 1);
+    for (const m of [month, date.slice(0, 7)]) {
+      const rows = await qc.fetchQuery({ queryKey: ["txns", m], queryFn: () => api.transactions(m), staleTime: 10_000 });
+      const row = rows.find((r) => r.uid === `m${id}`);
+      if (row) { open(row); return true; }
+    }
+    return false;
+  };
 }
