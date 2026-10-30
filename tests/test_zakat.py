@@ -321,3 +321,38 @@ def test_wipe_removes_zakat_data_keeps_own_assets(client, tmpdb):
     assert ben["hawl"] is None and not ben["payments"]
     assert [x["id"] for x in ben["plus"] if x.get("id")] == [own]  # kendi varlığı Hesaplar'da kalır
     assert client.get("/api/donations").json()["items"] == []
+
+
+def test_patch_payment_recomputes_hanafi_deduction(client, tmpdb, monkeypatch):
+    """PATCH /api/zakat/payments/{id}: tek işlemde düzenleme; pay_date değişince Hanefî düşümü yeniden hesaplanır."""
+    from app import zakat
+
+    monkeypatch.setattr(zakat, "historical_prices", lambda day, offline=False: {"GRA": 5000.0, "USD": 40.0})
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "ALTIN_22", "quantity": 100, "acquired": "2024-06-01"})
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2026-10-01"})
+    h = client.get(f"/api/zakat/people/{me}/history").json()
+    oldest = h["years"][-1]
+    # zamanında ödendi (yıl sonunda): sonraki yılda düşüm yok
+    client.post(f"/api/zakat/people/{me}/payments",
+                json={"amount": oldest["zakat"], "year_start": oldest["start"], "pay_date": oldest["end"]})
+    pid = _last_payment_id(client, me)
+    assert client.get(f"/api/zakat/people/{me}/history").json()["years"][1]["deduct"] == 0
+    # tarih bugüne alındı (geriye dönük ödeme): sonraki yıl bittiğinde borçtu → düşüm geri gelir
+    r = client.patch(f"/api/zakat/payments/{pid}", json={"pay_date": "2026-10-30", "note": "düzeltme"})
+    assert r.status_code == 200 and r.json()["pay_date"] == "2026-10-30" and r.json()["note"] == "düzeltme"
+    assert r.json()["amount"] == oldest["zakat"] and r.json()["year_start"] == oldest["start"]  # diğerleri aynı
+    h2 = client.get(f"/api/zakat/people/{me}/history").json()
+    assert h2["years"][1]["deduct"] == h["years"][1]["deduct"] and h2["years"][-1]["remaining"] == 0
+    # tutar yarıya: eski yılda kalan çıkar
+    r = client.patch(f"/api/zakat/payments/{pid}", json={"amount": round(oldest["zakat"] / 2, 2)}).json()
+    assert client.get(f"/api/zakat/people/{me}/history").json()["years"][-1]["remaining"] == round(oldest["zakat"] - r["amount"], 2)
+    # atomik: geçersiz alan varsa hiçbir alan değişmez
+    assert client.patch(f"/api/zakat/payments/{pid}", json={"amount": 0, "note": "x"}).status_code == 422
+    import pytest
+
+    with pytest.raises(ValueError):
+        zakat.update_payment(pid, {"note": "y", "year_start": ""})
+    p = next(x for x in zakat.people() if x["id"] == me)["payments"][0]
+    assert p["note"] == "düzeltme" and p["amount"] == r["amount"]
+    assert client.patch("/api/zakat/payments/99999", json={"note": "x"}).status_code == 404

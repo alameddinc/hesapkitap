@@ -739,6 +739,28 @@ def add_payment(pid: int, amount: float, pay_date: str, note: str | None, year_s
                          (pid, year_start or p["hawl_start"], pay_date, amount, (note or "").strip() or None)).lastrowid
 
 
+def update_payment(pay_id: int, data: dict) -> dict | None:
+    """Ödemeyi düzenle (amount, pay_date, note, year_start) — tek işlemde. Yoksa None. year_start boş verilemez;
+    note boş metin = notu sil. Hanefî düşümü pay_date'e bağlı olduğundan history() yeni tarihle hesaplar."""
+    fields = {k: v for k, v in data.items() if k in ("amount", "pay_date", "note", "year_start")}
+    if "amount" in fields and not (isinstance(fields["amount"], (int, float)) and fields["amount"] > 0):
+        raise ValueError("Tutar sıfırdan büyük olmalı")
+    if "year_start" in fields and not fields["year_start"]:
+        raise ValueError("Zekât yılı boş olamaz")
+    if "pay_date" in fields and not fields["pay_date"]:
+        raise ValueError("Ödeme tarihi boş olamaz")
+    if "note" in fields:
+        fields["note"] = (fields["note"] or "").strip() or None
+    with db.connect() as c:  # tek bağlantı = tek işlem: ya hepsi ya hiçbiri
+        _init(c)
+        if not c.execute("SELECT 1 FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone():
+            return None
+        if fields:
+            c.execute(f"UPDATE zakat_payments SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                      (*fields.values(), pay_id))
+        return dict(c.execute("SELECT * FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone())
+
+
 def delete_payment(pay_id: int) -> bool:
     with db.connect() as c:
         _init(c)
