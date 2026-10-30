@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type DocKind, type UploadResult } from "../api";
 import BankImport from "../components/BankImport";
@@ -9,6 +9,7 @@ import { useSave } from "../components/hooks";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
 import StatementHelp from "../components/StatementHelp";
+import StatementCard from "../components/StatementCard";
 import { QuotaFullModal, useDocQuota, type QuotaFull } from "../components/DocQuota";
 
 export default function Statements() {
@@ -50,7 +51,6 @@ export default function Statements() {
       },
       onSettled: () => void quota.refresh(),
     });
-  const del = useSave((id: number) => api.deleteStatement(id), () => ui.toast("Ekstre silindi"));
 
   const demo = useDemo().data;
   const sample = useSave((key: string) => fetch(`/api/demo/sample/${key}`, { method: "POST" }).then(async (r) => {
@@ -200,22 +200,7 @@ export default function Statements() {
       <RecentImports />
 
       <ul className="space-y-2">
-        {list.data?.map((s) => (
-          <li key={s.id} className="card flex items-center gap-3 p-3">
-            <div className="min-w-0 flex-1">
-              <div className="font-medium">{s.bank} · {s.card_no}</div>
-              <div className="text-xs text-stone-500">
-                Kesim {dateTR(s.period_end)} · son ödeme {s.due_date ? dateTR(s.due_date) : "—"} · {s.txn_count} işlem
-                {(s.fees ?? s.interest_fees) > 0 && <span className="text-red-600"> · faiz ve ücret {tl(s.fees ?? s.interest_fees)}</span>}
-              </div>
-            </div>
-            <div className="text-right font-semibold tabular-nums">{tl(s.total_debt)}</div>
-            <button className="btn-danger p-2" aria-label="Sil"
-              onClick={() => confirm(`${s.card_no} ${dateTR(s.period_end)} ekstresi ve tüm işlemleri silinsin mi?`) && del.mutate(s.id)}>
-              <Trash2 size={16} />
-            </button>
-          </li>
-        ))}
+        {list.data?.map((s) => <StatementCard key={s.id} s={s} />)}
       </ul>
     </div>
   );
