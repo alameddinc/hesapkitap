@@ -206,7 +206,7 @@ export default function Statements() {
               <div className="font-medium">{s.bank} · {s.card_no}</div>
               <div className="text-xs text-stone-500">
                 Kesim {dateTR(s.period_end)} · son ödeme {s.due_date ? dateTR(s.due_date) : "—"} · {s.txn_count} işlem
-                {s.interest_fees > 0 && <span className="text-red-600"> · faiz {tl(s.interest_fees)}</span>}
+                {(s.fees ?? s.interest_fees) > 0 && <span className="text-red-600"> · faiz ve ücret {tl(s.fees ?? s.interest_fees)}</span>}
               </div>
             </div>
             <div className="text-right font-semibold tabular-nums">{tl(s.total_debt)}</div>
