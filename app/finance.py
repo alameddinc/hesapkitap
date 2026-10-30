@@ -369,13 +369,16 @@ def _totals(rows: list[dict]) -> dict:
     card_spend = sum(r["amount"] for r in live if r["kind"] in CARD_SPEND)
     fees = sum(r["amount"] for r in live if r["kind"] == FEE)
     manual = sum(r["amount"] for r in live if r["kind"] == EXPENSE)
+    # elle girilmiş kart harcaması, ekstresi henüz gelmedi (manual_expense'in içinde; ekstre gelince kart satırıyla eşleşir)
+    card_pending = sum(r["amount"] for r in live if r["kind"] == EXPENSE and r.get("awaiting_statement"))
     refunds = -sum(r["amount"] for r in live if r["kind"] == REFUND)
     expense = card_spend + fees + manual
     # borç verip almak gelir/gider değil ama eldeki parayı değiştirir
     debt_flow = sum(r["flow"] * r["amount"] for r in live if r["kind"] == DEBT) + sum(r.get("debt_flow", 0) for r in live)
     return {k: _round(v) for k, v in dict(income=income, card_spend=card_spend, fees=fees, manual_expense=manual,
                                           refunds=refunds, expense=expense, net=income - expense, debt_flow=debt_flow,
-                                          savings=savings, cash_net=income - expense - savings + debt_flow).items()}
+                                          savings=savings, cash_net=income - expense - savings + debt_flow,
+                                          card_pending=card_pending).items()}
 
 
 def _group(rows: list[dict], key: str) -> list[dict]:
@@ -1062,7 +1065,8 @@ def interest_alarm(month: str) -> list[dict]:
     if inc:
         out.append({"level": "uyari", "title": f"Faiz geliri: {_tl(sum(r['amount'] for r in inc))} (arındırılacak)",
                     "detail": "Hesabına faiz işlemiş görünüyor. Faizden uzak durmak istiyorsan bu tutarı sevap beklemeden "
-                              "ihtiyaç sahibine vererek arındırabilirsin; hesap türünü (ör. katılım ya da faizsiz vadesiz) kontrol et."})
+                              "ihtiyaç sahibine vererek arındırabilirsin; hesap türünü (ör. katılım ya da faizsiz vadesiz) kontrol et.",
+                    "filter": {"kind": INCOME}})
     return out
 
 
@@ -1106,10 +1110,12 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         if x["status"] == "gecikti":
             out.append({"level": "kritik", "title": f"{x['title']}: son ödeme {abs(x['days_left'])} gün geçti",
                         "detail": f"{_tl(x['amount'])} ödenmedi olarak görünüyor. Ödediysen \"Ödedim\" ile işaretle; "
-                                  "ödemediysen gecikme faizi işliyor."})
+                                  "ödemediysen gecikme faizi işliyor.",
+                        "pay": {"type": x["type"], "id": x["id"]}})
         elif x["status"] == "kismi":
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
-                        "detail": "Kısmi ödeme yaptın; kalan borca faiz işler."})
+                        "detail": "Kısmi ödeme yaptın; kalan borca faiz işler.",
+                        "pay": {"type": x["type"], "id": x["id"]}})
 
     # 2-) Altın/döviz kumbarası: bu ayın alım günü geldi, henüz alınmadı
     for j in db.list_jars(today, include_closed=False):
@@ -1253,7 +1259,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                             "link": "plan"})
     else:
         out.append({"level": "bilgi", "title": "Gelirin tanımlı değil",
-                    "detail": "Maaşını Planlama → Sabit kalemler'e eklersen her ay ne kadar artı/eksi verdiğini görürsün."})
+                    "detail": "Maaşını Planlama → Sabit kalemler'e eklersen her ay ne kadar artı/eksi verdiğini görürsün.",
+                    "link": "plan", "soft_link": True})
 
     # 4) Taksit yükü
     next_m = add_months(current_period(today), 1)
@@ -1264,7 +1271,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         if nxt["income"]:
             msg += f" Gelirine oranı: %{inst / nxt['income'] * 100:.0f}."
         out.append({"level": "uyari" if nxt["income"] and inst / nxt["income"] > 0.3 else "bilgi",
-                    "title": "Gelecek ayın taksit yükü", "detail": msg})
+                    "title": "Gelecek ayın taksit yükü", "detail": msg, "link": "plan", "soft_link": True})
 
     # 5a) Taksitlendirme maliyeti (vade farkı/kâr payı + BSMV + KKDF taksitleri)
     fee_inst = [i for acc in p["projection"] for i in acc["installments"] if i.get("fee")]
@@ -1286,7 +1293,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     for m, items in sorted(ending.items())[:2]:
         top = ", ".join(i["description"] for i in sorted(items, key=lambda i: -i["amount"])[:3])
         out.append({"level": "iyi", "title": f"{m} ekstresinden sonra aylık {_tl(sum(i['amount'] for i in items))} taksit bitiyor",
-                    "detail": f"Son taksitler: {top}"})
+                    "detail": f"Son taksitler: {top}", "link": "plan", "soft_link": True})
 
     # 5b) Bütçe
     for b in budgets(month):
@@ -1354,7 +1361,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             ratio = unpaid / s["credit_limit"]
             if ratio > 0.5:
                 out.append({"level": "uyari", "title": f"{s['card_no']} limit doluluğu: %{ratio * 100:.0f}",
-                            "detail": "Ödenmemiş ekstre borcu limite göre yüksek; kredi notunu olumsuz etkiler."})
+                            "detail": "Ödenmemiş ekstre borcu limite göre yüksek; kredi notunu olumsuz etkiler.",
+                            "link": "ekstreler"})
 
     # 9b) Aynı gelir bu dönemde birden fazla (ör. ay dönümü kayınca ya da yanlış tarihle girilince)
     incomes = defaultdict(list)
@@ -1395,8 +1403,16 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     from app import prefs
 
     mods = prefs.modules()  # kapatılan özelliğin uyarıları gösterilmez
-    out = [i for i in out if mods.get(prefs.LINK_MODULE.get(i.get("link") or "", ""), True)]
-    return sorted(out, key=lambda i: order[i["level"]])
+    # kapatılan özelliğin uyarıları gösterilmez; "soft_link": uyarı kendi başına anlamlı, yalnız bağlantı düşer
+    kept = []
+    for i in out:
+        soft = i.pop("soft_link", False)
+        if not mods.get(prefs.LINK_MODULE.get(i.get("link") or "", ""), True):
+            if not soft:
+                continue
+            i.pop("link", None)
+        kept.append(i)
+    return sorted(kept, key=lambda i: order[i["level"]])
 
 
 # ---------------------------------------------------------------- "Alırsam ne olur?" simülasyonu
