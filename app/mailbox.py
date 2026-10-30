@@ -222,10 +222,14 @@ def classify(text: str) -> tuple[str, bool]:
 
 
 def handle_pdf(name: str, data: bytes) -> str:
-    """PDF'i tanı ve içe aktar; kısa sonuç metni döner."""
-    from app import bank_import, bank_pdf
+    """PDF'i tanı ve içe aktar; kısa sonuç metni döner. Hazır sürümde yeni belge 1 okuma hakkı (app/doc_reads.py)."""
+    from app import bank_import, bank_pdf, doc_reads
     from app.parsers import PasswordRequired, extract_text, parse_statement
 
+    try:
+        doc_reads.check(data)
+    except doc_reads.QuotaError as e:
+        raise MailError(str(e)) from e
     passwords = db.pdf_passwords()
     text = None
     for pw in [None, *passwords]:
@@ -242,8 +246,9 @@ def handle_pdf(name: str, data: bytes) -> str:
         d = dekont.import_text(text)
         if d["status"] == "duplicate":
             return f"Dekont {d['date']} {d['amount']:,.2f} TL: zaten vardı"
-        if d["status"] == "updated":
+        if d["status"] == "updated":  # önceki kayıt vardı: hak düşmez
             return f"🧾 Dekont {d['amount']:,.2f} TL: önceki kayıt güncellendi ({d['counterparty'] or 'kişi okunamadı'})"
+        doc_reads.charge(data)
         return f"🧾 Dekont: {d['amount']:,.2f} TL {d['kind']} ({d['bank'] or 'hesap'}) · bakiye değişmedi"
     if _looks_like_account_statement(text):
         res = bank_pdf.parse_account_pdf(data, passwords)
@@ -253,6 +258,8 @@ def handle_pdf(name: str, data: bytes) -> str:
             db.remember_owner_name(res["owner_name"])
         st = db.import_bank_rows(rows, account=res.get("bank") or "", owners=owners or db.card_holders())
         db.auto_link()
+        if any(st[k] for k in ("gelir", "gider", "kart_odemesi", "virman")):  # hepsi zaten vardıysa hak düşmez
+            doc_reads.charge(data)
         warn = "" if res.get("verified") else " · ⚠️ bakiye zinciri tutmadı, kontrol et"
         return (f"Hesap dökümü ({res.get('bank') or 'banka'}): {st['gelir']} gelir, {st['gider']} gider, "
                 f"{st['virman']} kendi hesapların arası, {st['tekrar']} zaten vardı{warn}")
@@ -263,6 +270,7 @@ def handle_pdf(name: str, data: bytes) -> str:
     if db.statement_exists(data, stmt):
         return f"Ekstre {stmt.bank} {stmt.card_no}: zaten vardı"
     db.save_statement(data, name, stmt)
+    doc_reads.charge(data)
     db.auto_link()
     db.auto_mark_paid()
     db.auto_update_cycle()
@@ -279,11 +287,15 @@ def parse_notification(text: str, mail_date: str) -> dict:
 
 
 def handle_notification(text: str, mail_date: str, mid: str) -> str | None:
-    """İşlem bildirimi → hareketler. Hareket yoksa None."""
-    from app import bank_import, receipt
+    """İşlem bildirimi → hareketler. Hareket yoksa None. Hazır sürümde yeni hareket getiren bildirim 1 okuma hakkı."""
+    from app import bank_import, doc_reads, receipt
 
     if not receipt.enabled():
         raise MailError("İşlem bildirimlerini okumak için Gemini anahtarı gerekli")
+    try:
+        doc_reads.check(f"mail:{mid}")
+    except doc_reads.QuotaError as e:
+        raise MailError(str(e)) from e
     raw = parse_notification(text, mail_date)
     if not raw.get("is_transaction"):
         return None
@@ -313,6 +325,8 @@ def handle_notification(text: str, mail_date: str, mid: str) -> str | None:
                                          ("virman", st["virman"]), ("zaten vardı", st["tekrar"] + st["eslesen_elle"])) if v]
     if card:
         parts.append(f"kart harcaması {card}")
+    if card or (rows and any(st[k] for k in ("gelir", "gider", "kart_odemesi", "virman"))):
+        doc_reads.charge(f"mail:{mid}")
     lines = [f"{'+' if r['amount'] > 0 else ''}{r['amount']:,.2f} TL · {r.get('who') or r['description'][:50]}" for r in rows]
     return (f"🏦 {raw.get('bank') or 'Banka'} bildirimi: " + ", ".join(parts)
             + ("".join(f"\n{x}" for x in lines[:5]) if lines else "")) if parts else "Bildirim okundu, yeni hareket yok"

@@ -40,7 +40,55 @@ export interface Row {
   wallet_id?: number | null; // ön ödemeli kart
   account_id?: number | null; // banka/nakit hesabı
   debt_id?: number | null;
+  match?: EntryMatch | null; // elle girilen kayıt dökümle/ekstreyle eşleşti (app/sync.py)
 }
+
+/** Elle girilen kaydın bankadaki karşılığı: "Dökümle eşleşti · Garanti · 28 Eki". */
+export interface EntryMatch {
+  source: "dokum" | "ekstre";
+  how: "otomatik" | "onay" | "kural" | "elle";
+  date: string;
+  description: string;
+  amount: number;
+  balance: number | null;
+  account: string | null;
+  can_undo: boolean;
+}
+
+/** Öğrenilen eşleşme: dökümdeki kalıp ↔ elle yazılan açıklama (iki onaydan sonra kendiliğinden birleşir). */
+export interface MatchRule {
+  id: number;
+  source: "dokum" | "ekstre";
+  pattern: string;
+  entry_key: string;
+  bank_label: string;
+  entry_label: string;
+  category: string | null;
+  hits: number;
+  used: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MatchResult {
+  ok: boolean;
+  same: boolean;
+  entry_id?: number;
+  undo_id?: string;
+  learned?: { id: number; bank: string; entry: string };
+  auto_merged?: number;
+}
+
+export interface AccountMergeResult {
+  ok: boolean;
+  into: number;
+  moved: Record<string, number>; // tablo → taşınan satır (entries, recurring, ...)
+  matched: number;
+  balance_from: "merged" | "kept"; // merged: birleşen hesabın bakiyesi daha yeniydi, o alındı
+  undo_id: string;
+}
+
+export const movedCount = (m: AccountMergeResult["moved"]) => Object.values(m ?? {}).reduce((a, b) => a + b, 0);
 
 export type Payment = "kredi_karti" | "nakit" | "havale" | "kart"; // kart: ön ödemeli (yemek/hediye/giyim)
 
@@ -272,7 +320,7 @@ export interface PlanInfo {
   until: string | null;
   features: Record<string, boolean>;
   feature_labels: Record<string, string>;
-  ai_docs: number | null; // ayda yapay zekâ ile okuma; null: sınırsız
+  ai_docs: number | null; // hazır sürüm: ayda belge okuma hakkı (50 / 1000); null: kendi sunucusu (kota /api/me/ai)
   member: boolean;
 }
 
@@ -309,7 +357,18 @@ export interface UploadResult {
   cycle_day?: number;
   dekont?: boolean; // tek işlem dekontu: hesaba eklendi, bakiye değişmedi
   card_excel?: { statements: number; transactions: number; range: [string, string] | null; cut_day: number }; // kart işlem Excel'i
+  manual?: boolean; quota_full?: boolean; limit?: number; upgrade?: boolean; // hazır sürüm: belge okuma hakkı doldu (okunmadı)
 }
+
+/** Sunucu hatası: mesaj sunucunun "detail" metni, status HTTP kodu (409: soru artık geçerli değil, 403: yetki yok). */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+export const errStatus = (e: unknown) => (e instanceof ApiError ? e.status : 0);
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method };
@@ -327,7 +386,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     } catch {
       /* gövde JSON değil */
     }
-    throw new Error(msg);
+    throw new ApiError(msg, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -408,6 +467,14 @@ export const api = {
   createRule: (body: Omit<Rule, "id">) => req("POST", "/api/rules", body),
   patchRule: (id: number, body: Partial<Rule>) => req("PATCH", `/api/rules/${id}`, body),
   deleteRule: (id: number) => req("DELETE", `/api/rules/${id}`),
+  // eşitleme: elle girilen ↔ döküm / ekstre
+  matchEntry: (id: number, other: string, same: boolean) => req<MatchResult>("POST", `/api/entries/${id}/match`, { other, same }),
+  unmatchEntry: (id: number) =>
+    req<{ ok: boolean; source: string; other_id?: number; txn_id?: number; undo_id: string }>("POST", `/api/entries/${id}/unmatch`),
+  matchRules: () => req<MatchRule[]>("GET", "/api/match-rules"),
+  deleteMatchRule: (id: number) => req("DELETE", `/api/match-rules/${id}`),
+  mergeAccount: (id: number, into: number) => req<AccountMergeResult>("POST", `/api/accounts/${id}/merge`, { into }),
+  separateAccount: (id: number, other: number) => req<{ ok: boolean }>("POST", `/api/accounts/${id}/separate`, { other }),
   testRule: (pattern: string, text: string) =>
     req<{ normalized: string; match: boolean }>("GET", `/api/rules/test${q({ pattern, text })}`),
 };

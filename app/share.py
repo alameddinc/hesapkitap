@@ -66,10 +66,14 @@ def process(name: str, data: bytes, mime: str) -> dict:
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     # fotoğraf: küçült + EXIF/konum sil; okuma ve saklama bu hazırlanmış görüntüyle (app/images.py)
     read, read_mime, photo = (data, "application/pdf", None) if is_pdf else _prepare_photo(data, mime)
+    from app import doc_reads
+
     try:
+        doc_reads.check(data)  # hazır sürüm: belge okuma hakkı doluysa okunmaz
         doc = receipt.parse_document(read, read_mime, cats, sorted({r["category"] for r in db.list_item_rules()}))
     except receipt.ReceiptError as e:
         return {"status": "hata", "message": str(e)}
+    doc_reads.charge(data)
     if doc["type"] == "bill" and photo:
         doc["file_name"] = db.save_bill_file(photo, ".jpg")
     elif doc["type"] == "bill" and (is_pdf or mime in BILL_TYPES):

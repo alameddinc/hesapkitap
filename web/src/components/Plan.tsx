@@ -8,7 +8,7 @@ export const usePlan = () => useMeta().data?.plan;
 
 /** Paket karşılaştırması (barındırılan sürüm). Zekât ve verini indirmek her pakette serbest. */
 const ROWS: [string, string, string, string][] = [
-  ["Yapay zekâ ile belge okuma", "ayda 3", "sınırsız", "sınırsız"],
+  ["Belge okuma (ekstre, döküm, fiş, fatura)", "Ayda 50", "Ayda 1000", "Ayda 1000, ailece"],
   ["Fiyat takibi, en ucuz market", "—", "✓", "✓"],
   ["Ortak defter (eşin, ailen)", "—", "—", "✓"],
   ["Ekstre, fiş, özet, plan, kumbara, zekât", "✓", "✓", "✓"],
@@ -41,7 +41,7 @@ export default function PlanSettings() {
   const p = usePlan();
   if (!p?.hosted) return null;
   return (
-    <section className="card space-y-3 p-4">
+    <section id="paket" className="card scroll-mt-4 space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 font-semibold"><Sparkles size={18} /> Paketin: {p.label}</h2>
         {p.until && <span className="text-xs text-stone-500">{dateTR(p.until.slice(0, 10))} tarihine kadar</span>}
@@ -69,7 +69,11 @@ export default function PlanSettings() {
           </tbody>
         </table>
       </div>
-      {p.plan === "free" && <Upgrade />}
+      {p.plan === "free" && <>
+        <p className="text-sm"><Crown size={14} className="mr-1 inline text-amber-500" aria-hidden="true" />
+          <b>Premium:</b> ayda 1000 belge okuma ve fiyat takibi.</p>
+        <Upgrade />
+      </>}
       <p className="text-xs text-stone-500">Verini indirmek ve hesabını silmek her pakette serbest.</p>
     </section>
   );

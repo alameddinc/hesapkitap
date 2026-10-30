@@ -317,6 +317,54 @@ CREATE TABLE IF NOT EXISTS bank_documents (
     stored INTEGER NOT NULL DEFAULT 1,
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- Eşitleme (app/sync.py): elle girilen kayıt ↔ dökümdeki/ekstredeki satır. Elle girilen kayıt kalır, banka satırının
+-- bilgisi ona bağlanır; geri almak için önceki hali (prev) ve dökümden gelen kaydın kendisi (other) saklanır.
+CREATE TABLE IF NOT EXISTS entry_matches (
+    entry_id INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,            -- dokum | ekstre
+    how TEXT NOT NULL,               -- otomatik | onay | kural | elle
+    import_hash TEXT,                -- dökümdeki satırın parmak izi (source = dokum)
+    txn_id INTEGER,                  -- ekstredeki satır (source = ekstre)
+    bank_date DATE,
+    bank_desc TEXT,
+    bank_amount REAL,
+    balance REAL,                    -- satırdan sonraki hesap bakiyesi (biliniyorsa)
+    account_id INTEGER,
+    rule_id INTEGER,
+    prev TEXT,                       -- JSON: elle girilen kaydın eşleşmeden önceki alanları
+    other TEXT,                      -- JSON: dökümden gelen kayıt / kart satırının eski alanları
+    created_by INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- "Bunlar farklı": bir daha sorulmaz, kendiliğinden de birleşmez. other: h:<import_hash> | t:<txn_id>
+CREATE TABLE IF NOT EXISTS match_rejects (
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    other TEXT NOT NULL,
+    created_by INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entry_id, other)
+);
+-- Öğrenilen eşleşme kuralları: dökümdeki kalıp ↔ elle yazılan açıklama; RULE_HITS onaydan sonra kendiliğinden birleşir
+CREATE TABLE IF NOT EXISTS match_rules (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'dokum',   -- dokum | ekstre
+    pattern TEXT NOT NULL,                  -- işyeri adı (merchant_name) ya da "KISI:<ad>"
+    entry_key TEXT NOT NULL,                -- elle girilen açıklama (normalize)
+    bank_label TEXT,                        -- gösterim: dökümdeki yazılış
+    entry_label TEXT,                       -- gösterim: elle yazılan açıklama
+    category TEXT,
+    hits INTEGER NOT NULL DEFAULT 1,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (source, pattern, entry_key)
+);
+-- "Bu döküm X hesabına mı ait?" sorusuna "ayrı hesap" cevabı (a: dökümden açılan, b: elle açılan)
+CREATE TABLE IF NOT EXISTS account_separate (
+    a INTEGER NOT NULL,
+    b INTEGER NOT NULL,
+    PRIMARY KEY (a, b)
+);
 CREATE TABLE IF NOT EXISTS recurring (
     id INTEGER PRIMARY KEY,
     description TEXT NOT NULL,
@@ -380,6 +428,9 @@ MIGRATIONS = [
     ("entries", "linked_txn_id", "INTEGER REFERENCES transactions(id) ON DELETE SET NULL"),
     ("entries", "receipt_file", "TEXT"),        # saklanan fiş fotoğrafı: receipts/<sha256>.jpg (app/storage.py)
     ("entries", "bank_doc_id", "INTEGER"),      # hangi hesap dökümünden geldi (bank_documents)
+    ("accounts", "iban", "TEXT"),               # dökümde okunan IBAN: sonraki dökümler doğrudan bu hesaba gider
+    ("accounts", "alias", "TEXT"),              # dökümlerin geldiği banka adı (short_bank), hesabın adı farklıysa
+    ("accounts", "origin", "TEXT"),             # elle | dokum: hesabı kim açtı (eski hesaplarda boş)
 ]
 
 
@@ -530,7 +581,9 @@ def _ensure_imported_bank_accounts() -> None:
     """Dökümü yüklenmiş bankalar kayıtlarda seçilebilsin: hesap yoksa bakiyesi bilinmeyen hesap olarak aç."""
     from app.bank_import import short_bank
 
-    for name in {short_bank(b) for b in imported_bank_names()} - {"Banka hesabı"}:
+    with connect() as c:  # başka bir hesaba bağlanmış banka adı (eşitleme: "bu döküm X hesabına ait") yeniden açılmaz
+        aliases = {r[0] for r in c.execute("SELECT alias FROM accounts WHERE alias IS NOT NULL")}
+    for name in {short_bank(b) for b in imported_bank_names()} - {"Banka hesabı"} - aliases:
         ensure_account(name)
 
 
@@ -693,8 +746,14 @@ def _free_card_txns(c) -> list[dict]:
              AND t.id NOT IN (SELECT linked_txn_id FROM entries WHERE linked_txn_id IS NOT NULL)"""))
 
 
-def _apply_link(c, entry: dict, txn: dict) -> None:
+def _apply_link(c, entry: dict, txn: dict, how: str = "otomatik") -> None:
+    from app import sync
+
+    old = c.execute("SELECT category, category_manual, note FROM transactions WHERE id = ?", (txn["id"],)).fetchone()
     c.execute("UPDATE entries SET linked_txn_id = ? WHERE id = ?", (txn["id"], entry["id"]))
+    # geri alınabilsin (app/sync.py unmatch): ekstre satırının eski kategori/notu saklanır
+    sync._record(c, entry["id"], "ekstre", how, txn_id=txn["id"], bank_date=txn["txn_date"], bank_desc_=txn["description"],
+                 bank_amount=txn["amount"], prev={"amount": entry.get("amount")}, other=dict(old) if old else None)
     # Kullanıcının verdiği bilgi ekstre satırına taşınır
     note = " · ".join(x for x in (txn["note"], entry["description"], entry["note"]) if x)
     if entry["category"] and not txn["category_manual"]:
@@ -726,13 +785,15 @@ def auto_link() -> int:
         if not pending:
             return 0
         free = _free_card_txns(c)
+        rejected = {(r[0], r[1]) for r in c.execute("SELECT entry_id, other FROM match_rejects WHERE other LIKE 't:%'")}
         for e in sorted(pending, key=lambda e: e["entry_date"]):
             n = int(e.get("installments") or 1)
             target = e["amount"] / n  # taksitli: ekstreye ilk taksit yansır
             tol = max(0.05 if n == 1 else 0.02 * n, target * 0.10 if e.get("category") == JAR_BUY_CATEGORY else 0)
             cands = [t for t in free if abs(t["amount"] - target) <= tol
                      and (n == 1 or (t.get("installment_no") or 1) == 1)
-                     and _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS]
+                     and _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS
+                     and (e["id"], f"t:{t['id']}") not in rejected]  # "farklı" denmiş / eşleşmesi geri alınmış
             if not cands:
                 continue
             last4 = e.get("card_last4")
@@ -763,13 +824,23 @@ def link_candidates(entry_id: int) -> list[dict]:
 def link_entry(entry_id: int, txn_id: int | None) -> None:
     with connect() as c:
         if txn_id is None:
+            import json as _json
+
+            m = c.execute("SELECT * FROM entry_matches WHERE entry_id = ? AND source = 'ekstre'", (entry_id,)).fetchone()
+            cur = c.execute("SELECT linked_txn_id FROM entries WHERE id = ?", (entry_id,)).fetchone()
+            if m and m["other"] and cur and cur[0] == m["txn_id"]:  # ekstre satırı eski kategorisine/notuna döner
+                o = _json.loads(m["other"])
+                c.execute("UPDATE transactions SET category = ?, category_manual = ?, note = ? WHERE id = ?",
+                          (o.get("category"), o.get("category_manual") or 0, o.get("note"), m["txn_id"]))
+            c.execute("DELETE FROM entry_matches WHERE entry_id = ? AND source = 'ekstre'", (entry_id,))
             c.execute("UPDATE entries SET linked_txn_id = NULL WHERE id = ?", (entry_id,))
             return
         e = dict(c.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone())
         t = next((t for t in _free_card_txns(c) if t["id"] == txn_id), None)
         if not t:
             raise ValueError("Kart işlemi bulunamadı veya başka bir kayda bağlı")
-        _apply_link(c, e, t)
+        c.execute("DELETE FROM match_rejects WHERE entry_id = ? AND other = ?", (entry_id, f"t:{txn_id}"))
+        _apply_link(c, e, t, "elle")
 
 
 def list_statements() -> list[dict]:
@@ -853,12 +924,17 @@ def installment_entries() -> list[dict]:
 
 
 def list_entries(month: str | None = None) -> list[dict]:
-    from app import book
+    from app import book, sync
 
     with connect() as c:
         if month:
-            return book.filter_entries(rows(c.execute("SELECT * FROM entries WHERE month = ? ORDER BY entry_date DESC, id DESC", (month,))))
-        return book.filter_entries(rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC")))
+            out = book.filter_entries(rows(c.execute("SELECT * FROM entries WHERE month = ? ORDER BY entry_date DESC, id DESC", (month,))))
+        else:
+            out = book.filter_entries(rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC")))
+    info = sync.match_info()  # "Dökümle eşleşti" rozeti (eşleşmeyi geri al)
+    for e in out:
+        e["match"] = info.get(e["id"])
+    return out
 
 
 def cycle_start_day() -> int:
@@ -1364,7 +1440,7 @@ def gc_files(min_age_hours: int = 24) -> list[str]:
 BANK_DOC_TYPES = {".pdf": ".pdf", ".xlsx": ".xlsx", ".xls": ".xls", ".csv": ".csv"}
 
 
-def save_bank_document(data: bytes, filename: str, bank: str | None = None) -> int | None:
+def save_bank_document(data: bytes, filename: str, bank: str | None = None, account_id: int | None = None) -> int | None:
     """İçe aktarılan dökümün dosyası. Döner: bank_documents id (dosya alan sınırı yüzünden saklanmadıysa da kayıt
     oluşur, stored = 0). Uzantı tanınmıyorsa None."""
     ext = BANK_DOC_TYPES.get(os.path.splitext(filename or "")[1].lower())
@@ -1372,8 +1448,8 @@ def save_bank_document(data: bytes, filename: str, bank: str | None = None) -> i
         return None
     name = f"{file_hash(data)}{ext}"
     stored = store_file("statements-bank", name, data)
-    acc = None
-    if bank:
+    acc = account_id
+    if bank and not acc:
         from app.bank_import import short_bank
 
         with connect() as c:
@@ -1576,8 +1652,12 @@ def day_at(r: dict, month: str, changes: list[dict] | None = None) -> int:
 def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, float], set[int]]:
     """Takvim yılının her ayında ödenen brüt + vergi matrahının sıfırlandığı aylar.
     Kayıttan önceki aylar (yıl başı) bilinen ilk brütle dolu varsayılır: kümülatif matrah gerçekçi kalsın."""
+    from app.payroll import gross_for_net
+
     r = dict(r)
-    first = r.get("gross_amount") or (changes[0]["gross"] if changes else 0.0)
+    # ilk brüt: kalemin brütü; netle tanımlıysa netin brüt karşılığı (zammın brütü değil: matrah şişmesin)
+    first = r.get("gross_amount") or (gross_for_net(r["amount"], year) if r.get("amount") else 0.0) \
+        or (changes[0]["gross"] if changes else 0.0)
     grosses: dict[int, float] = {}
     for m in range(1, 13):
         period = period_of(f"{year}-{m:02d}-{min(day_at(r, f'{year}-{m:02d}', changes), 28):02d}")
@@ -1680,8 +1760,10 @@ def match_card_payment(amount: float, on: str, only_unpaid: bool = False):
             (amount, amount, amount, (d - timedelta(days=0)).isoformat())).fetchone()
 
 
-def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | None = None) -> dict:
-    """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner."""
+def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | None = None, account_id: int | None = None,
+                     iban: str | None = None, new_account: bool = False) -> dict:
+    """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner.
+    account: dökümün bankası (metin); account_id: kullanıcının seçtiği hesap (yoksa IBAN / banka adıyla bulunur)."""
     import re as _re
     from datetime import date as _date, timedelta
 
@@ -1691,7 +1773,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
              "odendi_isaretlenen": 0, "maas": 0}
     from app.bank_import import short_bank
 
-    acc_id = ensure_account(short_bank(account)) if account else None
+    from app import sync
+
+    acc_id = sync.account_for_import(account or None, iban, account_id, new_account) if (account or account_id) else None
     with connect() as c:
         rules = load_rules(c)
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
@@ -1705,6 +1789,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                           if x.get("type") in ("gelir", "gider")) if p}
     with connect() as c:
         people |= {n for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL")}
+    # elle girilenle kesin eşleşme için: bu dökümdeki diğer yeni satırlar (aynı tutarda ikinci satır varsa sorulur)
+    batch = [x for x in rows if x.get("type") in ("gelir", "gider") and x.get("amount") is not None and x["hash"] not in seen]
     for r in rows:
         # dekontla önceden eklenmiş aynı işlem: dökümdeki satırla birleşir (iki kez sayılmaz)
         if acc_id and r["hash"] not in seen and r.get("amount") is not None:
@@ -1765,14 +1851,15 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         desc = r["description"]
         # daha önce elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog) → yeni kayıt açma, bağla
         with connect() as c:
-            # kumbaradan altın/döviz alımı tahmini fiyatla yazılmış olabilir: ±%10 içinde eşleşir, gerçek tutara güncellenir
+            # e-posta bildiriminden gelen geçici kayıt (aynı hareket, bankadan) ve kumbaradan altın/döviz alımı (tahmini
+            # fiyatla yazılmış olabilir: ±%10 içinde eşleşir, gerçek tutara güncellenir) doğrudan birleşir
             cands = [dict(x) for x in c.execute(
                 """SELECT id, entry_date, description, note, counterparty, amount, category FROM entries
-                   WHERE (import_hash IS NULL OR (import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti'))
+                   WHERE ((import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti' AND ABS(amount - ?) < 0.01)
+                          OR (import_hash IS NULL AND category = ? AND ABS(amount - ?) <= ? * 0.10))
                    AND import_hash IS NOT ? AND wallet_id IS NULL AND kind = ?
-                   AND (ABS(amount - ?) < 0.01 OR (category = ? AND ABS(amount - ?) <= ? * 0.10))
                    AND entry_date BETWEEN ? AND ?""",
-                (r["hash"], kind, amount, JAR_BUY_CATEGORY, amount, amount,
+                (amount, JAR_BUY_CATEGORY, amount, amount, r["hash"], kind,
                  (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
             who_here = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
             dup = _pick_manual(cands, who_here, people, d)
@@ -1781,6 +1868,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                           "account_id = COALESCE(account_id, ?) WHERE id = ?", (r["hash"], who_here, acc_id, dup["id"]))
                 if abs(dup["amount"] - amount) >= 0.01:  # kumbara alımı: bankadaki gerçek tutar
                     _sync_jar_purchase(c, dup["id"], amount)
+            else:
+                # elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog): KESİN eşleşmede yeni kayıt açılmaz, bağlanır.
+                # muhtemel eşleşmeler (tarih ±3–5, küçük tutar farkı, birden çok aday) kayıt olarak eklenir ve sorulur
+                dup = sync.pick_for_row(c, r, kind, amount, acc_id, who_here, people, batch)
+                if dup:
+                    sync.attach_row(c, dup, r, kind, amount, acc_id, who_here)
+            if dup:
                 matched = c.execute("SELECT counterparty FROM entries WHERE id = ?", (dup["id"],)).fetchone()[0]
         if dup:  # bağlantı yazıldıktan sonra (ayrı bağlantı açan borç kapatma kilitlenmesin)
             if link_debt_movement(matched, kind, amount, r["date"], dup["id"]):
@@ -1847,9 +1941,18 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         seen.add(r["hash"])
     # hesabın son bakiyesi: dökümdeki en son satırın bakiyesi (kayıtlar yazıldıktan sonra çapalanır)
     with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
-    if with_bal and account:  # (dekontlar bu yola girmez: app/dekont.py, bakiyeye dokunmaz)
+    if with_bal and acc_id:  # (dekontlar bu yola girmez: app/dekont.py, bakiyeye dokunmaz)
         d_, _, bal = max(with_bal)
-        set_account_balance(short_bank(account), bal, d_, source="dokum")
+        with connect() as c:
+            acc_name = c.execute("SELECT name FROM accounts WHERE id = ?", (acc_id,)).fetchone()[0]
+        set_account_balance(acc_name, bal, d_, source="dokum")
+    # öğrenilmiş kurallarla eşleşenler birleşir; kalan muhtemeller Yapılacaklar'da sorulur
+    rec = sync.reconcile()
+    if rec["kural"]:
+        stats["eslesen_kural"] = rec["kural"]
+    asked = sum(1 for p in sync.find_pairs() if not p["auto"] and p["source"] == "dokum")
+    if asked:
+        stats["eslesme_sorusu"] = asked
     return stats
 
 
@@ -2484,7 +2587,8 @@ def propose_split(items: list[dict], category: str | None, total: float | None) 
 
 # ---------------------------------------------------------------- hesaplar (bakiye tamponu)
 
-def set_account_balance(name: str, balance: float, as_of: str, source: str = "elle", kind: str = "banka") -> None:
+def set_account_balance(name: str, balance: float, as_of: str, source: str = "elle", kind: str = "banka",
+                        origin: str | None = None) -> None:
     """Bakiye çapası: o tarihteki bakiye. Sonraki (ve aynı gün sonradan girilen) hareketler bunun üstüne eklenir.
     Döküm daha eski bir tarihe aitse mevcut (daha yeni) bakiyeyi ezmez."""
     with connect() as c:
@@ -2492,11 +2596,11 @@ def set_account_balance(name: str, balance: float, as_of: str, source: str = "el
         if cur and cur["as_of"] and source == "dokum" and cur["as_of"] > as_of:
             return
         anchor = c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]
-        c.execute("""INSERT INTO accounts (name, kind, balance, as_of, source, anchor_entry_id, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        c.execute("""INSERT INTO accounts (name, kind, balance, as_of, source, anchor_entry_id, origin, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                      ON CONFLICT(name) DO UPDATE SET balance = excluded.balance, as_of = excluded.as_of,
                      source = excluded.source, anchor_entry_id = excluded.anchor_entry_id, updated_at = CURRENT_TIMESTAMP""",
-                  (name, kind, round(balance, 2), as_of, source, anchor))
+                  (name, kind, round(balance, 2), as_of, source, anchor, origin or ("elle" if source == "elle" else "dokum")))
 
 
 def ensure_account(name: str, kind: str = "banka") -> int:
@@ -2505,7 +2609,7 @@ def ensure_account(name: str, kind: str = "banka") -> int:
         r = c.execute("SELECT id FROM accounts WHERE name = ?", (name,)).fetchone()
         if r:
             return r["id"]
-        return c.execute("INSERT INTO accounts (name, kind, balance, as_of, source) VALUES (?, ?, 0, NULL, 'dokum')",
+        return c.execute("INSERT INTO accounts (name, kind, balance, as_of, source, origin) VALUES (?, ?, 0, NULL, 'dokum', 'dokum')",
                          (name, kind)).lastrowid
 
 

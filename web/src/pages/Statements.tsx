@@ -9,6 +9,7 @@ import { useSave } from "../components/hooks";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
 import StatementHelp from "../components/StatementHelp";
+import { QuotaFullModal, useDocQuota, type QuotaFull } from "../components/DocQuota";
 
 export default function Statements() {
   const ui = useUI();
@@ -22,6 +23,10 @@ export default function Statements() {
   // tek yükleme alanı: hesap dökümleri sırayla hesap hareketleri önizlemesine gider
   const [queue, setQueue] = useState<{ file: File; password?: string }[]>([]);
   const [asking, setAsking] = useState<File[]>([]); // türünden emin olunamayan dosyalar: kullanıcıya sorulur
+  // hazır sürüm: belge okuma hakkı doldu → dosya seçici açılmaz, elle gider/gelir önerilir
+  const quota = useDocQuota();
+  const [full, setFull] = useState<Partial<QuotaFull> | null>(null);
+  const pick = () => (quota.full ? setFull({}) : input.current?.click());
   const upload = useSave(
     ({ files, password, kind }: { files: File[]; password?: string; kind?: DocKind }) =>
       api.upload(files, password, remember, kind),
@@ -40,7 +45,10 @@ export default function Statements() {
         setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required")));
         const acc = files.filter((f) => res.some((r) => r.filename === f.name && r.status === "account_statement"));
         if (acc.length) setQueue((q) => [...q, ...acc.map((file) => ({ file, password }))]);
+        const qf = res.find((r) => r.quota_full);
+        if (qf) setFull({ upgrade: qf.upgrade, limit: qf.limit });
       },
+      onSettled: () => void quota.refresh(),
     });
   const del = useSave((id: number) => api.deleteStatement(id), () => ui.toast("Ekstre silindi"));
 
@@ -52,6 +60,7 @@ export default function Statements() {
   }), (res) => setResults(res));
 
   const send = (files: FileList | null) => {
+    if (quota.full) return setFull({});
     const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
     if (ok.length) sendFiles(ok);
   };
@@ -78,8 +87,8 @@ export default function Statements() {
       ) : (
       <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files); }}
-        onClick={() => input.current?.click()} role="button" tabIndex={0}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.current?.click(); } }}
+        onClick={pick} role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }}
         className={cx("card flex cursor-pointer flex-col items-center gap-2 border-2 border-dashed p-8 text-center",
           drag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30")}>
         {upload.isPending ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
@@ -91,6 +100,11 @@ export default function Statements() {
         <input ref={input} type="file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>
       )}
+      {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade}
+        manual={(["gider", "gelir"] as const).map((kind) => ({
+          label: kind === "gider" ? "Elle gider" : "Elle gelir",
+          onClick: () => { setFull(null); ui.openEntry(undefined, { kind }); },
+        }))} />}
       {upload.error && <p className="text-sm text-red-600">{(upload.error as Error).message}</p>}
 
       {locked.length > 0 && (

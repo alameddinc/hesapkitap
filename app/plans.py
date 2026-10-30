@@ -1,6 +1,7 @@
 """Paketler (yalnızca barındırılan sürümde, HESAPKITAP_HOSTED=1): ücretsiz / premium / aile.
 
 Kendi sunucusuna kuranda paket yoktur: her şey açık, yapay zekâ kotası yöneticinin ayarı (system.ai_quota).
+Hazır sürümde kota "belge okuma hakkı"dır: okunan her belge 1 (app/doc_reads.py).
 Paket defter sahibinindir; ortak deftere davet edilen üye sahibin paketini kullanır.
 Abonelik mağazadan (App Store / Google Play) RevenueCat üzerinden gelir: plan + bitiş tarihi kullanıcıya yazılır.
 """
@@ -26,9 +27,9 @@ FREE_HISTORY_MONTHS = 1  # ücretsiz: bu dönem + geçen dönem
 FREE_PLAN_MONTHS = 1
 FREE_BUDGETS = 2
 # Verini indirmek (zip/Excel) ve hesabı silmek her pakette serbest: KVKK erişim ve taşınabilirlik hakkı.
-# ayda yapay zekâ ile belge okuma. Premium/Aile: adil kullanım (normal kullanıcı ~30-50 okur; kötüye kullanım kapanır).
-# Ortak defterde sahip + üyeler aynı havuzdan düşer (system.ai_used_pool).
-AI_DOCS = {FREE: 10, PREMIUM: 300, FAMILY: 300}
+# ayda belge okuma hakkı: ekstre, hesap dökümü, fiş, fatura, posta belgesi/bildirimi — okuma yöntemi fark etmez
+# (app/doc_reads.py). Ortak defterde sahip + üyeler aynı havuzdan düşer (system.ai_used_pool).
+DOC_READS = {FREE: 50, PREMIUM: 1000, FAMILY: 1000}
 LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi sunucun"}
 FEATURE_LABELS = {"fiyatlar": "Fiyat takibi", "istatistik": "Geçmişle karşılaştırma", "alsam_mi": "Alsam mı?",
                   "kumbara": "Kumbara", "gecmis": "Geçmiş aylar", "uzun_plan": "Uzun planlama", "butce": "Sınırsız bütçe",
@@ -158,10 +159,10 @@ def storage_limit(u: dict | None) -> int | None:
 
 
 def ai_limit(u: dict) -> int | None:
-    """Barındırılan sürümde paketin kotası; elle verilmiş kişisel kota her zaman önce gelir."""
+    """Barındırılan sürümde paketin aylık belge okuma hakkı; elle verilmiş kişisel kota her zaman önce gelir."""
     if u.get("ai_quota") is not None:
         return u["ai_quota"]
-    return AI_DOCS[plan_of(u)]
+    return DOC_READS[plan_of(u)]
 
 
 def info(u: dict | None) -> dict:
@@ -170,7 +171,7 @@ def info(u: dict | None) -> dict:
     return {"plan": p, "label": LABELS[p], "hosted": hosted(),
             "until": o.get("plan_until") if o and p in (PREMIUM, FAMILY) else None,
             "features": {f: allows(u, f) for f in FEATURES}, "feature_labels": FEATURE_LABELS, "limits": limits(u),
-            "ai_docs": None if p == SELF else ai_limit(u) if u else AI_DOCS[FREE],
+            "ai_docs": None if p == SELF else ai_limit(u) if u else DOC_READS[FREE],
             "member": bool(u and u.get("member_of"))}
 
 
@@ -198,6 +199,8 @@ def apply_revenuecat(event: dict) -> dict:
     exp_ms = event.get("expiration_at_ms")
     until = datetime.fromtimestamp(exp_ms / 1000, timezone.utc).isoformat(timespec="seconds") if exp_ms else None
     if kind in END_EVENTS:
+        if u.get("plan_source") == "manual" and _active(u):  # yöneticinin verdiği (test) paketi mağaza bitişi silmesin
+            return {"user": u["id"], "ignored": "manual"}
         system.update_user(u["id"], plan=FREE, plan_until=None, plan_source="revenuecat")
         return {"user": u["id"], "plan": FREE}
     if kind in ACTIVE_EVENTS and plan:

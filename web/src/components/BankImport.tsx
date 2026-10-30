@@ -1,8 +1,9 @@
-import { Landmark, Loader2 } from "lucide-react";
+import { Check, Landmark, Loader2, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import { isQuotaFull, QuotaFullError, QuotaFullModal, useDocQuota, type QuotaFull } from "./DocQuota";
 
 type Key = "date" | "description" | "amount" | "debit" | "credit" | "balance";
 interface Preview {
@@ -20,6 +21,83 @@ interface Preview {
   warning?: string | null; // ör. kart dökümü olabilir (harcamalar gelir görünür)
   balance_change?: { account: string; current: number; new: number; date: string } | null;
   checks?: string[]; // şüpheli değişiklik: içe aktarmadan önce onay istenir
+  iban?: string | null;
+  account_match?: AccountMatch | { status?: undefined }; // döküm hangi hesaba gidecek (app/sync.py resolve_account)
+}
+
+interface AccountCand { id: number; name: string; balance: number | null; as_of: string | null; iban_last4: string | null }
+type AccountMatch =
+  | { status: "exact"; account_id: number; name: string; via: "iban" | "alias" | "name"; iban_last4: string | null }
+  | { status: "ask"; bank: string; default_id: number | null; candidates: AccountCand[]; iban_last4: string | null }
+  | { status: "new"; name: string; iban_last4: string | null }
+  | { status: "none"; candidates: AccountCand[]; iban_last4: string | null };
+/** Hesap seçimi: null = sunucu karar versin (ask ise Yapılacaklar'da sorulur), sayı = o hesap, "new" = yeni hesap aç. */
+type AccountChoice = number | "new" | null;
+
+const VIA: Record<string, string> = { iban: "IBAN'dan tanındı", alias: "daha önce bu hesaba eklemiştin", name: "banka adı tutuyor" };
+
+/** "Bu döküm 'Garanti' hesabına mı ait?" — önizlemede sorulur, cevap içe aktarmayla gider. */
+function AccountQuestion({ m, value, onChange }: { m: AccountMatch; value: AccountChoice; onChange: (v: AccountChoice) => void }) {
+  const iban = m.iban_last4 ? ` · IBAN ••${m.iban_last4}` : "";
+  if (m.status === "exact") return (
+    <p className="flex items-center gap-2 text-sm text-stone-700 dark:text-stone-300">
+      <Landmark size={15} className="shrink-0 text-stone-400" aria-hidden="true" />
+      <span><b>{m.name}</b> hesabına eklenecek <span className="text-xs text-stone-500">({VIA[m.via] ?? m.via}{iban})</span></span>
+    </p>
+  );
+  if (m.status === "new") return (
+    <p className="flex items-center gap-2 text-sm text-stone-700 dark:text-stone-300">
+      <Plus size={15} className="shrink-0 text-stone-400" aria-hidden="true" />
+      <span>Yeni hesap açılacak: <b>{m.name}</b><span className="text-xs text-stone-500">{iban}</span></span>
+    </p>
+  );
+  if (m.status === "none") return m.candidates.length ? (
+    <label className="block text-sm">
+      <span className="label">Hangi hesaba? (isteğe bağlı)</span>
+      <select className="input" value={typeof value === "number" ? value : ""}
+        onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
+        <option value="">Hesap belirtme</option>
+        {m.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.iban_last4 ? ` ••${c.iban_last4}` : ""}{c.balance != null ? ` · ${tl(c.balance)}` : ""}</option>)}
+      </select>
+    </label>
+  ) : null;
+  const cands = m.candidates.filter((c) => c.id !== m.default_id);
+  const single = cands.length === 1 ? cands[0] : null;
+  const opt = (checked: boolean) => cx("flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm transition-colors",
+    checked ? "border-blue-500 bg-blue-50 ring-2 ring-blue-500/20 dark:border-blue-500 dark:bg-blue-950/40"
+      : "border-stone-200 bg-white hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-900 dark:hover:bg-stone-800");
+  return (
+    <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 dark:border-blue-900/60 dark:bg-blue-950/20">
+    <fieldset className="space-y-2">
+      <legend className="font-display text-[15px] font-semibold tracking-tight">
+        {single ? `Bu döküm “${single.name}” hesabına mı ait?` : `Bu döküm hangi ${m.bank} hesabına ait?`}</legend>
+      <p className="text-xs text-stone-500 dark:text-stone-400">
+        {m.bank} için elle açtığın {cands.length > 1 ? `${cands.length} hesap` : "bir hesap"} var{iban}. Aynı hesapsa hareketler oraya eklenir,
+        elle girdiklerinle eşleşir; sonraki dökümler sormadan gider.</p>
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        {cands.map((c) => (
+          <label key={c.id} className={opt(value === c.id)}>
+            <input type="radio" name="bank-acc" className="accent-blue-600" checked={value === c.id} onChange={() => onChange(c.id)} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">{single ? "Evet, " : ""}{c.name}{c.iban_last4 ? ` ••${c.iban_last4}` : ""}</span>
+              {c.balance != null && <span className="block text-xs text-stone-500 tabular-nums">{tl(c.balance)}{c.as_of ? ` · ${dateTR(c.as_of)}` : ""}</span>}
+            </span>
+            {value === c.id && <Check size={15} className="text-blue-600" aria-hidden="true" />}
+          </label>
+        ))}
+        <label className={opt(value === "new")}>
+          <input type="radio" name="bank-acc" className="accent-blue-600" checked={value === "new"} onChange={() => onChange("new")} />
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium">Yeni hesap aç</span>
+            <span className="block text-xs text-stone-500">{m.default_id ? `“${m.candidates.find((c) => c.id === m.default_id)?.name ?? m.bank}” ayrı hesap olarak kalır` : `ayrı bir “${m.bank}” hesabı açılır`}</span>
+          </span>
+          {value === "new" && <Check size={15} className="text-blue-600" aria-hidden="true" />}
+        </label>
+      </div>
+      {value === null && <p className="text-xs text-stone-500">Seçmezsen yine içe aktarılır; hangi hesap olduğunu Yapılacaklar'da sorarız.</p>}
+    </fieldset>
+    </div>
+  );
 }
 
 const LABEL: Record<string, string> = {
@@ -36,6 +114,7 @@ async function postForm<T>(url: string, file: File, extra: Record<string, string
   Object.entries(extra).forEach(([k, v]) => fd.append(k, v));
   const r = await fetch(url, { method: "POST", body: fd });
   const j = await r.json().catch(() => ({}));
+  if (isQuotaFull(j)) throw new QuotaFullError(j); // 422: belge okuma hakkı doldu (hazır sürüm)
   if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
   return j as T;
 }
@@ -60,28 +139,40 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [sure, setSure] = useState(false); // şüpheli değişiklik onayı
+  const [acc, setAcc] = useState<AccountChoice>(null); // "Bu döküm X hesabına mı ait?" cevabı
+  const quota = useDocQuota();
+  const [full, setFull] = useState<Partial<QuotaFull> | null>(null); // belge okuma hakkı doldu uyarısı
+  const onFail = (e: unknown) => {
+    if (e instanceof QuotaFullError) setFull(e.info);
+    setErr((e as Error).message);
+  };
 
   const preview = async (f: File, mapping?: Preview["mapping"], headerRow?: number, pw?: string) => {
     setBusy(true);
     setErr(null);
     try {
       setSure(false);
+      setAcc(null);
       setPv(await postForm<Preview>("/api/bank-import/preview", f, {
         ...(mapping ? { mapping: JSON.stringify(mapping), header_row: String(headerRow ?? 0) } : {}),
         ...(pw ?? password ? { password: (pw ?? password)! } : {}),
       }));
     } catch (e) {
-      setErr((e as Error).message);
+      onFail(e);
     } finally {
       setBusy(false);
+      void quota.refresh();
     }
   };
   const run = useSave(() => postForm<Record<string, number>>("/api/bank-import", file!, {
     ...(pv!.pdf ? {} : { mapping: JSON.stringify(pv!.mapping), header_row: String(pv!.header_row) }),
     ...(password ? { password } : {}),
+    ...(typeof acc === "number" ? { account_id: String(acc) } : acc === "new" ? { new_account: "true" } : {}),
   }), (r) => {
     const parts = [r.gelir && `${r.gelir} gelir`, r.gider && `${r.gider} gider`, r.maas && `${r.maas} maaş onaylandı`,
-      r.odendi_isaretlenen && `${r.odendi_isaretlenen} ekstre ödendi`, r.eslesen_elle && `${r.eslesen_elle} elle girilenle eşleşti`,
+      r.odendi_isaretlenen && `${r.odendi_isaretlenen} ekstre ödendi`,
+      (r.eslesen_elle || r.eslesen_kural) && `${(r.eslesen_elle ?? 0) + (r.eslesen_kural ?? 0)} kayıt elle girdiğinle eşleşti (iki kez sayılmadı)`,
+      r.eslesme_sorusu && `${r.eslesme_sorusu} eşleşme sorusu Yapılacaklar'da`,
       r.virman && `${r.virman} kendi hesapların arası`, r.tekrar && `${r.tekrar} zaten vardı`].filter(Boolean);
     ui.toast(parts.length ? parts.join(" · ") : "Yeni hareket yok");
     setPv(null);
@@ -99,6 +190,11 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
   if (incoming !== undefined && !file && !busy && !err) return null;  // tek yükleme alanından gelen bir şey yok
   return (
     <section className="card space-y-3 p-4">
+      {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade}
+        manual={(["gider", "gelir"] as const).map((kind) => ({
+          label: kind === "gider" ? "Elle gider" : "Elle gelir",
+          onClick: () => { setFull(null); ui.openEntry(undefined, { kind }); },
+        }))} />}
       <div>
         <h2 className="flex items-center gap-2 font-semibold"><Landmark size={18} /> Hesap dökümü{file ? `: ${file.name}` : ""}</h2>
         <p className="text-xs text-stone-500">
@@ -108,7 +204,8 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
         </p>
       </div>
       {incoming === undefined && <>
-        <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy} onClick={() => input.current?.click()}>
+        <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy}
+          onClick={() => (quota.full ? setFull({}) : input.current?.click())}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Landmark size={16} />} {busy ? "Okunuyor…" : "Dosya seç (.pdf, .xlsx, .xls, .csv)"}
         </button>
         <input ref={input} type="file" accept=".pdf,application/pdf,.xlsx,.xls,.csv,text/csv" className="hidden"
@@ -139,6 +236,9 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
           </div>
           {pv.profile_saved && <p className="text-xs text-green-700 dark:text-green-400">Bu bankanın biçimi hatırlandı.</p>}
           </>)}
+          {pv.account_match?.status && (
+            <AccountQuestion m={pv.account_match as AccountMatch} value={acc} onChange={setAcc} />
+          )}
           {pv.balance_change && !pv.checks?.length && (
             <p className="text-xs text-stone-500">
               {pv.balance_change.account} bakiyesi {tl(pv.balance_change.current)} → <b>{tl(pv.balance_change.new)}</b> ({dateTR(pv.balance_change.date)} itibarıyla)
@@ -181,7 +281,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
           </div>
           <div className="flex gap-2">
             <button className="btn-primary" disabled={!pv.total || run.isPending || (!!pv.checks?.length && !sure)}
-              onClick={() => run.mutate(undefined, { onError: (e) => setErr(e.message) })}>
+              onClick={() => run.mutate(undefined, { onError: (e) => { onFail(e); void quota.refresh(); } })}>
               {pv.total} hareketi içe aktar
             </button>
             <button className="btn-ghost" onClick={() => { setPv(null); setFile(null); setErr(null); onDone?.(); }}>Vazgeç</button>

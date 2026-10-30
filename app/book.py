@@ -37,13 +37,14 @@ PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ek
 # üyenin yapabileceği değişiklikler (geri kalan her yazma sahibe ait)
 MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
+    ("POST", r"/api/entries/\d+/(match|unmatch)"),  # eşitleme: "Bu ikisi aynı mı?" ve eşleşmeyi geri al (görebildiği kayıtta)
     ("POST", r"/api/receipts/parse"), ("POST", r"/api/bills/parse"), ("POST", r"/api/splits/propose"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",
-                 "/api/bank-import", "/api/onboarding", "/api/mail")
+                 "/api/bank-import", "/api/onboarding", "/api/mail", "/api/match-rules")
 MEMBER_OPEN = ("/api/settings/password", "/api/settings/tokens", "/api/book/me")
 ENTRY_MEMBER_FIELDS = {"category", "note", "description", "counterparty", "location"}  # başkasının kaydında
 EMPTY = {"hidden_cards": [], "hidden_accounts": [], "hide_fees": False, "hidden_pages": []}

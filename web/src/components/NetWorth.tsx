@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, CreditCard, Landmark, Plus, Trash2, Wallet } from "lucide-react";
+import { ChevronDown, ChevronRight, CreditCard, GitMerge, Landmark, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
 import type { CardCycle } from "../api";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
-import { useMeta, useSave } from "./hooks";
+import { isLimited, useBook, useMeta, useSave } from "./hooks";
+import AccountMerge from "./AccountMerge";
 import Wallets from "./Wallets";
 import CycleLine from "./CardCycle";
 
@@ -95,6 +96,8 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
   const [name, setName] = useState("");
   const [bal, setBal] = useState("");
   const [kind, setKind] = useState<"banka" | "nakit" | "diger">("banka");
+  const [merging, setMerging] = useState<Account | null>(null); // "Başka hesapla birleştir"
+  const canMerge = !isLimited(useBook().data); // sahip ya da tam yetkili üye
   const add = useSave(() => json("POST", "/api/accounts", { name, kind, balance: parseAmount(bal) }),
     () => { ui.toast("Hesap eklendi"); setAdding(false); setBal(""); });
   const addKnown = useSave((a: { name: string; balance: number }) => json("POST", "/api/accounts", { name: a.name, kind: "banka", balance: a.balance }),
@@ -166,6 +169,10 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                       const v = window.prompt(`${a.name} bakiyesi (bugün):`, String(a.balance).replace(".", ","));
                       if (v != null && !Number.isNaN(parseAmount(v))) edit.mutate({ id: a.id, balance: parseAmount(v) });
                     }}>{tl(a.balance)}</button>
+                  {canMerge && d.accounts.length > 1 && (
+                    <button className="btn-ghost p-1 text-stone-400 hover:text-blue-600" aria-label={`${a.name}: başka hesapla birleştir`}
+                      title="Başka hesapla birleştir" onClick={() => setMerging(a)}><GitMerge size={13} /></button>
+                  )}
                   <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
                     onClick={() => window.confirm(`${a.name} silinsin mi?`) && del.mutate(a.id)}><Trash2 size={13} /></button>
                 </li>
@@ -194,6 +201,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             ) : (
               <button className="btn-ghost mt-1 px-2 py-1 text-xs" onClick={() => setAdding(true)}><Plus size={14} /> Banka / nakit hesabı ekle</button>
             )}
+            {merging && <AccountMerge from={merging} accounts={d.accounts} onClose={() => setMerging(null)} />}
           </div>
 
           {d.credit_cards.length > 0 && (

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { ArrowLeftRight, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { api, type Rule } from "../api";
+import { api, errStatus, type MatchRule, type Rule } from "../api";
 import CategoryPicker from "../components/CategoryPicker";
 import ItemRules from "../components/ItemRules";
 import { useMeta, useSave } from "../components/hooks";
@@ -25,6 +25,60 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
         </button>
       </div>
     </li>
+  );
+}
+
+/** Öğrenilen eşleşmeler: dökümdeki/ekstredeki kalıp ↔ elle yazdığın açıklama. Ortak defter üyesinde (403) görünmez. */
+function LearnedMatches() {
+  const ui = useUI();
+  const q = useQuery({ queryKey: ["match-rules"], queryFn: api.matchRules, retry: false });
+  const del = useSave((id: number) => api.deleteMatchRule(id), () => ui.toast("Öğrenilen eşleşme silindi"));
+  if (q.isPending || (q.error && errStatus(q.error) === 403)) return null;
+  const rules = q.data ?? [];
+  const remove = (r: MatchRule) => {
+    if (!confirm(`“${r.bank_label} ↔ ${r.entry_label}” eşleşmesi unutulsun mu?\n\nŞimdiye kadar birleşen kayıtlar olduğu gibi kalır; bundan sonra bu ikisi yeniden sorulur.`)) return;
+    del.mutate(r.id, { onError: (e) => ui.toast(e.message) });
+  };
+  return (
+    <section className="card p-3 sm:p-4" aria-labelledby="learned-h">
+      <div className="flex items-start gap-2">
+        <Sparkles size={18} className="mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+        <div>
+          <h2 id="learned-h" className="font-display font-semibold tracking-tight">Öğrenilen eşleşmeler</h2>
+          <p className="text-xs text-stone-500 dark:text-stone-400">
+            Elle girdiğin bir kaydı dökümdeki ya da ekstredeki satırla eşleştirdikçe öğrenilir; sonra aynı ikili sormadan birleşir, iki kez sayılmaz.
+          </p>
+        </div>
+      </div>
+      {q.error ? (
+        <p className="mt-3 text-sm text-red-600 dark:text-red-400">{(q.error as Error).message}</p>
+      ) : !rules.length ? (
+        <p className="mt-3 rounded-lg border border-dashed border-stone-300 px-3 py-4 text-center text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
+          Bir dökümdeki kalıbı aynı elle kayıtla iki kez eşleştirince burada kural olur.
+        </p>
+      ) : (
+        <ul className="mt-2 divide-y divide-stone-100 dark:divide-stone-800">
+          {rules.map((r) => (
+            <li key={r.id} className="flex items-center gap-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
+                  <code className="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-xs dark:bg-stone-800" title={r.pattern}>{r.bank_label}</code>
+                  <ArrowLeftRight size={13} className="text-stone-400" aria-label="ile eşleşir" />
+                  <span className="font-medium">{r.entry_label}</span>
+                  {r.category && <span className="text-xs text-stone-500">· {r.category}</span>}
+                </div>
+                <div className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+                  {r.source === "dokum" ? "Hesap dökümü" : "Kart ekstresi"} ·{" "}
+                  {r.used ? `${r.used} kez kendiliğinden eşleşti` : `${r.hits} kez onayladın · sıradaki kendiliğinden eşleşir`}
+                </div>
+              </div>
+              <button className="btn-danger p-2" aria-label={`${r.bank_label} ↔ ${r.entry_label} eşleşmesini sil`}
+                disabled={del.isPending} onClick={() => remove(r)}><Trash2 size={16} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -58,6 +112,8 @@ export default function Rules() {
       </div>
 
       <ItemRules />
+
+      <LearnedMatches />
 
       <section className="card space-y-2 p-3 sm:p-4">
         <h2 className="font-semibold">Yeni kural</h2>

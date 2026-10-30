@@ -20,6 +20,7 @@ import MailAddress from "../components/MailAddress";
 import DeleteAccount from "../components/DeleteAccount";
 import DemoStats from "../components/DemoStats";
 import Features from "../components/Features";
+import { DocQuotaNote, useDocQuota } from "../components/DocQuota";
 import { useBook, useDemo, useUiPrefs } from "../components/hooks";
 import { LogoutButton } from "./More";
 
@@ -333,8 +334,7 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
   const isAdmin = !auth.data?.user || auth.data.user.role === "admin";
   // barındırılan sürüm: anahtar/Telegram/e-posta kutusu ayarı yok; yapay zekâ paketin kotasıyla sunucudan
   const locked = !!useMeta().data?.plan?.hosted && !isAdmin;
-  const ai = useQuery({ queryKey: ["me-ai"], enabled: !isAdmin,
-    queryFn: () => fetch("/api/me/ai").then((r) => r.json() as Promise<{ used: number; quota: number | null; own_key: boolean; shared_available: boolean }>) });
+  const ai = useDocQuota();
 
   return (
     <div className="space-y-4">
@@ -352,15 +352,11 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
 
       <ViewPrefs />
 
-      {locked ? (ai.data && ai.data.quota != null && (
-        <section className="card p-4 text-sm">
-          Yapay zekâ ile belge okuma: bu ay <b>{ai.data.used}/{ai.data.quota}</b> hak kullanıldı. Ay başında yenilenir.
-        </section>
-      )) : (
+      {locked ? <DocQuotaNote /> : (
       <section className="card p-4">
         <h2 className="flex items-center gap-2 font-semibold"><KeyRound size={18} /> Anahtarlar</h2>
         <p className="text-xs text-stone-500">Değerler bu sunucuda saklanır; ekranda sadece son 4 karakteri görünür.</p>
-        {ai.data && (
+        {!isAdmin && ai.data && ai.data.used != null && (
           <p className="mt-2 rounded-lg bg-stone-50 p-2 text-sm dark:bg-stone-900">
             {ai.data.own_key
               ? <>Kendi Gemini anahtarını kullanıyorsun: okuma sınırı yok (bu ay {ai.data.used} okuma).</>

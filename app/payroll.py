@@ -72,6 +72,22 @@ def net_by_month(gross: float, year: int, start_month: int = 1, prior_cum_base: 
             "annual_net": _r(sum(x["net"] for x in months))}
 
 
+def gross_for_net(net: float, year: int) -> float:
+    """Neti bilinen maaşın brüt karşılığı: yıllık ortalama neti bu nete eşit olan sabit brüt (ikili arama, kuruş).
+    Netle tanımlı maaşa yıl ortasında brütlü zam gelince, zamdan önceki aylar bu brütle sayılır; yoksa zamlı brüt
+    yılın başına da yazılır ve vergi matrahı şişer."""
+    if net <= 0:
+        return 0.0
+    lo, hi = net, net * 3
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if net_by_month(mid, year)["annual_net"] / 12 < net:
+            lo = mid
+        else:
+            hi = mid
+    return _r(hi)
+
+
 def net_for(gross: float, year: int, month: int) -> float:
     return next(x["net"] for x in net_by_month(gross, year)["months"] if x["month"] == month)
 

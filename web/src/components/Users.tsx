@@ -8,9 +8,10 @@ import { isEmail, useLoginKind, useSave } from "./hooks";
 interface UserRow {
   id: number; username: string; role: "admin" | "user"; created_at: string; last_login: string | null;
   disabled: boolean; must_change_password: boolean; ai_used: number; ai_quota: number | null; ai_quota_custom: number | null;
+  plan?: "free" | "premium" | "aile"; plan_until?: string | null; plan_source?: string | null;
 }
 interface Invite { code: string; note: string | null; created_at: string; expires_at: string | null; used_by_name: string | null; used_at: string | null }
-interface AdminData { users: UserRow[]; invites: Invite[]; default_quota: number }
+interface AdminData { users: UserRow[]; invites: Invite[]; default_quota: number; hosted?: boolean }
 
 async function call<T>(url: string, method = "POST", body?: unknown): Promise<T> {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -53,7 +54,8 @@ export default function Users() {
       <h2 className="flex items-center gap-2 font-semibold"><UsersIcon size={18} /> Kullanıcılar</h2>
       <p className="text-xs text-stone-500">
         Her kullanıcının verisi ayrı dosyada; buradan sadece hesapları yönetirsin, kimsenin harcamasını göremezsin.
-        Fiş okuma senin Gemini anahtarınla, kişi başı aylık {d?.default_quota ?? 100} okuma; kendi anahtarını giren sınırsız.
+        {d?.hosted ? "Belge okuma hakkı pakete göre: Ücretsiz ayda 50, Premium ve Aile ayda 1000 (ailede ortak)."
+          : `Fiş okuma senin Gemini anahtarınla, kişi başı aylık ${d?.default_quota ?? 100} okuma; kendi anahtarını giren sınırsız.`}
       </p>
 
       <div className="grid gap-2 sm:grid-cols-2">
@@ -92,7 +94,12 @@ export default function Users() {
               </span>
               <span className="text-xs text-stone-500">
                 {u.last_login ? `son giriş ${dateTR(u.last_login.slice(0, 10))}` : "hiç girmedi"}
-                {u.ai_quota !== null && <> · yapay zekâ {u.ai_used}/{u.ai_quota}</>}
+                {u.ai_quota !== null && <> · {d?.hosted ? "belge okuma" : "yapay zekâ"} {u.ai_used}/{u.ai_quota}</>}
+                {u.plan && u.plan !== "free" && u.role !== "admin" && (
+                  <> · <b className="text-amber-700 dark:text-amber-400">{u.plan === "aile" ? "Aile" : "Premium"}</b>
+                    {u.plan_until && ` ${dateTR(u.plan_until.slice(0, 10))}'e kadar`}
+                    {u.plan_source === "manual" ? " (sen verdin)" : u.plan_source === "revenuecat" ? " (mağaza)" : ""}</>
+                )}
               </span>
             </div>
             {u.role !== "admin" && (
@@ -104,6 +111,21 @@ export default function Users() {
                       if (v !== u.ai_quota) patch.mutate({ id: u.id, body: v === null ? { reset_quota: true } : { ai_quota: v } }, onErr);
                     }} />
                 </label>
+                {d?.hosted && (
+                  <select className="input w-auto px-2 py-1 text-xs" value="" aria-label="Paket ver"
+                    onChange={(e) => {
+                      const [plan, days] = e.target.value.split(":");
+                      if (plan && confirm(plan === "free" ? `${u.username} ücretsiz pakete dönsün mü?` : `${u.username} için ${days} gün ${plan === "aile" ? "Aile" : "Premium"} verilsin mi?`))
+                        patch.mutate({ id: u.id, body: { plan, plan_days: days ? Number(days) : undefined } }, onErr);
+                    }}>
+                    <option value="">Paket ver…</option>
+                    <option value="premium:30">Premium · 30 gün</option>
+                    <option value="premium:90">Premium · 90 gün</option>
+                    <option value="premium:365">Premium · 1 yıl</option>
+                    <option value="aile:90">Aile · 90 gün</option>
+                    <option value="free">Ücretsize döndür</option>
+                  </select>
+                )}
                 <button className="btn-ghost border border-stone-300 px-2 py-1 dark:border-stone-700"
                   onClick={() => confirm(`${u.username} için yeni geçici şifre üretilsin mi? Açık oturumları kapanır.`) && reset.mutate(u, onErr)}>
                   Şifre sıfırla

@@ -110,3 +110,18 @@ def test_bank_salary_matches_new_employer(client, tmpdb):
     st = tmpdb.import_bank_rows([{"date": "2026-12-01", "description": "ORNEK YAZILIM AS ODEME", "amount": 110000.0,
                                   "type": "gelir", "hash": "s1"}])
     assert st["maas"] == 1
+
+
+def test_net_defined_salary_raise_midyear_does_not_inflate_base():
+    """Netle tanımlı maaşa Aralık'ta brütlü zam: önceki aylar netin brüt karşılığıyla sayılır, zamlı net düşmez."""
+    from app import db
+    from app.payroll import gross_for_net, net_schedule
+
+    r = {"id": 1, "amount": 85000, "gross_amount": None, "day_of_month": 1, "start_month": "2026-01", "advance_pay": None}
+    changes = [{"from_month": "2026-12", "gross": 120000, "reason": "zam", "reset_cum": 0, "pay_day": None, "id": 1}]
+    g0 = gross_for_net(85000, 2026)
+    assert 115000 < g0 < 135000
+    grosses, resets = db.gross_schedule(r, 2026, changes)
+    assert abs(grosses[1] - g0) < 0.01 and grosses[12] == 120000
+    months = net_schedule(2026, grosses, resets)["months"]
+    assert months[11]["net"] > months[10]["net"] * 0.9  # zam ayı neti öncekinin çok altına düşmez

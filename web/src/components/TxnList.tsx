@@ -4,6 +4,7 @@ import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import { useUI } from "../ui";
 import { useAccounts } from "./AccountSelect";
 import { usePeople } from "./hooks";
+import { MatchBadge } from "./MatchInfo";
 
 const BADGE: Record<string, string> = {
   iade: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
@@ -100,7 +101,8 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
                 {r.subscription === "dusuruldu" && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Paket düşürüldü</span>}
                 {r.split_of && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-800 dark:bg-violet-950 dark:text-violet-300">Alt kalem</span>}
                 {!!r.split_total && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-violet-800 dark:bg-violet-950 dark:text-violet-300">Bölündü · {tl(r.split_total)} ayrıldı</span>}
-                {r.linked && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Ekstreyle eşleşti</span>}
+                {r.match ? <MatchBadge m={r.match} />
+                  : r.linked && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Ekstreyle eşleşti</span>}
               </div>
               {r.note && <div className="mt-0.5 truncate text-xs text-stone-400">{r.note}</div>}
               {r.pending && <PendingActions r={r} />}

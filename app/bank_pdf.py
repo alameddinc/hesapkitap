@@ -101,6 +101,14 @@ def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
     if is_dekont(text):
         raise BankPdfError("Bu bir işlem dekontu (tek işlem), hesap dökümü değil. Ekstreler sayfasına bırak: tek işlem "
                            "olarak eklenir, bakiye değişmez.")
+    from app.sync import find_iban
+
+    res = _parse_account_text(text)
+    res["iban"] = find_iban(text)  # hesabın IBAN'ı: sonraki dökümler doğrudan aynı hesaba gider (app/sync.py)
+    return res
+
+
+def _parse_account_text(text: str) -> dict:
     ruled = parse_rule_based(text)
     if ruled and ruled["verified"]:
         return ruled

@@ -52,9 +52,13 @@ class ReceiptError(Exception):
 
 
 def _shared_key_user() -> dict | None:
-    """Ortak (yöneticinin) anahtarını kullanan yönetici-olmayan kullanıcı; kota ona uygulanır."""
-    from app import db
+    """Kendi sunucusu: ortak (yöneticinin) anahtarını kullanan yönetici-olmayan kullanıcı; kota ona, yapay zekâ çağrısı
+    başına uygulanır. Hazır sürümde None: orada hak BELGE başınadır (app/doc_reads.py) — bir belgenin içindeki birden çok
+    yapay zekâ çağrısı ayrıca sayılmaz, çift sayım olmaz."""
+    from app import db, plans
 
+    if plans.hosted():
+        return None
     u = db.current_user()
     if not u or u.get("role") == "admin" or config.own_ai_key():
         return None
@@ -69,11 +73,8 @@ def _check_quota() -> None:
         return
     quota, used = system.ai_quota(u), system.ai_used_pool(u)  # ortak defterde ailenin ortak havuzu
     if quota is not None and used >= quota:
-        from app import plans
-
-        hint = ("Ay başında yenilenir." if plans.hosted()
-                else "Ay başında yenilenir; beklemek istemezsen Ayarlar'dan kendi Gemini anahtarını girebilirsin.")
-        raise ReceiptError(f"Bu ayki yapay zekâ okuma hakkın doldu ({used}/{quota}). {hint}")
+        raise ReceiptError(f"Bu ayki yapay zekâ okuma hakkın doldu ({used}/{quota}). Ay başında yenilenir; beklemek "
+                           "istemezsen Ayarlar'dan kendi Gemini anahtarını girebilirsin.")
 
 
 def _count_usage() -> None:

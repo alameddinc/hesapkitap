@@ -35,11 +35,17 @@ CREATE TABLE IF NOT EXISTS invites (
     used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     used_at TEXT
 );
-CREATE TABLE IF NOT EXISTS ai_usage (
+CREATE TABLE IF NOT EXISTS ai_usage (     -- kendi sunucusu: yapay zekâ çağrısı; hazır sürüm: okunan belge (app/doc_reads.py)
     user_id INTEGER NOT NULL,
     month TEXT NOT NULL,                -- YYYY-MM (takvim ayı)
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, month)
+);
+CREATE TABLE IF NOT EXISTS doc_reads (    -- hazır sürüm: sayılmış belgeler; aynı içerik aynı defterde bir kez sayılır
+    book_id INTEGER NOT NULL,           -- defter sahibi (ortak defterde sahip)
+    hash TEXT NOT NULL,                 -- sha256(dosya baytları ya da "mail:<Message-ID>"); içerik saklanmaz
+    month TEXT NOT NULL,
+    PRIMARY KEY (book_id, hash)
 );
 CREATE TABLE IF NOT EXISTS sys_settings (
     key TEXT PRIMARY KEY,
@@ -223,6 +229,7 @@ def delete_user(uid: int) -> None:
     with connect() as c:
         if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
+            c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
 
@@ -391,7 +398,9 @@ def delete_invite(code: str) -> bool:
         return c.execute("DELETE FROM invites WHERE code = ? AND used_at IS NULL", (code,)).rowcount > 0
 
 
-# ---------------------------------------------------------------- yapay zekâ kotası
+# ---------------------------------------------------------------- okuma kotası
+# Kendi sunucusu: ortak Gemini anahtarıyla yapılan yapay zekâ çağrısı sayısı (receipt._count_usage).
+# Hazır sürüm: okunan belge sayısı (app/doc_reads.py) — "belge okuma hakkı".
 
 def ai_used(uid: int, month: str | None = None) -> int:
     month = month or date.today().strftime("%Y-%m")
@@ -401,7 +410,8 @@ def ai_used(uid: int, month: str | None = None) -> int:
 
 
 def ai_used_pool(u: dict, month: str | None = None) -> int:
-    """Ortak defterde okuma hakkı ailenin ortak havuzu: sahip + bütün üyeler."""
+    """Ortak defterde okuma hakkı ailenin ortak havuzu: sahip + bütün üyeler (hazır sürümde belge, kendi sunucusunda
+    yapay zekâ çağrısı)."""
     owner_id = u.get("member_of") or u["id"]
     ids = [owner_id] + [m["id"] for m in members(owner_id)]
     return sum(ai_used(i, month) for i in ids)
@@ -415,7 +425,8 @@ def ai_add(uid: int) -> None:
 
 
 def ai_quota(u: dict) -> int | None:
-    """None: sınırsız (yönetici). Barındırılan sürümde paketin kotası (ücretsiz 3, premium/aile sınırsız)."""
+    """None: sınırsız (yönetici). Hazır sürümde paketin aylık belge okuma hakkı (plans.DOC_READS; kişiye özel ai_quota
+    önce gelir); kendi sunucusunda aylık yapay zekâ çağrısı kotası (kişiye özel ya da varsayılan)."""
     if u["role"] == "admin":
         return None
     from app import plans

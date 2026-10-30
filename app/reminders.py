@@ -2,7 +2,8 @@
 yaklaşan son ödeme. Özet'teki "Yapılacaklar" kartı (mobil + web) ve ileride push bildirimleri aynı listeyi kullanır.
 
 Her hatırlatmanın kimliği kararlıdır ve döneme bağlıdır: "ekstre:<kart no>:<YYYY-MM>", "dokum:<hesap id>:<YYYY-MM>",
-"odeme:<kart no>:<YYYY-MM-DD>". Kapatma (dismiss) ve erteleme (snooze) bu kimlikle saklanır; sonraki dönemin
+"odeme:<kart no>:<YYYY-MM-DD>". Eşitleme soruları (app/sync.py) kayda bağlıdır: "esles:<kayıt id>:<e|t><id>",
+"hesap:<hesap id>:<hesap id>"; cevaplanınca kendiliğinden düşer. Kapatma (dismiss) ve erteleme (snooze) bu kimlikle saklanır; sonraki dönemin
 hatırlatması yeni kimlikle yeniden çıkar. Durum kişiye özeldir (ortak defterde üyenin kapattığı sahibinkini kapatmaz).
 
 Dönem ve gün hesapları Europe/Istanbul saatine göre yapılır.
@@ -228,6 +229,21 @@ def _odeme(now: date) -> list[dict]:
     return out
 
 
+def _esitleme(upload: bool) -> list[dict]:
+    """"Bu ikisi aynı mı?" (elle girilen ↔ döküm/ekstre; yazma yetkisi olana) ve "Bu döküm X hesabına mı ait?"
+    (hesapları yönetebilene). Kimlikler: esles:<kayıt id>:<e|t><id>, hesap:<dökümden açılan>:<elle açılan>."""
+    from app import book, sync
+
+    m = book.member()
+    if m and book.role(m) == "viewer":
+        return []
+    out = sync.questions()
+    if upload and not _page_hidden("hesaplar"):
+        visible = {a["id"] for a in db.list_accounts()}  # ortak defter: gizli hesap sorulmaz
+        out += [q for q in sync.account_questions() if q["account_id"] in visible and q["into"] in visible]
+    return out
+
+
 def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
     """Bugün gösterilecek hatırlatmalar (önce acil olanlar)."""
     now = now or today()
@@ -239,6 +255,7 @@ def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
         items += _dokum(now)
     if not _page_hidden("ekstreler"):
         items += _odeme(now)
+    items += _esitleme(upload)
     st = _state()
     if not include_hidden:
         items = [i for i in items if not _hidden(i["id"], st, now)]

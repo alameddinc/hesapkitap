@@ -152,9 +152,12 @@ def classify_sender(msg: Message, raw: bytes, people: list[str], verify=_dkim_do
 # ---------------------------------------------------------------- işleme
 
 def _bill(name: str, data: bytes, mime: str) -> str:
-    """Fatura belgesini (PDF ya da mail metni) oku, Ödemeler'e ekle; aynı fatura ikinci kez eklenmez."""
-    from app import receipt
+    """Fatura belgesini (PDF ya da mail metni) oku, Ödemeler'e ekle; aynı fatura ikinci kez eklenmez.
+    Hazır sürümde yeni fatura 1 belge okuma hakkı; hak doluysa okunmaz."""
+    from app import doc_reads, receipt
 
+    if not doc_reads.allowed(data):
+        return f"⏭ {name}: belge okuma hakkı doldu"
     parsed = receipt.parse_bill(data, mime)
     if not parsed.get("amount") or not parsed.get("due_date"):
         raise ValueError(f"{name}: tutar ya da son ödeme tarihi okunamadı")
@@ -166,6 +169,7 @@ def _bill(name: str, data: bytes, mime: str) -> str:
     db.create_bill({"provider": parsed["provider"], "amount": parsed["amount"], "due_date": parsed["due_date"],
                     "category": parsed["category"], "description": parsed.get("description") or None,
                     "note": "E-postayla geldi", "file_name": file_name})
+    doc_reads.charge(data)
     prev = [b for b in db.list_bills() if b["provider"] == parsed["provider"] and b["due_date"] < parsed["due_date"]]
     change = ""
     if prev and prev[0]["amount"]:
@@ -220,7 +224,7 @@ def set_senders(emails: list[str]) -> list[str]:
 
 def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
     """Bir maili işle. Dönen: posta günlüğü satırı (+ 'user' anahtarı yok). Adres yoksa LookupError."""
-    from app import mailbox, plans
+    from app import doc_reads, mailbox, plans
 
     u = resolve(to)
     if not u:
@@ -252,6 +256,10 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
                  "detail": f"Tanınan bir banka/kurum değil ya da imza doğrulanamadı ({dom or 'bilinmiyor'})"}
             db.log_mail(r)
             return r
+        if not doc_reads.allowed():  # hazır sürüm: bu ayın belge okuma hakkı bitti; hiçbir şey okunmaz
+            r = {**entry, "kind": "-", "status": "skip", "detail": "Belge okuma hakkı doldu"}
+            db.log_mail(r)
+            return r
         try:
             pdfs, details = _safe_pdfs(mailbox._pdfs(msg))
             if details and not pdfs:  # ekler vardı ama hiçbiri uygun değil: hiçbir şey okunmaz
@@ -262,6 +270,9 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
                 r = {**entry, "kind": "fatura", "status": "ok", "detail": "\n".join(details)}
             elif pdfs:
                 for n, d in pdfs:
+                    if not doc_reads.allowed(d):  # bir maildeki birden çok belge: hak ortada biterse kalanlar okunmaz
+                        details.append(f"⏭ {n}: belge okuma hakkı doldu")
+                        continue
                     try:
                         details.append(mailbox.handle_pdf(n, d))
                     except Exception:  # noqa: BLE001 - kullanıcının ilettiği PDF banka belgesi değilse fatura olabilir

@@ -14,6 +14,7 @@ import MarkDonation from "./MarkDonation";
 import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
+import { MatchPanel } from "./MatchInfo";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const splitsOf = (r: unknown) =>
@@ -271,7 +272,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             )}
           </div>
         )}
-        {showLink && editingEntry?.linked && (
+        {editingEntry?.match && <MatchPanel entryId={editingEntry.id} m={editingEntry.match} onUndone={done} />}
+        {showLink && editingEntry?.linked && !editingEntry.match && (
           <div className="flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-300">
             <Link2 size={16} className="shrink-0" />
             <span className="flex-1">Ekstredeki kart işlemiyle eşleşti; gider ekstreden sayılıyor.</span>

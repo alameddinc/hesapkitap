@@ -494,7 +494,8 @@ def _user_row(u: dict) -> dict:
     return {"id": u["id"], "username": u["username"], "role": u["role"], "created_at": u["created_at"],
             "last_login": u["last_login"], "disabled": bool(u["disabled"]),
             "must_change_password": bool(u["must_change_password"]),
-            "ai_used": system.ai_used(u["id"]), "ai_quota": system.ai_quota(u), "ai_quota_custom": u["ai_quota"]}
+            "ai_used": system.ai_used(u["id"]), "ai_quota": system.ai_quota(u), "ai_quota_custom": u["ai_quota"],
+            "plan": u.get("plan") or "free", "plan_until": u.get("plan_until"), "plan_source": u.get("plan_source")}
 
 
 class AdminUserIn(BaseModel):
@@ -505,6 +506,8 @@ class AdminUserPatch(BaseModel):
     disabled: bool | None = None
     ai_quota: int | None = Field(None, ge=0, le=100000)
     reset_quota: bool = False  # True: varsayılan kotaya dön
+    plan: Literal["free", "premium", "aile"] | None = None  # hazır sürüm: yöneticinin verdiği paket (test kullanıcıları)
+    plan_days: int | None = Field(None, ge=1, le=3660)      # kaç gün; boşsa 90
 
 
 class InviteIn(BaseModel):
@@ -517,7 +520,7 @@ class InviteIn(BaseModel):
 def admin_users():
     _require_admin()
     return {"users": [_user_row(u) for u in system.users()], "invites": system.invites(),
-            "default_quota": system.ai_quota({"role": "user"})}
+            "default_quota": system.ai_quota({"role": "user"}), "hosted": plans.hosted()}
 
 
 @app.post("/api/admin/users")
@@ -548,6 +551,14 @@ def admin_update_user(uid: int, body: AdminUserPatch):
         system.update_user(uid, ai_quota=None)
     elif body.ai_quota is not None:
         system.update_user(uid, ai_quota=body.ai_quota)
+    if body.plan is not None:
+        if body.plan == "free":
+            system.update_user(uid, plan="free", plan_until=None, plan_source="manual")
+        else:
+            from datetime import datetime, timedelta, timezone
+
+            until = (datetime.now(timezone.utc) + timedelta(days=body.plan_days or 90)).isoformat(timespec="seconds")
+            system.update_user(uid, plan=body.plan, plan_until=until, plan_source="manual")
     return _user_row(system.user(uid))
 
 
@@ -590,12 +601,14 @@ def admin_delete_invite(code: str):
 
 @app.get("/api/me/ai")
 def my_ai():
-    """Yapay zekâ kullanımı: ortak anahtarla aylık kota; kendi anahtarı varsa sınırsız."""
+    """Okuma kotası. unit "docs": hazır sürüm, aylık belge okuma hakkı (app/doc_reads.py; ailede ortak havuz).
+    unit "ai": kendi sunucusu, ortak anahtarla aylık yapay zekâ çağrısı kotası; kendi anahtarı varsa sınırsız."""
+    unit = "docs" if plans.hosted() else "ai"
     u = db.current_user()
     if not u or u["role"] == "admin":
-        return {"used": None, "quota": None, "own_key": False}
+        return {"used": None, "quota": None, "own_key": False, "unit": unit}
     own = bool(config.own_ai_key())
-    return {"used": system.ai_used_pool(u), "quota": None if own else system.ai_quota(u), "own_key": own,
+    return {"used": system.ai_used_pool(u), "quota": None if own else system.ai_quota(u), "own_key": own, "unit": unit,
             "shared_available": bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))}
 
 
@@ -931,8 +944,12 @@ def create_entry(body: EntryIn):
             db.delete_entry(eid)
             raise HTTPException(422, str(e)) from e
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
+    from app import sync
+
+    sync.reconcile()  # döküm önceden yüklendiyse: dökümdeki aynı hareketle kesin eşleşen kayıt birleşir (app/sync.py)
     debt = db.link_debt_movement(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
-    return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()),
+    match = sync.match_info().get(eid)
+    return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
             "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
             "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits]}
 
@@ -999,6 +1016,71 @@ def link_entry(entry_id: int, body: LinkIn):
         db.link_entry(entry_id, body.txn_id)
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- eşitleme: elle girilen ↔ döküm / ekstre (app/sync.py)
+
+class MatchIn(BaseModel):
+    other: str = Field(pattern=r"^[et]\d{1,12}$")  # e<dökümden gelen kayıt id> | t<ekstre satırı id>
+    same: bool                                     # True: aynı (birleştir) · False: farklı (bir daha sorma)
+
+
+def _match_guard(entry_id: int) -> None:
+    from app import book
+
+    if book.member() and not book.can_see_entry(entry_id):
+        raise HTTPException(404, "Kayıt bulunamadı")
+
+
+@app.post("/api/entries/{entry_id}/match")
+def match_entry(entry_id: int, body: MatchIn):
+    """"Bu ikisi aynı mı?" cevabı. Aynı: elle girilen kayıt kalır, dökümdeki satır ona bağlanır (geri alınabilir)."""
+    from app import sync, undo
+
+    _match_guard(entry_id)
+    try:
+        if not body.same:
+            return sync.decide(entry_id, body.other, False)
+        with undo.batch(f"Eşleştirme: kayıt #{entry_id}") as b:
+            res = sync.decide(entry_id, body.other, True)
+            b["summary"] = res
+        return {**res, "undo_id": b["id"]}
+    except sync.SyncError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@app.post("/api/entries/{entry_id}/unmatch")
+def unmatch_entry(entry_id: int):
+    """Eşleşmeyi geri al: elle girilen ve dökümden/ekstreden gelen iki ayrı kayda döner; bir daha birleşmez."""
+    from app import sync, undo
+
+    _match_guard(entry_id)
+    try:
+        with undo.batch(f"Eşleşme geri alındı: kayıt #{entry_id}") as b:
+            res = sync.unmatch(entry_id)
+            b["summary"] = res
+    except KeyError as e:
+        raise HTTPException(404, "Kayıt bulunamadı") from e
+    except sync.SyncError as e:
+        raise HTTPException(409, str(e)) from e
+    return {**res, "undo_id": b["id"]}
+
+
+@app.get("/api/match-rules")
+def match_rules():
+    """Öğrenilen eşleşmeler: dökümdeki kalıp ↔ elle yazılan açıklama (iki onaydan sonra kendiliğinden birleşir)."""
+    from app import sync
+
+    return sync.list_rules()
+
+
+@app.delete("/api/match-rules/{rule_id}")
+def delete_match_rule(rule_id: int):
+    from app import sync
+
+    if not sync.delete_rule(rule_id):
+        raise HTTPException(404, "Kural yok")
     return {"ok": True}
 
 
@@ -1147,12 +1229,16 @@ def _recurring_or_404(rid: int) -> dict:
 @app.post("/api/recurring/{rid}/confirm")
 def confirm_recurring(rid: int, body: RecurringAction):
     """Sabit kalem bu ay gerçekleşti → elle girilmiş kayda dönüştür."""
+    from app import sync
+
     r = _recurring_or_404(rid)
-    return {"id": db.create_entry({
+    eid = db.create_entry({
         "entry_date": db.occurrence_date(body.month, db.day_at(r, body.month)), "month": body.month, "description": r["description"],
         "amount": body.amount if body.amount is not None else db.planned_amount(r, body.month), "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 0, "account_id": r["account_id"],
-    })}
+    })
+    sync.reconcile()  # kira dökümden zaten geldiyse: aynı hareketle birleşir, iki kez sayılmaz
+    return {"id": eid}
 
 
 class MonthAmount(BaseModel):
@@ -1196,6 +1282,42 @@ def _owners() -> list[str]:
     return db.card_holders() + db.owner_names()
 
 
+class QuotaFull(HTTPException):
+    """Belge okuma hakkı doldu (hazır sürüm): yanıt {"detail", "manual": true, "quota_full", "limit", "upgrade", ...}.
+    İstemci elle girişe yönlendirir; fişte okunmadan saklanan fotoğraf (receipt_file) gider formuna bağlanabilir."""
+
+    def __init__(self, status: int, e, **extra):
+        super().__init__(status, str(e))
+        self.extra = {**e.fields(), **extra}
+
+
+@app.exception_handler(QuotaFull)
+async def _quota_full(request: Request, exc: QuotaFull):
+    return JSONResponse({"detail": exc.detail, **exc.extra}, status_code=exc.status_code)
+
+
+async def _doc_check(file: UploadFile, status: int = 422) -> bytes:
+    """Hazır sürüm: belge okuma hakkı doluysa dosyayı okumadan reddet (app/doc_reads.py). Dosyanın baytları (sayım
+    anahtarı) döner; dosya başa sarılır."""
+    from app import doc_reads
+
+    data = await file.read()
+    await file.seek(0)
+    try:
+        doc_reads.check(data)
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(status, e) from e
+    return data
+
+
+def _charge_if_new(key: bytes, counts: dict) -> None:
+    """Hesap dökümü: yeni hareket getirdiyse 1 belge okuma hakkı (hepsi "zaten vardı" ise düşmez; aynı dosya bir kez)."""
+    from app import doc_reads
+
+    if any(v for k, v in counts.items() if k in ("gelir", "gider", "kart_odemesi", "virman")):
+        doc_reads.charge(key)
+
+
 async def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple[list[dict], dict]:
     import hashlib
 
@@ -1213,6 +1335,7 @@ async def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple
     res = _PDF_CACHE[key]
     owners = [res.get("owner_name") or "", *_owners()]
     meta = {k: res[k] for k in ("bank", "owner_name", "verified", "chain_bad", "closing_ok")}
+    meta["iban"] = res.get("iban")
     return bank_import.finalize(res["rows"], owners), meta
 
 
@@ -1236,16 +1359,24 @@ async def _read_bank_file(file: UploadFile):
     return rows
 
 
-def _balance_check(rows: list[dict], account: str) -> dict:
-    """İçe aktarmadan önce: bu döküm hesabın bakiyesini nasıl değiştirecek? Şüpheliyse uyarılar (onay istenir)."""
-    from app.bank_import import short_bank
+def _account_match(account: str, iban: str | None) -> dict:
+    """Önizleme: döküm hangi hesaba gidecek? ask ise arayüz "Bu döküm 'Garanti' hesabına mı ait?" diye sorar ve
+    cevabı içe aktarmada account_id (Evet) ya da new_account=1 (Yeni hesap aç) olarak gönderir."""
+    from app import sync
 
+    return sync.resolve_account(account or None, iban)
+
+
+def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> dict:
+    """İçe aktarmadan önce: bu döküm hesabın bakiyesini nasıl değiştirecek? Şüpheliyse uyarılar (onay istenir)."""
     warnings = []
     if len(rows) == 1:
         warnings.append("Belgede tek hareket var: bu bir dekont olabilir. Dekontsa Ekstreler'e bırak; bakiyeye dokunmadan "
                         "tek işlem olarak eklenir.")
     with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
-    acc = next((a for a in db.list_accounts() if a["name"] == short_bank(account)), None) if account else None
+    am = _account_match(account, iban) if account else {}
+    aid = am.get("account_id") or am.get("default_id")
+    acc = next((a for a in db.list_accounts() if a["id"] == aid), None) if aid else None
     change = None
     if with_bal and acc and acc["as_of"]:
         d, _, new = max(with_bal)
@@ -1268,6 +1399,7 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
 
     from app import bank_import
 
+    doc = await _doc_check(file)
     if (file.filename or "").lower().endswith(".pdf"):
         parsed, meta = await _read_bank_pdf(file, password)
         with db.connect() as c:
@@ -1280,9 +1412,11 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
             counts[k] = counts.get(k, 0) + 1
             if r["type"] in ("gelir", "gider"):
                 r["who"] = bank_import.counterparty(r["description"], r["amount"], [meta.get("owner_name")] if meta.get("owner_name") else _owners())
+        _charge_if_new(doc, counts)
         return {"pdf": True, **meta, "header_row": 0, "columns": [], "mapping": {}, "profile_saved": False,
                 "total": len(parsed), "counts": counts, "sample": parsed[:200], "raw_preview": [],
-                **_balance_check(parsed, meta.get("bank") or "")}
+                **_balance_check(parsed, meta.get("bank") or "", meta.get("iban")),
+                "account_match": _account_match(meta.get("bank") or "", meta.get("iban"))}
 
     rows = await _read_bank_file(file)
     det = bank_import.detect(rows)
@@ -1309,21 +1443,29 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
         warning = ("Bu dosyada tutarların neredeyse hepsi artı ve bakiye sütunu yok: bir kredi kartı dökümü olabilir. "
                    "Öyleyse içe aktarma — harcamalar gelir sayılır. Kart dökümünü Ekstreler sayfasına bırak; tanınmazsa "
                    "bize bildir.")
+    from app import sync
+
+    iban = sync.find_iban_rows(rows)
+    _charge_if_new(doc, counts)
     return {**det, "profile_saved": bool(saved), "total": len(parsed), "counts": counts, "sample": parsed[:15],
-            "raw_preview": rows[det["header_row"]: det["header_row"] + 6], "warning": warning}
+            "raw_preview": rows[det["header_row"]: det["header_row"] + 6], "warning": warning, "iban": iban,
+            "account_match": _account_match("", iban)}
 
 
 @app.post("/api/bank-import")
 async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0),
-                          password: str | None = Form(None)):
+                          password: str | None = Form(None), account_id: int | None = Form(None),
+                          new_account: bool = Form(False)):
+    """account_id: önizlemedeki "Bu döküm X hesabına mı ait?" sorusuna Evet; new_account: Yeni hesap aç."""
     import json
 
-    from app import bank_import
+    from app import bank_import, sync
 
-    account = ""
+    account, iban = "", None
+    doc = await _doc_check(file)
     if (file.filename or "").lower().endswith(".pdf"):
         parsed, meta = await _read_bank_pdf(file, password)
-        account = meta.get("bank") or ""
+        account, iban = meta.get("bank") or "", meta.get("iban")
         if meta.get("owner_name"):
             db.remember_owner_name(meta["owner_name"])  # e-posta bildirimlerinde de "kendin" tanınsın
         # kişi ayrımında "kendin" = yalnızca döküm sahibi; ek kart sahipleri (eş, çocuk) Transferler'de kişi olarak görünsün
@@ -1333,6 +1475,7 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
         rows = await _read_bank_file(file)
         m = json.loads(mapping)
         parsed = bank_import.parse(rows, m, header_row, _owners())
+        iban = sync.find_iban_rows(rows)
         if parsed:
             db.set_setting(_bank_profile_key(rows[header_row]), json.dumps(m))  # bu banka biçimini hatırla
     if not parsed:
@@ -1342,11 +1485,14 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
     await file.seek(0)
     raw = await file.read()
     with undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
-        stats = db.import_bank_rows(parsed, account=account, owners=owners)
+        if account_id and not any(a["id"] == account_id and a["kind"] == "banka" for a in db.list_accounts()):
+            raise HTTPException(422, "Hesap bulunamadı")
+        acc_id = sync.account_for_import(account or None, iban, account_id, new_account) if (account or account_id) else None
+        stats = db.import_bank_rows(parsed, account=account, owners=owners, account_id=acc_id)
         db.auto_link()
         # dökümün kendisi de saklanır (kayıtların detayından indirilir); geri alınınca bağ kopar, gece temizliği siler
         try:
-            doc_id = db.save_bank_document(raw, file.filename or "", account or None)
+            doc_id = db.save_bank_document(raw, file.filename or "", account or None, account_id=acc_id)
         except Exception:  # noqa: BLE001 - dosya saklanamasa da içe aktarma geçerli
             import logging
 
@@ -1355,6 +1501,7 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
         if doc_id:
             db.link_bank_document(doc_id, [r.get("hash") for r in parsed])
         b["summary"] = stats
+    _charge_if_new(doc, stats)  # önizlemede sayıldıysa aynı dosya ikinci kez sayılmaz
     if warn := db.take_storage_warning():
         stats["storage_warning"] = warn
     return stats
@@ -1629,12 +1776,13 @@ def _onboarding_v2() -> dict:
         one = lambda q: bool(c.execute(q).fetchone())  # noqa: E731
         steps = [
             {"key": "hesap", "done": one("SELECT 1 FROM accounts WHERE kind <> 'kart' AND as_of IS NOT NULL"),
-             "route": "hesaplar", "action": "account", "cta": "Hesap ekle",
-             "title": "Hesaplarını ekle",
-             "text": "Banka hesaplarını ve nakdini bugünkü bakiyesiyle ekle; harcanabilir paran buna göre hesaplanır.",
-             "guide": ["Hesaplar'da + ile bankanı ya da nakit cüzdanını ekle.",
-                       "Bugünkü bakiyesini yaz; sonraki hareketler bunun üstüne işlenir.",
-                       "Hesap dökümü yüklersen bakiye kendiliğinden güncellenir."]},
+             "route": "ekstreler", "action": "dokum", "cta": "Hesap dökümü yükle",
+             "alt": {"cta": "Elle ekle", "route": "hesaplar", "action": "account"},  # ikincil: hesabı elle aç
+             "title": "Banka hesabını ekle",
+             "text": "En kolayı: hesap dökümünü yükle; hesap, bakiye ve hareketler tek seferde gelir.",
+             "guide": ["Bankanın uygulaması → Hesaplar → Hesap hareketleri → son 1–3 ay → PDF olarak paylaş.",
+                       "Hesap dökümü yükle ile PDF'i seç; hesabın, bakiyen ve hareketlerin kendiliğinden gelir.",
+                       "Elle girdiğin harcamalar dökümdekilerle eşleşir; iki kez sayılmaz."]},
             {"key": "maas", "done": one("SELECT 1 FROM recurring WHERE kind = 'gelir'"),
              "route": "plan", "action": "salary", "cta": "Maaşımı gir",
              "title": "Maaşını ve düzenli gelirlerini gir",
@@ -1682,7 +1830,7 @@ def onboarding_dismiss():
 
 # ---------------------------------------------------------------- hatırlatmalar (Yapılacaklar; ileride push)
 
-REMINDER_ID = r"^(ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?$"
+REMINDER_ID = r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|hesap:\d{1,12}:\d{1,12})$"
 
 
 class SnoozeIn(BaseModel):
@@ -2263,7 +2411,48 @@ def net_worth():
 
 @app.post("/api/accounts")
 def create_account(body: AccountIn):
-    db.set_account_balance(body.name.strip(), body.balance, (body.as_of or date.today()).isoformat(), "elle", body.kind)
+    db.set_account_balance(body.name.strip(), body.balance, (body.as_of or date.today()).isoformat(), "elle", body.kind,
+                           origin="elle")
+    return {"ok": True}
+
+
+class AccountMergeIn(BaseModel):
+    into: int  # birleşip kalacak hesap
+
+
+@app.post("/api/accounts/{aid}/merge")
+def merge_account(aid: int, body: AccountMergeIn):
+    """Başka hesapla birleştir: bu hesabın işlemleri, sabit kalemleri, borç hareketleri, dökümleri ve bakiye çapası
+    'into' hesabına taşınır, bu hesap silinir. Geri alınabilir (undo_id → POST /api/imports/{id}/undo)."""
+    from app import book, sync, undo
+
+    if book.member():  # tam yetkili üye de birleştirebilir ama gizli hesabı göremez/birleştiremez
+        visible = {a["id"] for a in db.list_accounts()}
+        if aid not in visible or body.into not in visible:
+            raise HTTPException(404, "Hesap yok")
+    names = {a["id"]: a["name"] for a in db.list_accounts()}
+    try:
+        with undo.batch(f"Hesap birleştirme: {names.get(aid, aid)} → {names.get(body.into, body.into)}") as b:
+            res = sync.merge_accounts(aid, body.into)
+            b["summary"] = res
+    except sync.SyncError as e:
+        raise HTTPException(409, str(e)) from e
+    return {**res, "undo_id": b["id"]}
+
+
+class AccountSeparateIn(BaseModel):
+    other: int
+
+
+@app.post("/api/accounts/{aid}/separate")
+def separate_account(aid: int, body: AccountSeparateIn):
+    """"Bu döküm X hesabına mı ait?" → Hayır, yeni (ayrı) hesap: bir daha sorulmaz."""
+    from app import sync
+
+    visible = {a["id"] for a in db.list_accounts()}
+    if aid not in visible or body.other not in visible:
+        raise HTTPException(404, "Hesap yok")
+    sync.keep_separate(aid, body.other)
     return {"ok": True}
 
 
@@ -2575,6 +2764,7 @@ async def upload_statements(files: list[UploadFile] = File(...), password: str |
 
 async def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
                              forced: str | None = None) -> list[dict]:
+    from app import doc_reads
     from app.parsers import PasswordRequired
 
     results = []
@@ -2583,6 +2773,11 @@ async def _upload_statements(files: list[UploadFile], password: str | None, reme
         data = await f.read()
         res = {"filename": f.filename}
         name = (f.filename or "").lower()
+        try:  # hazır sürüm: her yeni belge 1 okuma hakkı; doluysa bu dosya okunmaz
+            doc_reads.check(data)
+        except doc_reads.QuotaError as e:
+            results.append({**res, "status": "error", "message": str(e), **e.fields()})
+            continue
         if name.endswith((".xlsx", ".xls", ".csv")):  # tablo: kart işlem dökümü mü, hesap hareketleri mi?
             from app import card_excel
 
@@ -2591,6 +2786,8 @@ async def _upload_statements(files: list[UploadFile], password: str | None, reme
             except Exception:  # noqa: BLE001 - okunamazsa hesap hareketleri akışı denesin
                 imp = None
             if imp:
+                if imp["statements"]:  # hepsi zaten vardıysa hak düşmez
+                    doc_reads.charge(data)
                 results.append({**res, "status": "saved", "bank": imp["bank"], "card_no": imp["card_no"],
                                 "card_excel": imp, "txn_count": imp["transactions"],
                                 "message": f"Kart dökümü: {imp['statements']} aylık ekstre, {imp['transactions']} işlem"})
@@ -2613,7 +2810,9 @@ async def _upload_statements(files: list[UploadFile], password: str | None, reme
                     text = next(t for t in (_try_text(data, pw) for pw in [None, *tried]) if t)
                     d = dekont.import_text(text)
                     msg = f"Dekont: {d['amount']:,.2f} TL {d['kind']}" + (" (zaten vardı)" if d["status"] == "duplicate" else "")
-                else:
+                    if d["status"] not in ("duplicate", "updated"):
+                        doc_reads.charge(data)
+                else:  # handle_pdf yeni belgeyi kendisi sayar
                     msg = mailbox.handle_pdf(f.filename or "dekont.pdf", data)
                 results.append({**res, "status": "saved", "message": msg, "dekont": True})
             except Exception as e:  # noqa: BLE001
@@ -2641,7 +2840,11 @@ async def _upload_statements(files: list[UploadFile], password: str | None, reme
             results.append({**res, "status": "duplicate"})
             continue
         db.save_statement(data, f.filename or "ekstre.pdf", stmt)
+        doc_reads.charge(data)  # yerel ayrıştırıcı ya da yapay zekâ yedek okuması: belge başına 1
         results.append({**res, "status": "saved", "linked": db.auto_link(), "marked_paid": db.auto_mark_paid()})
+    from app import sync
+
+    sync.reconcile()  # öğrenilmiş kurallarla eşleşen kart harcamaları (kalanlar Yapılacaklar'da sorulur)
     changed = db.auto_update_cycle()
     if changed and results:
         results[-1]["cycle_day"] = changed  # arayüz "ay dönümü X'e güncellendi" der
@@ -3060,12 +3263,20 @@ async def parse_receipt(file: UploadFile = File(...)):
     mime = file.content_type or "image/jpeg"
     if not mime.startswith("image/"):
         raise HTTPException(422, "Sadece fotoğraf yüklenebilir")
+    from app import doc_reads
+
+    original = data
     data, mime, photo = _prepare_photo(data, mime)
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
+    try:
+        doc_reads.check(original)  # hazır sürüm: belge okuma hakkı doluysa okunmaz
+    except doc_reads.QuotaError as e:  # fotoğraf okunmadan saklanır: elle girilen gidere bağlanır
+        raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     try:
         out = receipt.parse_receipt(data, mime, cats)
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
+    doc_reads.charge(original)
     out["receipt_file"] = _store_receipt(photo)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
@@ -3296,12 +3507,18 @@ async def parse_bill(file: UploadFile = File(...)):
     mime = file.content_type or ""
     if mime not in BILL_TYPES:
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
+    from app import doc_reads
+
     read, read_mime, photo = _prepare_photo(data, mime)
     name = db.save_bill_file(photo, ".jpg") if photo else db.save_bill_file(data, BILL_TYPES[mime])
     try:
+        if receipt.enabled():
+            doc_reads.check(data)  # hazır sürüm: hak doluysa dosya saklanır ama okunmaz (elle girilir)
         parsed = receipt.parse_bill(read, read_mime) if receipt.enabled() else {}
     except receipt.ReceiptError as e:
-        parsed = {"error": str(e)}
+        parsed = {"error": str(e), **(e.fields() if isinstance(e, doc_reads.QuotaError) else {})}
+    if parsed and "error" not in parsed:
+        doc_reads.charge(data)
     warn = db.take_storage_warning()
     return {**parsed, "file_name": name, **({"storage_warning": warn} if warn else {})}
 
@@ -3438,14 +3655,26 @@ async def parse_document(file: list[UploadFile] = File(...)):
 
 def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
     """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır."""
+    import hashlib
+
+    from app import doc_reads
+
     original, original_mime = data, mime
+    # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti
+    key = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in [data, *(d for d, _ in (more or []))])).digest() \
+        if more else data
     data, mime, photo = _prepare_photo(data, mime)
     more = [_prepare_photo(d, m)[:2] for d, m in (more or [])] or None
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
+        doc_reads.check(key)  # hazır sürüm: belge okuma hakkı doluysa okunmaz
+    except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
+        raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
+    try:
         doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
+    doc_reads.charge(key)
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
         from app.categorize import UNCATEGORIZED, categorize

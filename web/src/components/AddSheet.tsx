@@ -3,6 +3,7 @@ import type { BillDraft } from "../api";
 import { useRef, useState } from "react";
 import { useMeta, useDemo } from "./hooks";
 import Modal from "./Modal";
+import { isQuotaFull, QuotaFullModal, useDocQuota, type QuotaFull } from "./DocQuota";
 import type { EntryDraft } from "../ui";
 
 /** Fotoğrafı yüklemeden önce küçült: mobil fotoğraflar 5-12 MB, 1600px yeterli ve token maliyeti düşer. */
@@ -93,6 +94,10 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // hazır sürüm: belge okuma hakkı doldu (ön kontrol ya da sunucu reddi) → elle ekleme uyarısı
+  const quota = useDocQuota();
+  const [full, setFull] = useState<Partial<QuotaFull> | null>(null);
+  const pick = (ref: React.RefObject<HTMLInputElement | null>) => (quota.full ? setFull({}) : ref.current?.click());
 
   // uzun fiş: sırayla çekilen parçalar tek fiş olarak okunur
   const [pages, setPages] = useState<Blob[]>([]);
@@ -112,6 +117,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
     } finally {
       setBusy(false);
       setPages([]);
+      void quota.refresh();
     }
   }
 
@@ -131,6 +137,10 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   /** Okunan belge: faturaysa fatura formu, fişse gider formu (taslakla). */
   async function handle(res: Response) {
     const r = (await res.json()) as DocResult & { detail?: string };
+    if (isQuotaFull(r)) {
+      setFull(r);
+      return;
+    }
     if (!res.ok) throw new Error(r.detail ?? "Belge okunamadı");
     if (r.type === "bill") {
       onBill({ provider: r.provider, amount: r.amount, due_date: r.due_date, category: r.category,
@@ -164,6 +174,11 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   }
 
 
+  if (full) return (
+    <QuotaFullModal onClose={onClose} upgrade={full.upgrade} hasPhoto={!!full.receipt_file}
+      manual={[{ label: "Elle ekle", onClick: () => onPick({ kind: "gider", receipt_file: full.receipt_file ?? null }) }]} />
+  );
+
   return (
     <Modal title="Ekle" onClose={onClose}>
       <div className="space-y-2">
@@ -185,7 +200,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           sub={meta.data?.receipt_enabled === false ? "Bu sunucuda fiş okuma yok (Gemini anahtarı ya da Tesseract gerekli)"
             : meta.data?.receipt_engine === "yerel" ? "Yerel okuma (anahtarsız): tutar, tarih, işyeri dolar — kontrol et"
             : "Fiş mi fatura mı kendisi anlar; tutar, tarih, işyeri otomatik dolar"}
-          onClick={() => cameraRef.current?.click()} disabled={busy || pages.length > 0 || meta.data?.receipt_enabled === false} />
+          onClick={() => pick(cameraRef)} disabled={busy || pages.length > 0 || meta.data?.receipt_enabled === false} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden"
           onChange={(e) => { onCamera(e.target.files?.[0]); e.target.value = ""; }} />
         {pages.length > 0 && !busy && (
@@ -193,7 +208,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
             <div className="text-sm"><b>{pages.length} fotoğraf</b> hazır. Fiş uzunsa devamını çek (en fazla 4); üst üste binen satırlar bir kez sayılır.</div>
             <div className="flex flex-wrap gap-2">
               {pages.length < 4 && (
-                <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => cameraRef.current?.click()}>
+                <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => pick(cameraRef)}>
                   <Camera size={16} /> Devamını çek
                 </button>
               )}
@@ -204,7 +219,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
         )}
         <Opt icon={<FileText size={20} className="text-violet-600" />} title="Dosyadan yükle"
           sub="E-fatura PDF'i veya galeriden fiş fotoğrafı (uzun fişse parçalarını birlikte seç)"
-          onClick={() => fileRef.current?.click()} disabled={busy || meta.data?.receipt_enabled === false} />
+          onClick={() => pick(fileRef)} disabled={busy || meta.data?.receipt_enabled === false} />
         <input ref={fileRef} type="file" accept="application/pdf,image/*" multiple className="hidden"
           onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
         </>}

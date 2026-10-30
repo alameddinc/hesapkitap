@@ -58,8 +58,8 @@ def test_free_user_is_limited_and_store_purchase_unlocks(hosted):
     c, u = _user(hosted)
     assert c.get("/api/auth/status").json()["user"]["id"] == u["id"]  # mağaza (RevenueCat) app_user_id
     p = c.get("/api/meta").json()["plan"]
-    assert (p["plan"], p["ai_docs"], p["features"]["fiyatlar"]) == ("free", 10, False)
-    assert system.ai_quota(u) == 10
+    assert (p["plan"], p["ai_docs"], p["features"]["fiyatlar"]) == ("free", 50, False)
+    assert system.ai_quota(u) == 50
     r = c.get("/api/prices")
     assert r.status_code == 402 and r.json()["plan_required"] == "fiyatlar"
     assert c.get("/api/settings/export.zip").status_code == 200  # verini indirmek her pakette serbest
@@ -68,9 +68,9 @@ def test_free_user_is_limited_and_store_purchase_unlocks(hosted):
     assert hosted.post("/api/billing/revenuecat", headers={"Authorization": "x"}, json={}).status_code == 404
     assert _rc(hosted, "INITIAL_PURCHASE", u["id"]).status_code == 200
     p = c.get("/api/meta").json()["plan"]
-    assert (p["plan"], p["ai_docs"]) == ("premium", 300) and p["until"].startswith("2100-01-01")
+    assert (p["plan"], p["ai_docs"]) == ("premium", 1000) and p["until"].startswith("2100-01-01")
     assert c.get("/api/prices").status_code == 200
-    assert system.ai_quota(system.user(u["id"])) == 300  # adil kullanım
+    assert system.ai_quota(system.user(u["id"])) == 1000
     # premium aileye davet edemez
     assert c.post("/api/book/invites", json={"note": "Eşim"}).status_code == 402
 
@@ -255,3 +255,17 @@ def test_hosted_signup_needs_both_consents_and_records_them(hosted, monkeypatch)
     assert c.post("/api/auth/register", json={**body, "consent": CONSENT}).status_code == 200
     rec = json.loads(system.get(f"consent:{system.user_by_name('onay@ornek.com')['id']}"))
     assert rec["version"] and rec["items"] == ["acik_riza", "kosullar"] and rec["at"]
+
+
+def test_admin_grants_premium_to_tester(hosted):
+    c, u = _user(hosted, "testci")
+    r = hosted.patch(f"/api/admin/users/{u['id']}", json={"plan": "premium", "plan_days": 30})
+    assert r.status_code == 200 and r.json()["plan"] == "premium" and r.json()["plan_source"] == "manual"
+    p = c.get("/api/meta").json()["plan"]
+    assert p["plan"] == "premium" and p["until"]
+    # mağazadaki deneme biterse yöneticinin verdiği paket silinmez
+    assert _rc(hosted, "EXPIRATION", u["id"]).status_code == 200
+    assert c.get("/api/meta").json()["plan"]["plan"] == "premium"
+    # üye kendine paket veremez
+    assert c.patch(f"/api/admin/users/{u['id']}", json={"plan": "aile"}).status_code in (401, 403)
+    assert hosted.patch(f"/api/admin/users/{u['id']}", json={"plan": "free"}).json()["plan"] == "free"
