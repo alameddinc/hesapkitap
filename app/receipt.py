@@ -18,7 +18,8 @@ ITEM_RULES = """items (sadece fiş, en fazla 40 satır, fişteki sırayla):
   Türkçe karakterli, kısaltmalar açık (ör. "ULKER GOFRET CIK 36GR" → "Ülker Çikolatalı Gofret 36 g"; "SUT 1L PINAR" → "Pınar Süt 1 L").
 - brand: ürünün markası (ör. Ülker, Pınar, Marlboro); kafe/restoranın kendi ürünüyse (latte, tost) işletmenin markası
   (ör. Kahve Dünyası); bilinmiyorsa null.
-- "2Adt x 230,00 Latte" → qty=2, unit="adet", amount=460 (satır toplamı).
+- "2Adt x 230,00 Latte" → qty=2, unit="adet", unit_price=230, amount=460 (satır toplamı). unit_price yalnız fişte birim
+  fiyat yazıyorsa (miktar satırı), yoksa null.
 - Tartılı ürün "0,750 KG x 89,90" → qty=0.75, unit="kg", amount=67.43; litre ise unit="lt".
 - Türk yazar kasa fişinde MİKTAR SATIRI ("2 ad X 2,90", "2 AD X 44.90", "0,750 KG X 89,90") ÜRÜN SATIRINDAN ÖNCE, kendi
   satırında gelir ve ALTINDAKİ ürüne aittir; o ürünün satırında sağda toplam yazar ("*5,80" = 2 × 2,90). Miktar satırını
@@ -45,7 +46,7 @@ PROMPT = """Bu bir Türkiye'de alınmış alışveriş fişi fotoğrafı. Bilgil
   "vat": 0.00,
   "payment": "nakit | kart | bilinmiyor",
   "category": "şu listeden en uygun olan: {categories}",
-  "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "qty": 1, "unit": "adet", "amount": 0.00}}],
+  "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "qty": 1, "unit": "adet", "unit_price": null, "amount": 0.00}}],
   "confidence": "yüksek | orta | düşük"
 }}
 Kurallar: total = fişteki GENEL TOPLAM / TOPLAM (KDV dahil, ödenen tutar). Türk sayı formatında 1.234,56 = 1234.56.
@@ -137,7 +138,7 @@ BILL_CATEGORY = {"elektrik": "Elektrik", "dogalgaz": "Doğalgaz", "su": "Su", "i
 
 
 def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | None = None,
-                 more: list[tuple[bytes, str]] | None = None) -> tuple[dict, dict]:
+                 more: list[tuple[bytes, str]] | None = None, model: str | None = None) -> tuple[dict, dict]:
     """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf)."""
     key = config.get("GEMINI_API_KEY")
     if not key:
@@ -146,7 +147,7 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
     docs = [(data, mime), *(more or [])]
     if sum(len(d) for d, _ in docs) > MAX_BYTES:
         raise ReceiptError("Dosya çok büyük (en fazla 15 MB)")
-    model = config.get("GEMINI_MODEL") or DEFAULT_MODEL
+    model = model or config.get("GEMINI_MODEL") or DEFAULT_MODEL
     body = {
         "contents": [{"parts": [
             {"text": prompt},
@@ -244,7 +245,8 @@ def fix_qty_lines(items: list[dict]) -> list[dict]:
             n, unit, _ = t["_q"]
             for j in range(min(seen_names, len(out) - 1), min(seen_names + 3, len(out))):
                 if j not in taken and near(out[j].get("amount"), total(t["_q"])):
-                    out[j] = {**out[j], "qty": int(n) if unit == "adet" and float(n).is_integer() else n, "unit": unit}
+                    out[j] = {**out[j], "qty": int(n) if unit == "adet" and float(n).is_integer() else n, "unit": unit,
+                              "unit_price": t["_q"][2]}
                     taken.add(j)
                     break
         if t["_rest"]:
@@ -271,7 +273,7 @@ def _items(raw: dict) -> list[dict]:
         product = str(i.get("product") or "").strip()[:80] or None
         brand = str(i.get("brand") or "").strip()[:40] or None
         out.append({"name": str(i["name"])[:60], "product": product, "brand": brand, "qty": q, "unit": unit,
-                    "amount": _num(i.get("amount")), "split": split})
+                    "amount": _num(i.get("amount")), "split": split, "unit_price": _num(i.get("unit_price"))})
     return out
 
 
@@ -302,7 +304,7 @@ SADECE şu JSON'u döndür:
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4543 **** **** 6081 → \"6081\"); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
-  "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "amount": 0.00, "split": null}}],
+  "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "unit_price": null, "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
 }}
 {split_rule}total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56.
@@ -409,3 +411,28 @@ def parse_receipt(image: bytes, mime: str, categories: list[str]) -> dict:
         "model": meta["model"],
         "tokens": {"input": meta["input"], "output": meta["output"]},
     }
+
+
+REREAD_PROMPT = """Bu, daha önce okunmuş bir Türkiye alışveriş fişinin fotoğrafı; ilk okumada ürün kalemleri hatalı çıktı
+(ad ile fiyat kaymış ya da miktar satırı ayrı ürün sanılmış olabilir). Satır satır dikkatle yeniden oku.
+{total_hint}SADECE şu JSON'u döndür:
+{{"total": 0.00, "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null",
+"qty": 1, "unit": "adet", "unit_price": null, "amount": 0.00}}], "confidence": "yüksek | orta | düşük"}}
+Her ürünün amount'u KENDİ satırının sağındaki tutardır. Türk sayı biçimi 1.234,56 = 1234.56.
+""" + ITEM_RULES
+
+
+def reread_model() -> str:
+    """Yeniden okuma modeli: GEMINI_REREAD_MODEL; yoksa varsayılan modelin '-lite' olmayan sürümü (daha güçlü)."""
+    base = config.get("GEMINI_MODEL") or DEFAULT_MODEL
+    return os.environ.get("GEMINI_REREAD_MODEL") or base.replace("-lite", "")
+
+
+def reread_items(image: bytes, mime: str, total: float | None) -> dict:
+    """Saklı fiş fotoğrafını daha güçlü modelle, fiş toplamını bildirerek yeniden oku. {items, total, model, confidence}."""
+    hint = (f"Fişin GENEL TOPLAMI {total:.2f} TL: kalemlerin amount toplamı (indirimler düşülmüş) bunu TUTMALI; tutmuyorsa "
+            "kaçan ya da kayan satırı bul.\n") if total else ""
+    model = reread_model()
+    raw, meta = _gemini_json(REREAD_PROMPT.format(total_hint=hint), image, mime, max_output_tokens=8000, model=model)
+    return {"items": _items(raw), "total": _num(raw.get("total")) or total, "model": meta["model"],
+            "confidence": raw.get("confidence") or "orta"}

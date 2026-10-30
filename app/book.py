@@ -39,6 +39,7 @@ MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
     ("POST", r"/api/entries/\d+/(match|unmatch)"),  # eşitleme: "Bu ikisi aynı mı?" ve eşleşmeyi geri al (görebildiği kayıtta)
     ("POST", r"/api/receipts/parse"), ("POST", r"/api/bills/parse"), ("POST", r"/api/splits/propose"),
+    ("PUT", r"/api/entries/\d+/receipt-items"), ("POST", r"/api/entries/\d+/receipt-reread"), ("POST", r"/api/receipts/reread"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),

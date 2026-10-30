@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, deletion, donations, finance, jobs, ocr, plans, prefs, receipt, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, finance, jobs, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -3432,6 +3432,7 @@ def parse_receipt(file: UploadFile = File(...)):
     except receipt.ReceiptError as e:
         raise HTTPException(502, str(e)) from e
     doc_reads.charge(original)
+    out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
     out["receipt_file"] = _store_receipt(photo)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
@@ -3847,9 +3848,115 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
             db.save_bill_file(original, BILL_TYPES.get(original_mime, ".pdf"))
     else:
         doc["receipt_file"] = _store_receipt(photo)
+        doc["check"] = receipt_check.check(doc.get("items") or [], doc.get("total"))
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
+
+
+# ---------------------------------------------------------------- kayıtlı fişin kalemleri ve yeniden okuma
+
+_REREAD_PER_DAY = 3  # aynı fotoğraf için günde (yeniden okuma belge hakkı düşürmez; yapay zekâ maliyeti sınırlı kalsın)
+
+
+def _entry_for_receipt(entry_id: int) -> dict:
+    from app import book
+
+    with db.connect() as c:
+        r = c.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
+    if not r or (book.member() and not book.can_see_entry(entry_id)):
+        raise HTTPException(404, "Kayıt yok")
+    return dict(r)
+
+
+def _receipt_items_out(entry_id: int, total: float | None) -> dict:
+    with db.connect() as c:
+        items = [dict(x) for x in c.execute(
+            "SELECT id, name, product, brand, qty, unit, amount, unit_price, price_known FROM receipt_items "
+            "WHERE entry_id = ? ORDER BY id", (entry_id,))]
+    # saklanan unit_price tutar / adet'ten türetilmiştir: adet × birim denetimi burada anlamsız, yalnız toplam denetlenir
+    return {"entry_id": entry_id, "items": items,
+            "check": receipt_check.check([{**i, "unit_price": None} for i in items], total)}
+
+
+@app.get("/api/entries/{entry_id}/receipt-items")
+def get_receipt_items(entry_id: int):
+    """Kayıtlı fişin kalemleri ve denetimi (toplam tutuyor mu)."""
+    e = _entry_for_receipt(entry_id)
+    return _receipt_items_out(entry_id, e["amount"])
+
+
+class ReceiptItemsIn(BaseModel):
+    items: list[dict]
+
+
+@app.put("/api/entries/{entry_id}/receipt-items")
+def put_receipt_items(entry_id: int, body: ReceiptItemsIn):
+    """Kalemleri tamamen değiştir ({name, product?, brand?, qty, unit, amount, unit_price?}). Kaydın kendisi, kategorisi
+    ve bölmeleri (splits) değişmez; fiyat takibi bu kalemlerle güncellenir."""
+    e = _entry_for_receipt(entry_id)
+    if len(body.items) > 60:
+        raise HTTPException(422, "En fazla 60 kalem")
+    n = db.save_receipt_items(entry_id, [i for i in body.items if isinstance(i, dict)], e["description"],
+                              e["entry_date"], total=e["amount"])
+    return {"saved": n, **_receipt_items_out(entry_id, e["amount"])}
+
+
+def _reread_photo(name: str | None, total: float | None) -> dict:
+    """Saklı fotoğrafı daha güçlü modelle yeniden oku. Belge okuma hakkı DÜŞMEZ (aynı belge ilk okumada sayıldı);
+    kötüye kullanım için fotoğraf başına günde _REREAD_PER_DAY. Sonuç kaydedilmez."""
+    import json as _json
+    from datetime import date as _date
+
+    from app import storage
+
+    if not name or not storage.valid_name("receipts", name) or not db.file_indexed("receipts", name):
+        raise HTTPException(404, "Fiş fotoğrafı yok")
+    if not receipt.enabled():
+        raise HTTPException(422, "Yeniden okuma yapay zekâ ister (Ayarlar → Anahtarlar)")
+    key = f"receipt_reread:{name}"
+    try:
+        st = _json.loads(db.get_setting(key) or "{}")
+    except ValueError:
+        st = {}
+    today = _date.today().isoformat()
+    used = st.get("n", 0) if st.get("day") == today else 0
+    if used >= _REREAD_PER_DAY:
+        raise HTTPException(429, f"Bu fiş bugün {_REREAD_PER_DAY} kez yeniden okundu; yarın tekrar dene ya da kalemleri elle düzelt")
+    try:
+        data = db.read_file("receipts", name)
+    except storage.StorageError as e:
+        raise HTTPException(503, "Fotoğraf şu an alınamadı") from e
+    if not data:
+        raise HTTPException(404, "Fiş fotoğrafı yok")
+    try:
+        out = receipt.reread_items(data, "image/jpeg", total)
+    except receipt.ReceiptError as e:
+        raise HTTPException(502, str(e)) from e
+    db.set_setting(key, _json.dumps({"day": today, "n": used + 1}))
+    out["check"] = receipt_check.check(out["items"], total if total is not None else out.get("total"))
+    out["receipt_file"] = name
+    return out
+
+
+@app.post("/api/entries/{entry_id}/receipt-reread")
+@_heavy
+def reread_entry_receipt(entry_id: int):
+    """Kayıtlı giderin fiş fotoğrafını kaydın tutarıyla yeniden oku; istemci onaylarsa PUT …/receipt-items ile yazar."""
+    e = _entry_for_receipt(entry_id)
+    return _reread_photo(e.get("receipt_file"), e["amount"])
+
+
+class RereadIn(BaseModel):
+    receipt_file: str
+    total: float | None = None
+
+
+@app.post("/api/receipts/reread")
+@_heavy
+def reread_receipt(body: RereadIn):
+    """Kaydetmeden önce (önizleme): okumadan dönen receipt_file adıyla yeniden oku."""
+    return _reread_photo(body.receipt_file, body.total)
 
 
 @app.get("/api/bills/summary")
