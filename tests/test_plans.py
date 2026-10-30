@@ -151,6 +151,11 @@ def test_delete_my_account_removes_data(hosted):
     assert os.path.isdir(folder)
     assert c.post("/api/me/delete", json={"password": "yanlis"}).status_code == 403
     assert c.post("/api/me/delete", json={"password": "ayse-sifre-12345"}).status_code == 200
+    from datetime import datetime, timedelta, timezone
+
+    from app import deletion
+
+    deletion.purge_due(datetime.now(timezone.utc) + timedelta(days=8))  # 7 günlük geri alma süresi doldu
     assert system.user(u["id"]) is None and not os.path.exists(folder)
     assert c.get("/api/summary").status_code == 401  # oturum da düştü
 

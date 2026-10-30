@@ -103,6 +103,12 @@ def test_google_account_without_password_can_delete_itself(google):
     assert c.get("/api/auth/status").json()["user"]["password_set"] is False
     assert c.post("/api/me/delete", json={"confirm": "hayır"}).status_code == 403
     assert c.post("/api/me/delete", json={"confirm": "sil"}).status_code == 200
+    assert system.user_by_name("ayse@gmail.com")["deleted_at"]  # hemen kapandı, 7 gün geri alınabilir
+    from datetime import datetime, timedelta, timezone
+
+    from app import deletion
+
+    deletion.purge_due(datetime.now(timezone.utc) + timedelta(days=8))
     assert system.user_by_name("ayse@gmail.com") is None
 
 

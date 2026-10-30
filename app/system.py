@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS tg_pairs (
     user_id INTEGER NOT NULL,
     expires INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS deleted_accounts (  -- silinen hesabın anonim kaydı (app/deletion.py); 1 yıl sonra düşer
+    user_id INTEGER PRIMARY KEY,         -- id hiç yeniden verilmez; RevenueCat app_user_id ile aynı
+    deleted_at TEXT NOT NULL,            -- silme isteği (ISO, UTC)
+    delete_after TEXT,                   -- bekleme süresinin sonu; geri alınabilir pencere
+    purged_at TEXT,                      -- veri kalıcı silindi (NULL: henüz bekliyor)
+    reason TEXT,                         -- self | owner (sahip defteri sildi) | admin
+    plan TEXT, plan_until TEXT, plan_source TEXT, plan_store TEXT, will_renew INTEGER,
+    store_customer TEXT,                 -- RevenueCat app_user_id (= user_id)
+    email_hash TEXT,                     -- HMAC-SHA256(sunucu anahtarı, küçük harf e-posta); düz e-posta yok
+    notes TEXT                           -- JSON liste: silme sonrası mağaza olayları, iptal denemeleri
+);
+CREATE INDEX IF NOT EXISTS deleted_accounts_email ON deleted_accounts(email_hash);
 """
 
 DEFAULT_AI_QUOTA = 100
@@ -108,6 +120,13 @@ def _migrate(c) -> None:
     for table in ("users", "invites"):
         if "book_role" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
             c.execute(f"ALTER TABLE {table} ADD COLUMN book_role TEXT")
+    # yumuşak silme (app/deletion.py): istek zamanı, kalıcı silinme zamanı, ortak defter sahibiyle birlikte silinen üye
+    # abonelik: mağaza yenilemesi açık mı (CANCELLATION → 0), hangi mağaza (APP_STORE / PLAY_STORE)
+    have = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+    for col, typ in (("deleted_at", "TEXT"), ("delete_after", "TEXT"), ("deleted_with", "INTEGER"),
+                     ("plan_renews", "INTEGER"), ("plan_store", "TEXT")):
+        if col not in have:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
 
 
 def init() -> None:
@@ -211,7 +230,8 @@ def members(owner_id: int) -> list[dict]:
 
 def update_user(uid: int, **fields) -> None:
     allowed = {"username", "password_hash", "disabled", "last_login", "must_change_password", "ai_quota", "role",
-               "plan", "plan_until", "plan_source", "book_role"}
+               "plan", "plan_until", "plan_source", "book_role", "deleted_at", "delete_after", "deleted_with",
+               "plan_renews", "plan_store"}
     data = {k: v for k, v in fields.items() if k in allowed}
     if not data:
         return
@@ -232,6 +252,13 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
+            c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))
+            for sql in ("DELETE FROM password_resets WHERE user_id = ?",   # tablolar ilk kullanımda kurulur (reset, inbound)
+                        "UPDATE inbound SET revoked = 1 WHERE user_id = ?"):
+                try:
+                    c.execute(sql, (uid,))
+                except sqlite3.OperationalError:
+                    pass
 
 
 def user_dirs(u: dict) -> list[str]:
@@ -476,4 +503,4 @@ def token_owner(token: str) -> dict | None:
             return None
         c.execute("UPDATE api_tokens SET last_used = CURRENT_TIMESTAMP WHERE token_hash = ?", (_token_hash(token),))
     u = user(r["user_id"])
-    return u if u and not u["disabled"] else None
+    return u if u and not u["disabled"] and not u.get("deleted_at") else None  # silinmek üzere: API erişimi yok

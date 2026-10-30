@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { isEmail } from "../components/hooks";
+import PendingDeletion, { isPendingDeletion, type PendingDeletionInfo } from "../components/PendingDeletion";
 
 const WAIT = 60; // sn: sunucu aynı hesaba dakikada bir kod gönderir
 /** Girişten gelirken yazılmış e-posta (Login bırakır) ya da son girilen hesap. */
@@ -30,8 +31,10 @@ const STRENGTH = [
 async function post(path: string, body: unknown) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) {
-    const detail = (await res.json().catch(() => ({}))).detail;
-    throw Object.assign(new Error(typeof detail === "string" ? detail : "Bir şeyler ters gitti, tekrar dene"), { status: res.status });
+    const j = await res.json().catch(() => ({}));
+    const detail = j.detail;
+    throw Object.assign(new Error(typeof detail === "string" ? detail : "Bir şeyler ters gitti, tekrar dene"),
+      { status: res.status, body: j });
   }
 }
 
@@ -51,6 +54,7 @@ export default function ForgotPassword() {
   const [until, setUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [codeFocus, setCodeFocus] = useState(false);
+  const [pending, setPending] = useState<PendingDeletionInfo | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
   const pwRef = useRef<HTMLInputElement>(null);
 
@@ -102,6 +106,8 @@ export default function ForgotPassword() {
       qc.invalidateQueries();
     } catch (x) {
       const st = (x as { status?: number }).status;
+      const body = (x as { body?: unknown }).body;
+      if (st === 409 && isPendingDeletion(body)) { setPending(body); setBusy(false); return; } // yeni şifre geçerli; geri almayı sor
       if (st === 400) { setCode(""); codeRef.current?.focus(); }
       setErr({ field: st === 400 ? "code" : st === 422 ? "pw" : "form", msg: (x as Error).message });
       setBusy(false);
@@ -118,6 +124,8 @@ export default function ForgotPassword() {
   const score = passwordScore(pw);
   const [sLabel, sBar, sText] = STRENGTH[score]!;
   const fieldErr = (f: "email" | "code" | "pw") => (err?.field === f ? <p role="alert" className="mt-1 text-sm text-red-600">{err.msg}</p> : null);
+
+  if (pending) return <PendingDeletion info={pending} onCancel={() => { window.location.hash = "/"; }} />;
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">

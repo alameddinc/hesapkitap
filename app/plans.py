@@ -184,29 +184,52 @@ ACTIVE_EVENTS = {"INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE", "UNCANCELLATIO
 END_EVENTS = {"EXPIRATION"}
 
 
+STORES = {"APP_STORE": "app_store", "MAC_APP_STORE": "app_store", "PLAY_STORE": "play_store"}
+# yenileme kesin kapalı: CANCELLATION (kullanıcı iptal etti), tek seferlik alım
+NO_RENEW_EVENTS = {"CANCELLATION", "NON_RENEWING_PURCHASE"}
+
+
+def subscription(u: dict | None) -> dict:
+    """Kullanıcının KENDİ mağaza aboneliği (ortak defter üyesi sahibin paketini kullanır ama ödemez).
+    will_renew: CANCELLATION geldiyse False; bilinmiyorsa (eski abonelik, olay gelmemiş) True say — silme akışında
+    "hâlâ yenileniyor" uyarısı gereksiz çıksın, eksik çıkmasın. store: app_store | play_store | None."""
+    active = bool(hosted() and u and u.get("plan_source") == "revenuecat" and u.get("plan") in (PREMIUM, FAMILY)
+                  and _active(u))
+    raw = (u or {}).get("plan_store")
+    return {"active": active, "will_renew": (u.get("plan_renews") != 0) if active else False,
+            "until": u.get("plan_until") if active else None,
+            "store": STORES.get(raw, raw.lower() if raw else None) if active else None}
+
+
 def apply_revenuecat(event: dict) -> dict:
     """RevenueCat webhook olayı → kullanıcının paketi. app_user_id = bizim kullanıcı kimliğimiz (uygulama giriş yapınca
-    RevenueCat'e bunu verir). Dönen: ne yapıldığı (kayıt için)."""
+    RevenueCat'e bunu verir). Dönen: ne yapıldığı (kayıt için). Silinmiş (ya da silinmek üzere bekleyen) hesaba gelen
+    olay silme kaydına not düşer (app/deletion.py): ör. silinmiş hesapta yenileme = kullanıcı mağazada iptal etmemiş."""
+    from app import deletion
+
     uid_raw = str(event.get("app_user_id") or "")
     if not uid_raw.isdigit():
         return {"ignored": "app_user_id"}
     u = system.user(int(uid_raw))
+    noted = deletion.note_store_event(int(uid_raw), event, exists=bool(u))
     if not u:
-        return {"ignored": "user"}
+        return {"ignored": "user", **({"deleted_account": int(uid_raw), **noted} if noted is not None else {})}
     kind = event.get("type")
     ents = [ENTITLEMENTS[e] for e in (event.get("entitlement_ids") or []) if e in ENTITLEMENTS]
     plan = FAMILY if FAMILY in ents else PREMIUM if PREMIUM in ents else None
     exp_ms = event.get("expiration_at_ms")
     until = datetime.fromtimestamp(exp_ms / 1000, timezone.utc).isoformat(timespec="seconds") if exp_ms else None
+    store = event.get("store") or u.get("plan_store")
     if kind in END_EVENTS:
         if u.get("plan_source") == "manual" and _active(u):  # yöneticinin verdiği (test) paketi mağaza bitişi silmesin
             return {"user": u["id"], "ignored": "manual"}
-        system.update_user(u["id"], plan=FREE, plan_until=None, plan_source="revenuecat")
+        system.update_user(u["id"], plan=FREE, plan_until=None, plan_source="revenuecat", plan_renews=None)
         return {"user": u["id"], "plan": FREE}
     if kind in ACTIVE_EVENTS and plan:
-        system.update_user(u["id"], plan=plan, plan_until=until, plan_source="revenuecat")
+        system.update_user(u["id"], plan=plan, plan_until=until, plan_source="revenuecat", plan_store=store,
+                           plan_renews=0 if kind in NO_RENEW_EVENTS else 1)
         return {"user": u["id"], "plan": plan, "until": until}
-    if kind == "CANCELLATION" and until:
-        system.update_user(u["id"], plan_until=until)
-        return {"user": u["id"], "until": until}
+    if kind == "CANCELLATION":  # yenileme kapandı; süre bitene kadar paket sürer
+        system.update_user(u["id"], plan_renews=0, plan_store=store, **({"plan_until": until} if until else {}))
+        return {"user": u["id"], "until": until, "will_renew": False}
     return {"ignored": kind}

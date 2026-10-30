@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, donations, finance, jobs, ocr, plans, prefs, receipt, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, finance, jobs, ocr, plans, prefs, receipt, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -119,7 +119,8 @@ async def require_login(request: Request, call_next):
             response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
         return response
     # şablon gönderimi (hub) ve gelen posta (Cloudflare Email Worker, kendi gizli anahtarıyla): oturumsuz
-    public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound", "/api/billing/revenuecat")
+    public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound", "/api/billing/revenuecat",
+                                                       "/api/me/restore")  # geri alma: oturum yok, giriş belgesiyle
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required"}, status_code=401)
@@ -197,6 +198,16 @@ def _reset_enabled() -> bool:
     return reset.enabled()
 
 
+def _pending_deletion(u: dict) -> JSONResponse:
+    """Kimliği doğrulandı ama hesap silinmek üzere bekliyor: oturum açılmaz. İstemci "geri almak ister misin?" sorar,
+    evet derse restore_token ile POST /api/me/restore. Sahibi defteri sildiği için silinen üye kendi başına geri alamaz."""
+    ok = deletion.restorable(u)
+    return JSONResponse({"detail": "account_pending_deletion", "delete_after": u.get("delete_after"),
+                         "deleted_at": u.get("deleted_at"), "username": u["username"], "restorable": ok,
+                         "restore_token": auth.make_restore_token(u) if ok else None,
+                         "subscription": plans.subscription(u)}, status_code=409)
+
+
 def _start_session(request: Request, response: Response, user: dict) -> None:
     # HTTPS arkasındaysa (doğrudan ya da proxy başlığıyla) çerez otomatik Secure olur
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
@@ -230,7 +241,9 @@ def auth_status(request: Request):
             "consent": sorted(CONSENT_ITEMS) if plans.hosted() else [],  # giriş alanı: hazır sürümde e-posta; kendi sunucusunda kullanıcı adı ya da e-posta
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
-            "user": {"id": u.get("id"), "username": u["username"], "password_set": not auth.password_unset(u.get("id")), "role": u["role"], "must_change_password": bool(u["must_change_password"])} if u else None}
+            "delete_grace_days": deletion.grace_days(),  # hesap silinince geri alma süresi
+            "user": {"id": u.get("id"), "username": u["username"], "password_set": not auth.password_unset(u.get("id")), "role": u["role"], "must_change_password": bool(u["must_change_password"]),
+                     "subscription": plans.subscription(u)} if u else None}
 
 
 @app.post("/api/auth/setup")
@@ -269,6 +282,8 @@ def login(body: LoginIn, request: Request, response: Response):
     if not u:
         auth.record_fail(ip)
         raise HTTPException(401, "Kullanıcı adı ya da şifre yanlış" if body.username else "Şifre yanlış")
+    if u.get("deleted_at"):
+        return _pending_deletion(u)
     _start_session(request, response, u)
     return {"ok": True}
 
@@ -295,7 +310,7 @@ class RegisterIn(BaseModel):
     consent: list[str] | None = None  # hazır sürümde: ["kosullar", "acik_riza"]
 
 
-CONSENT_VERSION = "2026-10-29"  # hukuk metinlerinin sürümü; metin değişirse güncellenir
+CONSENT_VERSION = "2026-10-30"  # hukuk metinlerinin sürümü; metin değişirse güncellenir
 CONSENT_ITEMS = {"kosullar", "acik_riza"}  # Koşullar + Aydınlatma okundu · Açık rıza (yurt dışı sağlayıcılar dahil)
 
 
@@ -378,6 +393,8 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
     created = False
     if u and u["disabled"]:
         raise HTTPException(403, "Bu hesap kapatılmış")
+    if u and u.get("deleted_at"):
+        return _pending_deletion(u)
     if not u:
         if not plans.open_signup():
             raise HTTPException(403, "Bu e-postayla bir hesap yok")
@@ -453,6 +470,8 @@ def reset_password(body: ResetIn, request: Request, response: Response):
         auth.record_fail(ip)
         raise HTTPException(400, "Kod yanlış ya da süresi dolmuş")
     auth.set_password(u["id"], body.password)
+    if u.get("deleted_at"):  # kodla kimliğini kanıtladı: geri almayı sor (yeni şifre geçerli)
+        return _pending_deletion(system.user(u["id"]))
     _start_session(request, response, system.user(u["id"]))
     return {"ok": True}
 
@@ -505,7 +524,8 @@ def _user_row(u: dict) -> dict:
             "last_login": u["last_login"], "disabled": bool(u["disabled"]),
             "must_change_password": bool(u["must_change_password"]),
             "ai_used": system.ai_used(u["id"]), "ai_quota": system.ai_quota(u), "ai_quota_custom": u["ai_quota"],
-            "plan": u.get("plan") or "free", "plan_until": u.get("plan_until"), "plan_source": u.get("plan_source")}
+            "plan": u.get("plan") or "free", "plan_until": u.get("plan_until"), "plan_source": u.get("plan_source"),
+            "deleted_at": u.get("deleted_at"), "delete_after": u.get("delete_after")}
 
 
 class AdminUserIn(BaseModel):
@@ -590,9 +610,21 @@ def admin_delete_user(uid: int):
     u = system.user(uid)
     if not u or u["role"] == "admin":
         raise HTTPException(404, "Kullanıcı yok")
+    deletion.admin_deleted(u)  # anonim kayıt (e-posta özeti, paket); veri aşağıda _silinen'e taşınır
     system.delete_user(uid)
     system.archive_user_data(u)
     return {"ok": True}
+
+
+@app.get("/api/admin/deleted")
+def admin_deleted_accounts(email: str | None = None):
+    """Silinen hesapların anonim kaydı. email verilirse özeti hesaplanıp eşleştirilir (düz e-posta saklanmaz)."""
+    _require_admin()
+    rows = deletion.records(email=(email or "").strip() or None)
+    return {"records": [{k: r[k] for k in ("user_id", "deleted_at", "delete_after", "purged_at", "reason", "plan",
+                                           "plan_until", "plan_source", "plan_store", "will_renew", "store_customer",
+                                           "notes", "warnings")} | {"email_hash": r["email_hash"][:12]} for r in rows],
+            "keep_days": deletion.RECORD_KEEP_DAYS, "grace_days": deletion.grace_days()}
 
 
 @app.post("/api/admin/invites")
@@ -627,9 +659,18 @@ class DeleteMeIn(BaseModel):
     confirm: str | None = None  # şifresi olmayan (Google/Apple ile açılmış) hesap: "SİL" yazarak onaylar
 
 
+@app.get("/api/me/subscription")
+def my_subscription():
+    """Kendi mağaza aboneliğin: silme akışının ilk adımı (yenileniyor mu, ne zaman bitiyor, hangi mağaza)."""
+    u = db.current_user()
+    return plans.subscription(system.user(u["id"]) if u else None)
+
+
 @app.post("/api/me/delete")
 def delete_me(body: DeleteMeIn, response: Response):
-    """Kendi hesabını ve tüm verini kalıcı olarak sil (şifreyle onay). Ortak defterin sahibiysen üyelerin de silinir."""
+    """Kendi hesabını sil (şifreyle ya da şifresizse "SİL" ile onay). Hesap hemen kapanır; bekleme süresi
+    (HESAPKITAP_DELETE_GRACE_DAYS, varsayılan 7) içinde giriş yapıp geri alınabilir, sonra kalıcı silinir.
+    Ortak defterin sahibiysen üyelerin de aynı akışa girer. Mağaza aboneliği engel değildir (iptali kullanıcının)."""
     u = db.current_user()
     if not u or u["role"] == "admin":
         raise HTTPException(403, "Yönetici hesabı buradan silinemez")
@@ -638,15 +679,31 @@ def delete_me(body: DeleteMeIn, response: Response):
             raise HTTPException(403, "Onay için SİL yaz")
     elif not auth.check_password(u, body.password or ""):
         raise HTTPException(403, "Şifre yanlış")
-    for m in system.members(u["id"]):
-        system.delete_user(m["id"])
-        system.purge_user_data(m)  # üyenin kendi ("Benim") defteri de
-    system.delete_user(u["id"])
-    system.purge_user_data(u)  # üye kendini silerse yalnız kendi klasörü (users/<id>); sahibin defteri kalır
-    for k in ("consent", "pw_unset"):  # KVKK: hesapla birlikte onay kaydı (IP içerir) de gider
-        system.put(f"{k}:{u['id']}", None)
+    res = deletion.request_delete(system.user(u["id"]))  # oturumdaki kopya değil: güncel satır (paket, mağaza)
     response.delete_cookie(auth.COOKIE, path="/")
-    return {"ok": True}
+    return {"ok": True, **res}
+
+
+class RestoreIn(BaseModel):
+    restore_token: str
+
+
+@app.post("/api/me/restore")
+def restore_me(body: RestoreIn, request: Request, response: Response):
+    """Silinmek üzere bekleyen hesabı geri al. Belge girişte (409 account_pending_deletion) verilir; oturum açılır."""
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    u = auth.restore_user(body.restore_token)
+    if not u:
+        auth.record_fail(ip)
+        raise HTTPException(401, "Geri alma süresi doldu; yeniden giriş yap")
+    if not deletion.restorable(u):
+        raise HTTPException(409, "Bu defterin sahibi hesabını sildi; yalnız o geri alabilir")
+    deletion.restore(u)
+    u = system.user(u["id"])
+    _start_session(request, response, u)
+    return {"ok": True, "subscription": plans.subscription(u)}
 
 
 @app.post("/api/auth/logout")

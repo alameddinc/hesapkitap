@@ -3,6 +3,7 @@ import { LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import { inApp, toLauncher } from "../components/AppServer";
 import { isEmail, loginKind } from "../components/hooks";
+import PendingDeletion, { isPendingDeletion, type PendingDeletionInfo } from "../components/PendingDeletion";
 
 export default function Login() {
   const qc = useQueryClient();
@@ -10,6 +11,7 @@ export default function Login() {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<PendingDeletionInfo | null>(null); // hesap silinmek üzere (409)
   const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
   const open = !!status.data?.open_signup; // barındırılan sürüm: herkes hesap açabilir
   const email = loginKind(status.data) === "email"; // hazır sürüm: giriş e-postayla
@@ -30,8 +32,14 @@ export default function Login() {
       try { if (user.trim()) localStorage.setItem("hk-username", user.trim()); } catch { /* özel mod */ }
       qc.invalidateQueries();
     }
-    else setErr((await res.json().catch(() => ({}))).detail ?? "Giriş başarısız");
+    else {
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 409 && isPendingDeletion(j)) setPending(j);
+      else setErr(j.detail ?? "Giriş başarısız");
+    }
   }
+
+  if (pending) return <PendingDeletion info={pending} onCancel={() => { setPending(null); setPw(""); }} />;
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">

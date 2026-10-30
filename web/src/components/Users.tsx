@@ -9,6 +9,7 @@ interface UserRow {
   id: number; username: string; role: "admin" | "user"; created_at: string; last_login: string | null;
   disabled: boolean; must_change_password: boolean; ai_used: number; ai_quota: number | null; ai_quota_custom: number | null;
   plan?: "free" | "premium" | "aile"; plan_until?: string | null; plan_source?: string | null;
+  deleted_at?: string | null; delete_after?: string | null; // kullanıcı sildi, geri alma süresinde
 }
 interface Invite { code: string; note: string | null; created_at: string; expires_at: string | null; used_by_name: string | null; used_at: string | null }
 interface AdminData { users: UserRow[]; invites: Invite[]; default_quota: number; hosted?: boolean }
@@ -90,6 +91,8 @@ export default function Users() {
               <span className={cx("font-medium", u.disabled && "text-stone-400 line-through")}>
                 {u.username}
                 {u.role === "admin" && <span className="ml-1.5 rounded bg-stone-100 px-1.5 py-0.5 text-xs dark:bg-stone-800">yönetici</span>}
+                {u.delete_after && <span className="ml-1.5 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-800 dark:bg-red-950 dark:text-red-300">
+                  silinecek · {dateTR(u.delete_after.slice(0, 10))}</span>}
                 {u.must_change_password && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">şifre bekliyor</span>}
               </span>
               <span className="text-xs text-stone-500">
@@ -144,6 +147,8 @@ export default function Users() {
         ))}
       </ul>
 
+      <DeletedAccounts />
+
       {openInvites.length > 0 && (
         <div>
           <h3 className="text-sm font-medium">Bekleyen davetler</h3>
@@ -162,5 +167,65 @@ export default function Users() {
         </div>
       )}
     </section>
+  );
+}
+
+interface DeletedRow {
+  user_id: number; deleted_at: string; delete_after: string | null; purged_at: string | null; reason: string | null;
+  plan: string | null; plan_until: string | null; plan_source: string | null; plan_store: string | null; will_renew: number | null;
+  store_customer: string | null; email_hash: string;
+  notes: { at: string; event?: string; action?: string; warning?: string }[]; warnings: { at: string; warning: string }[];
+}
+
+const REASON: Record<string, string> = { self: "kendisi", owner: "defter sahibiyle", admin: "yönetici" };
+const STORE: Record<string, string> = { app_store: "App Store", play_store: "Google Play" };
+
+/** Silinen hesapların anonim kaydı (1 yıl): fatura / itiraz takibi. E-posta saklanmaz; aramada özeti eşleştirilir. */
+function DeletedAccounts() {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [term, setTerm] = useState("");
+  const list = useQuery({
+    queryKey: ["admin-deleted", term], enabled: open,
+    queryFn: () => call<{ records: DeletedRow[]; keep_days: number }>(`/api/admin/deleted${term ? `?email=${encodeURIComponent(term)}` : ""}`, "GET"),
+  });
+  const rows = list.data?.records ?? [];
+  const warned = rows.filter((r) => r.warnings.length).length;
+  return (
+    <details className="rounded-lg border border-stone-200 p-2 dark:border-stone-700" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer text-sm font-medium">Silinen hesaplar{warned ? <span className="ml-1.5 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-800 dark:bg-red-950 dark:text-red-300">{warned} uyarı</span> : null}</summary>
+      <form className="mt-2 flex gap-2" onSubmit={(e) => { e.preventDefault(); setTerm(q.trim()); }}>
+        <input className="input min-w-0 flex-1" type="email" placeholder="E-postayla ara (saklanmaz, özeti eşleşir)" value={q}
+          onChange={(e) => setQ(e.target.value)} autoCapitalize="none" spellCheck={false} />
+        <button className="btn-ghost border border-stone-300 dark:border-stone-700">Ara</button>
+        {term && <button type="button" className="btn-ghost text-xs" onClick={() => { setQ(""); setTerm(""); }}>Temizle</button>}
+      </form>
+      {list.isError && <p className="mt-2 text-sm text-red-600">{(list.error as Error).message}</p>}
+      {open && list.data && !rows.length && <p className="mt-2 text-sm text-stone-500">{term ? "Bu e-postayla silinmiş hesap yok." : "Kayıt yok."}</p>}
+      <ul className="mt-1 divide-y divide-stone-100 text-sm dark:divide-stone-800">
+        {rows.map((r) => (
+          <li key={r.user_id} className="space-y-0.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span><b>#{r.user_id}</b> <code className="text-xs text-stone-500">{r.email_hash}…</code>
+                <span className="text-xs text-stone-500"> · {REASON[r.reason ?? ""] ?? r.reason}</span></span>
+              <span className="text-xs text-stone-500">
+                silindi {dateTR(r.deleted_at)} · {r.purged_at ? `kalıcı ${dateTR(r.purged_at)}` : r.delete_after ? `geri alınabilir ${dateTR(r.delete_after)}'e kadar` : ""}
+              </span>
+            </div>
+            {(r.plan && r.plan !== "free") && (
+              <p className="text-xs text-stone-500">
+                {r.plan === "aile" ? "Aile" : "Premium"} · {r.plan_source === "revenuecat" ? STORE[r.plan_store ?? ""] ?? "mağaza" : "elle"}
+                {r.plan_until && ` · ${dateTR(r.plan_until)}'e kadar`}
+                {r.will_renew != null && (r.will_renew ? " · yenileniyordu" : " · iptal edilmişti")}
+              </p>
+            )}
+            {r.warnings.map((w, i) => (
+              <p key={i} className="rounded bg-red-50 px-2 py-1 text-xs text-red-800 dark:bg-red-950/50 dark:text-red-300">⚠ {dateTR(w.at)} · {w.warning}</p>
+            ))}
+          </li>
+        ))}
+      </ul>
+      {open && <p className="mt-1 text-xs text-stone-500">Kayıtlar kalıcı silmeden {list.data?.keep_days ?? 365} gün sonra düşer.</p>}
+    </details>
   );
 }

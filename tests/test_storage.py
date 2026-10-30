@@ -375,6 +375,12 @@ def test_account_delete_purges_prefix_and_archive_moves_then_expires(client, tmp
     _parse_photo(a)
     assert any(k.startswith(f"users/{ua['id']}/") for k in s3.objects)
     assert a.post("/api/me/delete", json={"password": "silen-sifre-12345"}).status_code == 200
+    assert any(k.startswith(f"users/{ua['id']}/") for k in s3.objects)  # 7 gün geri alınabilir: nesneler duruyor
+    from datetime import datetime, timedelta, timezone
+
+    from app import deletion
+
+    assert deletion.purge_due(datetime.now(timezone.utc) + timedelta(days=8)) == [ua["id"]]
     assert not any(k.startswith(f"users/{ua['id']}/") for k in s3.objects)
 
     b, ub = _register(admin, "kapanan")

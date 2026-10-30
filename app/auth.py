@@ -200,7 +200,33 @@ def token_user(token: str | None) -> dict | None:
     if not (exp.isdigit() and int(exp) > time.time() and uid.isdigit() and ver.isdigit()):
         return None
     u = system.user(int(uid))
-    if not u or u["disabled"] or u["session_version"] != int(ver):
+    if not u or u["disabled"] or u.get("deleted_at") or u["session_version"] != int(ver):
+        return None  # silinmek üzere bekleyen hesap: giriş yapıp geri alana kadar hiçbir oturum çalışmaz
+    return u
+
+
+RESTORE_TTL = 15 * 60  # silinmek üzere bekleyen hesabı geri alma belgesi (giriş doğrulandıktan sonra verilir)
+
+
+def make_restore_token(u: dict) -> str:
+    """Kimliği doğrulanmış (şifre / Google / Apple / sıfırlama kodu) ama silinmek üzere bekleyen hesap için kısa ömürlü
+    geri alma belgesi. Oturum sürümüne bağlı: hesap yeniden silinirse (sürüm artar) eski belge çalışmaz."""
+    payload = f"restore.{int(time.time()) + RESTORE_TTL}.{u['id']}.{u['session_version']}"
+    return f"{payload}.{_sign(payload)}"
+
+
+def restore_user(token: str | None) -> dict | None:
+    """Geri alma belgesinin kullanıcısı (imza, süre, oturum sürümü); yalnız silinmek üzere bekleyen hesapta."""
+    parts = (token or "").split(".")
+    if len(parts) != 5 or parts[0] != "restore":
+        return None
+    _, exp, uid, ver, sig = parts
+    if not hmac.compare_digest(sig, _sign(f"restore.{exp}.{uid}.{ver}")):
+        return None
+    if not (exp.isdigit() and int(exp) > time.time() and uid.isdigit() and ver.isdigit()):
+        return None
+    u = system.user(int(uid))
+    if not u or u["disabled"] or not u.get("deleted_at") or u["session_version"] != int(ver):
         return None
     return u
 

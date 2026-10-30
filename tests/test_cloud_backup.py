@@ -333,6 +333,14 @@ ENTRY = {"entry_date": "2026-10-05", "description": "Fırın", "amount": 45, "ki
 OWN = {"X-HK-Book": "kendi"}
 
 
+def _after_grace(days=8):
+    from datetime import datetime, timedelta, timezone
+
+    from app import deletion
+
+    return deletion.purge_due(datetime.now(timezone.utc) + timedelta(days=days))
+
+
 def test_member_deleting_self_removes_own_book(owner):
     from app import system
 
@@ -341,6 +349,8 @@ def test_member_deleting_self_removes_own_book(owner):
     folder = os.path.dirname(system.own_db_path(mu))
     assert os.path.isdir(folder)
     assert m.post("/api/me/delete", json={"password": "esim-sifre-12345"}).status_code == 200
+    assert os.path.isdir(folder)  # 7 gün geri alınabilir
+    _after_grace()
     assert not os.path.exists(folder)
 
 
@@ -360,6 +370,8 @@ def test_owner_deleting_account_removes_members_own_books(owner):
     folders = [os.path.dirname(system.user_db_path(ou)), os.path.dirname(system.own_db_path(mu))]
     assert all(os.path.isdir(f) for f in folders)
     assert o.post("/api/me/delete", json={"password": "sahip-sifre-12345"}).status_code == 200
+    assert system.user(mu["id"])["deleted_with"] == ou["id"]  # üye de aynı akışta
+    _after_grace()
     assert not any(os.path.exists(f) for f in folders)
     assert system.user(mu["id"]) is None
 

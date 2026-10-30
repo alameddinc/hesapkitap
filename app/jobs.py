@@ -168,7 +168,8 @@ def spaces() -> list[tuple[str | None, dict | None]]:
 
     out: list[tuple[str | None, dict | None]] = [(None, None)]
     try:
-        out += [(system.user_db_path(u), u) for u in system.users() if u.get("db_file") and not u.get("disabled")]
+        out += [(system.user_db_path(u), u) for u in system.users()
+                if u.get("db_file") and not u.get("disabled") and not u.get("deleted_at")]  # silinmek üzere: iş yok
     except Exception:  # noqa: BLE001 - sistem veritabanı yoksa (tek kullanıcı) sadece ana alan
         log.exception("kullanıcı listesi okunamadı")
     return out
@@ -196,7 +197,19 @@ def run_global(now: datetime) -> list[str] | None:
     if now.hour < PURGE_HOUR or system.get("job:purge_deleted") == today:
         return None
     system.put("job:purge_deleted", today)
+    from app import deletion
+
+    if n := deletion.expire_records(now):  # 1 yılı dolan anonim silme kayıtları
+        log.info("eski silme kayıtları düştü: %d", n)
     return system.purge_archived(now=now.timestamp())
+
+
+def run_account_purge(now: datetime) -> list[int]:
+    """Bekleme süresi dolan (silinmek üzere bekleyen) hesapları kalıcı sil. Her turda: tek ucuz sorgu; böylece
+    "6 Kasım'da silinecek" denen hesap o gün silinir, gece 4'ü beklemez."""
+    from app import deletion
+
+    return deletion.purge_due(now)
 
 
 async def scheduler() -> None:
@@ -218,6 +231,11 @@ async def scheduler() -> None:
                 log.warning("telegram inbox: %s", e)
             except Exception:  # noqa: BLE001
                 log.exception("telegram inbox failed")
+        try:
+            if purged := await asyncio.to_thread(run_account_purge, now):
+                log.info("süresi dolan silinmiş hesaplar kalıcı silindi: %s", purged)
+        except Exception:  # noqa: BLE001
+            log.exception("account purge failed")
         try:
             if removed := await asyncio.to_thread(run_global, now):
                 log.info("silinmiş hesap klasörleri temizlendi: %s", removed)

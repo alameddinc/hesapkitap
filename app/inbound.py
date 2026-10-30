@@ -104,7 +104,8 @@ def resolve(to: str) -> dict | None:
     with system.connect() as c:
         _init(c)
         r = c.execute("SELECT user_id FROM inbound WHERE token = ? AND revoked = 0", (m.group(1),)).fetchone()
-    return system.user(r[0]) if r else None
+    u = system.user(r[0]) if r else None
+    return u if u and not u.get("deleted_at") else None  # silinmek üzere bekleyen defterin adresi mail kabul etmez
 
 
 # ---------------------------------------------------------------- imza
