@@ -237,3 +237,28 @@ def test_transfers_month_filter_self_and_rename(client, tmpdb):
     assert out["merged"] and out["entries"] == 1 and out["descriptions"] == 1
     people = {p["name"]: p for p in client.get("/api/transfers").json()["people"]}
     assert people["Selin Ak"]["count"] == 3 and "Selin ak" not in people
+
+
+def test_bills_summary(client, tmpdb):
+    db = tmpdb
+    raw = "İgdaş Tahsilatı Sözleşme Numarası: 500100000001, Fatura Numarası:{inv},Son Ödeme Tarihi: 2026/{m}/25"
+    rows = []
+    for d, amt, inv in (("2025-10-20", 300.0, "FT000A1"), ("2026-09-20", 500.0, "FT000A2"), ("2026-10-20", 2636.0, "FT000A3"),
+                        ("2026-10-20", 398.0, "FT000A4")):
+        rows.append({"date": d, "description": raw.format(inv=inv, m=d[5:7]), "amount": -amt, "balance": None})
+    db.import_bank_rows(bank_import.finalize(rows, [OWNER]), account="VakıfBank", owners=[OWNER])
+    db.create_entry({"entry_date": "2026-10-03", "description": "Vodafone", "amount": 600, "kind": "gider",
+                     "category": "Telefon"})
+    r = client.get("/api/bills/summary?until=2026-10&months=13").json()
+    assert r["window"] == {"start": "2025-10", "end": "2026-10"}
+    ig = next(p for p in r["providers"] if p["name"] == "İGDAŞ")
+    assert ig["category"] == "Doğalgaz" and ig["total"] == 3834 and ig["paid_months"] == 3
+    last = ig["months"][-1]
+    assert last["month"] == "2026-10" and last["amount"] == 3034 and last["count"] == 2
+    assert sorted(i["invoice"] for i in last["items"]) == ["FT000A3", "FT000A4"]  # aynı ay iki fatura: toplanır, ayrı görünür
+    assert ig["vs_prev_month"] == {"month": "2026-09", "amount": 500, "diff": 2534, "pct": 506.8}
+    assert ig["vs_last_year"]["month"] == "2025-10" and ig["max"] == {"month": "2026-10", "amount": 3034}
+    assert ig["average"] == 1278
+    cats = {c["name"]: c for c in r["categories"]}
+    assert cats["Doğalgaz"]["total"] == 3834 and cats["Telefon"]["total"] == 600
+    assert client.get("/api/bills/summary?until=10-2026").status_code == 422

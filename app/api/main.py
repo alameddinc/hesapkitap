@@ -3852,6 +3852,19 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
     return doc
 
 
+@app.get("/api/bills/summary")
+def bills_summary(months: int = 24, until: str | None = None):
+    """Faturalar özeti (app/bill_summary.py): kurum ve kategori bazında aylık seri, ortalama, en yüksek ay, önceki aya
+    ve geçen yılın aynı ayına göre değişim. until=YYYY-MM (varsayılan bu ay), months=1–60."""
+    import re as _re
+
+    from app import bill_summary
+
+    if until and not _re.fullmatch(r"\d{4}-\d{2}", until):
+        raise HTTPException(422, "until=YYYY-MM")
+    return bill_summary.summary(months, until)
+
+
 @app.get("/api/bills")
 def list_bills():
     return db.list_bills()
