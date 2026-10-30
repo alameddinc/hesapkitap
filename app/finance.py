@@ -572,7 +572,7 @@ def card_projection() -> dict:
                     installments.append({
                         "month": add_months(period, i), "amount": sign * t["installment_left_amount"],
                         "description": t["description"], "installment": f"{t['installment_no'] + i}/{total_n}",
-                        "card": card_label(t), "fee": t["txn_type"] == FEE,
+                        "card": card_label(t), "fee": t["txn_type"] == FEE, "txn_id": t["id"],
                     })
 
         subs: dict[str, dict] = {}
@@ -583,7 +583,7 @@ def card_projection() -> dict:
                 m = merchant_name(t["description"])
                 if m in cancelled:
                     continue
-                subs.setdefault(m, {"description": m, "amount": 0.0, "category": t["category"]})
+                subs.setdefault(m, {"description": m, "amount": 0.0, "category": t["category"], "txn_id": t["id"]})
                 subs[m]["amount"] += t["amount"]
 
         # Değişken = toplam kart harcaması - taksitli satırlar - abonelikler; son N dönem ortalaması
@@ -652,10 +652,13 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         inst = sum(i["amount"] for i in inst_items)
         subs = sum(x["amount"] for x in p["subscriptions"])
         # "bugüne kadar"ın kalemleri: ekran toplamı bunlarla açıklar (ekstre kesilmeden işlem listesi yok)
-        items = ([{"type": "taksit", "description": i["description"], "amount": _round(i["amount"]),
+        # uid kalıcı: taksit/abonelik → kaynak kart işlemi (c<id>, GET /api/transactions/...'daki uid ile aynı), harcama →
+        # kayıt (m<id>); dokununca o satırın düzenlemesi açılır
+        items = ([{"type": "taksit", "uid": f"c{i['txn_id']}:{i.get('installment')}", "txn_id": i.get("txn_id"),
+                   "entry_id": None, "description": i["description"], "amount": _round(i["amount"]),
                    "installment": i.get("installment")} for i in inst_items]
-                 + [{"type": "abonelik", "description": x["description"], "amount": _round(x["amount"])}
-                    for x in p["subscriptions"]])
+                 + [{"type": "abonelik", "uid": f"c{x['txn_id']}:abonelik", "txn_id": x.get("txn_id"), "entry_id": None,
+                     "description": x["description"], "amount": _round(x["amount"])} for x in p["subscriptions"]])
         out[acc] = {"account": acc, "bank": p["bank"], "start": start.isoformat(), "cut": cut.isoformat(),
                     "due": due.isoformat() if due else None, "days_left": max(0, (cut - today).days),
                     "days_total": max(1, (cut - start).days), "installments": _round(inst), "subscriptions": _round(subs),
@@ -676,8 +679,8 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         amt = e["amount"] / max(1, int(e.get("installments") or 1))  # taksitliyse bu ekstreye ilk taksit düşer
         c["spent"] += amt
         c["entries"] += 1
-        c["items"].append({"type": "harcama", "description": e["description"], "amount": _round(amt), "date": e["entry_date"],
-                           "entry_id": e["id"], "unassigned": not acc})
+        c["items"].append({"type": "harcama", "uid": f"m{e['id']}", "txn_id": None, "description": e["description"],
+                           "amount": _round(amt), "date": e["entry_date"], "entry_id": e["id"], "unassigned": not acc})
         if not acc:
             c["unassigned"] += amt
     for c in out.values():

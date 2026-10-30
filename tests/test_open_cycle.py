@@ -31,6 +31,12 @@ def test_open_cycle_counts_receipts_since_last_cut(client, upload):
     # bugüne kadar kalemlerle açıklanır: taksitler + abonelikler + girilen harcamalar = so_far
     assert round(sum(i["amount"] for i in c["items"]), 2) == c["so_far"]
     assert sum(1 for i in c["items"] if i["type"] == "harcama") == 2
+    # her satırın kalıcı uid'i: dokununca düzenleme (harcama → kayıt m<id>, taksit/abonelik → kart işlemi c<id>)
+    uids = [i["uid"] for i in c["items"]]
+    assert len(set(uids)) == len(uids) and all(u for u in uids)
+    assert all(i["uid"] == f"m{i['entry_id']}" for i in c["items"] if i["type"] == "harcama")
+    assert all(i["uid"].startswith(f"c{i['txn_id']}:") for i in c["items"] if i["type"] != "harcama")
+    assert finance.open_cycles(TODAY)[acc]["items"] == c["items"]  # tekrar hesapta aynı
     pace = c["variable_avg"] * c["days_left"] / c["days_total"]
     assert c["at_cut"] == round(c["installments"] + c["subscriptions"] + max(c["variable_avg"], 900 + pace), 2)
     # ödenecekler ve net durum aynı rakamı kullanır
