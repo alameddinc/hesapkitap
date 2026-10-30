@@ -24,7 +24,7 @@ import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } fro
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import { addMonths, cx, monthLabel, tl, tlCompact } from "../format";
-import { useUI, type Route } from "../ui";
+import { useUI } from "../ui";
 
 /** Dönemin tarih aralığı (ay dönümü günü 1 değilse önceki ayın o gününden başlar). */
 function periodBounds(month: string, startDay: number): [string, string] {
@@ -207,10 +207,9 @@ export default function Dashboard() {
       case "uyarilar": return (
         <section>
           <h2 className="mb-2 font-display text-lg font-semibold tracking-tight">Dikkat etmen gerekenler</h2>
-          <Insights items={allInsights ? s.insights : s.insights.slice(0, 3)} onClick={(i) => {
-            if (i.link) return ui.go(i.link as Route);
+          <Insights items={allInsights ? s.insights : s.insights.slice(0, 3)} active={insightFilter} onFilter={(i) => {
             setSel(null);
-            setInsightFilter(insightFilter === i ? null : i);
+            setInsightFilter(insightFilter?.title === i.title ? null : i);
           }} />
           {s.insights.length > 3 && (
             <button className="mt-2 flex w-full items-center justify-center gap-1 rounded-xl py-2 text-sm text-stone-600 active:bg-stone-100 dark:text-stone-400 dark:active:bg-stone-800"

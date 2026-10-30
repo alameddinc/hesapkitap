@@ -143,6 +143,8 @@ export interface Insight {
   detail: string;
   filter?: { kind?: Kind; category?: string; fx?: boolean; pending?: boolean; awaiting?: boolean };
   link?: string;
+  /** gecikmiş / kısmi ödenmiş kalem: "Ödedim" düğmesi bu ödemeyi açar (/api/payables içinde type + id) */
+  pay?: { type: "statement" | "bill" | "debt"; id: number };
 }
 
 export interface Statement {
@@ -459,7 +461,8 @@ export const api = {
   setBudget: (category: string, monthly_limit: number | null) => req("PUT", "/api/budgets", { category, monthly_limit }),
   payStatement: (id: number, amount: number, paid_at: string) => req("POST", `/api/statements/${id}/pay`, { amount, paid_at }),
   unpayStatement: (id: number) => req("DELETE", `/api/statements/${id}/pay`),
-  payDebt: (id: number, amount: number | null, paid_at: string) => req("POST", `/api/debts/${id}/pay`, { amount, paid_at }),
+  payDebt: (id: number, amount: number | null, paid_at: string, account_id?: number | null) =>
+    req("POST", `/api/debts/${id}/pay`, { amount, paid_at, account_id: account_id ?? null }),
   unpayDebt: (id: number) => req("DELETE", `/api/debts/${id}/pay`),
   people: () => req<{ people: { name: string }[] }>("GET", "/api/transfers").then((t) => t.people.map((p) => p.name)),
   parseBill: (file: File | Blob, name: string) => {

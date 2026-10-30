@@ -47,6 +47,12 @@ export function tsDateTR(ts: string) {
   return isNaN(d.getTime()) ? dateTR(ts) : d.toLocaleDateString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+/** Bugünün yerel tarihi (YYYY-AA-GG): toISOString UTC verir, gece yarısından sonra bir gün geride kalır. */
+export function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function addMonths(ym: string, n: number) {
   const [y, m] = ym.split("-").map(Number);
   const t = y * 12 + (m - 1) + n;

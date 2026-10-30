@@ -1,66 +1,94 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type Payable, type Payment } from "../api";
-import { dateTR, parseAmount, tl } from "../format";
+import { dateTR, parseAmount, tl, todayISO } from "../format";
+import AccountSelect from "./AccountSelect";
+import type { Debt } from "./Debts";
 import { useSave } from "./hooks";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 
-const today = () => new Date().toISOString().slice(0, 10);
-
-/** "Ödedim": kart ekstresi veya fatura ödemesini işaretle. */
+/** "Ödedim": kart ekstresi, fatura ya da vadeli borç ödemesini işaretle (tamamı / asgari / kısmi, tarih;
+ *  faturada nasıl ödendiği, borçta hangi hesaptan). Mobil: components/planlama/OdemeSheet.tsx PaySheet. */
 export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: () => void; onSaved?: (m: string) => void }) {
-  // ödenmişi düzenlerken ödenen tutar, kısmi/ödenmemişte toplam borç
-  const [amount, setAmount] = useState(String(p.status === "odendi" ? p.paid_amount ?? p.amount : p.amount));
-  const [date, setDate] = useState(p.paid_at ?? today());
+  const paid = p.status === "odendi";
+  const debt = p.type === "debt";
+  // ekstre/fatura "ödenen tutar"ı yazar (üstüne eklemez); borçta ödeme eklenir → varsayılan kalanın tamamı
+  const left = Math.max(0, p.amount - (p.paid_amount ?? 0));
+  const full = debt ? left : p.amount;
+  const [amount, setAmount] = useState(String(paid ? p.paid_amount ?? p.amount : full));
+  const [date, setDate] = useState((p.paid_at ?? todayISO()).slice(0, 10));
   const [payment, setPayment] = useState<Payment>("havale");
+  // borç: parayı hangi hesaptan ödedin (varsayılan: borcun kayıtlı hesabı)
+  const debts = useQuery({ queryKey: ["debts"], queryFn: () => fetch("/api/debts").then((r) => r.json() as Promise<Debt[]>), enabled: debt });
+  const [acc, setAcc] = useState<number | null | undefined>(undefined);
+  const debtAcc = acc !== undefined ? acc : debts.data?.find((d) => d.id === p.id)?.account_id ?? null;
   const amt = parseAmount(amount);
-  const partial = amt + 0.01 < p.amount;
+  const valid = Number.isFinite(amt) && amt > 0;
+  const partial = valid && amt + 0.01 < full;
+  const tooMuch = valid && debt && amt > left + 0.01;
 
   const save = useSave(async () => {
-    if (!(amt >= 0)) throw new Error("Tutar geçersiz");
+    if (!valid) throw new Error("Ödenen tutarı yaz");
+    if (date > todayISO()) throw new Error("Ödeme tarihi ileri bir gün olamaz");
     if (p.type === "statement") return api.payStatement(p.id!, amt, date);
-    if (p.type === "debt") return api.payDebt(p.id!, amt, date);
+    if (debt) return api.payDebt(p.id!, partial ? amt : null, date, debtAcc);
     return api.payBill(p.id!, amt, date, payment);
-  }, () => { onSaved?.(`${p.title} ödendi olarak işaretlendi`); onClose(); });
+  }, () => { onSaved?.(partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`); onClose(); });
   const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!)
-    : p.type === "debt" ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
+    : debt ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
     () => { onSaved?.("Ödeme geri alındı"); onClose(); });
+  const chip = "btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700";
 
   return (
-    <Modal title="Ödedim" onClose={onClose} footer={
+    <Modal title={paid ? "Ödemeyi düzelt" : "Ödedim"} onClose={onClose} footer={
       <>
-        {p.paid_at && <button className="btn-danger" onClick={() => undo.mutate(undefined)}>Ödemeyi geri al</button>}
+        {(paid || (p.paid_amount ?? 0) > 0) && (
+          <button className="btn-danger" disabled={undo.isPending} onClick={() => undo.mutate(undefined)}>Ödemeyi geri al</button>
+        )}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
-        <button className="btn-primary" disabled={save.isPending} onClick={() => save.mutate(undefined)}>Kaydet</button>
+        <button className="btn-primary" disabled={save.isPending || !valid} onClick={() => save.mutate(undefined)}>
+          {save.isPending ? "Kaydediliyor…" : "Kaydet"}</button>
       </>
     }>
       <div className="space-y-3">
         <div className="rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-800">
-          <div className="flex justify-between gap-2"><b>{p.title}</b><b className="tabular-nums">{tl(p.amount)}</b></div>
-          <div className="mt-1 text-xs text-stone-500">{p.subtitle} · son ödeme {dateTR(p.due_date)}</div>
+          <div className="flex justify-between gap-2"><b>{p.title}</b><b className="shrink-0 tabular-nums">{tl(p.amount)}</b></div>
+          <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">{p.subtitle} · son ödeme {dateTR(p.due_date)}</div>
+          {!paid && (p.paid_amount ?? 0) > 0 && (
+            <div className="mt-1 text-xs text-stone-600 dark:text-stone-300">Ödenen {tl(p.paid_amount!)} · kalan {tl(left)}</div>
+          )}
         </div>
         <div>
-          <label className="label" htmlFor="p-amt">Ödenen tutar (₺)</label>
+          <label className="label" htmlFor="p-amt">{debt ? "Bu ödemenin tutarı (₺)" : "Ödenen tutar (₺)"}</label>
           <input id="p-amt" className="input text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
-          <div className="mt-2 flex gap-2">
-            <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
-              onClick={() => setAmount(String(p.amount))}>Tamamı</button>
+          <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Hazır tutarlar">
+            <button type="button" className={chip} aria-pressed={Math.abs(amt - full) < 0.01} onClick={() => setAmount(String(full))}>
+              {debt ? `Kalanın tamamı (${tl(left)})` : "Tamamı"}</button>
             {p.min_payment != null && p.min_payment < p.amount && (
-              <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+              <button type="button" className={chip} aria-pressed={Math.abs(amt - p.min_payment) < 0.01}
                 onClick={() => setAmount(String(p.min_payment))}>Asgari ({tl(p.min_payment)})</button>
             )}
           </div>
           {partial && p.type === "statement" && (
             <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-              Kalan {tl(p.amount - amt)} bir sonraki ekstreye faiziyle (aylık ~%3,75 + vergiler) devreder.
+              Kısmi ödeme: kalan {tl(p.amount - amt)} bir sonraki ekstreye faiziyle (aylık ~%3,75 + vergiler) devreder.
             </p>
           )}
+          {partial && p.type === "bill" && (
+            <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">Kısmi ödeme: kalan {tl(p.amount - amt)} ödenmemiş görünür.</p>
+          )}
+          {partial && debt && <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">Kısmi ödeme: kalan {tl(left - amt)} açık kalır.</p>}
+          {tooMuch && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Kalan borçtan fazla; kalanın tamamı kapatılır.</p>}
         </div>
         <div>
           <label className="label" htmlFor="p-date">Ödeme tarihi</label>
-          <input id="p-date" type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input id="p-date" type="date" className="input" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} />
         </div>
+        {debt && !paid && (
+          <AccountSelect id="p-acc" label="Hangi hesaptan ödedin" value={debtAcc} onChange={setAcc} />
+        )}
         {p.type === "bill" && (
           <div>
             <span className="label">Nasıl ödendi</span>
@@ -69,7 +97,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
               { value: "kredi_karti", label: "Kredi kartı" },
               { value: "nakit", label: "Nakit" },
             ]} />
-            <p className="mt-1 text-xs text-stone-500">
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
               {payment === "kredi_karti"
                 ? "Gider olarak eklenir; ekstre gelince karttaki işlemle eşleşir, iki kez sayılmaz."
                 : "Bu ayın giderlerine eklenir."}
@@ -77,8 +105,11 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
           </div>
         )}
         {p.type === "statement" && (
-          <p className="text-xs text-stone-500">Kart ekstresi ödemesi gider olarak eklenmez; harcamalar zaten ekstreden sayılıyor.</p>
+          <p className="text-xs text-stone-500 dark:text-stone-400">
+            Kart ekstresi ödemesi gider olarak eklenmez; harcamalar zaten ekstreden sayılıyor.
+          </p>
         )}
+        {save.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
       </div>
     </Modal>
   );
