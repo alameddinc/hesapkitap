@@ -213,3 +213,27 @@ def test_repair_fixes_old_imports_without_documents(tmpdb):
     assert left == {"h-bill": ("Vodafone · Telefon faturası", "Vodafone"), "h-edited": ("Elle yazdığım", None)}
     again = bank_repair.repair(apply=True)
     assert not again["updated"] and not again["to_own_transfer"]  # ikinci çalıştırma bir şey değiştirmez
+
+
+def test_transfers_month_filter_self_and_rename(client, tmpdb):
+    db = tmpdb
+    db.remember_owner_name("ELİ F KAYA")
+    for d, amt, kind, who in (("2026-09-05", 100, "gider", "Selin Ak"), ("2026-10-05", 250, "gider", "Selin Ak"),
+                              ("2026-10-07", 40, "gelir", "Selin ak"), ("2026-10-09", 500, "gelir", "Elif Kaya"),
+                              ("2026-10-10", 70, "gider", "Selin Akdeniz")):
+        db.create_entry({"entry_date": d, "description": who, "amount": amt, "kind": kind, "category": "Diğer",
+                         "counterparty": who})
+    r = client.get("/api/transfers").json()
+    assert "Elif Kaya" not in [p["name"] for p in r["people"]]  # kendisi kişi değil
+    assert [i["amount"] for i in r["self"]] == [500]
+    selin = next(p for p in r["people"] if p["name"] == "Selin Ak")
+    assert selin["months"] == [{"month": "2026-10", "sent": 250, "received": 0, "count": 1},
+                               {"month": "2026-09", "sent": 100, "received": 0, "count": 1}]
+    r = client.get("/api/transfers?month=2026-10").json()
+    assert {p["name"]: p["sent"] for p in r["people"]} == {"Selin Ak": 250, "Selin ak": 0, "Selin Akdeniz": 70}
+    assert client.get("/api/transfers?start=2026-09-01&end=2026-09-30").json()["people"][0]["sent"] == 100
+    assert client.get("/api/transfers?month=10-2026").status_code == 422
+    out = client.patch("/api/transfers/people/Selin ak", json={"name": "Selin Ak"}).json()
+    assert out["merged"] and out["entries"] == 1 and out["descriptions"] == 1
+    people = {p["name"]: p for p in client.get("/api/transfers").json()["people"]}
+    assert people["Selin Ak"]["count"] == 3 and "Selin ak" not in people

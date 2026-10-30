@@ -2108,29 +2108,100 @@ def set_counterparty(name: str, category: str | None = None, track_debt: bool | 
     return 0
 
 
-def transfers_overview() -> dict:
+def rename_counterparty(old: str, new: str) -> dict:
+    """Kişiyi yeniden adlandır ya da başka kişiyle birleştir ('Zeynep Ağlar' → 'Zeynep Çelik'): o kişinin bütün
+    kayıtları (karşı taraf, 'Ad · not' biçimindeki açıklama), borç defteri ve kişi ayarı yeni ada geçer. Hedef zaten
+    varsa birleşir: hedefin kategori/ayarı korunur, boşsa eskininki alınır. Sayıları döner."""
+    old, new = (old or "").strip(), (new or "").strip()
+    if not old or not new:
+        raise ValueError("Ad boş olamaz")
+    if old == new:
+        return {"entries": 0, "debts": 0, "merged": False, "name": new}
+    with connect() as c:
+        merged = c.execute("SELECT 1 FROM entries WHERE counterparty = ? UNION SELECT 1 FROM debts WHERE person = ? "
+                           "UNION SELECT 1 FROM counterparties WHERE name = ?", (new, new, new)).fetchone() is not None
+        n_desc = c.execute("UPDATE entries SET description = ? || substr(description, ?) WHERE counterparty = ? "
+                           "AND (description = ? OR description LIKE ? || ' · %')",
+                           (new, len(old) + 1, old, old, old)).rowcount
+        n = c.execute("UPDATE entries SET counterparty = ? WHERE counterparty = ?", (new, old)).rowcount
+        d = c.execute("UPDATE debts SET person = ? WHERE person = ?", (new, old)).rowcount
+        src = c.execute("SELECT * FROM counterparties WHERE name = ?", (old,)).fetchone()
+        dst = c.execute("SELECT * FROM counterparties WHERE name = ?", (new,)).fetchone()
+        if src:
+            if dst:
+                c.execute("UPDATE counterparties SET category = COALESCE(category, ?), track_debt = MAX(track_debt, ?), "
+                          "note = COALESCE(note, ?) WHERE name = ?", (src["category"], src["track_debt"], src["note"], new))
+                c.execute("DELETE FROM counterparties WHERE name = ?", (old,))
+            else:
+                c.execute("UPDATE counterparties SET name = ? WHERE name = ?", (new, old))
+    return {"entries": n, "descriptions": n_desc, "debts": d, "merged": merged, "name": new}
+
+
+def _own_name_keys() -> set[str]:
+    """Kullanıcının kendi adı (hesap dökümlerinin sahibi) — boşluksuz, Türkçe harfsiz: 'AY ŞE YILMAZ' = 'Ayşe Yılmaz'. Kart sahipleri katılmaz: ek kart sahibi (eş, çocuk) Transferler'de kişi olarak kalır."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    return {k for k in (_re.sub(r"[^A-Z]", "", normalize(o)) for o in owner_names() if o) if len(k) >= 6}
+
+
+def transfers_overview(month: str | None = None, start: str | None = None, end: str | None = None) -> dict:
+    """Kişi kişi transferler. month='2026-10' ya da start/end (dahil) verilirse kişi toplamları ve items o aralıkta;
+    her kişinin ve genelin aylık kırılımı (months) her zaman tüm zaman için. Kullanıcının kendi adıyla kayıtlı
+    hareketler kişi değildir: self'te döner (kendi hesapları arası aktarım adayı; Hesaplar'da eşleşir)."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    if month:
+        start, end = f"{month}-01", f"{month}-31"
+    where, args = "e.counterparty IS NOT NULL", []
+    if start:
+        where, args = where + " AND e.entry_date >= ?", [*args, start]
+    if end:
+        where, args = where + " AND e.entry_date <= ?", [*args, end]
+    own_keys = _own_name_keys()
+    is_self = lambda n: _re.sub(r"[^A-Z]", "", normalize(n or "")) in own_keys  # noqa: E731
     with connect() as c:
         people = rows(c.execute(
-            """SELECT e.counterparty AS name,
+            f"""SELECT e.counterparty AS name,
                       ROUND(SUM(CASE WHEN e.kind = 'gider' THEN e.amount ELSE 0 END), 2) AS sent,
                       ROUND(SUM(CASE WHEN e.kind = 'gelir' THEN e.amount ELSE 0 END), 2) AS received,
                       COUNT(*) AS count, MAX(e.entry_date) AS last_date,
                       cp.category AS category, COALESCE(cp.track_debt, 0) AS track_debt
                FROM entries e LEFT JOIN counterparties cp ON cp.name = e.counterparty
-               WHERE e.counterparty IS NOT NULL GROUP BY e.counterparty ORDER BY sent + received DESC"""))
+               WHERE {where} GROUP BY e.counterparty ORDER BY sent + received DESC""", args))
         own = rows(c.execute("SELECT * FROM own_transfers ORDER BY transfer_date DESC"))
         items = rows(c.execute(
-            "SELECT id, entry_date, description, amount, kind, category, counterparty, note FROM entries "
-            "WHERE counterparty IS NOT NULL ORDER BY entry_date DESC"))
+            "SELECT id, entry_date, description, amount, kind, category, counterparty, note, account_id FROM entries e "
+            f"WHERE {where} ORDER BY entry_date DESC", args))
+        monthly = rows(c.execute(
+            "SELECT counterparty AS name, substr(entry_date, 1, 7) AS month, "
+            "ROUND(SUM(CASE WHEN kind = 'gider' THEN amount ELSE 0 END), 2) AS sent, "
+            "ROUND(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE 0 END), 2) AS received, COUNT(*) AS count "
+            "FROM entries WHERE counterparty IS NOT NULL GROUP BY 1, 2 ORDER BY 2 DESC"))
+    self_items = [i for i in items if is_self(i["counterparty"])]
+    people = [p for p in people if not is_self(p["name"])]
+    items = [i for i in items if not is_self(i["counterparty"])]
     debts = list_debts()
     by_name = {p["name"]: p for p in people}
     for p in people:
         p["net"] = round(p["received"] - p["sent"], 2)  # + ise sana gelen fazla
     for d in debts:
-        if d["person"] not in by_name:  # sadece defterde olan kişi (ör. nakit/altın borcu)
+        if d["person"] not in by_name and not month and not start and not end:
+            # sadece defterde olan kişi (ör. nakit/altın borcu)
             by_name[d["person"]] = {"name": d["person"], "sent": 0.0, "received": 0.0, "net": 0.0, "count": 0,
                                     "last_date": d["debt_date"], "category": None, "track_debt": 1}
             people.append(by_name[d["person"]])
+    per: dict[str, list] = {}
+    totals: dict[str, dict] = {}
+    for m in monthly:
+        if is_self(m["name"]):
+            continue
+        per.setdefault(m["name"], []).append({k: m[k] for k in ("month", "sent", "received", "count")})
+        t = totals.setdefault(m["month"], {"month": m["month"], "sent": 0.0, "received": 0.0, "count": 0})
+        t["sent"], t["received"], t["count"] = round(t["sent"] + m["sent"], 2), round(t["received"] + m["received"], 2), t["count"] + m["count"]
     for p in people:
         # açık borç/alacak birim birim: {"TRY": -200, "CEYREK_ALTIN": 2} (+ alacak, − borç)
         bal: dict[str, float] = {}
@@ -2138,7 +2209,10 @@ def transfers_overview() -> dict:
             if d["person"] == p["name"] and not d["settled_at"]:
                 bal[d["asset"]] = round(bal.get(d["asset"], 0) + (d["remaining"] if d["direction"] == "alacak" else -d["remaining"]), 4)
         p["open"] = {k: v for k, v in bal.items() if v}
-    return {"people": people, "own": own, "items": items, "debts": debts}
+        p["months"] = per.get(p["name"], [])
+    return {"people": people, "own": own, "items": items, "debts": debts, "self": self_items,
+            "months": sorted(totals.values(), key=lambda t: t["month"], reverse=True),
+            "range": {"month": month, "start": start, "end": end}}
 
 
 def interest_charges(period: str) -> list[dict]:
