@@ -137,6 +137,13 @@ def test_estimate_quantity_is_conservative(client, tmpdb, monkeypatch):
     assert item["estimated"] == 1
 
 
+def _last_payment_id(client, pid):
+    from app import zakat
+
+    p = next(x for x in zakat.people() if x["id"] == pid)
+    return max(x["id"] for x in p["payments"])
+
+
 def test_history_missed_years(client, tmpdb, monkeypatch):
     from app import zakat
 
@@ -152,14 +159,23 @@ def test_history_missed_years(client, tmpdb, monkeypatch):
     assert oldest["above_nisab"] and oldest["zakat"] == round(oldest["total"] * 0.025, 2) and oldest["partial"]
     # Hanefî: ödenmeyen zekât sonraki yılın tabanından düşülür
     assert h["years"][1]["deduct"] == oldest["remaining"]
-    # geçmiş yılın ödemesi o yıla yazılır
+    # geçmiş yılın ödemesi o yıla yazılır. BUGÜN (geriye dönük) ödenen eski yıl, sonraki yıl bittiğinde hâlâ
+    # borçtu: sonraki yılların düşümü ve zekâtı DEĞİŞMEZ (eskiden değişiyordu: her ödemede yeni küçük "kalan" çıkıyordu)
     client.post(f"/api/zakat/people/{me}/payments", json={"amount": oldest["zakat"], "year_start": oldest["start"]})
     h2 = client.get(f"/api/zakat/people/{me}/history").json()
-    assert h2["years"][-1]["remaining"] == 0 and h2["years"][1]["deduct"] == 0
-    assert h2["total_due"] < h["total_due"]
+    assert h2["years"][-1]["remaining"] == 0
+    assert h2["years"][1]["deduct"] == h["years"][1]["deduct"] and h2["years"][1]["zakat"] == h["years"][1]["zakat"]
+    assert h2["years"][0]["zakat"] == h["years"][0]["zakat"]
+    assert h2["total_due"] == round(h["total_due"] - oldest["zakat"], 2)
+    # zamanında (sonraki yıl bitmeden) ödenmiş olsaydı: o tarihte borç yoktu, düşüm olmaz
+    client.delete(f"/api/zakat/payments/{_last_payment_id(client, me)}")
+    client.post(f"/api/zakat/people/{me}/payments",
+                json={"amount": oldest["zakat"], "year_start": oldest["start"], "pay_date": oldest["end"]})
+    h3 = client.get(f"/api/zakat/people/{me}/history").json()
+    assert h3["years"][1]["deduct"] == 0 and h3["years"][1]["zakat"] > h["years"][1]["zakat"]
     # Net durum'da borç (sadece önbellekteki fiyatlarla; burada sahte fiyat önbellek yerine geçiyor)
     nw = client.get("/api/net-worth").json()
-    assert nw["zakat_due"] == h2["total_due"] and nw["net"] == round(nw["holdings"] - h2["total_due"], 2)
+    assert nw["zakat_due"] == h3["total_due"] and nw["net"] == round(nw["holdings"] - h3["total_due"], 2)
 
 
 def test_bank_balance_at_past_date(client, tmpdb):

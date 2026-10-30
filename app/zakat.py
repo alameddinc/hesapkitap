@@ -601,7 +601,19 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
     while end > earliest and len(ends) < max_years:
         ends.append(end)
         end -= timedelta(days=LUNAR_YEAR_DAYS)
-    years, carry = [], 0.0
+    years = []
+    prior: list[tuple[str, float]] = []  # (yıl başı, o yılın zekâtı) — eskiden yeniye
+
+    def unpaid_at(day: date) -> float:
+        """Hanefî: önceki yılların o GÜN ödenmemiş zekâtı borçtur ve tabandan düşülür. Ödemenin YAPILDIĞI tarih
+        esas: bugün geriye dönük ödenen eski yıl, o gün borçtu — sonraki yılların zekâtını değiştirmez."""
+        d = day.isoformat()
+        total = 0.0
+        for ys, due_ in prior:
+            paid_then = sum(x["amount"] for x in p["payments"] if x["year_start"] == ys and (x.get("pay_date") or "") <= d)
+            total += max(0.0, due_ - paid_then)
+        return round(total, 2)
+
     for end in reversed(ends):  # eskiden yeniye: ödenmeyen zekât sonraki yılın tabanından düşülür (Hanefî)
         start = end - timedelta(days=LUNAR_YEAR_DAYS)
         try:
@@ -626,7 +638,7 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
             deduct += extra_deduct
             return round(max(0.0, items + bank - deduct), 2), items, bank, deduct, unknown
 
-        total, items, bank, deduct, unknown = wealth(end, px, carry if st["madhhab"] == "hanefi" else 0.0)
+        total, items, bank, deduct, unknown = wealth(end, px, unpaid_at(end) if st["madhhab"] == "hanefi" else 0.0)
         nisab = round(NISAB_GRAMS * px["GRA"], 2)
         # Hanefî: nisap yılın BAŞINDA da olmalı (başta yoksa yıl o gün başlamamıştır)
         start_ok = True
@@ -639,7 +651,7 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
         due = round(total * RATE, 2) if total >= nisab and start_ok else 0.0
         paid = round(sum(x["amount"] for x in p["payments"] if x["year_start"] == start.isoformat()), 2)
         left = round(max(0.0, due - paid), 2)
-        carry = left
+        prior.append((start.isoformat(), due))
         years.append({"start": start.isoformat(), "end": end.isoformat(), "end_hijri": to_hijri(end),
                       "assets": round(items, 2), "bank": bank, "deduct": deduct, "total": total, "nisab": nisab,
                       "gram_price": px["GRA"], "above_nisab": total >= nisab and start_ok, "start_below": not start_ok,
