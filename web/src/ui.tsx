@@ -16,7 +16,9 @@ export interface EntryDraft {
   card_last4?: string | null; // fişte yazan kart numarasının son 4 hanesi
   legal_name?: string | null; // fişteki resmi unvan (ekstrede bu ad geçer)
   receipt_file?: string | null; // saklanan fiş fotoğrafı (okuma yanıtından; sunucu doğrular)
-  items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[]; // fiş satırları
+  items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null; unit_price?: number | null }[]; // fiş satırları
+  photo_url?: string | null; // önizleme: okunan fotoğrafın yerel adresi (object URL)
+  reread_used?: boolean; // sunucu fişi ikinci kez, güçlü modelle okudu ve onu kullandı
   location?: string | null; // fişteki işyeri adresi
   branch?: string | null; // fişteki şube/semt
   wallet_hint?: string | null; // fişte yazan yemek kartı markası (Multinet…)

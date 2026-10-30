@@ -1,3 +1,5 @@
+import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
+
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
 
 export interface Row {
@@ -37,6 +39,8 @@ export interface Row {
   split_total?: number; // ana satırdan ayrılan toplam
   original_amount?: number;
   location?: string | null; // fişteki adres
+  receipt_file?: string | null; // saklı fiş fotoğrafı (GET /api/entries/{id}/receipt)
+  bank_doc_id?: number | null; // hesap dökümünden geldi
   wallet_id?: number | null; // ön ödemeli kart
   account_id?: number | null; // banka/nakit hesabı
   debt_id?: number | null;
@@ -518,6 +522,12 @@ export const api = {
   deleteMatchRule: (id: number) => req("DELETE", `/api/match-rules/${id}`),
   mergeAccount: (id: number, into: number) => req<AccountMergeResult>("POST", `/api/accounts/${id}/merge`, { into }),
   separateAccount: (id: number, other: number) => req<{ ok: boolean }>("POST", `/api/accounts/${id}/separate`, { other }),
+  // fiş kalemleri (app/receipt_check.py): kayıtlı giderin kalemleri, yeniden okuma (kaydedilmez)
+  receiptItems: (id: number) => req<{ entry_id: number; items: ReceiptItem[]; check: ReceiptCheck }>("GET", `/api/entries/${id}/receipt-items`),
+  saveReceiptItems: (id: number, items: ReceiptItem[]) =>
+    req<{ saved: number; entry_id: number; items: ReceiptItem[]; check: ReceiptCheck }>("PUT", `/api/entries/${id}/receipt-items`, { items: toServer(items) }),
+  rereadEntryReceipt: (id: number) => req<Reread>("POST", `/api/entries/${id}/receipt-reread`),
+  rereadReceipt: (receipt_file: string, total?: number | null) => req<Reread>("POST", "/api/receipts/reread", { receipt_file, total: total ?? null }),
   testRule: (pattern: string, text: string) =>
     req<{ normalized: string; match: boolean }>("GET", `/api/rules/test${q({ pattern, text })}`),
 };

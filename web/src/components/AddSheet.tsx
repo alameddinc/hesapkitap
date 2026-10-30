@@ -25,7 +25,8 @@ export interface DocResult {
   total?: number | null;
   payment?: string;
   category?: string;
-  items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null }[];
+  items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null; unit_price?: number | null }[];
+  reread?: { tried: boolean; used: boolean; model?: string };
   address?: string | null;
   branch?: string | null;
   payment_card?: string | null;
@@ -44,7 +45,7 @@ export interface DocResult {
 }
 
 /** Okunan fişi forma taslak olarak çevir (AddSheet ve telefondan paylaşılanlar). */
-export function docToDraft(r: DocResult): EntryDraft {
+export function docToDraft(r: DocResult, photo?: Blob | null): EntryDraft {
   const items = (r.items ?? []).filter((i) => i.name).slice(0, 6)
         .map((i) => ((i.qty ?? 1) > 1 ? `${i.qty}× ${i.name}` : i.name)).join(", ");
   return {
@@ -61,6 +62,8 @@ export function docToDraft(r: DocResult): EntryDraft {
         legal_name: r.legal_name,
         receipt_file: r.receipt_file ?? null,
         items: r.items,
+        photo_url: photo?.type.startsWith("image/") ? URL.createObjectURL(photo) : null,
+        reread_used: !!r.reread?.used,
         location: r.address ?? null,
         branch: r.branch ?? null,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
@@ -111,7 +114,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
       const fd = new FormData();
       parts.slice(0, 4).forEach((p) => fd.append("file", p.blob, p.name));
       const res = await fetch("/api/documents/parse", { method: "POST", body: fd });
-      await handle(res);
+      await handle(res, parts[0]?.blob);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -135,7 +138,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   }
 
   /** Okunan belge: faturaysa fatura formu, fişse gider formu (taslakla). */
-  async function handle(res: Response) {
+  async function handle(res: Response, photo?: Blob) {
     const r = (await res.json()) as DocResult & { detail?: string };
     if (isQuotaFull(r)) {
       setFull(r);
@@ -147,7 +150,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
         description: r.description, file_name: r.file_name, confidence: r.confidence });
       return;
     }
-    onPick(docToDraft(r));
+    onPick(docToDraft(r, photo));
   }
 
   /** Kamera: her fotoğraf parçalara eklenir; "Bitti, oku" ile hepsi birlikte okunur. */

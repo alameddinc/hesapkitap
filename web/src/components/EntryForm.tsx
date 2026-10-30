@@ -15,6 +15,9 @@ import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 import { MatchPanel } from "./MatchInfo";
+import ReceiptItems, { checkSentence } from "./receipt/ReceiptItems";
+import SavedReceiptItems from "./receipt/SavedReceiptItems";
+import { checkItems, toServer, type ReceiptItem } from "./receipt/check";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const splitsOf = (r: unknown) =>
@@ -78,12 +81,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [wholeCat, setWholeCat] = useState<string | null>(null);
   // ortak harcama: başkalarının payı (kaydederken o kişilere alacak açılır)
   const [shares, setShares] = useState<{ person: string; amount: string }[]>([]);
-  const receiptMismatch = (() => {
-    const its = draft?.items ?? [];
-    if (!its.length || !draft?.amount || its.some((i) => i.amount == null)) return null;
-    const sum = its.reduce((a, i) => a + (i.amount ?? 0), 0);
-    return Math.abs(sum - draft.amount) > Math.max(1, draft.amount * 0.02) ? sum : null;
-  })();
+  // fiş kalemleri (önizleme): kullanıcı düzeltir (kaydır, birleştir, sil, ekle); kayıtla birlikte gider
+  const [items, setItems] = useState<ReceiptItem[]>(() => (draft?.items ?? []) as ReceiptItem[]);
+  const fromReceipt = !editingEntry && !rec && (!!draft?.items?.length || !!draft?.receipt_file);
+  const itemsCheck = fromReceipt && items.length ? checkItems(items, parseAmount(amount) || null) : null;
   useEffect(() => {
     if (!draft?.items?.length || draft.kind === "gelir") return;
     fetch("/api/splits/propose", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -133,7 +134,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
       ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
     return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
       receipt_file: kind === "gider" ? draft?.receipt_file ?? null : null,
-      items: kind === "gider" ? draft?.items ?? null : null,
+      items: kind === "gider" && fromReceipt ? toServer(items) : null,
       branch: draft?.branch ?? null,
       splits: kind === "gider" && (parts?.length || shares.length) ? [
         ...(parts ?? []).filter((p) => parseAmount(p.amount) > 0 && p.category)
@@ -362,11 +363,19 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <label className="label" htmlFor="e-note">Not</label>
           <input id="e-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
-        {!editingEntry && kind === "gider" && receiptMismatch && (
+        {fromReceipt && kind === "gider" && (
+          <ReceiptItems items={items} total={parseAmount(amount) || null} onChange={setItems} photo={draft?.photo_url}
+            onReread={draft?.receipt_file ? () => api.rereadReceipt(draft.receipt_file!, parseAmount(amount) || null) : undefined}
+            note={draft?.reread_used ? "Kalemler fişi tutmadığı için fiş ikinci kez, daha dikkatli okundu." : null} />
+        )}
+        {itemsCheck && !itemsCheck.ok && kind === "gider" && (
           <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-            Fişten okunan satırların toplamı ({tl(receiptMismatch)}) fiş toplamıyla tutmuyor; bazı satırlar eksik ya da iki kez
-            sayılmış olabilir. Uzun fişse parçalarını birlikte okut.
+            {checkSentence(itemsCheck)}. Kalemleri düzeltmeden de kaydedebilirsin; tutar formdaki değerdir, kalemler fiyat takibine gider.
           </p>
+        )}
+        {editingEntry && kind === "gider" && (
+          <SavedReceiptItems entryId={editingEntry.id} total={editingEntry.original_amount ?? editingEntry.amount}
+            receiptFile={editingEntry.receipt_file} readOnly={viewer} onToast={onSaved} />
         )}
         {!editingEntry && kind === "gider" && wholeCat && !parts?.length && (
           <p className="rounded-lg bg-violet-50 p-2 text-xs text-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
