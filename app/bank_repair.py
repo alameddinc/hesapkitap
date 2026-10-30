@@ -26,7 +26,9 @@ _EXTRA = re.compile(r"(Telefon|Abone no|Sözleşme no|Tesisat no|Mukavele no|Fat
 
 
 def _owners() -> list[str]:
-    return [o for o in db.card_holders() + db.owner_names() if o]
+    """Kendisi = hesap dökümlerinin sahibi (içe aktarmadaki gibi). Kart sahipleri yalnız döküm sahibi hiç bilinmiyorsa:
+    ek kart sahibi (eş) kişi olarak kalmalı — yoksa 'Zeynep Çelik'e giden havale kişisiz kalır."""
+    return [o for o in db.owner_names() if o] or [o for o in db.card_holders() if o]
 
 
 def _raw_of(e: dict) -> str | None:
@@ -92,7 +94,7 @@ def _document_rows(owners: list[str], report: dict) -> dict[str, dict]:
         if res.get("owner_name") and res["owner_name"] not in owners:
             owners.append(res["owner_name"])
             report["owner_names"].append(res["owner_name"])
-        for r in bank_import.finalize(res["rows"], owners):
+        for r in bank_import.finalize(res["rows"], [res["owner_name"]] if res.get("owner_name") else owners):
             out[r["hash"]] = {**r, "bank": res.get("bank") or full.get("bank") or "", "account_id": full.get("account_id")}
         report["docs_read"].append(d["filename"])
     return out
@@ -105,7 +107,15 @@ def repair(apply: bool = False) -> dict:
     owners = _owners()
     report = {"docs_read": [], "docs_unread": [], "docs_missing": [], "owner_names": [], "updated": [],
               "to_own_transfer": [], "cancelled": [], "skipped_edited": 0, "skipped_linked": 0, "paired": [], "missing": [], "restored": []}
+    report["warnings"] = []
     by_hash = _document_rows(owners, report)
+    if report["owner_names"] and not db.owner_names():  # dökümden öğrenilen sahip: kart sahipleri kişi kalsın
+        owners[:] = [o for o in owners if o in report["owner_names"]]
+
+    def keep_message(e_id, raw, signed, new_desc):
+        msg = bank_import.transfer_note(raw, owners)
+        if msg and bank_import._squash(msg) not in bank_import._squash(new_desc):
+            report["warnings"].append(f"#{e_id}: gönderenin mesajı '{msg}' yeni açıklamada yok → {new_desc!r}")
     with db.connect() as c:
         accounts = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM accounts")}
         entries = [dict(r) for r in c.execute(
@@ -127,11 +137,13 @@ def repair(apply: bool = False) -> dict:
                 continue
             brief = {"id": e["id"], "date": e["entry_date"], "amount": signed, "was": e["description"]}
             if typ == "virman":
-                report["to_own_transfer"].append(brief)
+                label = bank_import.own_label(raw, signed, accounts.get(e["account_id"], ""), owners)
+                keep_message(e["id"], raw, signed, label)
+                report["to_own_transfer"].append({**brief, "now": label,
+                                                  "why": bank_import.classify_reason(raw, signed, owners)[1]})
                 if apply:
-                    c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash) "
-                              "VALUES (?, ?, ?, ?, ?)", (e["entry_date"], signed, accounts.get(e["account_id"], ""),
-                                                         raw[:500], e["import_hash"]))
+                    db.add_own_transfer(c, e["entry_date"], signed, accounts.get(e["account_id"], ""), raw,
+                                        e["import_hash"], owners)
                     c.execute("DELETE FROM entries WHERE id = ?", (e["id"],))
                 continue
             if typ == "iptal":
@@ -151,6 +163,7 @@ def repair(apply: bool = False) -> dict:
             changed = {k: v for k, v in new.items() if (e.get(k) or None) != (v or None)}
             if not changed:
                 continue
+            keep_message(e["id"], raw, signed, desc)
             report["updated"].append({**brief, "now": desc, "counterparty": who, "fields": sorted(changed)})
             if apply:
                 c.execute(f"UPDATE entries SET {', '.join(f'{k} = ?' for k in changed)} WHERE id = ?",
@@ -163,13 +176,22 @@ def repair(apply: bool = False) -> dict:
         # eski eşleme hatası: başka hesaptan aynı tutarda ÇIKIŞ karşılık sanılıp gerçek gider virmana taşınmış olabilir
         # (Halkbank → VakıfBank 35.000, aynı gün VakıfBank'tan kiraya 35.000): geri alınır, gider olarak eklenir
         wrong = []
-        for o in [dict(x) for x in c.execute("SELECT * FROM own_transfers WHERE amount < 0 AND import_hash IS NOT NULL")]:
+        # ya da eski kural ('kendi adı açıklamada iki kez') üçüncü kişiye ödemeyi / kurumdan geleni virman saymış olabilir
+        for o in [dict(x) for x in c.execute("SELECT * FROM own_transfers WHERE import_hash IS NOT NULL")]:
             r = by_hash.get(o["import_hash"])
-            if r and r["type"] == "gider" and not db._pairs_own_transfer(-r["amount"], r["date"], r["description"], owners,
-                                                                           o["account"] or ""):
+            if r and (r["type"] == "gelir" or (r["type"] == "gider" and not db._pairs_own_transfer(
+                    -r["amount"], r["date"], r["description"], owners, o["account"] or ""))):
                 wrong.append(r)
                 if apply:
                     c.execute("DELETE FROM own_transfers WHERE id = ?", (o["id"],))
+            elif not o.get("raw"):  # eski kayıt: açıklama ham banka metni → temiz etiket, ham metin raw'a
+                raw = r["description"] if r else o["description"] or ""
+                label = bank_import.own_label(raw, o["amount"], o["account"], owners)
+                keep_message(f"virman {o['id']}", raw, o["amount"], label)
+                report.setdefault("relabelled", []).append({"id": o["id"], "date": o["transfer_date"],
+                                                            "amount": o["amount"], "was": o["description"], "now": label})
+                if apply:
+                    c.execute("UPDATE own_transfers SET description = ?, raw = ? WHERE id = ?", (label[:500], raw[:500], o["id"]))
         report["restored"] = [{"id": None, "date": r["date"], "amount": r["amount"], "was": r["description"]} for r in wrong]
         known -= {r["hash"] for r in wrong}
         report["missing"] = [{"id": None, "date": r["date"], "amount": r["amount"], "was": r["description"]}
@@ -207,10 +229,19 @@ def _print(rep: dict, apply: bool) -> None:
         rows = rep[key]
         print(f"\n{title}: {len(rows)} kayıt, toplam {sum(r['amount'] for r in rows):,.2f}")
         for r in rows:
-            print(f"  #{r['id'] or '-'} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:70]}")
+            extra = f" → {r['now']!r}" if r.get("now") else ""
+            why = f"  [{r['why']}]" if r.get("why") else ""
+            print(f"  #{r['id'] or '-'} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:60]}{extra}{why}")
     print(f"\naçıklama/kişi düzeltilen: {len(rep['updated'])}")
     for r in rep["updated"]:
         print(f"  #{r['id']} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:45]!r} → {r['now']!r} {r['fields']}")
+    rel = rep.get("relabelled", [])
+    print(f"\nvirman açıklaması temizlenen: {len(rel)}")
+    for r in rel:
+        print(f"  virman #{r['id']} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:45]!r} → {r['now']!r}")
+    print(f"\nUYARI (gönderenin mesajı kayboluyor): {len(rep['warnings'])}")
+    for w in rep["warnings"]:
+        print("  " + w)
     print(f"\ndokunulmayan: elle değiştirilmiş {rep['skipped_edited']}, bağlantılı {rep['skipped_linked']}")
 
 

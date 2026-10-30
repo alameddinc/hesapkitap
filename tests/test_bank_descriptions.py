@@ -262,3 +262,66 @@ def test_bills_summary(client, tmpdb):
     cats = {c["name"]: c for c in r["categories"]}
     assert cats["Doğalgaz"]["total"] == 3834 and cats["Telefon"]["total"] == 600
     assert client.get("/api/bills/summary?until=10-2026").status_code == 422
+
+
+# ---------------------------------------------------------------- kuru çalıştırma bulguları (2026-10-30)
+
+def test_own_name_only_in_message_is_not_self_transfer(tmpdb):
+    """Kendi adı yalnız gönderenin mesajında: üçüncü kişiye ödeme, virman değil; mesaj açıklamada kalır."""
+    raw = ("FAST Anlık Ödeme Elif Kaya kurs ücreti (10/03/2025 tarihli 1000000005 sorgu no'lu ELİF KAYA "
+           "hesabından Akbank T.A.Ş. Murat Demir hesabına giden FAST ödemesi)")
+    assert bank_import.classify(raw, -1350, [OWNER]) == "gider"
+    assert bank_import.describe(raw, -1350, [OWNER])["description"] == "Murat Demir · Elif Kaya kurs ücreti"
+    rows = bank_import.finalize([{"date": "10.03.2025", "description": raw, "amount": -1350.0, "balance": 100.0}], [OWNER])
+    tmpdb.import_bank_rows(rows, account="VakıfBank", owners=[OWNER])
+    assert _gider(tmpdb) == 1350
+
+
+def test_institution_money_is_income_not_virman():
+    raw = "Gelen EFT HAYAT EMEKLILIK A.S. tarafından ELIF KAYA hesabına BES birikim KATILMA HESABI iade"
+    assert bank_import.classify_reason(raw, 70000.00, [OWNER]) == ("gelir", "kurum/şirket")
+    g = ("Gelen EFT Otomatik Yatan AB000XY0ZZ/CITIBANK A.Ş.-0092-90001-128198 sorgu numaralı GOOGLE PAYMENT CORP. "
+         "tarafından ELIF KAYA tarafına gelen EFT")
+    assert bank_import.classify(g, 45.15, [OWNER]) == "gelir"
+    assert bank_import.describe(g, 45.15, [OWNER])["description"] == "Google Payment"
+
+
+def test_branch_cash_withdrawal_is_not_virman():
+    raw = ("Mevduat Para Çek 445000000001 ELİF KAYA ne ait TR12 0001 5001 5800 0000 0000 01 nolu mevduat hesabından "
+           "çekilen. Adına işlem Yapan: ELİF KAYA")
+    assert bank_import.classify(raw, -30000, [OWNER]) == "gider"
+    assert bank_import.describe(raw, -30000, [OWNER])["description"] == "Para çekme · şube"
+    hb = "2026-02-15/6587850104650839/011145 23/PN 023869/ORTAK PR ÇKM DZ/ORTAK NOKTA BNK"
+    assert bank_import.describe(hb, -500, [OWNER]) == {**bank_import.describe(hb, -500, [OWNER]),
+                                                       "description": "ATM para çekme · ortak nokta", "payment": "nakit"}
+
+
+def test_messages_survive_and_ibans_stay_out():
+    vb = ("FAST Anlık Ödeme (01/09/2026 tarihli 1000000006 sorgu no'lu ELİF KAYA hesabından Türkiye Halk Bankası A.Ş. "
+          "Mert Kaya hesabına giden FAST ödemesi)")
+    assert bank_import.describe(vb, -10000, [OWNER])["description"] == "Mert Kaya"  # '(01' değil
+    hb = "Harçlık,ELIF KAYA,TR430001200000000000000001,MERT KAYA,TR55******************0000"
+    d = bank_import.describe(hb, -40000, [OWNER])
+    assert d["description"] == "Mert Kaya · Harçlık" and "TR43" not in d["description"] and hb in d["note"]
+    hb2 = "Elif Kaya,Hale Yildiz,Türkiye Is Bankasi A.S.,TR14000640000000000000001"
+    assert bank_import.describe(hb2, -3000, [OWNER])["description"] == "Hale Yildiz"  # mesaj kendi adı: atlanır
+
+
+def test_own_transfer_label_keeps_message():
+    out = ("HAVALE - ELIF KAYA TARAFINDAN GÖNDERILEN,ELIF KAYA,TR430001200000000000000001,ELIF KAYA,"
+           "TR120001500000000000000001")
+    assert bank_import.own_label(out, -60300, "Halkbank", [OWNER]) == "Kendi hesabına · Halkbank → VakıfBank"
+    inc = "ELIF KAYA,ELIF KAYA 'DAN GELEN FAST ODEMESI , Türkiye Vakiflar Bankasi T.A.O.,TR12******************0001"
+    assert bank_import.classify(inc, 29000, []) == "virman"
+    assert bank_import.own_label(inc, 29000, "Halkbank", [OWNER]) == "Kendi hesabından · VakıfBank → Halkbank"
+    vb = ("FAST Anlık Ödeme pc taksiti (16/01/2025 tarihli 1 sorgu no'lu ELİF KAYA hesabından Kuveyt Türk Katılım "
+          "Bankası A.Ş. ELİF KAYA hesabına giden FAST ödemesi)")
+    assert bank_import.own_label(vb, -12550, "VakıfBank", [OWNER]) == "Kendi hesabına · VakıfBank → Kuveyt Türk · pc taksiti"
+
+
+def test_import_writes_clean_own_transfer_with_raw(tmpdb):
+    rows = bank_import.finalize([{"date": "18.10.2026", "description": VAKIF_IN, "amount": 135000.0, "balance": 1.0}], [])
+    tmpdb.import_bank_rows(rows, account="VakıfBank", owners=[])
+    with tmpdb.connect() as c:
+        r = c.execute("SELECT description, raw FROM own_transfers").fetchone()
+    assert r["description"] == "Kendi hesabından · Halkbank → VakıfBank" and r["raw"] == VAKIF_IN

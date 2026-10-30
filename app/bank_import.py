@@ -150,6 +150,8 @@ def _parties(desc: str) -> tuple[str, str] | None:
         r"NO'?\s?LU\s+(.+?)\s+HESABINDAN\s+(.+?)\s+HESABINA",
         # Halkbank giden: "GIDEN FAST - X TARAFINDAN GONDERILEN,Y,Banka…" / HAVALE: "…,X,TR..,Y,TR.."
         r"-\s*([A-Z ]{5,}?)\s+TARAFINDAN GONDERILEN\s*,\s*(?:[^,]+?,\s*TR[\d* ]+,\s*)?([^,]+?)\s*,",
+        # VakıfBank gelen EFT: "… sorgu numaralı GOOGLE PAYMENT CORP. tarafından AYŞE YILMAZ tarafına gelen EFT"
+        r"SORGU NUMARALI\s+(.+?)\s+TARAFINDAN\s+(.+?)\s+TARAFINA",
         # Halkbank havale (açıklamalı): "not,X,TRxx…,Y,TRxx…"
         r"(?:^|,)\s*([^,]+?)\s*,\s*TR\d[\d ]{10,}\s*,\s*([^,]+?)\s*,\s*TR\d",
     )
@@ -177,29 +179,45 @@ def _sender_receiver(desc: str) -> tuple[str, str] | None:
 
 
 def is_self_transfer(desc: str, owners: list[str]) -> bool:
-    """Kendi hesapları arası: gönderen ve alıcı aynı kişi (boşluksuz yazımlar dahil, ör. Kuveyt Türk)."""
-    sq = _squash(desc)
-    sr = _sender_receiver(desc)
-    if sr and len(sr[0]) >= 6 and sr[0] == sr[1]:
-        return True
-    names = {_squash(o) for o in owners if o and len(_squash(o)) >= 6}
-    if not names:
-        return False
-    # "X hesabından … X hesabına" / "X TARAFINDAN GÖNDERİLEN … X hesabına gelen"
-    for nm in names:
-        if sq.count(nm) >= 2 and re.search(r"HESABINDAN|TARAFINDANGONDERILEN|GONDEREN", sq):
-            return True
-    return False
+    """Kendi hesapları arası: GÖNDEREN ve ALICI aynı kişi (boşluksuz yazımlar dahil, ör. Kuveyt Türk). Kullanıcının adı
+    yalnız serbest açıklama metninde geçiyorsa ('Ayşe Yılmaz direksiyon harcı … X hesabından Murat Ç. hesabına')
+    virman DEĞİLDİR: kalıp tanınıyorsa karar gönderen/alıcıya göre verilir."""
+    return classify_reason(desc, -1, owners)[0] == "virman"
 
 
-def classify(desc: str, amount: float, owners: list[str] | None = None) -> str:
+# Kurum/şirket (emeklilik, sigorta, ödeme kuruluşu): kendi hesapları arası sayılmaz (kullanıcının takip ettiği hesap değil)
+_INSTITUTION = re.compile(r"\b(EMEKLILIK|SIGORTA|HAYAT|PAYMENT|PAYMENTS|CORP|INC|LLC|LTD|LIMITED|SIRKETI|A\.?S\.? TARAFINDAN|"
+                          r"FON|PORTFOY|YATIRIM|MENKUL)\b")
+
+
+def classify_reason(desc: str, amount: float, owners: list[str] | None = None) -> tuple[str, str]:
+    """(tür, neden) — neden onarım raporunda gösterilir."""
     n = normalize(desc)
     sq = _squash(desc)
     if amount < 0 and (CARD_PAYMENT.search(n) or re.search(r"KREDIKARTI(BORC|ODEME)|KARTBORC|KKBORC", sq)):
-        return "kart_odemesi"
-    if TRANSFER.search(n) or is_self_transfer(desc, owners or []):
-        return "virman"
-    return "gelir" if amount > 0 else "gider"
+        return "kart_odemesi", "kart borcu ödemesi"
+    plain = "gelir" if amount > 0 else "gider"
+    sr = _sender_receiver(desc)
+    if sr and len(sr[0]) >= 6:
+        if sr[0] == sr[1]:
+            return "virman", "gönderen = alıcı"
+        if not re.search(r"HESAPLAR ARASI|VIRMAN|KENDI HESAB", n):
+            return plain, "gönderen ≠ alıcı"  # açıklamada geçen ad ya da 'VADELI' gibi kelime karar vermez
+    if _INSTITUTION.search(n) and not re.search(r"HESAPLAR ARASI|VIRMAN|KENDI HESAB", n):
+        return plain, "kurum/şirket"
+    if re.search(r"PARA CEK|CEKILEN\b|\bPR CKM\b", n) and not re.search(r"HESAPLAR ARASI|VIRMAN", n):
+        return plain, "para çekme"  # 'Mevduat Para Çek … AYŞE YILMAZ ne ait … hesabından çekilen': nakit, virman değil
+    if m := TRANSFER.search(n):
+        return "virman", f"açıklamada '{m.group(0)}'"
+    names = {_squash(o) for o in owners or [] if o and len(_squash(o)) >= 6}
+    for nm in names:  # kalıp tanınmadı: "X hesabından … X hesabına" (adı iki kez geçiyor)
+        if sq.count(nm) >= 2 and re.search(r"HESABINDAN|TARAFINDANGONDERILEN|GONDEREN", sq):
+            return "virman", "kendi adı iki kez (gönderen ve alıcı)"
+    return plain, ""
+
+
+def classify(desc: str, amount: float, owners: list[str] | None = None) -> str:
+    return classify_reason(desc, amount, owners)[0]
 
 
 def finalize(rows: list[dict], owners: list[str]) -> list[dict]:
@@ -276,7 +294,7 @@ def _clean_name(raw: str) -> str:
     return " ".join(words[-3:])
 
 
-_COMPANY_CUT = {"LIMITED", "LTD", "SIRKETI", "STI", "ANONIM", "TIC", "TICARET", "SAN", "SANAYI"}
+_COMPANY_CUT = {"LIMITED", "LTD", "SIRKETI", "STI", "ANONIM", "TIC", "TICARET", "SAN", "SANAYI", "CORP", "INC", "LLC", "GMBH"}
 
 
 def _tr_title(word: str, dotless_i: bool = True) -> str:
@@ -441,12 +459,13 @@ def describe(raw: str, amount: float, owners: list[str] | None = None) -> dict:
     elif amount < 0 and re.match(r"\s*MASRAF TAHSILAT", norm):
         payment = "nakit"
         desc = "Banka masrafı" + (" · ATM komisyonu" if "ATM" in norm else "")
-    elif amount < 0 and re.search(r"PARA CEK", norm):  # ATM'den nakit
+    elif amount < 0 and re.search(r"PARA CEK|\bPR CKM\b", norm):  # ATM'den nakit
         payment = "nakit"
         branch = re.search(r"NO LU (.+?) ATM", norm)
         where = (_pretty_words(branch.group(1), raw) if branch and re.search(r"[A-Z]{3}", branch.group(1))
-                 else "diğer banka" if "DIGER BANKA" in norm else None)  # şube yerine terminal no yazıyorsa atla
-        desc = "ATM para çekme" + (f" · {where}" if where else "")
+                 else "diğer banka" if "DIGER BANKA" in norm
+                 else "ortak nokta" if "ORTAK NOKTA" in norm else None)  # şube yerine terminal no yazıyorsa atla
+        desc = ("Para çekme · şube" if "MEVDUAT PARA CEK" in norm else "ATM para çekme" + (f" · {where}" if where else ""))
     if desc == raw and len(desc) > 120:
         desc = desc[:120]
     note = "Hesap hareketi" + "".join(f" · {x}" for x in extra) + ("" if desc == raw else f" · {raw}")
@@ -491,3 +510,37 @@ def pair_cancellations(rows: list[dict]) -> None:
             r["type"] = o["type"] = "iptal"
             used |= {i, j}
             break
+
+
+def _bank_in(text: str) -> str | None:
+    """Metindeki banka adı ya da IBAN'ın banka kodundan kısa banka adı."""
+    from app.templates import IBAN_BANKS
+
+    m = re.search(r"TR\s?\d{2}\s?(\d{4})\s?(\d)", text.upper())
+    if m and (code := m.group(1) + m.group(2)) in IBAN_BANKS:
+        return IBAN_BANKS[code]
+    b = short_bank(text)
+    return None if b in ("Banka hesabı", (text or "").strip()) else b
+
+
+def own_label(raw: str, amount: float, account: str | None, owners: list[str] | None = None) -> str:
+    """Kendi hesapları arası aktarımın temiz açıklaması: 'Kendi hesabına · Halkbank → VakıfBank · not'. Gönderenin
+    yazdığı mesaj (not) kaybolmaz; ham banka metni own_transfers.raw'da kalır."""
+    acc = short_bank(account) if account else None
+    other = None
+    p = _parties(raw)
+    if p:
+        other = _bank_in(p[1] if amount < 0 else p[0])
+    if not other or other == acc:
+        from app.templates import IBAN_BANKS
+
+        n = normalize(raw)
+        tail = re.split(r"TARAFINDAN GONDERILEN", n, maxsplit=1)[-1]
+        found = [IBAN_BANKS.get(a + b) for a, b in re.findall(r"TR\s?\d{2}\s?(\d{4})\s?(\d)", tail)] + [_bank_in(tail)]
+        other = next((b for b in found if b and b != acc), None)
+    if amount < 0:
+        label = "Kendi hesabına" + (f" · {acc or '?'} → {other}" if other else (f" · {acc}" if acc else ""))
+    else:
+        label = "Kendi hesabından" + (f" · {other} → {acc or '?'}" if other else (f" · {acc}" if acc else ""))
+    note = transfer_note(raw, owners)
+    return label + (f" · {note}" if note else "")
