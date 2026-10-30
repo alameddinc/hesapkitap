@@ -55,7 +55,7 @@ function MonthCard({ m, open, onToggle }: { m: PlanMonth; open: boolean; onToggl
                 }}
                 disabled={!l.recurring_id}>
                 <span className="w-24 shrink-0 text-xs text-stone-500 sm:w-32">{PLAN_LABEL[l.type]}</span>
-                <span className="min-w-0 flex-1 truncate">
+                <span className="min-w-0 flex-1 break-words">
                   {maskText(l.description)}
                   {l.type === "sabit" && !l.confirmed && <span className="ml-1 text-xs text-stone-400">{l.custom ? "(bu aya özel)" : "(plan · dokun, tutarı değiştir)"}</span>}
                   {l.type === "sabit" && l.confirmed && <span className="ml-1 text-xs text-green-600">✓</span>}

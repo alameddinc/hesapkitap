@@ -24,7 +24,7 @@ export default function BarList({ items, selected, onSelect, limit }: {
               className={cx("group w-full rounded-lg px-2 py-1.5 text-left transition-colors",
                 active ? "bg-blue-50 ring-1 ring-blue-200 dark:bg-blue-950/40 dark:ring-blue-900" : "hover:bg-stone-50 dark:hover:bg-stone-800/50")}>
               <div className="flex items-baseline justify-between gap-2 text-sm">
-                <span className="truncate">{i.name}</span>
+                <span className="break-words">{i.name}</span>
                 <span className="flex shrink-0 items-center gap-1 font-medium tabular-nums">
                   {tl(i.amount)}
                   <ChevronRight size={14} className={cx("text-stone-400 transition-transform", active && "rotate-90")} />

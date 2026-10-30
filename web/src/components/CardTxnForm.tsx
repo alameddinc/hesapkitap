@@ -66,6 +66,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
             {row.installment && ` · ${row.installment} taksit`}
             {row.fx && ` · ${row.fx}`}
           </div>
+          <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">Tutar ve tarih kart ekstresinden gelir, değiştirilemez; yanlış okunduysa ekstreyi kontrol et.</div>
         </div>
         {row.subscription && (
           <div className={cx("flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm",

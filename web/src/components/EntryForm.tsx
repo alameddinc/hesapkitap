@@ -98,6 +98,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   }, [draft]);
   const people = useQuery({ queryKey: ["people"], queryFn: api.people });
   const [err, setErr] = useState<string | null>(null);
+  // belgeden (hesap dökümü) gelen ya da dökümle eşleşmiş kayıt: tutar/tarih kilitli, uyarıyla açılır
+  const fromDoc = !!editingEntry && (!!editingEntry.bank_doc_id || editingEntry.match?.source === "dokum");
+  const [unlock, setUnlock] = useState(false);
+  const docLocked = fromDoc && !unlock;
   const showLink = !!editingEntry && kind === "gider" && payment === "kredi_karti" && editingEntry.payment === "kredi_karti";
   const cands = useQuery({
     queryKey: ["cands", editingEntry?.id],
@@ -181,19 +185,30 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
           <input id="e-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)}
             placeholder={kind === "gelir" ? "ör. Maaş" : "ör. Psikolog, Kira"} autoFocus={!row && !rec} />
         </div>
+        {fromDoc && (
+          <div className="-mt-1 rounded-lg bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-300">
+            {docLocked ? <>
+              Tutar ve tarih {editingEntry?.bank_doc_id ? "hesap dökümünden" : "eşleşen banka kaydından"} geliyor; değiştirirsen dökümdeki bakiyeyle tutmayabilir.{" "}
+              <button type="button" className="font-medium text-blue-700 underline dark:text-blue-400"
+                onClick={() => window.confirm("Tutar ya da tarih değişirse dökümdeki bakiyeyle tutmayabilir. Yine de değiştirilsin mi?") && setUnlock(true)}>
+                Tutarı / tarihi yine de değiştir</button>
+            </> : "Dikkat: tutar ya da tarih belgedekinden farklı olursa dökümdeki bakiyeyle tutmayabilir."}
+          </div>
+        )}
         {draft?.legal_name && !editingEntry && (
           <p className="-mt-1 text-xs text-stone-500">Ekstrede muhtemelen <b>{draft.legal_name}</b> adıyla geçer; eşleştirilip markayla gruplanır.</p>
         )}
         <div className="grid grid-cols-2 gap-3">
           <div className={isGross && kind === "gelir" && isRecurring ? "hidden" : undefined}>
             <label className="label" htmlFor="e-amt">Tutar (₺)</label>
-            <input id="e-amt" className="input text-right" inputMode="decimal" value={amount}
-              onChange={(e) => setAmount(e.target.value)} placeholder="0,00" />
+            <input id="e-amt" className="input text-right disabled:bg-stone-100 disabled:text-stone-500 dark:disabled:bg-stone-800" inputMode="decimal" value={amount}
+              disabled={docLocked} onChange={(e) => setAmount(e.target.value)} placeholder="0,00" />
           </div>
           {!isRecurring ? (
             <div>
               <label className="label" htmlFor="e-date">Tarih</label>
-              <input id="e-date" type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+              <input id="e-date" type="date" className="input disabled:bg-stone-100 disabled:text-stone-500 dark:disabled:bg-stone-800" value={date}
+                disabled={docLocked} onChange={(e) => setDate(e.target.value)} />
             </div>
           ) : (
             <div>
@@ -287,7 +302,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             <ul className="space-y-1">
               {cands.data!.map((c) => (
                 <li key={c.id} className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate">
+                  <span className="min-w-0 flex-1 break-words">
                     {c.description} <span className="text-xs text-stone-500">· {dateTR(c.txn_date)} · {c.account}</span>
                   </span>
                   <span className="tabular-nums">{tl(c.amount)}</span>
@@ -396,7 +411,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
                 <div>
                   <CategoryPicker value={p.category} options={cats}
                     onChange={(v) => setParts(parts.map((x, j) => (j === i ? { ...x, category: v } : x)))} />
-                  <div className="mt-0.5 truncate text-xs text-stone-500">{p.description}</div>
+                  <div className="mt-0.5 break-words text-xs text-stone-500">{p.description}</div>
                 </div>
                 <button type="button" className="btn-ghost p-2 text-stone-400 hover:text-red-600" aria-label="Kaldır"
                   onClick={() => setParts(parts.filter((_, j) => j !== i))}><Trash2 size={14} /></button>

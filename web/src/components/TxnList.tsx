@@ -77,7 +77,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">
-                <span className={cx("truncate font-medium", r.deleted && "line-through")}>{r.description}</span>
+                <span className={cx("min-w-0 font-medium break-words", r.deleted && "line-through")}>{r.description}</span>
                 {r.hidden && <span title="Ortak defterde gizli"><EyeOff size={13} className="shrink-0 text-stone-400" /></span>}
                 <span className={cx("shrink-0 font-semibold tabular-nums", amountClass(r))}>
                   {r.kind === "gelir" || (r.kind === "borc" && (r.flow ?? 0) > 0) ? "+" : r.kind === "borc" ? "−" : ""}{tl(r.amount)}
@@ -104,7 +104,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
                 {r.match ? <MatchBadge m={r.match} />
                   : r.linked && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Ekstreyle eşleşti</span>}
               </div>
-              {r.note && <div className="mt-0.5 truncate text-xs text-stone-400">{r.note}</div>}
+              {r.note && <div className="mt-0.5 text-xs break-words text-stone-500 dark:text-stone-400">{r.note}</div>}
               {r.pending && <PendingActions r={r} />}
             </div>
           </div>
