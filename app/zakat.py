@@ -431,8 +431,8 @@ def compute(today: date | None = None) -> dict:
         year_end = (date.fromisoformat(p["hawl_start"]) + timedelta(days=LUNAR_YEAR_DAYS)) if p["hawl_start"] else today
         for a in p["assets"]:
             label, key, unit = KINDS.get(a["kind"], (a["kind"], "", ""))
-            base = {"id": a["id"], "qty": a["quantity"], "unit": unit, "source": "varlik", "note": a["note"],
-                    "acquired": a["acquired"]}
+            base = {"id": a["id"], "kind": a["kind"], "qty": a["quantity"], "unit": unit, "source": "varlik", "note": a["note"],
+                    "acquired": a["acquired"], "cost": a["cost"], "is_jewelry": bool(a["is_jewelry"])}
             if a["is_jewelry"] and st["madhhab"] == "safii":
                 plus.append({**base, "label": f"{label} (ziynet, muaf)", "value": 0.0, "exempt": True})
                 continue
@@ -743,6 +743,25 @@ def next_year(pid: int) -> str:
         new = (date.fromisoformat(p["hawl_start"]) + timedelta(days=LUNAR_YEAR_DAYS)).isoformat()
         c.execute("UPDATE zakat_people SET hawl_start = ? WHERE id = ?", (new, pid))
         return new
+
+
+def wipe() -> dict:
+    """Zekât ve sadaka verisini sil: ödemeler, bağış kayıtları, aile üyeleri (ve onların varlıkları), zekât yılı ve
+    ayarlar. "Ben"in altın/döviz varlıkları Hesaplar'daki net durumun ve kumbaraların da parçası olduğu için kalır
+    (Hesaplar'dan tek tek silinebilir); "Ben" boş bir kişi olarak durur. Banka hareketleri yerinde kalır."""
+    from app import donations
+
+    with db.connect() as c:
+        _init(c)
+        donations._init(c)
+        fam = [r[0] for r in c.execute("SELECT id FROM zakat_people WHERE is_self = 0")]
+        n = {"payments": c.execute("DELETE FROM zakat_payments").rowcount,
+             "donations": c.execute("DELETE FROM donations").rowcount,
+             "assets": sum(c.execute("DELETE FROM zakat_assets WHERE person_id = ?", (p,)).rowcount for p in fam),
+             "people": c.execute("DELETE FROM zakat_people WHERE is_self = 0").rowcount}
+        c.execute("UPDATE zakat_people SET hawl_start = NULL, check_date = NULL, note = NULL, is_minor = 0")
+        c.execute("DELETE FROM settings WHERE key LIKE 'zakat:%'")
+    return n
 
 
 def reminders(today: date) -> list[str]:

@@ -2,24 +2,23 @@ import { Crown, LayoutGrid } from "lucide-react";
 import { useState } from "react";
 import { useUI } from "../ui";
 import { useMeta, useSave } from "./hooks";
+import ZakatConsent from "./ZakatConsent";
 
 /** Hangi özellikler açık: kapatılan menüden, Özet'ten ve uyarılardan kalkar (veri silinmez). */
 export default function Features({ intro = false }: { intro?: boolean }) {
   const ui = useUI();
   const meta = useMeta().data;
   const [draft, setDraft] = useState<Record<string, boolean> | null>(null);
-  const [agreed, setAgreed] = useState<string[]>([]);
+  const [asking, setAsking] = useState<string | null>(null);
   const save = useSave((m: Record<string, boolean>) => fetch("/api/settings/modules", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ modules: m, consent: agreed }),
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ modules: m }),
   }).then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? "Kaydedilemedi"); }),
-  () => { setDraft(null); setAgreed([]); ui.toast("Özellikler kaydedildi"); });
+  () => { setDraft(null); ui.toast("Özellikler kaydedildi"); });
   if (!meta?.modules || !meta.module_labels) return null;
-  const cur = draft ?? meta.modules;
-  const set = (k: string, v: boolean) => setDraft({ ...cur, [k]: v });
   const consent = meta.module_consent ?? {};
-  // açılırken rıza isteyenler (hazır sürümde zekât): kutu işaretlenmeden kaydedilmez
-  const pending = Object.keys(consent).filter((k) => cur[k] && !meta.modules![k]);
-  const missing = pending.filter((k) => !agreed.includes(k));
+  const cur = draft ?? meta.modules;
+  // açılırken rıza isteyenler (hazır sürümde zekât): kutu değil, sade "açalım mı?" penceresi; "Aç" hemen kaydeder
+  const set = (k: string, v: boolean) => (v && consent[k] && !meta.modules![k] ? setAsking(k) : setDraft({ ...cur, [k]: v }));
   const locked = (k: string) => meta.plan?.features[k] === false; // paketinde yok (ör. fiyat takibi → Premium)
   return (
     <section className={intro ? "card space-y-3 border-blue-200 p-4 dark:border-blue-900" : "card space-y-3 p-4"}>
@@ -40,15 +39,9 @@ export default function Features({ intro = false }: { intro?: boolean }) {
           </label>
         ))}
       </div>
-      {pending.map((k) => (
-        <label key={k} className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-800 dark:bg-amber-950/40">
-          <input type="checkbox" className="mt-0.5" checked={agreed.includes(k)}
-            onChange={(e) => setAgreed(e.target.checked ? [...agreed, k] : agreed.filter((x) => x !== k))} />
-          <span><b>{meta.module_labels![k].label}:</b> {consent[k]} Bu amaçla işlenmesine açık rıza veriyorum.</span>
-        </label>
-      ))}
+      {asking === "zekat" && <ZakatConsent onClose={() => setAsking(null)} onDone={() => draft && setDraft({ ...draft, zekat: true })} />}
       <div className="flex flex-wrap gap-2">
-        <button className="btn-primary" disabled={save.isPending || (!intro && !draft) || missing.length > 0}
+        <button className="btn-primary" disabled={save.isPending || (!intro && !draft)}
           onClick={() => save.mutate(cur, { onError: (e) => ui.toast(e.message) })}>
           {intro ? "Bu şekilde başla" : "Kaydet"}
         </button>

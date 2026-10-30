@@ -773,6 +773,7 @@ def meta():
         "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": prefs.ui(),
         "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
         "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
+        "module_consent_title": {k: prefs.CONSENT_TITLE.get(k) for k in prefs._consent_needed()},
         "plan": _plan_info(),
     }
 
@@ -2232,6 +2233,13 @@ def zakat_settings(body: ZakatSettingsIn):
         if k in d:
             db.set_setting(f"zakat:{k}", str(d[k]) if d[k] else None)
     return {"ok": True}
+
+
+@app.delete("/api/zakat/data")
+def zakat_wipe():
+    """Zekât ve sadaka verilerinin hepsini sil (kişiler, varlıklar, ödemeler, bağış kayıtları, zekât ayarları). Hesap
+    dökümündeki hareketler yerinde kalır; sadece zekât/sadaka işaretleri kalkar. Özelliği kapatırken "verileri de sil"."""
+    return zakat.wipe()
 
 
 @app.get("/api/zakat/holy")

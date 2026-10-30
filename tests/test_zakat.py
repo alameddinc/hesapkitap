@@ -281,3 +281,27 @@ def test_new_zakat_year_starts_automatically(tmpdb):
     assert next(p for p in zakat.people() if p["id"] == pid)["hawl_start"] == start.isoformat()  # henüz dolmadı
     zakat.compute(today=due)
     assert next(p for p in zakat.people() if p["id"] == pid)["hawl_start"] == due.isoformat()  # yeni yıl başladı
+
+
+def test_wipe_removes_zakat_data_keeps_own_assets(client, tmpdb):
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    wife = client.post("/api/zakat/people", json={"name": "Eşim"}).json()["id"]
+    client.post("/api/zakat/assets", json={"person_id": wife, "kind": "ALTIN_22", "quantity": 100})
+    own = client.post("/api/zakat/assets", json={"person_id": me, "kind": "TRY", "quantity": 1000000}).json()["id"]
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2026-01-01"})
+    client.post(f"/api/zakat/people/{me}/payments", json={"amount": 5000})
+    client.post("/api/donations", json={"kind": "sadaka", "amount": 100, "given_date": "2026-10-01"})
+    client.put("/api/zakat/settings", json={"madhhab": "safii"})
+    # varlık düzenlenebilir; özet düzenleme için türü ve ziynet bilgisini döner
+    assert client.patch(f"/api/zakat/assets/{own}", json={"quantity": 900000, "note": "kasada"}).status_code == 200
+    line = next(x for x in _person(client.get("/api/zakat").json(), "Ben")["plus"] if x.get("id") == own)
+    assert line["kind"] == "TRY" and line["qty"] == 900000 and line["note"] == "kasada" and line["is_jewelry"] is False
+
+    r = client.delete("/api/zakat/data").json()
+    assert r["payments"] == 1 and r["donations"] == 1 and r["people"] == 1 and r["assets"] == 1
+    d = client.get("/api/zakat").json()
+    assert [p["name"] for p in d["people"]] == ["Ben"] and d["settings"]["madhhab"] == "hanefi"
+    ben = d["people"][0]
+    assert ben["hawl"] is None and not ben["payments"]
+    assert [x["id"] for x in ben["plus"] if x.get("id")] == [own]  # kendi varlığı Hesaplar'da kalır
+    assert client.get("/api/donations").json()["items"] == []

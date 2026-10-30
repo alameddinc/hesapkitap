@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSave } from "../components/hooks";
 import AssetForm from "../components/AssetForm";
 import Sadaka from "../components/Sadaka";
+import { ZakatOff } from "../components/ZakatConsent";
 import Segmented from "../components/Segmented";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -310,6 +311,7 @@ function ZakatTab() {
   const q = useQuery({ queryKey: ["zakat"], queryFn: () => json<ZakatData>("GET", "/api/zakat") });
   const [newPerson, setNewPerson] = useState("");
   const [showRules, setShowRules] = useState(false);
+  const [closing, setClosing] = useState(false);
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const addPerson = useSave(() => json("POST", "/api/zakat/people", { name: newPerson }), () => setNewPerson(""));
   const settings = useSave((b: object) => json("PUT", "/api/zakat/settings", b));
@@ -383,6 +385,11 @@ function ZakatTab() {
           </ul>
         )}
       </section>
+
+      <p className="text-center text-xs text-stone-500">
+        Bu bilgiler yalnız senin hesabında. <button className="underline" onClick={() => setClosing(true)}>Zekâtı kapat ya da kayıtları sil</button>
+      </p>
+      {closing && <ZakatOff onClose={() => setClosing(false)} />}
     </div>
   );
 }

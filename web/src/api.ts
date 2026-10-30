@@ -308,7 +308,8 @@ export interface Meta {
   modules?: Record<string, boolean>; // açık özellikler (defter bazında)
   modules_chosen?: boolean;
   module_labels?: Record<string, { label: string; desc: string }>;
-  module_consent?: Record<string, string>; // hazır sürüm: açarken açık rıza isteyen özellikler (metin)
+  module_consent?: Record<string, string>; // hazır sürüm: açarken açık rıza isteyen özellikler (sade pencerede gösterilen metin)
+  module_consent_title?: Record<string, string | null>; // o pencerenin başlığı ("Zekât hesaplamayı açalım mı?")
   ui?: { simple: boolean; layout: string[] | null }; // kişisel görünüm
   plan?: PlanInfo; // paket (barındırılan sürüm); kendi sunucunda "self": her şey açık
 }

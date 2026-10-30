@@ -158,11 +158,12 @@ def test_delete_my_account_removes_data(hosted):
 def test_hosted_zakat_off_by_default_and_needs_consent(hosted):
     import json
 
-    from app import db, system
+    from app import db, prefs, system
 
     c, u = _user(hosted)
     meta = c.get("/api/meta").json()
     assert meta["modules"]["zekat"] is False and "zekat" in meta["module_consent"]
+    assert meta["module_consent_title"]["zekat"] == "Zekât hesaplamayı açalım mı?"
     assert meta["modules"]["plan"] is True
     r = c.put("/api/settings/modules", json={"modules": {"zekat": True}})
     assert r.status_code == 422 and "rıza" in r.json()["detail"]
@@ -170,7 +171,8 @@ def test_hosted_zakat_off_by_default_and_needs_consent(hosted):
     assert c.get("/api/meta").json()["modules"]["zekat"] is True
     with db.use_space(system.user_db_path(u), u):
         rec = json.loads(db.get_setting("consent:zekat"))
-    assert rec["version"] == "1" and rec["user"] == u["id"] and rec["at"]
+    assert rec["version"] == prefs.CONSENT_VERSION and rec["user"] == u["id"] and rec["at"]
+    assert rec["action"] == "Aç" and rec["text"] == prefs.CONSENT["zekat"] and rec["title"]
     # kapatınca rıza geri alınır
     c.put("/api/settings/modules", json={"modules": {"zekat": False}})
     with db.use_space(system.user_db_path(u), u):

@@ -25,11 +25,13 @@ LINK_MODULE = {"zekat": "zekat", "plan": "plan", "tasarruf": "tasarruf", "borcla
                "hesaplar": "hesaplar", "istatistik": "istatistik", "fiyatlar": "fiyatlar"}
 
 
-# Barındırılan sürümde açık rıza isteyen özellikler (KVKK özel nitelikli veri): varsayılan kapalı, açarken onay.
-CONSENT = {"zekat": "Zekât, sadaka, fitre ve kurban kayıtların dini inancına dair bilgi verebilir (özel nitelikli kişisel "
-                    "veri). Bu bilgiler yalnızca senin hesabında, hesaplama ve hatırlatma için işlenir; kimseyle paylaşılmaz, "
-                    "anonim istatistiklere girmez. Özelliği kapatınca rızan geri alınmış olur."}
-CONSENT_VERSION = "1"
+# Barındırılan sürümde açık rıza isteyen özellikler (KVKK özel nitelikli veri): varsayılan kapalı. Rıza, ayrı bir onay
+# kutusu yerine bu metnin gösterildiği sade pencerede "Aç" düğmesine basılarak verilir (bilgilendirilmiş, açık ve ayrı bir
+# eylem; koşullara gömülü değil). Kayıtta zaman, metin, sürüm ve eylem tutulur. Metin değişirse CONSENT_VERSION artar.
+CONSENT_TITLE = {"zekat": "Zekât hesaplamayı açalım mı?"}
+CONSENT = {"zekat": "Zekât için mal varlığını (altın, döviz, nakit vb.) girersin; bu bilgiler yalnız senin hesabında, "
+                    "hesaplama ve hatırlatma için kullanılır. İstediğin an kapatıp silebilirsin."}
+CONSENT_VERSION = "2"  # 1: onay kutusu (29.10.2026) · 2: "Aç" eylemi, sade metin
 
 
 def _consent_needed() -> set[str]:
@@ -66,7 +68,8 @@ def set_modules(data: dict, consent: list[str] | None = None) -> dict[str, bool]
                 raise ConsentRequired(k)
             u = db.current_user() or {}
             db.set_setting(f"consent:{k}", json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                                      "version": CONSENT_VERSION, "user": u.get("id"), "text": CONSENT[k]},
+                                                      "version": CONSENT_VERSION, "user": u.get("id"), "action": "Aç",
+                                                      "title": CONSENT_TITLE.get(k), "text": CONSENT[k]},
                                                      ensure_ascii=False))
         elif before[k] and not m[k]:
             db.set_setting(f"consent:{k}", None)  # rıza geri alındı
