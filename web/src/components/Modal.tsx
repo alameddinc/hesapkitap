@@ -1,6 +1,9 @@
 import { X } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { cx } from "../format";
+
+// açık pencereler yığını: Esc yalnız en üsttekini kapatır (pencere içinde pencere: kalem düzenleme, önce/sonra)
+const stack: symbol[] = [];
 
 /** Mobilde alttan açılan panel, masaüstünde ortada modal. */
 export default function Modal({ title, onClose, children, footer }: {
@@ -9,16 +12,21 @@ export default function Modal({ title, onClose, children, footer }: {
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const close = useRef(onClose);
+  useEffect(() => { close.current = onClose; }, [onClose]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const me = Symbol("modal");
+    stack.push(me);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && stack[stack.length - 1] === me && close.current();
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", onKey);
+      stack.splice(stack.indexOf(me), 1);
       document.body.style.overflow = prev;
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
