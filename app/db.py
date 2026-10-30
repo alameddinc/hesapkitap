@@ -1760,6 +1760,48 @@ def match_card_payment(amount: float, on: str, only_unpaid: bool = False):
             (amount, amount, amount, (d - timedelta(days=0)).isoformat())).fetchone()
 
 
+def _names_owner(desc: str, owners: list[str] | None) -> bool:
+    from app.bank_import import _squash
+
+    sq = _squash(desc or "")
+    return any(len(_squash(o)) >= 6 and _squash(o) in sq for o in owners or [] if o)
+
+
+def _pairs_own_transfer(amount: float, day: str, desc: str, owners: list[str] | None, account: str) -> bool:
+    """Giden transferin karşılığı: aynı tutar, ±1 gün, BAŞKA kendi hesabına giriş (own_transfers). Gönderen adı
+    kullanıcının kendisi olmalı; Halkbank gibi bankalar giden açıklamada alıcıyı kesebiliyor, eşleşme bunu tamamlar."""
+    if not _names_owner(desc, owners):
+        return False
+    with connect() as c:
+        return c.execute("SELECT 1 FROM own_transfers WHERE ABS(ABS(amount) - ?) < 0.01 AND COALESCE(account, '') <> ? "
+                         "AND transfer_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') LIMIT 1",
+                         (amount, account or "", day, day)).fetchone() is not None
+
+
+def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:
+    """Önceden gider sayılmış kendi hesapları arası transferleri düzelt: dökümden gelen (import_hash'li) gider kaydı,
+    açıklamasında kullanıcının adı geçiyor ve aynı tutar ±1 gün başka kendi hesabına giriş varsa → virmana taşınır.
+    Dökümler farklı sırayla yüklendiğinde (önce giden, sonra gelen) oluşan çift sayımı kapatır. Taşınanları döner."""
+    owners = owners if owners is not None else card_holders()
+    moved = []
+    with connect() as c:
+        accounts = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM accounts")}
+        cands = [dict(r) for r in c.execute(
+            "SELECT id, entry_date, amount, description, account_id, import_hash FROM entries "
+            "WHERE kind = 'gider' AND import_hash IS NOT NULL AND import_hash NOT LIKE 'dekont:%' "
+            "AND COALESCE(payment, '') <> 'kredi_karti' AND wallet_id IS NULL")]
+    for e in cands:
+        acc = accounts.get(e["account_id"], "")
+        if not _pairs_own_transfer(e["amount"], e["entry_date"], e["description"], owners, acc):
+            continue
+        with connect() as c:
+            c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash) "
+                      "VALUES (?, ?, ?, ?, ?)", (e["entry_date"], -e["amount"], acc, (e["description"] or "")[:500], e["import_hash"]))
+            c.execute("DELETE FROM entries WHERE id = ?", (e["id"],))
+        moved.append(e)
+    return moved
+
+
 def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | None = None, account_id: int | None = None,
                      iban: str | None = None, new_account: bool = False) -> dict:
     """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner.
@@ -1825,6 +1867,14 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                               (r["amount"], r["date"], r["date"]))
                 c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash) "
                           "VALUES (?, ?, ?, ?, ?)", (r["date"], r["amount"], account, r["description"][:500], r["hash"]))
+            continue
+        if r["type"] == "gider" and _pairs_own_transfer(abs(r["amount"]), r["date"], r["description"], owners, account):
+            # karşılığı kendi başka hesabına giriş olarak zaten var (ör. Halkbank → VakıfBank): harcama değil, virman
+            stats["virman"] += 1
+            with connect() as c:
+                c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash) "
+                          "VALUES (?, ?, ?, ?, ?)", (r["date"], r["amount"], account, r["description"][:500], r["hash"]))
+            seen.add(r["hash"])
             continue
         if r["type"] == "gider" and match_card_payment(abs(r["amount"]), r["date"]):
             r["type"] = "kart_odemesi"  # açıklamada "kart" yok ama tutar bir ekstreyle birebir
@@ -1947,6 +1997,11 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             acc_name = c.execute("SELECT name FROM accounts WHERE id = ?", (acc_id,)).fetchone()[0]
         set_account_balance(acc_name, bal, d_, source="dokum")
     # öğrenilmiş kurallarla eşleşenler birleşir; kalan muhtemeller Yapılacaklar'da sorulur
+    # önce yüklenen dökümde gider sayılmış, bu dökümle karşılığı gelen kendi hesapları arası transferler
+    moved = repair_own_transfers(owners)
+    if moved:
+        stats["virman"] += len(moved)
+        stats["gider"] = max(0, stats["gider"] - sum(1 for m in moved if m["import_hash"] in {r["hash"] for r in rows}))
     rec = sync.reconcile()
     if rec["kural"]:
         stats["eslesen_kural"] = rec["kural"]
