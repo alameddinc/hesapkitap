@@ -49,6 +49,21 @@ async def lifespan(_app):
         task.cancel()
 
 
+# Belge okuma (pdfplumber, OCR, yapay zekâ) bellek yer: toplu yüklemede 30 dosya aynı anda okununca kapsayıcı bellek
+# sınırını aşıp düşüyordu (OOM → "Sunucuya ulaşılamadı"). Aynı anda en fazla N belge okunur; gerisi sırada bekler.
+_HEAVY = threading.BoundedSemaphore(max(1, int(os.environ.get("HESAPKITAP_PARSE_SLOTS", "2"))))
+
+
+def _heavy(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **kw):
+        with _HEAVY:
+            return fn(*a, **kw)
+    return run
+
+
 app = FastAPI(title="HesapKitap", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
 
@@ -769,7 +784,8 @@ async def mail_inbound(request: Request):
 
     def work():
         try:
-            inbound.handle(raw, to)
+            with _HEAVY:
+                inbound.handle(raw, to)
         except Exception:  # noqa: BLE001 - arka planda: günlüğe yaz, sunucuyu düşürme
             logging.getLogger("hesapkitap.inbound").exception("gelen posta işlenemedi")
         finally:
@@ -1499,6 +1515,7 @@ def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> d
 
 
 @app.post("/api/bank-import/preview")
+@_heavy
 def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form(None),
                          header_row: int | None = Form(None), password: str | None = Form(None)):
     """Sütunları tahmin et (ya da verilen eşlemeyi kullan), ilk satırları ve özetini döndür."""
@@ -1560,6 +1577,7 @@ def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form
 
 
 @app.post("/api/bank-import")
+@_heavy
 def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0),
                     password: str | None = Form(None), account_id: int | None = Form(None),
                     new_account: bool = Form(False)):
@@ -2862,6 +2880,7 @@ def _classify_pdf(data: bytes, passwords: list[str]) -> tuple[str, bool] | None:
 
 
 @app.post("/api/statements/upload")
+@_heavy
 def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
                       remember: bool = Form(False),
                       kind: Literal["card", "account", "dekont"] | None = Form(None)):
@@ -3370,6 +3389,7 @@ def test_rule(pattern: str, text: str):
 # ---------------------------------------------------------------- receipt
 
 @app.post("/api/receipts/parse")
+@_heavy
 def parse_receipt(file: UploadFile = File(...)):
     """Fiş fotoğrafını oku, kaydetmeden önce kullanıcıya önizleme döndür."""
     data = _file_bytes(file)
@@ -3614,6 +3634,7 @@ BILL_TYPES = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".pn
 
 
 @app.post("/api/bills/parse")
+@_heavy
 def parse_bill(file: UploadFile = File(...)):
     """Fatura PDF/fotoğrafını sakla ve oku; kullanıcı onaylayınca /api/bills ile kaydedilir."""
     data = _file_bytes(file)
