@@ -422,17 +422,20 @@ Her ürünün amount'u KENDİ satırının sağındaki tutardır. Türk sayı bi
 """ + ITEM_RULES
 
 
+REREAD_MODEL = "gemini-3.5-flash"
+
+
 def reread_model() -> str:
-    """Yeniden okuma modeli: GEMINI_REREAD_MODEL; yoksa varsayılan modelin '-lite' olmayan sürümü (daha güçlü)."""
-    base = config.get("GEMINI_MODEL") or DEFAULT_MODEL
-    return os.environ.get("GEMINI_REREAD_MODEL") or base.replace("-lite", "")
+    """Yeniden okuma modeli (ilk okumadan güçlü): GEMINI_REREAD_MODEL, yoksa REREAD_MODEL."""
+    return os.environ.get("GEMINI_REREAD_MODEL") or REREAD_MODEL
 
 
-def reread_items(image: bytes, mime: str, total: float | None) -> dict:
+def reread_items(image: bytes, mime: str, total: float | None, more: list[tuple[bytes, str]] | None = None) -> dict:
     """Saklı fiş fotoğrafını daha güçlü modelle, fiş toplamını bildirerek yeniden oku. {items, total, model, confidence}."""
     hint = (f"Fişin GENEL TOPLAMI {total:.2f} TL: kalemlerin amount toplamı (indirimler düşülmüş) bunu TUTMALI; tutmuyorsa "
             "kaçan ya da kayan satırı bul.\n") if total else ""
     model = reread_model()
-    raw, meta = _gemini_json(REREAD_PROMPT.format(total_hint=hint), image, mime, max_output_tokens=8000, model=model)
+    raw, meta = _gemini_json(REREAD_PROMPT.format(total_hint=hint), image, mime, max_output_tokens=8000, model=model,
+                             more=more)
     return {"items": _items(raw), "total": _num(raw.get("total")) or total, "model": meta["model"],
             "confidence": raw.get("confidence") or "orta"}
