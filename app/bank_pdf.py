@@ -45,7 +45,8 @@ class BankPdfError(ValueError):
 # Satırı "tarih saat işlem-no tutar bakiye açıklama" olan dökümler (VakıfBank "Hesap Hareketleri").
 # Hızlı, ücretsiz ve uzunluk sınırı yok (yıllarca hareket); bakiye zinciri tutmazsa yapay zekâya düşülür.
 _VB_ROW = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4}) \d{2}:\d{2} \d{10,20} (-?[\d.]+,\d{2}) (-?[\d.]+,\d{2}) ?(.*)$")
-_VB_NOISE = re.compile(r"^(hesap hareketleri|hesap no ?:|tari̇h saat|tarih saat|vb .*no ?:|iban|sayfa|\S{0,3}$)", re.I)
+_VB_NOISE = re.compile(r"^(hesap hareketleri|hesap no ?:|tari̇h saat|tarih saat|vb .*no ?:|iban|sayfa|\S{0,3}$|\*{2,}\s*dekont yerine|"
+                       r"www\.vakifbank)", re.I)
 
 
 def _tr_num(v: str) -> float:
@@ -68,9 +69,17 @@ def parse_rule_based(text: str) -> dict | None:
         m = _VB_ROW.match(st)
         if m:
             d, mo, y, amt, bal, desc = m.groups()
-            rows.append({"date": f"{y}-{mo}-{d}", "amount": _tr_num(amt), "balance": _tr_num(bal), "description": desc.strip()})
+            desc = desc.strip()
+            if not desc and rows and rows[-1].get("_tail"):
+                # işlem adı satırın üstüne ve altına bölünmüş ("Diğer Banka ATM-QR İle Para" / satır / "Çekme"):
+                # önceki harekete eklenen son satır bu hareketin adıdır
+                tail = rows[-1].pop("_tail")
+                rows[-1]["description"] = rows[-1]["description"][: -len(tail)].rstrip()
+                desc = tail
+            rows.append({"date": f"{y}-{mo}-{d}", "amount": _tr_num(amt), "balance": _tr_num(bal), "description": desc})
         elif rows and line.strip() and not _VB_NOISE.match(line.strip()) and len(rows[-1]["description"]) < 480:
             rows[-1]["description"] = f"{rows[-1]['description']} {line.strip()}".strip()
+            rows[-1]["_tail"] = line.strip()
     if len(rows) < 3 or len(rows) < len(lines) / 40:  # bu düzen değil
         return None
     # sıra: yeniden eskiye listelenmişse çevir (zincir eskiden yeniye doğrulanır)
@@ -82,11 +91,12 @@ def parse_rule_based(text: str) -> dict | None:
     check = verify_chain(rows, opening, rows[-1]["balance"])
     bank = "VakıfBank" if re.search(r"vak[ıi]f|\bVB\b", text[:3000], re.I) else ""
     for r in rows:
+        r.pop("_tail", None)
         r["description"] = r["description"][:500]
     return {"owner_name": "", "bank": bank, "rows": rows, "rule_based": True, **check}
 
 
-def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
+def parse_account_pdf(data: bytes, passwords: list[str] | None = None, allow_ai: bool = True) -> dict:
     text = None
     for pw in [None, *(passwords or [])]:
         try:
@@ -103,12 +113,36 @@ def parse_account_pdf(data: bytes, passwords: list[str] | None = None) -> dict:
                            "olarak eklenir, bakiye değişmez.")
     from app.sync import find_iban
 
-    res = _parse_account_text(text)
+    res = _parse_account_text(text, allow_ai)
     res["iban"] = find_iban(text)  # hesabın IBAN'ı: sonraki dökümler doğrudan aynı hesaba gider (app/sync.py)
+    if not res.get("owner_name"):  # kural tabanlı okuyucular ve şablonlar adı vermez: başlıktan
+        res["owner_name"] = owner_from_text(text)
     return res
 
 
-def _parse_account_text(text: str) -> dict:
+_OWNER_PATS = (
+    r"M[üu]şteri\s*Ad[ıi]\s*(?:/\s*[ÜüUu]nvan[ıi])?\s*:\s*(.+?)(?:\s+D[öo]nemi\b|\s{2,}|$)",  # Halkbank
+    r"Hesap\s*Sahibi\s*(?:Ad[ıi]\s*Soyad[ıi])?\s*:\s*(.+?)(?:\s{2,}|$)",
+    r"^Sayın\s+(.+?)\s*$",  # Kuveyt Türk
+    r"^Hesap Hareketleri\s*\n\s*(.+?)\s*$",  # VakıfBank: başlığın altındaki satır
+)
+
+
+def owner_from_text(text: str) -> str:
+    """Hesap sahibinin adı (belgenin başlığından). Bulunamazsa boş. Kendi hesapları arası aktarımı tanımak için."""
+    head = text[:2500]
+    for pat in _OWNER_PATS:
+        m = re.search(pat, head, re.M | re.I)
+        if not m:
+            continue
+        name = re.sub(r"\s+", " ", m.group(1)).strip(" :,")
+        # yalnız harf ve boşluk, 2–5 kelime, maskesiz ('A******** Ç****' değil)
+        if re.fullmatch(r"[^\W\d_]+(?: [^\W\d_]+){1,4}", name) and len(name) <= 60:
+            return name
+    return ""
+
+
+def _parse_account_text(text: str, allow_ai: bool = True) -> dict:
     ruled = parse_rule_based(text)
     if ruled and ruled["verified"]:
         return ruled
@@ -118,6 +152,8 @@ def _parse_account_text(text: str) -> dict:
     if templated and templated["verified"]:
         templated["bank"] = templated.get("bank") or templates.bank_of(text)
         return templated
+    if not allow_ai:
+        raise BankPdfError("Bu döküm yapay zekâsız okunamadı")
     if not receipt.enabled():
         raise BankPdfError("Bu bankanın PDF dökümü yapay zekâ ile okunur; Ayarlar → Anahtarlar'dan Gemini anahtarı gir "
                            "ya da bankadan Excel/CSV indir.")

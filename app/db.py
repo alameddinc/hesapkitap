@@ -432,6 +432,7 @@ MIGRATIONS = [
     ("accounts", "iban", "TEXT"),               # dökümde okunan IBAN: sonraki dökümler doğrudan bu hesaba gider
     ("accounts", "alias", "TEXT"),              # dökümlerin geldiği banka adı (short_bank), hesabın adı farklıysa
     ("accounts", "origin", "TEXT"),             # elle | dokum: hesabı kim açtı (eski hesaplarda boş)
+    ("entries", "bill_provider", "TEXT"),       # dökümdeki fatura tahsilatı: kurum (Vodafone, İGDAŞ…) — Faturalar özeti
 ]
 
 
@@ -915,7 +916,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
-                "installments", "card_last4", "hidden", "created_by", "receipt_file")
+                "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:
@@ -1788,7 +1789,9 @@ def _pairs_own_transfer(amount: float, day: str, desc: str, owners: list[str] | 
     if not _names_owner(desc, owners):
         return False
     with connect() as c:
-        return c.execute("SELECT 1 FROM own_transfers WHERE ABS(ABS(amount) - ?) < 0.01 AND COALESCE(account, '') <> ? "
+        # yalnız GİRİŞ (amount > 0): başka hesaptan aynı gün aynı tutarda çıkış (ör. Halkbank → VakıfBank 35.000, sonra
+        # VakıfBank'tan kiraya 35.000) karşılık değildir
+        return c.execute("SELECT 1 FROM own_transfers WHERE amount > 0 AND ABS(amount - ?) < 0.01 AND COALESCE(account, '') <> ? "
                          "AND transfer_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') LIMIT 1",
                          (amount, account or "", day, day)).fetchone() is not None
 
@@ -1873,6 +1876,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                               (acc_id, r["hash"]))  # maaş bu hesaba yatıyormuş: sabit kalem öğrenir
             continue
         d = _date.fromisoformat(r["date"])
+        if r["type"] == "iptal":  # bankanın iptal edip geri ödediği ödeme ve iadesi: birbirini götürür, kayıt açılmaz
+            stats["iptal"] = stats.get("iptal", 0) + 1
+            continue
         if r["type"] == "virman":
             stats["virman"] += 1
             with connect() as c:
@@ -1982,23 +1988,29 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             category = categorize(desc, "harcama", rules)
             if category == "Kategorisiz":
                 category = None
-        payment = "havale" if _re.search(r"EFT|HAVALE|FAST|TRANSFER", norm) else "nakit"
-        from app.bank_import import counterparty, transfer_note
+        from app.bank_import import describe, transfer_note
 
-        who = None if rec else counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)  # maaşta işveren kişi değil
+        # açıklama, kişi, ödeme biçimi, fatura kurumu: app/bank_import.describe (onarım da aynısını kullanır)
+        info = describe(r["description"], r["amount"], owners)
+        payment, bill_provider = info["payment"], info["bill_provider"]
+        who = None if rec else info["counterparty"] or _who_hint(r, owners)  # maaşta işveren kişi değil
+        note_text = "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}")
         if who:
             who, payment = _known_counterparty(who), "havale"
             cp = get_counterparty(who)
             if cp and cp["category"]:
                 category = cp["category"]  # kişiye verilmiş kategori
-            note = transfer_note(r["description"])
-            short = f"{who}" + (f" · {note}" if note else "")
-            desc = short if desc == r["description"] else desc
+            if desc == r["description"]:  # 'Elif Demir · not' (bilinen kişi adının yazılışıyla)
+                note = transfer_note(r["description"], owners, who)
+                desc = who + (f" · {note}" if note else "")
+                note_text = f"Hesap hareketi · {r['description']}"
+        elif not rec:
+            desc, note_text = info["description"], info["note"]
         if desc == r["description"] and len(desc) > 120:
             desc = desc[:120]  # uzun banka metni notta tam haliyle kalır
         eid = create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
                             "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
-                            "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}"),
+                            "note": note_text, "bill_provider": bill_provider,
                             "import_hash": r["hash"], "counterparty": who, "account_id": acc_id})
         if link_debt_movement(who, kind, amount, r["date"], eid):
             stats["borc_hareketi"] = stats.get("borc_hareketi", 0) + 1

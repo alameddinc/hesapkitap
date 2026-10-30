@@ -1,5 +1,6 @@
 """Banka tespiti + parser registry. Yeni banka = yeni modül + DETECTORS'a bir satır."""
 import io
+import threading
 
 import pdfplumber
 
@@ -21,11 +22,34 @@ def extract_text(data: bytes, password: str | None = None) -> str:
 
     try:
         with pdfplumber.open(io.BytesIO(data), password=password or "") as pdf:
-            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+            pages = [p.extract_text() or "" for p in pdf.pages]
     except Exception as e:  # noqa: BLE001
         if e.args and isinstance(e.args[0], PDFPasswordIncorrect):
             raise PasswordRequired("PDF şifreli") from e
         raise
+    text = "\n".join(pages)
+    _remember_pages(text, pages)
+    return text
+
+
+# Sayfa sınırları: metin tek parça döner (tüm okuyucular onu bekler); sayfa başlığı/altlığını ayıklamak isteyen
+# (app/templates.py) aynı metnin sayfalarını buradan sorar. Küçük, kilitli önbellek — uçlar iş parçacığında çalışır.
+_PAGES: dict[int, list[str]] = {}
+_PAGES_LOCK = threading.Lock()
+
+
+def _remember_pages(text: str, pages: list[str]) -> None:
+    with _PAGES_LOCK:
+        _PAGES[hash(text)] = pages
+        while len(_PAGES) > 8:
+            _PAGES.pop(next(iter(_PAGES)))
+
+
+def pages_of(text: str) -> list[str] | None:
+    """extract_text'in döndürdüğü metnin sayfaları (bilinmiyorsa None)."""
+    with _PAGES_LOCK:
+        pages = _PAGES.get(hash(text))
+    return pages if pages is not None and "\n".join(pages) == text else None
 
 
 def _text_with_passwords(data: bytes, passwords: list[str]) -> tuple[str, str | None]:
