@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check, ExternalLink, Layers, RefreshCw, X } from "lucide-react";
-import { dateTR } from "../format";
+import { tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
@@ -53,7 +53,7 @@ export default function BankTemplates({ isAdmin }: { isAdmin: boolean }) {
         {d.templates.map((t) => (
           <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
             <span><b>{t.bank}</b> <span className="text-xs text-stone-500">· {t.spec.kind === "card" ? "kart ekstresi" : "hesap dökümü"} · {t.source === "community" ? "topluluktan" : "bu sunucuda öğrenildi"} · {t.uses} kez kullanıldı
-              {t.shared_at && ` · paylaşıldı ${dateTR(t.shared_at.slice(0, 10))}`}</span></span>
+              {t.shared_at && ` · paylaşıldı ${tsDateTR(t.shared_at)}`}</span></span>
             <code className="text-xs text-stone-500">{t.spec.date.order}{t.spec.date.sep} · tutar #{t.spec.amount_idx}
               {t.spec.kind === "card" ? ` · ${t.spec.num} · ödeme ${t.spec.credit === "minus" ? "−" : "+"}` : ` · bakiye #${t.spec.balance_idx}`}</code>
           </li>
@@ -71,7 +71,7 @@ export default function BankTemplates({ isAdmin }: { isAdmin: boolean }) {
             {d.submissions.map((s) => (
               <li key={s.id} className="rounded-lg border border-stone-200 p-2 dark:border-stone-700">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span><b>{s.bank}</b> · {s.count} sunucudan · {dateTR(s.received_at.slice(0, 10))} · {s.status}</span>
+                  <span><b>{s.bank}</b> · {s.count} sunucudan · {tsDateTR(s.received_at)} · {s.status}</span>
                   <span className="flex gap-1">
                     {s.status !== "onaylandi" && <button className="btn-ghost px-2 py-0.5" onClick={() => review.mutate({ id: s.id, status: "onaylandi" }, onErr)}><Check size={13} /> Onayla</button>}
                     {s.status !== "reddedildi" && <button className="btn-ghost px-2 py-0.5" onClick={() => review.mutate({ id: s.id, status: "reddedildi" }, onErr)}><X size={13} /> Reddet</button>}

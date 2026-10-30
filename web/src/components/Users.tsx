@@ -209,7 +209,7 @@ function DeletedAccounts() {
               <span><b>#{r.user_id}</b> <code className="text-xs text-stone-500">{r.email_hash}…</code>
                 <span className="text-xs text-stone-500"> · {REASON[r.reason ?? ""] ?? r.reason}</span></span>
               <span className="text-xs text-stone-500">
-                silindi {dateTR(r.deleted_at)} · {r.purged_at ? `kalıcı ${dateTR(r.purged_at)}` : r.delete_after ? `geri alınabilir ${dateTR(r.delete_after)}'e kadar` : ""}
+                silindi {tsDateTR(r.deleted_at)} · {r.purged_at ? `kalıcı ${tsDateTR(r.purged_at)}` : r.delete_after ? `geri alınabilir ${dateTR(r.delete_after)}'e kadar` : ""}
               </span>
             </div>
             {(r.plan && r.plan !== "free") && (

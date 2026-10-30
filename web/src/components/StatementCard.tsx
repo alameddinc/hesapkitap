@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { api, type Statement } from "../api";
-import { cx, dateTR, tl } from "../format";
+import { cx, dateTR, tl, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
@@ -90,7 +90,7 @@ export default function StatementCard({ s }: { s: Statement }) {
               ? eq && !eq.ok
                 ? `Denklem ${tl(Math.abs(eq.diff))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
                 : `PDF'i aç ve işlemleri ekstreyle karşılaştır. Rakamlar aynıysa "Doğru, onayla" de.`
-              : status === "confirmed" ? "Rakamları ekstreyle karşılaştırıp doğru dedin."
+              : status === "confirmed" ? `Rakamları ekstreyle karşılaştırıp doğru dedin${s.confirmed_at ? ` (${tsDateTR(s.confirmed_at)})` : ""}.`
               : eq?.withFees ? "Denklem tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı."
               : eq ? "Denklem tuttu: okunan rakamlar ekstreyle aynı." : "Bu ekstrede özet rakamları okunamadı."}
           </p>
