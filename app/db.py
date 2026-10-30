@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict
@@ -509,8 +510,10 @@ def use_space(db_file: str | None, user: dict | None = None):
 
 # Okuma önbelleği: veritabanı dosyası değişmediyse aynı sorgu tekrar çalışmaz. Anahtar = dosyanın zamanı + boyutu +
 # bu süreçteki yazma sayacı (dosya zamanı birkaç ms hassasiyette; art arda iki yazma aynı zamanı taşıyabilir).
+# İstekler iş parçacığı havuzunda eşzamanlı çalışır: sayaç artırımı (oku-artır-yaz) ve önbellek temizliği kilitli.
 _WRITES: dict[str, int] = {}
 _READ_CACHE: dict = {}
+_CACHE_LOCK = threading.Lock()
 
 
 def stamp() -> tuple:
@@ -524,11 +527,19 @@ def stamp() -> tuple:
 
 def _cached(name: str, fn, *key):
     k = (name, stamp(), *key)
-    if k not in _READ_CACHE:
+    with _CACHE_LOCK:
+        hit = _READ_CACHE.get(k, _MISS)
+    if hit is not _MISS:
+        return hit
+    val = fn()  # sorgu kilit dışında: başka defterlerin okuması beklemesin
+    with _CACHE_LOCK:
         if len(_READ_CACHE) > 256:
             _READ_CACHE.clear()
-        _READ_CACHE[k] = fn()
-    return _READ_CACHE[k]
+        _READ_CACHE[k] = val
+    return val
+
+
+_MISS = object()
 
 
 @contextmanager
@@ -540,9 +551,13 @@ def connect():
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
-        if conn.total_changes:
-            _WRITES[path] = _WRITES.get(path, 0) + 1  # önbellekler bu dosya için geçersiz
+        changed = conn.total_changes
         conn.commit()
+        if changed:
+            # önbellekler bu dosya için geçersiz. Sayaç işlemeden (commit) SONRA artar: önce artsaydı, arada okuyan
+            # başka bir iş parçacığı eski veriyi yeni damgayla önbelleğe yazabilirdi
+            with _CACHE_LOCK:
+                _WRITES[path] = _WRITES.get(path, 0) + 1
     finally:
         conn.close()
 

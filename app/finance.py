@@ -20,6 +20,7 @@ import threading
 _CACHE: dict = {}
 _LOCKS: dict = {}
 _LOCKS_GUARD = threading.Lock()
+_MISS = object()
 
 
 def _db_stamp() -> tuple:
@@ -31,17 +32,21 @@ def _memo(fn):
         u = db.current_user()  # ortak defter üyesi süzülmüş veri görür: sonuç sahibininkiyle karışmasın
         viewer = u["id"] if u and u.get("member_of") else None
         key = (fn.__name__, _db_stamp(), viewer, date.today(), repr(args), repr(sorted(kwargs.items())))
-        if key not in _CACHE:
+        # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada _CACHE.clear() yapsa da KeyError olmaz.
+        hit = _CACHE.get(key, _MISS)
+        if hit is _MISS:
             # aynı anda gelen istekler (Özet + ay özeti) aynı ağır hesabı ikişer kez yapmasın: ikincisi birinciyi bekler
             with _LOCKS_GUARD:
                 lock = _LOCKS.setdefault(key, threading.Lock())
             with lock:
-                if key not in _CACHE:
-                    if len(_CACHE) > 128:
-                        _CACHE.clear()
-                        _LOCKS.clear()
-                    _CACHE[key] = fn(*args, **kwargs)
-        hit = _CACHE[key]
+                hit = _CACHE.get(key, _MISS)
+                if hit is _MISS:
+                    hit = fn(*args, **kwargs)
+                    with _LOCKS_GUARD:  # temizlik ve ekleme tek kilit altında (eşzamanlı clear/insert yarışmasın)
+                        if len(_CACHE) > 128:
+                            _CACHE.clear()
+                            _LOCKS.clear()
+                        _CACHE[key] = hit
         # çağıran sonucu değiştirse de önbellek bozulmasın
         if isinstance(hit, list) and all(isinstance(x, dict) for x in hit):
             return [dict(x) for x in hit]

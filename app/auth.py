@@ -14,6 +14,7 @@ import ipaddress
 import logging
 import os
 import secrets
+import threading
 import time
 from collections import defaultdict, deque
 
@@ -28,6 +29,7 @@ MIN_PASSWORD = 10
 
 log = logging.getLogger("hesapkitap.auth")
 _fails: dict[str, deque] = defaultdict(deque)
+_fails_lock = threading.Lock()  # giriş uçları iş parçacığı havuzunda eşzamanlı: deque/sözlük erişimi kilitli
 _setup_code: str | None = None
 
 
@@ -208,15 +210,17 @@ def valid_token(token: str | None) -> bool:
 
 
 def rate_limited(ip: str) -> bool:
-    q = _fails[ip]
     now = time.time()
-    while q and q[0] < now - FAIL_WINDOW:
-        q.popleft()
-    return len(q) >= MAX_FAILS
+    with _fails_lock:
+        q = _fails[ip]
+        while q and q[0] < now - FAIL_WINDOW:
+            q.popleft()
+        return len(q) >= MAX_FAILS
 
 
 def record_fail(ip: str) -> None:
-    _fails[ip].append(time.time())
+    with _fails_lock:
+        _fails[ip].append(time.time())
 
 
 def cookie_secure() -> bool:

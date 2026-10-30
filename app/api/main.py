@@ -314,6 +314,7 @@ def _record_consent(uid: int, request: Request) -> None:
 
 
 _signups: dict[str, list[float]] = {}
+_rate_lock = threading.Lock()  # _signups / _forgots: uçlar iş parçacığı havuzunda eşzamanlı çalışır
 
 
 def _signup_limited(ip: str) -> bool:
@@ -321,9 +322,17 @@ def _signup_limited(ip: str) -> bool:
     import time
 
     now = time.time()
-    recent = [t for t in _signups.get(ip, []) if now - t < 3600]
-    _signups[ip] = recent
-    return len(recent) >= 5
+    with _rate_lock:
+        recent = [t for t in _signups.get(ip, []) if now - t < 3600]
+        _signups[ip] = recent
+        return len(recent) >= 5
+
+
+def _signup_record(ip: str) -> None:
+    import time
+
+    with _rate_lock:
+        _signups.setdefault(ip, []).append(time.time())
 
 
 @app.get("/api/auth/invite/{code}")
@@ -376,13 +385,11 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
             raise HTTPException(409, "consent_required")
         if _signup_limited(ip):
             raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
-        import time
-
         # şifresiz hesap olmasın (boş şifre eski tek kullanıcılı girişe düşerdi): kimsenin bilmediği rastgele şifre;
         # isterse "Şifremi unuttum" ile kendi şifresini koyar
         u = auth.create_user(who["email"], secrets.token_urlsafe(32))
         system.put(f"pw_unset:{u['id']}", "1")  # şifresini bilmiyor: silme "SİL" yazarak onaylanır
-        _signups.setdefault(ip, []).append(time.time())
+        _signup_record(ip)
         _record_consent(u["id"], request)
         created = True
     system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
@@ -414,10 +421,13 @@ def forgot_password(body: ForgotIn, request: Request):
     if not reset.enabled():
         raise HTTPException(404, "Bu sunucuda şifre sıfırlama kapalı; sunucu yöneticisine sor")
     ip, now = client_ip(request), time.time()
-    _forgots[ip] = [t for t in _forgots.get(ip, []) if now - t < 3600]
-    if len(_forgots[ip]) >= 10:
+    with _rate_lock:  # say ve ekle tek adımda: eşzamanlı istekler sınırı aşamasın
+        _forgots[ip] = [t for t in _forgots.get(ip, []) if now - t < 3600]
+        limited = len(_forgots[ip]) >= 10
+        if not limited:
+            _forgots[ip].append(now)
+    if limited:
         raise HTTPException(429, "Çok fazla istek. Bir saat sonra tekrar dene.")
-    _forgots[ip].append(now)
     try:
         reset.request(body.email)
     except Exception:  # noqa: BLE001 - posta sunucusu hatası dışarıya hesap bilgisi sızdırmasın
@@ -462,9 +472,7 @@ def register(body: RegisterIn, request: Request, response: Response):
             u = auth.create_user(body.username, body.password)
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
-        import time
-
-        _signups.setdefault(ip, []).append(time.time())
+        _signup_record(ip)
         _record_consent(u["id"], request)
         _start_session(request, response, u)
         return {"ok": True}
@@ -670,7 +678,7 @@ async def revenuecat_webhook(request: Request):
     if not plans.hosted() or not secret or not hmac.compare_digest(request.headers.get("authorization", ""), secret):
         raise HTTPException(404, "Yok")
     body = await request.json()
-    res = plans.apply_revenuecat(body.get("event") or {})
+    res = await asyncio.to_thread(plans.apply_revenuecat, body.get("event") or {})  # SQLite yazma: döngü beklemesin
     import logging
 
     logging.getLogger("ekstre").info("revenuecat %s %s", (body.get("event") or {}).get("type"), res)
@@ -1299,7 +1307,10 @@ def _bank_profile_key(columns: list[str]) -> str:
     return "bank_profile:" + hashlib.sha1("|".join(c.strip().casefold() for c in columns).encode()).hexdigest()[:16]
 
 
-_PDF_CACHE: dict[str, dict] = {}  # önizleme ile içe aktarma arasında yapay zekâ çağrısını tekrarlamamak için
+# Önizleme ile içe aktarma arasında yapay zekâ çağrısını tekrarlamamak için. Anahtar: (defter, dosya özeti) — başka
+# defterin şifresiyle açılmış sonuç bu deftere verilmez. Uçlar iş parçacığında çalışır: erişim kilitle.
+_PDF_CACHE: dict[tuple[str, str], dict] = {}
+_PDF_CACHE_LOCK = threading.Lock()
 
 
 def _owners() -> list[str]:
@@ -1321,13 +1332,22 @@ async def _quota_full(request: Request, exc: QuotaFull):
     return JSONResponse({"detail": exc.detail, **exc.extra}, status_code=exc.status_code)
 
 
-async def _doc_check(file: UploadFile, status: int = 422) -> bytes:
+# Belge okuyan uçlar (PDF/OCR/yapay zekâ/Excel/SQLite yazma) senkron `def`: FastAPI onları iş parçacığı havuzunda
+# çalıştırır (bağlam — db.use_space — kopyalanır), olay döngüsü ve diğer kullanıcıların istekleri beklemez. Bu yüzden
+# yardımcılar da senkron: yüklenen dosya UploadFile.file (SpooledTemporaryFile) üzerinden doğrudan okunur.
+
+def _file_bytes(file: UploadFile) -> bytes:
+    file.file.seek(0)
+    return file.file.read()
+
+
+def _doc_check(file: UploadFile, status: int = 422) -> bytes:
     """Hazır sürüm: belge okuma hakkı doluysa dosyayı okumadan reddet (app/doc_reads.py). Dosyanın baytları (sayım
     anahtarı) döner; dosya başa sarılır."""
     from app import doc_reads
 
-    data = await file.read()
-    await file.seek(0)
+    data = _file_bytes(file)
+    file.file.seek(0)
     try:
         doc_reads.check(data)
     except doc_reads.QuotaError as e:
@@ -1343,31 +1363,34 @@ def _charge_if_new(key: bytes, counts: dict) -> None:
         doc_reads.charge(key)
 
 
-async def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple[list[dict], dict]:
+def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple[list[dict], dict]:
     import hashlib
 
     from app import bank_import, bank_pdf
 
-    data = await file.read()
-    key = hashlib.sha256(data).hexdigest()
-    if key not in _PDF_CACHE:
+    data = _file_bytes(file)
+    key = (os.path.abspath(db.db_path()), hashlib.sha256(data).hexdigest())
+    with _PDF_CACHE_LOCK:
+        res = _PDF_CACHE.get(key)
+    if res is None:  # ayrıştırma (yapay zekâ olabilir) kilit dışında: başka defterlerin okuması beklemesin
         try:
-            _PDF_CACHE[key] = bank_pdf.parse_account_pdf(data, ([password] if password else []) + db.pdf_passwords())
+            res = bank_pdf.parse_account_pdf(data, ([password] if password else []) + db.pdf_passwords())
         except (bank_pdf.BankPdfError, receipt.ReceiptError) as e:
             raise HTTPException(422, str(e)) from e
-        while len(_PDF_CACHE) > 8:
-            _PDF_CACHE.pop(next(iter(_PDF_CACHE)))
-    res = _PDF_CACHE[key]
+        with _PDF_CACHE_LOCK:
+            _PDF_CACHE[key] = res
+            while len(_PDF_CACHE) > 8:
+                _PDF_CACHE.pop(next(iter(_PDF_CACHE)))
     owners = [res.get("owner_name") or "", *_owners()]
     meta = {k: res[k] for k in ("bank", "owner_name", "verified", "chain_bad", "closing_ok")}
     meta["iban"] = res.get("iban")
     return bank_import.finalize(res["rows"], owners), meta
 
 
-async def _read_bank_file(file: UploadFile):
+def _read_bank_file(file: UploadFile):
     from app import bank_import
 
-    data = await file.read()
+    data = _file_bytes(file)
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(413, "Dosya çok büyük")
     try:
@@ -1417,16 +1440,16 @@ def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> d
 
 
 @app.post("/api/bank-import/preview")
-async def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form(None),
-                              header_row: int | None = Form(None), password: str | None = Form(None)):
+def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form(None),
+                         header_row: int | None = Form(None), password: str | None = Form(None)):
     """Sütunları tahmin et (ya da verilen eşlemeyi kullan), ilk satırları ve özetini döndür."""
     import json
 
     from app import bank_import
 
-    doc = await _doc_check(file)
+    doc = _doc_check(file)
     if (file.filename or "").lower().endswith(".pdf"):
-        parsed, meta = await _read_bank_pdf(file, password)
+        parsed, meta = _read_bank_pdf(file, password)
         with db.connect() as c:
             seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
         counts: dict[str, int] = {}
@@ -1443,7 +1466,7 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
                 **_balance_check(parsed, meta.get("bank") or "", meta.get("iban")),
                 "account_match": _account_match(meta.get("bank") or "", meta.get("iban"))}
 
-    rows = await _read_bank_file(file)
+    rows = _read_bank_file(file)
     det = bank_import.detect(rows)
     saved = db.get_setting(_bank_profile_key(det["columns"]))
     if mapping:
@@ -1478,18 +1501,18 @@ async def bank_import_preview(file: UploadFile = File(...), mapping: str | None 
 
 
 @app.post("/api/bank-import")
-async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0),
-                          password: str | None = Form(None), account_id: int | None = Form(None),
-                          new_account: bool = Form(False)):
+def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), header_row: int = Form(0),
+                    password: str | None = Form(None), account_id: int | None = Form(None),
+                    new_account: bool = Form(False)):
     """account_id: önizlemedeki "Bu döküm X hesabına mı ait?" sorusuna Evet; new_account: Yeni hesap aç."""
     import json
 
     from app import bank_import, sync
 
     account, iban = "", None
-    doc = await _doc_check(file)
+    doc = _doc_check(file)
     if (file.filename or "").lower().endswith(".pdf"):
-        parsed, meta = await _read_bank_pdf(file, password)
+        parsed, meta = _read_bank_pdf(file, password)
         account, iban = meta.get("bank") or "", meta.get("iban")
         if meta.get("owner_name"):
             db.remember_owner_name(meta["owner_name"])  # e-posta bildirimlerinde de "kendin" tanınsın
@@ -1497,7 +1520,7 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
         owners = [meta.get("owner_name") or ""] if meta.get("owner_name") else _owners()
     else:
         owners = _owners()
-        rows = await _read_bank_file(file)
+        rows = _read_bank_file(file)
         m = json.loads(mapping)
         parsed = bank_import.parse(rows, m, header_row, _owners())
         iban = sync.find_iban_rows(rows)
@@ -1507,8 +1530,7 @@ async def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"
         raise HTTPException(422, "İçe aktarılacak satır bulunamadı; sütun eşlemesini kontrol et")
     from app import undo
 
-    await file.seek(0)
-    raw = await file.read()
+    raw = _file_bytes(file)
     with undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
         if account_id and not any(a["id"] == account_id and a["kind"] == "banka" for a in db.list_accounts()):
             raise HTTPException(422, "Hesap bulunamadı")
@@ -2781,28 +2803,28 @@ def _classify_pdf(data: bytes, passwords: list[str]) -> tuple[str, bool] | None:
 
 
 @app.post("/api/statements/upload")
-async def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
-                            remember: bool = Form(False),
-                            kind: Literal["card", "account", "dekont"] | None = Form(None)):
+def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
+                      remember: bool = Form(False),
+                      kind: Literal["card", "account", "dekont"] | None = Form(None)):
     from app import undo
 
     names = ", ".join(f.filename or "dosya" for f in files)
     with undo.batch(f"Ekstre: {names[:120]}") as b:
-        results = await _upload_statements(files, password, remember, kind)
+        results = _upload_statements(files, password, remember, kind)
         b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
                                                 "message")} for r in results]
     return results
 
 
-async def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
-                             forced: str | None = None) -> list[dict]:
+def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
+                       forced: str | None = None) -> list[dict]:
     from app import doc_reads
     from app.parsers import PasswordRequired
 
     results = []
     tried = ([password] if password else []) + db.pdf_passwords()
     for f in files:
-        data = await f.read()
+        data = _file_bytes(f)
         res = {"filename": f.filename}
         name = (f.filename or "").lower()
         try:  # hazır sürüm: her yeni belge 1 okuma hakkı; doluysa bu dosya okunmaz
@@ -3289,9 +3311,9 @@ def test_rule(pattern: str, text: str):
 # ---------------------------------------------------------------- receipt
 
 @app.post("/api/receipts/parse")
-async def parse_receipt(file: UploadFile = File(...)):
+def parse_receipt(file: UploadFile = File(...)):
     """Fiş fotoğrafını oku, kaydetmeden önce kullanıcıya önizleme döndür."""
-    data = await file.read()
+    data = _file_bytes(file)
     mime = file.content_type or "image/jpeg"
     if not mime.startswith("image/"):
         raise HTTPException(422, "Sadece fotoğraf yüklenebilir")
@@ -3533,9 +3555,9 @@ BILL_TYPES = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".pn
 
 
 @app.post("/api/bills/parse")
-async def parse_bill(file: UploadFile = File(...)):
+def parse_bill(file: UploadFile = File(...)):
     """Fatura PDF/fotoğrafını sakla ve oku; kullanıcı onaylayınca /api/bills ile kaydedilir."""
-    data = await file.read()
+    data = _file_bytes(file)
     mime = file.content_type or ""
     if mime not in BILL_TYPES:
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
@@ -3673,15 +3695,15 @@ def delete_token(tid: int):
 
 
 @app.post("/api/documents/parse")
-async def parse_document(file: list[UploadFile] = File(...)):
+def parse_document(file: list[UploadFile] = File(...)):
     """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
     Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4)."""
     files = file[:4]
-    data = await files[0].read()
+    data = _file_bytes(files[0])
     mime = files[0].content_type or ""
     if mime not in BILL_TYPES or any((f.content_type or "") not in BILL_TYPES for f in files[1:]):
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
-    more = [(await f.read(), f.content_type or "") for f in files[1:]]
+    more = [(_file_bytes(f), f.content_type or "") for f in files[1:]]
     return _read_document(data, mime, more)
 
 
@@ -4000,9 +4022,9 @@ def export_xlsx():
 
 
 @app.post("/api/settings/backup/restore")
-async def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(None)):
+def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(None)):
     try:
-        return backup.restore(await file.read(), file.filename or "", passphrase)
+        return backup.restore(_file_bytes(file), file.filename or "", passphrase)
     except backup.RestoreError as e:
         raise HTTPException(422, str(e)) from e
 
