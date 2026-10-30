@@ -435,6 +435,7 @@ MIGRATIONS = [
     ("entries", "bill_provider", "TEXT"),       # dökümdeki fatura tahsilatı: kurum (Vodafone, İGDAŞ…) — Faturalar özeti
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
     ("own_transfers", "note", "TEXT"),          # kullanıcının notu
+    ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
 ]
 
@@ -944,7 +945,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
-                "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider")
+                "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider", "not_virman")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:
@@ -1834,6 +1835,49 @@ def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, 
                                             import_hash, (raw or "")[:500]))
 
 
+def update_own_transfer(tid: int, description: str | None = None, note: str | None = None) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+        if not r:
+            return None
+        sets = {k: v for k, v in (("description", description), ("note", note)) if v is not None}
+        if sets:
+            c.execute(f"UPDATE own_transfers SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), tid))
+        return dict(c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)).fetchone())
+
+
+def own_transfer_to_entry(tid: int, owners: list[str] | None = None) -> int | None:
+    """'Virman değil': kendi hesapları arası sayılmış aktarımı gelir/gider kaydına geri çevir (giriş + → gelir, çıkış −
+    → gider). Açıklama/kişi ham metinden içe aktarmadaki gibi üretilir; parmak izi korunur (tekrar yüklemede kopya
+    olmaz) ve kayıt işaretlenir (not_virman): onarım ve eşleme onu bir daha virmana taşımaz. Yeni kayıt id'si."""
+    from app.bank_import import describe
+
+    with connect() as c:
+        r = c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+        if not r:
+            return None
+        r = dict(r)
+        acc = c.execute("SELECT id FROM accounts WHERE name = ? OR alias = ?", (r["account"], r["account"])).fetchone()
+    raw = r.get("raw") or r["description"] or ""
+    kind = "gelir" if r["amount"] > 0 else "gider"
+    info = describe(raw, r["amount"], owners if owners is not None else owner_names())
+    who = _known_counterparty(info["counterparty"]) if info["counterparty"] else None
+    desc = info["description"] if not who else who + info["description"][len(info["counterparty"]):]
+    note = info["note"] + (f" · {r['note']}" if r.get("note") else "")
+    with connect() as c:
+        rules = load_rules(c)
+    cat = "Diğer Gelir" if kind == "gelir" else categorize(raw, "harcama", rules)
+    if who and (cp := get_counterparty(who)) and cp["category"]:
+        cat = cp["category"]
+    eid = create_entry({"entry_date": r["transfer_date"], "description": desc, "amount": abs(r["amount"]), "kind": kind,
+                        "category": cat or "Kategorisiz", "payment": (info["payment"] if not who else "havale") if kind == "gider" else None,
+                        "note": note, "import_hash": r["import_hash"], "counterparty": who,
+                        "account_id": acc[0] if acc else None, "bill_provider": info["bill_provider"], "not_virman": 1})
+    with connect() as c:
+        c.execute("DELETE FROM own_transfers WHERE id = ?", (tid,))
+    return eid
+
+
 def _raw_note(e: dict) -> str:
     note = e.get("note") or ""
     return note[len("Hesap hareketi · "):] if note.startswith("Hesap hareketi · ") else (e.get("description") or "")
@@ -1850,7 +1894,7 @@ def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:
         cands = [dict(r) for r in c.execute(
             "SELECT id, entry_date, amount, description, note, account_id, import_hash FROM entries "
             "WHERE kind = 'gider' AND import_hash IS NOT NULL AND import_hash NOT LIKE 'dekont:%' "
-            "AND COALESCE(payment, '') <> 'kredi_karti' AND wallet_id IS NULL")]
+            "AND COALESCE(payment, '') <> 'kredi_karti' AND wallet_id IS NULL AND not_virman = 0")]
     for e in cands:
         acc = accounts.get(e["account_id"], "")
         if not _pairs_own_transfer(e["amount"], e["entry_date"], e["description"], owners, acc):

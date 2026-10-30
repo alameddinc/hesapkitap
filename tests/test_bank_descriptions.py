@@ -325,3 +325,32 @@ def test_import_writes_clean_own_transfer_with_raw(tmpdb):
     with tmpdb.connect() as c:
         r = c.execute("SELECT description, raw FROM own_transfers").fetchone()
     assert r["description"] == "Kendi hesabından · Halkbank → VakıfBank" and r["raw"] == VAKIF_IN
+
+
+def test_own_transfer_edit_and_not_transfer(client, tmpdb):
+    """PATCH /api/own-transfers/{id}: not/açıklama; 'virman değil' → gider kaydı, onarım ve eşleme geri taşımaz."""
+    from app import bank_repair
+
+    db = tmpdb
+    db.remember_owner_name(OWNER)
+    out = ("FAST Anlık Ödeme kira (18/06/2026 tarihli 1000000004 sorgu no'lu ELİF KAYA hesabından Türkiye İş Bankası A.Ş. "
+           "ELİF KAYA hesabına giden FAST ödemesi)")
+    db.import_bank_rows(bank_import.finalize([{"date": "18.06.2026", "description": out, "amount": -35000.0,
+                                               "balance": 500.0}], [OWNER]), account="VakıfBank", owners=[OWNER])
+    own = client.get("/api/transfers").json()["own"]
+    assert len(own) == 1 and own[0]["description"] == "Kendi hesabına · VakıfBank → İş Bankası · kira"
+    tid = own[0]["id"]
+    r = client.patch(f"/api/own-transfers/{tid}", json={"note": "annemin hesabı", "description": "Annemin İş Bankası"}).json()
+    assert r["own_transfer"]["note"] == "annemin hesabı" and r["own_transfer"]["description"] == "Annemin İş Bankası"
+    r = client.patch(f"/api/own-transfers/{tid}", json={"not_transfer": True}).json()
+    assert r["kind"] == "gider"
+    with db.connect() as c:
+        e = dict(c.execute("SELECT * FROM entries WHERE id = ?", (r["entry_id"],)).fetchone())
+        assert c.execute("SELECT COUNT(*) FROM own_transfers").fetchone()[0] == 0
+    assert e["amount"] == 35000 and e["not_virman"] == 1 and "annemin hesabı" in e["note"]
+    # onarım ve tekrar yükleme virmana geri taşımaz, kopya açmaz
+    assert not bank_repair.repair(apply=True)["to_own_transfer"]
+    st = db.import_bank_rows(bank_import.finalize([{"date": "18.06.2026", "description": out, "amount": -35000.0,
+                                                    "balance": 500.0}], [OWNER]), account="VakıfBank", owners=[OWNER])
+    assert st["tekrar"] == 1 and _gider(db) == 35000
+    assert client.patch("/api/own-transfers/999", json={"note": "x"}).status_code == 404
