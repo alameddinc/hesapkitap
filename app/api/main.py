@@ -2827,13 +2827,35 @@ class CounterpartyIn(BaseModel):
 
 
 @app.get("/api/transfers")
-def transfers():
-    return db.transfers_overview()
+def transfers(month: str | None = None, start: str | None = None, end: str | None = None):
+    """month=YYYY-MM ya da start/end=YYYY-MM-DD (dönem: ör. kart dönemi 16 Eki–15 Kas): kişi toplamları ve items o
+    aralıkta. months (genel) ve people[].months (kişi başı) aylık kırılım her zaman tüm zaman için."""
+    import re as _re
+
+    for v, pat in ((month, r"\d{4}-\d{2}"), (start, r"\d{4}-\d{2}-\d{2}"), (end, r"\d{4}-\d{2}-\d{2}")):
+        if v and not _re.fullmatch(pat, v):
+            raise HTTPException(422, "Tarih biçimi: month=YYYY-MM, start/end=YYYY-MM-DD")
+    return db.transfers_overview(month, start, end)
 
 
 @app.put("/api/transfers/people/{name}")
 def set_person(name: str, body: CounterpartyIn):
     return {"updated": db.set_counterparty(name, body.category, body.track_debt, body.note)}
+
+
+class PersonRename(BaseModel):
+    name: str  # yeni ad; başka bir kişinin adıysa iki kişi birleşir
+
+
+@app.patch("/api/transfers/people/{name}")
+def rename_person(name: str, body: PersonRename):
+    """Kişiyi yeniden adlandır / başka kişiyle birleştir: kayıtları, borç defteri ve kişi ayarı yeni ada geçer."""
+    if len(body.name.strip()) > 80:
+        raise HTTPException(422, "Ad çok uzun")
+    try:
+        return db.rename_counterparty(name, body.name)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 # ---------------------------------------------------------------- statements
