@@ -2847,6 +2847,33 @@ class PersonRename(BaseModel):
     name: str  # yeni ad; başka bir kişinin adıysa iki kişi birleşir
 
 
+class OwnTransferPatch(BaseModel):
+    description: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=500)
+    not_transfer: bool = False  # "virman değil": gelir/gider kaydına geri çevir
+
+
+@app.patch("/api/own-transfers/{tid}")
+def patch_own_transfer(tid: int, body: OwnTransferPatch):
+    """Kendi hesapları arası aktarım: açıklama/not düzenle ya da yanlış eşleşmeyse (not_transfer) gelir/gider kaydına
+    çevir. Dönüş: {own_transfer} ya da {entry_id, kind} (çevrildiyse)."""
+    from app import book
+
+    if book.member():
+        raise HTTPException(403, "Bu işlemi defter sahibi yapabilir")
+    if body.not_transfer:
+        eid = db.own_transfer_to_entry(tid)
+        if eid is None:
+            raise HTTPException(404, "Aktarım yok")
+        with db.connect() as c:
+            kind = c.execute("SELECT kind FROM entries WHERE id = ?", (eid,)).fetchone()[0]
+        return {"entry_id": eid, "kind": kind}
+    r = db.update_own_transfer(tid, body.description.strip() if body.description is not None else None, body.note)
+    if r is None:
+        raise HTTPException(404, "Aktarım yok")
+    return {"own_transfer": r}
+
+
 @app.patch("/api/transfers/people/{name}")
 def rename_person(name: str, body: PersonRename):
     """Kişiyi yeniden adlandır / başka kişiyle birleştir: kayıtları, borç defteri ve kişi ayarı yeni ada geçer."""

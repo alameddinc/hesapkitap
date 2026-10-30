@@ -122,6 +122,8 @@ def repair(apply: bool = False) -> dict:
             "SELECT * FROM entries WHERE import_hash IS NOT NULL AND import_hash NOT LIKE 'dekont:%' "
             "AND import_hash NOT LIKE 'mail:%' AND kind IN ('gelir', 'gider') AND wallet_id IS NULL "
             "AND COALESCE(payment, '') <> 'kredi_karti' AND recurring_id IS NULL")]
+        entries = [e for e in entries if not e.get("not_virman")] + [
+            {**e, "_keep": True} for e in entries if e.get("not_virman")]
         for e in entries:
             row = by_hash.get(e["import_hash"])
             raw = row["description"] if row else _raw_of(e)
@@ -136,6 +138,8 @@ def repair(apply: bool = False) -> dict:
                 report["skipped_linked"] += 1
                 continue
             brief = {"id": e["id"], "date": e["entry_date"], "amount": signed, "was": e["description"]}
+            if e.get("_keep") and typ == "virman":  # kullanıcı "virman değil" dedi: yalnız açıklama onarılır
+                typ = "gelir" if signed > 0 else "gider"
             if typ == "virman":
                 label = bank_import.own_label(raw, signed, accounts.get(e["account_id"], ""), owners)
                 keep_message(e["id"], raw, signed, label)
