@@ -44,7 +44,30 @@ class Statement:
     transactions: list[Transaction] = field(default_factory=list)
     ai_parsed: bool = False  # bankaya özel parser yerine yapay zekâ ile okundu
 
+    def fees(self) -> float:
+        """Ekstredeki faiz ve ücret: özet satırı okunduysa o, okunmadıysa faiz/ücret işlemlerinin toplamı."""
+        return statement_fees(self.interest_fees, sum(t.amount for t in self.transactions if t.txn_type == FEE))
+
     def reconciliation_diff(self) -> float:
         """Parse edilen işlemler toplamı ile ekstre özetinin farkı. 0 değilse satır kaçmış demektir."""
         parsed = sum(t.amount for t in self.transactions if t.txn_type != PAYMENT)
-        return round(parsed - (self.period_activity + self.interest_fees), 2)
+        return reconciliation_diff(parsed, self.period_activity, self.interest_fees, self.fees(),
+                                   self.previous_balance, self.payments, self.total_debt)
+
+
+def statement_fees(interest_fees: float | None, fee_txn_sum: float) -> float:
+    return round(interest_fees or 0.0, 2) if interest_fees else round(max(fee_txn_sum, 0.0), 2)
+
+
+def reconciliation_diff(parsed: float, activity: float | None, interest_fees: float | None, fees: float,
+                        previous: float | None, payments: float | None, total: float | None) -> float:
+    """Okunan işlemler (ödeme hariç, faiz/ücret dahil) − ekstre özeti. Bazı ekstrelerde "Dönem içi işlemler" faizi
+    içerir, bazılarında faiz ayrı satırdır (VakıfBank: önceki borç − ödemeler + harcamalar + faiz ve ücret = yeni borç).
+    Özetteki faiz satırı okunamadıysa (interest_fees 0) hangisi olduğu denklemden anlaşılır."""
+    activity = activity or 0.0
+    extra = interest_fees or 0.0
+    if not extra and fees and None not in (previous, payments, total):
+        separate = abs(previous - payments + activity + fees - total) < 1
+        included = abs(previous - payments + activity - total) < 1
+        extra = fees if separate and not included else 0.0
+    return round(parsed - (activity + extra), 2)

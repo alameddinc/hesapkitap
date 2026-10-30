@@ -157,6 +157,10 @@ export interface Statement {
   min_payment: number | null;
   credit_limit: number | null;
   interest_fees: number;
+  /** faiz ve ücret: özet satırı okunmadıysa faiz/ücret işlemlerinin toplamı (sunucu hesaplar) */
+  fees?: number;
+  /** okunan işlemler − ekstre özeti, faiz ve ücret dahil (0 = tuttu) */
+  reconciliation_diff?: number | null;
   txn_count: number;
 }
 

@@ -860,13 +860,29 @@ def link_entry(entry_id: int, txn_id: int | None) -> None:
 
 
 def list_statements() -> list[dict]:
+    """Ekstreler. fees: faiz ve ücret (özet satırı okunduysa interest_fees, yoksa faiz/ücret işlemlerinin toplamı);
+    reconciliation_diff: okunan işlemler − ekstre özeti (faiz ve ücret dahil, app/parsers/base.py) — kayıtlı veriden."""
     from app import book
+    from app.parsers.base import reconciliation_diff, statement_fees
 
     with connect() as c:
-        return book.filter_statements(rows(c.execute(
-            """SELECT s.*, substr(s.period_end, 1, 7) AS period, COUNT(t.id) AS txn_count
+        out = book.filter_statements(rows(c.execute(
+            """SELECT s.*, substr(s.period_end, 1, 7) AS period, COUNT(t.id) AS txn_count,
+                      ROUND(COALESCE(SUM(CASE WHEN t.txn_type = 'faiz_ucret' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
+                          AS fee_txns,
+                      ROUND(COALESCE(SUM(CASE WHEN t.txn_type <> 'odeme' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
+                          AS parsed_total
                FROM statements s LEFT JOIN transactions t ON t.statement_id = s.id
                GROUP BY s.id ORDER BY s.period_end DESC""")))
+    hide = book.hide_fees()
+    for s in out:
+        s["fees"] = 0.0 if hide else statement_fees(s["interest_fees"], s.pop("fee_txns"))
+        s.pop("fee_txns", None)
+        parsed = s.pop("parsed_total")
+        s["reconciliation_diff"] = (reconciliation_diff(parsed, s["period_activity"], s["interest_fees"], s["fees"],
+                                                        s["previous_balance"], s["payments"], s["total_debt"])
+                                    if s["period_activity"] is not None else None)
+    return out
 
 
 def delete_statement(statement_id: int) -> None:
