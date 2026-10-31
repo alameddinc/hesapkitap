@@ -4455,15 +4455,33 @@ def shared_inbox():
     return share_mod.inbox()
 
 
-@app.post("/api/inbox/{iid}/import")
-def inbox_import(iid: int):
-    """Doğrulanamadığı için e-postadan/paylaşımdan onaya düşen belgeyi (kind dokum | ekstre) kaydet (S6). Dönüş:
-    {ok, kind, message, stats? (döküm sayaçları), statement_id?}. Yalnız bekleyen dokum/ekstre kaydı: yoksa 404."""
-    from app import book, undo, verification
+def _held_access() -> None:
+    from app import book
 
     m = book.member()
     if m and book.role(m) != "full":  # belge yükleme gibi: ortak defterde yalnız tam yetkili üye
         raise HTTPException(403, errors.GENERIC[403])
+
+
+@app.get("/api/inbox/{iid}/file")
+def inbox_file(iid: int):
+    """Onay bekleyen dokum/ekstre belgesinin PDF'i (inline). Yetki import ile aynı; başka tür ya da gizli kayıt 404."""
+    from app import verification
+
+    _held_access()
+    doc = verification.held_doc(iid)
+    if not doc or not doc.get("file"):
+        raise HTTPException(404, "Dosya yok")
+    return _stored_file("uploads", doc["file"], doc.get("filename") or "belge.pdf", inline=True)
+
+
+@app.post("/api/inbox/{iid}/import")
+def inbox_import(iid: int):
+    """Doğrulanamadığı için e-postadan/paylaşımdan onaya düşen belgeyi (kind dokum | ekstre) kaydet (S6). Dönüş:
+    {ok, kind, message, stats? (döküm sayaçları), statement_id?}. Yalnız bekleyen dokum/ekstre kaydı: yoksa 404."""
+    from app import undo, verification
+
+    _held_access()
     try:
         with undo.batch(f"Gelen kutusu: belge #{iid}"):
             return verification.import_held(iid)

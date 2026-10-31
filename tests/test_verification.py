@@ -15,6 +15,11 @@ def _bad_account(ok=False):
 
 
 @pytest.fixture
+def hold(monkeypatch):
+    monkeypatch.setenv("HESAPKITAP_HOLD_UNVERIFIED", "1")
+
+
+@pytest.fixture
 def account_pdf(monkeypatch):
     from app import bank_pdf, mailbox
 
@@ -34,7 +39,7 @@ def _ai_statement(broken=True):
                      ai_parsed=True)
 
 
-def test_mail_account_unverified_waits_for_approval(client, tmpdb, account_pdf):
+def test_mail_account_unverified_waits_for_approval(client, tmpdb, account_pdf, hold):
     from app import mailbox
 
     msg = mailbox.handle_pdf("dokum.pdf", b"%PDF-1.4\n" + fixture_bytes("kuveytturk.txt"))
@@ -64,7 +69,7 @@ def test_mail_account_verified_imports_directly(tmpdb, account_pdf):
     assert not getattr(msg, "inbox_id", None) and "1 gelir, 1 gider" in msg
 
 
-def test_mail_ai_card_statement_broken_equation_held(client, tmpdb, monkeypatch):
+def test_mail_ai_card_statement_broken_equation_held(client, tmpdb, monkeypatch, hold):
     from app import mailbox, parsers
 
     monkeypatch.setattr(parsers, "parse_statement", lambda data, passwords=None: _ai_statement())
@@ -79,6 +84,42 @@ def test_mail_ai_card_statement_broken_equation_held(client, tmpdb, monkeypatch)
     assert len(client.get(f"/api/statements/{st[0]['id']}/file").content) > 0
 
 
+def test_held_file_endpoint(client, tmpdb, account_pdf, hold):
+    from app import mailbox
+
+    data = b"%PDF-1.4\n" + fixture_bytes("kuveytturk.txt")
+    msg = mailbox.handle_pdf("Ekim dokumu.pdf", data)
+    r = client.get(f"/api/inbox/{msg.inbox_id}/file")
+    assert r.status_code == 200 and r.content == data and r.headers["content-type"] == "application/pdf"
+    assert "inline" in r.headers.get("content-disposition", "")
+    assert client.get("/api/inbox/9999/file").status_code == 404
+    from app import db, share
+
+    with db.connect() as c:  # fiş/fatura kaydı: bu uçtan dosya verilmez
+        share._init(c)
+        rid = c.execute("INSERT INTO shared_inbox (filename, kind, doc) VALUES ('f.jpg', 'receipt', '{}')").lastrowid
+    assert client.get(f"/api/inbox/{rid}/file").status_code == 404
+
+
+def test_hold_off_imports_but_warns(client, tmpdb, account_pdf, monkeypatch):
+    """Varsayılan (HESAPKITAP_HOLD_UNVERIFIED=0): eski istemciler için eskisi gibi içe aktarılır; uyarı yine çıkar."""
+    from app import mailbox, parsers
+
+    monkeypatch.delenv("HESAPKITAP_HOLD_UNVERIFIED", raising=False)
+    msg = mailbox.handle_pdf("dokum.pdf", b"%PDF-1.4\n" + fixture_bytes("kuveytturk.txt"))
+    assert not getattr(msg, "inbox_id", None) and "Rakamlar tutmadı" in msg
+    assert len([e for e in tmpdb.list_entries() if e.get("import_hash")]) == 2
+    assert not client.get("/api/inbox").json()
+    doc = client.get("/api/bank-import/documents").json()[0]
+    assert doc["verification"] == "dogrulanamadi"
+    monkeypatch.setattr(parsers, "parse_statement", lambda data, passwords=None: _ai_statement())
+    monkeypatch.setattr(mailbox, "_looks_like_account_statement", lambda text: False)
+    assert not getattr(mailbox.handle_pdf("e.pdf", b"%PDF-1.4\nFIXTURE:vakifbank_a.txt"), "inbox_id", None)
+    assert len(tmpdb.list_statements()) == 1
+    ids = {r["id"] for r in client.get("/api/reminders").json() if r["kind"] == "belge_dogrulanamadi"}
+    assert f"dokum_kontrol:{doc['id']}" in ids and f"ekstre_kontrol:{tmpdb.list_statements()[0]['id']}" in ids
+
+
 def test_mail_ai_card_statement_ok_saved(tmpdb, monkeypatch):
     from app import mailbox, parsers
 
@@ -87,7 +128,7 @@ def test_mail_ai_card_statement_ok_saved(tmpdb, monkeypatch):
     assert not getattr(msg, "inbox_id", None) and len(tmpdb.list_statements()) == 1
 
 
-def test_share_path_reports_waiting(client, tmpdb, account_pdf):
+def test_share_path_reports_waiting(client, tmpdb, account_pdf, hold):
     from app import share
 
     r = share.process("dokum.pdf", b"%PDF-1.4\n" + fixture_bytes("kuveytturk.txt"), "application/pdf")

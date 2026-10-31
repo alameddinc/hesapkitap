@@ -2,19 +2,27 @@
 
 - Uygulamadan yükleme (kullanıcı ekranın başında): kaydedilir, yanıtta verified: false, verification: "dogrulanamadi",
   verification_text; Yapılacaklar'a "Belgedeki rakamları kontrol et" düşer (kullanıcı onaylayınca ya da kapatınca gider).
-- E-posta / paylaş yolu (kullanıcı yok): İÇE AKTARILMAZ. Okunan sonuç Gelen kutusu'nda (shared_inbox, kind "dokum" |
+- E-posta / paylaş yolu (kullanıcı yok; HESAPKITAP_HOLD_UNVERIFIED=1 iken): İÇE AKTARILMAZ. Okunan sonuç Gelen kutusu'nda (shared_inbox, kind "dokum" |
   "ekstre") onay bekler; POST /api/inbox/{id}/import ile kaydedilir, /silindi ile atılır. Yapılacaklar'da "belge_onay".
 
 Durum değerleri (sözleşme): "dogrulandi" (zincir/denklem tuttu), "dogrulanamadi" (tutmadı), "onaylandi" (tutmadı ama
 kullanıcı belgeyle karşılaştırıp doğru dedi), null (Excel/CSV gibi doğrulaması olmayan biçim).
 """
 import json
+import os
 from dataclasses import asdict
 from datetime import date
 
 from app import db, terms
 
 DOGRULANDI, DOGRULANAMADI, ONAYLANDI = "dogrulandi", "dogrulanamadi", "onaylandi"
+
+
+def hold_enabled() -> bool:
+    """HESAPKITAP_HOLD_UNVERIFIED=1: e-posta/paylaş yolunda doğrulanamayan belge Gelen kutusu'nda onay bekler.
+    Varsayılan 0 (Gelen kutusu'nda dokum/ekstre türlerini tanımayan eski istemciler için): belge eskisi gibi içe
+    aktarılır; verification alanları ve 'belge_dogrulanamadi' Yapılacaklar maddesi yine üretilir."""
+    return os.environ.get("HESAPKITAP_HOLD_UNVERIFIED", "0").strip() == "1"
 _DOC_STATE = {1: DOGRULANDI, 0: DOGRULANAMADI, 2: ONAYLANDI}
 RECENT_DAYS = 45  # bu kadar eski yüklemeler için Yapılacaklar'da ısrar edilmez
 
@@ -129,6 +137,30 @@ def held(message: str, iid: int) -> Held:
     return h
 
 
+def held_doc(iid: int) -> dict | None:
+    """Bekleyen dokum/ekstre kaydının belgesi; ortak defterde üyeden gizli kart/hesaba aitse None (404)."""
+    from app import book, share
+    from app.bank_import import short_bank
+
+    with db.connect() as c:
+        share._init(c)
+        r = c.execute("SELECT * FROM shared_inbox WHERE id = ? AND kind IN ('dokum', 'ekstre')", (iid,)).fetchone()
+    if not r:
+        return None
+    doc = json.loads(r["doc"])
+    rules = book.active()
+    if rules:
+        if r["kind"] == "ekstre" and (doc.get("statement") or {}).get("card_no") in set(rules["hidden_cards"]):
+            return None
+        if r["kind"] == "dokum" and rules["hidden_accounts"]:
+            with db.connect() as c:
+                ids = {x[0] for x in c.execute("SELECT id FROM accounts WHERE name = ? OR alias = ?",
+                                               (short_bank(doc.get("bank") or ""), short_bank(doc.get("bank") or "")))}
+            if ids & set(rules["hidden_accounts"]):
+                return None
+    return {**doc, "kind": r["kind"], "status": r["status"], "filename": doc.get("filename") or r["filename"]}
+
+
 def import_held(iid: int) -> dict:
     """Onay: Gelen kutusu'ndaki doğrulanamayan belgeyi kaydet. {ok, kind, message, stats?}. Bulunamazsa KeyError."""
     from app import doc_reads, share
@@ -137,7 +169,7 @@ def import_held(iid: int) -> dict:
         share._init(c)
         r = c.execute("SELECT * FROM shared_inbox WHERE id = ? AND status = 'bekliyor' AND kind IN ('dokum', 'ekstre')",
                       (iid,)).fetchone()
-    if not r:
+    if not r or held_doc(iid) is None:
         raise KeyError(iid)
     doc = json.loads(r["doc"])
     data = db.read_file("uploads", doc.get("file")) or b""
