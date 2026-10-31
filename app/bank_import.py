@@ -538,7 +538,8 @@ def describe(raw: str, amount: float, owners: list[str] | None = None) -> dict:
         desc = ("Para çekme · şube" if "MEVDUAT PARA CEK" in norm else "ATM para çekme" + (f" · {where}" if where else ""))
     if desc == raw and len(desc) > 120:
         desc = desc[:120]
-    note = "Hesap hareketi" + "".join(f" · {x}" for x in extra) + ("" if desc == raw else f" · {raw}")
+    # ham banka metni her zaman notun ilk satırında (açıklama düzeltilse de banka açıklaması kaybolmasın; app/rawnote.py)
+    note = "Hesap hareketi" + "".join(f" · {x}" for x in extra) + f" · {raw}"
     return {"description": desc, "counterparty": who, "payment": payment, "note": note, "bill_provider": provider}
 
 

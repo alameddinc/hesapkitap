@@ -165,7 +165,7 @@ def _raw(e: dict) -> str | None:
     m = e.get("match")
     if m and m.get("source") == "dokum" and m.get("description"):
         return m["description"]
-    return rawnote.raw_of(e.get("note"), e.get("description"))
+    return rawnote.raw_of(e.get("note"))
 
 
 def _entry_row(e: dict) -> dict:

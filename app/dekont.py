@@ -99,6 +99,7 @@ def import_text(text: str) -> dict:
             return {**p, "counterparty": who, "status": "updated"}
     db.create_entry({"entry_date": p["date"], "description": desc[:120], "amount": p["amount"], "kind": p["kind"],
                      "category": category, "payment": "havale" if p["kind"] == "gider" else None,
-                     "note": "Dekont (bakiye değişmedi; döküm gelince birleşir)", "import_hash": h,
+                     "note": f"Hesap hareketi · {p['description']}\nDekont (bakiye değişmedi; döküm gelince birleşir)",
+                     "import_hash": h,
                      "counterparty": who, "account_id": acc_id})
     return {**p, "counterparty": who, "status": "saved"}

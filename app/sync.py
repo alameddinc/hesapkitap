@@ -442,7 +442,7 @@ def attach_row(c, m: dict, r: dict, kind: str, amount: float, acc_id: int | None
     desc = (who or r["description"])[:120]
     other = {"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
              "payment": payment if kind == "gider" else None, "import_hash": r["hash"], "counterparty": who,
-             "account_id": acc_id, "note": "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}")}
+             "account_id": acc_id, "note": f"Hesap hareketi · {r['description']}"}
     c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?), "
               "account_id = COALESCE(account_id, ?) WHERE id = ?", (r["hash"], who, acc_id, m["id"]))
     _record(c, m["id"], "dokum", "otomatik", import_hash=r["hash"], bank_date=r["date"], bank_desc_=r["description"],

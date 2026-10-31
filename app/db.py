@@ -2261,8 +2261,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                                "AND ROUND(amount * 100) = ? AND kind = ? LIMIT 1",
                                (acc_id, r["date"], money.kurus(abs(r["amount"])), "gelir" if r["amount"] > 0 else "gider")).fetchone()
                 if dk:
-                    c.execute("UPDATE entries SET import_hash = ?, note = 'Hesap hareketi (dekontla eşleşti)' WHERE id = ?",
-                              (r["hash"], dk["id"]))
+                    c.execute("UPDATE entries SET import_hash = ?, note = ? WHERE id = ?",
+                              (r["hash"], f"Hesap hareketi · {r['description']}\nDekontla eşleşti", dk["id"]))
             if dk:
                 seen.add(r["hash"])
                 stats["tekrar"] += 1
@@ -2405,7 +2405,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         info = describe(r["description"], r["amount"], owners)
         payment, bill_provider = info["payment"], info["bill_provider"]
         who = None if rec else info["counterparty"] or _who_hint(r, owners)  # maaşta işveren kişi değil
-        note_text = "Hesap hareketi" + ("" if desc == r["description"] else f" · {r['description']}")
+        note_text = f"Hesap hareketi · {r['description']}"  # ham metin her zaman notta (app/rawnote.py)
         if who:
             who, payment = _known_counterparty(who), "havale"
             cp = get_counterparty(who)

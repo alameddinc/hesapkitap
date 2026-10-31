@@ -3368,7 +3368,7 @@ def transfers(month: str | None = None, start: str | None = None, end: str | Non
         for i in out.get(key) or []:
             m = info.get(i.get("id")) or {}
             i["raw"] = m["description"] if m.get("source") == "dokum" and m.get("description") else \
-                rawnote.raw_of(i.get("note"), i.get("description"))
+                rawnote.raw_of(i.get("note"))
             i["note_user"] = rawnote.user_note(i.get("note"))
     return out
 

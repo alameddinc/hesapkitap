@@ -30,6 +30,7 @@ import re
 import sys
 
 from app import db
+from app import rawnote
 from app.money import eq as money_eq, ne as money_ne
 
 _EXTRA = re.compile(r"(Telefon|Abone no|Sözleşme no|Tesisat no|Mukavele no|Fatura no|Son ödeme) [^·]{1,40} · ")
@@ -45,7 +46,7 @@ def _raw_of(e: dict) -> str | None:
     """Kaydın içe aktarıldığı ham banka metni (app/rawnote.py)."""
     from app import rawnote
 
-    return rawnote.raw_of(e.get("note"), e.get("description"))
+    return rawnote.legacy_raw(e.get("note"), e.get("description"))
 
 
 def _untouched(e: dict) -> bool:
@@ -186,6 +187,47 @@ def _duplicates(c, docs: list[tuple[dict, list[dict]]]) -> list[dict]:
     return out
 
 
+_BANKISH = re.compile(r"\b(FAST|EFT|HAVALE|POS|REF|SORGU|IBAN|TR\d{2}|ODEME|ÖDEME|TAHSILAT|VIRMAN|ATM|KART|GELEN|GIDEN|"
+                      r"GİDEN|HESAB|NOLU|NO'LU|PARA|MASRAF|KOMISYON|AIDAT|SATIS|ALIS)\b|\d{6,}", re.I)
+
+
+def _looks_bank_text(desc: str) -> bool:
+    """Açıklama hâlâ bankanın ham metni mi (kullanıcı değiştirmemiş)? Büyük harf ağırlıklı ve banka sözcükleri/uzun
+    numara içeriyor."""
+    letters = [ch for ch in desc or "" if ch.isalpha()]
+    upper = sum(ch.isupper() for ch in letters) / len(letters) if letters else 0
+    return bool(_BANKISH.search(desc or "")) and upper >= 0.6
+
+
+def _raw_notes(by_hash: dict, report: dict, apply: bool) -> None:
+    """Eski kayıtlar: içe aktarma açıklama ham metinle aynıysa notuna yalnız "Hesap hareketi" yazıyordu; kullanıcı
+    açıklamayı düzeltince banka açıklaması kayboluyordu. Açıklama değişmemişse ham metin notun ilk satırına geri
+    yazılır (kullanıcı notu altında korunur). Değişmiş ya da emin olunamıyorsa dokunulmaz (raw null kalır)."""
+    report.update(raw_notes=[], raw_unknown=[])
+    with db.connect() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT id, entry_date, amount, kind, description, note, import_hash FROM entries "
+            "WHERE import_hash IS NOT NULL AND (note = 'Hesap hareketi' OR note LIKE 'Hesap hareketi' || char(10) || '%')")]
+        for e in rows:
+            signed = e["amount"] if e["kind"] == "gelir" else -e["amount"]
+            doc = by_hash.get(e["import_hash"])
+            desc = e["description"] or ""
+            if doc:
+                raw = doc["description"]
+                same = desc in (raw, raw[:120])
+            else:
+                raw, same = desc, _looks_bank_text(desc)
+            brief = {"id": e["id"], "date": e["entry_date"], "amount": signed, "was": desc}
+            if not same:
+                report["raw_unknown"].append({**brief, "why": "açıklama değiştirilmiş ya da ham metin bilinmiyor"})
+                continue
+            report["raw_notes"].append({**brief, "now": raw[:60], "why": "döküm dosyasından" if doc else "açıklamadan"})
+            if apply:
+                user = rawnote.user_note(e["note"])
+                c.execute("UPDATE entries SET note = ? WHERE id = ?",
+                          (f"Hesap hareketi · {raw}" + (f"\n{user}" if user else ""), e["id"]))
+
+
 def repair(apply: bool = False) -> dict:
     """Onarım. apply=False: hiçbir şey yazmaz, ne değişeceğini döner."""
     from app import bank_import
@@ -218,6 +260,7 @@ def repair(apply: bool = False) -> dict:
             if apply:
                 db.rename_counterparty(n, new)
     by_hash, docs = _document_rows(owners, report)
+    _raw_notes(by_hash, report, apply)
     if report["owner_names"] and not db.owner_names():  # dökümden öğrenilen sahip: kart sahipleri kişi kalsın
         owners[:] = [o for o in owners if o in report["owner_names"]]
 
@@ -273,6 +316,13 @@ def repair(apply: bool = False) -> dict:
                    "bill_provider": info["bill_provider"]}
             if e["kind"] == "gider":
                 new["payment"] = "havale" if who else info["payment"]
+            if (not row and rawnote.raw_of(e.get("note")) is None
+                    and (e.get("description") or None) == (new.get("description") or None)):
+                # eski kayıt, ham metin bilinmiyor ve açıklamaya dokunulmuyor: not elle bırakılır (raw_notes karar verir).
+                # Onarım açıklamayı değiştiriyorsa içe aktarmanın notu (ham satırı dahil) yazılır: ham metin kaybolmaz.
+                new.pop("note", None)
+            if new.get("note") and rawnote.user_note(e.get("note")):  # kullanıcının ham satır altındaki notu korunur
+                new["note"] = f"{new['note']}\n{rawnote.user_note(e.get('note'))}"
             changed = {k: v for k, v in new.items() if (e.get(k) or None) != (v or None)}
             if not changed:
                 continue
@@ -402,6 +452,8 @@ def _print(rep: dict, apply: bool) -> None:
                        ("restored", "yanlışlıkla virman sayılmış gider → geri eklendi"),
                        ("missing", "dökümde var, kaydı yok → eklendi"),
                        ("duplicates", "aynı hareket iki belgeden (PDF + Excel) → fazlası silinir"),
+                       ("raw_notes", "banka açıklaması (ham metin) nota geri yazılır"),
+                       ("raw_unknown", "banka açıklaması bilinmiyor (açıklama değişmiş) → dokunulmaz, raw boş"),
                        ("anchors", "hesap bakiyesi (yeniden eskiye sıralı döküm) → günün son hareketi"),
                        ("transfer_accounts", "virmanlara hesap bilgisi eklenir (dökümden gelmiş; bakiye değişmez)"),
                        ("transfer_balance", "virmanlara hesap bilgisi eklenir (elle/e-postadan, çapadan sonra; bakiyeye girer)")):

@@ -22,7 +22,9 @@ def _head(note: str | None) -> tuple[str | None, str | None]:
 
 
 def raw_of(note: str | None, description: str | None = None) -> str | None:
-    """Ham banka metni: 'Hesap hareketi · <ham>' → ham; 'Hesap hareketi' (ek yok) → açıklama; değilse None."""
+    """Ham banka metni yalnız notun ilk satırından: 'Hesap hareketi · <ham>' → ham. Açıklamadan ASLA türetilmez
+    (kullanıcı düzeltince değişir): 'Hesap hareketi' tek başına (eski kayıt) → None; onarım (bank_repair) eski
+    kayıtlarda açıklama değişmemişse ham satırı geri yazar. description bağımsız değişken yalnız geriye uyum için."""
     first, _ = _head(note)
     if first is None:
         return None
@@ -32,7 +34,17 @@ def raw_of(note: str | None, description: str | None = None) -> str | None:
         while m := _EXTRA.match(rest):
             rest = rest[m.end():]
         return rest or None
-    return (description or None) if rest.strip() == "" else None
+    return None
+
+
+def legacy_raw(note: str | None, description: str | None) -> str | None:
+    """Onarım ve iç eşleştirme için: eski kayıtta notu yalnız 'Hesap hareketi' ise içe aktarma açıklamayı hamın
+    kendisi yazmıştı (kullanıcı değiştirmediyse). Kullanıcıya gösterilmez."""
+    raw = raw_of(note)
+    if raw is not None:
+        return raw
+    first, _ = _head(note)
+    return (description or None) if first is not None and first.strip() == PREFIX else None
 
 
 def user_note(note: str | None) -> str | None:
