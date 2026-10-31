@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+
+import MailSubject from "../components/MailSubject";
 import { ask } from "../lib/ask";
 import Sessions from "../components/Sessions";
 import { call, errorText, send } from "../lib/apiError";
@@ -549,15 +551,16 @@ function MailSection({ keys }: { keys: ConfigItem[] }) {
               <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 text-sm dark:divide-stone-800 dark:border-stone-700">
                 {log.map((m) => (
                   <li key={m.message_id} className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <span className={cx("rounded px-1.5 py-0.5 text-xs",
+                    <div className="flex items-start gap-2">
+                      <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-xs",
                         m.status === "ok" ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
                           : m.status === "error" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                             : "bg-stone-100 text-stone-500 dark:bg-stone-800")}>
                         {m.status === "ok" ? "aktarıldı" : m.status === "error" ? "hata" : "atlandı"}
                       </span>
-                      <span className="min-w-0 flex-1 truncate">{m.subject || "(konusuz)"}</span>
-                      <span className="text-xs text-stone-500">{dateTR(m.received_at)}</span>
+                      {/* konu kesilmez: Gmail yönlendirme onay kodu buradadır */}
+                      <MailSubject subject={m.subject} className="min-w-0 flex-1" />
+                      <span className="shrink-0 text-xs text-stone-500">{dateTR(m.received_at)}</span>
                     </div>
                     <p className="mt-0.5 text-xs whitespace-pre-line text-stone-500">{maskText(m.detail)}</p>
                   </li>

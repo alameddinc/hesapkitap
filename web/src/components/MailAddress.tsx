@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import MailSubject from "./MailSubject";
 import { ask } from "../lib/ask";
 import { ChevronDown, Copy, Crown, Inbox, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -184,7 +185,7 @@ function Log({ log, refreshing, onRefresh }: { log: MailLogItem[]; refreshing: b
               <div className="flex items-start gap-2">
                 <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-xs", st.cls)} title={st.label}>{st.icon} {st.label}</span>
                 {/* konu her zaman görünür: Gmail yönlendirme onay kodu buradadır */}
-                <span className="min-w-0 flex-1 font-medium break-words">{m.subject || "(konusuz)"}</span>
+                <MailSubject subject={m.subject} className="min-w-0 flex-1 font-medium" />
                 <span className="shrink-0 text-xs text-stone-500">{dateTR(m.received_at)}</span>
               </div>
               <div className="mt-0.5 truncate text-xs text-stone-500">{m.sender || "gönderen bilinmiyor"}</div>
