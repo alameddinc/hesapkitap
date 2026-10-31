@@ -538,35 +538,61 @@ def _gain_totals(items: list[dict]) -> dict:
 
 # ---------------------------------------------------------------- geçmiş yıllar (kaza zekâtı)
 
-def _bank_at(day: date) -> tuple[float, list[str]]:
-    """O günkü banka/nakit bakiyeleri: bugünkü çapadan geriye (ya da ileriye) hareketlerle. Hareketler: hesaba bağlı
-    gelir/gider + kendi hesaplar arası aktarımlar + karttan ödemeler (bunlar ayrı tablolarda). Hareketi o tarihe
-    uzanmayan hesap bilinmiyor sayılır."""
+def account_balances_at(day: date) -> dict[int, float | None]:
+    """Hesap başına o günün sonundaki bakiye (bilinmiyorsa None). Hareketler hesabın ADIYLA değil account_id ile
+    eşleşir: hesap yeniden adlandırılınca geçmiş bakiye kaymaz (A5). account_id'si boş eski aktarım/kart ödemesi
+    kayıtları (e-posta/döküm, hesap bilgisi eklenmeden önce) ad ya da takma adla (short_bank) eşleşir.
+
+    Çapa tarihinden sonrası db._account_balance ile aynı kural (bugün için ikisi eşit). Öncesi: çapadan geriye, çapanın
+    içindeki hareketler (çapa günü çapadan sonra girilenler hariç) düşülür. Hareketi o tarihe uzanmayan hesap: None."""
     from app.bank_import import short_bank
 
-    total, unknown = 0.0, []
     d = day.isoformat()
+    out: dict[int, float | None] = {}
     with db.connect() as c:
         accs = db.rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' AND as_of IS NOT NULL"))
-        own = db.rows(c.execute("SELECT transfer_date AS date, amount, account FROM own_transfers"))
-        cps = db.rows(c.execute("SELECT pay_date AS date, -amount AS amount, account FROM card_payments"))
+        own = db.rows(c.execute("SELECT transfer_date AS date, amount, account, account_id, import_hash, NULL AS created_at "
+                                "FROM own_transfers"))
+        cps = db.rows(c.execute("SELECT pay_date AS date, -amount AS amount, account, account_id, import_hash, created_at "
+                                "FROM card_payments"))
+        debts = [r for r in db.debt_rows() if r["step"] != "vazgecildi"]
         for a in accs:
-            extra = [x for x in own + cps if short_bank(x["account"]) == a["name"]]
+            names = {a["name"], a.get("alias")} - {None, ""}
+            extra = [x for x in own + cps if x["account_id"] == a["id"]
+                     or (x["account_id"] is None and short_bank(x["account"]) in names)]
             dates = [r[0] for r in c.execute("SELECT entry_date FROM entries WHERE account_id = ? AND skipped = 0", (a["id"],))]
             dates += [x["date"] for x in extra]
-            first = min(dates) if dates else None
-            if d < a["as_of"] and (not first or first > d):
-                unknown.append(a["name"])
+            if d >= a["as_of"]:
+                out[a["id"]] = db._account_balance(c, a, until=d)
                 continue
-            lo, hi, sign = (d, a["as_of"], -1) if d < a["as_of"] else (a["as_of"], d, 1)
-            flows = c.execute("SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) "
-                              "FROM entries WHERE account_id = ? AND skipped = 0 AND entry_date > ? AND entry_date <= ?",
-                              (a["id"], lo, hi)).fetchone()[0]
-            flows += sum(x["amount"] for x in extra if lo < x["date"] <= hi)
-            debt = sum(r["flow"] * r["amount"] for r in db.debt_rows()
-                       if r.get("account_id") == a["id"] and lo < r["date"] <= hi and r["step"] != "vazgecildi")
-            total += a["balance"] + sign * (flows + debt)
-    return round(total, 2), unknown
+            if not dates or min(dates) > d:
+                out[a["id"]] = None
+                continue
+            # geriye: (d, çapa] aralığında çapanın içinde kalan hareketler düşülür
+            anchor = a["anchor_entry_id"] or 0
+            flows = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0)
+                                 FROM entries WHERE account_id = ? AND skipped = 0 AND entry_date > ?
+                                 AND (entry_date < ? OR (entry_date = ? AND id <= ?))""",
+                              (a["id"], d, a["as_of"], a["as_of"], anchor)).fetchone()[0]
+            for x in extra:
+                if not d < x["date"] <= a["as_of"]:
+                    continue
+                after_anchor = (x["date"] == a["as_of"] and (not x["import_hash"] or x["import_hash"].startswith("mail:"))
+                                and (x["created_at"] or "") > (a.get("updated_at") or ""))
+                if not after_anchor:
+                    flows += x["amount"]
+            flows += sum(r["flow"] * r["amount"] for r in debts if r.get("account_id") == a["id"] and d < r["date"] <= a["as_of"])
+            out[a["id"]] = round(a["balance"] - flows, 2)
+    return out
+
+
+def _bank_at(day: date) -> tuple[float, list[str]]:
+    """O günkü banka/nakit bakiyeleri toplamı ve bilinmeyen hesapların adları (account_balances_at)."""
+    bal = account_balances_at(day)
+    with db.connect() as c:
+        names = {r[0]: r[1] for r in c.execute("SELECT id, name FROM accounts")}
+    total = sum(v for v in bal.values() if v is not None)
+    return round(total, 2), [names[i] for i, v in bal.items() if v is None]
 
 
 def _debts_at(day: date, px: dict) -> float:

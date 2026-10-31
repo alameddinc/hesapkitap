@@ -356,3 +356,33 @@ def test_patch_payment_recomputes_hanafi_deduction(client, tmpdb, monkeypatch):
     p = next(x for x in zakat.people() if x["id"] == me)["payments"][0]
     assert p["note"] == "düzeltme" and p["amount"] == r["amount"]
     assert client.patch("/api/zakat/payments/99999", json={"note": "x"}).status_code == 404
+
+
+def test_bank_at_uses_account_id_rename_safe(client, tmpdb):
+    """A5: geçmiş bakiye hesap ADINA değil account_id'ye bağlı; hesap yeniden adlandırılınca kaymaz.
+    Bugün için _bank_at = hesapların güncel bakiyesi (_account_balance) toplamı. Tutarlar uydurma."""
+    from app import zakat
+
+    client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": 10000})
+    aid = client.get("/api/accounts").json()["accounts"][0]["id"]
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET as_of = '2026-10-01', anchor_entry_id = 0 WHERE id = ?", (aid,))
+        c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, account_id, import_hash) "
+                  "VALUES ('2026-09-20', 3000, '1234', 'Örnek Banka', ?, 'cp1')", (aid,))
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account, account_id, import_hash) "
+                  "VALUES ('2026-09-17', 5000, 'Örnek Banka', ?, 'ot1')", (aid,))
+        # çapadan sonra elle: kart ödemesi ve virman bakiyeye girer
+        c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, account_id, created_at) "
+                  "VALUES ('2026-10-05', 400, '1234', 'Örnek Banka', ?, '2026-10-05 10:00:00')", (aid,))
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account, account_id) "
+                  "VALUES ('2026-10-06', 250, 'Örnek Banka', ?)", (aid,))
+    tmpdb.create_entry({"entry_date": "2026-10-03", "description": "Market", "amount": 100, "kind": "gider", "account_id": aid})
+    before = {d: zakat._bank_at(d) for d in (date(2026, 9, 16), date(2026, 9, 17), date(2026, 9, 20), date(2026, 10, 31))}
+    assert before[date(2026, 9, 17)] == (13000.0, [])
+    today = date.today()
+    cur = sum(a["current"] for a in tmpdb.list_accounts() if a["current"] is not None)
+    assert zakat._bank_at(max(today, date(2026, 10, 31)))[0] == cur == 10000 - 100 - 400 + 250
+
+    client.patch(f"/api/accounts/{aid}", json={"name": "Maaş Hesabım"})  # yeniden adlandır
+    assert {d: zakat._bank_at(d) for d in before} == {d: (v[0], [n.replace("Örnek Banka", "Maaş Hesabım") for n in v[1]])
+                                                      for d, v in before.items()}
