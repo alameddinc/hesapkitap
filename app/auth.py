@@ -24,6 +24,7 @@ COOKIE = "ekstre_session"
 SESSION_DAYS = 30
 MAX_FAILS = 5          # pencere başına hatalı deneme (IP başı)
 ACCOUNT_MAX_FAILS = 10  # pencere başına hatalı deneme (hesap başı, IP'den bağımsız; başarılı girişte sıfırlanır)
+ADMIN_FAIL_WINDOW = 60 * 60  # yönetici hesabı: aynı 10 deneme 1 saatlik pencerede sayılır (kilit en çok 1 saat sürer)
 FAIL_WINDOW = 15 * 60  # saniye
 PBKDF2_ITER = 600_000
 MIN_PASSWORD = 10
@@ -161,9 +162,17 @@ def set_password(uid: int, pw: str, must_change: bool = False) -> None:
     system.bump_session(uid)  # eski oturumlar düşsün
 
 
+def username_optional() -> bool:
+    """Kullanıcı adısız giriş (eski tek kullanıcılı ekran, APP_PASSWORD) yalnız kendi sunucusunda ve yönetici tek
+    hesapken: hazır sürümde ya da başka hesap varken boş ad yöneticiyi açmaz (Y4; ad tahminiyle yöneticiye deneme)."""
+    from app import plans
+
+    return not plans.hosted() and len(system.users()) <= 1
+
+
 def login(username: str | None, pw: str) -> dict | None:
-    """Kullanıcı adı verilmezse yönetici (eski tek kullanıcılı giriş ekranı ve APP_PASSWORD uyumu)."""
-    u = system.user_by_name(username) if username else admin()
+    """Kullanıcı adı verilmezse yönetici — yalnız username_optional() iken (eski tek kullanıcılı giriş ve APP_PASSWORD)."""
+    u = system.user_by_name(username) if username else (admin() if username_optional() else None)
     if not u or u["disabled"]:
         _verify(pw, _dummy_hash())  # var olmayan hesapta da aynı süre: yanıt süresinden hesabın varlığı anlaşılmasın
         return None
@@ -282,17 +291,27 @@ def account_key(username: str | None) -> str:
     """Hesap başı sayaç anahtarı. Var olan kullanıcıda id (ad/e-posta biçimi fark etmesin); yoksa ad. Var olmayan ad
     da aynı kuralla kilitlenir, kilit adın varlığını ele vermez."""
     name = (username or "").strip()
-    u = system.user_by_name(name) if name else admin()
+    u = system.user_by_name(name) if name else (admin() if username_optional() else None)
     return f"id:{u['id']}" if u else f"ad:{name.lower()}"
+
+
+def _account_window(key: str) -> int:
+    """Yönetici (her kullanıcının verisine yetkili) için pencere 1 saat: saatte en çok 10 deneme; diğerleri 15 dk."""
+    if key.startswith("id:"):
+        u = system.user(int(key[3:]))
+        if u and u["role"] == "admin":
+            return ADMIN_FAIL_WINDOW
+    return FAIL_WINDOW
 
 
 def account_locked(key: str) -> bool:
     now = time.time()
+    window = _account_window(key)
     with _fails_lock:
         q = _account_fails.get(key)
         if not q:
             return False
-        while q and q[0] < now - FAIL_WINDOW:
+        while q and q[0] < now - window:
             q.popleft()
         if not q:
             del _account_fails[key]
