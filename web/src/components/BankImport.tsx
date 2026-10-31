@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, Landmark, Loader2, Plus, X } from "lucide-react";
+import { TERIM } from "../lib/terimler";
 import { errorText } from "../lib/apiError";
 import { useEffect, useRef, useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
@@ -104,7 +105,7 @@ function AccountQuestion({ m, value, onChange }: { m: AccountMatch; value: Accou
 }
 
 const LABEL: Record<string, string> = {
-  gelir: "Gelir", gider: "Gider", kart_odemesi: "Kart ödemesi", virman: "Kendi hesabın", tekrar: "Zaten var",
+  gelir: "Gelir", gider: "Gider", kart_odemesi: "Kart ödemesi", virman: TERIM.kendiHesaplar.ad, tekrar: "Zaten var",
   cakisma: "Başka belgeden yüklü",
 };
 const FIELDS: { key: Key; label: string }[] = [
@@ -182,7 +183,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
       r.odendi_isaretlenen && `${r.odendi_isaretlenen} ekstre ödendi`,
       (r.eslesen_elle || r.eslesen_kural) && `${(r.eslesen_elle ?? 0) + (r.eslesen_kural ?? 0)} kayıt elle girdiğinle eşleşti (iki kez sayılmadı)`,
       r.eslesme_sorusu && `${r.eslesme_sorusu} eşleşme sorusu Yapılacaklar'da`,
-      r.virman && `${r.virman} kendi hesapların arası`, r.tekrar && `${r.tekrar} zaten vardı`,
+      r.virman && `${r.virman} ${TERIM.kendiHesaplar.ad.toLocaleLowerCase("tr")}`, r.tekrar && `${r.tekrar} zaten vardı`,
       r.cakisma && `${r.cakisma} başka belgeden zaten yüklüydü`].filter(Boolean);
     ui.toast(parts.length ? parts.join(" · ") : "Yeni hareket yok");
     setNotice(typeof r.uyari === "string" && r.uyari ? r.uyari : null);
@@ -211,7 +212,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
         <p className="text-xs text-stone-500">
           Maaş sabit kaleme bağlanır, kredi kartı ödemeleri ilgili ekstreyi "ödendi" yapar, kendi hesapların arası aktarımlar
           gelir/gider sayılmaz, aynı hareket iki kez eklenmez, hesabın bakiyesi güncellenir.
-          {busy && " PDF yapay zekâyla okunuyor ve bakiye zinciriyle doğrulanıyor (bir dakika sürebilir)…"}
+          {busy && " PDF yapay zekâyla okunuyor; her satırın bakiyesi bir öncekiyle karşılaştırılıyor (bir dakika sürebilir)…"}
         </p>
         {notice && (
           <div className="mt-2 flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" role="status">

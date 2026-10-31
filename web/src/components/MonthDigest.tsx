@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { TERIM } from "../lib/terimler";
 import { send } from "../lib/apiError";
 import { CalendarCheck, ChevronDown, X } from "lucide-react";
 import { useState } from "react";
@@ -33,7 +34,7 @@ export default function MonthDigest() {
       <div className="grid grid-cols-3 gap-2 text-sm">
         <div><div className="text-xs text-stone-500">Gelir</div><div className="font-semibold tabular-nums text-green-700 dark:text-green-400">{tl(d.income)}</div></div>
         <div><div className="text-xs text-stone-500">Gider{pct(d.expense_change)}</div><div className="font-semibold tabular-nums">{tl(d.expense)}</div></div>
-        <div><div className="text-xs text-stone-500">Kalan</div>
+        <div><div className="text-xs text-stone-500">{TERIM.artan.ad}</div>
           <div className={cx("font-semibold tabular-nums", d.net < 0 && "text-red-600")}>{tl(d.net)}{d.savings_rate != null && d.savings_rate > 0 && <span className="text-xs font-normal text-stone-500"> · %{d.savings_rate}</span>}</div></div>
       </div>
       {!!d.estimated_expense && (

@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { TERIM } from "../lib/terimler";
+import TerimBilgi from "./TerimBilgi";
 import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
 import { addMonths, dateTR, monthLabel, tl } from "../format";
@@ -31,7 +33,7 @@ export default function SimpleDashboard() {
               <div className="text-2xl font-semibold tabular-nums text-green-700 dark:text-green-400">{tl(t.income)}</div>
             </div>
             <div className="rounded-xl bg-stone-50 p-3 dark:bg-stone-800/50">
-              <div className="text-base text-stone-500">Kalan</div>
+              <div className="text-base text-stone-500">{TERIM.eldeKalan.ad} <TerimBilgi id="eldeKalan" metin={summary.data?.definitions?.left_after_savings} /></div>
               <div className={`text-2xl font-semibold tabular-nums ${t.net - t.savings < 0 ? "text-red-600" : ""}`}>{tl(t.net - t.savings)}</div>
             </div>
           </div>

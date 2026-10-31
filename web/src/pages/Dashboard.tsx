@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { TERIM } from "../lib/terimler";
+import TerimBilgi from "../components/TerimBilgi";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Insight, type Row } from "../api";
@@ -171,7 +173,7 @@ export default function Dashboard() {
               {s.pending.income > 0 && <div className="text-[11px] text-blue-100">+{tlCompact(s.pending.income)} bekliyor</div>}
             </div>
             <div>
-              <div className="text-[11px] tracking-wide text-blue-100 uppercase">Kalan</div>
+              <div className="text-[11px] tracking-wide text-blue-100 uppercase">{TERIM.artan.ad} <TerimBilgi id="artan" metin={s.definitions?.left} className="text-blue-100" /></div>
               <div className={cx("font-semibold tabular-nums", s.totals.net < 0 && "text-rose-200")}>{tlCompact(s.totals.net)}</div>
             </div>
             <div>
@@ -186,8 +188,8 @@ export default function Dashboard() {
             sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
             sub={`Kart ${tlCompact(s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
-          <Kpi label="Net (bu dönem)" value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"}
-            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : "gelir − gider"} />
+          <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"}
+            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
           {book?.hide_fees ? <Kpi label="İade" value={s.totals.refunds} /> : (
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}

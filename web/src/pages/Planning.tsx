@@ -119,7 +119,7 @@ export default function Planning() {
           <h2 className="mb-1 font-semibold">Gelir ve planlanan giderler</h2>
           <p className="mb-2 text-xs text-stone-500">
             Dolu çubuklar <b>kesin</b> giderler (taksit, abonelik, sabit, fatura, gelen ekstre). Soluk kesikli kısım
-            <b> tahmini kart harcaması</b>: son dönemlerin medyanı, nete katılmaz — "harcamalar böyle giderse" göstergesi.
+            <b> tahmini kart harcaması</b>: son dönemlerin ortadaki değeri (aşırı uçlar sayılmaz), nete katılmaz — "harcamalar böyle giderse" göstergesi.
           </p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">

@@ -87,7 +87,7 @@ export default function Statements() {
               </button>
             ))}
           </div>
-          <p className="text-xs text-stone-500">Gerçek yükleme yolundan geçer: okunur, mutabakat yapılır, işlemler kategorilenir; Garanti örneği hazır
+          <p className="text-xs text-stone-500">Gerçek yükleme yolundan geçer: okunur, rakamlar ekstreyle karşılaştırılır, işlemler kategorilenir; Garanti örneği hazır
             okuyucusu olmayan bankalar için genel okuyucuyu gösterir.</p>
         </div>
       ) : (
@@ -211,7 +211,7 @@ export default function Statements() {
                     {r.ai && <div className="text-violet-700 dark:text-violet-400">Bu banka için hazır okuyucu yok; yapay zekâ ile okundu</div>}
                     {r.cycle_day && <div className="text-blue-700 dark:text-blue-400">Ay dönümü kesim günlerine göre her ayın {r.cycle_day}. gününe ayarlandı</div>}
                     <div className={r.reconciliation_diff === 0 ? "text-green-700 dark:text-green-400" : "text-amber-600"}>
-                      {r.reconciliation_diff === 0 ? "Mutabakat tamam: tüm işlemler okundu" : `Mutabakat farkı ${tl(r.reconciliation_diff!)}`}
+                      {r.reconciliation_diff === 0 ? "Rakamlar tuttu: tüm işlemler okundu" : `Rakamlar tutmadı: ${tl(Math.abs(r.reconciliation_diff!))} fark`}
                     </div>
                   </div>
                 )}

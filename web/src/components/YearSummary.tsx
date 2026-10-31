@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { TERIM } from "../lib/terimler";
 import { send } from "../lib/apiError";
 import { CalendarRange } from "lucide-react";
 import { useState } from "react";
@@ -39,7 +40,7 @@ export default function YearSummary() {
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <Kpi label="Gelir" value={y.income} tone="green" sub={chg(y.income_change, "geçen yıla göre") ?? `${y.months} ay`} />
           <Kpi label="Gider" value={y.expense} sub={chg(y.expense_change, "geçen yıla göre") ?? undefined} />
-          <Kpi label="Kalan" value={y.net} tone={y.net < 0 ? "red" : "green"} sub={y.savings_rate != null ? `gelirin %${y.savings_rate}'i` : undefined} />
+          <Kpi label={TERIM.artan.ad} value={y.net} tone={y.net < 0 ? "red" : "green"} sub={y.savings_rate != null ? `gelirin %${y.savings_rate}'i` : undefined} />
           <Kpi label="Aylık ortalama gider" value={y.avg_expense} sub="tamamlanan dönemler" />
         </div>
         <ul className="space-y-1 text-sm">

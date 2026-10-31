@@ -192,7 +192,7 @@ export default function Transfers() {
         <section className="card p-4">
           <h2 className="mb-1 flex items-center gap-2 font-semibold"><ArrowLeftRight size={18} aria-hidden /> Kendi hesapların arası</h2>
           <p className="mb-2 text-xs text-stone-500 dark:text-stone-400">Gelir/gider toplamlarına katılmaz; sadece para nereden nereye geçmiş görmen için.
-            {!inSharedBook(book) && " Dokunarak açıklamasını düzelt ya da virman değilse gelir/gider kaydına çevir."}</p>
+            {!inSharedBook(book) && " Dokunarak açıklamasını düzelt ya da kendi hesapların arası değilse gelir/gider kaydına çevir."}</p>
           <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
             {ownList.map((o) => {
               const body = (
@@ -393,7 +393,7 @@ function OwnTransferForm({ o, onClose }: { o: Own; onClose: () => void }) {
           <label className="label" htmlFor="ot-note">Not</label>
           <input id="ot-note" className="input" maxLength={500} value={note} placeholder="İsteğe bağlı" onChange={(e) => setNote(e.target.value)} />
         </div>
-        {/* "virman değil": soru değil, açık eylem — ne olacağı düğmede ve onayda yazar */}
+        {/* "kendi hesaplar arası değil": soru değil, açık eylem — ne olacağı düğmede ve onayda yazar */}
         <div className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
           <p className="text-sm font-medium">Yanlış eşleştiyse</p>
           <p className="text-xs text-stone-500 dark:text-stone-400">

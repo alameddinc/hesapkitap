@@ -29,7 +29,7 @@ export default function Modal({ title, onClose, children, footer }: {
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center text-left text-base font-normal tracking-normal text-stone-900 normal-case sm:items-center dark:text-stone-100" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/40" role="presentation" onClick={onClose} /* Esc ile de kapanır */ />
       <div className="relative flex max-h-[calc(100dvh-var(--sat)-0.5rem)] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:max-w-lg sm:rounded-2xl dark:bg-stone-900">
         <div className="flex items-center justify-between border-b border-stone-200 px-4 py-3 dark:border-stone-800">

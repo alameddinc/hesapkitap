@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { METIN } from "../lib/terimler";
 import { BellOff, Check, Clock, CreditCard, FileText, GitMerge, HandCoins, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, errStatus, movedCount } from "../api";
@@ -106,7 +107,7 @@ function useAnswers() {
     const more = res.auto_merged ? ` · ${res.auto_merged} kayıt daha kendiliğinden eşleşti` : "";
     ui.toast(res.learned
       ? `Öğrendim: bundan sonra ${res.learned.bank} ↔ ${res.learned.entry} kendiliğinden eşleşir${more}`
-      : `Birleştirildi · iki kez sayılmaz${more}`);
+      : `${METIN.eslestiBildirim}${more}`);
   });
   const merge = useSave((r: Reminder) => api.mergeAccount(r.account_id!, r.into!), (res) =>
     ui.toast(`Hesaplar birleşti · ${movedCount(res.moved)} kayıt taşındı${res.matched ? ` · ${res.matched} kayıt eşleşti` : ""}`));
@@ -191,7 +192,7 @@ function CardUnmatched({ r }: { r: Reminder }) {
   const fail = useAnswerError();
   const [cands, setCands] = useState(false);
   const q = useQuery({ queryKey: ["cands", r.entry_id], queryFn: () => api.linkCandidates(r.entry_id!), enabled: cands && !!r.entry_id });
-  const link = useSave((txn: number) => api.linkEntry(r.entry_id!, txn), () => ui.toast("Eşleşti · iki kez sayılmaz"));
+  const link = useSave((txn: number) => api.linkEntry(r.entry_id!, txn), () => ui.toast(METIN.eslestiBildirim));
   const dismiss = useSave(() => post(r.id, "dismiss"), () => ui.toast("Tamam, bu kayıt için bir daha sormayız"));
   const open = () => void openRow(`m${r.entry_id}`, r.due, (row) => ui.openEntry(row)).then((ok) => { if (!ok) ui.toast("Kayıt bulunamadı (silinmiş olabilir)"); });
   return (

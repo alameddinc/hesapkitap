@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
+import { TERIM } from "../lib/terimler";
 import { ask } from "../lib/ask";
 import { useState } from "react";
 import { api, type Payable, type Statement } from "../api";
@@ -31,7 +32,7 @@ const Line = ({ l, v, tone }: { l: string; v: string; tone?: string }) => (
 );
 
 /** Ekstreler listesinde tek ekstre: başlık (dokununca denklem açılır), durum rozeti, eylemler.
- *  "Kontrol et" durumunda birincil eylemler PDF'i aç ve Doğru, onayla; silme en altta, ikincil. */
+ *  "Rakamlar tutmadı" durumunda birincil eylemler PDF'i aç ve Doğru, onayla; silme en altta, ikincil. */
 export default function StatementCard({ s }: { s: Statement }) {
   const ui = useUI();
   const status = statementStatus(s);
@@ -67,9 +68,9 @@ export default function StatementCard({ s }: { s: Statement }) {
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <span className="font-semibold tabular-nums">{tl(s.total_debt)}</span>
-          {status === "ok" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400"><CheckCircle2 size={12} aria-hidden /> Doğrulandı</span>}
-          {status === "confirmed" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400"><CheckCircle2 size={12} aria-hidden /> Onaylandı</span>}
-          {status === "check" && <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"><AlertTriangle size={12} aria-hidden /> Kontrol et</span>}
+          {status === "ok" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400"><CheckCircle2 size={12} aria-hidden /> {TERIM.dogrulandi.ad}</span>}
+          {status === "confirmed" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400"><CheckCircle2 size={12} aria-hidden /> {TERIM.onaylandi.ad}</span>}
+          {status === "check" && <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"><AlertTriangle size={12} aria-hidden /> {TERIM.rakamlarTutmadi.ad}</span>}
         </div>
         <ChevronDown size={16} aria-hidden className={cx("mt-1 shrink-0 text-stone-400 transition-transform", open && "rotate-180")} />
       </button>
@@ -93,11 +94,11 @@ export default function StatementCard({ s }: { s: Statement }) {
           <p className="text-xs text-stone-500 dark:text-stone-400">
             {status === "check"
               ? eq.ok === false
-                ? `Denklem ${tl(Math.abs(eq.diff!))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
+                ? `Rakamlar ${tl(Math.abs(eq.diff!))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
                 : `PDF'i aç ve işlemleri ekstreyle karşılaştır. Rakamlar aynıysa "Doğru, onayla" de.`
               : status === "confirmed" ? `Rakamları ekstreyle karşılaştırıp doğru dedin${s.confirmed_at ? ` (${tsDateTR(s.confirmed_at)})` : ""}.`
-              : eq.ok && eq.feesIncluded != null ? "Denklem tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı."
-              : eq.ok ? "Denklem tuttu: okunan rakamlar ekstreyle aynı." : "Bu ekstrede özet rakamları okunamadı."}
+              : eq.ok && eq.feesIncluded != null ? "Rakamlar tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı (uygulama kontrol etti)."
+              : eq.ok ? "Rakamlar tuttu: okunan rakamlar ekstreyle aynı (uygulama kontrol etti)." : "Bu ekstrede özet rakamları okunamadı."}
           </p>
           {!!s.reconciliation_diff && Math.abs(s.reconciliation_diff) >= 1 && (
             <p className="text-xs text-amber-700 dark:text-amber-300">

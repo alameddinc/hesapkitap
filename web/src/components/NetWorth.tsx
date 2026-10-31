@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { TERIM } from "../lib/terimler";
+import TerimBilgi from "./TerimBilgi";
 import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
 import { AlertTriangle, ChevronDown, ChevronRight, CreditCard, GitMerge, Landmark, Plus, Trash2, Wallet } from "lucide-react";
@@ -23,6 +25,9 @@ interface NW {
   /** sunucu toplamları (istemci toplamaz); card_overdue: ödenmemiş eski ekstreler, kalanı son ekstrede (toplamda yok) */
   totals?: { card_debt: number; card_estimated: number; card_overdue: number; cash: number; spendable: number; net: number };
   card_overdue?: { title: string; amount: number; due_date: string; statement_id: number; rolled_into: number | null }[];
+  /** sunucu a18ac2a: Harcanabilir'in parçaları ve açıklaması (Özet ve Hesaplar'da aynı metin) */
+  spendable_parts?: { key: string; label: string; amount: number; sign: "+" | "−" }[];
+  spendable_explain?: string;
 }
 
 /** Sunucu totals'ı varsa o, yoksa (eski sunucu) üst düzey alanlar. */
@@ -89,18 +94,41 @@ function NetWorthAt({ month }: { month: string }) {
   );
 }
 
-/** İki rakam: harcanabilir TL (ödenecekler ve kumbara düşülmüş, altın/döviz hariç) ve net durum (her şey dahil). */
+/** Harcanabilir'in parçaları (sunucu spendable_parts): (i) penceresinde bugünkü rakamlarla. */
+function SpendableParts({ d }: { d: NW }) {
+  const parts = (d.spendable_parts ?? []).filter((p) => p.amount);
+  if (!parts.length) return null;
+  return (
+    <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700">
+      {parts.map((p) => (
+        <li key={p.key} className="flex justify-between gap-3 px-3 py-1.5">
+          <span>{p.label}</span><span className="shrink-0 tabular-nums">{p.sign === "−" ? "−" : "+"}{tl(p.amount)}</span>
+        </li>
+      ))}
+      <li className="flex justify-between gap-3 px-3 py-1.5 font-semibold">
+        <span>{TERIM.harcanabilir.ad}</span><span className="shrink-0 tabular-nums">{tl(tot(d).spendable)}</span>
+      </li>
+    </ul>
+  );
+}
+
+/** İki rakam: harcanabilir (ödenecekler ve kumbara düşülmüş, altın/döviz hariç) ve net durum (her şey dahil).
+ *  Açıklamalar (i) penceresinde (title değil: dokunmatikte görünmez); eksi harcanabilir neden eksi, alt satırda. */
 function Headline({ d }: { d: NW }) {
   const tone = (x: number) => (x < 0 ? "text-red-600" : "text-green-700 dark:text-green-400");
+  const sp = tot(d).spendable;
   return (
     <span className="mb-1 grid grid-cols-2 gap-3">
-      <span title="Bankada − ödenecek kart ekstresi − borçların − kumbaraya ayrılan. Altın/döviz, alacak ve yemek/hediye kartı dahil değil.">
-        <span className="block text-xs text-stone-500">Harcanabilir TL</span>
-        <span className={cx("block text-lg font-semibold tabular-nums", tone(tot(d).spendable))}>{tl(tot(d).spendable)}</span>
+      <span>
+        <span className="block text-xs text-stone-500">{TERIM.harcanabilir.ad} <TerimBilgi id="harcanabilir" metin={d.spendable_explain} ek={<SpendableParts d={d} />} /></span>
+        <span className={cx("block text-lg font-semibold tabular-nums", tone(sp))}>{tl(sp)}</span>
+        <span className={cx("block text-xs", sp < 0 ? "text-red-600 dark:text-red-400" : "text-stone-500")}>
+          {sp < 0 ? `Ödeyeceklerin eldeki paradan ${tl(-sp)} fazla` : TERIM.harcanabilir.kisa}</span>
       </span>
-      <span title="Sahip olduğun her şey: bankada + altın/döviz + kartlarda − kart borcu ± borç/alacak">
-        <span className="block text-xs text-stone-500">Net durum{d.holdings ? " (altın/döviz dahil)" : ""}</span>
+      <span>
+        <span className="block text-xs text-stone-500">{TERIM.netDurum.ad}{d.holdings ? " (altın/döviz dahil)" : ""} <TerimBilgi id="netDurum" /></span>
         <span className={cx("block text-lg font-semibold tabular-nums", tone(tot(d).net))}>{tl(tot(d).net)}</span>
+        <span className="block text-xs text-stone-500">{TERIM.netDurum.kisa}</span>
       </span>
     </span>
   );
@@ -130,12 +158,14 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
   const empty = !d.accounts.length && !d.holdings && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
   if (compact) {
     return (
-      <button className="card flex w-full items-center gap-3 p-4 text-left" onClick={() => ui.go("hesaplar")}>
-        <Landmark size={18} className="shrink-0 text-stone-500" />
+      <div className="card relative flex w-full items-center gap-3 p-4 text-left">
+        {/* kartın tamamı Hesaplar'a gider; (i) düğmeleri iç içe düğme olmasın diye kardeş ve üstte */}
+        <button className="absolute inset-0 rounded-[inherit]" aria-label="Hesaplar ve net durum ayrıntısı" onClick={() => ui.go("hesaplar")} />
+        <Landmark size={18} className="pointer-events-none relative shrink-0 text-stone-500" />
         {empty ? (
-          <span className="flex-1 text-sm text-stone-500">Hesaplarını, nakdini ve yemek/hediye kartlarını ekle: gerçek durumunu görürsün.</span>
+          <span className="pointer-events-none relative flex-1 text-sm text-stone-500">Hesaplarını, nakdini ve yemek/hediye kartlarını ekle: gerçek durumunu görürsün.</span>
         ) : (
-          <span className="min-w-0 flex-1">
+          <span className="pointer-events-none relative min-w-0 flex-1">
             <Headline d={d} />
             {/* döküm telefonda gizli: karta dokununca Hesaplar'da tamamı */}
             <span className="hidden text-xs text-stone-500 sm:block">
@@ -150,25 +180,27 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             <CardOverdue d={d} compact />
           </span>
         )}
-        <ChevronRight size={16} className="shrink-0 text-stone-400" />
-      </button>
+        <ChevronRight size={16} className="pointer-events-none relative shrink-0 text-stone-400" />
+      </div>
     );
   }
   return (
     <section className="card">
-      <button className="flex w-full items-center gap-3 p-4 text-left" onClick={() => setOpen(!open)}>
-        <Landmark size={18} className="shrink-0 text-stone-500" />
-        <div className="min-w-0 flex-1">
+      <div className="relative flex w-full items-center gap-3 p-4 text-left">
+        <button className="absolute inset-0 rounded-t-[inherit]" aria-expanded={open} aria-label={open ? "Hesap ayrıntısını gizle" : "Hesap ayrıntısını göster"}
+          onClick={() => setOpen(!open)} />
+        <Landmark size={18} className="pointer-events-none relative shrink-0 text-stone-500" />
+        <div className="pointer-events-none relative min-w-0 flex-1">
           <Headline d={d} />
           <div className="text-xs text-stone-500">
             Bankada {tl(tot(d).cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{tot(d).card_debt ? ` · kart borcu ${tl(tot(d).card_debt)}` : ""}
-            {tot(d).card_estimated ? ` · kesilecek ekstreler ~${tl(tot(d).card_estimated)}` : ""}
+            {tot(d).card_estimated ? ` · kesilecek ekstreler tahmini ~${tl(tot(d).card_estimated)}` : ""}
           </div>
           {d.reserved > 0 && <div className="text-xs text-stone-500">Kumbaralarda ayrılan {tl(d.reserved)}</div>}
           <CardOverdue d={d} />
         </div>
-        <ChevronDown size={16} className={cx("text-stone-400 transition-transform", open && "rotate-180")} />
-      </button>
+        <ChevronDown size={16} className={cx("pointer-events-none relative text-stone-400 transition-transform", open && "rotate-180")} />
+      </div>
       {open && (
         <div className="space-y-3 border-t border-stone-100 px-4 pt-3 pb-4 dark:border-stone-800">
           <div>
@@ -265,7 +297,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
           )}
           <Wallets />
           {tot(d).card_estimated > 0 && (
-            <p className="text-xs text-stone-500">Henüz kesilmemiş ekstreler (tahmini {tl(tot(d).card_estimated)}) düşülünce: <b>{tl(d.net_after_estimates)}</b></p>
+            <p className="text-xs text-stone-500">{TERIM.tahminiEkstreSonrasi.ad} <TerimBilgi id="tahminiEkstreSonrasi" />: <b>{tl(d.net_after_estimates)}</b> (kesilmemiş ekstreler ~{tl(tot(d).card_estimated)} düşülünce)</p>
           )}
           <p className="text-xs text-stone-500">
             Banka bakiyesini elle girebilirsin; hesap dökümü yüklersen (elle, e-postayla ya da Telegram'dan) kendiliğinden güncellenir.
