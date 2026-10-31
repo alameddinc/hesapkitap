@@ -119,3 +119,16 @@ def test_transactions_pagination(client, upload):
     assert client.get("/api/transactions", params={"before": "dün|x"}).status_code == 422
     m = client.get("/api/transactions", params={"month": M, "limit": 2}).json()
     assert all(x["month"] == M for x in m["rows"])
+
+
+def test_meta_and_status_handshake(client):
+    """S17: mobil eski sunucuyu tanısın: api_version + capabilities (+ sürüm, açık bayraklar)."""
+    m = client.get("/api/meta").json()
+    assert isinstance(m["api_version"], int) and m["api_version"] >= 2
+    for cap in ("idempotency", "email_verify", "invites_v2", "raw_note", "payables_totals", "transactions_paging",
+                "inbox_documents", "debt_payment_delete"):
+        assert cap in m["capabilities"], cap
+    assert set(m["server"]["flags"]) == {"email_verify_required", "hold_unverified"} and "version" in m["server"]
+    s = client.get("/api/auth/status").json()
+    assert s["api_version"] == m["api_version"] and s["capabilities"] == m["capabilities"]
+    assert "version" not in s  # girişsiz uçta commit yok

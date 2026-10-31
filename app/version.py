@@ -12,6 +12,43 @@ from pathlib import Path
 from app import system
 
 REPO = os.environ.get("HESAPKITAP_REPO", "alameddinc/hesapkitap")
+
+# İstemci el sıkışması (S17): mobil/web eski sunucuya göre davranabilsin. API_VERSION, geriye uyumsuz değişiklikte
+# artar; CAPABILITIES yalnız eklenir (bir yetenek adı kaldırılmaz, anlamı değişmez). İstemci bilmediği adı yok sayar.
+API_VERSION = 2
+CAPABILITIES = (
+    "idempotency",            # Idempotency-Key başlığı: kopan yanıtta tek kayıt
+    "email_verify",           # kayıtta e-posta kodu adımı (açık olup olmadığı: flags.email_verify_required)
+    "sessions",               # /api/me/sessions: açık oturumlar, iptal
+    "invites_v2",             # davet önizleme (GET /api/auth/invite/{kod}), yenile/iptal, ortak defter yetkisi
+    "raw_note",               # işlem satırında raw (banka açıklaması) ve note_user
+    "summary_left",           # /api/summary totals.left / left_after_savings / card_spend_incl_pending / fees_hidden
+    "transactions_totals",    # /api/transactions satır bayrakları counts_as_* ve ?totals=1
+    "transactions_paging",    # /api/transactions?limit&before → {rows, next}
+    "payables_totals",        # /api/payables?totals=1 (window ?days, paid_this_month)
+    "networth_explain",       # /api/net-worth spendable_parts / spendable_explain
+    "transfer_totals",        # /api/transfers totals
+    "bills_overall",          # /api/bills/summary overall, average_12
+    "holdings_totals",        # /api/holdings totals
+    "budgets_totals",         # /api/budgets totals
+    "rules_test_all",         # /api/rules/test pattern'sız: tüm kurallar
+    "debt_payment_delete",    # DELETE /api/debt-payments/{id}; pay yanıtında payment_id
+    "integrity",              # Yapılacaklar kind 'dogruluk' (gece doğruluk denetimi)
+    "verification",           # belge verification alanları, belge_dogrulanamadi, documents/{id}/confirm
+    "inbox_documents",        # Gelen kutusu kind dokum|ekstre, /api/inbox/{id}/import ve /file
+)
+
+
+def handshake(with_version: bool = False) -> dict:
+    """{api_version, capabilities, flags[, version]}. flags: sunucuda o an açık olan davranışlar."""
+    from app import email_verify
+
+    out = {"api_version": API_VERSION, "capabilities": list(CAPABILITIES),
+           "flags": {"email_verify_required": email_verify.required(),
+                     "hold_unverified": os.environ.get("HESAPKITAP_HOLD_UNVERIFIED", "0").strip() == "1"}}
+    if with_version:
+        out["version"] = current()
+    return out
 TTL = 6 * 3600
 
 
