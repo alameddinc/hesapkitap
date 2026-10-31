@@ -20,6 +20,8 @@ interface Preview {
   verified?: boolean;
   bank?: string;
   chain_bad?: number[];
+  verification_text?: string | null; // S6: neden tutmadı (sunucu metni)
+  chain_bad_count?: number;
   warning?: string | null; // ör. kart dökümü olabilir (harcamalar gelir görünür)
   balance_change?: { account: string; current: number; new: number; date: string } | null;
   checks?: string[]; // şüpheli değişiklik: içe aktarmadan önce onay istenir
@@ -171,7 +173,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
   };
   // içe aktarma sonucu uyarısı (çakışma): bildirim birkaç saniyede kaybolur, bu kutuda kalır
   const [notice, setNotice] = useState<string | null>(null);
-  const run = useSave(() => postForm<Record<string, number> & { uyari?: string }>("/api/bank-import", file!, {
+  const run = useSave(() => postForm<Record<string, number> & { uyari?: string; verification?: "dogrulandi" | "dogrulanamadi" | "onaylandi" | null; verification_text?: string | null }>("/api/bank-import", file!, {
     ...(pv!.pdf ? {} : { mapping: JSON.stringify(pv!.mapping), header_row: String(pv!.header_row) }),
     ...(password ? { password } : {}),
     // önizlemede hesap kesin tanındıysa (IBAN / takma ad) o hesap açıkça gönderilir: belgede banka adı yokken (yalnız IBAN)
@@ -186,7 +188,10 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
       r.virman && `${r.virman} ${TERIM.kendiHesaplar.ad.toLocaleLowerCase("tr")}`, r.tekrar && `${r.tekrar} zaten vardı`,
       r.cakisma && `${r.cakisma} başka belgeden zaten yüklüydü`].filter(Boolean);
     ui.toast(parts.length ? parts.join(" · ") : "Yeni hareket yok");
-    setNotice(typeof r.uyari === "string" && r.uyari ? r.uyari : null);
+    // S6: bakiye zinciri tutmayan PDF içe aktarıldı → kalıcı sarı uyarı (Hesaplar'da onaylanana kadar Yapılacaklar'da)
+    const unverified = r.verification === "dogrulanamadi"
+      ? `${r.verification_text || "Rakamlar tutmadı."} Hareketleri belgeyle karşılaştır; doğruysa Hesaplar → Kontrol bekleyen dökümler'den onayla.` : null;
+    setNotice([typeof r.uyari === "string" && r.uyari ? r.uyari : null, unverified].filter(Boolean).join(" ") || null);
     setPv(null);
     setFile(null);
     onDone?.();
@@ -239,7 +244,8 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
             <p className={cx("text-sm", pv.verified ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400")}>
               {pv.bank && <b>{pv.bank} · </b>}
               {pv.verified ? "Bakiye zinciriyle doğrulandı ✓ (her satırda önceki bakiye + tutar = bakiye)"
-                : `Doğrulanamadı: ${pv.chain_bad?.length ?? 0} satırda bakiye tutmuyor. Satırları kontrol et ya da tekrar yükle.`}
+                : pv.verification_text ? `${pv.verification_text} İçe aktarırsan Hesaplar'da onay bekler.`
+                : `Doğrulanamadı: ${pv.chain_bad_count ?? pv.chain_bad?.length ?? 0} satırda bakiye tutmuyor. Satırları kontrol et ya da tekrar yükle.`}
             </p>
           ) : (<>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

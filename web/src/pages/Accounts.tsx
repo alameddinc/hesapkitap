@@ -1,3 +1,4 @@
+import DocChecks from "../components/DocChecks";
 import Holdings from "../components/Holdings";
 import Jars from "../components/Jars";
 import NetWorth from "../components/NetWorth";
@@ -12,6 +13,7 @@ export default function Accounts() {
           Bankadaki, cebindeki ve yemek/hediye kartlarındaki paran; kredi kartı borçların ve alacakların. Bakiyeye dokunup düzeltebilirsin.
         </p>
       </div>
+      <DocChecks />
       <NetWorth />
       <Holdings />
       <Jars />

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send as apiSend } from "../lib/apiError";
-import { CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type DocKind, type UploadResult } from "../api";
 import BankImport from "../components/BankImport";
@@ -210,9 +210,16 @@ export default function Statements() {
                     {!!r.linked && <div className="text-blue-700 dark:text-blue-400">{r.linked} elle girilen kredi kartı gideri bu ekstreyle eşleşti</div>}
                     {r.ai && <div className="text-violet-700 dark:text-violet-400">Bu banka için hazır okuyucu yok; yapay zekâ ile okundu</div>}
                     {r.cycle_day && <div className="text-blue-700 dark:text-blue-400">Ay dönümü kesim günlerine göre her ayın {r.cycle_day}. gününe ayarlandı</div>}
+                    {r.verification === "dogrulanamadi" ? (
+                      // S6: denklem/işlem toplamı tutmadı — kayıtlı ama kontrol bekliyor (aşağıdaki kartta "Doğru, onayla")
+                      <div className="mt-1 flex gap-1.5 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" role="status">
+                        <AlertTriangle size={14} className="mt-px shrink-0" aria-hidden />
+                        <span>{r.verification_text || "Rakamlar tutmadı."} Kaydedildi; doğruysa aşağıdaki ekstrede "Doğru, onayla" de.</span>
+                      </div>
+                    ) : (
                     <div className={r.reconciliation_diff === 0 ? "text-green-700 dark:text-green-400" : "text-amber-600"}>
                       {r.reconciliation_diff === 0 ? "Rakamlar tuttu: tüm işlemler okundu" : `Rakamlar tutmadı: ${tl(Math.abs(r.reconciliation_diff!))} fark`}
-                    </div>
+                    </div>)}
                   </div>
                 )}
               </div>

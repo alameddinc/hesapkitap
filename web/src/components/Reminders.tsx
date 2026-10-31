@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { METIN } from "../lib/terimler";
-import { BellOff, Check, Clock, CreditCard, FileText, GitMerge, HandCoins, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
+import { METIN, TERIM } from "../lib/terimler";
+import { BellOff, Check, Clock, CreditCard, FileText, GitMerge, HandCoins, Inbox, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
+import { ask } from "../lib/ask";
 import { useEffect, useRef, useState } from "react";
 import { api, errStatus, movedCount } from "../api";
 import { cx, dateTR, tl } from "../format";
@@ -11,8 +12,11 @@ import { PairCards } from "./MatchInfo";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
-  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme"; title: string; text: string; cta: string; route: Route;
-  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay"; due: string; severity: "info" | "warn" | "urgent"; tag?: string; bank?: string; last4?: string;
+  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi";
+  title: string; text: string; cta: string; route: Route | "gelen";
+  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm";
+  // S6: belge_onay (Gelen kutusu'nda bekleyen belge), belge_dogrulanamadi (yüklenen döküm/ekstre kontrol bekliyor)
+  inbox_id?: number; document_id?: number; due: string; severity: "info" | "warn" | "urgent"; tag?: string; bank?: string; last4?: string;
   statement_id?: number;
   // esles: "Bu ikisi aynı mı?"
   entry_id?: number; other?: string; reason?: "tarih" | "tutar" | "aday"; source?: "dokum" | "ekstre";
@@ -48,7 +52,8 @@ const TAG = {
 
 function Badge({ r }: { r: Reminder }) {
   const bank = r.bank ?? r.pair?.other.account ?? "";
-  const Ic = r.kind === "esles" ? Link2 : r.kind === "hesap" ? GitMerge : r.kind === "dokum" ? Landmark : r.kind === "odeme" ? Clock
+  const Ic = r.kind === "esles" ? Link2 : r.kind === "hesap" ? GitMerge : r.kind === "dokum" || r.action === "document_confirm" ? Landmark
+    : r.kind === "belge_onay" ? Inbox : r.kind === "odeme" ? Clock
     : r.kind === "borc_odeme" ? HandCoins : CreditCard;
   return (
     <span className={cx("relative flex h-11 w-[52px] shrink-0 flex-col justify-between rounded-lg px-1.5 py-1 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]", tone(bank))} aria-hidden="true">
@@ -59,7 +64,8 @@ function Badge({ r }: { r: Reminder }) {
         </> : <Ic size={15} className="opacity-80" />}
       </span>
       <span className="text-[10px] leading-none font-semibold tracking-wider tabular-nums opacity-80">{r.last4 ? `••${r.last4}` : r.kind === "esles" ? (r.source === "ekstre" ? "Ekstre" : "Döküm")
-        : r.kind === "kart_eslesmedi" ? "Kart" : r.kind === "borc_odeme" ? "Borç" : "Hesap"}</span>
+        : r.kind === "kart_eslesmedi" ? "Kart" : r.kind === "borc_odeme" ? "Borç" : r.kind === "belge_onay" ? "Gelen"
+        : r.action === "statement_confirm" ? "Ekstre" : r.action === "document_confirm" ? "Döküm" : "Hesap"}</span>
     </span>
   );
 }
@@ -267,6 +273,42 @@ function DebtQuestion({ r }: { r: Reminder }) {
 }
 
 /** Özet'te "Yapılacaklar": kesilen ekstre, ayı kapanan hesap dökümü, yaklaşan son ödeme. Boşsa hiç görünmez. */
+/** Sayfadaki bir bölüme kaydır; yoksa (bileşen Özet'te kapalı) Özet'e git. */
+function scrollTo(id: string, ui: { go: (r: Route) => void; toast: (m: string) => void }) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  else { ui.go("ozet"); setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 600); }
+}
+
+/** S6 "belgedeki rakamları kontrol et": Bak (belgenin olduğu sayfa) ve "Rakamlar doğru" (onaylı; madde düşer). */
+function DocCheck({ r }: { r: Reminder }) {
+  const ui = useUI();
+  const doc = r.action === "document_confirm";
+  const ok = useSave((): Promise<unknown> => (doc ? api.confirmBankDocument(r.document_id!) : api.confirmStatement(r.statement_id!)),
+    () => ui.toast(`${TERIM.onaylandi.ad} · bir daha sorulmaz`));
+  const look = () => (doc ? (ui.go("hesaplar"), setTimeout(() => document.getElementById("dokum-kontrol")?.scrollIntoView({ block: "start" }), 600))
+    : ui.go("ekstreler"));
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3">
+      <Badge r={r} />
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="flex items-center gap-2">
+          <span className="break-words text-sm font-semibold">{r.title}</span>
+          {r.tag && <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium", TAG[r.severity])}>{r.tag}</span>}
+        </div>
+        <p className="break-words text-xs text-stone-500 dark:text-stone-400">{r.text}</p>
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <button className="btn-ghost border border-stone-300 px-3 dark:border-stone-700" onClick={look}>Bak</button>
+        <button className="btn-primary px-3" disabled={ok.isPending}
+          onClick={() => void ask(`${doc ? "Dökümdeki" : "Ekstredeki"} rakamlar doğru mu?\n\nBelgeyle karşılaştırdıysan ve hareketler doğruysa onayla; bu belge bir daha sorulmaz.`,
+            { confirm: "Rakamlar doğru", danger: false }).then((y: boolean) => { if (y) ok.mutate(undefined); })}>Rakamlar doğru</button>
+        <Menu r={r} onDone={ui.toast} />
+      </div>
+    </li>
+  );
+}
+
 export default function Reminders() {
   const ui = useUI();
   const q = useQuery({
@@ -282,6 +324,8 @@ export default function Reminders() {
   const run = (r: Reminder) => {
     const p = r.action === "pay" ? pay.data?.find((x) => x.type === "statement" && x.id === r.statement_id) : undefined;
     if (p) return ui.openPay(p);
+    // belge_onay: Gelen kutusu Özet'te (bu bölümün üstünde) — oraya kaydır
+    if (r.route === "gelen" || r.action === "inbox_review") return scrollTo("gelen-kutusu", ui);
     ui.go(r.action === "upload" ? "ekstreler" : r.route);
   };
   return (
@@ -297,19 +341,22 @@ export default function Reminders() {
       <ul className="divide-y divide-stone-100 px-1 pb-1 dark:divide-stone-800">
         {shown.map((r) => r.kind === "esles" || r.kind === "hesap" ? <Question key={r.id} r={r} a={answers} />
           : r.kind === "kart_eslesmedi" ? <CardUnmatched key={r.id} r={r} />
-          : r.kind === "borc_odeme" ? <DebtQuestion key={r.id} r={r} /> : (
-          <li key={r.id} className="flex items-center gap-3 px-2 py-2.5 sm:px-3">
+          : r.kind === "borc_odeme" ? <DebtQuestion key={r.id} r={r} />
+          : r.kind === "belge_dogrulanamadi" ? <DocCheck key={r.id} r={r} /> : (
+          <li key={r.id} className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3">
             <Badge r={r} />
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-48">
               <div className="flex items-center gap-2">
                 <span className="break-words text-sm font-semibold">{r.title}</span>
                 {r.tag && <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium", TAG[r.severity])}>{r.tag}</span>}
               </div>
               <p className="break-words text-xs text-stone-500 dark:text-stone-400" title={r.text}>{r.text}</p>
             </div>
-            <button className="btn-primary shrink-0 px-3" onClick={() => run(r)}>
-              {r.action === "upload" ? <><FileText size={14} />Yükle</> : "Bak"}</button>
-            <Menu r={r} onDone={ui.toast} />
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <button className="btn-primary shrink-0 px-3" onClick={() => run(r)}>
+                {r.action === "upload" ? <><FileText size={14} />Yükle</> : r.action === "inbox_review" ? "Gelen kutusu" : "Bak"}</button>
+              <Menu r={r} onDone={ui.toast} />
+            </div>
           </li>
         ))}
       </ul>
