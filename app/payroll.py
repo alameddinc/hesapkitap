@@ -40,9 +40,9 @@ def income_tax(cum: float, brackets) -> float:
 
 def _r(x: float) -> float:
     """Bordrodaki gibi kuruşa yarım-yukarı yuvarla (4.211,325 → 4.211,33)."""
-    from decimal import ROUND_HALF_UP, Decimal
+    from app import money
 
-    return float(Decimal(repr(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return money.money(x)
 
 
 def net_by_month(gross: float, year: int, start_month: int = 1, prior_cum_base: float = 0.0) -> dict:

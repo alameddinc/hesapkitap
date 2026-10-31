@@ -6,8 +6,8 @@ Metin yapay zekâyla satırlara ayrılır, sonra her satır BAKİYE ZİNCİRİYL
 """
 import re
 
+from app import money, receipt
 from app.textnorm import normalize
-from app import receipt
 from app.parsers import extract_text
 
 PROMPT = """Bu bir Türkiye bankası VADESİZ HESAP HAREKETLERİ dökümünün düz metni (PDF'ten çıkarıldı; satırlar bölünmüş,
@@ -84,7 +84,7 @@ def parse_rule_based(text: str) -> dict | None:
         return None
     # sıra: yeniden eskiye listelenmişse çevir (zincir eskiden yeniye doğrulanır)
     def chain_hits(rs):
-        return sum(abs(round(b["balance"] - a["balance"], 2) - b["amount"]) <= 0.01 for a, b in zip(rs, rs[1:]))
+        return sum(money.within(b["balance"] - a["balance"], b["amount"]) for a, b in zip(rs, rs[1:]))
     if chain_hits(rows[::-1]) > chain_hits(rows):
         rows.reverse()
     opening = round(rows[0]["balance"] - rows[0]["amount"], 2)
@@ -230,7 +230,7 @@ def solve_chain(rows: list[dict], opening: float | None, closing: float | None =
         for prev, choice in paths.items():
             opts = []
             for bi, bal in enumerate(nums):
-                if any(ai != bi and abs(abs(bal - prev) - a) <= 0.01 for ai, a in enumerate(nums)):
+                if any(ai != bi and money.within(abs(bal - prev), a) for ai, a in enumerate(nums)):
                     opts.append(round(bal, 2))
             if not opts and r.get("amount") is not None:  # sayılar eksikse modelin tahmini
                 opts.append(round(prev + r["amount"], 2))
@@ -244,7 +244,7 @@ def solve_chain(rows: list[dict], opening: float | None, closing: float | None =
     else:
         # kapanış bilinmiyorsa: her satırda sondaki sayıyı bakiye sayan yola en yakın olanı seç
         chosen = min(paths.values(), key=lambda ch: sum(
-            1 for r, bal in zip(rows, ch) if r.get("numbers") and abs(abs(r["numbers"][-1]) - bal) > 0.01))
+            1 for r, bal in zip(rows, ch) if r.get("numbers") and not money.within(abs(r["numbers"][-1]), bal)))
     prev = round(opening, 2)
     for r, bal in zip(rows, chosen):
         r["balance"], r["amount"] = bal, round(bal - prev, 2)
@@ -263,16 +263,16 @@ def verify_chain(rows: list[dict], opening: float | None, closing: float | None)
             continue
         if prev is not None and bal is not None:
             diff = round(bal - prev, 2)
-            if abs(diff - r["amount"]) <= 0.01:
+            if money.within(diff, r["amount"]):
                 ok += 1
-            elif abs(abs(diff) - abs(r["amount"])) <= 0.01:
+            elif money.within(abs(diff), abs(r["amount"])):
                 r["amount"] = diff  # işaret yanlış okunmuş: bakiye farkı esas
                 fixed += 1
                 ok += 1
             else:
                 bad.append(i)
         prev = bal if bal is not None else prev
-    closing_ok = closing is None or prev is None or abs(prev - closing) <= 0.01
+    closing_ok = closing is None or prev is None or money.within(prev, closing)
     return {"chain_ok": ok, "chain_fixed": fixed, "chain_bad": bad, "closing_ok": closing_ok,
             "verified": not bad and closing_ok and ok == len(rows)}
 

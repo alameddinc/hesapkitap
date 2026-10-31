@@ -8,7 +8,7 @@ import os
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app import backup, db, finance, telegram
+from app import backup, db, finance, money, telegram
 
 log = logging.getLogger("ekstre.jobs")
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "Europe/Istanbul"))
@@ -54,7 +54,7 @@ def reminders(today: date) -> list[str]:
 
     # 1) Son ödeme yaklaşan ekstreler (gerçek tutar belli, henüz "Ödedim" denmemiş)
     for s in statements:
-        if not s["due_date"] or (s["paid_amount"] is not None and s["paid_amount"] >= s["total_debt"] - 0.01):
+        if not s["due_date"] or (s["paid_amount"] is not None and money.diff_k(s["paid_amount"], s["total_debt"]) >= -1):
             continue
         days = (date.fromisoformat(s["due_date"]) - today).days
         if days in REMIND_DAYS:

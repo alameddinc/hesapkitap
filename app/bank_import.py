@@ -13,6 +13,7 @@ import io
 import re
 from datetime import date, datetime
 
+from app import money
 from app.textnorm import normalize
 
 HEADER_HINTS = {
@@ -503,7 +504,7 @@ def pair_cancellations(rows: list[dict]) -> None:
         # en yakın satırdan başla (önce öncekiler): aynı gün aynı tutarda başka çekim de olabilir
         for j in sorted((k for k in range(len(rows)) if k != i), key=lambda k: (abs(k - i), k > i)):
             o = rows[j]
-            if j in used or o.get("type") not in ("gider", "virman") or abs(o["amount"] + r["amount"]) > 0.005:
+            if j in used or o.get("type") not in ("gider", "virman") or not money.eq(o["amount"], -r["amount"]):
                 continue
             od = parse_date(o["date"])
             if not d or not od or abs((d - od).days) > 2:
