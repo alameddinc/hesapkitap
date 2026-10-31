@@ -4,6 +4,7 @@ import { UserPlus } from "lucide-react";
 import { useState } from "react";
 import DataPrivacy from "../components/DataPrivacy";
 import VerifyEmail from "../components/VerifyEmail";
+import InvitePreview from "../components/InvitePreview";
 import { isEmail, loginKind } from "../components/hooks";
 
 const codeFromHash = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("kod") ?? "";
@@ -88,6 +89,7 @@ export default function Register() {
           <label className="label" htmlFor="code">Davet kodu</label>
           <input id="code" className="input mb-3 font-mono uppercase" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
             placeholder="XXXX-XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} />
+          <InvitePreview code={code} />
         </>}
         <label className="label" htmlFor="user">{email ? "E-posta" : "Kullanıcı adı"}</label>
         <input id="user" className={email ? "input mb-3" : "input"} type={email ? "email" : "text"} inputMode={email ? "email" : undefined}
