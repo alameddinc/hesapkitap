@@ -1,6 +1,7 @@
 """Fiş fotoğrafından gider bilgisi çıkarma (Gemini API, REST)."""
 import base64
 import json
+import logging
 import os
 import re
 from datetime import date
@@ -8,6 +9,8 @@ from datetime import date
 import httpx
 
 from app import config
+
+log = logging.getLogger("hesapkitap.receipt")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
@@ -56,6 +59,22 @@ Fiş değilse veya okunamıyorsa total null ve confidence "düşük" döndür.
 
 
 
+def _gemini_reason(status: int, msg: str) -> str:
+    """Gemini'nin (İngilizce) hata yanıtından kullanıcıya Türkçe neden."""
+    m = (msg or "").lower()
+    if status in (401, 403) or "api key" in m or "permission" in m:
+        return "Gemini anahtarı geçersiz ya da yetkisiz; Ayarlar → Anahtarlar'dan kontrol et"
+    if status == 429 or "quota" in m or "exhausted" in m:
+        return "Yapay zekâ servisinin kullanım sınırı doldu ya da şu an yoğun; birkaç dakika sonra tekrar dene"
+    if status == 400 and ("size" in m or "too large" in m or "token" in m):
+        return "Belge yapay zekâ için çok büyük; daha küçük parçalara bölüp tekrar dene"
+    if status == 404 or "model" in m and "not found" in m:
+        return "Ayarlardaki yapay zekâ modeli bulunamadı; Ayarlar → Anahtarlar'dan model adını kontrol et"
+    if status >= 500:
+        return "Yapay zekâ servisi şu an yanıt vermiyor; biraz sonra tekrar dene"
+    return "Yapay zekâ belgeyi okuyamadı; tekrar dene ya da elle gir"
+
+
 class ReceiptError(Exception):
     pass
 
@@ -101,7 +120,7 @@ def enabled() -> bool:
 def _extract_json(text: str) -> dict:
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
-        raise ReceiptError("Model JSON döndürmedi")
+        raise ReceiptError("Yapay zekâ okunabilir bir yanıt vermedi; tekrar dene ya da elle gir")
     return json.loads(m.group(0))
 
 
@@ -180,16 +199,18 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
         r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=180,
                        headers={"x-goog-api-key": key})
     except httpx.HTTPError as e:
-        raise ReceiptError(f"Gemini'ye ulaşılamadı: {e}") from e
+        log.warning("Gemini'ye ulaşılamadı: %s", e)
+        raise ReceiptError("Yapay zekâ servisine ulaşılamadı; biraz sonra tekrar dene") from e
     if r.status_code != 200:
         msg = r.json().get("error", {}).get("message", r.text[:200]) if r.headers.get("content-type", "").startswith("application/json") else r.text[:200]
-        raise ReceiptError(f"Gemini hatası ({r.status_code}): {msg}")
+        log.warning("Gemini hatası (%s): %s", r.status_code, msg)  # İngilizce ayrıntı günlükte, kullanıcıya Türkçe neden
+        raise ReceiptError(_gemini_reason(r.status_code, msg))
 
     resp = r.json()
     try:
         text = "".join(p.get("text", "") for p in resp["candidates"][0]["content"]["parts"])
     except (KeyError, IndexError) as e:
-        raise ReceiptError("Gemini boş yanıt döndü") from e
+        raise ReceiptError("Yapay zekâ boş yanıt verdi; tekrar dene ya da elle gir") from e
     _count_usage()
     usage = resp.get("usageMetadata", {})
     return _extract_json(text), {"model": model, "input": usage.get("promptTokenCount"),
