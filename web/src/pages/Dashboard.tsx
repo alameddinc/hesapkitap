@@ -23,7 +23,7 @@ import { EstimateNote, isEstimate } from "../components/Estimates";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
-import { cx, monthLabel, periodBounds, tl, tlCompact } from "../format";
+import { cx, monthLabel, periodBounds, signed, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
 
 /** Hazır sürüm (posta adresi açık): bu dönem son ödemeli faturaların toplamı; dokununca Ödemeler'e kayar. */
@@ -187,7 +187,7 @@ export default function Dashboard() {
           <Kpi label="Gider" value={s.totals.expense}
             sub={`Kart ${tlCompact(s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
           <Kpi label="Net (bu dönem)" value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"}
-            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${s.totals.debt_flow > 0 ? "+" : ""}${tl(s.totals.debt_flow)}` : "gelir − gider"} />
+            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : "gelir − gider"} />
           {book?.hide_fees ? <Kpi label="İade" value={s.totals.refunds} /> : (
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
