@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, Landmark, Loader2, Plus, X } from "lucide-react";
-import { detailText } from "../lib/apiError";
+import { errorText } from "../lib/apiError";
 import { useEffect, useRef, useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
@@ -119,7 +119,7 @@ async function postForm<T>(url: string, file: File, extra: Record<string, string
   const r = await fetch(url, { method: "POST", body: fd });
   const j = await r.json().catch(() => ({}));
   if (isQuotaFull(j)) throw new QuotaFullError(j); // 422: belge okuma hakkı doldu (hazır sürüm)
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 }
 

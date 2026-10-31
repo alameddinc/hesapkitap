@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { errorText } from "../lib/apiError";
 import { HeartHandshake } from "lucide-react";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
@@ -11,7 +11,7 @@ export const DONATION_KINDS: Record<string, string> = {
 const call = async (method: string, url: string, body?: unknown) => {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j;
 };
 

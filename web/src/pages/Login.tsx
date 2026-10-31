@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import { inApp, toLauncher } from "../components/AppServer";
@@ -22,20 +23,16 @@ export default function Login() {
     if (email && !isEmail(user)) return setErr("Geçerli bir e-posta yaz");
     setBusy(true);
     setErr(null);
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: user.trim() || null, password: pw }),
-    });
-    setBusy(false);
-    if (res.ok) {
+    try {
+      await send("/api/auth/login", { method: "POST", json: { username: user.trim() || null, password: pw } });
       try { if (user.trim()) localStorage.setItem("hk-username", user.trim()); } catch { /* özel mod */ }
       qc.invalidateQueries();
-    }
-    else {
-      const j = await res.json().catch(() => ({}));
-      if (res.status === 409 && isPendingDeletion(j)) setPending(j);
-      else setErr(j.detail ?? "Giriş başarısız");
+    } catch (x) {
+      const { status, body } = x as { status?: number; body?: unknown };
+      if (status === 409 && isPendingDeletion(body)) setPending(body);
+      else setErr((x as Error).message || "Giriş başarısız");
+    } finally {
+      setBusy(false); // ağ hatasında da düğme kilitli kalmaz
     }
   }
 

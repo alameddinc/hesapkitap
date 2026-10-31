@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { KeyRound } from "lucide-react";
 import { useState } from "react";
 
@@ -16,12 +17,14 @@ export default function ChangePassword({ username }: { username: string }) {
     if (pw !== pw2) return setErr("Şifreler aynı değil");
     setBusy(true);
     setErr(null);
-    const res = await fetch("/api/settings/password", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current: cur, new: pw }),
-    });
-    setBusy(false);
-    if (res.ok) qc.invalidateQueries();
-    else setErr((await res.json().catch(() => ({}))).detail ?? "Değiştirilemedi");
+    try {
+      await send("/api/settings/password", { method: "POST", json: { current: cur, new: pw } });
+      qc.invalidateQueries();
+    } catch (x) {
+      setErr((x as Error).message || "Değiştirilemedi");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

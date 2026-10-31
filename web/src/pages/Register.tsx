@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { UserPlus } from "lucide-react";
 import { useState } from "react";
 import DataPrivacy from "../components/DataPrivacy";
@@ -37,16 +38,16 @@ export default function Register() {
     if (needAgree && !agreed) return setErr("Devam etmek için iki onay kutusunu da işaretle");
     setBusy(true);
     setErr(null);
-    const res = await fetch("/api/auth/register", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: askCode ? code.trim() : null, username: user.trim(), password: pw, ...(needAgree ? { consent } : {}) }),
-    });
-    setBusy(false);
-    if (res.ok) {
+    try {
+      await send("/api/auth/register", { method: "POST", json: { code: askCode ? code.trim() : null, username: user.trim(), password: pw, ...(needAgree ? { consent } : {}) } });
       try { localStorage.setItem("hk-username", user.trim()); } catch { /* özel mod */ }
       window.location.hash = "/ozet";
       qc.invalidateQueries();
-    } else setErr((await res.json().catch(() => ({}))).detail ?? "Kayıt başarısız");
+    } catch (x) {
+      setErr((x as Error).message || "Kayıt başarısız");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
