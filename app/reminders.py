@@ -319,6 +319,20 @@ def _esitleme(upload: bool) -> list[dict]:
     return out
 
 
+def _belge(upload: bool) -> list[dict]:
+    """Doğrulanamayan belgeler (app/verification.py): onay bekleyen e-posta belgesi, kontrol edilmemiş yükleme."""
+    from app import verification
+
+    if not upload:
+        return []
+    items = verification.todos(today())
+    if _page_hidden("ekstreler"):
+        items = [i for i in items if i.get("action") != "statement_confirm"]
+    if _page_hidden("hesaplar"):
+        items = [i for i in items if i.get("action") != "document_confirm"]
+    return items
+
+
 def _dogruluk() -> list[dict]:
     """Gece doğruluk denetimi ihlal bulduysa "Rakamları kontrol et" (app/integrity.py; kimlik dogruluk:<imza>)."""
     from app import book, integrity
@@ -343,6 +357,7 @@ def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
         items += _odeme(now)
     items += _esitleme(upload)
     items += _dogruluk()
+    items += _belge(upload)
     st = _state()
     if not include_hidden:
         items = [i for i in items if not _hidden(i["id"], st, now)]

@@ -454,6 +454,7 @@ MIGRATIONS = [
     ("card_payments", "created_at", "TEXT"),      # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
     ("statements", "paid_source", "TEXT"),        # auto (ödemelerden eşleşti) | elle (kullanıcı işaretledi/geri aldı)
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
+    ("bank_documents", "verified", "INTEGER"),    # bakiye zinciri: 1 tuttu, 0 tutmadı, 2 kullanıcı onayladı (app/verification.py)
 ]
 
 
@@ -1756,8 +1757,13 @@ def link_bank_document(doc_id: int, hashes: list[str]) -> int:
 
 def list_bank_documents() -> list[dict]:
     with connect() as c:
-        return rows(c.execute("SELECT id, filename, bank, account_id, size, stored, uploaded_at FROM bank_documents "
-                              "ORDER BY id DESC"))
+        out = rows(c.execute("SELECT id, filename, bank, account_id, size, stored, uploaded_at, verified FROM bank_documents "
+                             "ORDER BY id DESC"))
+    from app import verification
+
+    for d in out:  # verification: dogrulandi | dogrulanamadi | onaylandi | null (Excel/CSV, eski yükleme)
+        d["verification"] = verification.document_state(d.pop("verified"))
+    return out
 
 
 def get_bank_document(doc_id: int) -> dict | None:

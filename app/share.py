@@ -56,6 +56,8 @@ def process(name: str, data: bytes, mime: str) -> dict:
         try:
             with undo.batch(f"Telefondan: {name}"):  # yanlışsa Ekstreler → Son yüklemeler'den geri alınır
                 msg = mailbox.handle_pdf(name, data)
+            if getattr(msg, "inbox_id", None):  # rakamlar tutmadı: Gelen kutusu'nda onay bekliyor (app/verification.py)
+                return {"status": "bekliyor", "message": str(msg), "id": msg.inbox_id, "verification": "dogrulanamadi"}
             return {"status": "ok", "message": msg}
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
             return {"status": "hata", "message": str(e)}
