@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, GitMerge, HandCoins, Pencil, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
@@ -48,7 +49,7 @@ const shortBank = (b: string | null) => (b ? b.replace(/\s+(KATILIM\s+)?BANKASI.
 async function json<T>(method: string, url: string, body: object): Promise<T> {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 }
 const putPerson = (name: string, body: object) => json<{ updated: number }>("PUT", `/api/transfers/people/${encodeURIComponent(name)}`, body);
@@ -372,11 +373,9 @@ function OwnTransferForm({ o, onClose }: { o: Own; onClose: () => void }) {
     ui.toast(r.kind === "gelir" ? "Gelir kaydına çevrildi" : "Gider kaydına çevrildi"); onClose();
   });
   const err = (save.error || convert.error) as Error | null;
+  const kindWord = o.amount > 0 ? "Gelir" : "Gider";
   return (
     <Modal title="Kendi hesapların arası" onClose={onClose} footer={<>
-      <button className="btn-danger text-xs" disabled={convert.isPending}
-        onClick={() => window.confirm(`Bu aktarım kendi hesapların arası değil mi? ${o.amount > 0 ? "Gelir" : "Gider"} kaydına çevrilir ve toplamlara katılır.`) && convert.mutate(undefined)}>
-        Virman değil</button>
       <div className="flex-1" />
       <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
       <button className="btn-primary" disabled={save.isPending || !desc.trim()} onClick={() => save.mutate(undefined)}>Kaydet</button>
@@ -394,6 +393,23 @@ function OwnTransferForm({ o, onClose }: { o: Own; onClose: () => void }) {
         <div>
           <label className="label" htmlFor="ot-note">Not</label>
           <input id="ot-note" className="input" maxLength={500} value={note} placeholder="İsteğe bağlı" onChange={(e) => setNote(e.target.value)} />
+        </div>
+        {/* "virman değil": soru değil, açık eylem — ne olacağı düğmede ve onayda yazar */}
+        <div className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+          <p className="text-sm font-medium">Yanlış eşleştiyse</p>
+          <p className="text-xs text-stone-500 dark:text-stone-400">
+            Bu para kendi hesapların arasında değil de başkasına gittiyse ya da başkasından geldiyse aşağıdaki düğmeyle
+            {" "}{kindWord.toLocaleLowerCase("tr")} olarak say; bu ayın {kindWord.toLocaleLowerCase("tr")}lerine eklenir.
+          </p>
+          <button className="btn border border-stone-300 text-stone-800 hover:bg-stone-50 dark:border-stone-600 dark:text-stone-100 dark:hover:bg-stone-800"
+            disabled={convert.isPending}
+            onClick={() => void ask(
+              `${tl(Math.abs(o.amount))} (${dateTR(o.transfer_date)}, ${shortBank(o.account)}) kendi hesapların arası aktarım sayılmayacak; ` +
+              `${kindWord.toLocaleLowerCase("tr")} kaydı olur ve bu ayın toplamlarına girer. Kişi ve kategori dökümdeki açıklamadan gelir; ` +
+              "sonra İşlemler'den düzeltebilirsin.",
+              { title: `${kindWord} olarak sayılsın mı?`, confirm: `${kindWord} olarak say`, danger: false, irreversible: false },
+            ).then((ok) => { if (ok) convert.mutate(undefined); })}>
+            Kendi hesaplarım arası değil → {kindWord.toLocaleLowerCase("tr")} olarak say</button>
         </div>
         {err && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{err.message}</p>}
       </div>
