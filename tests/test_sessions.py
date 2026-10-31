@@ -118,3 +118,18 @@ def test_member_can_manage_own_sessions(owner):
     m = _member(owner, "cocuk", "viewer")
     assert m.get("/api/me/sessions").status_code == 200
     assert m.post("/api/me/sessions/revoke-all", json={"keep_current": True}).status_code == 200
+
+
+def test_session_times_utc_naive(owner):
+    """Diğer *_at alanlarıyla aynı sözleşme: UTC, saat dilimisiz 'YYYY-MM-DD HH:MM:SS'."""
+    import re
+    from datetime import datetime, timezone
+
+    from app.api.main import app
+
+    a, h = _mobile_login()
+    s = TestClient(app).get("/api/me/sessions", headers=h).json()[0]
+    for k in ("created_at", "last_seen"):
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s[k]), s[k]
+        t = datetime.strptime(s[k], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        assert abs((datetime.now(timezone.utc) - t).total_seconds()) < 120  # yerel saat değil, UTC
