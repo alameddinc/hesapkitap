@@ -61,7 +61,11 @@ def _summarise(key: str, items: list[dict], window: list[str]) -> dict:
     last = paid[-1] if paid else None
     series = {m["month"]: m["amount"] for m in months}
     top = max(paid, key=lambda m: m["amount"]) if paid else None
+    last12 = {_shift(last["month"], -i) for i in range(12)} if last else set()
+    paid12 = [m for m in paid if m["month"] in last12]
     return {
+        # son ödemeli aydan geriye 12 ay içinde ödeme olan ayların ortalaması (web ve mobil aynı rakamı göstersin)
+        "average_12": round(sum(m["amount"] for m in paid12) / len(paid12), 2) if paid12 else 0.0,
         "name": key, "months": months,
         "total": round(sum(m["amount"] for m in months), 2),
         "average": round(sum(m["amount"] for m in paid) / len(paid), 2) if paid else 0.0,
@@ -124,4 +128,7 @@ def summary(months: int = 24, until: str | None = None) -> dict:
         providers.append(s)
     providers.sort(key=lambda p: -p["total"])
     categories = sorted((_summarise(k, v, window) for k, v in cats.items()), key=lambda p: -p["total"])
-    return {"providers": providers, "categories": categories, "window": {"start": window[0], "end": window[-1]}}
+    # genel: tüm faturalar (her ödeme bir kez); last/vs_prev_month/vs_last_year/average_12 kategorilerle aynı kural
+    overall = _summarise("Toplam", items, window) if items else None
+    return {"providers": providers, "categories": categories, "overall": overall,
+            "window": {"start": window[0], "end": window[-1]}}

@@ -567,6 +567,15 @@ def goals_review(today: date | None = None) -> list[dict]:
 
 # ---------------------------------------------------------------- bütçeler
 
+def budgets_totals(status: list[dict]) -> dict:
+    """Bütçe başlığı (istemci toplamasın): limit, harcanan, kalan, yüzde, aşan kategori sayısı."""
+    limit = sum(b["limit"] for b in status)
+    spent = sum(b["spent"] for b in status)
+    return {"limit": _round(limit), "spent": _round(spent), "remaining": _round(limit - spent),
+            "pct": round(spent / limit * 100, 1) if limit else 0.0, "over": sum(1 for b in status if b["spent"] > b["limit"]),
+            "count": len(status)}
+
+
 def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
     limits = db.list_budgets()
     if not limits:
@@ -1062,7 +1071,12 @@ def payables_totals(today: date | None = None, items: list[dict] | None = None, 
         out_window = {"days": days, "total": _round(sum(rem(p) for p in win)), "count": len(win),
                       "overdue": _round(sum(rem(p) for p in win if p["days_left"] < 0)),
                       "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate" and p["days_left"] <= days))}
+    this_month = today.isoformat()[:7]  # takvim ayı (mobil 'Bu ay ödenen'): ödendi işaretli, ödeme tarihi bu ay
+    paid_m = [p for p in items if p["status"] == "odendi" and (p.get("paid_at") or "")[:7] == this_month]
+    out_paid = {"month": this_month, "total": _round(sum(p["paid_amount"] or p["amount"] for p in paid_m)),
+                "count": len(paid_m)}
     return {"open": _round(sum(rem(p) for p in inc)), "open_count": len(inc), "window": out_window,
+            "paid_this_month": out_paid,
             "card_debt": db.card_debt_at(today.isoformat()), "statements": by["statement"], "bills": by["bill"],
             "debts": by["debt"], "overdue": _round(sum(rem(p) for p in rolled)), "overdue_count": len(rolled),
             "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate"))}
