@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { ChevronDown, Copy, EyeOff, KeyRound, Trash2, Users2 } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, maskText, tsDateTR } from "../format";
@@ -24,7 +25,7 @@ const ROLES: { value: BookRole; label: string; sub: string }[] = [
 const call = async <T,>(url: string, method = "GET", body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 };
 const link = (code: string) => `${window.location.origin}/#/kayit?kod=${code}`;

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { Copy, Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, tsDateTR } from "../format";
@@ -18,7 +19,7 @@ async function call<T>(url: string, method = "POST", body?: unknown): Promise<T>
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 }
 

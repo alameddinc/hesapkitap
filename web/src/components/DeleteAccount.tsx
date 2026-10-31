@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { CircleCheck, Download, ExternalLink, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { dayMonth, onDate } from "./PendingDeletion";
@@ -49,7 +50,7 @@ export default function DeleteAccount() {
     const r = await fetch("/api/me/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) return setErr(j.detail ?? "Silinemedi");
+    if (!r.ok) return setErr(detailText(j.detail, r.status));
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined); // oturum çerezi kalmasın
     setUntil(j.delete_after ?? null);
     setStep("bitti");

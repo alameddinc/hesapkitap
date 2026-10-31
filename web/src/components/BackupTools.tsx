@@ -1,4 +1,5 @@
 import { FileSpreadsheet, FolderDown, Upload } from "lucide-react";
+import { detailText } from "../lib/apiError";
 import { useRef, useState } from "react";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
@@ -8,7 +9,7 @@ interface RestoreResult { entries: number; statements: number; files: number; be
 const send = async (url: string, body?: FormData): Promise<RestoreResult> => {
   const r = await fetch(url, { method: "POST", body });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j;
 };
 

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { Plus, Trash2, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { monthLabel, parseAmount, tl } from "../format";
@@ -10,7 +11,7 @@ interface Change { id: number; from_month: string; amount: number }
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 };
 

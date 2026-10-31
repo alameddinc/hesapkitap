@@ -1,4 +1,5 @@
 import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { detailText } from "../lib/apiError";
 import { useState } from "react";
 import { cx, dateTR, maskText, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -43,7 +44,7 @@ export function fmtAsset(x: number, asset: string) {
 const json = async (method: string, url: string, body?: unknown) => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j;
 };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -274,6 +275,7 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
           label={d.direction === "borc" ? "Hangi hesaptan ödedin? (nakitse boş)" : "Hangi hesaba geldi? (nakitse boş)"} />
       )}
       <p className="text-xs text-stone-500">Kalanın tamamı kapatır; azını yazarsan kısmi ödeme olarak düşer.</p>
+      {save.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
       <div className="flex gap-2">
         <button className="btn-primary" disabled={!(parseAmount(amount) > 0) || save.isPending} onClick={() => save.mutate(undefined)}>Kaydet</button>
         <button className="btn-ghost" onClick={onDone}>Vazgeç</button>

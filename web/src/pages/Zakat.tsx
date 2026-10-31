@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { ChevronDown, Info, Moon, Plus, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useSave } from "../components/hooks";
@@ -29,7 +30,7 @@ interface ZakatData {
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 };
 const today = () => new Date().toISOString().slice(0, 10);
