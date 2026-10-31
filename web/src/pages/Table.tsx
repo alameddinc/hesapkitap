@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
 import { netSpend } from "../lib/counts";
+import { usePagedTxns } from "../lib/pagedTxns";
+import LoadMore from "../components/LoadMore";
 import { ArrowDown, ArrowUp, Download, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type Row } from "../api";
+import type { Row } from "../api";
 import MultiSelect from "../components/MultiSelect";
 import Segmented from "../components/Segmented";
 import { cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
@@ -55,7 +56,10 @@ function downloadCsv(name: string, rows: (string | number)[][]) {
 
 export default function Table() {
   const ui = useUI();
-  const all = useQuery({ queryKey: ["txns", "all-months"], queryFn: () => api.transactions(undefined) });
+  // tüm geçmiş sayfa sayfa (1000'er): ilk sayfa hemen çizilir, pivot tüm ayları gerektirdiği için kalanlar arka arkaya gelir
+  const all = usePagedTxns({ pageSize: 1000, auto: true });
+  // liste görünümü DOM'u şişirmesin: 300'er satır, kaydırdıkça
+  const [shown, setShown] = useState(300);
   const [f, setF] = useState<Filters>(load);
   const [view, setView] = useState<View>("pivot");
   const [pivotBy, setPivotBy] = useState<PivotBy>("category");
@@ -64,10 +68,10 @@ export default function Table() {
   useEffect(() => {
     try { localStorage.setItem(KEY, JSON.stringify(f)); } catch { /* özel mod */ }
   }, [f]);
-  const set = (p: Partial<Filters>) => { setF({ ...f, ...p }); setDrill(null); };
+  const set = (p: Partial<Filters>) => { setF({ ...f, ...p }); setDrill(null); setShown(300); };
 
   // tahmini satırlar (ekstresiz kart ödemesi) gerçek değil: tabloya/pivota girmez (eski sunucu listede verirse de)
-  const data = (all.data ?? []).filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && !isEstimate(r));
+  const data = all.rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && !isEstimate(r));
   const months = useMemo(() => [...new Set(data.map((r) => r.month))].sort(), [data]);
   const categories = useMemo(() => [...new Set(data.map((r) => r.category))].sort((a, b) => a.localeCompare(b, "tr")), [data]);
   const cards = useMemo(() => [...new Set(data.map((r) => r.card ?? "Elle girilen"))].sort(), [data]);
@@ -176,6 +180,11 @@ export default function Table() {
       )}
 
       {all.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
+      {all.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(all.error as Error).message}</p>}
+      {!all.isLoading && !all.complete && !all.error && (
+        <p className="text-xs text-stone-500" role="status">
+          {all.rows.length}{all.totals ? ` / ${all.totals.count}` : ""} işlem yüklendi; kalanı geliyor, toplamlar tamamlanınca kesinleşir…</p>
+      )}
 
       {view === "pivot" && (
         <div className="card overflow-auto">
@@ -232,7 +241,7 @@ export default function Table() {
           <div className="flex items-center justify-between border-b border-stone-100 px-3 py-2 text-xs text-stone-500 dark:border-stone-800">
             <span>
               {drill && <b className="text-stone-800 dark:text-stone-200">{drill.name}{drill.month && ` · ${monthLabel(drill.month)}`} — </b>}
-              {listRows.length} kayıt · toplam <b>{tl(total)}</b> · satıra tıkla → düzenle
+              {listRows.length} kayıt · toplam <b>{tl(total)}</b>{!all.complete && " (yükleniyor)"} · satıra tıkla → düzenle
             </span>
             {drill && <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => setDrill(null)}><X size={12} /> Kapat</button>}
           </div>
@@ -245,7 +254,7 @@ export default function Table() {
                 </tr>
               </thead>
               <tbody>
-                {listRows.map((r) => (
+                {listRows.slice(0, shown).map((r) => (
                   <tr key={r.uid} className="cursor-pointer border-t border-stone-100 hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-800/50"
                     onClick={() => (r.source === "card" ? ui.openCardTxn(r) : r.source === "estimate" ? ui.go("ekstreler") : ui.openEntry(r))}>
                     <td className="px-2 py-1.5 whitespace-nowrap">{dateTR(r.date)}</td>
@@ -266,6 +275,7 @@ export default function Table() {
                 ))}
               </tbody>
             </table>
+            {listRows.length > shown && <LoadMore onMore={() => setShown((n) => n + 300)} busy={false} label={`${listRows.length - shown} kayıt daha`} />}
           </div>
         </div>
       )}

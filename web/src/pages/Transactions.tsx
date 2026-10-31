@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { rowTotals } from "../lib/counts";
+import { usePagedTxns } from "../lib/pagedTxns";
+import LoadMore from "../components/LoadMore";
 import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Row } from "../api";
@@ -27,17 +29,19 @@ export default function Transactions() {
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
-  const txns = useQuery({ queryKey: ["txns", ui.month, "all", "est"], queryFn: () => api.transactions(ui.month, true, true) });
-  // tahmini satırlar ana listede ve sekme sayılarında yok; başta ayrı, katlanır bölümde
-  const [real, estimates] = useMemo(() => splitEstimates(txns.data ?? []), [txns.data]);
   const needle = fold(q.trim());
+  // sayfa sayfa (200): kaydırdıkça sıradaki; sekme ya da arama tüm dönemi gerektirir → kalanlar kendiliğinden gelir
+  const txns = usePagedTxns({ month: ui.month, includeDeleted: true, includeEstimates: true, pageSize: 200, auto: tab !== "all" || !!needle });
+  // tahmini satırlar ana listede ve sekme sayılarında yok; başta ayrı, katlanır bölümde
+  const [real, estimates] = useMemo(() => splitEstimates(txns.rows), [txns.rows]);
   const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle);
   const active = TABS.find((x) => x.key === tab)!;
   const rows = real.filter((r) => active.test(r) && match(r));
   const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
-  // süzgeç toplamı: sunucunun counts_as_spend bayrağı (Özet'teki gider ile aynı kural)
-  const spend = rowTotals(rows).spend;
+  // toplam: süzgeç yokken sunucunun dönem toplamı (sayfanın değil); süzgeçte tüm satırlar gelince counts_as_spend bayrağı
+  const filtered = tab !== "all" || !!needle;
+  const spend = !filtered && txns.totals ? txns.totals.expense : txns.complete ? rowTotals(rows).spend : null;
 
   return (
     <div className="space-y-3">
@@ -56,12 +60,12 @@ export default function Transactions() {
 
       <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0">
         {TABS.map((t) => {
-          const n = real.filter(t.test).length;
+          const n = txns.complete ? real.filter(t.test).length : null; // sayılar dönemin tamamı gelince
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={cx("shrink-0 rounded-full border px-3 py-1 text-sm",
                 tab === t.key ? "border-blue-600 bg-blue-600 text-white" : "border-stone-300 dark:border-stone-700")}>
-              {t.label} <span className="opacity-70">{n}</span>
+              {t.label}{n != null && <span className="opacity-70"> {n}</span>}
             </button>
           );
         })}
@@ -71,9 +75,12 @@ export default function Transactions() {
 
       <div className="card overflow-hidden">
         <div className="border-b border-stone-100 px-3 py-2 text-xs text-stone-500 dark:border-stone-800">
-          {rows.length} kayıt · gider toplamı {tl(spend)} · düzenlemek için dokun
+          {txns.complete ? `${rows.length} kayıt` : `İlk ${rows.length} kayıt`} · gider toplamı {spend == null ? "…" : tl(spend)}
+          {!filtered && !txns.complete && " (dönemin tamamı)"} · düzenlemek için dokun
         </div>
         {txns.isLoading ? <p className="p-4 text-sm text-stone-500">Yükleniyor…</p> : <TxnList rows={rows} />}
+        {txns.error && <p className="p-3 text-sm text-red-600 dark:text-red-400" role="alert">{(txns.error as Error).message}</p>}
+        {!txns.isLoading && !txns.complete && !txns.error && <LoadMore onMore={txns.loadMore} busy={txns.loadingMore} label="Daha eski işlemler" />}
       </div>
     </div>
   );
