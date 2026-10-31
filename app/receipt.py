@@ -105,18 +105,38 @@ def _extract_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
-def _num(v) -> float | None:
-    if v is None or v == "":
+def _num(v, qty: bool = False) -> float | None:
+    """Fiş/fatura sayısı. Tutar (varsayılan) Türk biçimleriyle: "1.234,50", "12,90"; virgül yoksa tek/çok nokta ve
+    ardından tam 3 hane binliktir ("1.234" → 1234, "1.234.567"), 2 hane ondalıktır ("2.90" → 2,9). İkisi birden varsa
+    sondaki ayraç ondalıktır ("1,234.56"). Tutar yarım yukarı kuruşa yuvarlanır (app/money.py).
+    qty=True (adet/kg): nokta da virgül de ondalıktır ("1.250" kg → 1,25)."""
+    import re
+
+    from app import money
+
+    if v is None or v == "" or isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
-        return round(float(v), 2)
-    s = str(v).replace("₺", "").replace("TL", "").strip()
-    if "," in s:  # Türk formatı
+        return round(float(v), 2) if qty else money.money(v)
+    s = re.sub(r"\s|₺|TL", "", str(v))
+    neg = s.startswith("-")
+    s = s.lstrip("+-")
+    if not re.fullmatch(r"[\d.,]*\d[\d.,]*", s):
+        return None
+    if qty:
+        s = s.replace(",", ".")
+    elif "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    elif "," in s:
         s = s.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(\.\d{3})+", s):  # binlik nokta
+        s = s.replace(".", "")
     try:
-        return round(float(s), 2)
+        x = float(s)
     except ValueError:
         return None
+    x = -x if neg else x
+    return round(x, 2) if qty else money.money(x)
 
 
 BILL_PROMPT = """Bu bir Türkiye'de kesilmiş fatura (elektrik, doğalgaz, su, internet, telefon, aidat vb.). PDF veya fotoğraf olabilir.
@@ -265,7 +285,7 @@ def _items(raw: dict) -> list[dict]:
         if not isinstance(i, dict) or not i.get("name"):
             continue
         unit = i.get("unit") if i.get("unit") in ("adet", "kg", "lt") else "adet"
-        q = _num(i.get("qty"))
+        q = _num(i.get("qty"), qty=True)
         q = q if q and q > 0 else 1
         if unit == "adet":
             q = int(q) if float(q).is_integer() and q >= 1 else 1
