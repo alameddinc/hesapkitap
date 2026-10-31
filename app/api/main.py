@@ -1368,6 +1368,9 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     u = db.current_user()
     if month is None and not plans.allows(u, "gecmis"):  # tüm aylar istendi: ücretsizde görünür pencereyle sınırlı
         rows = [r for r in rows if plans.history_ok(u, r["month"])]
+    for r in rows:  # her satırda: raw (banka açıklaması, yoksa null), note_user (kullanıcının kendi notu)
+        r.setdefault("raw", None)
+        r.setdefault("note_user", r.get("note"))
     return rows
 
 
@@ -1517,6 +1520,13 @@ def patch_entry(entry_id: int, body: EntryPatch):
 
     data = body.model_dump(exclude_unset=True)
     _visible_or_404("account", data.get("account_id"))
+    if "note" in data:  # notun ilk satırındaki banka açıklaması (ham metin) korunur; kullanıcı notu altına (app/rawnote.py)
+        from app import rawnote
+
+        with db.connect() as c:
+            cur = c.execute("SELECT note FROM entries WHERE id = ?", (entry_id,)).fetchone()
+        if cur:
+            data["note"] = rawnote.with_user_note(cur["note"], data["note"])
     if (m := book.member()):  # üye: görebildiği kayıt; başkasının kaydında sadece kategori/not/açıklama
         if not book.can_see_entry(entry_id):
             raise HTTPException(404, "Kayıt bulunamadı")
@@ -3350,7 +3360,17 @@ def transfers(month: str | None = None, start: str | None = None, end: str | Non
     for v, pat in ((month, r"\d{4}-\d{2}"), (start, r"\d{4}-\d{2}-\d{2}"), (end, r"\d{4}-\d{2}-\d{2}")):
         if v and not _re.fullmatch(pat, v):
             raise HTTPException(422, "Tarih biçimi: month=YYYY-MM, start/end=YYYY-MM-DD")
-    return db.transfers_overview(month, start, end)
+    from app import rawnote, sync
+
+    out = db.transfers_overview(month, start, end)
+    info = sync.match_info()
+    for key in ("items", "self"):
+        for i in out.get(key) or []:
+            m = info.get(i.get("id")) or {}
+            i["raw"] = m["description"] if m.get("source") == "dokum" and m.get("description") else \
+                rawnote.raw_of(i.get("note"), i.get("description"))
+            i["note_user"] = rawnote.user_note(i.get("note"))
+    return out
 
 
 @app.put("/api/transfers/people/{name}")

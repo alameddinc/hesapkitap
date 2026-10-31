@@ -42,18 +42,10 @@ def _owners() -> list[str]:
 
 
 def _raw_of(e: dict) -> str | None:
-    """Kaydın içe aktarıldığı ham banka metni: not 'Hesap hareketi · <ham>' ya da (açıklama hamsa) açıklama."""
-    note = e.get("note") or ""
-    if not note.startswith("Hesap hareketi"):
-        return None
-    rest = note[len("Hesap hareketi"):]
-    if rest.startswith(" · "):
-        rest = rest[3:]
-        # fatura notu: 'Telefon 54… · Fatura no FD… · Son ödeme 30.06.2026 · <ham>'
-        while m := _EXTRA.match(rest):
-            rest = rest[m.end():]
-        return rest or None
-    return e["description"] if rest.strip() == "" else None
+    """Kaydın içe aktarıldığı ham banka metni (app/rawnote.py)."""
+    from app import rawnote
+
+    return rawnote.raw_of(e.get("note"), e.get("description"))
 
 
 def _untouched(e: dict) -> bool:

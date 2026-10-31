@@ -93,8 +93,8 @@ def _rejects(c) -> set[tuple[int, str]]:
 def bank_desc(i: dict) -> str:
     """Dökümden gelen kaydın bankadaki asıl açıklaması (kısaltıldıysa notta tam hali durur)."""
     note = i.get("note") or ""
-    if note.startswith("Hesap hareketi · "):
-        return note[len("Hesap hareketi · "):]
+    if note.startswith("Hesap hareketi · "):  # (altında kullanıcı notu olabilir: yalnız ilk satır; app/rawnote.py)
+        return note.partition("\n")[0][len("Hesap hareketi · "):]
     return i.get("description") or ""
 
 
