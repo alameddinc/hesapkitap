@@ -439,6 +439,7 @@ MIGRATIONS = [
     ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)
     ("card_payments", "statement_id", "INTEGER"), # elle "ödendi" denen ekstre (POST /api/statements/{id}/pay)
     ("card_payments", "created_at", "TEXT"),      # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
+    ("statements", "paid_source", "TEXT"),        # auto (ödemelerden eşleşti) | elle (kullanıcı işaretledi/geri aldı)
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
 ]
 
@@ -595,7 +596,6 @@ def init_db() -> None:
         c.execute("""UPDATE entries SET debt_id = (SELECT debt_id FROM debt_payments p WHERE p.entry_id = entries.id)
                      WHERE debt_id IS NULL AND id IN (SELECT entry_id FROM debt_payments WHERE entry_id IS NOT NULL)""")
         _sync_default_rules(c)
-    auto_mark_paid()
     auto_update_cycle()
     _ensure_imported_bank_accounts()
 
@@ -870,7 +870,7 @@ def list_statements() -> list[dict]:
     """Ekstreler. fees: faiz ve ücret (özet satırı okunduysa interest_fees, yoksa faiz/ücret işlemlerinin toplamı);
     reconciliation_diff: okunan işlemler − ekstre özeti (faiz ve ücret dahil, app/parsers/base.py) — kayıtlı veriden."""
     from app import book
-    from app.parsers.base import reconciliation_diff, statement_fees
+    from app.parsers.base import equation, reconciliation_diff, statement_fees
 
     with connect() as c:
         out = book.filter_statements(rows(c.execute(
@@ -890,7 +890,10 @@ def list_statements() -> list[dict]:
         s["reconciliation_diff"] = (reconciliation_diff(parsed, s["period_activity"], s["interest_fees"], s["fees"],
                                                         s["previous_balance"], s["payments"], s["total_debt"])
                                     if s["period_activity"] is not None else None)
-        s["needs_check"] = bool(s["reconciliation_diff"]) and abs(s["reconciliation_diff"]) >= 1 and not s.get("confirmed_at")
+        eq = equation(s["previous_balance"], s["payments"], s["period_activity"], s["fees"], s["total_debt"])
+        s["fees_included"], s["equation_diff"] = eq["fees_included"], eq["diff"]  # faiz harcamaların içinde mi
+        s["needs_check"] = (bool(s["reconciliation_diff"]) and abs(s["reconciliation_diff"]) >= 1
+                            or eq["ok"] is False) and not s.get("confirmed_at")
     return out
 
 
@@ -1239,22 +1242,108 @@ def category_usage() -> dict[str, int]:
 # ---------------------------------------------------------------- ödemeler: ekstre + fatura
 
 def auto_mark_paid() -> int:
-    """Bir ekstredeki ödeme satırları (ÖDEMENİZ İÇİN TEŞEKKÜRLER / Borç Ödeme) bir önceki ekstrenin ödemesidir.
-    Elle işaretlenmemiş önceki ekstreleri bu satırlara göre ödendi yapar."""
-    marked = 0
+    """Ekstrelerin ödendi işaretleri ödemelerden yeniden hesaplanır (reassign_statement_payments). Yeni işaretlenen sayısı."""
+    return reassign_statement_payments()["marked"]
+
+
+PAY_GRACE_DAYS = 25  # son ödeme tarihinden sonra geç ödeme penceresi (sonraki kesimi geçmez)
+
+
+def _statement_windows(sts: list[dict]) -> dict[int, tuple[str, str]]:
+    """Ekstre → ödeme penceresi (kesim, bitiş]: aynı kartın sonraki kesimi ya da son ödeme + PAY_GRACE_DAYS (hangisi
+    önceyse). Aynı kartta pencereler örtüşmez: her ödeme en fazla bir ekstreye düşer."""
+    from datetime import date as _date, timedelta
+
+    by_card: dict[str, list] = {}
+    for s in sts:
+        by_card.setdefault((s["card_no"] or "")[-4:], []).append(s)
+    out = {}
+    for lst in by_card.values():
+        lst.sort(key=lambda s: s["period_end"])
+        for i, s in enumerate(lst):
+            pe = _date.fromisoformat(s["period_end"])
+            due = _date.fromisoformat(s["due_date"]) if s["due_date"] else pe + timedelta(days=10)
+            end = due + timedelta(days=PAY_GRACE_DAYS)
+            if i + 1 < len(lst):
+                end = min(end, _date.fromisoformat(lst[i + 1]["period_end"]))
+            out[s["id"]] = (s["period_end"], end.isoformat())
+    return out
+
+
+def _payment_evidence(c) -> list[dict]:
+    """Kart borcu ödemeleri: banka dökümü (card_payments) + kart ekstresindeki ödeme satırları. Aynı ödeme iki yerde
+    görünür (aynı kart, ±0,01, ±5 gün): bir kez sayılır, banka satırı esas."""
+    from datetime import date as _date
+
+    bank = [{"key": f"b{r['id']}", "date": r["pay_date"], "amount": round(r["amount"], 2), "last4": r["card_last4"],
+             "statement_id": r["statement_id"]} for r in rows(c.execute(
+                 "SELECT id, pay_date, amount, card_last4, statement_id FROM card_payments WHERE amount > 0"))]
+    card = [{"key": f"t{r['id']}", "date": r["txn_date"], "amount": round(-r["amount"], 2), "last4": (r["card_no"] or "")[-4:],
+             "statement_id": None} for r in rows(c.execute(
+                 "SELECT t.id, t.txn_date, t.amount, s.card_no FROM transactions t JOIN statements s ON s.id = t.statement_id "
+                 "WHERE t.txn_type = 'odeme' AND t.is_deleted = 0 AND t.amount < 0"))]
+    out = list(bank)
+    for t in card:
+        dup = any(b["last4"] in (t["last4"], None) and abs(b["amount"] - t["amount"]) < 0.01
+                  and abs((_date.fromisoformat(b["date"][:10]) - _date.fromisoformat(t["date"][:10])).days) <= 5 for b in bank)
+        if not dup:
+            out.append(t)
+    return sorted(out, key=lambda p: (p["date"], p["key"]))
+
+
+def reassign_statement_payments(apply: bool = True) -> dict:
+    """Ekstrelerin 'ödendi' işaretini TÜM ödemelerden, yükleme sırasından bağımsız yeniden hesapla.
+
+    Her ödeme en fazla bir ekstreye atanır: kart son 4 hanesi biliniyorsa o kartın, ödeme tarihini içeren penceredeki
+    ekstresine; bilinmiyorsa penceresi tutan ekstrelerden tutarı borç ya da asgariyle eşleşene (önce tam borç). Bir
+    ekstreye düşen ödemeler toplanır (kısmi ödemeler); toplam asgariyi (yoksa borcu) karşılıyorsa ödendi: paid_amount =
+    toplam, paid_at = son ödeme. Kullanıcının elle işaretlediği / geri aldığı ekstreye (paid_source 'elle') dokunulmaz.
+    Kaynağı bilinmeyen eski işaret: ödemelerden birine denk geliyorsa yeniden hesaplanır, gelmiyorsa (elle) korunur.
+    Dönüş: {marked, cleared, changed: [...]}."""
     with connect() as c:
-        sts = rows(c.execute("SELECT id, card_no, period_end, total_debt, paid_amount FROM statements ORDER BY card_no, period_end"))
-        for prev, cur in zip(sts, sts[1:]):
-            if prev["card_no"] != cur["card_no"] or prev["paid_amount"] is not None:
+        sts = rows(c.execute("SELECT id, card_no, bank, period_end, due_date, total_debt, min_payment, paid_amount, "
+                             "paid_at, paid_source FROM statements"))
+        pays = _payment_evidence(c)
+    win = _statement_windows(sts)
+    manual = {s["id"] for s in sts if s["paid_source"] == "elle"}
+    assigned: dict[int, list] = {s["id"]: [] for s in sts}
+    for p in pays:
+        if p["statement_id"] in manual:  # elle ödenen ekstreye bağlı ödeme: orada kalır
+            continue
+        cands = [s for s in sts if s["id"] not in manual and win[s["id"]][0] < p["date"][:10] <= win[s["id"]][1]]
+        if p["last4"]:
+            cands = [s for s in cands if (s["card_no"] or "")[-4:] == p["last4"]]
+        else:  # kart bilinmiyor (başka bankanın kartına EFT): tutar borç ya da asgariyle tutmalı
+            cands = [s for s in cands if abs((s["total_debt"] or 0) - p["amount"]) <= 1
+                     or abs((s["min_payment"] or -9) - p["amount"]) <= 1]
+            cands.sort(key=lambda s: (abs((s["total_debt"] or 0) - p["amount"]) > 1, s["period_end"]))
+        if cands:
+            assigned[cands[0]["id"]].append(p)
+    evidence = {(p["amount"], p["date"][:10]) for p in pays}
+    changed, marked, cleared = [], 0, 0
+    for s in sts:
+        if s["id"] in manual:
+            continue
+        ps = assigned[s["id"]]
+        total = round(sum(p["amount"] for p in ps), 2)
+        need = s["min_payment"] if s["min_payment"] else s["total_debt"]
+        new = (total, max(p["date"][:10] for p in ps)) if ps and need is not None and total >= need - 1 else (None, None)
+        old = (s["paid_amount"], s["paid_at"])
+        if new == (None, None) and old != (None, None) and s["paid_source"] != "auto":
+            # kaynağı bilinmeyen eski işaret: bir ödemeye denk gelmiyorsa kullanıcı elle girmiştir, korunur
+            if not any(abs(a - (old[0] or 0)) <= 1 and d == old[1] for a, d in evidence):
                 continue
-            pays = c.execute("SELECT txn_date, amount FROM transactions WHERE statement_id = ? AND txn_type = 'odeme' "
-                             "AND txn_date > ?", (cur["id"], prev["period_end"])).fetchall()
-            if pays:
-                total = round(-sum(p["amount"] for p in pays), 2)
-                c.execute("UPDATE statements SET paid_amount = ?, paid_at = ? WHERE id = ?",
-                          (min(total, prev["total_debt"]), max(p["txn_date"] for p in pays), prev["id"]))
-                marked += 1
-    return marked
+        if new != old:
+            changed.append({"id": s["id"], "card": s["card_no"], "period_end": s["period_end"], "total_debt": s["total_debt"],
+                            "was": old, "now": new, "payments": [(p["date"], p["amount"]) for p in ps]})
+            marked += old[1] is None and new[1] is not None
+            cleared += old[1] is not None and new[1] is None
+    if apply and changed:
+        with connect() as c:
+            for ch in changed:
+                c.execute("UPDATE statements SET paid_amount = ?, paid_at = ?, paid_source = ? WHERE id = ?",
+                          (*ch["now"], "auto" if ch["now"][1] else None, ch["id"]))
+    return {"marked": marked, "cleared": cleared, "changed": changed}
 
 
 def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, account_id: int | None = None) -> dict:
@@ -1269,9 +1358,10 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
         if amount is None:
             c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
             c.execute("UPDATE card_payments SET statement_id = NULL WHERE statement_id = ?", (sid,))
-            c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL WHERE id = ?", (sid,))
+            # kullanıcı geri aldı: otomatik eşleme bu ekstreyi yeniden işaretlemez
+            c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL, paid_source = 'elle' WHERE id = ?", (sid,))
             return {"card_payment_id": None, "linked": False}
-        c.execute("UPDATE statements SET paid_amount = ?, paid_at = ? WHERE id = ?", (amount, paid_at, sid))
+        c.execute("UPDATE statements SET paid_amount = ?, paid_at = ?, paid_source = 'elle' WHERE id = ?", (amount, paid_at, sid))
         if not account_id:
             return {"card_payment_id": None, "linked": False}
         acc = c.execute("SELECT id, name FROM accounts WHERE id = ? AND kind IN ('banka', 'nakit')", (account_id,)).fetchone()
@@ -2045,11 +2135,6 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                 c.execute("INSERT OR IGNORE INTO card_payments (pay_date, amount, card_last4, account, description, import_hash, "
                           "account_id) VALUES (?, ?, ?, ?, ?, ?, ?)", (r["date"], amt, card.group(1) if card else None,
                                                                        account, r["description"][:300], r["hash"], acc_id))
-            st = match_card_payment(amt, r["date"], only_unpaid=True)
-            if st:
-                with connect() as c:
-                    c.execute("UPDATE statements SET paid_amount = ?, paid_at = ? WHERE id = ?", (amt, r["date"], st["id"]))
-                stats["odendi_isaretlenen"] += 1
             seen.add(r["hash"])
             continue
         kind = "gelir" if r["amount"] > 0 else "gider"
@@ -2160,6 +2245,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         set_account_balance(acc_name, bal, d_, source="dokum")
     # öğrenilmiş kurallarla eşleşenler birleşir; kalan muhtemeller Yapılacaklar'da sorulur
     # önce yüklenen dökümde gider sayılmış, bu dökümle karşılığı gelen kendi hesapları arası transferler
+    # ekstrelerin ödendi işaretleri: bütün kart ödemelerinden, yükleme sırasından bağımsız
+    stats["odendi_isaretlenen"] = reassign_statement_payments()["marked"]
     moved = repair_own_transfers(owners)
     if moved:
         stats["virman"] += len(moved)
