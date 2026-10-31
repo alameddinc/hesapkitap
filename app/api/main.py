@@ -165,8 +165,8 @@ async def _demo_request(request: Request, call_next):
     # mobil uygulama çerez tutmaz: demo kopyasının kimliği X-Demo-Sid başlığıyla gider gelir
     sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE) or request.headers.get("x-demo-sid"))
     db_file, user = demo_mode.space(sid)
-    with db.use_space(db_file, user):
-        response = await call_next(request)
+    with db.use_space(db_file, user):  # okuma sırası ve Idempotency-Key (kapsam: demo kopyası + anahtar) burada da
+        response = await _run(request, call_next, db_file, path)
     response.headers["X-Demo-Sid"] = sid
     demo_mode.track(sid, path, request.method, request.headers.get("x-real-ip") or (request.client.host if request.client else ""),
                     request.headers.get("user-agent", ""))
