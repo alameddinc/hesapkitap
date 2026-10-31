@@ -22,13 +22,15 @@ from app import db, system
 
 COOKIE = "ekstre_session"
 SESSION_DAYS = 30
-MAX_FAILS = 5          # pencere başına hatalı deneme
+MAX_FAILS = 5          # pencere başına hatalı deneme (IP başı)
+ACCOUNT_MAX_FAILS = 10  # pencere başına hatalı deneme (hesap başı, IP'den bağımsız; başarılı girişte sıfırlanır)
 FAIL_WINDOW = 15 * 60  # saniye
 PBKDF2_ITER = 600_000
 MIN_PASSWORD = 10
 
 log = logging.getLogger("hesapkitap.auth")
 _fails: dict[str, deque] = defaultdict(deque)
+_account_fails: dict[str, deque] = defaultdict(deque)
 _fails_lock = threading.Lock()  # giriş uçları iş parçacığı havuzunda eşzamanlı: deque/sözlük erişimi kilitli
 _setup_code: str | None = None
 
@@ -247,6 +249,37 @@ def rate_limited(ip: str) -> bool:
 def record_fail(ip: str) -> None:
     with _fails_lock:
         _fails[ip].append(time.time())
+
+
+def account_key(username: str | None) -> str:
+    """Hesap başı sayaç anahtarı. Var olan kullanıcıda id (ad/e-posta biçimi fark etmesin); yoksa ad. Var olmayan ad
+    da aynı kuralla kilitlenir, kilit adın varlığını ele vermez."""
+    name = (username or "").strip()
+    u = system.user_by_name(name) if name else admin()
+    return f"id:{u['id']}" if u else f"ad:{name.lower()}"
+
+
+def account_locked(key: str) -> bool:
+    now = time.time()
+    with _fails_lock:
+        q = _account_fails.get(key)
+        if not q:
+            return False
+        while q and q[0] < now - FAIL_WINDOW:
+            q.popleft()
+        if not q:
+            del _account_fails[key]
+        return len(q) >= ACCOUNT_MAX_FAILS
+
+
+def record_account_fail(key: str) -> None:
+    with _fails_lock:
+        _account_fails[key].append(time.time())
+
+
+def clear_account_fails(key: str) -> None:
+    with _fails_lock:
+        _account_fails.pop(key, None)
 
 
 def cookie_secure() -> bool:

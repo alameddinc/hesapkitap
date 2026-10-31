@@ -34,4 +34,6 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 # PORT: bulut servisleri (Render, Railway, Fly…) kendi portunu verir; yoksa 8000
 ENV PORT=8000
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8000\")}/api/auth/status')"
-CMD ["sh", "-c", "exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*"]
+# --no-proxy-headers: uvicorn soket adresini X-Forwarded-For ile değiştirmesin ("her vekile güven" ayarıyla istemci
+# uydurabiliyordu). Vekil başlıklarını uygulama kendisi, yalnız güvenilir vekilden okur (app/netaddr.py).
+CMD ["sh", "-c", "exec uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-proxy-headers"]

@@ -39,6 +39,9 @@ def _fixture_pdfs(monkeypatch):
     monkeypatch.setattr(templates, "sync_community", lambda force=False: 0)
     monkeypatch.setattr(templates, "share_async", lambda spec: None)
     monkeypatch.setenv("HESAPKITAP_NO_AUTH", "1")  # test_auth bunu kendisi kaldırır
+    from app import auth
+
+    auth._account_fails.clear()  # hesap başı giriş sayacı süreç geneli; testler birbirini kilitlemesin
 
 
 @pytest.fixture(autouse=True)

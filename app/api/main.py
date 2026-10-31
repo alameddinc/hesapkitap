@@ -68,10 +68,19 @@ app = FastAPI(title="HesapKitap", docs_url=None, redoc_url=None, openapi_url=Non
 
 
 def client_ip(request: Request) -> str:
-    # Cloudflare arkasında gerçek IP bu header'da
-    return (request.headers.get("cf-connecting-ip")
-            or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (request.client.host if request.client else "?"))
+    """Başlıklara yalnız güvenilir vekilden gelince inanılır (HESAPKITAP_TRUSTED_PROXIES; ayrıntı: app/netaddr.py)."""
+    from app import netaddr
+
+    return netaddr.client_ip(request.client.host if request.client else None, request.headers)
+
+
+def is_local_request(request: Request) -> bool:
+    """Kurulum kodu muafiyeti: tüm adaylar (soket dahil) yerel olmalı. X-Real-IP'yi ezmeden geçiren bir vekil
+    gerçek adresi X-Forwarded-For'a yazıyorsa, uydurulmuş X-Real-IP: 127.0.0.1 tek başına yetmez."""
+    from app import netaddr
+
+    return all(auth.is_local(c) for c in netaddr.candidates(request.client.host if request.client else None,
+                                                             request.headers))
 
 
 from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
@@ -243,7 +252,7 @@ def auth_status(request: Request):
     if not auth.enabled():
         return {"required": False, "authenticated": True, "setup_required": False}
     if auth.setup_required():
-        local = auth.is_local(client_ip(request))
+        local = is_local_request(request)
         if not local:
             auth.setup_code()  # log'a yazılsın
         return {"required": True, "authenticated": False, "setup_required": True, "setup_code_needed": not local}
@@ -267,7 +276,7 @@ def setup(body: SetupIn, request: Request, response: Response):
     if not auth.setup_required():
         raise HTTPException(409, "Şifre zaten belirlenmiş")
     ip = client_ip(request)
-    if not auth.is_local(ip):
+    if not is_local_request(request):
         if auth.rate_limited(ip):
             raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
         if body.code != auth.setup_code():
@@ -293,10 +302,15 @@ def login(body: LoginIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    acct = auth.account_key(body.username)
+    if auth.account_locked(acct):  # IP'den bağımsız: dağıtık deneme de hesabı geçici kilitler
+        raise HTTPException(429, "Bu hesap için çok fazla hatalı deneme yapıldı. 15 dakika sonra tekrar dene.")
     u = auth.login(body.username, body.password)
     if not u:
         auth.record_fail(ip)
+        auth.record_account_fail(acct)
         raise HTTPException(401, "Kullanıcı adı ya da şifre yanlış" if body.username else "Şifre yanlış")
+    auth.clear_account_fails(acct)
     if u.get("deleted_at"):
         return _pending_deletion(u)
     _start_session(request, response, u)

@@ -309,7 +309,11 @@ Aynı `docker compose up -d`; önüne HTTPS yapan bir reverse proxy (Caddy, Ngin
 - Uygulamayı internete açıp kurulumu yapmadan bırakma: yerel ağ dışından ilk kurulumda container log'undaki
   tek seferlik kod istenir (`docker compose logs | grep kurulum`).
 - Şifreler PBKDF2 ile hash'lenir; oturum çerezi HttpOnly + (HTTPS'te) Secure, imzalı ve şifre değişince geçersiz olur;
-  hatalı girişlerde 15 dakika kilit.
+  hatalı girişlerde 15 dakika kilit (IP başına 5, hesap başına IP'den bağımsız 10 deneme).
+- Vekil arkasında ziyaretçi IP'si: başlıklar (`X-Real-IP`, yoksa `X-Forwarded-For`) yalnız güvenilir vekilden gelince
+  okunur — `HESAPKITAP_TRUSTED_PROXIES` (virgüllü CIDR, varsayılan özel ağlar + loopback). Vekil istemcinin
+  `X-Real-IP`'sini ezmeli (nginx `proxy_set_header X-Real-IP $remote_addr;`, Caddy `header_up X-Real-IP {remote_host}`);
+  Cloudflare Tunnel'da `HESAPKITAP_TRUST_CF=1`. Ayrıntı: [`docs/KURULUM.md`](docs/KURULUM.md#5-kendi-sunucun-vps).
 - Sunucu yöneticileri ayarları `.env` ile de verebilir (bkz. [`.env.example`](.env.example)); `.env` uygulama içindekinden önceliklidir.
 - Veri: `./data` — `system.db` (kullanıcılar, davetler), `ekstre.db` (yönetici), `users/<id>/` (diğer kullanıcılar),
   yüklenen dosyalar ve gece yedekleri. Yedeklemek için bu klasörü kopyalaman yeterli.
