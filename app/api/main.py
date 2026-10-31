@@ -3777,8 +3777,12 @@ class PayIn(BaseModel):
 
 
 @app.get("/api/payables")
-def payables():
-    return finance.payables()
+def payables(totals: bool = False):
+    """Ödenecekler (liste; eski istemciler için değişmedi). totals=1: {"items": [...], "totals": {...}}: istemci toplamı
+    kendisi hesaplamasın (finance.payables_totals). Kalemde in_total: toplama girer mi; rolled_into: kalanı bu id'li
+    son ekstreye devretmiş ödenmemiş eski ekstre (gecikmiş bilgisi)."""
+    items = finance.payables()
+    return {"items": items, "totals": finance.payables_totals(items=items)} if totals else items
 
 
 class StatementPayIn(PayIn):
