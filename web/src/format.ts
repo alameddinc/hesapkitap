@@ -8,9 +8,14 @@ let amountsHidden = false;
 export const setAmountsHidden = (v: boolean) => { amountsHidden = v; };
 export const areAmountsHidden = () => amountsHidden;
 
-export const tl = (x: number) => (amountsHidden ? MASK : tlFmt.format(x));
+// işaret ile ₺ arasına görünmez "kelime birleştirici": "-₺1.234" satır sonunda "-" / "₺1.234" diye bölünmesin
+const WJ = "\u2060";
+const fmt = (x: number) => tlFmt.format(x).replace(/^([-+−])/, `$1${WJ}`);
+export const tl = (x: number) => (amountsHidden ? MASK : fmt(x));
 /** Genel gizlemeyi yok sayar: kullanıcı o bölümde gözle açıkça "göster" dediyse. */
-export const tlShown = (x: number) => tlFmt.format(x);
+export const tlShown = (x: number) => fmt(x);
+/** Tutarın önüne işaret ("+₺500"): işaret tutardan ayrı satıra düşmez. */
+export const signed = (s: "+" | "−" | "-" | "", amount: string) => (s ? `${s}${WJ}${amount}` : amount);
 /** Sunucudan gelen metinlerdeki tutarları da maskele ("16.793,18 ₺ taksit…" → "•••• ₺ taksit…"). */
 export const maskText = (s: string) =>
   amountsHidden ? s.replace(/[-+]?₺?\s?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?\s?₺|₺\s?[-+]?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?/g, MASK) : s;

@@ -8,7 +8,7 @@ export default function Kpi({ label, value, sub, tone }: { label: string; value:
         tone === "red" && "text-red-600 dark:text-red-400", tone === "green" && "text-green-700 dark:text-green-400")}>
         {tl(value)}
       </div>
-      {sub && <div className="mt-0.5 text-xs text-stone-500">{sub}</div>}
+      {sub && <div className="mt-0.5 text-xs [overflow-wrap:break-word] text-stone-500 dark:text-stone-400">{sub}</div>}
     </div>
   );
 }
