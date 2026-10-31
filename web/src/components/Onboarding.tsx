@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { CheckCircle2, ChevronDown, ChevronRight, Circle, X } from "lucide-react";
 import { useState } from "react";
@@ -11,7 +12,7 @@ interface Data { steps: Step[]; done: number; total: number; dismissed: boolean 
 /** Başlarken: ilk kurulum adımları; tamamlandıkça işaretlenir, istenince kapatılır. */
 export default function Onboarding() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["onboarding"], queryFn: () => fetch("/api/onboarding").then((r) => r.json() as Promise<Data>) });
+  const q = useQuery({ queryKey: ["onboarding"], queryFn: () => send<Data>("/api/onboarding") });
   const dismiss = useSave(() => fetch("/api/onboarding/dismiss", { method: "POST" }));
   // varsayılan kapalı (akordiyon); hiç adım tamamlanmamışsa (yeni kullanıcı) açık başlar
   const [open, setOpen] = useState<boolean | null>(() => { try { const v = localStorage.getItem("hk-onboarding-open"); return v == null ? null : v === "1"; } catch { return null; } });

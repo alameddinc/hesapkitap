@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { send } from "../lib/apiError";
+import { send as request } from "../lib/apiError";
 import { Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { isEmail } from "../components/hooks";
@@ -30,12 +30,12 @@ const STRENGTH = [
 ] as const;
 
 // ağ hatası ve hata yanıtı Türkçe metinli; status ve body ekli (lib/apiError send)
-const post = (path: string, body: unknown) => send(path, { method: "POST", json: body });
+const post = (path: string, body: unknown) => request(path, { method: "POST", json: body });
 
 /** #/sifre — Şifremi unuttum: 1) e-postaya 6 haneli kod  2) kod + yeni şifre → oturum açılır, ana sayfa. */
 export default function ForgotPassword() {
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => request<any>("/api/auth/status") });
   const closed = status.data && !status.data.reset; // sunucuda e-posta ayarlı değil
   const hosted = status.data?.login === "email";
   const [email, setEmail] = useState(initialEmail);

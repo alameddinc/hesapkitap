@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -147,7 +148,7 @@ export function DowngradeForm({ sub, onClose }: { sub: { merchant: string; month
 
 export default function Savings() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["savings"], queryFn: () => fetch("/api/savings").then((r) => r.json() as Promise<SavingsData>) });
+  const q = useQuery({ queryKey: ["savings"], queryFn: () => send<SavingsData>("/api/savings") });
   const [adding, setAdding] = useState(false);
   const [downgrade, setDowngrade] = useState<Sub | null>(null);
   const setSub = useSave((b: { merchant: string; status: string }) => j("PUT", "/api/subscriptions", b),

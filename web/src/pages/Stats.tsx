@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { BarChart3, Percent } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useId } from "react";
@@ -21,8 +22,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 /** Faiz alarmı geçmişi: hangi dönemde ne kadar faiz / vade farkı, nedeniyle. */
 export function InterestHistory() {
-  const q = useQuery({ queryKey: ["interest-history"], queryFn: () => fetch("/api/interest-history").then((r) => r.json() as Promise<{
-    months: { month: string; total: number; alarms: Insight[] }[]; total: number; checked: number }>) });
+  const q = useQuery({ queryKey: ["interest-history"], queryFn: () => send<{
+    months: { month: string; total: number; alarms: Insight[] }[]; total: number; checked: number }>("/api/interest-history") });
   const d = q.data;
   if (!d) return null;
   return (

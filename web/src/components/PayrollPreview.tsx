@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { monthLabel, tl } from "../format";
 
 const tl0 = (x: number) => tl(Math.round(x)).replace(",00", "");
@@ -18,9 +19,9 @@ interface PayrollMonth {
 export default function PayrollPreview({ gross, year }: { gross: number; year: number }) {
   const q = useQuery({
     queryKey: ["payroll", gross, year],
-    queryFn: () => fetch(`/api/payroll/net?gross=${gross}&year=${year}`).then((r) => r.json() as Promise<{
+    queryFn: () => send<{
       params_year: number; months: PayrollMonth[]; annual_net: number;
-    }>),
+    }>(`/api/payroll/net?gross=${gross}&year=${year}`),
     enabled: gross > 0,
   });
   if (!(gross > 0)) return null;

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { useState } from "react";
 import { useUI } from "../ui";
 import { useMeta, useSave } from "./hooks";
@@ -15,7 +16,7 @@ const DETAIL = "Mal varlığı ve zekât/sadaka kayıtları dini inanca ilişkin
 export default function ZakatConsent({ onClose, onDone }: { onClose: () => void; onDone?: () => void }) {
   const ui = useUI();
   const meta = useMeta().data;
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   const [more, setMore] = useState(false);
   const needs = !!meta?.module_consent?.zekat;
   const text = meta?.module_consent?.zekat ?? ZAKAT_TEXT;

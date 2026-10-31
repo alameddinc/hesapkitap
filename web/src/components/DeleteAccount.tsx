@@ -19,7 +19,7 @@ type Step = "kapali" | "abonelik" | "onay" | "bitti";
  *  veriyi indir önerisi + şifre / "SİL" onayı → "Hesabın kapatıldı, 7 gün içinde geri alabilirsin" → oturum kapanır.
  *  Hesap hemen kapanır, bekleme süresi sonunda kalıcı silinir (sunucu: app/deletion.py). Yönetici için gösterilmez. */
 export default function DeleteAccount() {
-  const auth = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const auth = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   // password_set: false → Google ile açılmış, şifresi hiç konmamış hesap (alan yoksa şifreli say)
   const hasPassword = (auth.data as { user?: { password_set?: boolean } | null } | undefined)?.user?.password_set !== false;
   const grace = (auth.data as { delete_grace_days?: number } | undefined)?.delete_grace_days ?? 7; // 0: hemen kalıcı

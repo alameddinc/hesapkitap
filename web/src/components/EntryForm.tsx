@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { errorText, send } from "../lib/apiError";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
@@ -61,8 +61,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const statements = useQuery({ queryKey: ["statements"], queryFn: api.statements });
   const cards = [...new Map((statements.data ?? []).map((s) => [s.card_no.slice(-4), `${s.bank} ··${s.card_no.slice(-4)}`])).entries()];
   if (cardLast4 && !cards.some(([k]) => k === cardLast4)) cards.push([cardLast4, `··${cardLast4} (fişten)`]);
-  const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => fetch("/api/wallets").then((r) => r.json() as Promise<
-    { id: number; name: string; card_type: string; current: number }[]>) });
+  const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => send<
+    { id: number; name: string; card_type: string; current: number }[]>("/api/wallets") });
   const [walletId, setWalletId] = useState<number | null>(row?.wallet_id ?? null);
   const [accountId, setAccountId] = useState<number | null>(rec ? rec.account_id ?? null : row ? row.account_id ?? null : lastAccount());
   useEffect(() => {  // fişte yazan kart (Multinet…) ya da tek yemek kartı

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { Repeat, X } from "lucide-react";
 import { cx, maskText, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
@@ -21,11 +22,11 @@ const post = (url: string, body: unknown) =>
 /** Hareketlerde her ay tekrarlayan ödemeler (kira, aidat, internet…): tek tıkla sabit kalem olur, planlamaya girer. */
 export default function RecurringSuggestions() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["recurring-suggestions"], queryFn: () => fetch("/api/recurring/suggestions").then((r) => r.json() as Promise<Suggestion[]>) });
+  const q = useQuery({ queryKey: ["recurring-suggestions"], queryFn: () => send<Suggestion[]>("/api/recurring/suggestions") });
   const accept = useSave((s: Suggestion) => post("/api/recurring/suggestions/accept", { key: s.key }),
     () => ui.toast("Sabit kalem eklendi; geçmiş ödemeler bağlandı"));
   const dismiss = useSave((s: Suggestion) => post("/api/recurring/suggestions/dismiss", { key: s.key }));
-  const drift = useQuery({ queryKey: ["recurring-drift"], queryFn: () => fetch("/api/recurring/drift").then((r) => r.json() as Promise<Drift[]>) });
+  const drift = useQuery({ queryKey: ["recurring-drift"], queryFn: () => send<Drift[]>("/api/recurring/drift") });
   const applyDrift = useSave((d: Drift) => post(`/api/recurring/${d.recurring_id}/changes`, { from_month: d.from_month, amount: d.new }),
     () => ui.toast("Sabit kalemin tutarı güncellendi"));
   const items = q.data ?? [];

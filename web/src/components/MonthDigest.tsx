@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { CalendarCheck, ChevronDown, X } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
@@ -20,7 +21,7 @@ const pct = (p: number | null) => (p == null ? "" : p === 0 ? " · aynı" : ` ·
 /** Yeni dönemin ilk haftası: biten dönemin özeti (Telegram'daki raporla aynı rakamlar). */
 export default function MonthDigest() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["digest"], queryFn: () => fetch("/api/digest").then((r) => r.json() as Promise<Digest | null>) });
+  const q = useQuery({ queryKey: ["digest"], queryFn: () => send<Digest | null>("/api/digest") });
   const dismiss = useSave(() => fetch("/api/digest/dismiss", { method: "POST" }));
   const [open, setOpen] = useState(false); // ayrıntılar dokununca: Özet'te yazı kalabalığı olmasın
   const d = q.data;
