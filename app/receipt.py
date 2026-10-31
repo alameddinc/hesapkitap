@@ -21,14 +21,14 @@ ITEM_RULES = """items (sadece fiş, en fazla 40 satır, fişteki sırayla):
 - "2Adt x 230,00 Latte" → qty=2, unit="adet", unit_price=230, amount=460 (satır toplamı). unit_price yalnız fişte birim
   fiyat yazıyorsa (miktar satırı), yoksa null.
 - Tartılı ürün "0,750 KG x 89,90" → qty=0.75, unit="kg", amount=67.43; litre ise unit="lt".
-- Türk yazar kasa fişinde MİKTAR SATIRI ("2 ad X 2,90", "2 AD X 44.90", "0,750 KG X 89,90") ÜRÜN SATIRINDAN ÖNCE, kendi
-  satırında gelir ve ALTINDAKİ ürüne aittir; o ürünün satırında sağda toplam yazar ("*5,80" = 2 × 2,90). Miktar satırını
+- Türk yazar kasa fişinde MİKTAR SATIRI ("2 ad X 2,50", "2 AD X 40.00", "0,750 KG X 89,90") ÜRÜN SATIRINDAN ÖNCE, kendi
+  satırında gelir ve ALTINDAKİ ürüne aittir; o ürünün satırında sağda toplam yazar ("*5,00" = 2 × 2,50). Miktar satırını
   AYRI ÜRÜN olarak YAZMA ve adını ürün adına katma; qty ve unit'i altındaki ürüne ver. Her ürünün amount'u KENDİ satırının
   sağındaki tutardır (bir alttaki ya da üstteki ürünün tutarı değil). Örnek:
-    2 ad X 2,90
-    K. CANTA ORTA BOY        *5,80
-    KIZILAY 6X200 SADE      *66,00
-  → [{{"name": "K. CANTA ORTA BOY", "qty": 2, "amount": 5.80}}, {{"name": "KIZILAY 6X200 SADE", "qty": 1, "amount": 66.00}}]
+    2 ad X 2,50
+    POSET ORTA BOY        *5,00
+    MADEN SUYU 6X200      *60,00
+  → [{{"name": "POSET ORTA BOY", "qty": 2, "amount": 5.00}}, {{"name": "MADEN SUYU 6X200", "qty": 1, "amount": 60.00}}]
 - Bir ürünün hemen altındaki İNDİRİM/KAMPANYA satırı o ürünün amount'undan düşülür; hangi ürüne ait olduğu belli olmayan genel
   indirimleri item olarak yazma.
 - Fiyatı okunamayan ürünü amount null ile yine yaz.
@@ -177,7 +177,7 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
 
 
 def card_last4(v) -> str | None:
-    """Kartın son 4 hanesi: "6081", "****6081", 6081 → "6081"; okunamadıysa None."""
+    """Kartın son 4 hanesi: "1234", "****1234", 1234 → "1234"; okunamadıysa None."""
     m = re.search(r"(\d{4})\D*$", str(v or ""))
     return m.group(1) if m else None
 
@@ -190,7 +190,7 @@ def _installments(v) -> int:
     return n if 2 <= n <= 36 else 1
 
 
-# miktar satırı: "2 ad X 2.90", "2 AD x 44,90", "0,750 KG X 89,90" (ardından ürün adı gelebilir: model birleştirmiş)
+# miktar satırı: "2 ad X 2.50", "2 AD x 40,00", "0,750 KG X 89,90" (ardından ürün adı gelebilir: model birleştirmiş)
 QTY_LINE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(AD|ADT|ADET|KG|GR|LT|L)\.?\s*[xX×*]\s*(\d+(?:[.,]\d{1,3})?)\s*", re.I)
 
 
@@ -200,12 +200,12 @@ def _qty_of(m: re.Match) -> tuple[float, str, float]:
 
 
 def fix_qty_lines(items: list[dict]) -> list[dict]:
-    """Model miktar satırını ("2 ad X 2.90") ayrı ürün yazdıysa ya da ürün adına kattıysa düzelt.
+    """Model miktar satırını ("2 ad X 2.50") ayrı ürün yazdıysa ya da ürün adına kattıysa düzelt.
 
     Türk fişinde miktar satırı ürün satırının ÜSTÜNDEDİR. Model onu ayrı ürün yazıp ürünün tutarını ona verince sonraki
-    adlar bir aşağı kayar ("2× 2 ad X 2.90 5,80", "K. CANTA ORTA BOY 66,00"…): tutarların sırası doğru, adlar kaymış.
+    adlar bir aşağı kayar ("2× 2 ad X 2.50 5,00", "POSET ORTA BOY 60,00"…): tutarların sırası doğru, adlar kaymış.
     O noktadan sonra adlar (miktar satırları çıkarılarak) tutarlarla yeniden eşlenir; ad kalmayan son tutar 'Okunamayan
-    ürün' olur (toplam korunur). Miktar (adet × birim) toplamı tutan ilk satıra verilir: '2 ad X 44.90' → 89,80'lik ürün."""
+    ürün' olur (toplam korunur). Miktar (adet × birim) toplamı tutan ilk satıra verilir: '2 ad X 40.00' → 80,00'lik ürün."""
     toks = []
     for it in items:
         m = QTY_LINE.match(it.get("name") or "")
@@ -301,7 +301,7 @@ SADECE şu JSON'u döndür:
   "subscriber_no": "abone/tesisat no veya null",
   "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
   "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
-  "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4543 **** **** 6081 → \"6081\"); yoksa null",
+  "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
   "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "unit_price": null, "amount": 0.00, "split": null}}],

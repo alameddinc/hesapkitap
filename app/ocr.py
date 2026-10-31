@@ -129,7 +129,7 @@ def _company(lines: list[str]) -> str | None:
 
 
 def _items(lines: list[str]) -> list[dict]:
-    """Ürün satırları. Türk fişinde miktar satırı ("2 ad X 2,90") ürünün ÜSTÜNDE ayrı satırdır: altındaki ürüne verilir."""
+    """Ürün satırları. Türk fişinde miktar satırı ("2 ad X 2,50") ürünün ÜSTÜNDE ayrı satırdır: altındaki ürüne verilir."""
     from app.receipt import QTY_LINE, _qty_of
 
     out = []
@@ -171,7 +171,7 @@ def parse(data: bytes, mime: str, categories: list[str], more: list[tuple[bytes,
     payment = "yemek_karti" if any(k in u for k in _MEAL) else \
         "kart" if re.search(r"KRED[İI] KART|K\.KART|BANKA KART|KART\b|POS", u) else \
         "nakit" if re.search(r"NAK[İI]T", u) else "bilinmiyor"
-    card = re.search(r"(?:\d{4,6}|[*X]{4})[\s*X]*[*X]{4,}[\s*X]*(\d{4})\b", u)  # 454360******6081 / **** **** 6081
+    card = re.search(r"(?:\d{4,6}|[*X]{4})[\s*X]*[*X]{4,}[\s*X]*(\d{4})\b", u)  # 400000******1234 / **** **** 1234
     inst = re.search(r"(\d{1,2})\s*TAKS[İI]T|TAKS[İI]T\s*(?:SAYISI)?\s*:?\s*(\d{1,2})", u)
     n = int(inst.group(1) or inst.group(2)) if inst else 1
     return {"type": "receipt", "merchant": _merchant(lines), "date": _date(text), "total": _total(lines),

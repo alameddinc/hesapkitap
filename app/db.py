@@ -2306,7 +2306,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
 # ---------------------------------------------------------------- kişiler (transferler paneli)
 
 def _mentions(entry: dict, name: str) -> bool:
-    """Elle girilen kayıt bu kişiden mi bahsediyor? ('Harun'a borç' ↔ 'Mehmet Aydın'). Soyad tek başına yetmez:
+    """Elle girilen kayıt bu kişiden mi bahsediyor? ('Mehmet'e borç' ↔ 'Mehmet Aydın'). Soyad tek başına yetmez:
     aynı soyadlı iki kişi (aile) karışmasın; ad ya da ad+soyad geçmeli."""
     import re as _re
 
@@ -2374,7 +2374,7 @@ def set_counterparty(name: str, category: str | None = None, track_debt: bool | 
 
 
 def rename_counterparty(old: str, new: str) -> dict:
-    """Kişiyi yeniden adlandır ya da başka kişiyle birleştir ('Zeynep Ağlar' → 'Zeynep Çelik'): o kişinin bütün
+    """Kişiyi yeniden adlandır ya da başka kişiyle birleştir ('Zeynep Kaya' → 'Zeynep Yılmaz'): o kişinin bütün
     kayıtları (karşı taraf, 'Ad · not' biçimindeki açıklama), borç defteri ve kişi ayarı yeni ada geçer. Hedef zaten
     varsa birleşir: hedefin kategori/ayarı korunur, boşsa eskininki alınır. Sayıları döner."""
     old, new = (old or "").strip(), (new or "").strip()
@@ -2403,7 +2403,8 @@ def rename_counterparty(old: str, new: str) -> dict:
 
 
 def _own_name_keys() -> set[str]:
-    """Kullanıcının kendi adı (hesap dökümlerinin sahibi) — boşluksuz, Türkçe harfsiz: 'AY ŞE YILMAZ' = 'Ayşe Yılmaz'. Kart sahipleri katılmaz: ek kart sahibi (eş, çocuk) Transferler'de kişi olarak kalır."""
+    """Kullanıcının kendi adı (hesap dökümlerinin sahibi) — boşluksuz, Türkçe harfsiz: 'AY ŞE YILMAZ' = 'Ayşe
+    Yılmaz'. Kart sahipleri katılmaz: ek kart sahibi (eş, çocuk) Transferler'de kişi olarak kalır."""
     import re as _re
 
     from app.textnorm import normalize

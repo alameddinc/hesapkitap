@@ -150,7 +150,7 @@ def _parties(desc: str) -> tuple[str, str] | None:
         r"NO'?\s?LU\s+(.+?)\s+HESABINDAN\s+(.+?)\s+HESABINA",
         # Halkbank giden: "GIDEN FAST - X TARAFINDAN GONDERILEN,Y,Banka…" / HAVALE: "…,X,TR..,Y,TR.."
         r"-\s*([A-Z ]{5,}?)\s+TARAFINDAN GONDERILEN\s*,\s*(?:[^,]+?,\s*TR[\d* ]+,\s*)?([^,]+?)\s*,",
-        # VakıfBank gelen EFT: "… sorgu numaralı GOOGLE PAYMENT CORP. tarafından AYŞE YILMAZ tarafına gelen EFT"
+        # VakıfBank gelen EFT: "… sorgu numaralı ORNEK SIRKET A.S. tarafından AYSE YILMAZ tarafına gelen EFT"
         r"SORGU NUMARALI\s+(.+?)\s+TARAFINDAN\s+(.+?)\s+TARAFINA",
         # Halkbank havale (açıklamalı): "not,X,TRxx…,Y,TRxx…"
         r"(?:^|,)\s*([^,]+?)\s*,\s*TR\d[\d ]{10,}\s*,\s*([^,]+?)\s*,\s*TR\d",
@@ -180,7 +180,7 @@ def _sender_receiver(desc: str) -> tuple[str, str] | None:
 
 def is_self_transfer(desc: str, owners: list[str]) -> bool:
     """Kendi hesapları arası: GÖNDEREN ve ALICI aynı kişi (boşluksuz yazımlar dahil, ör. Kuveyt Türk). Kullanıcının adı
-    yalnız serbest açıklama metninde geçiyorsa ('Ayşe Yılmaz direksiyon harcı … X hesabından Murat Ç. hesabına')
+    yalnız serbest açıklama metninde geçiyorsa ('Ayşe Yılmaz kurs ücreti … X hesabından Can Ö. hesabına')
     virman DEĞİLDİR: kalıp tanınıyorsa karar gönderen/alıcıya göre verilir."""
     return classify_reason(desc, -1, owners)[0] == "virman"
 

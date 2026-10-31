@@ -2,7 +2,7 @@
 
 Neyi düzeltir (2026-10 canlı bulguları):
 - Halkbank şablon okuyucusu açıklamanın sık tekrarlanan devam satırlarını sayfa başlığı sanıp atıyordu
-  ('GIDEN FAST - AYŞE ÇELIK TARAFI … Sayfa No:4 / 5'): alıcı kayboluyor, kendi hesabına giden para gider sayılıyordu.
+  ('GIDEN FAST - AYŞE YILMAZ TARAFI … Sayfa No:4 / 5'): alıcı kayboluyor, kendi hesabına giden para gider sayılıyordu.
 - Hesap sahibinin adı bilinmediğinde (kural tabanlı okuyucular adı vermez) kendi hesabından gelen para gelir sayılıp
   'Ayşe Yılmaz' kişi olarak listeleniyordu.
 - Fatura tahsilatları ham banka metniyle kalıyordu; bankanın iptal edip iade ettiği ödeme hem gider hem gelir sayılıyordu.
@@ -27,7 +27,7 @@ _EXTRA = re.compile(r"(Telefon|Abone no|Sözleşme no|Tesisat no|Mukavele no|Fat
 
 def _owners() -> list[str]:
     """Kendisi = hesap dökümlerinin sahibi (içe aktarmadaki gibi). Kart sahipleri yalnız döküm sahibi hiç bilinmiyorsa:
-    ek kart sahibi (eş) kişi olarak kalmalı — yoksa 'Zeynep Çelik'e giden havale kişisiz kalır."""
+    ek kart sahibi (eş) kişi olarak kalmalı — yoksa 'Zeynep Yılmaz'e giden havale kişisiz kalır."""
     return [o for o in db.owner_names() if o] or [o for o in db.card_holders() if o]
 
 

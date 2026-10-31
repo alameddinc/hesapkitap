@@ -7,8 +7,8 @@ from app.parsers.base import FEE, PAYMENT, PURCHASE, Statement, Transaction
 
 def _st(activity: float, total: float, interest_fees: float = 0.0) -> Statement:
     txns = [Transaction(date(2026, 9, 1), "MARKET", 15000.00, PURCHASE, "4000***0001"),
-            Transaction(date(2026, 9, 15), "AKDI FAIZ", 700.00, FEE, "4000***0001"),
-            Transaction(date(2026, 9, 15), "BSMV", 53.80, FEE, "4000***0001"),
+            Transaction(date(2026, 9, 15), "AKDI FAIZ", 500.00, FEE, "4000***0001"),
+            Transaction(date(2026, 9, 15), "BSMV", 40.00, FEE, "4000***0001"),
             Transaction(date(2026, 9, 2), "ODEME", -20000.00, PAYMENT, "4000***0001")]
     return Statement(bank="VakıfBank", card_no="4000***0001", period_end=date(2026, 9, 15), due_date=date(2026, 9, 25),
                      total_debt=total, min_payment=None, credit_limit=None, previous_balance=20000.00,
@@ -32,7 +32,7 @@ def test_fees_read_from_summary():
 def test_missing_line_still_detected():
     st = _st(15000.00, 15540.00)
     st.transactions.pop(0)
-    assert st.reconciliation_diff() == -15000.00
+    assert st.reconciliation_diff() == -15000.0
 
 
 def test_api_returns_fees_for_saved_statement(client, tmpdb):
@@ -58,13 +58,13 @@ def test_confirm_statement_clears_check(client, tmpdb):
 
 
 def test_fees_inside_activity_not_added_again(client, tmpdb):
-    """Kuveyt Türk 9106: 30.000,00 − 30.000,00 + 25.000,00 = 25.000,00; 150,00 faiz harcamaların İÇİNDE. Ayrıca
-    eklenmez (eskiden 74.070,64 → KONTROL)."""
-    st = Statement(bank="Kuveyt Türk", card_no="4111********3333", period_end=date(2026, 10, 15), due_date=date(2026, 10, 25),
+    """Kart 3333: 30.000,00 − 30.000,00 + 25.000,00 = 25.000,00; 150,00 faiz harcamaların İÇİNDE. Ayrıca
+    eklenmez (eskiden 25.150,00 → KONTROL)."""
+    st = Statement(bank="Kuveyt Türk", card_no="4111***3333", period_end=date(2026, 10, 15), due_date=date(2026, 10, 25),
                    total_debt=25000.00, min_payment=None, credit_limit=None, previous_balance=30000.00,
                    period_activity=25000.00, interest_fees=0.0, payments=30000.00,
-                   transactions=[Transaction(date(2026, 10, 1), "MARKET", 24850.00, PURCHASE, "4111********3333"),
-                                 Transaction(date(2026, 10, 15), "FAIZ", 150.00, FEE, "4111********3333")])
+                   transactions=[Transaction(date(2026, 10, 1), "MARKET", 24850.00, PURCHASE, "4111***3333"),
+                                 Transaction(date(2026, 10, 15), "FAIZ", 150.00, FEE, "4111***3333")])
     assert st.reconciliation_diff() == 0
     tmpdb.save_statement(b"x-kuveyt", "k.pdf", st)
     s = client.get("/api/statements").json()[0]
