@@ -51,6 +51,7 @@ def test_mail_account_unverified_waits_for_approval(client, tmpdb, account_pdf, 
     assert item["doc"]["verification_text"].startswith("Rakamlar tutmadı")
     todo = [r for r in client.get("/api/reminders").json() if r["kind"] == "belge_onay"]
     assert todo and todo[0]["id"] == f"gelen:{msg.inbox_id}" and todo[0]["action"] == "inbox_review"
+    assert "okundu ama rakamlar tutmadı:" in todo[0]["text"]  # cümle içinde küçük harf
 
     r = client.post(f"/api/inbox/{msg.inbox_id}/import").json()
     assert r["ok"] and r["kind"] == "dokum" and r["stats"]["gider"] == 1 and r["stats"]["gelir"] == 1
@@ -145,6 +146,7 @@ def test_upload_unverified_document_flagged_until_confirmed(client, tmpdb, accou
     assert doc["verification"] == "dogrulanamadi"
     todo = [r for r in client.get("/api/reminders").json() if r["kind"] == "belge_dogrulanamadi"]
     assert todo and todo[0]["id"] == f"dokum_kontrol:{doc['id']}" and todo[0]["action"] == "document_confirm"
+    assert todo[0]["cta"] == "Bak" and todo[0]["confirm_label"] == "Rakamlar doğru"
     assert client.post(f"/api/bank-import/documents/{doc['id']}/confirm").json()["verification"] == "onaylandi"
     assert not [r for r in client.get("/api/reminders").json() if r["kind"] == "belge_dogrulanamadi"]
 

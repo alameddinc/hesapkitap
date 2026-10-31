@@ -8,3 +8,10 @@ LEFT_AFTER_SAVINGS = "Elde kalan"         # Sade görünüm: gelir − gider −
 SPENDABLE = "Harcanabilir"
 EQ_OK = "Rakamlar tuttu"                  # ekstre denklemi / döküm bakiye zinciri doğrulandı
 EQ_BAD = "Rakamlar tutmadı"               # doğrulanamadı: kullanıcı belgeyle karşılaştırmalı
+CTA_LOOK = "Bak"                          # Yapılacaklar: ilgili kayda/belgeye git
+CONFIRM_OK = "Rakamlar doğru"             # kullanıcı belgeyle karşılaştırdı, onaylıyor (confirm uçları)
+
+
+def lower_first(s: str) -> str:
+    """Cümle içinde kullanılan metnin ilk harfi küçük: 'Rakamlar tutmadı: …' → 'rakamlar tutmadı: …'."""
+    return s[:1].lower() + s[1:] if s else s

@@ -230,7 +230,8 @@ def todos(today: date | None = None) -> list[dict]:
         what = "Hesap dökümü" if r["kind"] == "dokum" else "Kart ekstresi"
         out.append({"id": f"gelen:{r['id']}", "kind": "belge_onay", "severity": "warn",
                     "title": f"{what} onay bekliyor",
-                    "text": f"E-postayla gelen {r['filename'] or 'belge'} okundu ama {doc.get('verification_text') or terms.EQ_BAD}"
+                    "text": f"E-postayla gelen {r['filename'] or 'belge'} okundu ama "
+                            f"{terms.lower_first(doc.get('verification_text') or terms.EQ_BAD + '.')}"
                             " Kaydetmeden önce Gelen kutusu'nda rakamlara bak; doğruysa kaydet.",
                     "cta": "Gelen kutusu", "route": "gelen", "action": "inbox_review", "due": (r["created_at"] or "")[:10],
                     "period": (r["created_at"] or "")[:7], "inbox_id": r["id"], "tag": terms.EQ_BAD})
@@ -245,8 +246,8 @@ def todos(today: date | None = None) -> list[dict]:
         out.append({"id": f"dokum_kontrol:{d['id']}", "kind": "belge_dogrulanamadi", "severity": "warn",
                     "title": "Dökümdeki rakamları kontrol et",
                     "text": f"{d['bank'] or 'Hesap'} dökümü ({d['filename'] or 'dosya'}) okunurken bakiyeler birbirini "
-                            f"tutmadı. Hareketleri belgeyle karşılaştır; doğruysa onayla.",
-                    "cta": "Kontrol et", "route": "hesaplar", "action": "document_confirm", "due": (d["uploaded_at"] or "")[:10],
+                            f"tutmadı. Hareketleri belgeyle karşılaştır; doğruysa '{terms.CONFIRM_OK}' de.",
+                    "cta": terms.CTA_LOOK, "confirm_label": terms.CONFIRM_OK, "route": "hesaplar", "action": "document_confirm", "due": (d["uploaded_at"] or "")[:10],
                     "period": (d["uploaded_at"] or "")[:7], "document_id": d["id"], "tag": terms.EQ_BAD})
     for s in db.list_statements():
         if not s.get("needs_check") or s.get("source") == "excel" or (s.get("uploaded_at") or "")[:10] < cut:
@@ -254,8 +255,8 @@ def todos(today: date | None = None) -> list[dict]:
         out.append({"id": f"ekstre_kontrol:{s['id']}", "kind": "belge_dogrulanamadi", "severity": "warn",
                     "title": f"{s['bank']} ekstresini kontrol et",
                     "text": statement_text(s.get("equation_diff"), s.get("reconciliation_diff"))
-                            + " Doğruysa 'Rakamlar doğru' de.",
-                    "cta": "Kontrol et", "route": "ekstreler", "action": "statement_confirm",
+                            + f" Doğruysa '{terms.CONFIRM_OK}' de.",
+                    "cta": terms.CTA_LOOK, "confirm_label": terms.CONFIRM_OK, "route": "ekstreler", "action": "statement_confirm",
                     "due": (s.get("uploaded_at") or "")[:10], "period": s["period"], "statement_id": s["id"],
                     "tag": terms.EQ_BAD})
     return out

@@ -29,7 +29,7 @@ import sys
 import time
 from datetime import date, datetime
 
-from app import db, money
+from app import db, money, terms
 
 log = logging.getLogger("ekstre.integrity")
 SETTING = "integrity:last"
@@ -357,7 +357,7 @@ def todo() -> dict | None:
             "text": f"Gece yaptığımız kontrolde {n} yerde tutmayan bir rakam gördük: "
                     + "; ".join(f"{x['label'].lower()} ({x['count']})" for x in lines)
                     + ". Bunu biz de gördük, inceliyoruz. Bu arada ilgili kayda bir göz atmak istersen buradan açabilirsin.",
-            "cta": "Göz at", "route": ROUTES.get(first, "ozet"), "action": "integrity", "due": r["day"],
+            "cta": terms.CTA_LOOK, "route": ROUTES.get(first, "ozet"), "action": "integrity", "due": r["day"],
             "period": r["day"][:7], "details": lines, "tag": "Kontrol"}
 
 
