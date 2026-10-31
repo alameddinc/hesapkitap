@@ -744,6 +744,60 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
     return out
 
 
+CARD_ROW_KINDS = (PURCHASE, REFUND, FEE, EXPENSE)
+
+
+def of_card(r: dict, card_no: str) -> bool:
+    """Satır bu kredi kartının mı? Ekstre satırı: ekstrenin ana kart numarası (ek kartlar dahil); elle kayıt: kredi
+    kartıyla ödendi ve son 4 hane aynı. Silinen ve ekstreyle eşleşmiş (linked; kart satırı zaten var) elle kayıt hariç."""
+    if r.get("deleted") or r.get("linked"):
+        return False
+    if r["source"] == "card":
+        return r.get("account") == card_no
+    l4 = "".join(ch for ch in card_no if ch.isdigit())[-4:]
+    return r["source"] == "manual" and r.get("payment") == "kredi_karti" and bool(l4) and r.get("card_last4") == l4
+
+
+def cards_summary(today: date | None = None, recent: int = 20) -> dict:
+    """Kartlar ekranının açılışı için kart başına özet (tam işlem geçmişini çekmeden): son ekstre (kalan dahil),
+    açık dönem (bugüne kadar / kesimde tahmini, kalemleri), kalan taksitler ve abonelikler, son N işlem.
+    Toplamlar net durumla aynı kural (kart başına yalnız son ekstrenin kalanı)."""
+    today = today or date.today()
+    nw = net_worth(today)
+    proj = card_projection()
+    cyc = open_cycles(today, proj)
+    rows = [r for r in transactions(None) if r["kind"] in CARD_ROW_KINDS]
+    sts = {s["id"]: s for s in db.list_statements()}
+    cards = []
+    for c in nw["credit_cards"]:
+        card_no = c["card_no"]
+        latest = next((s for s in sorted(sts.values(), key=lambda s: s["period_end"], reverse=True)
+                       if s["card_no"] == card_no and s["bank"] == c["bank"]), None)
+        p = proj.get(card_no) or {}
+        inst = p.get("installments") or []
+        mine = [r for r in rows if of_card(r, card_no)]
+        cards.append({
+            "title": c["title"], "bank": c["bank"], "card_no": card_no,
+            "last_statement": {k: latest.get(k) for k in ("id", "period_end", "period", "due_date", "total_debt",
+                                                         "min_payment", "paid_amount", "paid_at", "needs_check",
+                                                         "source", "txn_count")} | {"unpaid": c["unpaid"]}
+            if latest else None,
+            "unpaid": c["unpaid"], "next_estimate": c["next_estimate"], "next_due": c["next_due"],
+            "cycle": cyc.get(card_no),
+            "installments_left": {"count": len({i["txn_id"] for i in inst}), "total": _round(sum(i["amount"] for i in inst)),
+                                  "next_month": _round(sum(i["amount"] for i in inst
+                                                           if i["month"] == add_months(p.get("latest_period") or "", 1)))
+                                  if p.get("latest_period") else 0.0},
+            "subscriptions": p.get("subscriptions") or [],
+            "recent": mine[:recent], "recent_total": len(mine),
+        })
+    so_far = sum((c["cycle"] or {}).get("so_far", 0) for c in cards)
+    at_cut = sum((c["cycle"] or {}).get("at_cut", 0) for c in cards)
+    return {"cards": cards, "overdue": nw["card_overdue"],
+            "totals": {"so_far": _round(so_far), "at_cut": _round(at_cut), "unpaid": nw["totals"]["card_debt"],
+                       "estimated": nw["totals"]["card_estimated"], "overdue": nw["totals"]["card_overdue"]}}
+
+
 def recurring_suggestions(today: date | None = None) -> list[dict]:
     """Hareketlerde her ay tekrarlayan ama sabit kalem olmayan ödemeler (kira, aidat, kreş, kira geliri…).
 

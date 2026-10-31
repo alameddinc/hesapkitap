@@ -1386,10 +1386,17 @@ def summary(month: str | None = None):
     return finance.summary(month or finance.current_period())
 
 
+@app.get("/api/cards/summary")
+def cards_summary(recent: int = Query(20, ge=0, le=200)):
+    """Kartlar ekranı açılışı: kart başına son ekstre, açık dönem, taksit/abonelik, son N işlem (finance.cards_summary).
+    Kartın tam geçmişi: GET /api/transactions?card=<card_no>&limit=…"""
+    return FastJSON(finance.cards_summary(recent=recent))
+
+
 @app.get("/api/transactions")
 def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
                  totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),
-                 before: str | None = Query(None, max_length=80)):
+                 before: str | None = Query(None, max_length=80), card: str | None = Query(None, max_length=40)):
     """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
     include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz.
     Her satırda counts_as_spend / counts_as_income: gider/gelir toplamına girer mi (sunucu kuralı, finance.counts);
@@ -1400,6 +1407,8 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     u = db.current_user()
     if month is None and not plans.allows(u, "gecmis"):  # tüm aylar istendi: ücretsizde görünür pencereyle sınırlı
         rows = [r for r in rows if plans.history_ok(u, r["month"])]
+    if card:  # tek kartın satırları (ekstre ana kart numarası; elle kayıtta son 4 hane): Kartlar ekranı geçmişi
+        rows = [r for r in rows if finance.of_card(r, card)]
     for r in rows:  # her satırda: raw (banka açıklaması, yoksa null), note_user (kullanıcının kendi notu)
         r.setdefault("raw", None)
         r.setdefault("note_user", r.get("note"))

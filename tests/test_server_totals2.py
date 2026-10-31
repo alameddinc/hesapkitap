@@ -82,3 +82,21 @@ def test_rules_test_whole_ruleset(client, tmpdb):
     client.post("/api/item-rules", json={"keywords": "ornekkola", "category": "İçecek"})
     it = client.post("/api/item-rules/test", json={"text": "ORNEKKOLA 1L"}).json()
     assert it["category"] == "İçecek" and it["keyword"] == "ornekkola" and it["rule_id"]
+
+
+def test_cards_summary(client, upload):
+    upload()
+    s = client.get("/api/cards/summary").json()
+    nw = client.get("/api/net-worth").json()
+    assert [c["card_no"] for c in s["cards"]] == [c["card_no"] for c in nw["credit_cards"]]
+    assert s["totals"]["unpaid"] == nw["totals"]["card_debt"]
+    c0 = s["cards"][0]
+    assert c0["last_statement"]["period_end"] == nw["credit_cards"][0]["last_period_end"]
+    assert len(c0["recent"]) <= 20 and {"count", "total", "next_month"} <= set(c0["installments_left"])
+    full = [r for r in client.get("/api/transactions", params={"card": c0["card_no"]}).json()
+            if r["kind"] != "odeme"]  # ?card tüm satırlar (ödeme dahil); özetin 'recent'i ödemesiz
+    assert len(full) == c0["recent_total"] and [r["uid"] for r in full[:len(c0["recent"])]] == [r["uid"] for r in c0["recent"]]
+    assert all(r["account"] == c0["card_no"] for r in full if r["source"] == "card")
+    page = client.get("/api/transactions", params={"card": c0["card_no"], "limit": 5}).json()
+    assert len(page["rows"]) == min(5, len(full))
+    assert client.get("/api/cards/summary", params={"recent": 3}).json()["cards"][0]["recent"] == c0["recent"][:3]
