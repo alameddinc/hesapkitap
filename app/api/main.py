@@ -311,10 +311,50 @@ async def require_login(request: Request, call_next):
         return JSONResponse({"detail": errors.GENERIC[500]}, status_code=500)
 
 
+CSRF_ORIGINS = {o.rstrip("/") for o in APP_ORIGINS} | {
+    o.strip().rstrip("/") for o in os.environ.get("HESAPKITAP_CSRF_ORIGINS", "").split(",") if o.strip()}
+_UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _origin_of(url: str | None) -> str | None:
+    from urllib.parse import urlsplit
+
+    if not url or url == "null":
+        return None
+    u = urlsplit(url)
+    return f"{u.scheme}://{u.netloc}".lower() if u.scheme and u.netloc else None
+
+
+def _csrf_ok(request: Request) -> bool:
+    """Çerezle (tarayıcı) gelen yazma isteği başka siteden mi (S9)? SameSite=Lax tek başına yetmez: aynı alan adındaki
+    kardeş siteler 'aynı site' sayılır. Bearer'lı istek (mobil, Kısayollar) çerez taşımaz: denetlenmez.
+    İzinli: isteğin kendi adresi (Host), HESAPKITAP_PUBLIC_URL, uygulama kökenleri (APP_ORIGINS) ve
+    HESAPKITAP_CSRF_ORIGINS. Sec-Fetch-Site same-origin/none (adres çubuğu, paylaşım hedefi) geçer; same-site ve
+    cross-site yalnız izinli Origin'le. Başlık hiç yoksa (eski tarayıcı, sunucudan sunucuya çağrı) geçer."""
+    if request.method not in _UNSAFE or _bearer(request):
+        return True
+    sfs = (request.headers.get("sec-fetch-site") or "").lower()
+    if sfs in ("same-origin", "none"):
+        return True
+    origin = _origin_of(request.headers.get("origin")) or (
+        _origin_of(request.headers.get("referer")) if not request.headers.get("origin") else None)
+    if origin is None:
+        return not sfs and request.headers.get("origin") in (None, "")  # 'Origin: null' (sandbox iframe) geçmez
+    host = (request.headers.get("host") or request.url.netloc).lower()
+    allowed = {o.lower() for o in CSRF_ORIGINS} | {f"https://{host}", f"http://{host}"}
+    if pub := os.environ.get("HESAPKITAP_PUBLIC_URL"):
+        allowed.add((_origin_of(pub) or "").lower())
+    return origin in allowed
+
+
 async def _require_login(request: Request, call_next):
     path = request.url.path
     user = None
     from app import demo_mode
+
+    if not _csrf_ok(request):
+        return JSONResponse({"detail": "Bu istek başka bir siteden geldiği için reddedildi; sayfayı yenileyip "
+                                       "uygulamanın kendisinden tekrar dene.", "code": "csrf"}, status_code=403)
 
     if demo_mode.enabled() and path == "/api/demo/stats":  # yönetici paneli çeker (anahtarla); sandbox açmaz, sayılmaz
         return await call_next(request)
