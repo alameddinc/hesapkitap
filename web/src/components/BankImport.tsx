@@ -1,4 +1,5 @@
-import { Check, Landmark, Loader2, Plus } from "lucide-react";
+import { AlertTriangle, Check, Landmark, Loader2, Plus, X } from "lucide-react";
+import { detailText } from "../lib/apiError";
 import { useEffect, useRef, useState } from "react";
 import { cx, dateTR, maskText, tl } from "../format";
 import { useUI } from "../ui";
@@ -23,6 +24,8 @@ interface Preview {
   checks?: string[]; // şüpheli değişiklik: içe aktarmadan önce onay istenir
   iban?: string | null;
   account_match?: AccountMatch | { status?: undefined }; // döküm hangi hesaba gidecek (app/sync.py resolve_account)
+  /** aynı hesabın aynı hareketi başka belgeden (PDF ↔ Excel/CSV) zaten yüklü: eklenmez (counts.cakisma) */
+  overlap?: { count: number; from: string; to: string; message: string } | null;
 }
 
 interface AccountCand { id: number; name: string; balance: number | null; as_of: string | null; iban_last4: string | null }
@@ -102,6 +105,7 @@ function AccountQuestion({ m, value, onChange }: { m: AccountMatch; value: Accou
 
 const LABEL: Record<string, string> = {
   gelir: "Gelir", gider: "Gider", kart_odemesi: "Kart ödemesi", virman: "Kendi hesabın", tekrar: "Zaten var",
+  cakisma: "Başka belgeden yüklü",
 };
 const FIELDS: { key: Key; label: string }[] = [
   { key: "date", label: "Tarih" }, { key: "description", label: "Açıklama" }, { key: "amount", label: "Tutar (±)" },
@@ -115,7 +119,7 @@ async function postForm<T>(url: string, file: File, extra: Record<string, string
   const r = await fetch(url, { method: "POST", body: fd });
   const j = await r.json().catch(() => ({}));
   if (isQuotaFull(j)) throw new QuotaFullError(j); // 422: belge okuma hakkı doldu (hazır sürüm)
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 }
 
@@ -164,17 +168,24 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
       void quota.refresh();
     }
   };
-  const run = useSave(() => postForm<Record<string, number>>("/api/bank-import", file!, {
+  // içe aktarma sonucu uyarısı (çakışma): bildirim birkaç saniyede kaybolur, bu kutuda kalır
+  const [notice, setNotice] = useState<string | null>(null);
+  const run = useSave(() => postForm<Record<string, number> & { uyari?: string }>("/api/bank-import", file!, {
     ...(pv!.pdf ? {} : { mapping: JSON.stringify(pv!.mapping), header_row: String(pv!.header_row) }),
     ...(password ? { password } : {}),
-    ...(typeof acc === "number" ? { account_id: String(acc) } : acc === "new" ? { new_account: "true" } : {}),
+    // önizlemede hesap kesin tanındıysa (IBAN / takma ad) o hesap açıkça gönderilir: belgede banka adı yokken (yalnız IBAN)
+    // içe aktarma hesabı ayrıca çözmüyor, hareketler hesapsız kalıp çakışma denetimi atlanıyordu
+    ...(typeof acc === "number" ? { account_id: String(acc) } : acc === "new" ? { new_account: "true" }
+      : pv!.account_match?.status === "exact" ? { account_id: String((pv!.account_match as { account_id: number }).account_id) } : {}),
   }), (r) => {
     const parts = [r.gelir && `${r.gelir} gelir`, r.gider && `${r.gider} gider`, r.maas && `${r.maas} maaş onaylandı`,
       r.odendi_isaretlenen && `${r.odendi_isaretlenen} ekstre ödendi`,
       (r.eslesen_elle || r.eslesen_kural) && `${(r.eslesen_elle ?? 0) + (r.eslesen_kural ?? 0)} kayıt elle girdiğinle eşleşti (iki kez sayılmadı)`,
       r.eslesme_sorusu && `${r.eslesme_sorusu} eşleşme sorusu Yapılacaklar'da`,
-      r.virman && `${r.virman} kendi hesapların arası`, r.tekrar && `${r.tekrar} zaten vardı`].filter(Boolean);
+      r.virman && `${r.virman} kendi hesapların arası`, r.tekrar && `${r.tekrar} zaten vardı`,
+      r.cakisma && `${r.cakisma} başka belgeden zaten yüklüydü`].filter(Boolean);
     ui.toast(parts.length ? parts.join(" · ") : "Yeni hareket yok");
+    setNotice(typeof r.uyari === "string" && r.uyari ? r.uyari : null);
     setPv(null);
     setFile(null);
     onDone?.();
@@ -187,7 +198,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
     preview(file, mapping, pv.header_row);
   };
 
-  if (incoming !== undefined && !file && !busy && !err) return null;  // tek yükleme alanından gelen bir şey yok
+  if (incoming !== undefined && !file && !busy && !err && !notice) return null;  // tek yükleme alanından gelen bir şey yok
   return (
     <section className="card space-y-3 p-4">
       {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade}
@@ -202,6 +213,13 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
           gelir/gider sayılmaz, aynı hareket iki kez eklenmez, hesabın bakiyesi güncellenir.
           {busy && " PDF yapay zekâyla okunuyor ve bakiye zinciriyle doğrulanıyor (bir dakika sürebilir)…"}
         </p>
+        {notice && (
+          <div className="mt-2 flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" role="status">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">İçe aktarıldı. {notice}</span>
+            <button className="btn-ghost -m-1 shrink-0 p-1" aria-label="Uyarıyı kapat" onClick={() => setNotice(null)}><X size={14} /></button>
+          </div>
+        )}
       </div>
       {incoming === undefined && <>
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy}
@@ -258,9 +276,17 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
               ⚠️ {pv.warning}
             </p>
           )}
+          {pv.overlap && pv.overlap.count > 0 && (
+            <p className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" role="note">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+              <span>{pv.overlap.count} hareket ({dateTR(pv.overlap.from)} – {dateTR(pv.overlap.to)}) başka bir belgeden (aynı dönemin PDF'i ya da
+                Excel'i) zaten yüklü; aynı gün ve tutarla kayıtlı olduğu için tekrar eklenmeyecek.</span>
+            </p>
+          )}
           <div className="flex flex-wrap gap-1.5 text-xs">
             {Object.entries(pv.counts).map(([k, n]) => (
-              <span key={k} className={cx("rounded-full px-2 py-0.5", k === "tekrar" || k === "virman" ? "bg-stone-100 dark:bg-stone-800" : "bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300")}>
+              <span key={k} className={cx("rounded-full px-2 py-0.5", k === "tekrar" || k === "virman" ? "bg-stone-100 dark:bg-stone-800"
+                : k === "cakisma" ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300" : "bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300")}>
                 {LABEL[k] ?? k}: {n}
               </span>
             ))}
@@ -271,7 +297,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
                 {pv.sample.map((r, i) => (
                   <tr key={i} className="border-t border-stone-100 first:border-0 dark:border-stone-800">
                     <td className="px-2 py-1 text-stone-500">{dateTR(r.date)}</td>
-                    <td className="max-w-32 truncate px-2 py-1 sm:max-w-64" title={r.description}>{r.who ? <b>{maskText(r.who)}</b> : maskText(r.description)}</td>
+                    <td className="min-w-36 px-2 py-1 whitespace-normal [overflow-wrap:anywhere] sm:min-w-64" title={r.description}>{r.who ? <b>{maskText(r.who)}</b> : maskText(r.description)}</td>
                     <td className={cx("px-2 py-1 text-right tabular-nums", r.amount > 0 && "text-green-700 dark:text-green-400")}>{tl(r.amount)}</td>
                     <td className="px-2 py-1 text-stone-500">{LABEL[r.type] ?? r.type}</td>
                   </tr>
