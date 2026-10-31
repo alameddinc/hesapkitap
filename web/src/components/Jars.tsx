@@ -255,7 +255,9 @@ export default function Jars() {
   const all = q.data ?? [];
   const active = all.filter((j) => !j.closed_at);
   const closed = all.filter((j) => j.closed_at);
-  const total = active.filter((j) => !isUnit(j)).reduce((s, j) => s + j.balance, 0);
+  // toplam sunucudan (net-worth.reserved: TL kumbaraları, Harcanabilir'den düşülen rakamın aynısı); eski sunucuda satırlar
+  const nw = useQuery({ queryKey: ["net-worth"], queryFn: () => call<{ reserved?: number }>("GET", "/api/net-worth") });
+  const total = nw.data?.reserved ?? active.filter((j) => !isUnit(j)).reduce((s, j) => s + j.balance, 0);
 
   return (
     <section className="card p-4">

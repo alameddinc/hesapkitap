@@ -10,7 +10,7 @@ import Kpi from "../components/Kpi";
 import Modal from "../components/Modal";
 import MonthPicker from "../components/MonthPicker";
 import Segmented from "../components/Segmented";
-import { cx, dateTR, maskText, monthLabel, periodBounds, periodOf, tl } from "../format";
+import { boundsOf, cx, dateTR, maskText, monthLabel, periodOf, tl } from "../format";
 import { userNote } from "../components/BankText";
 import { useUI } from "../ui";
 
@@ -63,7 +63,7 @@ export default function Transfers() {
   const viewer = isViewer(book);
   const startDay = meta.data?.cycle_start_day ?? 1;
   const [mode, setMode] = useState<"ay" | "tumu">("ay");
-  const [from, to] = periodBounds(ui.month, startDay);
+  const [from, to] = boundsOf(ui.month, meta.data);
   const url = mode === "ay" ? `/api/transfers?start=${from}&end=${to}` : "/api/transfers";
   const q = useQuery({ queryKey: ["transfers", mode === "ay" ? ui.month : "tumu", startDay],
     queryFn: () => send<Data>(url) });

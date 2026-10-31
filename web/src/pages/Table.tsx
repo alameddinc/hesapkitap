@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { netSpend } from "../lib/counts";
 import { ArrowDown, ArrowUp, Download, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type Row } from "../api";
@@ -11,7 +12,8 @@ import { isEstimate } from "../components/Estimates";
 type View = "liste" | "pivot";
 type PivotBy = "category" | "merchant" | "card";
 // tabloda gider +, gelir −; borç hareketi parayla aynı yönde (verilen +, gelen −)
-const spendOf = (r: Row) => (r.kind === "gelir" ? -r.amount : r.kind === "borc" ? -(r.flow ?? 0) * r.amount : r.amount);
+// hücre: gider artı, gelir eksi; kart ödemesi, borç hareketi, birikim sayılmaz (sunucu counts_as_* ile aynı kural)
+const spendOf = netSpend;
 
 type SortKey = "date" | "month" | "description" | "category" | "card" | "kind" | "amount";
 

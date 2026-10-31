@@ -58,6 +58,12 @@ export function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Dönem sınırı: sunucu şimdiki dönemi veriyorsa (meta.period) o, değilse periodBounds. */
+export function boundsOf(month: string, meta?: { cycle_start_day?: number; period?: { month: string; start: string; end: string } } | null): [string, string] {
+  if (meta?.period?.month === month) return [meta.period.start, meta.period.end];
+  return periodBounds(month, meta?.cycle_start_day ?? 1);
+}
+
 /** Dönemin tarih aralığı (ay dönümü günü 1 değilse önceki ayın o gününden başlar). */
 export function periodBounds(month: string, startDay: number): [string, string] {
   if (startDay <= 1) return [`${month}-01`, `${month}-31`];

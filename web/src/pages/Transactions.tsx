@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { rowTotals } from "../lib/counts";
 import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Row } from "../api";
@@ -25,6 +26,7 @@ export default function Transactions() {
   const ui = useUI();
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
+  const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
   const txns = useQuery({ queryKey: ["txns", ui.month, "all", "est"], queryFn: () => api.transactions(ui.month, true, true) });
   // tahmini satırlar ana listede ve sekme sayılarında yok; başta ayrı, katlanır bölümde
   const [real, estimates] = useMemo(() => splitEstimates(txns.data ?? []), [txns.data]);
@@ -34,9 +36,8 @@ export default function Transactions() {
   const rows = real.filter((r) => active.test(r) && match(r));
   const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
-  const spend = rows.filter((r) => !r.deleted && !r.pending && !r.skipped && !r.linked && r.kind !== "gelir" && r.kind !== "odeme" && r.kind !== "borc"
-    && r.category !== "Altın & Döviz Birikimi")
-    .reduce((a, r) => a + r.amount, 0);
+  // süzgeç toplamı: sunucunun counts_as_spend bayrağı (Özet'teki gider ile aynı kural)
+  const spend = rowTotals(rows).spend;
 
   return (
     <div className="space-y-3">
@@ -66,7 +67,7 @@ export default function Transactions() {
         })}
       </div>
 
-      <EstimateSection rows={estShown} />
+      <EstimateSection rows={estShown} summary={!needle ? summary.data : undefined} />
 
       <div className="card overflow-hidden">
         <div className="border-b border-stone-100 px-3 py-2 text-xs text-stone-500 dark:border-stone-800">

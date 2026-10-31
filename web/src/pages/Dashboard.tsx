@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { rowTotals } from "../lib/counts";
 import { TERIM } from "../lib/terimler";
 import TerimBilgi from "../components/TerimBilgi";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
@@ -25,8 +26,11 @@ import { EstimateNote, isEstimate } from "../components/Estimates";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
-import { cx, monthLabel, periodBounds, signed, tl, tlCompact } from "../format";
+import { boundsOf, cx, monthLabel, signed, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
+
+/** Seçili işlemlerin toplamı: gider ve gelir sunucu bayrağıyla (gider satırları toplamı; yalnız gelirse gelir toplamı). */
+const detailTotal = (rows: Row[]) => { const t = rowTotals(rows); return t.spend || t.income; };
 
 /** Hazır sürüm (posta adresi açık): bu dönem son ödemeli faturaların toplamı; dokununca Ödemeler'e kayar. */
 function BillsLine({ month }: { month: string }) {
@@ -35,7 +39,7 @@ function BillsLine({ month }: { month: string }) {
   const on = !!meta?.plan?.hosted && meta.plan.features.posta !== false;
   const q = useQuery({ queryKey: ["bills"], queryFn: api.bills, enabled: on });
   if (!on || !q.data) return null;
-  const [from, to] = periodBounds(month, meta?.cycle_start_day ?? 1);
+  const [from, to] = boundsOf(month, meta);
   const items = q.data.filter((b) => b.due_date >= from && b.due_date <= to);
   if (!items.length) return null;
   const total = items.reduce((a, b) => a + b.amount, 0);
@@ -146,7 +150,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between border-b border-stone-100 px-3 py-2 dark:border-stone-800">
         <div>
           <h2 className="font-semibold">{detailTitle}</h2>
-          <p className="text-xs text-stone-500">{detail.length} işlem · {tl(detail.reduce((a, r) => a + r.amount, 0))}</p>
+          <p className="text-xs text-stone-500">{detail.length} işlem · {tl(detailTotal(detail))}</p>
         </div>
         <button className="btn-ghost" onClick={() => { setSel(null); setInsightFilter(null); }}>Kapat</button>
       </div>
@@ -154,6 +158,9 @@ export default function Dashboard() {
     </section>
   );
 
+  // sunucu tek tanım (a18ac2a): Artan = totals.left; ortak defterde faiz gizliyse kutu yok (eski sunucu: defter ayarı)
+  const left = s ? s.totals.left ?? s.totals.net : 0;
+  const feesHidden = s?.totals.fees_hidden ?? !!book?.hide_fees;
   const render = (id: string): React.ReactNode => {
     if (!s) return null;
     switch (id) {
@@ -166,7 +173,7 @@ export default function Dashboard() {
           <div className="relative mt-1 font-display text-[2.6rem] leading-none font-semibold tracking-tight tabular-nums">{tl(s.totals.expense)}</div>
           {s.totals.savings > 0 && <div className="relative mt-1 text-xs text-blue-100">+ birikime {tl(s.totals.savings)} (gider sayılmaz)</div>}
           <div className="relative"><EstimateNote summary={s} tone="hero" /></div>
-          <div className="relative mt-5 grid grid-cols-3 gap-2 border-t border-white/15 pt-3">
+          <div className={cx("relative mt-5 grid gap-2 border-t border-white/15 pt-3", feesHidden ? "grid-cols-2" : "grid-cols-3")}>
             <div>
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">Gelen</div>
               <div className="font-semibold tabular-nums">{tlCompact(s.totals.income)}</div>
@@ -174,23 +181,24 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">{TERIM.artan.ad} <TerimBilgi id="artan" metin={s.definitions?.left} className="text-blue-100" /></div>
-              <div className={cx("font-semibold tabular-nums", s.totals.net < 0 && "text-rose-200")}>{tlCompact(s.totals.net)}</div>
+              <div className={cx("font-semibold tabular-nums", left < 0 && "text-rose-200")}>{tlCompact(left)}</div>
             </div>
-            <div>
-              <div className="text-[11px] tracking-wide text-blue-100 uppercase">{book?.hide_fees ? "İade" : "Faiz"}</div>
-              <div className={cx("font-semibold tabular-nums", !book?.hide_fees && s.totals.fees > 0 && "text-amber-200")}>
-                {tlCompact(book?.hide_fees ? s.totals.refunds : s.totals.fees)}</div>
-            </div>
+            {!feesHidden && (
+              <div>
+                <div className="text-[11px] tracking-wide text-blue-100 uppercase">Faiz</div>
+                <div className={cx("font-semibold tabular-nums", s.totals.fees > 0 && "text-amber-200")}>{tlCompact(s.totals.fees)}</div>
+              </div>
+            )}
           </div>
         </section>
-        <div className="hidden grid-cols-2 gap-2 sm:grid sm:gap-3 lg:grid-cols-4">
+        <div className={cx("hidden grid-cols-2 gap-2 sm:grid sm:gap-3", feesHidden ? "lg:grid-cols-3" : "lg:grid-cols-4")}>
           <Kpi label="Gelir" value={s.totals.income} tone="green"
             sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
-            sub={`Kart ${tlCompact(s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
-          <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={s.totals.net} tone={s.totals.net < 0 ? "red" : "green"}
+            sub={`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
+          <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={left} tone={left < 0 ? "red" : "green"}
             sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
-          {book?.hide_fees ? <Kpi label="İade" value={s.totals.refunds} /> : (
+          {!feesHidden && (
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
         </div>

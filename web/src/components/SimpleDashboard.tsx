@@ -23,18 +23,18 @@ export default function SimpleDashboard() {
     <div className="space-y-5">
       <section className="card p-6 text-center">
         <div className="text-lg text-stone-500">{monthLabel(ui.month)} · bu ay harcadığın</div>
-        <div className="mt-1 text-5xl font-bold tabular-nums tracking-tight">{t ? tl(t.expense) : "…"}</div>
+        <div className="mt-1 text-[min(3rem,12vw)] font-bold whitespace-nowrap tabular-nums tracking-tight">{t ? tl(t.expense) : "…"}</div>
         {prev.data && <div className="mt-1 text-base text-stone-500">Geçen ay ({monthLabel(prevMonth)}): {tl(prev.data.totals.expense)}</div>}
         {summary.data && <div className="text-left"><EstimateNote summary={summary.data} /></div>}
         {t && (
-          <div className="mt-4 grid grid-cols-2 gap-3 text-left">
+          <div className="mt-4 grid grid-cols-1 gap-3 text-left min-[440px]:grid-cols-2">
             <div className="rounded-xl bg-green-50 p-3 dark:bg-green-950/30">
               <div className="text-base text-stone-500">Gelen</div>
-              <div className="text-2xl font-semibold tabular-nums text-green-700 dark:text-green-400">{tl(t.income)}</div>
+              <div className="text-2xl font-semibold whitespace-nowrap tabular-nums text-green-700 dark:text-green-400">{tl(t.income)}</div>
             </div>
             <div className="rounded-xl bg-stone-50 p-3 dark:bg-stone-800/50">
               <div className="text-base text-stone-500">{TERIM.eldeKalan.ad} <TerimBilgi id="eldeKalan" metin={summary.data?.definitions?.left_after_savings} /></div>
-              <div className={`text-2xl font-semibold tabular-nums ${t.net - t.savings < 0 ? "text-red-600" : ""}`}>{tl(t.net - t.savings)}</div>
+              <div className={`text-2xl font-semibold whitespace-nowrap tabular-nums ${(t.left_after_savings ?? t.net - t.savings) < 0 ? "text-red-600" : ""}`}>{tl(t.left_after_savings ?? t.net - t.savings)}</div>
             </div>
           </div>
         )}
