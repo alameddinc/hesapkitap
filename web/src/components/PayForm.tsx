@@ -57,7 +57,10 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
     const linked = !!r && typeof r === "object" && "linked" in r && r.linked;
     const warning = r && typeof r === "object" && "warning" in r && typeof r.warning === "string" ? r.warning : null;
     const msg = `${partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`}${linked ? " · dökümdeki ödemeyle eşleşti" : ""}`;
-    if (fresh) ui.toast(msg, { undo: unpay });
+    // borç: sunucu payment_id verdiyse yalnız bu ödeme geri alınır (öncekiler kalır); yoksa ilk ödemede tümü
+    const pid = debt && r && typeof r === "object" && "payment_id" in r && typeof r.payment_id === "number" ? r.payment_id : null;
+    if (pid != null) ui.toast(msg, { undo: () => api.undoDebtPayment(pid) });
+    else if (fresh) ui.toast(msg, { undo: unpay });
     else onSaved?.(msg);
     if (warning) setWarn(warning); // kayıt yapıldı; uyarı okunsun diye pencere açık kalır
     else onClose();

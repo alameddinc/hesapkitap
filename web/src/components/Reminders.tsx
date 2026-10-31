@@ -242,7 +242,8 @@ function CardUnmatched({ r }: { r: Reminder }) {
 function DebtQuestion({ r }: { r: Reminder }) {
   const ui = useUI();
   const fail = useAnswerError();
-  const yes = useSave(() => call("POST", `/api/debts/${r.debt_id}/pay`, r.pay), () => ui.toast("Borçtan düşüldü · gelir/gider sayılmaz"));
+  const yes = useSave(() => call<{ payment_id?: number }>("POST", `/api/debts/${r.debt_id}/pay`, r.pay),
+    (res) => ui.toast("Borçtan düşüldü · gelir/gider sayılmaz", res?.payment_id != null ? { undo: () => api.undoDebtPayment(res.payment_id!) } : undefined));
   const no = useSave(() => post(r.id, "dismiss"), () => ui.toast("Tamam, ayrı hareket olarak kalır"));
   const busy = yes.isPending || no.isPending;
   return (

@@ -1,4 +1,5 @@
 import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { api } from "../api";
 import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
 import { useState } from "react";
@@ -263,10 +264,12 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
   const [accountId, setAccountId] = useState<number | null>(d.account_id);
   const save = useSave(() => json("POST", `/api/debts/${d.id}/pay`, { amount: parseAmount(amount), paid_at: date,
     account_id: d.asset === "TRY" ? accountId : null }),
-    // ilk ödemede "Geri al" (DELETE /pay önceki duruma döner); önceden ödeme varsa hepsini silerdi → sunulmaz
-    () => {
-      ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı",
-        d.paid_amount > 0 ? undefined : { undo: () => json("DELETE", `/api/debts/${d.id}/pay`) });
+    // "Geri al": sunucu payment_id verirse yalnız bu ödeme silinir (öncekiler kalır); eski sunucuda yalnız ilk ödemede
+    // DELETE /pay (hepsini siler, önceden ödeme yoksa birebir dönüş)
+    (r: { payment_id?: number }) => {
+      const undo = r?.payment_id != null ? () => api.undoDebtPayment(r.payment_id!)
+        : d.paid_amount > 0 ? null : () => json("DELETE", `/api/debts/${d.id}/pay`);
+      ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı", undo ? { undo } : undefined);
       onDone();
     }, { inline: true });
   return (
