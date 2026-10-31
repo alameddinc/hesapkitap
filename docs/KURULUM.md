@@ -105,11 +105,20 @@ curl -fsSLO https://raw.githubusercontent.com/alameddinc/hesapkitap/main/deploy/
 docker compose up -d
 # HTTPS için Caddy (alan adını yaz):
 docker run -d --name caddy --restart unless-stopped --network host -v caddy:/data caddy \
-  caddy reverse-proxy --from para.adin.com --to localhost:8080
+  caddy reverse-proxy --from para.adin.com --to localhost:8080 --header-up "X-Real-IP {remote_host}"
 docker compose logs | grep kurulum      # kurulum kodu
 ```
 
 `https://para.adin.com` → kurulum. **Güncelleme:** `docker compose pull && docker compose up -d`.
+
+**Önünde vekil (reverse proxy) varken gerçek ziyaretçi adresi:** giriş denemesi sınırları ve "yerel ağdan kurulum"
+kararı ziyaretçinin IP'sine bakar. Uygulama vekil başlıklarına (`X-Real-IP`, yoksa `X-Forwarded-For`) yalnız bağlantı
+güvenilir bir vekilden geliyorsa inanır: `HESAPKITAP_TRUSTED_PROXIES` (virgüllü CIDR; verilmezse özel ağlar ve
+loopback, yani aynı makinedeki ya da docker ağındaki Caddy/nginx). Vekil, istemcinin gönderdiği `X-Real-IP`'yi ezmeli:
+Caddy'de yukarıdaki `--header-up`, nginx'te `proxy_set_header X-Real-IP $remote_addr;`. Cloudflare Tunnel
+kullanıyorsan `HESAPKITAP_TRUST_CF=1` (o zaman `CF-Connecting-IP` okunur). Vekil yoksa (doğrudan açık) başlıklar hiç
+okunmaz. Ayrıca bir hesaba 15 dakikada 10 hatalı şifre denenirse, hangi adresten gelirse gelsin o hesap 15 dakika
+kilitlenir; başarılı girişte sayaç sıfırlanır.
 
 ---
 
