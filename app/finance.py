@@ -245,19 +245,35 @@ def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
     }
 
 
+# banka dökümündeki maaş satırı ("MAAS 2026 OCAK ÖDEMESI", "ISÇI UCRET 2026 TEMMUZ ÜCRET ÖDEM…"): kategorisi
+# "Diğer Gelir" kalsa da o ayın maaşı yatmış sayılır, üstüne tahmini maaş eklenmez (çift sayım)
+SALARY_TEXT = re.compile(r"MAAS|UCRETODEM|PERSONELODEM|BORDRO")  # _fold boşlukları atar
+
+
+def _is_salary(r: dict) -> bool:
+    return (r["category"] or "") == "Maaş" or bool(r.get("gross_amount")) or "MAAS" in _fold(r["description"])
+
+
+def _salary_entry(e: dict, salary_ids: set) -> bool:
+    return (e["category"] == "Maaş" or (e.get("recurring_id") in salary_ids)
+            or bool(SALARY_TEXT.search(_fold(e["description"] or ""))))
+
+
 def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) -> list[dict]:
     done = {e["recurring_id"] for e in entries if e["recurring_id"] and e["month"] == month}
     ov = db.recurring_overrides()
     # geçmiş ayda maaş geliri hiç yoksa (maaşın yattığı hesabın dökümü yüklenmemiş): maaş kalemi tahmini gelir sayılır;
     # o ayın gerçek maaşı (döküm) gelince kendiliğinden kalkar
-    salary_seen = any(e["kind"] == INCOME and e["category"] == "Maaş" and e["month"] == month and not e["skipped"] for e in entries)
+    salary_ids = {r["id"] for r in recurring if _is_salary(r)}
+    salary_seen = any(e["kind"] == INCOME and e["month"] == month and not e["skipped"] and _salary_entry(e, salary_ids)
+                      for e in entries)
     past = month < current_period()
     out = []
     for r in recurring:
         if not is_active(r, month) or r["id"] in done:
             continue
         row = _pending_row(r, month, ov)
-        is_salary = (r["category"] or "") == "Maaş" or bool(r.get("gross_amount")) or "MAAS" in _fold(r["description"])
+        is_salary = _is_salary(r)
         if r["kind"] == INCOME and is_salary and salary_seen:  # o ayın maaşı dökümden gelmiş: "bekliyor" gösterme
             continue
         if past and r["kind"] == INCOME and is_salary and not salary_seen:

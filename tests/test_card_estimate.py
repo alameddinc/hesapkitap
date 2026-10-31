@@ -95,6 +95,23 @@ def test_no_pending_salary_when_actual_exists(client, tmpdb):
     assert [(r["amount"], bool(r.get("pending"))) for r in jan] == [(210000, False)]
 
 
+def test_no_salary_estimate_when_bank_salary_line_uncategorized(client, tmpdb):
+    """Dökümdeki maaş satırı 'Diğer Gelir' kalsa da (sabit kaleme bağlanmamış) o ayın maaşı yatmış sayılır:
+    üstüne tahmini maaş eklenip gelir iki kez sayılmaz."""
+    from app import finance
+
+    client.post("/api/recurring", json={"description": "Maaş", "amount": 200000, "kind": "gelir", "day_of_month": 15,
+                                        "start_month": "2025-12"})
+    tmpdb.create_entry({"entry_date": "2026-02-15", "description": "ISÇI UCRET 2026 SUBAT ÜCRET ÖDEM M20260215-1",
+                        "amount": 205000, "kind": "gelir", "category": "Diğer Gelir"})
+    tmpdb.create_entry({"entry_date": "2026-03-15", "description": "Örnek Kişi", "amount": 5000, "kind": "gelir",
+                        "category": "Diğer Gelir"})
+    feb = [r for r in finance.transactions("2026-02") if r["kind"] == "gelir"]
+    assert [(r["amount"], r.get("salary_estimate")) for r in feb] == [(205000, None)]
+    mar = [r for r in finance.transactions("2026-03") if r["kind"] == "gelir"]
+    assert sorted((r["amount"], bool(r.get("salary_estimate"))) for r in mar) == [(5000, False), (200000, True)]
+
+
 def test_advance_pay_raise_difference(tmpdb):
     """Memur: maaş 15'inde peşin; ocak zammının 1–14 günlük farkı ocak maaşına eklenir."""
     rid = tmpdb.create_recurring({"description": "Maaş", "amount": 0, "kind": "gelir", "day_of_month": 15,

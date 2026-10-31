@@ -245,6 +245,12 @@ def test_after_write_reruns_in_background(client, monkeypatch):
     assert integrity.last()["counts"] == {"bolme_asim": 1}
     assert client.delete(f"/api/entries/{eid}").status_code == 200  # kaydı silmek sorunu giderir
     assert done.wait(5)
+    # kayıt eklemenin tetiklediği önceki arka plan koşusu da done'ı kurmuş olabilir: silmeden sonraki koşuyu bekle
+    import time
+
+    end = time.monotonic() + 5
+    while integrity.last()["counts"] != {} and time.monotonic() < end:
+        time.sleep(0.02)
     assert integrity.last()["counts"] == {}
 
 
