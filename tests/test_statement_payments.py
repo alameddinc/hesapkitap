@@ -80,3 +80,24 @@ def test_partial_payments_sum_and_unknown_card_by_amount(tmpdb):
     _bank(tmpdb, [("26.08.2026", 20000.00)], card=False)  # açıklamada kart yok: tutar borçla tutuyor
     assert _paid(tmpdb)["2026-08-15"] == (20000.00, "2026-08-26")
     assert _paid(tmpdb)["2026-07-17"] == (None, None)
+
+
+def test_payment_after_debt_closed_is_not_added(tmpdb):
+    """09-15 borcu 09-26'da kapandı; 10-18'deki ödeme (yüklenmemiş Ekim ekstresinin) ona yazılmaz."""
+    _statements(tmpdb)
+    _bank(tmpdb, [*PAYS, ("18.10.2026", 47000.00)])
+    assert _paid(tmpdb)["2026-09-15"] == (15540.00, "2026-09-26")
+    with tmpdb.connect() as c:  # Ekim ekstresi gelince o ödeme ona gider
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt, min_payment) "
+                  "VALUES ('h-oct', 'VakıfBank', ?, '2026-10-16', '2026-10-26', 47000.00, 2000)", (CARD,))
+    tmpdb.auto_mark_paid()
+    assert _paid(tmpdb)["2026-10-16"] == (47000.00, "2026-10-18") and _paid(tmpdb)["2026-09-15"] == (15540.00, "2026-09-26")
+
+
+def test_partial_then_close_dates(tmpdb):
+    """Asgari karşılandı ama borç kapanmadı: paid_at asgarinin karşılandığı ödeme; sonra kapanınca kapanış tarihi."""
+    _statements(tmpdb)
+    _bank(tmpdb, [("17.06.2026", 2500.0)])
+    assert _paid(tmpdb)["2026-06-15"] == (2500.0, "2026-06-17")
+    _bank(tmpdb, [("23.06.2026", 38793.88), ("30.06.2026", 999.0)])
+    assert _paid(tmpdb)["2026-06-15"] == (43000.00, "2026-06-23")  # 30.06'daki fazla ödeme eklenmez

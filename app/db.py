@@ -1266,6 +1266,8 @@ def _statement_windows(sts: list[dict]) -> dict[int, tuple[str, str]]:
             end = due + timedelta(days=PAY_GRACE_DAYS)
             if i + 1 < len(lst):
                 end = min(end, _date.fromisoformat(lst[i + 1]["period_end"]))
+            elif s.get("next_period_end"):  # sonraki ekstre henüz yüklenmedi: onun kesimine kadar
+                end = min(end, _date.fromisoformat(s["next_period_end"]))
             out[s["id"]] = (s["period_end"], end.isoformat())
     return out
 
@@ -1301,8 +1303,8 @@ def reassign_statement_payments(apply: bool = True) -> dict:
     Kaynağı bilinmeyen eski işaret: ödemelerden birine denk geliyorsa yeniden hesaplanır, gelmiyorsa (elle) korunur.
     Dönüş: {marked, cleared, changed: [...]}."""
     with connect() as c:
-        sts = rows(c.execute("SELECT id, card_no, bank, period_end, due_date, total_debt, min_payment, paid_amount, "
-                             "paid_at, paid_source FROM statements"))
+        sts = rows(c.execute("SELECT id, card_no, bank, period_end, due_date, next_period_end, total_debt, min_payment, "
+                             "paid_amount, paid_at, paid_source FROM statements"))
         pays = _payment_evidence(c)
     win = _statement_windows(sts)
     manual = {s["id"] for s in sts if s["paid_source"] == "elle"}
@@ -1317,6 +1319,8 @@ def reassign_statement_payments(apply: bool = True) -> dict:
             cands = [s for s in cands if abs((s["total_debt"] or 0) - p["amount"]) <= 1
                      or abs((s["min_payment"] or -9) - p["amount"]) <= 1]
             cands.sort(key=lambda s: (abs((s["total_debt"] or 0) - p["amount"]) > 1, s["period_end"]))
+        # borcu kapanmış ekstreye sonraki ödeme yazılmaz (sonraki dönemin ödemesidir; o ekstre yüklenince ona gider)
+        cands = [s for s in cands if round(sum(x["amount"] for x in assigned[s["id"]]), 2) < (s["total_debt"] or 0) - 1]
         if cands:
             assigned[cands[0]["id"]].append(p)
     evidence = {(p["amount"], p["date"][:10]) for p in pays}
@@ -1324,10 +1328,19 @@ def reassign_statement_payments(apply: bool = True) -> dict:
     for s in sts:
         if s["id"] in manual:
             continue
-        ps = assigned[s["id"]]
+        ps = assigned[s["id"]]  # tarih sırasıyla
         total = round(sum(p["amount"] for p in ps), 2)
         need = s["min_payment"] if s["min_payment"] else s["total_debt"]
-        new = (total, max(p["date"][:10] for p in ps)) if ps and need is not None and total >= need - 1 else (None, None)
+        new = (None, None)
+        if ps and need is not None and total >= need - 1:
+            # paid_at: borcun kapandığı ödeme; kapanmadıysa asgarinin karşılandığı ödeme
+            target = (s["total_debt"] or 0) - 1 if total >= (s["total_debt"] or 0) - 1 else need - 1
+            run = 0.0
+            for p in ps:
+                run += p["amount"]
+                if run >= target:
+                    new = (total, p["date"][:10])
+                    break
         old = (s["paid_amount"], s["paid_at"])
         if new == (None, None) and old != (None, None) and s["paid_source"] != "auto":
             # kaynağı bilinmeyen eski işaret: bir ödemeye denk gelmiyorsa kullanıcı elle girmiştir, korunur
