@@ -10,9 +10,12 @@ export default function Borclar() {
     queryKey: ["transfers"],
     queryFn: () => send<{ people: { name: string }[] }>("/api/transfers"),
   });
+  // açık TL alacak/borç toplamı sunucudan (net-worth: Özet ve Hesaplar ile aynı rakam); eski sunucuda satırlardan
+  const nw = useQuery({ queryKey: ["net-worth"], queryFn: () => send<{ receivable?: number; payable?: number }>("/api/net-worth") });
   if (!debts.data) return <div className="text-sm text-stone-500">Yükleniyor…</div>;
   const openTry = debts.data.filter((d) => !d.settled_at && d.asset === "TRY");
-  const sum = (dir: Debt["direction"]) => openTry.filter((d) => d.direction === dir).reduce((a, d) => a + d.remaining, 0);
+  const sum = (dir: Debt["direction"]) => (dir === "alacak" ? nw.data?.receivable : nw.data?.payable)
+    ?? openTry.filter((d) => d.direction === dir).reduce((a, d) => a + d.remaining, 0);
   return (
     <div className="space-y-4">
       <div>

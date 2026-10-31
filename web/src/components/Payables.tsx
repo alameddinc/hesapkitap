@@ -20,7 +20,7 @@ function DueBadge({ p }: { p: Payable }) {
 export default function Payables() {
   const ui = useUI();
   // toplamlar sunucudan: eski ödenmemiş ekstre (kalanı son ekstreye devretti) iki kez sayılmasın
-  const q = useQuery({ queryKey: ["payables", "totals"], queryFn: api.payablesWithTotals });
+  const q = useQuery({ queryKey: ["payables", "totals", 15], queryFn: () => api.payablesWithTotals(15) });
   const items = q.data?.items ?? [];
   const t = q.data?.totals;
   const rolled = (p: Payable) => p.in_total === false && !!p.rolled_into;
@@ -30,7 +30,12 @@ export default function Payables() {
       <div className="flex items-center justify-between gap-2 border-b border-stone-100 px-3 py-2.5 sm:px-4 dark:border-stone-800">
         <div>
           <h2 className="font-semibold">Ödemeler</h2>
-          <p className="text-xs text-stone-500 dark:text-stone-400">{t && t.open_count ? `${t.open_count} ödeme bekliyor · ${tl(t.open)}` : t ? "Bekleyen ödeme yok 🎉" : "…"}</p>
+          {/* başlık: sunucunun 15 günlük penceresi (mobil Ödemeler ile aynı tanım; gecikmiş dahil, tahmin ayrı) */}
+          <p className="text-xs text-stone-500 dark:text-stone-400">{!t ? "…" : !t.open_count ? "Bekleyen ödeme yok 🎉"
+            : t.window ? `${t.window.count === t.open_count ? `${t.open_count} ödeme bekliyor` : `15 gün içinde ${t.window.count} ödeme`} · ${tl(t.window.total)}${
+                !t.window.overdue ? "" : t.window.overdue >= t.window.total ? " · hepsinin günü geçti" : ` · ${tl(t.window.overdue)} günü geçti`}${
+                t.window.count < t.open_count ? ` · tümü ${t.open_count} ödeme ${tl(t.open)}` : ""}`
+              : `${t.open_count} ödeme bekliyor · ${tl(t.open)}`}</p>
           {!!t?.overdue_count && (
             <p className="text-xs text-stone-500 dark:text-stone-400">
               + {t.overdue_count} eski ekstre ödenmemiş ({tl(t.overdue)}); kalanı sonraki ekstreye devretti, toplama ayrıca girmez</p>

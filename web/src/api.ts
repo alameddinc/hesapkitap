@@ -39,6 +39,8 @@ export interface Row {
   subscription?: "aktif" | "iptal" | "dusuruldu" | null;
   counterparty?: string | null;
   flow?: number; // borç hareketi: +1 para geldi, −1 para çıktı
+  counts_as_spend?: boolean; // sunucu (a18ac2a): gider toplamına girer mi — istemci kuralı kendisi kurmaz (lib/counts)
+  counts_as_income?: boolean;
   split_of?: string; // alt kalemse ana satırın uid'i
   split_total?: number; // ana satırdan ayrılan toplam
   original_amount?: number;
@@ -273,6 +275,7 @@ export interface Payable {
 export interface PayableTotals {
   open: number; open_count: number; card_debt: number; statements: number; bills: number; debts: number;
   overdue: number; overdue_count: number; estimated: number;
+  window?: { days: number; total: number; count: number; overdue: number; estimated: number } | null;
 }
 
 export interface BillDraft {
@@ -368,6 +371,8 @@ export interface Plan {
 
 export interface Meta {
   months: string[];
+  /** şimdiki dönemin sınırları (sunucu a18ac2a); istemci dönem sınırını kendisi hesaplamasın */
+  period?: { month: string; start: string; end: string };
   today: string;
   categories: string[];
   income_categories: string[];
@@ -474,7 +479,8 @@ export const api = {
   skipRecurring: (id: number, month: string) => req("POST", `/api/recurring/${id}/skip`, { month }),
 
   payables: () => req<Payable[]>("GET", "/api/payables"),
-  payablesWithTotals: () => req<{ items: Payable[]; totals: PayableTotals }>("GET", "/api/payables?totals=1"),
+  /** days: başlık toplamı penceresi (totals.window: vadesi N gün içinde ya da geçmiş) — web ve mobil aynı tanım */
+  payablesWithTotals: (days = 15) => req<{ items: Payable[]; totals: PayableTotals }>("GET", `/api/payables?totals=1&days=${days}`),
   budgets: (month: string) =>
     req<{ limits: Record<string, number>; status: Budget[]; last_month: Record<string, number> }>("GET", `/api/budgets?month=${month}`),
   setBudget: (category: string, monthly_limit: number | null) => req("PUT", "/api/budgets", { category, monthly_limit }),

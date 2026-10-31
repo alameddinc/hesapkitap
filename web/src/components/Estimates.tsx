@@ -35,7 +35,7 @@ export function EstimateNote({ summary, tone = "plain" }: { summary: Summary; to
   const cardText = missingCardsText(items);
   const est = summary.totals.estimated_expense ?? 0;
   const salary = items.filter((i) => i.source === "recurring" && i.kind === "gelir");
-  const salaryTotal = salary.reduce((a, i) => a + i.amount, 0);
+  const salaryTotal = summary.totals.estimated_income ?? salary.reduce((a, i) => a + i.amount, 0);
   if (!(cardText && est > 0) && !salaryTotal) return null;
   const hero = tone === "hero";
   return (
@@ -64,12 +64,13 @@ export function EstimateNote({ summary, tone = "plain" }: { summary: Summary; to
 }
 
 /** İşlemler listesinin başında katlanır bölüm: tahmini satırlar soluk, kesikli kenarlı, toplamı ayrı. */
-export function EstimateSection({ rows }: { rows: Row[] }) {
+/** summary verilirse (süzgeç yok) toplamlar sunucudan; süzülmüş listede satırların toplamı. */
+export function EstimateSection({ rows, summary }: { rows: Row[]; summary?: Summary }) {
   const ui = useUI();
   const [open, setOpen] = useState(false);
   if (!rows.length) return null;
-  const expense = rows.filter((r) => r.kind !== "gelir").reduce((a, r) => a + r.amount, 0);
-  const income = rows.filter((r) => r.kind === "gelir").reduce((a, r) => a + r.amount, 0);
+  const expense = summary?.totals.estimated_expense ?? rows.filter((r) => r.kind !== "gelir").reduce((a, r) => a + r.amount, 0);
+  const income = summary?.totals.estimated_income ?? rows.filter((r) => r.kind === "gelir").reduce((a, r) => a + r.amount, 0);
   const onlyCards = rows.every((r) => r.kind !== "gelir");
   return (
     <section className="rounded-xl border border-dashed border-stone-300 bg-stone-50/60 dark:border-stone-700 dark:bg-stone-900/40" data-testid="estimate-section">
