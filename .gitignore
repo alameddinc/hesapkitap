@@ -12,3 +12,9 @@ web/dist/
 *.tsbuildinfo
 app/VERSION
 docker-compose.demo.yml
+
+# Kişisel veri: kök dizindeki dökümler/ekstreler asla repoya girmesin
+/*.xlsx
+/*.xls
+/*.csv
+/*.pdf
