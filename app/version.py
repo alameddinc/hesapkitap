@@ -38,6 +38,7 @@ CAPABILITIES = (
     "inbox_documents",        # Gelen kutusu kind dokum|ekstre, /api/inbox/{id}/import ve /file
     "cards_summary",          # GET /api/cards/summary; /api/transactions?card=
     "integrity_details",      # dogruluk details[].items/hint, GET /api/integrity, POST /api/integrity/run
+    "bills_by_bill_month",    # /api/bills/summary months[] faturanın ait olduğu aya göre (paid_date / bill_month)
     "universal_links",        # davet link'i https://<adres>/davet/<kod> (+ web_link eski biçim)
 )
 

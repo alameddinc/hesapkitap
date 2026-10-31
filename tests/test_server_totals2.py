@@ -100,3 +100,35 @@ def test_cards_summary(client, upload):
     page = client.get("/api/transactions", params={"card": c0["card_no"], "limit": 5}).json()
     assert len(page["rows"]) == min(5, len(full))
     assert client.get("/api/cards/summary", params={"recent": 3}).json()["cards"][0]["recent"] == c0["recent"][:3]
+
+
+def test_bills_grouped_by_bill_month(client, tmpdb):
+    """Biriken üç doğalgaz faturası aynı gün ödendi: son ödeme tarihlerine göre üç ayrı aya düşer."""
+    for due in ("10.07.2026", "10.08.2026", "10.09.2026"):
+        _entry(client, "2026-09-25", "Örnek Gaz · Doğalgaz faturası", 300, "gider", category="Doğalgaz",
+               note=f"Hesap hareketi · Son ödeme {due} · ORNEK GAZ TAHSILATI")
+    # dönem yazan fatura (ödeme ekimde, dönem eylül), hiçbir bilgisi olmayan (ödeme ayı)
+    _entry(client, "2026-10-03", "Örnek Elektrik · Elektrik faturası", 200, "gider", category="Elektrik",
+           note="Dönem 01.09–30.09")
+    _entry(client, "2026-10-04", "Su C · Su faturası", 80, "gider", category="Su")
+    s = client.get("/api/bills/summary", params={"until": "2026-10", "months": 6}).json()
+    gaz = next(p for p in s["providers"] if p["name"] == "Örnek Gaz")
+    paid = {m["month"]: m["count"] for m in gaz["months"] if m["count"]}
+    assert paid == {"2026-07": 1, "2026-08": 1, "2026-09": 1}
+    it = next(m for m in gaz["months"] if m["month"] == "2026-07")["items"][0]
+    assert it["paid_date"] == "2026-09-25" and it["bill_month"] == "2026-07" and it["month_source"] == "son_odeme"
+    assert gaz["average"] == 300.0 and gaz["vs_prev_month"]["pct"] == 0.0
+    el = next(p for p in s["providers"] if p["name"] == "Örnek Elektrik")
+    assert el["last"]["month"] == "2026-09"
+    su = next(p for p in s["providers"] if p["name"] == "Su C")
+    assert su["last"]["month"] == "2026-10"
+    assert s["month_basis"] == "bill_month"
+
+
+def test_paid_bill_record_uses_due_date(client, tmpdb):
+    bid = client.post("/api/bills", json={"provider": "Örnek İnternet", "amount": 400, "due_date": "2026-08-20",
+                                          "category": "İnternet & TV"}).json()["id"]
+    client.post(f"/api/bills/{bid}/pay", json={"amount": 400, "paid_at": "2026-10-02", "payment": "havale"})
+    s = client.get("/api/bills/summary", params={"until": "2026-10", "months": 6}).json()
+    p = next(x for x in s["providers"] if x["name"] == "Ornek Internet")
+    assert p["last"]["month"] == "2026-08"

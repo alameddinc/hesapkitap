@@ -241,11 +241,11 @@ def test_transfers_month_filter_self_and_rename(client, tmpdb):
 
 def test_bills_summary(client, tmpdb):
     db = tmpdb
-    raw = "İgdaş Tahsilatı Sözleşme Numarası: 500100000001, Fatura Numarası:{inv},Son Ödeme Tarihi: 2026/{m}/25"
+    raw = "İgdaş Tahsilatı Sözleşme Numarası: 500100000001, Fatura Numarası:{inv},Son Ödeme Tarihi: {y}/{m}/25"
     rows = []
     for d, amt, inv in (("2025-10-20", 300.0, "FT000A1"), ("2026-09-20", 500.0, "FT000A2"), ("2026-10-20", 2636.0, "FT000A3"),
                         ("2026-10-20", 398.0, "FT000A4")):
-        rows.append({"date": d, "description": raw.format(inv=inv, m=d[5:7]), "amount": -amt, "balance": None})
+        rows.append({"date": d, "description": raw.format(inv=inv, y=d[:4], m=d[5:7]), "amount": -amt, "balance": None})
     db.import_bank_rows(bank_import.finalize(rows, [OWNER]), account="VakıfBank", owners=[OWNER])
     db.create_entry({"entry_date": "2026-10-03", "description": "Vodafone", "amount": 600, "kind": "gider",
                      "category": "Telefon"})
