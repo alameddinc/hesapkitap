@@ -436,6 +436,9 @@ MIGRATIONS = [
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
     ("own_transfers", "note", "TEXT"),          # kullanıcının notu
     ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
+    ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)
+    ("card_payments", "statement_id", "INTEGER"), # elle "ödendi" denen ekstre (POST /api/statements/{id}/pay)
+    ("card_payments", "created_at", "TEXT"),      # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
 ]
 
@@ -1254,10 +1257,42 @@ def auto_mark_paid() -> int:
     return marked
 
 
-def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None) -> None:
-    """Kart ekstresi ödendi. Gider eklenmez: kart harcamaları zaten ekstreden sayılıyor."""
+def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, account_id: int | None = None) -> dict:
+    """Kart ekstresi ödendi. Gider eklenmez: kart harcamaları zaten ekstreden sayılıyor.
+
+    account_id (banka/nakit) verilirse ödeme o hesaptan çıkan bir kart ödemesi kaydıdır (card_payments; gider değil,
+    hesabın bakiyesi düşer). Aynı hesapta, aynı tutarda (±0,01), ±3 gün içinde dökümden gelmiş bir kart ödemesi zaten
+    varsa yeni kayıt açılmaz, o bağlanır; döküm sonradan gelirse elle girilen kayıt dökümün satırı olur (import_bank_rows).
+    amount None: ödeme geri alınır — elle girilmiş bağlı kayıt silinir, dökümden gelmişse yalnız bağ kopar.
+    Dönüş: {card_payment_id, linked} (hesapsız ödemede card_payment_id None)."""
     with connect() as c:
+        if amount is None:
+            c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
+            c.execute("UPDATE card_payments SET statement_id = NULL WHERE statement_id = ?", (sid,))
+            c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL WHERE id = ?", (sid,))
+            return {"card_payment_id": None, "linked": False}
         c.execute("UPDATE statements SET paid_amount = ?, paid_at = ? WHERE id = ?", (amount, paid_at, sid))
+        if not account_id:
+            return {"card_payment_id": None, "linked": False}
+        acc = c.execute("SELECT id, name FROM accounts WHERE id = ? AND kind IN ('banka', 'nakit')", (account_id,)).fetchone()
+        if not acc:
+            raise ValueError("Hesap bulunamadı (banka ya da nakit olmalı)")
+        st = c.execute("SELECT bank, card_no FROM statements WHERE id = ?", (sid,)).fetchone()
+        # önceki elle ödeme kaydı (tutar/tarih/hesap değişti): yenisiyle değişir
+        c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
+        c.execute("UPDATE card_payments SET statement_id = NULL WHERE statement_id = ?", (sid,))
+        found = c.execute(
+            "SELECT id FROM card_payments WHERE import_hash IS NOT NULL AND statement_id IS NULL AND account_id = ? "
+            "AND ABS(amount - ?) < 0.01 AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') "
+            "ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1", (account_id, amount, paid_at, paid_at, paid_at)).fetchone()
+        if found:
+            c.execute("UPDATE card_payments SET statement_id = ? WHERE id = ?", (sid, found["id"]))
+            return {"card_payment_id": found["id"], "linked": True}
+        cid = c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, description, account_id, "
+                        "statement_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                        (paid_at, amount, (st["card_no"] or "")[-4:] or None, acc["name"],
+                         f"Kart ödemesi · {st['bank']} •••• {(st['card_no'] or '')[-4:]}", account_id, sid)).lastrowid
+        return {"card_payment_id": cid, "linked": False}
 
 
 BILL_FIELDS = ("provider", "description", "amount", "due_date", "category", "note", "file_name")
@@ -1991,9 +2026,25 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                 if not r["hash"].startswith("mail:"):
                     c.execute("DELETE FROM card_payments WHERE import_hash LIKE 'mail:%' AND ABS(amount - ?) < 0.01 "
                               "AND pay_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')", (amt, r["date"], r["date"]))
-                c.execute("INSERT OR IGNORE INTO card_payments (pay_date, amount, card_last4, account, description, import_hash) "
-                          "VALUES (?, ?, ?, ?, ?, ?)", (r["date"], amt, card.group(1) if card else None, account,
-                                                        r["description"][:300], r["hash"]))
+                # elle "ekstreyi bu hesaptan ödedim" denmişse (aynı hesap, aynı tutar, ±3 gün): yeni kayıt açılmaz,
+                # elle girilen ödeme dökümün satırı olur (parmak izi ve tarih dökümden)
+                manual = c.execute(
+                    "SELECT id FROM card_payments WHERE import_hash IS NULL AND ABS(amount - ?) < 0.01 "
+                    "AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') AND account_id IS NOT NULL "
+                    "AND account_id = ? ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1",
+                    (amt, r["date"], r["date"], acc_id, r["date"])).fetchone() if acc_id else None
+                if manual:
+                    c.execute("UPDATE card_payments SET import_hash = ?, pay_date = ?, description = ?, "
+                              "card_last4 = COALESCE(card_last4, ?) WHERE id = ?",
+                              (r["hash"], r["date"], r["description"][:300], card.group(1) if card else None, manual["id"]))
+                    c.execute("UPDATE statements SET paid_at = ? WHERE id = (SELECT statement_id FROM card_payments "
+                              "WHERE id = ?)", (r["date"], manual["id"]))
+                    stats["eslesen_elle"] += 1
+                    seen.add(r["hash"])
+                    continue
+                c.execute("INSERT OR IGNORE INTO card_payments (pay_date, amount, card_last4, account, description, import_hash, "
+                          "account_id) VALUES (?, ?, ?, ?, ?, ?, ?)", (r["date"], amt, card.group(1) if card else None,
+                                                                       account, r["description"][:300], r["hash"], acc_id))
             st = match_card_payment(amt, r["date"], only_unpaid=True)
             if st:
                 with connect() as c:
@@ -2860,6 +2911,11 @@ def _account_balance(c, a: dict) -> float | None:
     flows = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) FROM entries
                          WHERE account_id = ? AND skipped = 0 AND (entry_date > ? OR (entry_date = ? AND id > ?))""",
                       (a["id"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0)).fetchone()[0]
+    # elle girilmiş kart ekstresi ödemesi (gider değil, hesaptan para çıktı); dökümden gelenler çapanın içinde
+    cards = c.execute("""SELECT COALESCE(SUM(amount), 0) FROM card_payments WHERE account_id = ? AND import_hash IS NULL
+                         AND (pay_date > ? OR (pay_date = ? AND COALESCE(created_at, '') > COALESCE(?, '')))""",
+                      (a["id"], a["as_of"], a["as_of"], a.get("updated_at"))).fetchone()[0]
+    flows -= cards
     debt = 0.0
     for d in debt_rows():
         if d.get("account_id") == a["id"] and d["date"] > a["as_of"] and d["step"] != "vazgecildi":
