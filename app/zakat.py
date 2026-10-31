@@ -314,7 +314,9 @@ def holy(today: date | None = None) -> dict:
 
 
 def _tl0(x: float) -> str:
-    return f"{x:,.0f}".replace(",", ".")
+    from app.money import tl
+
+    return tl(x, decimals=0)
 
 
 def holy_insights(today: date | None = None) -> list[dict]:
@@ -322,7 +324,7 @@ def holy_insights(today: date | None = None) -> list[dict]:
     h = holy(today)
     d = {x["key"]: x for x in h["days"]}
     f = h["fitre"]
-    fitre = (f"{f['people']} kişi × {_tl0(f['amount'])} ₺ = <b>{_tl0(f['total'])} ₺</b>" if f["amount"]
+    fitre = (f"{f['people']} kişi × {_tl0(f['amount'])} = <b>{_tl0(f['total'])}</b>" if f["amount"]
              else "Diyanet'in açıkladığı kişi başı tutarı Zekât → Sadaka'da gir")
     out = []
     if h["in_ramadan"]:
@@ -342,7 +344,7 @@ def holy_reminders(today: date) -> list[str]:
     h = holy(today)
     d = {x["key"]: x for x in h["days"]}
     f = h["fitre"]
-    fitre = f"{f['people']} kişi × {_tl0(f['amount'])} ₺ = <b>{_tl0(f['total'])} ₺</b>" if f["amount"] else "tutarı Zekât → Sadaka'da gir"
+    fitre = f"{f['people']} kişi × {_tl0(f['amount'])} = <b>{_tl0(f['total'])}</b>" if f["amount"] else "tutarı Zekât → Sadaka'da gir"
     msgs = []
     if d["ramazan"]["days_left"] in (30, 7):
         msgs.append(f"🌙 <b>Ramazan'a {d['ramazan']['days_left']} gün</b> (≈ {d['ramazan']['date'][8:10]}.{d['ramazan']['date'][5:7]}) · fitre: {fitre}")
@@ -810,23 +812,22 @@ def reminders(today: date) -> list[str]:
     except Exception:  # noqa: BLE001 - fiyat/hesap hatası diğer hatırlatmaları engellemesin
         log.exception("zekât hesabı")
         return msgs
-    def tl(x: float) -> str:
-        return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    from app.money import tl
 
     for p in data["people"]:
         ck = p.get("check")
         if ck and ck["days_left"] in (7, 0):
             when = "BUGÜN" if ck["days_left"] == 0 else "7 gün sonra"
             msgs.append(f"🌙 <b>Zekât kontrolü</b> · {p['name']}: {date.fromisoformat(ck['date']):%d.%m.%Y} ({ck['hijri']}) — {when}\n"
-                        f"Bugünkü toplamla zekât {tl(ck['zakat_now'])} TL, son bir yılda ödenen {tl(ck['paid'])} TL → "
-                        f"fark: <b>{tl(ck['difference'])} TL</b>")
+                        f"Bugünkü toplamla zekât {tl(ck['zakat_now'])}, son bir yılda ödenen {tl(ck['paid'])} → "
+                        f"fark: <b>{tl(ck['difference'])}</b>")
         h = p["hawl"]
         if not h or h["days_left"] not in (7, 0) or h["remaining"] <= 0:
             continue
         when = "BUGÜN doluyor" if h["days_left"] == 0 else "7 gün kaldı"
-        amount = f"{h['remaining']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        amount = tl(h["remaining"])
         msgs.append(f"🌙 <b>Zekât</b> · {p['name']}: yıl {date.fromisoformat(h['due']):%d.%m.%Y} ({h['due_hijri']}) — {when}\n"
-                    f"Güncel hesap: <b>{amount} TL</b> ödenecek")
+                    f"Güncel hesap: <b>{amount}</b> ödenecek")
     return msgs
 
 

@@ -118,8 +118,8 @@ async def _limit_error(request: Request, exc: limits.LimitError):
 
 
 def _tl_tr(x: float) -> str:
-    """Hata metinleri için: 1.234,50 TL."""
-    return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " TL"
+    """Hata metinleri için: ₺1.234,50 (money.tl, istemcilerle aynı biçim)."""
+    return money.tl(x)
 
 
 def client_ip(request: Request) -> str:
@@ -1981,9 +1981,9 @@ def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> d
         if d >= acc["as_of"]:  # daha eski döküm bakiyeyi değiştirmez
             change = {"account": acc["name"], "current": round(cur, 2), "new": round(new, 2), "date": d}
             if money.is_zero(new) and abs(cur) >= 1000:
-                warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → 0 olacak. Belge doğru mu?")
+                warnings.append(f"{acc['name']} bakiyesi {money.tl(cur)} → ₺0 olacak. Belge doğru mu?")
             elif abs(new - cur) > max(abs(cur) * 0.5, 20000):
-                warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → {new:,.2f} ₺ olacak (büyük değişiklik). "
+                warnings.append(f"{acc['name']} bakiyesi {money.tl(cur)} → {money.tl(new)} olacak (büyük değişiklik). "
                                 "Arada yüklenmemiş bir dönem ya da yanlış belge olabilir.")
     return {"balance_change": change, "checks": warnings}
 
@@ -3306,7 +3306,7 @@ def patch_debt(did: int, body: DebtPatch):
         with db.connect() as c:
             paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (did,)).fetchone()[0]
         if paid and data["amount"] < paid - 1e-9:
-            raise HTTPException(422, f"Bu kaydın {_tl_tr(paid)}'si ödenmiş; tutar bundan az olamaz")
+            raise HTTPException(422, f"Bu kayıttan {_tl_tr(paid)} ödenmiş; tutar bundan az olamaz")
     for k in ("debt_date", "due_date"):
         if data.get(k):
             data[k] = data[k].isoformat()
@@ -3559,7 +3559,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
 
                     text = next(t for t in (_try_text(data, pw) for pw in [None, *tried]) if t)
                     d = dekont.import_text(text)
-                    msg = f"Dekont: {d['amount']:,.2f} TL {d['kind']}" + (" (zaten vardı)" if d["status"] == "duplicate" else "")
+                    msg = f"Dekont: {money.tl(d['amount'])} {d['kind']}" + (" (zaten vardı)" if d["status"] == "duplicate" else "")
                     if d["status"] not in ("duplicate", "updated"):
                         doc_reads.charge(data)
                 else:  # handle_pdf yeni belgeyi kendisi sayar

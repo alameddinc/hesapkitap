@@ -53,8 +53,9 @@ def _exact(a: float, b: float, d: int) -> bool:
 
 
 def _tl(x: float) -> str:
-    s = f"{abs(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return "₺" + (s[:-3] if s.endswith(",00") else s)
+    from app import money
+
+    return money.tl(abs(x), trim=True)
 
 
 def _dm(d: str) -> str:

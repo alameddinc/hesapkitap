@@ -86,7 +86,7 @@ def test_balance_check_warns_on_suspicious_changes(tmpdb):
     ok = _balance_check([row("2026-10-05", 125990), row("2026-10-06", 125980)], "Halkbank")
     assert ok["checks"] == [] and ok["balance_change"]["new"] == 125980
     zero = _balance_check([row("2026-10-05", 10), row("2026-10-06", 0)], "Halkbank")
-    assert any("→ 0" in c for c in zero["checks"])
+    assert any("→ ₺0" in c for c in zero["checks"])
     jump = _balance_check([row("2026-10-05", 300000), row("2026-10-06", 400000)], "Halkbank")
     assert any("büyük değişiklik" in c for c in jump["checks"])
     one = _balance_check([row("2026-10-05", 125990)], "Halkbank")

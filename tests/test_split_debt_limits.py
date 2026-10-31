@@ -18,7 +18,7 @@ def _rows(month="2026-10"):
 def test_patch_amount_below_splits_is_422(client, tmpdb):
     eid = _split_entry(client)
     r = client.patch(f"/api/entries/{eid}", json={"amount": 800})
-    assert r.status_code == 422 and "900,00 TL" in r.json()["detail"] and "bölmeyi düzelt" in r.json()["detail"]
+    assert r.status_code == 422 and "₺900,00" in r.json()["detail"] and "bölmeyi düzelt" in r.json()["detail"]
     assert client.patch(f"/api/entries/{eid}", json={"amount": 900}).status_code == 200
 
 
@@ -85,7 +85,7 @@ def test_debt_amount_not_below_paid(client, tmpdb):
     did = _debt(client)
     client.post(f"/api/debts/{did}/pay", json={"amount": 300, "paid_at": "2026-10-05"})
     r = client.patch(f"/api/debts/{did}", json={"amount": 200})
-    assert r.status_code == 422 and "300,00 TL" in r.json()["detail"]
+    assert r.status_code == 422 and "₺300,00" in r.json()["detail"]
     assert client.patch(f"/api/debts/{did}", json={"amount": 300}).status_code == 200
 
 

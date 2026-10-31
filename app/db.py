@@ -1462,8 +1462,7 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
             c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
             out = {"card_payment_id": dokum["id"], "linked": True, "link": "dokum"}
             if money.ne(dokum["amount"], amount):
-                tl = lambda v: f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")  # noqa: E731
-                out["warning"] = (f"Dökümdeki ödeme {tl(dokum['amount'])} TL ({dokum['pay_date']}); ekstreye {tl(amount)} TL "
+                out["warning"] = (f"Dökümdeki ödeme {money.tl(dokum['amount'])} ({dokum['pay_date']}); ekstreye {money.tl(amount)} "
                                   "yazıldı, hesap hareketi değişmedi")
             return out
         if account_id is _KEEP:
@@ -3251,7 +3250,7 @@ def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual")
             if p.get("person"):
                 o = old_debts.get(_name_key(p["person"]))
                 if o and o["paid_amount"] and money.lt(p["amount"], o["paid_amount"]):
-                    raise ValueError(f"{p['person']} payının {o['paid_amount']:.2f} TL'si tahsil edilmiş; daha az olamaz")
+                    raise ValueError(f"{p['person']} payından {money.tl(o['paid_amount'])} tahsil edilmiş; daha az olamaz")
                 if o:
                     keep.add(o["debt_id"])
                     p["debt_id"] = o["debt_id"]

@@ -19,7 +19,7 @@ STATEMENT_LATE_DAYS = 3        # kesimden kaç gün sonra "ekstreyi yükle" deni
 
 
 def _tl(x: float) -> str:
-    return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
+    return money.tl(x)
 
 
 # ---------------------------------------------------------------- yedek
