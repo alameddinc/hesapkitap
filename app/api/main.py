@@ -772,6 +772,7 @@ def reset_password(body: ResetIn, request: Request, response: Response):
         auth.record_fail(ip)
         raise HTTPException(400, "Kod yanlış ya da süresi dolmuş")
     auth.set_password(u["id"], body.password)
+    reset.notify_changed(u)
     from app import email_verify
 
     email_verify.mark_verified(u["id"])  # sıfırlama kodu da e-postanın sahibini kanıtlar
@@ -1021,6 +1022,9 @@ def admin_reset_password(uid: int):
         raise HTTPException(404, "Kullanıcı yok")
     temp = auth.temp_password()
     auth.set_password(uid, temp, must_change=True)
+    from app import reset
+
+    reset.notify_changed(u, by_admin=True)  # kullanıcı yöneticinin sıfırladığını bilsin (Y4)
     return {"temp_password": temp}
 
 
@@ -3937,6 +3941,9 @@ def book_reset_member_password(uid: int):
         raise HTTPException(404, "Üye yok")
     temp = auth.temp_password()
     auth.set_password(uid, temp, must_change=True)
+    from app import reset
+
+    reset.notify_changed(m, by_admin=True)
     return {"temp_password": temp}
 
 

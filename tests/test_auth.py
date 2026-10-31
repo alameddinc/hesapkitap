@@ -151,3 +151,11 @@ def test_users_cannot_see_each_others_data(authed, tmpdb):
     system.update_user(ayse["id"], disabled=1)
     assert b.get("/api/meta").status_code == 401
     assert admin["role"] == "admin"
+
+
+def test_hosted_single_admin_needs_username(authed, monkeypatch):
+    from app import auth
+
+    monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
+    auth.create_admin("admin@ornek.com", "yonetici-sifre-1")
+    assert authed.post("/api/auth/login", json={"password": "yonetici-sifre-1"}).status_code == 401

@@ -23,6 +23,7 @@ from app import mailer, plans, system
 CODE_TTL = 30 * 60
 MAX_TRIES = 5
 RESEND_GAP = 60
+DAILY_CODES = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS email_codes (
@@ -74,6 +75,12 @@ def send_code(u: dict) -> bool:
         row = c.execute("SELECT sent_at FROM email_codes WHERE user_id = ?", (u["id"],)).fetchone()
         if row and now - row[0] < RESEND_GAP:
             return False
+        from app import reset
+
+        c.executescript(reset.SCHEMA)
+        if reset.daily_count(c, u["id"], "verify_code") >= DAILY_CODES:  # hesap başı günlük posta tavanı (O3)
+            return False
+        reset.bump(c, u["id"], "verify_code")
         code = f"{secrets.randbelow(1_000_000):06d}"
         c.execute("INSERT OR REPLACE INTO email_codes (user_id, code_hash, expires, tries, sent_at) VALUES (?, ?, ?, 0, ?)",
                   (u["id"], _digest(u["id"], code), now + CODE_TTL, now))
