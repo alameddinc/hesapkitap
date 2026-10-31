@@ -151,8 +151,16 @@ def run_wallet_loads(today: date) -> int:
     return db.auto_load_wallets(today)
 
 
-JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads)]
-MAIN_ONLY = {"remind"}  # Telegram'a yazan işler sadece yöneticinin alanında
+def run_session_cleanup(today: date) -> int:
+    """Sistem veritabanı: iptal edilmiş ve çok eski oturum kayıtları (app/sessions.py)."""
+    from app import sessions
+
+    return sessions.cleanup()
+
+
+JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads),
+        ("sessions", 3, run_session_cleanup)]
+MAIN_ONLY = {"remind", "sessions"}  # Telegram'a yazan ve sistem veritabanına bakan işler yalnız yöneticinin alanında
 
 
 def due_jobs(now: datetime) -> list[tuple[str, callable]]:
