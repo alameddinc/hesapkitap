@@ -875,6 +875,10 @@ def list_statements() -> list[dict]:
     with connect() as c:
         out = book.filter_statements(rows(c.execute(
             """SELECT s.*, substr(s.period_end, 1, 7) AS period, COUNT(t.id) AS txn_count,
+                      (SELECT cp.account_id FROM card_payments cp WHERE cp.statement_id = s.id
+                       ORDER BY cp.import_hash IS NULL LIMIT 1) AS paid_account_id,
+                      (SELECT CASE WHEN cp.import_hash IS NULL THEN 'elle' ELSE 'dokum' END FROM card_payments cp
+                       WHERE cp.statement_id = s.id ORDER BY cp.import_hash IS NULL LIMIT 1) AS paid_link,
                       ROUND(COALESCE(SUM(CASE WHEN t.txn_type = 'faiz_ucret' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
                           AS fee_txns,
                       ROUND(COALESCE(SUM(CASE WHEN t.txn_type <> 'odeme' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
@@ -1359,43 +1363,69 @@ def reassign_statement_payments(apply: bool = True) -> dict:
     return {"marked": marked, "cleared": cleared, "changed": changed}
 
 
-def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, account_id: int | None = None) -> dict:
+_KEEP = object()  # mark_statement_paid: account_id hiç verilmedi (mevcut bağlı hesabı koru)
+
+
+def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, account_id=_KEEP) -> dict:
     """Kart ekstresi ödendi. Gider eklenmez: kart harcamaları zaten ekstreden sayılıyor.
 
     account_id (banka/nakit) verilirse ödeme o hesaptan çıkan bir kart ödemesi kaydıdır (card_payments; gider değil,
     hesabın bakiyesi düşer). Aynı hesapta, aynı tutarda (±0,01), ±3 gün içinde dökümden gelmiş bir kart ödemesi zaten
     varsa yeni kayıt açılmaz, o bağlanır; döküm sonradan gelirse elle girilen kayıt dökümün satırı olur (import_bank_rows).
+
+    Zaten ödenmiş ekstrede (düzeltme):
+      account_id verilmedi (_KEEP) → bağlı elle kaydın hesabı korunur, tutarı/tarihi yeni değerlere güncellenir;
+      account_id None → bağlı elle kayıt silinir (bakiye geri gelir);
+      account_id X → elle kayıt X hesabına taşınır ve güncellenir (yoksa açılır).
+    Dökümden gelmiş bağlı kayda hiçbir durumda tutar/tarih yazılmaz; tutarı farklıysa 'warning' döner.
     amount None: ödeme geri alınır — elle girilmiş bağlı kayıt silinir, dökümden gelmişse yalnız bağ kopar.
-    Dönüş: {card_payment_id, linked} (hesapsız ödemede card_payment_id None)."""
+    Dönüş: {card_payment_id, linked (dökümden gelen kayda bağlı), link: 'elle'|'dokum'|None, warning?}."""
     with connect() as c:
         if amount is None:
             c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
             c.execute("UPDATE card_payments SET statement_id = NULL WHERE statement_id = ?", (sid,))
             # kullanıcı geri aldı: otomatik eşleme bu ekstreyi yeniden işaretlemez
             c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL, paid_source = 'elle' WHERE id = ?", (sid,))
-            return {"card_payment_id": None, "linked": False}
+            return {"card_payment_id": None, "linked": False, "link": None}
         c.execute("UPDATE statements SET paid_amount = ?, paid_at = ?, paid_source = 'elle' WHERE id = ?", (amount, paid_at, sid))
-        if not account_id:
-            return {"card_payment_id": None, "linked": False}
+        manual = c.execute("SELECT * FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,)).fetchone()
+        dokum = c.execute("SELECT * FROM card_payments WHERE statement_id = ? AND import_hash IS NOT NULL", (sid,)).fetchone()
+        if dokum:  # dökümün satırı gerçektir: ona yazılmaz; elle kopya varsa (olmamalı) silinir
+            c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
+            out = {"card_payment_id": dokum["id"], "linked": True, "link": "dokum"}
+            if abs(dokum["amount"] - amount) >= 0.01:
+                tl = lambda v: f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")  # noqa: E731
+                out["warning"] = (f"Dökümdeki ödeme {tl(dokum['amount'])} TL ({dokum['pay_date']}); ekstreye {tl(amount)} TL "
+                                  "yazıldı, hesap hareketi değişmedi")
+            return out
+        if account_id is _KEEP:
+            if not manual:
+                return {"card_payment_id": None, "linked": False, "link": None}
+            c.execute("UPDATE card_payments SET amount = ?, pay_date = ? WHERE id = ?", (amount, paid_at, manual["id"]))
+            return {"card_payment_id": manual["id"], "linked": False, "link": "elle"}
+        if account_id is None:
+            c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
+            return {"card_payment_id": None, "linked": False, "link": None}
         acc = c.execute("SELECT id, name FROM accounts WHERE id = ? AND kind IN ('banka', 'nakit')", (account_id,)).fetchone()
         if not acc:
             raise ValueError("Hesap bulunamadı (banka ya da nakit olmalı)")
+        if manual:
+            c.execute("UPDATE card_payments SET amount = ?, pay_date = ?, account_id = ?, account = ? WHERE id = ?",
+                      (amount, paid_at, account_id, acc["name"], manual["id"]))
+            return {"card_payment_id": manual["id"], "linked": False, "link": "elle"}
         st = c.execute("SELECT bank, card_no FROM statements WHERE id = ?", (sid,)).fetchone()
-        # önceki elle ödeme kaydı (tutar/tarih/hesap değişti): yenisiyle değişir
-        c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
-        c.execute("UPDATE card_payments SET statement_id = NULL WHERE statement_id = ?", (sid,))
         found = c.execute(
             "SELECT id FROM card_payments WHERE import_hash IS NOT NULL AND statement_id IS NULL AND account_id = ? "
             "AND ABS(amount - ?) < 0.01 AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') "
             "ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1", (account_id, amount, paid_at, paid_at, paid_at)).fetchone()
         if found:
             c.execute("UPDATE card_payments SET statement_id = ? WHERE id = ?", (sid, found["id"]))
-            return {"card_payment_id": found["id"], "linked": True}
+            return {"card_payment_id": found["id"], "linked": True, "link": "dokum"}
         cid = c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, description, account_id, "
                         "statement_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
                         (paid_at, amount, (st["card_no"] or "")[-4:] or None, acc["name"],
                          f"Kart ödemesi · {st['bank']} •••• {(st['card_no'] or '')[-4:]}", account_id, sid)).lastrowid
-        return {"card_payment_id": cid, "linked": False}
+        return {"card_payment_id": cid, "linked": False, "link": "elle"}
 
 
 BILL_FIELDS = ("provider", "description", "amount", "due_date", "category", "note", "file_name")

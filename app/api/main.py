@@ -3695,12 +3695,14 @@ class StatementPayIn(PayIn):
 
 @app.post("/api/statements/{sid}/pay")
 def pay_statement(sid: int, body: StatementPayIn):
-    """Ekstre ödendi. account_id verilirse o hesaptan çıkan kart ödemesi kaydı (gider değil, bakiye düşer); dökümde aynı
-    ödeme gelince birleşir. Dönüş: {ok, card_payment_id, linked} (linked: dökümdeki mevcut ödemeye bağlandı)."""
+    """Ekstre ödendi / ödemeyi düzelt. account_id: X → o hesaptan çıkan kart ödemesi kaydı (gider değil, bakiye düşer);
+    null → bağlı elle kayıt kaldırılır; anahtar yok → bağlı elle kaydın hesabı korunur, tutar/tarih güncellenir. Dökümden
+    gelen kayda yazılmaz (tutar farklıysa warning). Dönüş: {ok, card_payment_id, linked, link, warning?}."""
     if not any(x["id"] == sid for x in db.list_statements()):
         raise HTTPException(404, "Ekstre bulunamadı")
+    acc = body.account_id if "account_id" in body.model_fields_set else db._KEEP  # anahtar yok: bağlı hesabı koru
     try:
-        r = db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat(), body.account_id)
+        r = db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat(), acc)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     return {"ok": True, **r}
