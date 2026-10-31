@@ -175,8 +175,12 @@ export interface Statement {
   paid_at?: string | null;
   /** kullanıcı "rakamlar doğru" dedi (POST /api/statements/{id}/confirm) */
   confirmed_at?: string | null;
-  /** okunan işlemler ekstre özetiyle tutmuyor ve onay yok */
+  /** okunan işlemler ya da denklem ekstre özetiyle tutmuyor ve onay yok (sunucu) */
   needs_check?: boolean;
+  /** faiz ve ücret: true harcamaların içinde, false ayrı satır, null faiz yok / hesaplanamaz (sunucu) */
+  fees_included?: boolean | null;
+  /** denklem farkı: yeni borç − (önceki − ödemeler + harcamalar [+ faiz]); null hesaplanamaz */
+  equation_diff?: number | null;
 }
 
 export interface Summary {
