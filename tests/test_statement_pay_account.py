@@ -68,7 +68,51 @@ def test_undo_deletes_manual_payment_and_restores_balance(client, tmpdb):
 def test_without_account_unchanged_and_bad_account(client, tmpdb):
     aid, sid = _setup(client, tmpdb)
     r = client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": "2026-10-16"}).json()
-    assert r == {"ok": True, "card_payment_id": None, "linked": False} and _cps(tmpdb) == []
+    assert r == {"ok": True, "card_payment_id": None, "linked": False, "link": None} and _cps(tmpdb) == []
     assert _current(client, aid) == 50000
     assert client.post(f"/api/statements/{sid}/pay", json={"amount": 1, "paid_at": "2026-10-16", "account_id": 999}).status_code == 422
     assert client.post("/api/statements/999/pay", json={"amount": 1, "paid_at": "2026-10-16"}).status_code == 404
+
+
+
+def _st(client, sid):
+    return next(s for s in client.get("/api/statements").json() if s["id"] == sid)
+
+
+def test_correction_amount_keeps_account_and_fixes_balance(client, tmpdb):
+    aid, sid = _setup(client, tmpdb)
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": "2026-10-16", "account_id": aid})
+    s = _st(client, sid)
+    assert s["paid_account_id"] == aid and s["paid_link"] == "elle"
+    # account_id anahtarı yok: hesap korunur, tutar/tarih güncellenir (eski tutarla kalmaz)
+    r = client.post(f"/api/statements/{sid}/pay", json={"amount": 10000, "paid_at": "2026-10-18"}).json()
+    assert r["link"] == "elle" and _current(client, aid) == 40000
+    cps = _cps(tmpdb)
+    assert len(cps) == 1 and cps[0]["amount"] == 10000 and cps[0]["pay_date"] == "2026-10-18" and cps[0]["account_id"] == aid
+
+
+def test_correction_move_account_and_remove_with_null(client, tmpdb):
+    aid, sid = _setup(client, tmpdb)
+    client.post("/api/accounts", json={"name": "Cüzdan", "kind": "nakit", "balance": 3000, "as_of": "2026-10-01"})
+    cash = next(a["id"] for a in client.get("/api/accounts").json()["accounts"] if a["name"] == "Cüzdan")
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 2000, "paid_at": "2026-10-16", "account_id": aid})
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 2000, "paid_at": "2026-10-16", "account_id": cash})
+    assert _current(client, aid) == 50000 and _current(client, cash) == 1000 and len(_cps(tmpdb)) == 1
+    assert _st(client, sid)["paid_account_id"] == cash
+    r = client.post(f"/api/statements/{sid}/pay", json={"amount": 2000, "paid_at": "2026-10-16", "account_id": None}).json()
+    assert r["link"] is None and _cps(tmpdb) == [] and _current(client, cash) == 3000
+    s = _st(client, sid)
+    assert s["paid_amount"] == 2000 and s["paid_account_id"] is None and s["paid_link"] is None
+
+
+def test_correction_never_writes_to_statement_row(client, tmpdb):
+    aid, sid = _setup(client, tmpdb)
+    _import(tmpdb, aid)
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": "2026-10-16", "account_id": aid})
+    assert _st(client, sid)["paid_link"] == "dokum"
+    for body in ({"amount": 11000, "paid_at": "2026-10-20"}, {"amount": 11000, "paid_at": "2026-10-20", "account_id": None}):
+        r = client.post(f"/api/statements/{sid}/pay", json=body).json()
+        assert r["link"] == "dokum" and "12.500" in r["warning"].replace(",", ".")
+        cps = _cps(tmpdb)
+        assert len(cps) == 1 and cps[0]["amount"] == 12500 and cps[0]["pay_date"] == "2026-10-17"
+        assert _st(client, sid)["paid_amount"] == 11000 and _current(client, aid) == 37500
