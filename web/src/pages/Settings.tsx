@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import Sessions from "../components/Sessions";
-import { errorText, send } from "../lib/apiError";
+import { call, errorText, send } from "../lib/apiError";
 import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send } from "lucide-react";
 import { useMeta } from "../components/hooks";
 import { periodRange } from "../components/MonthPicker";
@@ -53,9 +53,7 @@ function KeyRow({ c }: { c: ConfigItem }) {
   const ui = useUI();
   const [value, setValue] = useState("");
   const [shown, setShown] = useState<string | null>(null);
-  const save = useSave((v: string | null) => fetch("/api/settings/config", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: c.name, value: v }),
-  }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail); }), () => { setValue(""); ui.toast("Kaydedildi"); });
+  const save = useSave((v: string | null) => send("/api/settings/config", { method: "PUT", json: { name: c.name, value: v } }), () => { setValue(""); ui.toast("Kaydedildi"); });
   const test = useSave(() => post<{ detail: string }>(`/api/settings/config/test/${c.name}`), (r) => ui.toast(r.detail));
   const gen = useSave(() => post<{ passphrase: string }>("/api/settings/config/generate-backup-passphrase"), (r) => setShown(r.passphrase));
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
@@ -114,9 +112,8 @@ function CycleForm() {
   const cur = meta.data?.cycle_start_day ?? 1;
   const auto = (meta.data?.cycle_mode ?? "auto") === "auto";
   const sug = meta.data?.suggested_cycle_day;
-  const save = useSave((body: { mode: "auto" | "manual"; day?: number }) => fetch("/api/settings/cycle", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }).then((r) => r.json()), (r: { current_month: string; day: number }) => {
+  const save = useSave((body: { mode: "auto" | "manual"; day?: number }) =>
+    send<{ current_month: string; day: number }>("/api/settings/cycle", { method: "PUT", json: body }), (r) => {
     ui.setMonth(r.current_month);
     ui.toast(r.day > 1 ? `Ay dönümü: her ayın ${r.day}. günü` : "Ay dönümü: takvim ayı");
   });
@@ -164,7 +161,8 @@ function PdfPasswords() {
         {q.data.map((p) => (
           <li key={p.index} className="flex items-center justify-between py-2">
             <code>{p.hint}</code>
-            <button className="btn-danger px-2 py-1 text-xs" onClick={() => del.mutate(p.index)}>Sil</button>
+            <button className="btn-danger px-2 py-1 text-xs" disabled={del.isPending}
+              onClick={() => void ask(`${p.hint} şifresi silinsin mi?\n\nBu şifreli PDF'ler yüklenirken şifre yeniden sorulur.`).then((ok) => { if (ok) del.mutate(p.index); })}>Sil</button>
           </li>
         ))}
       </ul>
@@ -215,12 +213,7 @@ interface SettingsStatus {
   last_reminder: string | null;
 }
 
-async function post<T>(url: string): Promise<T> {
-  const r = await fetch(url, { method: "POST" });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-}
+const post = <T,>(url: string) => call<T>("POST", url);
 
 function Step({ n, done, children }: { n: number; done: boolean; children: React.ReactNode }) {
   return (

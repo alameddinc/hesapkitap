@@ -75,7 +75,7 @@ export default function Holdings() {
                   </span>
                 )}
               </span>
-              <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
+              <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
                 onClick={() => void ask(`${i.label} silinsin mi?`).then((ok) => { if (ok) del.mutate(i.id); })}><Trash2 size={13} /></button>
             </span>
           </li>

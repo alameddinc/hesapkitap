@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call as apiCall } from "../lib/apiError";
 import { ChevronDown, Copy, EyeOff, KeyRound, Trash2, Users2 } from "lucide-react";
 import { useState } from "react";
 import { cx, maskText, tsDateTR } from "../format";
@@ -24,12 +24,7 @@ const ROLES: { value: BookRole; label: string; sub: string }[] = [
   { value: "full", label: "Tam yetki", sub: "Ekstre yükler, düzenler, siler. Ayarlar ve üyeler sende kalır." },
 ];
 
-const call = async <T,>(url: string, method = "GET", body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const call = <T,>(url: string, method = "GET", body?: unknown) => apiCall<T>(method, url, body);
 const link = (code: string) => `${window.location.origin}/#/kayit?kod=${code}`;
 const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 const hiddenCount = (r: Rules) => r.hidden_cards.length + r.hidden_accounts.length + r.hidden_pages.length + (r.hide_fees ? 1 : 0);
@@ -112,8 +107,10 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
           onChange={(e) => setRole.mutate(e.target.value as BookRole, onErr)}>
           {ROLES.map((r) => <option key={r.value} value={r.value}>{d.roles?.[r.value] ?? r.label}</option>)}
         </select>
-        <button className="btn-ghost px-2 py-1 text-xs" title="Şifre sıfırla" onClick={() => reset.mutate(undefined, onErr)}><KeyRound size={14} /></button>
-        <button className="btn-danger px-2 py-1 text-xs" title="Çıkar"
+        <button className="btn-ghost px-2 py-1 text-xs" title="Şifre sıfırla" aria-label={`${m.username} için şifre sıfırla`} disabled={reset.isPending}
+          onClick={() => void ask(`${m.username} için şifre sıfırlansın mı?\n\nŞu anki şifresi çalışmaz; ekranda bir kez gösterilecek geçici şifreyi ona iletmen gerekir.`,
+            { confirm: "Şifreyi sıfırla", danger: true, irreversible: false }).then((ok) => { if (ok) reset.mutate(undefined, onErr); })}><KeyRound size={14} /></button>
+        <button className="btn-danger px-2 py-1 text-xs" title="Çıkar" aria-label={`${m.username} üyesini çıkar`} disabled={remove.isPending}
           onClick={() => void ask(`${m.username} ortak defterden çıkarılsın mı? Eklediği kayıtlar defterde kalır.`).then((ok) => { if (ok) remove.mutate(undefined, onErr); })}>
           <Trash2 size={14} /></button>
       </div>

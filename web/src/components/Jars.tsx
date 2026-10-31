@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call, bodyOf, failureText, UNEXPECTED } from "../lib/apiError";
 import { Camera, ChevronDown, Minus, Coins, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
@@ -29,12 +29,7 @@ const sym = (unit: string) => SYM[unit] ?? "adet";
 export const qty = (n: number, s: string) => (s === "gr" || s === "adet" ? `${Number(n.toFixed(3))} ${s}` : `${s}${Number(n.toFixed(2))}`);
 const isUnit = (j?: { unit?: string }) => !!j?.unit && j.unit !== "TRY";
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 function JarForm({ jar, onClose }: { jar?: Jar; onClose: () => void }) {
   const ui = useUI();
@@ -157,9 +152,10 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
       const fd = new FormData();
       fd.append("file", f, f.name);
       const r = await fetch("/api/documents/parse", { method: "POST", body: fd });
-      const d = await r.json();
+      const d = await bodyOf(r) as { total?: number; date?: string } | null;
       if (isQuotaFull(d)) return quotaMsg();
-      if (!r.ok) throw new Error(d.detail ?? "Fiş okunamadı");
+      if (!r.ok) throw new Error(failureText(r.status, d));
+      if (!d) throw new Error(UNEXPECTED);
       if (d.total) setCost(String(d.total));
       if (d.date) setDay(d.date);
       ui.toast(d.total ? `Fişten ${tl(d.total)} okundu; kontrol et` : "Tutar okunamadı; elle yaz");
@@ -340,7 +336,7 @@ export default function Jars() {
                           <button className="btn-ghost p-0.5 text-stone-400 hover:text-blue-600" aria-label="Alımı düzelt"
                             onClick={() => setFix({ jar: j, move: m })}><Pencil size={12} /></button>
                         )}
-                        <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Hareketi sil"
+                        <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Hareketi sil" disabled={delMove.isPending}
                           onClick={() => void ask("Bu hareket silinsin mi?").then((ok) => { if (ok) delMove.mutate(m.id); })}><Trash2 size={12} /></button>
                       </span>
                     </li>
@@ -352,7 +348,7 @@ export default function Jars() {
                   <button className="btn-ghost px-2 py-1" onClick={() => patch.mutate({ id: j.id, body: { closed: !j.closed_at } })}>
                     {j.closed_at ? "Yeniden aç" : "Kapat (hedefe ulaştım / vazgeçtim)"}
                   </button>
-                  <button className="btn-danger px-2 py-1" onClick={() => void ask(`${j.name} ve tüm hareketleri silinsin mi?`).then((ok) => { if (ok) del.mutate(j.id); })}>Sil</button>
+                  <button className="btn-danger px-2 py-1" disabled={del.isPending} onClick={() => void ask(`${j.name} ve tüm hareketleri silinsin mi?`).then((ok) => { if (ok) del.mutate(j.id); })}>Sil</button>
                 </div>
               </div>
             )}

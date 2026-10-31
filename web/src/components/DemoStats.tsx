@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { FlaskConical, Smartphone } from "lucide-react";
 import { useState } from "react";
 import Segmented from "./Segmented";
@@ -25,7 +26,7 @@ const dur = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} dk ${s % 60 ? `${s 
 export default function DemoStats() {
   const [days, setDays] = useState("7");
   const q = useQuery({ queryKey: ["demo-stats", days], retry: false,
-    queryFn: () => fetch(`/api/admin/demo-stats?days=${days}`).then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail); return r.json() as Promise<Stats>; }) });
+    queryFn: () => send<Stats>(`/api/admin/demo-stats?days=${days}`) });
   const s = q.data;
   if (q.error) return <section className="card p-4 text-sm text-red-600">Demo istatistikleri: {(q.error as Error).message}</section>;
   if (!s?.configured) return null;

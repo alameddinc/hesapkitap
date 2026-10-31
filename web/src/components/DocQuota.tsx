@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { bodyOf } from "../lib/apiError";
 import { Crown, FileWarning } from "lucide-react";
 import { useUI } from "../ui";
 import { useMeta } from "./hooks";
@@ -48,7 +49,7 @@ export function useDocQuota() {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["me-ai"], staleTime: 30_000,
-    queryFn: () => fetch("/api/me/ai").then((r) => (r.ok ? r.json() : null) as Promise<AiUsage | null>),
+    queryFn: () => fetch("/api/me/ai").then(async (r) => (r.ok ? await bodyOf(r) : null) as AiUsage | null),
   });
   const d = q.data;
   const docs = d?.unit === "docs" && d.used != null && d.quota != null;

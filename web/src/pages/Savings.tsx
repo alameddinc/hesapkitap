@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { send } from "../lib/apiError";
+import { call, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -47,12 +47,7 @@ interface SavingsData {
   reference_month: string;
 }
 
-const j = async (method: string, url: string, body?: unknown) => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.detail ?? `HTTP ${r.status}`);
-  return d;
-};
+const j = (method: string, url: string, body?: unknown) => call<any>(method, url, body);
 // İşyeri adları normalize edilmiş ASCII (İ/ı → I); Türkçe küçültme "ANTHROPIC"i "anthropıc" yapar
 export const title = (s: string) => s.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
 
@@ -246,7 +241,7 @@ export default function Savings() {
                   <button className="btn-ghost px-2 py-1 text-xs" onClick={() => patchGoal.mutate({ id: g.id, active: !g.active })}>
                     {g.active ? "Durdur" : "Devam"}
                   </button>
-                  <button className="btn-danger p-1.5" aria-label="Sil" onClick={() => void ask("Hedef silinsin mi?").then((ok) => { if (ok) delGoal.mutate(g.id); })}>
+                  <button className="btn-danger p-1.5" aria-label="Sil" disabled={delGoal.isPending} onClick={() => void ask("Hedef silinsin mi?").then((ok) => { if (ok) delGoal.mutate(g.id); })}>
                     <Trash2 size={14} />
                   </button>
                 </div>

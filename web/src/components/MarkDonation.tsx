@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { call as apiCall } from "../lib/apiError";
 import { HeartHandshake } from "lucide-react";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
@@ -8,12 +8,7 @@ export const DONATION_KINDS: Record<string, string> = {
   sadaka: "Sadaka", fitre: "Fitre", fidye: "Fidye", kurban: "Kurban", adak: "Adak", kefaret: "Kefaret", bagis: "Vakıf / dernek bağışı",
 };
 
-const call = async (method: string, url: string, body?: unknown) => {
-  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j;
-};
+const call = (method: string, url: string, body?: unknown) => apiCall<any>(method, url, body);
 
 /** Bir hareketi sadaka/bağış ya da zekât olarak işaretle (zekât → o yılın zekât ödemesi). */
 export default function MarkDonation({ source, id }: { source: "entry" | "card"; id: number }) {

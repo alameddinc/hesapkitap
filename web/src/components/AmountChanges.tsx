@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { call } from "../lib/apiError";
 import { Plus, Trash2, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { monthLabel, parseAmount, tl } from "../format";
@@ -8,12 +9,7 @@ import { useSave } from "./hooks";
 
 interface Change { id: number; from_month: string; amount: number }
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 /** Kira artışı, aidat zammı: o aydan itibaren yeni tutar; geçmiş aylar eski tutarla kalır. */
 export default function AmountChanges({ rid, base }: { rid: number; base: number }) {
@@ -24,7 +20,7 @@ export default function AmountChanges({ rid, base }: { rid: number; base: number
   const [amount, setAmount] = useState("");
   const add = useSave(() => json("POST", `/api/recurring/${rid}/changes`, { from_month: month, amount: parseAmount(amount) }), () => {
     setOpen(false); setAmount(""); ui.toast("Tutar değişikliği kaydedildi");
-  });
+  }, { inline: true });
   const del = useSave((id: number) => json("DELETE", `/api/recurring-changes/${id}`));
   const items = list.data ?? [];
   return (
@@ -43,7 +39,8 @@ export default function AmountChanges({ rid, base }: { rid: number; base: number
             <li key={c.id} className="flex items-center justify-between gap-2 py-0.5">
               <span>{monthLabel(c.from_month, true)}’den itibaren</span>
               <span className="flex items-center gap-1 tabular-nums">{tl(c.amount)}
-                <button type="button" className="btn-ghost p-1" aria-label="Sil" onClick={() => del.mutate(c.id)}><Trash2 size={13} /></button>
+                <button type="button" className="btn-ghost p-1" aria-label="Sil" disabled={del.isPending}
+                  onClick={() => void ask("Tutar değişikliği silinsin mi?\n\nO aydan sonraki aylar önceki tutarla planlanır.").then((ok) => { if (ok) del.mutate(c.id); })}><Trash2 size={13} /></button>
               </span>
             </li>
           ))}

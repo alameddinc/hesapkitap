@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { call } from "../lib/apiError";
 import { Plus, Trash2, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { addMonths, cx, monthLabel, parseAmount, tl } from "../format";
@@ -33,12 +34,7 @@ interface Schedule {
   months: { month: number; gross: number; net: number; income_tax: number; bracket_rate: number | null }[];
 }
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 /** Brüt maaşta zam / iş değişikliği: o dönemden itibaren yeni brüt; geçmiş aylar eski brütle kalır. */
 export default function SalaryChanges({ rid }: { rid: number }) {
@@ -100,8 +96,8 @@ export default function SalaryChanges({ rid }: { rid: number }) {
                 {c.employer ? ` · ${c.employer}` : ""}
               </span>
             </span>
-            <button type="button" className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
-              onClick={() => del.mutate(c.id)}><Trash2 size={14} /></button>
+            <button type="button" className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
+              onClick={() => void ask("Maaş değişikliği silinsin mi?\n\nO aydan sonraki aylar önceki brütle hesaplanır.").then((ok) => { if (ok) del.mutate(c.id); })}><Trash2 size={14} /></button>
           </li>
         ))}
       </ul>

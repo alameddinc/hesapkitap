@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText, send } from "../lib/apiError";
+import { call, send } from "../lib/apiError";
 import { Plus, Scissors, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cx, parseAmount, tl } from "../format";
@@ -15,12 +15,7 @@ interface Saved {
 const shareStatus = (p: Saved) => !p.person ? "" : p.debt_settled_at ? " · ödedi ✓"
   : p.debt_remaining != null && p.debt_remaining < p.amount - 0.005 ? ` · kalan ${tl(p.debt_remaining)}` : " · bekliyor"
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 /** Harcamayı alt kalemlere böl: ör. 520 ₺ market fişinin 220 ₺'si Sigara. Ana kayıt kalan tutarla kendi kategorisinde kalır. */
 export default function SplitEditor({ target, id, total, onDone }: {

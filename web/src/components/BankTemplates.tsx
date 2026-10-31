@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { call as apiCall } from "../lib/apiError";
 import { Check, ExternalLink, Layers, RefreshCw, X } from "lucide-react";
 import { tsDateTR } from "../format";
 import { useUI } from "../ui";
@@ -11,12 +11,7 @@ interface Tpl { id: number; bank: string; spec: Spec; source: "learned" | "commu
 interface Sub { id: number; bank: string; spec: Spec; count: number; status: "bekliyor" | "onaylandi" | "reddedildi"; received_at: string }
 interface Data { templates: Tpl[]; sharing: boolean; is_hub: boolean; submissions: Sub[] }
 
-const call = async (method: string, url: string, body?: unknown) => {
-  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j;
-};
+const call = (method: string, url: string, body?: unknown) => apiCall<any>(method, url, body);
 const slug = (s: string) => s.toLowerCase().replace(/ı/g, "i").replace(/ş/g, "s").replace(/ğ/g, "g").replace(/ü/g, "u")
   .replace(/ö/g, "o").replace(/ç/g, "c").replace(/[^a-z0-9]+/g, "-");
 // GitHub'da dosya oluşturma ekranı (önceden doldurulmuş): onaylanan şablon depoya eklenir, tüm sunucular çeker

@@ -1,4 +1,5 @@
 import { Camera, FileText, Loader2, Minus, Plus, Repeat } from "lucide-react";
+import { bodyOf, failureText, UNEXPECTED } from "../lib/apiError";
 import type { BillDraft } from "../api";
 import { useRef, useState } from "react";
 import { useMeta, useDemo } from "./hooks";
@@ -139,12 +140,15 @@ export default function AddSheet({ onClose, onPick, onBill }: {
 
   /** Okunan belge: faturaysa fatura formu, fişse gider formu (taslakla). */
   async function handle(res: Response, photo?: Blob) {
-    const r = (await res.json()) as DocResult & { detail?: string };
-    if (isQuotaFull(r)) {
-      setFull(r);
+    // vekilin HTML hata sayfası (413/504) "Unexpected token '<'" olarak görünmesin: gövde güvenli okunur
+    const body = await bodyOf(res);
+    if (isQuotaFull(body)) {
+      setFull(body);
       return;
     }
-    if (!res.ok) throw new Error(r.detail ?? "Belge okunamadı");
+    if (!res.ok) throw new Error(failureText(res.status, body));
+    if (!body) throw new Error(UNEXPECTED);
+    const r = body as DocResult;
     if (r.type === "bill") {
       onBill({ provider: r.provider, amount: r.amount, due_date: r.due_date, category: r.category,
         description: r.description, file_name: r.file_name, confidence: r.confidence });

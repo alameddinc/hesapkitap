@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call as apiCall } from "../lib/apiError";
 import { Eye, EyeOff, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { dateTR, parseAmount, tlShown } from "../format";
@@ -17,12 +17,7 @@ interface Pending { id: number; source: "entry" | "card"; date: string; descript
 interface Data { items: Item[]; zakat_payments: ZP[]; pending: Pending[]; years: { year: string; sadaka: number; zekat: number }[];
   this_month: number; this_year: number }
 
-const call = async (method: string, url: string, body?: unknown) => {
-  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j;
-};
+const call = (method: string, url: string, body?: unknown) => apiCall<any>(method, url, body);
 const today = () => new Date().toISOString().slice(0, 10);
 // "Sağ elin verdiğini sol el bilmesin": tutarlar bu sayfada varsayılan gizli (cihaz ayarı değil, her açılışta)
 const MASK = "••••";
@@ -139,7 +134,7 @@ export default function Sadaka() {
               <li key={x.key} className="flex items-center justify-between gap-2 py-2">
                 <span className="min-w-0">{dateTR(x.date)} · {x.label}{x.who && <span className="text-xs text-stone-500"> · {x.who}</span>}</span>
                 <span className="flex items-center gap-1 tabular-nums">{m(x.amount)}
-                  {x.id != null && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil"
+                  {x.id != null && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
                     onClick={() => void ask("Kayıt silinsin mi?").then((ok) => { if (ok) del.mutate(x.id!); })}><Trash2 size={12} /></button>}
                 </span>
               </li>

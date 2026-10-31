@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { Check, ChevronDown, ChevronRight, Plus, Zap } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
@@ -25,10 +26,7 @@ export interface BillSeries {
 }
 interface BillSummary { providers: BillSeries[]; categories: BillSeries[]; window: { start: string; end: string } }
 
-const fetchSummary = (until: string) => fetch(`/api/bills/summary?months=24&until=${until}`).then(async (r) => {
-  if (!r.ok) throw new Error("Fatura özeti alınamadı");
-  return r.json() as Promise<BillSummary>;
-});
+const fetchSummary = (until: string) => send<BillSummary>(`/api/bills/summary?months=24&until=${until}`);
 
 const monthYear = (ym: string) => `${monthLabel(ym)}`;
 const pctTR = (p: number) => `%${Math.abs(p).toLocaleString("tr-TR", { maximumFractionDigits: 1 })}`;

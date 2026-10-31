@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { send as apiSend } from "../lib/apiError";
 import { CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type DocKind, type UploadResult } from "../api";
@@ -63,11 +63,7 @@ export default function Statements() {
   };
 
   const demo = useDemo().data;
-  const sample = useSave((key: string) => fetch(`/api/demo/sample/${key}`, { method: "POST" }).then(async (r) => {
-    const j = await r.json();
-    if (!r.ok) throw new Error(errorText(j, r.status));
-    return j as UploadResult[];
-  }), (res) => setResults(res));
+  const sample = useSave((key: string) => apiSend<UploadResult[]>(`/api/demo/sample/${key}`, { method: "POST" }), (res) => setResults(res));
 
   const send = (files: FileList | null) => {
     if (quota.full) return setFull({});
