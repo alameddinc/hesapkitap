@@ -372,6 +372,12 @@ def _google_enabled() -> bool:
     return social.google_enabled()
 
 
+def _email_unverified(uid) -> bool:
+    from app import email_verify
+
+    return email_verify.unverified(uid)
+
+
 def _reset_enabled() -> bool:
     from app import reset
 
@@ -423,7 +429,8 @@ def auth_status(request: Request):
             "legal": {"terms": os.environ.get("HESAPKITAP_TERMS_URL"), "privacy": os.environ.get("HESAPKITAP_PRIVACY_URL")},
             "password_source": auth.password_source(u) if u else None,
             "delete_grace_days": deletion.grace_days(),  # hesap silinince geri alma süresi
-            "user": {"id": u.get("id"), "username": u["username"], "password_set": not auth.password_unset(u.get("id")), "role": u["role"], "must_change_password": bool(u["must_change_password"]),
+            "user": {"id": u.get("id"), "username": u["username"], "password_set": not auth.password_unset(u.get("id")),
+                     "email_verified": not _email_unverified(u.get("id")), "role": u["role"], "must_change_password": bool(u["must_change_password"]),
                      "subscription": plans.subscription(u)} if u else None}
 
 
@@ -468,6 +475,16 @@ def login(body: LoginIn, request: Request, response: Response):
         auth.record_account_fail(acct)
         raise HTTPException(401, "Kullanıcı adı ya da şifre yanlış" if body.username else "Şifre yanlış")
     auth.clear_account_fails(acct)
+    from app import email_verify
+
+    if email_verify.unverified(u["id"]):  # şifre doğru ama e-posta doğrulanmamış: oturum yok, kod (yeniden) gider
+        try:
+            email_verify.send_code(u)
+        except Exception:  # noqa: BLE001
+            logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
+        return JSONResponse({"detail": "email_unverified", "code": "email_unverified", "verify_required": True,
+                             "email": u["username"], "message": "E-postana gönderdiğimiz kodla hesabını doğrula."},
+                            status_code=403)
     if u.get("deleted_at"):
         return _pending_deletion(u)
     _start_session(request, response, u)
@@ -581,6 +598,17 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         raise HTTPException(403, "Bu hesap kapatılmış")
     if u and u.get("deleted_at"):
         return _pending_deletion(u)
+    from app import email_verify
+
+    if u and email_verify.unverified(u["id"]):
+        # şifreyle açılmış ama doğrulanmamış hesap (belki başkası önceden açtı): Google/Apple e-postanın sahibini
+        # kanıtladı. Eski şifre geçersiz, açık oturumlar düşer, hesap doğrulanır; sahibine bilgi gider.
+        system.update_user(u["id"], password_hash=auth._hash(secrets.token_urlsafe(32)))
+        system.put(f"pw_unset:{u['id']}", "1")
+        system.bump_session(u["id"])
+        email_verify.mark_verified(u["id"])
+        email_verify.notify_taken_over(u)
+        u = system.user(u["id"])
     if not u:
         if not plans.open_signup():
             raise HTTPException(403, "Bu e-postayla bir hesap yok")
@@ -656,6 +684,9 @@ def reset_password(body: ResetIn, request: Request, response: Response):
         auth.record_fail(ip)
         raise HTTPException(400, "Kod yanlış ya da süresi dolmuş")
     auth.set_password(u["id"], body.password)
+    from app import email_verify
+
+    email_verify.mark_verified(u["id"])  # sıfırlama kodu da e-postanın sahibini kanıtlar
     if u.get("deleted_at"):  # kodla kimliğini kanıtladı: geri almayı sor (yeni şifre geçerli)
         return _pending_deletion(system.user(u["id"]))
     _start_session(request, response, system.user(u["id"]))
@@ -673,6 +704,10 @@ def register(body: RegisterIn, request: Request, response: Response):
     if not body.code and plans.open_signup():
         if _signup_limited(ip):
             raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
+        from app import email_verify
+
+        if email_verify.required():  # hazır sürüm: e-posta koduyla doğrulanmadan oturum açılmaz (app/email_verify.py)
+            return _register_with_code(body, request, ip)
         try:
             u = auth.create_user(body.username, body.password)
         except ValueError as e:
@@ -694,6 +729,82 @@ def register(body: RegisterIn, request: Request, response: Response):
         raise HTTPException(409, "Davet kodu az önce kullanıldı")
     _record_consent(u["id"], request)
     _start_session(request, response, u)
+    return {"ok": True}
+
+
+def _register_with_code(body: RegisterIn, request: Request, ip: str) -> dict:
+    """Şifreli açık kayıt, e-posta doğrulamalı. Yanıt her durumda aynı (e-postanın kayıtlı olup olmadığı anlaşılmaz):
+    {"ok": true, "verify_required": true, "email"}. Oturum, POST /api/auth/verify-email ile kod girilince açılır."""
+    from app import email_verify
+
+    name = (body.username or "").strip()
+    if "@" not in name:
+        raise HTTPException(422, "E-posta adresini yaz")
+    try:
+        auth._check_strength(body.password)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    pw_hash = auth._hash(body.password)  # her yolda aynı iş: yanıt süresi de bir şey söylemesin
+    u = system.user_by_name(name)
+    try:
+        if u and email_verify.unverified(u["id"]):
+            # doğrulanmamış hesap (belki başkası açtı): yeni şifre, yeni kod; kodu giren (e-postanın sahibi) hesabı alır
+            system.update_user(u["id"], password_hash=pw_hash)
+            system.bump_session(u["id"])
+            email_verify.send_code(u)
+        elif u:
+            email_verify.notify_existing(u)
+        else:
+            u = system.create_user(name, pw_hash)
+            email_verify.mark_unverified(u["id"])
+            _signup_record(ip)
+            _record_consent(u["id"], request)
+            email_verify.send_code(u)
+    except Exception:  # noqa: BLE001 - posta gönderilemese de yanıt aynı (kod yeniden istenebilir)
+        logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
+    return {"ok": True, "verify_required": True, "email": name}
+
+
+class VerifyEmailIn(BaseModel):
+    email: str
+    code: str
+
+
+class EmailIn(BaseModel):
+    email: str
+
+
+@app.post("/api/auth/verify-email")
+def verify_email(body: VerifyEmailIn, request: Request, response: Response):
+    """Kayıttan sonra e-postaya gelen kod: doğruysa hesap doğrulanır ve oturum açılır."""
+    from app import email_verify
+
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    u = email_verify.verify(body.email, body.code)
+    if not u:
+        auth.record_fail(ip)
+        raise HTTPException(400, "Kod yanlış ya da süresi dolmuş; yeni kod iste")
+    u = system.user(u["id"])
+    system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
+    _start_session(request, response, u)
+    return {"ok": True}
+
+
+@app.post("/api/auth/verify-email/resend")
+def verify_email_resend(body: EmailIn, request: Request):
+    """Doğrulama kodunu yeniden gönder. Yanıt her durumda aynı; aynı hesaba dakikada en fazla bir kod."""
+    from app import email_verify
+
+    if auth.rate_limited(client_ip(request)):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    u = system.user_by_name((body.email or "").strip())
+    if u and email_verify.unverified(u["id"]):
+        try:
+            email_verify.send_code(u)
+        except Exception:  # noqa: BLE001
+            logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
     return {"ok": True}
 
 

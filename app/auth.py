@@ -49,6 +49,15 @@ def _hash(pw: str, salt: bytes | None = None) -> str:
     return f"pbkdf2${PBKDF2_ITER}${salt.hex()}${h.hex()}"
 
 
+_DUMMY: list[str] = []
+
+
+def _dummy_hash() -> str:
+    if not _DUMMY:
+        _DUMMY.append(_hash(secrets.token_hex(16)))
+    return _DUMMY[0]
+
+
 def _verify(pw: str, stored: str) -> bool:
     try:
         _, it, salt, h = stored.split("$")
@@ -156,6 +165,7 @@ def login(username: str | None, pw: str) -> dict | None:
     """Kullanıcı adı verilmezse yönetici (eski tek kullanıcılı giriş ekranı ve APP_PASSWORD uyumu)."""
     u = system.user_by_name(username) if username else admin()
     if not u or u["disabled"]:
+        _verify(pw, _dummy_hash())  # var olmayan hesapta da aynı süre: yanıt süresinden hesabın varlığı anlaşılmasın
         return None
     if not u["password_hash"]:
         env = os.environ.get("APP_PASSWORD")
