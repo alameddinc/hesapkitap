@@ -20,13 +20,14 @@ def _invite(owner, role="viewer"):
 
 def test_invite_has_links(owner, monkeypatch):
     inv = _invite(owner)
-    assert inv["link"] == f"http://testserver/#/kayit?kod={inv['code']}"
+    assert inv["link"] == f"http://testserver/davet/{inv['code']}"  # evrensel bağlantı (gerçek yol)
+    assert inv["web_link"] == f"http://testserver/#/kayit?kod={inv['code']}"  # eski biçim
     assert inv["app_link"] == f"hesapkitap://kayit?kod={inv['code']}" and inv["kind"] == "book"
     assert inv["role_label"] == "Sadece görür"
     monkeypatch.setenv("HESAPKITAP_PUBLIC_URL", "https://para.ornek.com/")
     monkeypatch.setenv("HESAPKITAP_APP_SCHEME", "hkdeneme")
     inv2 = owner.get("/api/book").json()["invites"][0]
-    assert inv2["link"].startswith("https://para.ornek.com/#/kayit?kod=") and inv2["app_link"].startswith("hkdeneme://")
+    assert inv2["link"].startswith("https://para.ornek.com/davet/") and inv2["app_link"].startswith("hkdeneme://")
 
 
 def test_invite_check_shows_book_and_role(owner):
@@ -92,3 +93,28 @@ def test_google_login_with_invite_joins_book(owner, monkeypatch):
     assert m.get("/api/book/me").json()["member"] is True
     bad = _new().post("/api/auth/google", json={"id_token": "x", "invite": "YANL-IS00-KOD0"})
     assert bad.status_code == 200  # hesap artık var: davet yok sayılır, girer
+
+
+
+def test_universal_link_files_and_redirect(client, monkeypatch):
+    r = client.get("/.well-known/apple-app-site-association")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    d = r.json()["applinks"]["details"][0]
+    assert d["appIDs"] == ["D78HMKA7Z8.com.alameddinc.hesapkitap"] and d["components"][0]["/"] == "/davet/*"
+    assert client.get("/.well-known/assetlinks.json").status_code == 404  # parmak izi yokken
+    monkeypatch.setenv("HESAPKITAP_ANDROID_SHA256", "aa:bb:cc, DD:EE:FF")
+    a = client.get("/.well-known/assetlinks.json").json()[0]
+    assert a["target"]["package_name"] == "com.alameddinc.hesapkitap"
+    assert a["target"]["sha256_cert_fingerprints"] == ["AA:BB:CC", "DD:EE:FF"]
+    r = client.get("/davet/ab12-cd34-ef56", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/#/kayit?kod=AB12-CD34-EF56"
+    assert client.get("/davet/<script>", follow_redirects=False).headers["location"] == "/#/kayit"
+
+
+def test_universal_link_paths_public_without_login(client, monkeypatch):
+    from app import auth
+
+    monkeypatch.delenv("HESAPKITAP_NO_AUTH", raising=False)
+    auth.create_admin("admin", "yonetici-sifre-1")
+    assert client.get("/.well-known/apple-app-site-association").status_code == 200
+    assert client.get("/davet/AB12-CD34-EF56", follow_redirects=False).status_code == 302
