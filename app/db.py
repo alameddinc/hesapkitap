@@ -2131,7 +2131,8 @@ def own_transfer_to_entry(tid: int, owners: list[str] | None = None) -> int | No
 
 def _raw_note(e: dict) -> str:
     note = e.get("note") or ""
-    return note[len("Hesap hareketi · "):] if note.startswith("Hesap hareketi · ") else (e.get("description") or "")
+    return (note.partition("\n")[0][len("Hesap hareketi · "):] if note.startswith("Hesap hareketi · ")
+            else (e.get("description") or ""))  # yalnız ilk satır: altında kullanıcı notu olabilir (app/rawnote.py)
 
 
 def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:

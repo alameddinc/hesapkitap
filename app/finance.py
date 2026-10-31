@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db, money
+from app import db, money, rawnote
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
@@ -161,6 +161,13 @@ def _card_row(t: dict, states: dict | None = None, aliases: dict | None = None) 
     }
 
 
+def _raw(e: dict) -> str | None:
+    m = e.get("match")
+    if m and m.get("source") == "dokum" and m.get("description"):
+        return m["description"]
+    return rawnote.raw_of(e.get("note"), e.get("description"))
+
+
 def _entry_row(e: dict) -> dict:
     if e.get("debt_id"):  # borç verildi/alındı/ödendi: gelir-gider değil, sadece eldeki para
         return {**_entry_row({**e, "debt_id": None}), "kind": DEBT, "flow": 1 if e["kind"] == INCOME else -1,
@@ -172,6 +179,8 @@ def _entry_row(e: dict) -> dict:
         "amount": e["amount"], "kind": e["kind"], "category": e["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
+        # banka açıklaması (ham metin) ve kullanıcının kendi notu: app/rawnote.py (eşleşmiş elle kayıtta dökümün metni)
+        "raw": _raw(e), "note_user": rawnote.user_note(e["note"]),
         "payment": e["payment"], "linked_txn_id": e["linked_txn_id"], "counterparty": e.get("counterparty"), "location": e.get("location"),
         "wallet_id": e.get("wallet_id"), "account_id": e.get("account_id"), "installments": e.get("installments") or 1,
         "card_last4": e.get("card_last4"), "hidden": bool(e.get("hidden")), "created_by": e.get("created_by"),
