@@ -204,6 +204,27 @@ def repair(apply: bool = False) -> dict:
     report["warnings"] = []
     report.update(duplicates=[], anchors=[], transfer_accounts=[], transfer_balance=[], overlap_skipped=0)
     before = {a["id"]: (a["name"], a["current"]) for a in db.list_accounts()}
+    # kişi adlarının başındaki banka artığı (eski sürüm 'Bank', 'Cumhuriyeti' atmıyordu). İLK adım ve döküm dosyasından
+    # bağımsız: kayıt karşı tarafı, borç defteri ve kişi ayarı doğrudan taranır; elle değiştirilmiş kayıtta da ad
+    # düzelir (ayrıştırma artığı, kullanıcı girişi değil). Aynı kişi varsa birleşir (db.rename_counterparty: kayıtlar,
+    # yalnız "Ad" / "Ad · not" biçimindeki açıklama öneki, borçlar, kişi kategorisi/ayarı); kullanıcının yazdığı başka
+    # açıklama ve notlara dokunulmaz.
+    report["names"] = []
+    with db.connect() as c:
+        names = sorted({n for (n,) in c.execute(
+            "SELECT counterparty FROM entries WHERE counterparty IS NOT NULL UNION SELECT name FROM counterparties "
+            "UNION SELECT person FROM debts") if n})
+    for n in names:
+        new = bank_import.clean_person_name(n)
+        if new and new != n:
+            with db.connect() as c:
+                cnt = c.execute("SELECT COUNT(*) FROM entries WHERE counterparty = ?", (n,)).fetchone()[0]
+                exists = c.execute("SELECT 1 FROM entries WHERE counterparty = ? UNION SELECT 1 FROM counterparties "
+                                   "WHERE name = ? UNION SELECT 1 FROM debts WHERE person = ?", (new, new, new)).fetchone()
+            report["names"].append({"id": None, "date": "", "amount": cnt, "was": n, "now": new,
+                                    "why": "mevcut kişiyle birleşir" if exists else "ad düzelir"})
+            if apply:
+                db.rename_counterparty(n, new)
     by_hash, docs = _document_rows(owners, report)
     if report["owner_names"] and not db.owner_names():  # dökümden öğrenilen sahip: kart sahipleri kişi kalsın
         owners[:] = [o for o in owners if o in report["owner_names"]]
@@ -373,24 +394,6 @@ def repair(apply: bool = False) -> dict:
     # ekstrelerin ödendi işaretleri: bütün kart ödemelerinden yeniden (eski algoritma aynı ödemeyi birden çok ekstreye
     # yazıyordu, yükleme sırasına bağlıydı); elle işaretlenenlere dokunulmaz
     report["statements"] = db.reassign_statement_payments(apply=apply)["changed"]
-    # kişi adlarının başındaki banka artığı (eski sürüm 'Bank', 'Cumhuriyeti' atmıyordu): ad düzelir, aynı kişi
-    # varsa birleşir (kayıtlar, 'Ad · not' açıklamaları, borç defteri, kişi kategorisi/ayarı yeni ada geçer)
-    report["names"] = []
-    with db.connect() as c:
-        names = sorted({n for (n,) in c.execute(
-            "SELECT counterparty FROM entries WHERE counterparty IS NOT NULL UNION SELECT name FROM counterparties "
-            "UNION SELECT person FROM debts") if n})
-    for n in names:
-        new = bank_import.clean_person_name(n)
-        if new and new != n:
-            with db.connect() as c:
-                cnt = c.execute("SELECT COUNT(*) FROM entries WHERE counterparty = ?", (n,)).fetchone()[0]
-                exists = c.execute("SELECT 1 FROM entries WHERE counterparty = ? UNION SELECT 1 FROM counterparties "
-                                   "WHERE name = ? UNION SELECT 1 FROM debts WHERE person = ?", (new, new, new)).fetchone()
-            report["names"].append({"id": None, "date": "", "amount": cnt, "was": n, "now": new,
-                                    "why": "mevcut kişiyle birleşir" if exists else "ad düzelir"})
-            if apply:
-                db.rename_counterparty(n, new)
     after = {a["id"]: a["current"] for a in db.list_accounts()}
     report["balances"] = [{"account": name, "before": cur, "after": after.get(aid),
                            "diff": round((after.get(aid) or 0) - (cur or 0), 2) if cur is not None else None}
