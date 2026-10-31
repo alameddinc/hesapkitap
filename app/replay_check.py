@@ -22,7 +22,7 @@ import sys
 import tempfile
 from collections import defaultdict
 
-from app import db
+from app import db, money
 
 DOC_SQL = ("import_hash IS NOT NULL AND import_hash NOT LIKE 'mail:%' AND import_hash NOT LIKE 'dekont:%' "
            "AND kind IN ('gelir', 'gider')")
@@ -262,7 +262,7 @@ def compare(new: dict, live: dict, last_bal: dict) -> dict:
         keys = ("gelir", "gider", "virman_in", "virman_out", "kart_odemesi", "kart_harcama")
         diff = {k: round(n.get(k, 0) - lv.get(k, 0), 2) for k in keys}
         row = {"month": m, "new": {k: n.get(k, 0) for k in keys}, "live": {k: lv.get(k, 0) for k in keys}, "diff": diff}
-        if any(abs(v) >= 0.01 for v in diff.values()):
+        if any(not money.is_zero(v) for v in diff.values()):
             row["records"] = _month_records(m, new, live)
         months.append(row)
     out["months"] = months
@@ -319,7 +319,7 @@ def _month_records(m: str, new: dict, live: dict) -> list[dict]:
              {h for h, o in live["own"].items() if o["transfer_date"][:7] == m}
     for h in sorted(hashes):
         a, b = label(new, h), label(live, h)
-        if a and b and a[0] == b[0] and abs(abs(a[1]) - abs(b[1])) < 0.01:
+        if a and b and a[0] == b[0] and money.eq(abs(a[1]), abs(b[1])):
             continue
         recs.append({"import_hash": h, "where": "yalnız yenide" if not b else "yalnız canlıda" if not a else "farklı",
                      "new": {"kind": a[0], "amount": a[1], "description": a[2]} if a else None,
@@ -381,7 +381,7 @@ def render(r: dict) -> str:
                    f"ekstre {_tl(s['total_debt'])} (fark {_tl(s['equation_diff'])}, okunan−özet {_tl(s['reconciliation_diff'])})")
     out += ["", "(3) AY AY (belgeden gelen kayıtlar): yeni / canlı / fark"]
     for m in r["months"]:
-        cols = " · ".join(f"{k} {_tl(m['new'][k])}/{_tl(m['live'][k])}" + (f" (Δ {_tl(m['diff'][k])})" if abs(m['diff'][k]) >= 0.01 else "")
+        cols = " · ".join(f"{k} {_tl(m['new'][k])}/{_tl(m['live'][k])}" + (f" (Δ {_tl(m['diff'][k])})" if not money.is_zero(m['diff'][k]) else "")
                           for k in m["new"])
         out.append(f"  {m['month']}: {cols}")
         for rec in m.get("records", []):

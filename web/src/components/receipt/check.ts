@@ -16,7 +16,21 @@ export interface ReceiptCheck {
 export interface Reread { items: ReceiptItem[]; total: number | null; model?: string; confidence?: string; check?: ReceiptCheck; receipt_file?: string }
 
 export const TOL = 0.02;
-const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Sunucuyla (app/money.py) aynı yuvarlama: 2 ondalık, yarım yukarı (sıfırdan uzağa), sayının en kısa ondalık
+ *  gösterimi üzerinden. Math.round(n * 100) / 100 1,005'i 1,00, -0,125'i -0,12 yapıyordu (sunucu 1,01 / -0,13).
+ *  JS toString ile Python repr aynı en kısa gösterimi verir, ikisi aynı sonucu bulur. */
+export function money(n: number): number {
+  if (!Number.isFinite(n)) return n;
+  const a = Math.abs(n);
+  if (a < 0.001) return 0; // (toString bu aralıkta üstel gösterime geçebilir; yuvarlanınca zaten 0)
+  const [int, frac = ""] = (a >= 1e21 ? a.toFixed(0) : a.toString()).split(".");
+  let cents = Number(int) * 100 + Number((frac + "00").slice(0, 2));
+  if ((frac[2] ?? "0") >= "5") cents += 1;
+  const v = cents / 100;
+  return n < 0 && v !== 0 ? -v : v;
+}
+const r2 = money;
 
 export const expectedOf = (it: ReceiptItem): number | null => {
   const up = it.unit_price, q = it.qty || 1;

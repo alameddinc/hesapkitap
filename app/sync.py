@@ -24,7 +24,7 @@ import re
 from collections import defaultdict
 from datetime import date, timedelta
 
-from app import db
+from app import db, money
 from app.textnorm import merchant_name, normalize
 
 EXACT_DAYS = 2
@@ -45,11 +45,11 @@ def _days(a: str, b: str) -> int:
 
 
 def _tol(a: float, b: float) -> float:
-    return max(0.01, round(max(abs(a), abs(b)) * NEAR_PCT, 2))
+    return max(money.CENT, round(max(abs(a), abs(b)) * NEAR_PCT, 2))
 
 
 def _exact(a: float, b: float, d: int) -> bool:
-    return abs(a - b) < 0.005 and d <= EXACT_DAYS
+    return money.eq(a, b) and d <= EXACT_DAYS
 
 
 def _tl(x: float) -> str:
@@ -104,8 +104,8 @@ def _other_person(m: dict, cp: str | None, people: set[str]) -> bool:
 def _window(items: list[dict], amount: float) -> list[dict]:
     """Tutara göre sıralı listede ±NEAR_PCT aralığı."""
     keys = [x["amount"] for x in items]
-    lo = bisect.bisect_left(keys, amount * (1 - NEAR_PCT) - 0.01)
-    hi = bisect.bisect_right(keys, amount / (1 - NEAR_PCT) + 0.01)
+    lo = bisect.bisect_left(keys, amount * (1 - NEAR_PCT) - money.CENT)
+    hi = bisect.bisect_right(keys, amount / (1 - NEAR_PCT) + money.CENT)
     return items[lo:hi]
 
 
@@ -248,7 +248,7 @@ def find_pairs() -> list[dict]:
             r = _rule_for(p, rules)
             if r:
                 p["auto"], p["rule"] = "kural", r
-        p["reason"] = "aday" if not uniq else "tutar" if abs(p["diff"]) >= 0.005 else "tarih"
+        p["reason"] = "aday" if not uniq else "tutar" if not money.is_zero(p["diff"]) else "tarih"
     return pairs
 
 

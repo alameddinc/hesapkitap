@@ -20,7 +20,7 @@ from email import message_from_bytes
 from email.message import Message
 from email.utils import parseaddr, parsedate_to_datetime
 
-from app import db, system
+from app import db, money, system
 
 log = logging.getLogger("hesapkitap.inbound")
 
@@ -165,7 +165,7 @@ def _bill(name: str, data: bytes, mime: str) -> str:
         raise ValueError(f"{name}: tutar ya da son ödeme tarihi okunamadı")
     for b in db.list_bills():
         if b["provider"] == parsed["provider"] and b["due_date"] == parsed["due_date"] \
-                and abs(b["amount"] - parsed["amount"]) < 0.01:
+                and money.eq(b["amount"], parsed["amount"]):
             return f"Fatura {parsed['provider']} {parsed['amount']:,.2f} TL: zaten vardı"
     file_name = db.save_bill_file(data, ".pdf") if mime == "application/pdf" else None
     db.create_bill({"provider": parsed["provider"], "amount": parsed["amount"], "due_date": parsed["due_date"],

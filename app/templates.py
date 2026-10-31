@@ -15,7 +15,7 @@ import json
 import re
 from collections import Counter
 
-from app import system
+from app import money, system
 
 MONEY = re.compile(r"(?<![\d.,])(-?\s?\d{1,3}(?:\.\d{3})*,\d{2})(?![\d,])")
 KEYWORDS = ("hesap hareket", "hesap ekstre", "hesap özeti", "hesap dökümü", "işlem dökümü", "vadesiz", "bakiye",
@@ -171,8 +171,8 @@ def apply(text: str, spec: dict) -> dict | None:
         return None
 
     def hits(rs):
-        return sum(abs(round(b["balance"] - a["balance"], 2) - b["amount"]) <= 0.01 or
-                   abs(abs(round(b["balance"] - a["balance"], 2)) - abs(b["amount"])) <= 0.01 for a, b in zip(rs, rs[1:]))
+        return sum(money.within(b["balance"] - a["balance"], b["amount"]) or
+                   money.within(abs(b["balance"] - a["balance"]), abs(b["amount"])) for a, b in zip(rs, rs[1:]))
     if hits(rows[::-1]) > hits(rows):
         rows.reverse()
     opening = round(rows[0]["balance"] - rows[0]["amount"], 2)

@@ -8,14 +8,14 @@ import os
 import re
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from app import auth, backup, config, db, deletion, donations, finance, jobs, limits, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, finance, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -70,6 +70,11 @@ def _heavy(fn):
         finally:
             _HEAVY.release()
     return run
+
+
+# TL tutarı: API sınırında yarım yukarı 2 ondalığa yuvarlanır (kuruş altı tutar saklanmasın; app/money.py).
+# Miktar olabilen alanlar (altın/döviz borcu, birimli kumbara, gram) bilerek float kalır.
+Money = Annotated[float, AfterValidator(money.money)]
 
 
 app = FastAPI(title="HesapKitap", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -979,7 +984,7 @@ def plan(months: int = 6):
 
 
 class SimulateIn(BaseModel):
-    amount: float = Field(gt=0)
+    amount: Money = Field(gt=0)
     installments: int = Field(ge=1, le=36)
     monthly_rate: float = Field(default=0.0, ge=0, le=0.2)  # 0.0375 = aylık %3,75 (vade farkı / kâr payı)
     start_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
@@ -1032,7 +1037,7 @@ def patch_card_txn(txn_id: int, body: CardTxnPatch):
 class EntryIn(BaseModel):
     entry_date: date
     description: str = Field(min_length=1)
-    amount: float = Field(ge=0)
+    amount: Money = Field(ge=0)
     kind: Kind
     category: str | None = None
     note: str | None = None
@@ -1055,7 +1060,7 @@ class EntryIn(BaseModel):
 class EntryPatch(BaseModel):
     entry_date: date | None = None
     description: str | None = None
-    amount: float | None = Field(default=None, ge=0)
+    amount: Money | None = Field(default=None, ge=0)
     kind: Kind | None = None
     category: str | None = None
     note: str | None = None
@@ -1142,7 +1147,7 @@ def patch_entry(entry_id: int, body: EntryPatch):
     if "payment" in data or "wallet_id" in data or "account_id" in data:
         _check_wallet(data)
     split_total = sum(p["amount"] for p in db.splits_map().get(("entry", entry_id), []))
-    if "amount" in data and data["amount"] + 0.005 < split_total:
+    if "amount" in data and money.lt(data["amount"], split_total):
         raise HTTPException(422, f"Bu kayıt bölünmüş ({split_total:.2f} alt kalem); tutar bundan az olamaz")
     db.update_entry(entry_id, data)
     db.auto_link()
@@ -1256,35 +1261,35 @@ def delete_entry(entry_id: int):
 
 class RecurringIn(BaseModel):
     description: str = Field(min_length=1)
-    amount: float = Field(ge=0)
+    amount: Money = Field(ge=0)
     kind: Kind
     category: str | None = None
     day_of_month: int = Field(default=1, ge=1, le=31)
     start_month: str = Field(pattern=r"^\d{4}-\d{2}$")
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
-    gross_amount: float | None = Field(default=None, ge=0)
+    gross_amount: Money | None = Field(default=None, ge=0)
     advance_pay: bool | None = None  # maaş peşin (memur): zam farkı ilk zamlı maaşta
     account_id: int | None = None  # banka/nakit hesabı
 
 
 class RecurringPatch(BaseModel):
     description: str | None = None
-    amount: float | None = Field(default=None, ge=0)
+    amount: Money | None = Field(default=None, ge=0)
     kind: Kind | None = None
     category: str | None = None
     day_of_month: int | None = Field(default=None, ge=1, le=31)
     start_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     end_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
-    gross_amount: float | None = Field(default=None, ge=0)
+    gross_amount: Money | None = Field(default=None, ge=0)
     advance_pay: bool | None = None  # maaş peşin (memur): zam farkı ilk zamlı maaşta
     account_id: int | None = None  # banka/nakit hesabı
 
 
 class RecurringAction(BaseModel):
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
-    amount: float | None = Field(default=None, ge=0)  # o ay farklı tutar olduysa
+    amount: Money | None = Field(default=None, ge=0)  # o ay farklı tutar olduysa
 
 
 @app.get("/api/payroll/net")
@@ -1299,7 +1304,7 @@ def payroll_net(gross: float, year: int | None = None, start_month: int = 1):
 
 class SalaryChangeIn(BaseModel):
     from_month: str = Field(pattern=r"^\d{4}-\d{2}$")
-    gross: float = Field(gt=0)
+    gross: Money = Field(gt=0)
     reason: Literal["zam", "is_degisikligi"] = "zam"
     reset_cum: bool = False
     pay_day: int | None = Field(default=None, ge=1, le=31)
@@ -1404,7 +1409,7 @@ def confirm_recurring(rid: int, body: RecurringAction):
 
 
 class MonthAmount(BaseModel):
-    amount: float | None = Field(default=None, ge=0)  # None = aya özel tutarı kaldır (şablona dön)
+    amount: Money | None = Field(default=None, ge=0)  # None = aya özel tutarı kaldır (şablona dön)
 
 
 @app.put("/api/recurring/{rid}/months/{month}")
@@ -1560,7 +1565,7 @@ def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> d
         cur = acc["current"] if acc["current"] is not None else acc["balance"]
         if d >= acc["as_of"]:  # daha eski döküm bakiyeyi değiştirmez
             change = {"account": acc["name"], "current": round(cur, 2), "new": round(new, 2), "date": d}
-            if abs(new) < 0.01 and abs(cur) >= 1000:
+            if money.is_zero(new) and abs(cur) >= 1000:
                 warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → 0 olacak. Belge doğru mu?")
             elif abs(new - cur) > max(abs(cur) * 0.5, 20000):
                 warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → {new:,.2f} ₺ olacak (büyük değişiklik). "
@@ -1729,21 +1734,21 @@ def _check_wallet(data: dict) -> None:
 class WalletIn(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     card_type: Literal["yemek", "hediye", "giyim", "diger"] = "yemek"
-    balance: float = 0
+    balance: Money = 0
     expires_at: date | None = None
-    monthly_amount: float | None = Field(default=None, gt=0)
+    monthly_amount: Money | None = Field(default=None, gt=0)
     load_day: int = Field(default=1, ge=1, le=31)
 
 
 class WalletPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=40)
     card_type: Literal["yemek", "hediye", "giyim", "diger"] | None = None
-    balance: float | None = None
+    balance: Money | None = None
     expires_at: date | None = None
 
 
 class WalletSchedule(BaseModel):
-    amount: float = Field(gt=0)
+    amount: Money = Field(gt=0)
     day: int = Field(default=1, ge=1, le=31)
     from_month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
 
@@ -1753,7 +1758,7 @@ class WalletStop(BaseModel):
 
 
 class WalletLoad(BaseModel):
-    amount: float = Field(gt=0)
+    amount: Money = Field(gt=0)
     on: date | None = None
 
 
@@ -1831,14 +1836,14 @@ def wallet_load(wid: int, body: WalletLoad):
 class AccountIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     kind: Literal["banka", "nakit", "diger"] = "nakit"
-    balance: float
+    balance: Money
     as_of: date | None = None
 
 
 class AccountPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=60)
     kind: Literal["banka", "nakit", "diger"] | None = None
-    balance: float | None = None
+    balance: Money | None = None
     as_of: date | None = None
 
 
@@ -2049,7 +2054,7 @@ JarUnit = Literal["TRY", "ALTIN_24", "ALTIN_22", "CEYREK", "YARIM", "TAM", "CUMH
 
 class JarBuy(BaseModel):
     quantity: float = Field(gt=0)
-    cost: float = Field(gt=0)          # ödenen TL
+    cost: Money = Field(gt=0)          # ödenen TL
     buy_date: date | None = None
     payment: Literal["havale", "nakit", "kredi_karti"] = "havale"
     account_id: int | None = None
@@ -2190,7 +2195,7 @@ def buy_into_jar(jid: int, body: JarBuy):
 
 class JarMovePatch(BaseModel):
     quantity: float | None = Field(None, gt=0)
-    cost: float | None = Field(None, gt=0)
+    cost: Money | None = Field(None, gt=0)
     move_date: date | None = None
 
 
@@ -2294,7 +2299,7 @@ class ZakatAssetIn(BaseModel):
     is_jewelry: bool = False
     note: str | None = None
     acquired: date | None = None
-    cost: float | None = Field(None, gt=0)
+    cost: Money | None = Field(None, gt=0)
     estimated: bool = False
 
 
@@ -2305,12 +2310,12 @@ class ZakatAssetPatch(BaseModel):
     is_jewelry: bool | None = None
     note: str | None = None
     acquired: date | None = None
-    cost: float | None = Field(None, gt=0)
+    cost: Money | None = Field(None, gt=0)
     estimated: bool | None = None
 
 
 class ZakatPaymentIn(BaseModel):
-    amount: float = Field(gt=0)
+    amount: Money = Field(gt=0)
     pay_date: date | None = None
     note: str | None = None
     year_start: date | None = None  # geçmiş bir yılın ödemesi
@@ -2465,7 +2470,7 @@ def zakat_add_payment(pid: int, body: ZakatPaymentIn):
 
 
 class ZakatPaymentPatch(BaseModel):
-    amount: float | None = Field(None, gt=0)
+    amount: Money | None = Field(None, gt=0)
     pay_date: date | None = None
     note: str | None = None
     year_start: date | None = None
@@ -2685,7 +2690,7 @@ def delete_account(aid: int):
 # ---------------------------------------------------------------- bölme (alt kalemler) ve kalem kuralları
 
 class SplitPart(BaseModel):
-    amount: float = Field(gt=0)
+    amount: Money = Field(gt=0)
     category: str = ""
     description: str | None = None
     person: str | None = None  # ortak harcama: bu kısım kişinin payı → alacak
@@ -2720,7 +2725,7 @@ def put_splits(target: Literal["entry", "card"], pid: int, body: SplitsIn):
 class SplitProposalIn(BaseModel):
     items: list[dict]
     category: str | None = None
-    total: float | None = None
+    total: Money | None = None
 
 
 @app.post("/api/splits/propose")
@@ -2731,9 +2736,9 @@ def propose_split(body: SplitProposalIn):
 
 class TargetIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
-    amount: float = Field(gt=0)
+    amount: Money = Field(gt=0)
     deadline: date
-    already: float = Field(default=0, ge=0)
+    already: Money = Field(default=0, ge=0)
 
 
 @app.get("/api/targets")
@@ -2819,6 +2824,12 @@ class DebtIn(BaseModel):
     note: str | None = None
     account_id: int | None = None  # banka/nakit hesabı
 
+    @model_validator(mode="after")
+    def _tl(self):
+        if self.amount is not None and (self.asset or "TRY") == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
+            self.amount = money.money(self.amount)
+        return self
+
 
 class DebtPatch(BaseModel):
     person: str | None = None
@@ -2829,6 +2840,12 @@ class DebtPatch(BaseModel):
     due_date: date | None = None
     note: str | None = None
     account_id: int | None = None  # banka/nakit hesabı
+
+    @model_validator(mode="after")
+    def _tl(self):
+        if self.amount is not None and self.asset == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
+            self.amount = money.money(self.amount)
+        return self
 
 
 class DebtPayIn(BaseModel):
@@ -3167,12 +3184,12 @@ def delete_statement(sid: int):
 class SuggestionAccept(BaseModel):
     key: str
     description: str | None = Field(None, max_length=60)
-    amount: float | None = Field(None, gt=0)
+    amount: Money | None = Field(None, gt=0)
 
 
 class AmountChange(BaseModel):
     from_month: str = Field(pattern=r"^\d{4}-\d{2}$")
-    amount: float = Field(ge=0)
+    amount: Money = Field(ge=0)
 
 
 @app.get("/api/recurring/{rid}/changes")
@@ -3661,22 +3678,22 @@ class SubState(BaseModel):
     merchant: str = Field(min_length=1)
     status: Literal["aktif", "iptal", "dusuruldu"]
     changed_at: date | None = None
-    new_amount: float | None = Field(default=None, ge=0)  # paket düşürüldüyse yeni aylık tutar
+    new_amount: Money | None = Field(default=None, ge=0)  # paket düşürüldüyse yeni aylık tutar
     note: str | None = None
 
 
 class GoalIn(BaseModel):
     kind: Literal["category", "merchant"]
     name: str = Field(min_length=1)
-    baseline: float = Field(ge=0)
-    target: float = Field(ge=0)
+    baseline: Money = Field(ge=0)
+    target: Money = Field(ge=0)
     start_month: str = Field(pattern=r"^\d{4}-\d{2}$")
     note: str | None = None
 
 
 class GoalPatch(BaseModel):
-    target: float | None = Field(default=None, ge=0)
-    baseline: float | None = Field(default=None, ge=0)
+    target: Money | None = Field(default=None, ge=0)
+    baseline: Money | None = Field(default=None, ge=0)
     note: str | None = None
     active: bool | None = None
 
@@ -3729,7 +3746,7 @@ def delete_goal(gid: int):
 
 class BudgetIn(BaseModel):
     category: str = Field(min_length=1)
-    monthly_limit: float | None = Field(default=None, ge=0)  # boş/0 = kaldır
+    monthly_limit: Money | None = Field(default=None, ge=0)  # boş/0 = kaldır
 
 
 @app.get("/api/budgets")
@@ -3754,7 +3771,7 @@ def put_budget(body: BudgetIn):
 # ---------------------------------------------------------------- ödemeler + faturalar
 
 class PayIn(BaseModel):
-    amount: float = Field(ge=0)
+    amount: Money = Field(ge=0)
     paid_at: date
     payment: Payment | None = None  # sadece fatura için
 
@@ -3793,7 +3810,7 @@ def unpay_statement(sid: int):
 class BillIn(BaseModel):
     provider: str = Field(min_length=1)
     description: str | None = None
-    amount: float = Field(ge=0)
+    amount: Money = Field(ge=0)
     due_date: date
     category: str | None = "Faturalar"
     note: str | None = None
@@ -3803,7 +3820,7 @@ class BillIn(BaseModel):
 class BillPatch(BaseModel):
     provider: str | None = None
     description: str | None = None
-    amount: float | None = Field(default=None, ge=0)
+    amount: Money | None = Field(default=None, ge=0)
     due_date: date | None = None
     category: str | None = None
     note: str | None = None
@@ -4175,7 +4192,7 @@ def reread_entry_receipt(entry_id: int):
 
 class RereadIn(BaseModel):
     receipt_file: str
-    total: float | None = None
+    total: Money | None = None
 
 
 @app.post("/api/receipts/reread")

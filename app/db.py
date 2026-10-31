@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import date, timedelta
 
+from app import money
 from app.categorize import DEFAULT_RULES, RULES_VERSION, categorize
 from app.parsers.base import Statement
 
@@ -824,7 +825,7 @@ def auto_link() -> int:
                                              _days(t["txn_date"], e["entry_date"]),
                                              -_name_score(t["description"], e["description"])))
             _apply_link(c, e, best)
-            if e.get("category") == JAR_BUY_CATEGORY and abs(best["amount"] - target) >= 0.01:
+            if e.get("category") == JAR_BUY_CATEGORY and money.ne(best["amount"], target):
                 _sync_jar_purchase(c, e["id"], best["amount"])  # kumbara alımı: ekstredeki gerçek tutar
             free.remove(best)
             linked += 1
@@ -1111,6 +1112,8 @@ def auto_update_cycle() -> int | None:
 
 def create_entry(data: dict) -> int:
     data = {k: data.get(k) for k in ENTRY_FIELDS if k in data}
+    if data.get("amount") is not None:  # kuruş altı tutar saklanmaz (içe aktarma, yapay zekâ, döviz çevirisi)
+        data["amount"] = money.money(data["amount"])
     month = data.pop("month", None)
     data["month"] = month or period_of(data["entry_date"])
     with connect() as c:
@@ -1123,6 +1126,8 @@ def create_entry(data: dict) -> int:
 def update_entry(entry_id: int, data: dict) -> None:
     data = {k: v for k, v in data.items() if k in ENTRY_FIELDS}
     data.pop("month", None)
+    if data.get("amount") is not None:
+        data["amount"] = money.money(data["amount"])
     if not data:
         return
     with connect() as c:
@@ -1290,7 +1295,7 @@ def _payment_evidence(c) -> list[dict]:
                  "WHERE t.txn_type = 'odeme' AND t.is_deleted = 0 AND t.amount < 0"))]
     out = list(bank)
     for t in card:
-        dup = any(b["last4"] in (t["last4"], None) and abs(b["amount"] - t["amount"]) < 0.01
+        dup = any(b["last4"] in (t["last4"], None) and money.eq(b["amount"], t["amount"])
                   and abs((_date.fromisoformat(b["date"][:10]) - _date.fromisoformat(t["date"][:10])).days) <= 5 for b in bank)
         if not dup:
             out.append(t)
@@ -1380,6 +1385,7 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
     Dökümden gelmiş bağlı kayda hiçbir durumda tutar/tarih yazılmaz; tutarı farklıysa 'warning' döner.
     amount None: ödeme geri alınır — elle girilmiş bağlı kayıt silinir, dökümden gelmişse yalnız bağ kopar.
     Dönüş: {card_payment_id, linked (dökümden gelen kayda bağlı), link: 'elle'|'dokum'|None, warning?}."""
+    amount = money.money(amount)
     with connect() as c:
         if amount is None:
             c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
@@ -1393,7 +1399,7 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
         if dokum:  # dökümün satırı gerçektir: ona yazılmaz; elle kopya varsa (olmamalı) silinir
             c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
             out = {"card_payment_id": dokum["id"], "linked": True, "link": "dokum"}
-            if abs(dokum["amount"] - amount) >= 0.01:
+            if money.ne(dokum["amount"], amount):
                 tl = lambda v: f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")  # noqa: E731
                 out["warning"] = (f"Dökümdeki ödeme {tl(dokum['amount'])} TL ({dokum['pay_date']}); ekstreye {tl(amount)} TL "
                                   "yazıldı, hesap hareketi değişmedi")
@@ -1416,8 +1422,8 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
         st = c.execute("SELECT bank, card_no FROM statements WHERE id = ?", (sid,)).fetchone()
         found = c.execute(
             "SELECT id FROM card_payments WHERE import_hash IS NOT NULL AND statement_id IS NULL AND account_id = ? "
-            "AND ABS(amount - ?) < 0.01 AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') "
-            "ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1", (account_id, amount, paid_at, paid_at, paid_at)).fetchone()
+            "AND ROUND(amount * 100) = ? AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') "
+            "ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1", (account_id, money.kurus(amount), paid_at, paid_at, paid_at)).fetchone()
         if found:
             c.execute("UPDATE card_payments SET statement_id = ? WHERE id = ?", (sid, found["id"]))
             return {"card_payment_id": found["id"], "linked": True, "link": "dokum"}
@@ -1473,6 +1479,7 @@ def delete_bill(bid: int) -> None:
 
 def pay_bill(bid: int, amount: float, paid_at: str, payment: str | None) -> int:
     """Fatura ödendi → gider kaydı oluştur (kredi kartıyla ödendiyse ekstre gelince eşleşir)."""
+    amount = money.money(amount)
     b = get_bill(bid)
     if not b:
         raise ValueError("Fatura yok")
@@ -1988,9 +1995,9 @@ def _pairs_own_transfer(amount: float, day: str, desc: str, owners: list[str] | 
     with connect() as c:
         # yalnız GİRİŞ (amount > 0): başka hesaptan aynı gün aynı tutarda çıkış (ör. Halkbank → VakıfBank 35.000, sonra
         # VakıfBank'tan kiraya 35.000) karşılık değildir
-        return c.execute("SELECT 1 FROM own_transfers WHERE amount > 0 AND ABS(amount - ?) < 0.01 AND COALESCE(account, '') <> ? "
+        return c.execute("SELECT 1 FROM own_transfers WHERE amount > 0 AND ROUND(amount * 100) = ? AND COALESCE(account, '') <> ? "
                          "AND transfer_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') LIMIT 1",
-                         (amount, account or "", day, day)).fetchone() is not None
+                         (money.kurus(amount), account or "", day, day)).fetchone() is not None
 
 
 def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, import_hash: str | None,
@@ -2110,8 +2117,8 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         if acc_id and r["hash"] not in seen and r.get("amount") is not None:
             with connect() as c:
                 dk = c.execute("SELECT id FROM entries WHERE import_hash LIKE 'dekont:%' AND account_id = ? AND entry_date = ? "
-                               "AND ABS(amount - ?) < 0.01 AND kind = ? LIMIT 1",
-                               (acc_id, r["date"], abs(r["amount"]), "gelir" if r["amount"] > 0 else "gider")).fetchone()
+                               "AND ROUND(amount * 100) = ? AND kind = ? LIMIT 1",
+                               (acc_id, r["date"], money.kurus(abs(r["amount"])), "gelir" if r["amount"] > 0 else "gider")).fetchone()
                 if dk:
                     c.execute("UPDATE entries SET import_hash = ?, note = 'Hesap hareketi (dekontla eşleşti)' WHERE id = ?",
                               (r["hash"], dk["id"]))
@@ -2137,9 +2144,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             stats["virman"] += 1
             with connect() as c:
                 if not r["hash"].startswith("mail:"):  # PDF geldi: aynı aktarımın bildirimden gelen geçici kaydını sil
-                    c.execute("DELETE FROM own_transfers WHERE import_hash LIKE 'mail:%' AND ABS(amount - ?) < 0.01 "
+                    c.execute("DELETE FROM own_transfers WHERE import_hash LIKE 'mail:%' AND ROUND(amount * 100) = ? "
                               "AND transfer_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')",
-                              (r["amount"], r["date"], r["date"]))
+                              (money.kurus(r["amount"]), r["date"], r["date"]))
                 add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners)
             continue
         if r["type"] == "gider" and _pairs_own_transfer(abs(r["amount"]), r["date"], r["description"], owners, account):
@@ -2157,15 +2164,15 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             card = _re.search(r"\d{4}\s*\*+\s*(\d{4})", r["description"])
             with connect() as c:
                 if not r["hash"].startswith("mail:"):
-                    c.execute("DELETE FROM card_payments WHERE import_hash LIKE 'mail:%' AND ABS(amount - ?) < 0.01 "
-                              "AND pay_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')", (amt, r["date"], r["date"]))
+                    c.execute("DELETE FROM card_payments WHERE import_hash LIKE 'mail:%' AND ROUND(amount * 100) = ? "
+                              "AND pay_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')", (money.kurus(amt), r["date"], r["date"]))
                 # elle "ekstreyi bu hesaptan ödedim" denmişse (aynı hesap, aynı tutar, ±3 gün): yeni kayıt açılmaz,
                 # elle girilen ödeme dökümün satırı olur (parmak izi ve tarih dökümden)
                 manual = c.execute(
-                    "SELECT id FROM card_payments WHERE import_hash IS NULL AND ABS(amount - ?) < 0.01 "
+                    "SELECT id FROM card_payments WHERE import_hash IS NULL AND ROUND(amount * 100) = ? "
                     "AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') AND account_id IS NOT NULL "
                     "AND account_id = ? ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1",
-                    (amt, r["date"], r["date"], acc_id, r["date"])).fetchone() if acc_id else None
+                    (money.kurus(amt), r["date"], r["date"], acc_id, r["date"])).fetchone() if acc_id else None
                 if manual:
                     c.execute("UPDATE card_payments SET import_hash = ?, pay_date = ?, description = ?, "
                               "card_last4 = COALESCE(card_last4, ?) WHERE id = ?",
@@ -2189,18 +2196,18 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             # fiyatla yazılmış olabilir: ±%10 içinde eşleşir, gerçek tutara güncellenir) doğrudan birleşir
             cands = [dict(x) for x in c.execute(
                 """SELECT id, entry_date, description, note, counterparty, amount, category FROM entries
-                   WHERE ((import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti' AND ABS(amount - ?) < 0.01)
+                   WHERE ((import_hash LIKE 'mail:%' AND COALESCE(payment, '') <> 'kredi_karti' AND ROUND(amount * 100) = ?)
                           OR (import_hash IS NULL AND category = ? AND ABS(amount - ?) <= ? * 0.10))
                    AND import_hash IS NOT ? AND wallet_id IS NULL AND kind = ?
                    AND entry_date BETWEEN ? AND ?""",
-                (amount, JAR_BUY_CATEGORY, amount, amount, r["hash"], kind,
+                (money.kurus(amount), JAR_BUY_CATEGORY, amount, amount, r["hash"], kind,
                  (d - timedelta(days=3)).isoformat(), (d + timedelta(days=3)).isoformat()))]
             who_here = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
             dup = _pick_manual(cands, who_here, people, d)
             if dup:
                 c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?), "
                           "account_id = COALESCE(account_id, ?) WHERE id = ?", (r["hash"], who_here, acc_id, dup["id"]))
-                if abs(dup["amount"] - amount) >= 0.01:  # kumbara alımı: bankadaki gerçek tutar
+                if money.ne(dup["amount"], amount):  # kumbara alımı: bankadaki gerçek tutar
                     _sync_jar_purchase(c, dup["id"], amount)
             else:
                 # elle girilmiş aynı hareket (ör. havaleyle ödenen psikolog): KESİN eşleşmede yeni kayıt açılmaz, bağlanır.
@@ -2609,6 +2616,8 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
         if not d:
             raise KeyError(debt_id)
         amt = amount if amount is not None else d["amount"] - d["paid_amount"]
+        if d["asset"] == "TRY":  # altın/döviz borcunda tutar miktardır (gram, adet): yuvarlanmaz
+            amt = money.money(amt)
         c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id) VALUES (?, ?, ?, ?, ?)",
                   (debt_id, amt, on, entry_id, account_id))
         if entry_id:
@@ -2620,7 +2629,7 @@ def _recalc_debt(c, debt_id: int) -> None:
     d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
     paid, last = c.execute("SELECT COALESCE(SUM(amount), 0), MAX(paid_at) FROM debt_payments WHERE debt_id = ?",
                            (debt_id,)).fetchone()
-    settled = d["written_off_at"] or (last if paid >= d["amount"] - 0.005 else None)
+    settled = d["written_off_at"] or (last if money.ge(paid, d["amount"]) else None)
     c.execute("UPDATE debts SET paid_amount = ?, settled_at = ? WHERE id = ?", (min(paid, d["amount"]), settled, debt_id))
 
 
@@ -2670,7 +2679,7 @@ def link_debt_movement(person: str | None, kind: str, amount: float, on: str, en
     debts_ = [d for d in list_debts() if d["asset"] == "TRY" and _name_key(d["person"]) == key]
     given_dir = "alacak" if kind == "gider" else "borc"
     for d in debts_:
-        if (d["direction"] == given_dir and not d["given_entry_id"] and not d.get("split_id") and abs(d["amount"] - amount) < 0.01
+        if (d["direction"] == given_dir and not d["given_entry_id"] and not d.get("split_id") and money.eq(d["amount"], amount)
                 and abs((_date.fromisoformat(d["debt_date"]) - d_on).days) <= 3):
             with connect() as c:
                 c.execute("UPDATE debts SET given_entry_id = ? WHERE id = ?", (entry_id, d["id"]))
@@ -2680,7 +2689,7 @@ def link_debt_movement(person: str | None, kind: str, amount: float, on: str, en
     pay_dir = "borc" if kind == "gider" else "alacak"
     open_ = [d for d in debts_ if d["direction"] == pay_dir and not d["settled_at"] and d["debt_date"] <= on]
     for d in open_:
-        if abs(d["remaining"] - amount) < 0.01:
+        if money.eq(d["remaining"], amount):
             pay_debt(d["id"], amount, on, entry_id)
             return "odeme", d
     # kısmi: kişinin TEK açık kaydı varsa ve gelen/giden tutar kalandan azsa ondan düşülür (300'ün 250'si)
@@ -2707,9 +2716,9 @@ def _link_existing_given(debt_id: int) -> None:
         kind = "gider" if d["direction"] == "alacak" else "gelir"
         day = _date.fromisoformat(d["debt_date"])
         key = _name_key(d["person"])
-        for e in c.execute("""SELECT id, counterparty FROM entries WHERE debt_id IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
+        for e in c.execute("""SELECT id, counterparty FROM entries WHERE debt_id IS NULL AND kind = ? AND ROUND(amount * 100) = ?
                               AND entry_date BETWEEN ? AND ? AND counterparty IS NOT NULL""",
-                           (kind, d["amount"], (day - timedelta(days=3)).isoformat(), (day + timedelta(days=3)).isoformat())):
+                           (kind, money.kurus(d["amount"]), (day - timedelta(days=3)).isoformat(), (day + timedelta(days=3)).isoformat())):
             if _name_key(e["counterparty"]) == key:
                 c.execute("UPDATE debts SET given_entry_id = ? WHERE id = ?", (e["id"], debt_id))
                 c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, e["id"]))
@@ -2736,7 +2745,7 @@ def debt_rows(month: str | None = None) -> list[dict]:
                             "step": "tahsil" if d["direction"] == "alacak" else "odendi"})
         if d["written_off_at"]:
             left = round(d["amount"] - sum(p["amount"] for p in pays if p["debt_id"] == d["id"]), 2)
-            if left > 0.005:
+            if money.gt(left, 0):
                 out.append({"uid": f"d{d['id']}w", "debt_id": d["id"], "date": d["written_off_at"], "flow": 0,
                             "amount": left, "person": d["person"], "step": "vazgecildi", "direction": d["direction"]})
     for r in out:
@@ -2779,16 +2788,16 @@ def _already_imported(r: dict, people: set[str], owners: list[str] | None) -> bo
     window = ("date(?, '-3 days')", "date(?, '+3 days')")
     with connect() as c:
         if r["type"] == "virman":
-            return c.execute(f"SELECT 1 FROM own_transfers WHERE ABS(ABS(amount) - ?) < 0.01 AND transfer_date "
-                             f"BETWEEN {window[0]} AND {window[1]}", (amt, d, d)).fetchone() is not None
+            return c.execute(f"SELECT 1 FROM own_transfers WHERE ROUND(ABS(amount) * 100) = ? AND transfer_date "
+                             f"BETWEEN {window[0]} AND {window[1]}", (money.kurus(amt), d, d)).fetchone() is not None
         if r["type"] == "kart_odemesi":
-            return c.execute(f"SELECT 1 FROM card_payments WHERE ABS(amount - ?) < 0.01 AND pay_date "
-                             f"BETWEEN {window[0]} AND {window[1]}", (amt, d, d)).fetchone() is not None
+            return c.execute(f"SELECT 1 FROM card_payments WHERE ROUND(amount * 100) = ? AND pay_date "
+                             f"BETWEEN {window[0]} AND {window[1]}", (money.kurus(amt), d, d)).fetchone() is not None
         kind = "gelir" if r["amount"] > 0 else "gider"
         cands = [dict(x) for x in c.execute(
             f"""SELECT id, entry_date, description, note, counterparty FROM entries WHERE import_hash IS NOT NULL
-                AND import_hash NOT LIKE 'mail:%' AND wallet_id IS NULL AND kind = ? AND ABS(amount - ?) < 0.01
-                AND entry_date BETWEEN {window[0]} AND {window[1]}""", (kind, amt, d, d))]
+                AND import_hash NOT LIKE 'mail:%' AND wallet_id IS NULL AND kind = ? AND ROUND(amount * 100) = ?
+                AND entry_date BETWEEN {window[0]} AND {window[1]}""", (kind, money.kurus(amt), d, d))]
     if not cands:
         return False
     who = counterparty(r["description"], r["amount"], owners) or _who_hint(r, owners)
@@ -2939,7 +2948,7 @@ def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual")
             p["category"] = "Borç / Alacak"
     with connect() as c:
         total = _parent_amount(c, target, pid)
-        if sum(p["amount"] for p in parts) > total + 0.005:
+        if money.gt(sum(p["amount"] for p in parts), total):
             raise ValueError(f"Alt kalemlerin toplamı ({sum(p['amount'] for p in parts):.2f}) harcamayı ({total:.2f}) geçemez")
         pdate = c.execute("SELECT entry_date FROM entries WHERE id = ?" if target == "entry"
                           else "SELECT txn_date FROM transactions WHERE id = ?", (pid,)).fetchone()[0]
@@ -2952,7 +2961,7 @@ def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual")
         for p in parts:
             if p.get("person"):
                 o = old_debts.get(_name_key(p["person"]))
-                if o and o["paid_amount"] and p["amount"] + 0.005 < o["paid_amount"]:
+                if o and o["paid_amount"] and money.lt(p["amount"], o["paid_amount"]):
                     raise ValueError(f"{p['person']} payının {o['paid_amount']:.2f} TL'si tahsil edilmiş; daha az olamaz")
                 if o:
                     keep.add(o["debt_id"])
@@ -2999,9 +3008,9 @@ def propose_split(items: list[dict], category: str | None, total: float | None) 
         g["amount"] += amt
         g["names"].append(f"{it['qty']}× {it['name']}" if (it.get("qty") or 1) > 1 else it["name"])
     split_total = sum(g["amount"] for g in groups.values())
-    if total and len(groups) == 1 and split_total >= total - 0.01:  # fişin tamamı tek kategori
+    if total and len(groups) == 1 and money.diff_k(split_total, total) >= -1:  # fişin tamamı tek kategori (1 kuruş tolerans)
         return {"parts": [], "category": next(iter(groups))}
-    if not groups or (total and split_total > total + 0.01):  # satırlar toplamı tutmuyorsa (okuma hatası) önerme
+    if not groups or (total and money.diff_k(split_total, total) > 1):  # satırlar toplamı tutmuyorsa (okuma hatası) önerme
         return {"parts": [], "category": None}
     return {"parts": [{"category": c, "amount": round(g["amount"], 2), "description": ", ".join(g["names"])[:80],
                        "origin": g["origin"]} for c, g in groups.items()], "category": None}
@@ -3368,7 +3377,7 @@ def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = Non
         if j["closed_at"]:
             raise ValueError("Kumbara kapalı; önce yeniden aç")
         bal = c.execute("SELECT COALESCE(SUM(amount), 0) FROM jar_moves WHERE jar_id = ?", (jid,)).fetchone()[0]
-        if amount < 0 and bal + amount < -0.005:
+        if amount < 0 and money.lt(bal + amount, 0):
             raise ValueError(f"Kumbarada {bal:.2f} var; daha fazlası çekilemez")
         u = current_user()
         return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, created_by) VALUES (?, ?, ?, ?, ?)",

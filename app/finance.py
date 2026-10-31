@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db
+from app import db, money
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
@@ -123,7 +123,7 @@ def is_active(r: dict, month: str) -> bool:
 
 
 def _round(x: float) -> float:
-    return round(x + 0.0, 2)
+    return money.money(x) + 0.0  # tek kural: yarım yukarı (app/money.py); + 0.0: -0,00 görünmesin
 
 
 # ---------------------------------------------------------------- unified rows
@@ -386,7 +386,7 @@ def _group(rows: list[dict], key: str) -> list[dict]:
     for r in rows:
         agg[r[key]]["amount"] += r["amount"]
         agg[r[key]]["count"] += 1
-    out = [{"name": k, "amount": _round(v["amount"]), "count": v["count"]} for k, v in agg.items() if v["amount"] > 0.005]
+    out = [{"name": k, "amount": _round(v["amount"]), "count": v["count"]} for k, v in agg.items() if money.gt(v["amount"], 0)]
     return sorted(out, key=lambda x: -x["amount"])
 
 
@@ -910,7 +910,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
     dues = []
     for s in statements:
         if s["due_date"] and s["due_date"] >= today.isoformat() and not (
-                s["paid_amount"] is not None and s["paid_amount"] >= s["total_debt"] - 0.01):
+                s["paid_amount"] is not None and money.diff_k(s["paid_amount"], s["total_debt"]) >= -1):
             dues.append({"date": s["due_date"], "account": s["card_no"], "bank": s["bank"],
                          "amount": s["total_debt"], "min_payment": s["min_payment"], "estimated": False})
     for acc, c in cycles.items():
@@ -928,7 +928,7 @@ PAYABLE_WINDOW = 35  # ödenmiş kalemler kaç gün listede kalsın
 
 
 def _status(amount: float, paid: float | None, due: str, today: date) -> str:
-    if paid is not None and paid >= amount - 0.01:
+    if paid is not None and money.diff_k(paid, amount) >= -1:  # 1 kuruş eksik ödeme de ödendi
         return "odendi"
     if paid:
         return "kismi"
