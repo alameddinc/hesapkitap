@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -1296,6 +1296,8 @@ def meta():
         "receipt_enabled": receipt.enabled() or ocr.available(),
         "receipt_engine": "gemini" if receipt.enabled() else "yerel" if ocr.available() else None,
         "current_month": finance.current_period(),
+        "period": dict(zip(("month", "start", "end"), (finance.current_period(),
+                                                     *(d.isoformat() for d in finance.period_bounds(finance.current_period()))))),
         "cycle_start_day": db.cycle_start_day(),
         "cycle_mode": db.cycle_mode(),
         "suggested_cycle_day": db.suggested_cycle_day(),
@@ -1360,9 +1362,13 @@ def summary(month: str | None = None):
 
 
 @app.get("/api/transactions")
-def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False):
+def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
+                 totals: bool = False):
     """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
-    include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz."""
+    include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz.
+    Her satırda counts_as_spend / counts_as_income: gider/gelir toplamına girer mi (sunucu kuralı, finance.counts);
+    süzgeç toplamı = bayrağı true olan satırların amount toplamı (iade eksi). totals=1: {"rows": [...], "totals": {...}}
+    (Özet ile aynı _totals + count)."""
     _history_gate(month)
     rows = finance.transactions(month, include_deleted, include_estimates)
     u = db.current_user()
@@ -1371,6 +1377,9 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     for r in rows:  # her satırda: raw (banka açıklaması, yoksa null), note_user (kullanıcının kendi notu)
         r.setdefault("raw", None)
         r.setdefault("note_user", r.get("note"))
+        r["counts_as_spend"], r["counts_as_income"] = finance.counts(r)
+    if totals:
+        return {"rows": rows, "totals": {**finance._totals([r for r in rows if not r.get("estimated")]), "count": len(rows)}}
     return rows
 
 
@@ -4227,12 +4236,15 @@ class PayIn(BaseModel):
 
 
 @app.get("/api/payables")
-def payables(totals: bool = False):
+def payables(totals: bool = False, days: int | None = Query(None, ge=0, le=366)):
     """Ödenecekler (liste; eski istemciler için değişmedi). totals=1: {"items": [...], "totals": {...}}: istemci toplamı
     kendisi hesaplamasın (finance.payables_totals). Kalemde in_total: toplama girer mi; rolled_into: kalanı bu id'li
-    son ekstreye devretmiş ödenmemiş eski ekstre (gecikmiş bilgisi)."""
+    son ekstreye devretmiş ödenmemiş eski ekstre (gecikmiş bilgisi). days=N (totals'ı da açar): totals.window =
+    vadesi N gün içinde ya da geçmiş, toplama giren kalemlerin kalanı (başlık toplamı; tahmin ayrı: window.estimated)."""
     items = finance.payables()
-    return {"items": items, "totals": finance.payables_totals(items=items)} if totals else items
+    if totals or days is not None:
+        return {"items": items, "totals": finance.payables_totals(items=items, days=days)}
+    return items
 
 
 class StatementPayIn(PayIn):

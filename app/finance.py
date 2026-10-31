@@ -388,10 +388,36 @@ def _totals(rows: list[dict]) -> dict:
     expense = card_spend + fees + manual
     # borç verip almak gelir/gider değil ama eldeki parayı değiştirir
     debt_flow = sum(r["flow"] * r["amount"] for r in live if r["kind"] == DEBT) + sum(r.get("debt_flow", 0) for r in live)
-    return {k: _round(v) for k, v in dict(income=income, card_spend=card_spend, fees=fees, manual_expense=manual,
-                                          refunds=refunds, expense=expense, net=income - expense, debt_flow=debt_flow,
-                                          savings=savings, cash_net=income - expense - savings + debt_flow,
-                                          card_pending=card_pending).items()}
+    out = {k: _round(v) for k, v in dict(income=income, card_spend=card_spend, fees=fees, manual_expense=manual,
+                                         refunds=refunds, expense=expense, net=income - expense, debt_flow=debt_flow,
+                                         savings=savings, cash_net=income - expense - savings + debt_flow,
+                                         card_pending=card_pending).items()}
+    # istemci kendisi hesaplamasın (S1): Özet 'Kalan' = net; Sade görünüm 'Kalan' = net − birikime ayrılan;
+    # gider kırılımında elle girilmiş ama ekstresi beklenen kart harcaması 'Kart' tarafında
+    out["left"] = out["net"]
+    out["left_after_savings"] = _round(income - expense - savings)
+    out["card_spend_incl_pending"] = _round(card_spend + card_pending)
+    out["manual_expense_excl_card_pending"] = _round(manual - card_pending)
+    return out
+
+
+def counts(r: dict) -> tuple[bool, bool]:
+    """Satır gerçek gidere / gelire sayılır mı (_totals ile aynı kural, tek yer): silinen, atlanan, bekleyen, eşleşmiş
+    (linked) ve tahmini satır hiçbirine girmez; birikim (altın/döviz alımı) gider değil; iade gideri düşürür (eksi tutar);
+    kart ödemesi (odeme) ve borç hareketi ikisine de girmez."""
+    if r.get("deleted") or r.get("skipped") or r.get("pending") or r.get("linked") or r.get("estimated"):
+        return False, False
+    return _spends(r), r["kind"] == INCOME
+
+
+TOTALS_DEFINITIONS = {
+    "expense": "Gider: kart harcaması + faiz/ücret + elle gider − iadeler. Birikime ayrılan (altın/döviz alımı), kart "
+               "ödemesi, borç hareketi ve bekleyen kayıtlar dahil değil.",
+    "income": "Gelir: gerçekleşen gelir kayıtları (bekleyenler dahil değil).",
+    "left": "Kalan: gelir − gider.",
+    "left_after_savings": "Kalan (sade görünüm): gelir − gider − birikime ayrılan.",
+    "cash_net": "Eldeki paraya etkisi: gelir − gider − birikime ayrılan ± borç/alacak hareketleri.",
+}
 
 
 def _group(rows: list[dict], key: str) -> list[dict]:
@@ -454,10 +480,14 @@ def summary(month: str, today: date | None = None) -> dict:
     est = estimates(month)
     totals.update(_estimate_totals(est))
 
+    from app import book
+
+    totals["fees_hidden"] = book.hide_fees()  # ortak defterde faiz gizli: istemci faiz kutusunu göstermesin
     by_category = _group(expenses, "category")
     return {
         "month": month,
         "totals": totals,
+        "definitions": TOTALS_DEFINITIONS,
         # gerçek toplamlara (expense, by_category, budgets, trend.expense) GİRMEYEN tahmini kalemler: ekstre bekleniyor
         "estimated_items": [estimate_item(r) for r in sorted(est, key=lambda r: (r["date"], r["uid"]))],
         "budgets": budgets(month, by_category),
@@ -1016,7 +1046,7 @@ def payables(today: date | None = None) -> list[dict]:
     return sorted(out, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
 
 
-def payables_totals(today: date | None = None, items: list[dict] | None = None) -> dict:
+def payables_totals(today: date | None = None, items: list[dict] | None = None, days: int | None = None) -> dict:
     """Ödemeler toplamı (istemci kendisi toplamasın). open: toplama giren kalemlerin (in_total) kalanı; card_debt:
     kart başına son ekstrenin kalanı (net durumla aynı kural); overdue: kalanı yeni ekstreye devretmiş, ödenmemiş eski
     ekstreler (bilgi; toplamda yok); estimated: kesilmemiş ekstrelerin tahmini."""
@@ -1026,7 +1056,13 @@ def payables_totals(today: date | None = None, items: list[dict] | None = None) 
     inc = [p for p in items if p.get("in_total")]
     by = {t: _round(sum(rem(p) for p in inc if p["type"] == t)) for t in ("statement", "bill", "debt")}
     rolled = [p for p in items if p.get("rolled_into")]
-    return {"open": _round(sum(rem(p) for p in inc)), "open_count": len(inc),
+    out_window = None
+    if days is not None:  # başlık toplamı (mobil 'önümüzdeki N gün'): toplama giren kalemlerden vadesi N gün içinde ya da geçmiş
+        win = [p for p in inc if p["days_left"] <= days]
+        out_window = {"days": days, "total": _round(sum(rem(p) for p in win)), "count": len(win),
+                      "overdue": _round(sum(rem(p) for p in win if p["days_left"] < 0)),
+                      "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate" and p["days_left"] <= days))}
+    return {"open": _round(sum(rem(p) for p in inc)), "open_count": len(inc), "window": out_window,
             "card_debt": db.card_debt_at(today.isoformat()), "statements": by["statement"], "bills": by["bill"],
             "debts": by["debt"], "overdue": _round(sum(rem(p) for p in rolled)), "overdue_count": len(rolled),
             "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate"))}
@@ -1571,6 +1607,10 @@ def net_worth(today: date | None = None) -> dict:
     # altın/döviz (varlık, hemen harcanmaz), alacak (henüz elde değil) ve yemek/hediye kartı (sadece o işte harcanır)
     # dahil değil; net durumda hepsi var.
     spendable = cash - card_debt - payable - jars["total"] - zakat_due
+    spendable_parts = [{"key": k, "label": lbl, "amount": _round(v), "sign": sg} for k, lbl, v, sg in (
+        ("cash", "Bankadaki ve nakit para", cash, "+"), ("card_debt", "Ödenecek kart ekstresi", card_debt, "−"),
+        ("payable", "TL borçların", payable, "−"), ("reserved", "Kumbaraya ayrılan", jars["total"], "−"),
+        ("zakat_due", "Ödenmemiş zekât", zakat_due, "−"))]
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "spendable": _round(spendable), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
             "wallets": wallets, "in_wallets": _round(in_wallets), "credit_cards": credit_cards, "unknown_banks": seen_banks,
@@ -1583,7 +1623,14 @@ def net_worth(today: date | None = None) -> dict:
                        "card_overdue": _round(sum(o["amount"] for o in overdue)), "cash": _round(cash),
                        "spendable": _round(spendable), "net": _round(cash + in_wallets + hold["self_total"] - card_debt
                                                                     + receivable - payable - zakat_due)},
+            "spendable_parts": spendable_parts,  # formülün kalemleri (sign '+'/'−'); istemci yalnız gösterir
+            "spendable_explain": SPENDABLE_EXPLAIN,
             "stale": stale}
+
+
+SPENDABLE_EXPLAIN = ("Harcanabilir: bankadaki ve nakit para − ödenecek kart ekstresi − TL borçların − kumbaraya ayrılan − "
+                     "ödenmemiş zekât. Altın/döviz, alacakların ve yemek/hediye kartları dahil değil; eksiye düştüyse "
+                     "ödenecekler eldeki parayı aşıyor demektir.")
 
 
 def net_worth_at(day: date) -> dict:
