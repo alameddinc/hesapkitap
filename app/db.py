@@ -537,18 +537,37 @@ def stamp() -> tuple:
         return path, 0, 0, _WRITES.get(path, 0)
 
 
+_FLIGHTS: dict = {}  # anahtar → kilit: aynı okuma aynı anda bir kez yapılır (tek uçuş)
+
+
 def _cached(name: str, fn, *key):
+    """Defter dosyasının damgası (yol, mtime, boyut, yazma sayacı) değişmedikçe sonucu sakla. Tek uçuş: aynı anahtarı
+    aynı anda isteyen iş parçacıkları sorguyu bir kez çalıştırır, diğerleri sonucunu bekler (Özet açılışında 14 istek
+    aynı tabloları aynı anda okuyordu). Sorgu genel kilit dışında: başka defterlerin okuması beklemesin."""
     k = (name, stamp(), *key)
     with _CACHE_LOCK:
         hit = _READ_CACHE.get(k, _MISS)
-    if hit is not _MISS:
-        return hit
-    val = fn()  # sorgu kilit dışında: başka defterlerin okuması beklemesin
-    with _CACHE_LOCK:
-        if len(_READ_CACHE) > 256:
-            _READ_CACHE.clear()
-        _READ_CACHE[k] = val
+        if hit is not _MISS:
+            return hit
+        lock = _FLIGHTS.setdefault(k, threading.Lock())
+    with lock:
+        with _CACHE_LOCK:
+            hit = _READ_CACHE.get(k, _MISS)
+        if hit is not _MISS:
+            return hit
+        val = fn()
+        with _CACHE_LOCK:
+            if len(_READ_CACHE) > 256:
+                _READ_CACHE.clear()
+            _READ_CACHE[k] = val
+            _FLIGHTS.pop(k, None)
     return val
+
+
+def _viewer() -> int | None:
+    """Önbellek anahtarı: ortak defter üyesi süzülmüş veri görür, sahibinkiyle karışmasın."""
+    u = current_user()
+    return u["id"] if u and u.get("member_of") else None
 
 
 _MISS = object()
@@ -1002,22 +1021,27 @@ def installment_parts(e: dict) -> list[tuple[int, str, float]]:
 
 
 def installment_entries() -> list[dict]:
-    with connect() as c:
-        return rows(c.execute("SELECT * FROM entries WHERE installments > 1 AND payment = 'kredi_karti' AND kind = 'gider'"))
+    def load():
+        with connect() as c:
+            return rows(c.execute("SELECT * FROM entries WHERE installments > 1 AND payment = 'kredi_karti' AND kind = 'gider'"))
+    return [dict(r) for r in _cached("installment_entries", load)]
 
 
 def list_entries(month: str | None = None) -> list[dict]:
+    """Kayıtlar (ortak defter üyesine süzülmüş). Damga başına bir kez okunur; çağıran satırı değiştirebilir: kopyası."""
     from app import book, sync
 
-    with connect() as c:
-        if month:
-            out = book.filter_entries(rows(c.execute("SELECT * FROM entries WHERE month = ? ORDER BY entry_date DESC, id DESC", (month,))))
-        else:
-            out = book.filter_entries(rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC")))
-    info = sync.match_info()  # "Dökümle eşleşti" rozeti (eşleşmeyi geri al)
-    for e in out:
-        e["match"] = info.get(e["id"])
-    return out
+    def load():
+        with connect() as c:
+            if month:
+                out = book.filter_entries(rows(c.execute("SELECT * FROM entries WHERE month = ? ORDER BY entry_date DESC, id DESC", (month,))))
+            else:
+                out = book.filter_entries(rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC")))
+        info = sync.match_info()  # "Dökümle eşleşti" rozeti (eşleşmeyi geri al)
+        for e in out:
+            e["match"] = info.get(e["id"])
+        return out
+    return [dict(e) for e in _cached("list_entries", load, month, _viewer())]
 
 
 def cycle_start_day() -> int:
@@ -1796,8 +1820,10 @@ def delete_goal(gid: int) -> None:
 # ---------------------------------------------------------------- sabit kalem: aya özel tutar
 
 def recurring_overrides() -> dict[tuple[int, str], float]:
-    with connect() as c:
-        return {(r[0], r[1]): r[2] for r in c.execute("SELECT recurring_id, month, amount FROM recurring_overrides")}
+    def load():
+        with connect() as c:
+            return {(r[0], r[1]): r[2] for r in c.execute("SELECT recurring_id, month, amount FROM recurring_overrides")}
+    return dict(_cached("recurring_overrides", load))
 
 
 def set_recurring_override(rid: int, month: str, amount: float | None) -> None:
@@ -1835,9 +1861,14 @@ def amount_at(r: dict, month: str) -> float:
 
 
 def amount_changes(recurring_id: int) -> list[dict]:
-    with connect() as c:
-        return rows(c.execute("SELECT id, from_month, amount FROM recurring_changes WHERE recurring_id = ? "
-                              "ORDER BY from_month, id", (recurring_id,)))
+    """Sabit kalemin tutar değişiklikleri; tablo damga başına bir kez okunur (salary_changes gibi)."""
+    def load():
+        by: dict[int, list] = {}
+        with connect() as c:
+            for r in c.execute("SELECT recurring_id, id, from_month, amount FROM recurring_changes ORDER BY from_month, id"):
+                by.setdefault(r[0], []).append({"id": r[1], "from_month": r[2], "amount": r[3]})
+        return by
+    return [dict(r) for r in _cached("amount_changes", load).get(recurring_id, [])]
 
 
 def add_amount_change(recurring_id: int, from_month: str, amount: float) -> int:
@@ -1855,9 +1886,15 @@ def delete_amount_change(cid: int) -> None:
 # ---------------------------------------------------------------- maaş değişiklikleri
 
 def salary_changes(recurring_id: int) -> list[dict]:
-    with connect() as c:
-        return rows(c.execute("SELECT * FROM salary_changes WHERE recurring_id = ? ORDER BY from_month, id",
-                              (recurring_id,)))
+    """Bir sabit kalemin maaş değişiklikleri. Tablo damga başına bir kez okunur (Özet'te kalem × ay kez çağrılıyordu:
+    istek başı ~380 sorgu)."""
+    def load():
+        by: dict[int, list] = {}
+        with connect() as c:
+            for r in rows(c.execute("SELECT * FROM salary_changes ORDER BY from_month, id")):
+                by.setdefault(r["recurring_id"], []).append(r)
+        return by
+    return [dict(r) for r in _cached("salary_changes", load).get(recurring_id, [])]
 
 
 def add_salary_change(recurring_id: int, data: dict) -> int:
