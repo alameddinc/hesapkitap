@@ -150,7 +150,8 @@ function Senders({ senders }: { senders: string[] }) {
             <li key={s} className="flex items-center justify-between gap-2 px-3 py-1.5">
               <span className="min-w-0 truncate">{s}</span>
               <button className="btn-ghost p-1 text-red-600" aria-label={`${s} adresini sil`} disabled={save.isPending}
-                onClick={() => save.mutate(senders.filter((x) => x !== s), onErr)}><Trash2 size={14} /></button>
+                onClick={() => void ask(`${s} güvenilen adreslerden çıkarılsın mı?\n\nBu adresten iletilen belgeler artık kabul edilmez.`, { confirm: "Çıkar", irreversible: false })
+                  .then((ok) => { if (ok) save.mutate(senders.filter((x) => x !== s), onErr); })}><Trash2 size={14} /></button>
             </li>
           ))}
         </ul>

@@ -13,11 +13,7 @@ interface Suggestion {
   history: { month: string; amount: number }[];
 }
 
-const post = (url: string, body: unknown) =>
-  fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => {
-    if (!r.ok) throw new Error("İşlem yapılamadı");
-    return r.json();
-  });
+const post = (url: string, body: unknown) => send(url, { method: "POST", json: body });
 
 /** Hareketlerde her ay tekrarlayan ödemeler (kira, aidat, internet…): tek tıkla sabit kalem olur, planlamaya girer. */
 export default function RecurringSuggestions() {

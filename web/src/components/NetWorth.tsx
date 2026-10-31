@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call } from "../lib/apiError";
 import { AlertTriangle, ChevronDown, ChevronRight, CreditCard, GitMerge, Landmark, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
 import type { CardCycle } from "../api";
@@ -44,12 +44,7 @@ function CardOverdue({ d, compact }: { d: NW; compact?: boolean }) {
   );
 }
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 /** Gerçek durum: hesaplardaki para (dökümden ya da elle) + kartlar − kart borcu ± borç/alacak.
  *  compact: Özet'teki tek satırlık özet (dokununca Hesaplar sayfası); değilse sayfanın tamamı. */
@@ -199,7 +194,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                     <button className="btn-ghost p-1 text-stone-400 hover:text-blue-600" aria-label={`${a.name}: başka hesapla birleştir`}
                       title="Başka hesapla birleştir" onClick={() => setMerging(a)}><GitMerge size={13} /></button>
                   )}
-                  <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
+                  <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label={`${a.name} hesabını sil`} disabled={del.isPending}
                     onClick={() => void ask(`${a.name} silinsin mi?`).then((ok) => { if (ok) del.mutate(a.id); })}><Trash2 size={13} /></button>
                 </li>
               ))}

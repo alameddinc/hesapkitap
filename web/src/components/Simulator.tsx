@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cx, monthLabel, parseAmount, tl } from "../format";
@@ -40,10 +41,9 @@ export default function Simulator({ onClose }: { onClose: () => void }) {
   const params = useDebounced({ a, n, r });
   const q = useQuery({
     queryKey: ["simulate", params],
-    queryFn: () => fetch("/api/plan/simulate", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: params.a, installments: params.n, monthly_rate: params.r }),
-    }).then((x) => x.json() as Promise<SimResult>),
+    queryFn: () => send<SimResult>("/api/plan/simulate", {
+      method: "POST", json: { amount: params.a, installments: params.n, monthly_rate: params.r },
+    }),
     enabled: params.a > 0 && Number.isFinite(params.r),
   });
   const d = q.data;

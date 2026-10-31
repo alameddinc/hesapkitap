@@ -53,10 +53,10 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
     onSaved?.(`${partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`}${linked ? " · dökümdeki ödemeyle eşleşti" : ""}`);
     if (warning) setWarn(warning); // kayıt yapıldı; uyarı okunsun diye pencere açık kalır
     else onClose();
-  });
+  }, { inline: true });
   const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!)
     : debt ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
-    () => { onSaved?.("Ödeme geri alındı"); onClose(); });
+    () => { onSaved?.("Ödeme geri alındı"); onClose(); }, { inline: true });
   const chip = "btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700";
 
   return (

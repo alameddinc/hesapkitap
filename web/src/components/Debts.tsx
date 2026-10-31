@@ -1,6 +1,6 @@
 import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call } from "../lib/apiError";
 import { useState } from "react";
 import { cx, dateTR, maskText, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -42,12 +42,7 @@ export function fmtAsset(x: number, asset: string) {
   return maskText(`${n} ${assetLabel(asset)}`);
 }
 
-const json = async (method: string, url: string, body?: unknown) => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j;
-};
+const json = (method: string, url: string, body?: unknown) => call<any>(method, url, body);
 const today = () => new Date().toISOString().slice(0, 10);
 
 /** Borç / alacak defteri: gelir-gider toplamlarını etkilemez; kim kime ne (TL, döviz, altın) borçlu. */
@@ -130,7 +125,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
             Vazgeçtim
           </button>
         )}
-        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil"
+        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
           onClick={() => void ask("Kayıt silinsin mi? Bağlı havaleler yeniden normal gelir/gider sayılır.").then((ok) => { if (ok) del.mutate(d.id); })}>
           <Trash2 size={14} />
         </button>
@@ -261,7 +256,7 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
   const [accountId, setAccountId] = useState<number | null>(d.account_id);
   const save = useSave(() => json("POST", `/api/debts/${d.id}/pay`, { amount: parseAmount(amount), paid_at: date,
     account_id: d.asset === "TRY" ? accountId : null }),
-    () => { ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı"); onDone(); });
+    () => { ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı"); onDone(); }, { inline: true });
   return (
     <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50/50 p-3 dark:border-blue-900 dark:bg-blue-950/20">
       <div className="text-sm">

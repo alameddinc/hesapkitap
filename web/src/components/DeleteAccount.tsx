@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { send } from "../lib/apiError";
+import { send, bodyOf } from "../lib/apiError";
 import { CircleCheck, Download, ExternalLink, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { dayMonth, onDate } from "./PendingDeletion";
@@ -27,7 +27,7 @@ export default function DeleteAccount() {
   const [step, setStep] = useState<Step>("kapali");
   const sub = useQuery({
     queryKey: ["my-subscription"], enabled: step !== "kapali", staleTime: 0,
-    queryFn: () => fetch("/api/me/subscription").then((r) => (r.ok ? r.json() as Promise<Sub> : null)),
+    queryFn: () => fetch("/api/me/subscription").then(async (r) => (r.ok ? await bodyOf(r) as Sub | null : null)),
   });
   const [pw, setPw] = useState("");
   const [onay, setOnay] = useState("");

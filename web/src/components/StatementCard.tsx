@@ -39,9 +39,9 @@ export default function StatementCard({ s }: { s: Statement }) {
   const eq = equation(s);
   const fees = feesOf(s);
   const name = `${s.bank} · ${s.card_no}`;
-  const confirm = useSave(() => api.confirmStatement(s.id), () => ui.toast("Onaylandı: rakamlar ekstreyle aynı"));
-  const unconfirm = useSave(() => api.unconfirmStatement(s.id), () => ui.toast("Onay geri alındı"));
-  const del = useSave(() => api.deleteStatement(s.id), () => ui.toast("Ekstre silindi"));
+  const confirm = useSave(() => api.confirmStatement(s.id), () => ui.toast("Onaylandı: rakamlar ekstreyle aynı"), { inline: true });
+  const unconfirm = useSave(() => api.unconfirmStatement(s.id), () => ui.toast("Onay geri alındı"), { inline: true });
+  const del = useSave(() => api.deleteStatement(s.id), () => ui.toast("Ekstre silindi"), { inline: true });
   const pdf = `/api/statements/${s.id}/file`;
   // "Ödedim" penceresi (Payables ile aynı): ekstreden ödenecek kalem
   const paid = s.paid_amount != null && s.paid_amount >= s.total_debt - 0.01;

@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellOff, Check, Clock, CreditCard, FileText, GitMerge, HandCoins, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, errStatus, movedCount } from "../api";
+import { api, errStatus, movedCount } from "../api";
 import { cx, dateTR, tl } from "../format";
 import { useUI, type Route } from "../ui";
 import { useOpenRow, useSave } from "./hooks";
-import { errorText } from "../lib/apiError";
+import { bodyOf, call } from "../lib/apiError";
 import { PairCards } from "./MatchInfo";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
@@ -27,9 +27,7 @@ export interface Reminder {
 }
 
 const post = (id: string, what: "snooze" | "dismiss", body?: object) =>
-  fetch(`/api/reminders/${encodeURIComponent(id)}/${what}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined,
-  }).then((r) => { if (!r.ok) throw new Error("Kaydedilemedi"); return r.json(); });
+  call("POST", `/api/reminders/${encodeURIComponent(id)}/${what}`, body);
 
 // banka rozeti: logo uydurmadan, adın baş harfi + addan türeyen sabit bir ton
 const TONES = [
@@ -243,14 +241,7 @@ function CardUnmatched({ r }: { r: Reminder }) {
 function DebtQuestion({ r }: { r: Reminder }) {
   const ui = useUI();
   const fail = useAnswerError();
-  const yes = useSave(async () => {
-    const res = await fetch(`/api/debts/${r.debt_id}/pay`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.pay) });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      throw new ApiError(errorText(j, res.status), res.status);
-    }
-    return res.json();
-  }, () => ui.toast("Borçtan düşüldü · gelir/gider sayılmaz"));
+  const yes = useSave(() => call("POST", `/api/debts/${r.debt_id}/pay`, r.pay), () => ui.toast("Borçtan düşüldü · gelir/gider sayılmaz"));
   const no = useSave(() => post(r.id, "dismiss"), () => ui.toast("Tamam, ayrı hareket olarak kalır"));
   const busy = yes.isPending || no.isPending;
   return (
@@ -278,7 +269,7 @@ export default function Reminders() {
   const ui = useUI();
   const q = useQuery({
     queryKey: ["reminders"], staleTime: 60_000,
-    queryFn: () => fetch("/api/reminders").then((r) => (r.ok ? r.json() : []) as Promise<Reminder[]>),
+    queryFn: () => fetch("/api/reminders").then(async (r) => ((r.ok && await bodyOf(r)) || []) as Reminder[]),
   });
   const pay = useQuery({ queryKey: ["payables"], queryFn: api.payables });
   const [all, setAll] = useState(false);

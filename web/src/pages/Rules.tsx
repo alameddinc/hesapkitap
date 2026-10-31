@@ -21,7 +21,7 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
       <div className="flex gap-2 sm:w-72">
         <div className="flex-1"><CategoryPicker value={category} onChange={setCategory} options={cats} /></div>
         {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}
-        <button className="btn-danger p-2" aria-label="Sil" onClick={() => void ask("Kural silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
+        <button className="btn-danger p-2" aria-label="Sil" disabled={del.isPending} onClick={() => void ask("Kural silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
         </button>
       </div>

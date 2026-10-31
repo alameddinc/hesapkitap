@@ -1,26 +1,43 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { send } from "../lib/apiError";
-import { useRef } from "react";
+import { ApiError, bodyOf, failureText, send } from "../lib/apiError";
+import { useCallback, useContext, useRef } from "react";
+import { UIContext } from "../ui";
 import { newKey, withAction } from "../lib/idem";
 import { api, type Row } from "../api";
 import { addMonths, periodOf } from "../format";
 
 export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta });
 
-/** Her yazma işleminden sonra tüm sorguları tazele: veri küçük, basitlik daha değerli. */
-export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void) {
+/** Her yazma işleminden sonra tüm sorguları tazele: veri küçük, basitlik daha değerli.
+ *  Hata: çağrıda onError verilmediyse ve form hatayı kendisi göstermiyorsa (inline) hata bildirimi çıkar —
+ *  hiçbir yazma hatası sessiz kalmaz, düğme yeniden açılır. */
+export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void, opts?: { inline?: boolean }) {
   const qc = useQueryClient();
+  const ui = useContext(UIContext);
   // eylem anahtarı (Idempotency-Key): başarıya kadar aynı kalır — ağ hatasından sonra tekrar basılan "Kaydet"
   // aynı anahtarla gider, sunucu işlemi ikinci kez yapmaz; başarıdan sonra sıradaki eylem yeni anahtar alır
   const key = useRef<string | null>(null);
-  return useMutation({
-    mutationFn: (a: A) => withAction(key.current ??= newKey(), () => fn(a)),
+  const handled = useRef(false); // bu çağrının kendi onError'u var mı
+  const m = useMutation({
+    mutationFn: (a: A) => withAction(key.current ??= newKey(), async () => {
+      const r = await fn(a);
+      // fn çıplak fetch yanıtı döndürdüyse: hata yanıtı başarı sayılmasın ("Silindi" denip silinmemesin)
+      if (r instanceof Response && !r.ok) {
+        const body = await bodyOf(r.clone());
+        throw new ApiError(failureText(r.status, body), r.status, body);
+      }
+      return r;
+    }),
     onSuccess: (r) => {
       key.current = null;
       qc.invalidateQueries();
       onDone?.(r);
     },
+    onError: (e) => { if (!handled.current && !opts?.inline) ui?.toast(e.message); },
   });
+  const { mutate: run } = m;
+  const mutate = useCallback((...args: Parameters<typeof run>) => { handled.current = !!args[1]?.onError; run(...args); }, [run]) as typeof run;
+  return { ...m, mutate };
 }
 
 /** Ortak defter: bu kullanıcı başkasının defterinin üyesi mi, hangi defter açık, yetkisi, neler kapalı (sunucu da ayrıca uygular). */
@@ -33,7 +50,7 @@ export interface BookInfo {
 
 export const useBook = () => useQuery({
   queryKey: ["book-me"], staleTime: 60_000,
-  queryFn: () => fetch("/api/book/me").then((r) => (r.ok ? r.json() : { member: false }) as Promise<BookInfo>),
+  queryFn: () => fetch("/api/book/me").then(async (r) => ((r.ok && await bodyOf(r)) || { member: false }) as BookInfo),
 });
 
 /** Üye ortak defterde mi? (kendi defterinde kısıt yok) */
@@ -100,8 +117,8 @@ export const routeVisible = (b: BookInfo | undefined, route: string, modules?: R
 /** Sahip ve en az bir üyesi var mı? (işlemde "Ortak defterde gizle" seçeneği o zaman görünür) */
 export const useHasMembers = () => useQuery({
   queryKey: ["book"], retry: false, staleTime: 60_000,
-  queryFn: () => fetch("/api/book").then((r) => (r.ok ? r.json() : null) as Promise<{ members: unknown[] } | null>),
-  select: (d) => !!d?.members.length,
+  queryFn: () => fetch("/api/book").then(async (r) => (r.ok ? await bodyOf(r) : null) as { members: unknown[] } | null),
+  select: (d) => !!d?.members?.length,
 });
 
 /** Canlı demo: süre ve örnek dosyalar (demo değilse null). */
@@ -109,7 +126,7 @@ export interface DemoInfo { expires_at: number; ttl: number; samples: { key: str
 
 export const useDemo = () => useQuery({
   queryKey: ["demo"], staleTime: Infinity, retry: false,
-  queryFn: () => fetch("/api/demo").then((r) => (r.ok ? r.json() : null) as Promise<DemoInfo | null>),
+  queryFn: () => fetch("/api/demo").then(async (r) => (r.ok ? await bodyOf(r) : null) as DemoInfo | null),
 });
 
 /** Kişisel görünüm (sade mod, Özet düzeni): sunucuda kişi bazında saklanır. */
@@ -119,8 +136,7 @@ export function useUiPrefs() {
   const ui = meta.data?.ui ?? { simple: false, layout: null };
   const save = useMutation({
     mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean }) =>
-      fetch("/api/me/ui", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-        .then((r) => r.json()),
+      send("/api/me/ui", { method: "PUT", json: body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["meta"] }),
   });
   return { ui, save };

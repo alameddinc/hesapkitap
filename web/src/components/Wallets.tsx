@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask as askConfirm } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call } from "../lib/apiError";
 import { ChevronDown, CreditCard, Gift, Plus, Shirt, Trash2, Utensils } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
@@ -17,12 +17,7 @@ const TYPES = { yemek: "Yemek", hediye: "Hediye", giyim: "Giyim", diger: "Diğer
 const Icon = ({ t }: { t: Wallet["card_type"] }) =>
   t === "yemek" ? <Utensils size={14} /> : t === "hediye" ? <Gift size={14} /> : t === "giyim" ? <Shirt size={14} /> : <CreditCard size={14} />;
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 function WalletRow({ w }: { w: Wallet }) {
   const ui = useUI();
@@ -74,7 +69,7 @@ function WalletRow({ w }: { w: Wallet }) {
               <button className="btn-ghost border border-stone-300 px-2 py-1 dark:border-stone-700"
                 onClick={() => act("POST", `/api/wallets/${w.id}/schedule/stop`, { mode: "resume" }, "Yükleme devam ediyor")}>Devam et</button>
             )}
-            <button className="btn-ghost px-2 py-1 text-red-600"
+            <button className="btn-ghost px-2 py-1 text-red-600" aria-label={`${w.name} kartını sil`} disabled={save.isPending}
               onClick={() => void askConfirm(`${w.name} silinsin mi? Geçmiş harcamalar kayıtlarda kalır.`).then((ok) => { if (ok) act("DELETE", `/api/wallets/${w.id}`, undefined, "Kart silindi"); })}>
               <Trash2 size={13} />
             </button>

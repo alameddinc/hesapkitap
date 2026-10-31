@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call } from "../lib/apiError";
 import { ChevronDown, Info, Moon, Plus, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useSave } from "../components/hooks";
@@ -28,12 +28,7 @@ interface ZakatData {
   people: Person[];
 }
 
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 const today = () => new Date().toISOString().slice(0, 10);
 
 interface HistYear {
@@ -205,7 +200,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                   <li key={x.id} className="flex items-center justify-between gap-2">
                     <span>{dateTR(x.pay_date)} {x.note && `· ${x.note}`}</span>
                     <span className="flex items-center gap-1 tabular-nums">{tl(x.amount)}
-                      <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Ödemeyi sil"
+                      <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Ödemeyi sil" disabled={delPay.isPending}
                         onClick={() => void ask("Ödeme silinsin mi?").then((ok) => { if (ok) delPay.mutate(x.id); })}><Trash2 size={12} /></button>
                     </span>
                   </li>
@@ -251,7 +246,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                   {x.source !== "varlik" && <span className="text-xs text-stone-400"> · uygulamadan</span>}
                 </span>
                 <span className="flex items-center gap-1 tabular-nums">{x.value != null ? tl(x.value) : "?"}
-                  {x.id && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil"
+                  {x.id && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={delAsset.isPending}
                     onClick={() => void ask(`${x.label} silinsin mi?`).then((ok) => { if (ok) delAsset.mutate(x.id!); })}><Trash2 size={12} /></button>}
                 </span>
               </li>
@@ -269,7 +264,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               const v = window.prompt("Zekât yılının başladığı gün (YYYY-AA-GG):", h.start);
               if (v) setStart.mutate(v, onErr);
             }}>Yıl başlangıcını değiştir</button>}
-            {!p.is_self && <button className="btn-danger px-2 py-1 text-xs"
+            {!p.is_self && <button className="btn-danger px-2 py-1 text-xs" disabled={delPerson.isPending}
               onClick={() => void ask(`${p.name} ve varlıkları silinsin mi?`).then((ok) => { if (ok) delPerson.mutate(undefined, onErr); })}>Kişiyi sil</button>}
           </div>
         </div>

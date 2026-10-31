@@ -1,17 +1,12 @@
 import { FileSpreadsheet, FolderDown, Upload } from "lucide-react";
-import { errorText } from "../lib/apiError";
+import { call } from "../lib/apiError";
 import { useRef, useState } from "react";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
 interface RestoreResult { entries: number; statements: number; files: number; before: string }
 
-const send = async (url: string, body?: FormData): Promise<RestoreResult> => {
-  const r = await fetch(url, { method: "POST", body });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j;
-};
+const send = (url: string, body?: FormData) => call<RestoreResult>("POST", url, body);
 
 export const restoreNamed = (name: string) => send(`/api/settings/backup/${encodeURIComponent(name)}/restore`);
 
@@ -30,7 +25,7 @@ export default function BackupTools() {
     fd.append("file", file!);
     if (pass) fd.append("passphrase", pass);
     return send("/api/settings/backup/restore", fd);
-  }, (r) => { setFile(null); setPass(""); ui.toast(restoredMsg(r)); });
+  }, (r) => { setFile(null); setPass(""); ui.toast(restoredMsg(r)); }, { inline: true });
 
   return (
     <div className="space-y-3 rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { send } from "../lib/apiError";
 import { Share2, Trash2 } from "lucide-react";
 import { useEffect } from "react";
@@ -44,8 +45,8 @@ export default function SharedInbox() {
               {(i.doc.installments ?? 1) > 1 && ` · ${i.doc.installments} taksit`}
               <span className="block text-xs text-stone-500">Dokun: kontrol et ve kaydet</span>
             </button>
-            <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
-              onClick={() => close.mutate({ id: i.id, action: "silindi" })}><Trash2 size={14} /></button>
+            <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={close.isPending}
+              onClick={() => void ask("Paylaşılan belge silinsin mi?\n\nKaydedilmeden atılır.").then((ok) => { if (ok) close.mutate({ id: i.id, action: "silindi" }); })}><Trash2 size={14} /></button>
           </li>
         ))}
       </ul>

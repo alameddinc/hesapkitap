@@ -83,7 +83,43 @@ export function networkText(): string {
 /** Vekil/sunucu yanıt vermiyor (502/503/504, gövde JSON değil). */
 const GATEWAY = new Set([502, 503, 504]);
 
-/** fetch + JSON gövde; ağ hatası ve hata yanıtı Türkçe metinli Error olarak fırlar (status, body ekli).
+/** Başarılı (2xx) ama JSON olmayan yanıt: vekilin HTML sayfası, boş gövde, eski önbellekteki index.html. */
+export const UNEXPECTED = "Sunucudan beklenmeyen bir yanıt geldi; sayfayı yenileyip tekrar dene.";
+
+/** Sunucu hatası: Türkçe metin, HTTP durumu (0: yanıt alınamadı) ve varsa çözülmüş gövde. */
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+  constructor(message: string, status: number, body: unknown = null) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/** Hata yanıtının Türkçe metni (gövde JSON değilse durum koduna göre). */
+export function failureText(status: number, body: unknown): string {
+  if (body && typeof body === "object") return errorText(body as Body, status);
+  return GATEWAY.has(status) ? "Sunucu şu an yanıt vermiyor; biraz sonra tekrar dene." : detailText(undefined, status);
+}
+
+/** Yanıtın JSON gövdesi; çözülemezse null (fırlatmaz). */
+export async function bodyOf(res: Response): Promise<unknown> {
+  const text = await res.text().catch(() => "");
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+/** Yanıt → gövde. Hata yanıtı ve JSON olmayan başarılı yanıt Türkçe metinli ApiError olarak fırlar
+ *  ("Unexpected token '<'" ya da "[object Object]" hiçbir zaman görünmez). */
+export async function readBody<T = unknown>(res: Response): Promise<T> {
+  const body = await bodyOf(res);
+  if (!res.ok) throw new ApiError(failureText(res.status, body), res.status, body);
+  if (body === null) throw new ApiError(UNEXPECTED, res.status);
+  return body as T;
+}
+
+/** fetch + JSON gövde; ağ hatası ve hata yanıtı Türkçe metinli ApiError olarak fırlar (status, body ekli).
  *  Çağıran try/finally ile "meşgul" durumunu her koşulda bırakır. */
 export async function send<T = unknown>(url: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = init;
@@ -92,13 +128,11 @@ export async function send<T = unknown>(url: string, init: RequestInit & { json?
   try {
     res = await fetch(url, rest);
   } catch {
-    throw Object.assign(new Error(networkText()), { status: 0, body: null });
+    throw new ApiError(networkText(), 0);
   }
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const msg = body ? errorText(body, res.status)
-      : GATEWAY.has(res.status) ? "Sunucu şu an yanıt vermiyor; biraz sonra tekrar dene." : detailText(undefined, res.status);
-    throw Object.assign(new Error(msg), { status: res.status, body });
-  }
-  return body as T;
+  return readBody<T>(res);
 }
+
+/** Bileşenlerdeki eski json(method, url, body) yardımcılarının ortak karşılığı. */
+export const call = <T = unknown>(method: string, url: string, body?: unknown): Promise<T> =>
+  send<T>(url, body instanceof FormData ? { method, body } : { method, json: body });

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { call } from "../lib/apiError";
 import { useState } from "react";
 import { dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -7,12 +7,7 @@ import { useSave } from "./hooks";
 import Modal from "./Modal";
 
 const today = () => new Date().toISOString().slice(0, 10);
-const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-};
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
 /** Altın / döviz / para varlığı: kimin, ne, ne kadar, ne zaman, kaça. Zekât ve Net durum aynı listeyi kullanır. */
 export default function AssetForm({ people, kinds, personId, onClose }: {

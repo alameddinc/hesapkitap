@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call, send } from "../lib/apiError";
 import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, GitMerge, HandCoins, Pencil, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
@@ -50,12 +50,7 @@ interface Data { people: Person[]; own: Own[]; items: Item[]; debts: Debt[]; sel
 
 const shortBank = (b: string | null) => (b ? b.replace(/\s+(KATILIM\s+)?BANKASI.*$/i, "").replace(/\s+A\.?Ş\.?$/i, "") : "Hesap");
 
-async function json<T>(method: string, url: string, body: object): Promise<T> {
-  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-}
+const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 const putPerson = (name: string, body: object) => json<{ updated: number }>("PUT", `/api/transfers/people/${encodeURIComponent(name)}`, body);
 
 const sumKind = (l: Item[], k: "gider" | "gelir") => l.filter((i) => i.kind === k).reduce((a, i) => a + i.amount, 0);
@@ -71,7 +66,7 @@ export default function Transfers() {
   const [from, to] = periodBounds(ui.month, startDay);
   const url = mode === "ay" ? `/api/transfers?start=${from}&end=${to}` : "/api/transfers";
   const q = useQuery({ queryKey: ["transfers", mode === "ay" ? ui.month : "tumu", startDay],
-    queryFn: () => fetch(url).then((r) => r.json() as Promise<Data>) });
+    queryFn: () => send<Data>(url) });
   const [open, setOpen] = useState<string | null>(null);
   const [rename, setRename] = useState<{ name: string; merge: boolean } | null>(null);
   const [own, setOwn] = useState<Own | null>(null);
@@ -331,7 +326,7 @@ function RenamePerson({ name, merge, people, count, debts, onClose, onDone }: {
     `/api/transfers/people/${encodeURIComponent(name)}`, { name: joins ?? t }), (r) => {
     ui.toast(r.merged ? `${name}, ${r.name} ile birleşti` : `Ad “${r.name}” oldu`);
     onDone(r.name);
-  });
+  }, { inline: true });
   return (
     <Modal title={merge ? "Başka kişiyle birleştir" : "Adı düzenle"} onClose={onClose} footer={<>
       <div className="flex-1" />
@@ -372,10 +367,10 @@ function OwnTransferForm({ o, onClose }: { o: Own; onClose: () => void }) {
   const [note, setNote] = useState(o.note ?? "");
   const save = useSave(() => json("PATCH", `/api/own-transfers/${o.id}`, { description: desc.trim(), note: note.trim() }), () => {
     ui.toast("Aktarım kaydedildi"); onClose();
-  });
+  }, { inline: true });
   const convert = useSave(() => json<{ kind: string }>("PATCH", `/api/own-transfers/${o.id}`, { not_transfer: true }), (r) => {
     ui.toast(r.kind === "gelir" ? "Gelir kaydına çevrildi" : "Gider kaydına çevrildi"); onClose();
-  });
+  }, { inline: true });
   const err = (save.error || convert.error) as Error | null;
   const kindWord = o.amount > 0 ? "Gelir" : "Gider";
   return (

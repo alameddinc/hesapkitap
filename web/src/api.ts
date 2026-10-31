@@ -1,4 +1,4 @@
-import { detailText, errorText, networkText } from "./lib/apiError";
+import { ApiError, call } from "./lib/apiError";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
@@ -424,40 +424,11 @@ export interface UploadResult {
   manual?: boolean; quota_full?: boolean; limit?: number; upgrade?: boolean; // hazır sürüm: belge okuma hakkı doldu (okunmadı)
 }
 
-/** Sunucu hatası: mesaj sunucunun "detail" metni, status HTTP kodu (409: soru artık geçerli değil, 403: yetki yok). */
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
-}
+export { ApiError };
 export const errStatus = (e: unknown) => (e instanceof ApiError ? e.status : 0);
 
-async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method };
-  if (body instanceof FormData) init.body = body;
-  else if (body !== undefined) {
-    init.body = JSON.stringify(body);
-    init.headers = { "Content-Type": "application/json" };
-  }
-  let res: Response;
-  try {
-    res = await fetch(url, init);
-  } catch {
-    throw new ApiError(networkText(), 0); // çevrimdışı mı sunucu mu: networkText ayırır
-  }
-  if (!res.ok) {
-    let msg = [502, 503, 504].includes(res.status) ? "Sunucu şu an yanıt vermiyor; biraz sonra tekrar dene." : detailText(undefined, res.status);
-    try {
-      const j = await res.json();
-      msg = errorText(j, res.status);
-    } catch {
-      /* gövde JSON değil */
-    }
-    throw new ApiError(msg, res.status);
-  }
-  return res.json() as Promise<T>;
+function req<T>(method: string, url: string, body?: unknown): Promise<T> {
+  return call<T>(method, url, body);
 }
 
 const q = (params: Record<string, string | number | boolean | undefined>) =>

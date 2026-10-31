@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { send as apiSend } from "../lib/apiError";
 import { CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 import Modal from "./Modal";
@@ -12,10 +13,7 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
   const [tester, setTester] = useState(() => new URLSearchParams(window.location.search).has("test"));
   const send = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/demo/waitlist", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, platform, note, tester }) });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? "Kaydedilemedi");
-      return r.json() as Promise<{ new: boolean }>;
+      return apiSend<{ new: boolean }>("/api/demo/waitlist", { method: "POST", json: { email, platform, note, tester } });
     },
   });
   if (send.isSuccess) {

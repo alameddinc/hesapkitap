@@ -14,8 +14,8 @@ export default function ShareSetup() {
   const q = useQuery({ queryKey: ["tokens"], queryFn: () => send<
     { id: number; name: string | null; created_at: string; last_used: string | null }[]>("/api/settings/tokens") });
   const [token, setToken] = useState<string | null>(null);
-  const create = useSave(() => fetch("/api/settings/tokens", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "iPhone Paylaş" }) }).then((r) => r.json() as Promise<{ token: string }>), (r) => setToken(r.token));
+  const create = useSave(() => send<{ token: string }>("/api/settings/tokens", { method: "POST", json: { name: "iPhone Paylaş" } }),
+    (r) => setToken(r.token));
   const del = useSave((id: number) => fetch(`/api/settings/tokens/${id}`, { method: "DELETE" }), () => ui.toast("Anahtar silindi"));
   const url = `${window.location.origin}/api/share`;
   const sc = useQuery({ queryKey: ["shortcut"], queryFn: () => send<{ available: boolean; camera?: boolean }>("/api/share/shortcut") });
@@ -105,7 +105,7 @@ export default function ShareSetup() {
           {q.data.map((t) => (
             <li key={t.id} className="flex items-center justify-between gap-2 py-1.5">
               <span>{t.name ?? "Anahtar"} · oluşturuldu {tsDateTR(t.created_at)}{t.last_used ? ` · son kullanım ${tsDateTR(t.last_used)}` : " · hiç kullanılmadı"}</span>
-              <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Anahtarı sil"
+              <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Anahtarı sil" disabled={del.isPending}
                 onClick={() => void ask("Anahtar silinsin mi? Onu kullanan kısayol çalışmaz.").then((ok) => { if (ok) del.mutate(t.id); })}><Trash2 size={13} /></button>
             </li>
           ))}

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import { call as apiCall } from "../lib/apiError";
 import { Copy, Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, tsDateTR } from "../format";
@@ -16,13 +16,7 @@ interface UserRow {
 interface Invite { code: string; note: string | null; created_at: string; expires_at: string | null; used_by_name: string | null; used_at: string | null }
 interface AdminData { users: UserRow[]; invites: Invite[]; default_quota: number; hosted?: boolean }
 
-async function call<T>(url: string, method = "POST", body?: unknown): Promise<T> {
-  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorText(j, r.status));
-  return j as T;
-}
+const call = <T,>(url: string, method = "POST", body?: unknown) => apiCall<T>(method, url, body);
 
 const inviteLink = (code: string) => `${window.location.origin}/#/kayit?kod=${code}`;
 
@@ -139,7 +133,7 @@ export default function Users() {
                   onClick={() => patch.mutate({ id: u.id, body: { disabled: !u.disabled } }, onErr)}>
                   {u.disabled ? "Aç" : "Kapat"}
                 </button>
-                <button className="btn-danger px-2 py-1"
+                <button className="btn-danger px-2 py-1" disabled={del.isPending}
                   onClick={() => void ask(`${u.username} silinsin mi? Giriş yapamaz; veri dosyası sunucuda arşive taşınır.`).then((ok) => { if (ok) del.mutate(u, onErr); })}>
                   <Trash2 size={14} /> Sil
                 </button>
@@ -161,7 +155,8 @@ export default function Users() {
                   {i.expires_at && <span className="text-xs text-stone-500"> · {dateTR(i.expires_at)}'e kadar</span>}</span>
                 <span className="flex gap-1">
                   <button className="btn-ghost px-2 py-1 text-xs" onClick={() => copy(inviteLink(i.code))}><Copy size={14} /> Bağlantı</button>
-                  <button className="btn-ghost px-2 py-1 text-xs" aria-label="Daveti sil" onClick={() => delInvite.mutate(i.code, onErr)}><Trash2 size={14} /></button>
+                  <button className="btn-ghost px-2 py-1 text-xs" aria-label="Daveti sil" disabled={delInvite.isPending}
+                    onClick={() => void ask("Davet silinsin mi?\n\nBağlantı artık çalışmaz.", { irreversible: false }).then((ok) => { if (ok) delInvite.mutate(i.code, onErr); })}><Trash2 size={14} /></button>
                 </span>
               </li>
             ))}

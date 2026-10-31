@@ -27,13 +27,13 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   const save = useSave((body: Record<string, unknown>) => api.patchCard(row.id, body), (r) => {
     onSaved?.(r.rule ? `Kaydedildi · kural: ${r.rule}` : "Kaydedildi");
     onClose();
-  });
+  }, { inline: true });
 
   const categoryChanged = category !== row.category && category !== "";
   const [downgrade, setDowngrade] = useState(false);
   const subSave = useSave((status: string) => fetch("/api/subscriptions", {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merchant: row.merchant, status }),
-  }).then((r) => { if (!r.ok) throw new Error("Kaydedilemedi"); }), () => { onSaved?.("Abonelik güncellendi"); onClose(); });
+  }).then((r) => { if (!r.ok) throw new Error("Kaydedilemedi"); }), () => { onSaved?.("Abonelik güncellendi"); onClose(); }, { inline: true });
   const submit = () => {
     const body: Record<string, unknown> = {};
     if (categoryChanged) Object.assign(body, { category, create_rule: makeRule });

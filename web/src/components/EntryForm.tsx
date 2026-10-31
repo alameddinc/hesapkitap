@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText, send } from "../lib/apiError";
+import { send } from "../lib/apiError";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
@@ -91,9 +91,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const itemsCheck = fromReceipt && items.length ? checkItems(items, parseAmount(amount) || null) : null;
   useEffect(() => {
     if (!draft?.items?.length || draft.kind === "gelir") return;
-    fetch("/api/splits/propose", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: draft.items, category: draft.category ?? null, total: draft.amount ?? null }) })
-      .then((r) => r.json() as Promise<{ parts: { amount: number; category: string; description: string }[]; category: string | null }>)
+    send<{ parts: { amount: number; category: string; description: string }[]; category: string | null }>("/api/splits/propose",
+      { method: "POST", json: { items: draft.items, category: draft.category ?? null, total: draft.amount ?? null } })
       .then((p) => {
         if (p.category) { setCategory(p.category); setWholeCat(p.category); }
         if (p.parts?.length) setParts(p.parts.map((x) => ({ amount: String(x.amount).replace(".", ","), category: x.category, description: x.description })));
@@ -169,7 +168,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     <Modal title={title} onClose={onClose} footer={
       <>
         {(editingEntry || rec) && !member && (
-          <button className="btn-danger" onClick={() => void ask("Silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
+          <button className="btn-danger" disabled={del.isPending}
+            onClick={() => void ask(rec ? `“${rec.description}” sabit kalemi silinsin mi?\n\nPlanlamada artık görünmez.`
+              : `“${editingEntry?.description || "Bu kayıt"}” silinsin mi?${editingEntry?.receipt_file ? "\n\nFiş fotoğrafı da silinir." : ""}`,
+              { irreversible: true }).then((ok) => { if (ok) del.mutate(undefined); })}>
             <Trash2 size={16} /> Sil
           </button>
         )}
@@ -434,12 +436,11 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             o tarihteki hesap bakiyesi olur.
             <button type="button" className="btn-ghost mt-2 block border border-stone-300 px-2 py-1 dark:border-stone-700" disabled={!accountId}
               onClick={async () => {
-                const r = await fetch(`/api/entries/${editingEntry.id}/to-opening`, { method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ account_id: accountId }) });
-                const j = await r.json();
-                if (!r.ok) return setErr(errorText(j, r.status));
-                qc.invalidateQueries();
-                done(j.message);
+                try {
+                  const j = await send<{ message: string }>(`/api/entries/${editingEntry.id}/to-opening`, { method: "POST", json: { account_id: accountId } });
+                  qc.invalidateQueries();
+                  done(j.message);
+                } catch (e) { setErr((e as Error).message); }
               }}>{accountId ? "Hesap bakiyesine çevir" : "Önce hesabı seç"}</button>
           </div>
         )}
