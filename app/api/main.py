@@ -2023,7 +2023,9 @@ def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form
             if r["type"] in ("gelir", "gider"):
                 r["who"] = bank_import.counterparty(r["description"], r["amount"], [meta.get("owner_name")] if meta.get("owner_name") else _owners())
         _charge_if_new(doc, counts)
-        return {"pdf": True, **meta, "header_row": 0, "columns": [], "mapping": {}, "profile_saved": False,
+        from app import verification
+
+        return {"pdf": True, **meta, **verification.account_check(meta), "header_row": 0, "columns": [], "mapping": {}, "profile_saved": False,
                 "total": len(parsed), "counts": counts, "overlap": overlap, "sample": parsed[:200], "raw_preview": [],
                 **_balance_check(parsed, meta.get("bank") or "", meta.get("iban")),
                 "account_match": _account_match(meta.get("bank") or "", meta.get("iban"))}
@@ -2066,10 +2068,11 @@ def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), hea
 
     from app import bank_import, sync
 
-    account, iban = "", None
+    account, iban, meta_v = "", None, None
     doc = _doc_check(file)
     if (file.filename or "").lower().endswith(".pdf"):
         parsed, meta = _read_bank_pdf(file, password)
+        meta_v = meta
         account, iban = meta.get("bank") or "", meta.get("iban")
         if meta.get("owner_name"):
             db.remember_owner_name(meta["owner_name"])  # e-posta bildirimlerinde de "kendin" tanınsın
@@ -2105,11 +2108,28 @@ def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), hea
             doc_id = None
         if doc_id:
             db.link_bank_document(doc_id, [r.get("hash") for r in parsed])
+        if meta_v is not None:  # PDF: bakiye zinciri (S6); Excel/CSV: doğrulaması yok, alan da yok
+            from app import verification
+
+            stats.update(verification.account_check(meta_v))
+            verification.set_document(doc_id, stats["verified"])
         b["summary"] = stats
     _charge_if_new(doc, stats)  # önizlemede sayıldıysa aynı dosya ikinci kez sayılmaz
     if warn := db.take_storage_warning():
         stats["storage_warning"] = warn
     return stats
+
+
+@app.post("/api/bank-import/documents/{doc_id}/confirm")
+def bank_document_confirm(doc_id: int):
+    """Bakiye zinciri tutmayan dökümü kullanıcı belgeyle karşılaştırdı, doğru: verification 'onaylandi' (S6)."""
+    from app import verification
+
+    d = db.get_bank_document(doc_id)
+    if not d or not _bank_doc_visible(d):
+        raise HTTPException(404, errors.GENERIC[404])
+    verification.confirm_document(doc_id)
+    return {"ok": True, "verification": verification.document_state(db.get_bank_document(doc_id).get("verified"))}
 
 
 @app.get("/api/bank-import/documents")
@@ -2445,7 +2465,8 @@ def onboarding_dismiss():
 # ---------------------------------------------------------------- hatırlatmalar (Yapılacaklar; ileride push)
 
 REMINDER_ID = (r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|"
-               r"(hesap|borc):\d{1,12}:\d{1,12}|kart:\d{1,12}|dogruluk:[0-9a-f]{10})$")
+               r"(hesap|borc):\d{1,12}:\d{1,12}|kart:\d{1,12}|dogruluk:[0-9a-f]{10}|"
+               r"(gelen|dokum_kontrol|ekstre_kontrol):\d{1,12})$")
 
 
 class SnoozeIn(BaseModel):
@@ -3591,7 +3612,11 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             continue
         db.save_statement(data, f.filename or "ekstre.pdf", stmt)
         doc_reads.charge(data)  # yerel ayrıştırıcı ya da yapay zekâ yedek okuması: belge başına 1
-        results.append({**res, "status": "saved", "linked": db.auto_link(), "marked_paid": db.auto_mark_paid()})
+        from app import verification
+
+        chk = verification.statement_check(stmt)  # tutmadıysa Yapılacaklar'da 'ekstre_kontrol' (S6)
+        results.append({**res, "status": "saved", "linked": db.auto_link(), "marked_paid": db.auto_mark_paid(),
+                        **{k: chk[k] for k in ("verified", "verification", "verification_text", "equation_diff")}})
     from app import sync
 
     sync.reconcile()  # öğrenilmiş kurallarla eşleşen kart harcamaları (kalanlar Yapılacaklar'da sorulur)
@@ -4428,6 +4453,22 @@ def shared_inbox():
     from app import share as share_mod
 
     return share_mod.inbox()
+
+
+@app.post("/api/inbox/{iid}/import")
+def inbox_import(iid: int):
+    """Doğrulanamadığı için e-postadan/paylaşımdan onaya düşen belgeyi (kind dokum | ekstre) kaydet (S6). Dönüş:
+    {ok, kind, message, stats? (döküm sayaçları), statement_id?}. Yalnız bekleyen dokum/ekstre kaydı: yoksa 404."""
+    from app import book, undo, verification
+
+    m = book.member()
+    if m and book.role(m) != "full":  # belge yükleme gibi: ortak defterde yalnız tam yetkili üye
+        raise HTTPException(403, errors.GENERIC[403])
+    try:
+        with undo.batch(f"Gelen kutusu: belge #{iid}"):
+            return verification.import_held(iid)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
 
 
 @app.post("/api/inbox/{iid}/{action}")

@@ -251,9 +251,17 @@ def handle_pdf(name: str, data: bytes) -> str:
         doc_reads.charge(data)
         return f"🧾 Dekont: {money.tl(d['amount'])} {d['kind']} ({d['bank'] or 'hesap'}) · bakiye değişmedi"
     if _looks_like_account_statement(text):
+        from app import verification
+
         res = bank_pdf.parse_account_pdf(data, passwords)
         owners = [res.get("owner_name") or ""] if res.get("owner_name") else []
         rows = bank_import.finalize(res["rows"], owners or db.card_holders())
+        if not res.get("verified"):  # bakiye zinciri tutmadı: kullanıcı görmeden içe aktarılmaz, onay bekler (S6)
+            chk = verification.account_check(res)
+            iid = verification.hold("dokum", name, data, {"bank": res.get("bank") or "", "iban": res.get("iban"),
+                                                          "owner_name": res.get("owner_name") or "", "rows": rows}, chk)
+            return verification.held(f"Hesap dökümü ({res.get('bank') or 'banka'}): {terms.EQ_BAD}, içe aktarılmadı · "
+                                     "uygulamada Gelen kutusu'ndan bakıp onayla", iid)
         if res.get("owner_name"):
             db.remember_owner_name(res["owner_name"])
         st = db.import_bank_rows(rows, account=res.get("bank") or "", owners=owners or db.card_holders(),
@@ -270,6 +278,15 @@ def handle_pdf(name: str, data: bytes) -> str:
         raise MailError(f"{name}: PDF şifreli; Ekstreler'den bir kez elle yükleyip şifreyi hatırlat") from e
     if db.statement_exists(data, stmt):
         return f"Ekstre {stmt.bank} {stmt.card_no}: zaten vardı"
+    if stmt.ai_parsed:  # yapay zekâ okudu ve denklem tutmadı: onay bekler (S6)
+        from app import verification
+
+        chk = verification.statement_check(stmt)
+        if not chk["verified"]:
+            iid = verification.hold("ekstre", name, data,
+                                    {"statement": verification._jsonable_statement(stmt), "bank": stmt.bank}, chk)
+            return verification.held(f"💳 {stmt.bank} {stmt.card_no} ekstresi: {terms.EQ_BAD}, kaydedilmedi · "
+                                     "uygulamada Gelen kutusu'ndan bakıp onayla", iid)
     db.save_statement(data, name, stmt)
     doc_reads.charge(data)
     db.auto_link()
