@@ -122,9 +122,11 @@ def _import_bank(doc: dict, passwords: list[str], last_bal: dict) -> dict:
     acc_id = sync.account_for_import(account or None, iban, chosen, False) if (account or chosen) else None
     stats = db.import_bank_rows(parsed, account=account, owners=owners, account_id=acc_id)
     db.auto_link()
-    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(parsed) if r.get("balance") is not None]
-    if with_bal and acc_id:
-        d, _, bal = max(with_bal)
+    from app.bank_import import last_balance
+
+    lb = last_balance(parsed)
+    if lb and acc_id:
+        d, bal = lb
         if acc_id not in last_bal or d >= last_bal[acc_id][0]:
             last_bal[acc_id] = (d, bal)
     return {**extra, "rows": len(parsed), "stats": stats}

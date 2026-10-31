@@ -244,15 +244,49 @@ def finalize(rows: list[dict], owners: list[str]) -> list[dict]:
 
 
 def _unique_hashes(rows: list[dict]) -> None:
-    """Aynı gün, aynı tutar, aynı bakiye iki ayrı hareket olabilir (çekim → iptal → yine aynı çekim): parmak izi aynı
-    çıkar ve ikincisi 'zaten var' sanılıp kaybolurdu. Belgedeki 2., 3. tekrar sıra numarasıyla ayrışır; ilki eskisiyle
-    aynı kalır (önceden yüklenmiş kayıtlar yeniden yüklemede kopyalanmaz)."""
-    seen: dict[str, int] = {}
-    for r in rows:
-        n = seen.get(r["hash"], 0)
-        seen[r["hash"]] = n + 1
-        if n:
-            r["hash"] = hashlib.sha1(f"{r['hash']}|{n + 1}".encode()).hexdigest()[:20]
+    """Aynı gün, aynı tutar, aynı bakiye iki ayrı hareket olabilir (çekim → iptal → yine aynı çekim; bakiyesiz CSV'de
+    aynı kafede iki kahve): parmak izi aynı çıkar ve ikincisi 'zaten var' sanılıp kaybolurdu. Belgedeki 2., 3. tekrar
+    sıra numarasıyla ayrışır; ilki eskisiyle aynı kalır (önceden yüklenmiş kayıtlar yeniden yüklemede kopyalanmaz).
+    Eski biçim parmak izi (alt_hash) de aynı kuralla ayrışır."""
+    for key in ("hash", "alt_hash"):
+        seen: dict[str, int] = {}
+        for r in rows:
+            if not r.get(key):
+                continue
+            n = seen.get(r[key], 0)
+            seen[r[key]] = n + 1
+            if n:
+                r[key] = hashlib.sha1(f"{r[key]}|{n + 1}".encode()).hexdigest()[:20]
+
+
+def _chain_hits(rows: list[dict]) -> int:
+    """Bakiye zinciri bu sırada kaç adımda tutuyor (önceki bakiye + tutar = bakiye)?"""
+    from app import money
+
+    rs = [r for r in rows if r.get("balance") is not None and r.get("amount") is not None]
+    return sum(money.within(b["balance"] - a["balance"], b["amount"]) for a, b in zip(rs, rs[1:]))
+
+
+def newest_first(rows: list[dict]) -> bool:
+    """Döküm yeniden eskiye mi sıralı? Önce bakiye zinciri (hangi yönde tutuyor), karar vermezse tarihlerin yönü."""
+    fwd, rev = _chain_hits(rows), _chain_hits(rows[::-1])
+    if fwd != rev:
+        return rev > fwd
+    days = [r["date"] for r in rows if r.get("date")]
+    return bool(days) and days[0] > days[-1]
+
+
+def last_balance(rows: list[dict]) -> tuple[str, float] | None:
+    """Dökümün en son hareketinin (tarih, bakiye): hesap çapası. Aynı günün birden çok hareketinde, yeniden eskiye
+    sıralı dosyada günün son hareketi üstteki satırdır (önce günün ilk hareketi seçiliyordu)."""
+    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
+    if not with_bal:
+        return None
+    if newest_first(rows):
+        d, _, bal = max(with_bal, key=lambda x: (x[0], -x[1]))
+    else:
+        d, _, bal = max(with_bal)
+    return d, bal
 
 
 def row_hash(d: date, desc: str, amount: float, balance: str) -> str:
@@ -272,9 +306,18 @@ def parse(rows: list[list[str]], mapping: dict, header_row: int, owners: list[st
             amt = (abs(credit) - abs(debit)) if (debit or credit) else None
         if not d or amt is None or amt == 0 or not desc:
             continue
-        out.append({"date": d.isoformat(), "description": desc[:500], "amount": round(amt, 2),
-                    "type": classify(desc, amt, owners), "hash": row_hash(d, desc, amt, get("balance")),
-                    "balance": parse_amount(get("balance")) if get("balance") else None})
+        bal_txt = get("balance")
+        bal = parse_amount(bal_txt) if bal_txt else None
+        # parmak izi PDF yoluyla (finalize) aynı: tarih + tutar + bakiye, bakiye yoksa açıklama. Aynı dönem bir kez PDF,
+        # bir kez Excel yüklenince aynı hareket tanınır; bakiye yazımı ("5.000,00" / "5000") da fark etmez
+        h = row_hash(d, "" if bal is not None else desc, amt, f"{bal:.2f}" if bal is not None else "")
+        item = {"date": d.isoformat(), "description": desc[:500], "amount": round(amt, 2),
+                "type": classify(desc, amt, owners), "hash": h, "balance": bal}
+        old = row_hash(d, desc, amt, bal_txt)  # eski biçim (açıklama + ham bakiye metni): önceki yüklemeler tekrar sayılsın
+        if old != h:
+            item["alt_hash"] = old
+        out.append(item)
+    _unique_hashes(out)  # bakiyesiz dosyada aynı gün aynı tutarlı eş satırlar kaybolmasın
     pair_cancellations(out)
     return out
 

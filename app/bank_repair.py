@@ -13,6 +13,13 @@ değişmez, yeniden yüklemede kopya oluşmaz. Kullanıcının elle değiştirdi
 haliyle aynı değilse) ve borç/eşleşme/bölme bağlantısı olanlara dokunulmaz. Kendi hesapları arası olduğu anlaşılan kayıt
 own_transfers'a taşınır, iptal çifti silinir. Dosyası saklanmamış kayıtlar notlarındaki ham metinle sınıflanır.
 
+Denetim (2026-10-31, M2) düzeltmeleri de buradan onarılır:
+- bakiyesiz Excel/CSV'de aynı gün aynı tutarlı eş satırın kaybolanı ("missing"; artık Excel/CSV dökümleri de okunur),
+- aynı dönem PDF ve Excel olarak iki kez yüklenmiş hareketler ("duplicates": sonra yüklenen belgenin fazlası silinir;
+  elle değiştirilmiş ya da bağlantılı kayda dokunulmaz),
+- yeniden eskiye sıralı dökümde günün ilk hareketinden alınmış hesap bakiyesi ("anchors"),
+- e-postadan gelmiş virmanın hesabı ("transfer_accounts": bakiyeye girmesi için own_transfers.account_id).
+
 Çalıştırma (önce yedek!):
     python -m app.bank_repair <kullanıcı-adı>            # kuru çalıştırma: ne değişeceğini yazar
     python -m app.bank_repair <kullanıcı-adı> --apply    # uygular
@@ -21,6 +28,7 @@ import re
 import sys
 
 from app import db
+from app.money import eq as money_eq, ne as money_ne
 
 _EXTRA = re.compile(r"(Telefon|Abone no|Sözleşme no|Tesisat no|Mukavele no|Fatura no|Son ödeme) [^·]{1,40} · ")
 
@@ -72,31 +80,115 @@ def _linked(c, eid: int) -> bool:
     return False
 
 
-def _document_rows(owners: list[str], report: dict) -> dict[str, dict]:
-    """Saklanan PDF dökümlerinden hash → satır (yapay zekâsız; okunamayan belge atlanır)."""
+def _read_document(d: dict, full: dict, owners: list[str], report: dict) -> list[dict] | None:
+    """Saklanan dökümü yapay zekâsız yeniden oku: PDF, Excel ya da CSV (kayıtlı sütun eşlemesiyle). Satırlar."""
+    import json
+
     from app import bank_import, bank_pdf
     from app.storage import book_get
 
-    out: dict[str, dict] = {}
-    for d in db.list_bank_documents():
-        full = db.get_bank_document(d["id"])
-        if not d["stored"] or not (full["file_name"] or "").endswith(".pdf"):
-            continue
-        data = book_get("statements-bank", full["file_name"])
-        if not data:
-            report["docs_missing"].append(d["filename"])
-            continue
-        try:
+    name = (full["file_name"] or "").lower()
+    if not d["stored"] or not name.endswith((".pdf", ".xlsx", ".xls", ".csv")):
+        return None
+    data = book_get("statements-bank", full["file_name"])
+    if not data:
+        report["docs_missing"].append(d["filename"])
+        return None
+    try:
+        if name.endswith(".pdf"):
             res = bank_pdf.parse_account_pdf(data, db.pdf_passwords(), allow_ai=False)
-        except Exception as e:  # noqa: BLE001
-            report["docs_unread"].append(f"{d['filename']}: {e}")
+            if res.get("owner_name") and res["owner_name"] not in owners:
+                owners.append(res["owner_name"])
+                report["owner_names"].append(res["owner_name"])
+            rows = bank_import.finalize(res["rows"], [res["owner_name"]] if res.get("owner_name") else owners)
+            bank = res.get("bank") or full.get("bank") or ""
+        else:
+            from app.replay_check import _profile_key
+
+            raw = bank_import.read_rows(data, d["filename"] or full["file_name"])
+            det = bank_import.detect(raw)
+            saved = db.get_setting(_profile_key(det["columns"]))
+            rows = bank_import.parse(raw, json.loads(saved) if saved else det["mapping"], det["header_row"], owners)
+            bank = full.get("bank") or ""
+    except Exception as e:  # noqa: BLE001
+        report["docs_unread"].append(f"{d['filename']}: {e}")
+        return None
+    report["docs_read"].append(d["filename"])
+    return [{**r, "bank": bank, "account_id": full.get("account_id"), "doc_id": d["id"]} for r in rows]
+
+
+def _document_rows(owners: list[str], report: dict) -> tuple[dict[str, dict], list[tuple[dict, list[dict]]]]:
+    """Saklanan dökümlerden hash → satır (eski biçim parmak izi alt_hash ile de) ve belge başı satırlar (yükleme
+    sırasıyla). Okunamayan belge atlanır."""
+    out: dict[str, dict] = {}
+    docs = []
+    for d in sorted(db.list_bank_documents(), key=lambda x: x["id"]):
+        full = db.get_bank_document(d["id"])
+        rows = _read_document(d, full, owners, report)
+        if rows is None:
             continue
-        if res.get("owner_name") and res["owner_name"] not in owners:
-            owners.append(res["owner_name"])
-            report["owner_names"].append(res["owner_name"])
-        for r in bank_import.finalize(res["rows"], [res["owner_name"]] if res.get("owner_name") else owners):
-            out[r["hash"]] = {**r, "bank": res.get("bank") or full.get("bank") or "", "account_id": full.get("account_id")}
-        report["docs_read"].append(d["filename"])
+        docs.append((full, rows))
+        for r in rows:
+            out[r["hash"]] = r
+            if r.get("alt_hash"):
+                out.setdefault(r["alt_hash"], r)
+    return out, docs
+
+
+def _signed_records(c, acc_id: int, account: str) -> list[dict]:
+    """Hesabın dökümden gelmiş kayıtları (kayıt, gün, işaretli kuruş, parmak izi)."""
+    from app import money
+
+    doc = "import_hash IS NOT NULL AND import_hash NOT LIKE 'mail:%' AND import_hash NOT LIKE 'dekont:%'"
+    out = [{"table": "entries", "id": r[0], "date": r[1], "k": money.kurus(r[3] if r[2] == "gelir" else -r[3]),
+            "hash": r[4], "desc": r[5]}
+           for r in c.execute(f"SELECT id, entry_date, kind, amount, import_hash, description FROM entries "
+                              f"WHERE account_id = ? AND {doc}", (acc_id,))]
+    out += [{"table": "card_payments", "id": r[0], "date": r[1], "k": money.kurus(-r[2]), "hash": r[3], "desc": r[4]}
+            for r in c.execute(f"SELECT id, pay_date, amount, import_hash, description FROM card_payments "
+                               f"WHERE account_id = ? AND {doc}", (acc_id,))]
+    out += [{"table": "own_transfers", "id": r[0], "date": r[1], "k": money.kurus(r[2]), "hash": r[3], "desc": r[4]}
+            for r in c.execute(f"SELECT id, transfer_date, amount, import_hash, description FROM own_transfers "
+                               f"WHERE {doc} AND (account_id = ? OR (account_id IS NULL AND account = ?))", (acc_id, account))]
+    return out
+
+
+def _duplicates(c, docs: list[tuple[dict, list[dict]]]) -> list[dict]:
+    """Aynı hesabın aynı hareketi iki belgeden (PDF + Excel) iki kez kayıtlı: o gün o tutarda, hiçbir belgede
+    olmadığı kadar çok kayıt. Fazlası: en son yüklenen belgeye ait olanlar (ilk belgeninki kalır)."""
+    from collections import Counter, defaultdict
+
+    from app import money
+
+    by_acc = defaultdict(list)
+    for full, rows in docs:
+        if full.get("account_id"):
+            by_acc[full["account_id"]].append((full, rows))
+    out = []
+    for acc_id, items in by_acc.items():
+        if len(items) < 2:
+            continue
+        max_in_doc: Counter = Counter()
+        owner_doc: dict[str, int] = {}
+        for full, rows in items:
+            cnt = Counter((r["date"], money.kurus(r["amount"])) for r in rows)
+            for k, n in cnt.items():
+                max_in_doc[k] = max(max_in_doc[k], n)
+            for r in rows:
+                for h in (r["hash"], r.get("alt_hash")):
+                    if h:
+                        owner_doc.setdefault(h, full["id"])
+        recs = [r for r in _signed_records(c, acc_id, items[0][0].get("bank") or "") if r["hash"] in owner_doc]
+        groups = defaultdict(list)
+        for r in recs:
+            groups[(r["date"], r["k"])].append(r)
+        for k, rs in groups.items():
+            extra = len(rs) - max_in_doc.get(k, 0)
+            if extra <= 0 or len({owner_doc[r["hash"]] for r in rs}) < 2:
+                continue
+            rs.sort(key=lambda r: (owner_doc[r["hash"]], r["id"]))  # ilk yüklenen belgeninki önde: o kalır
+            for r in rs[-extra:]:
+                out.append({**r, "doc_id": owner_doc[r["hash"]], "amount": r["k"] / 100})
     return out
 
 
@@ -108,7 +200,8 @@ def repair(apply: bool = False) -> dict:
     report = {"docs_read": [], "docs_unread": [], "docs_missing": [], "owner_names": [], "updated": [],
               "to_own_transfer": [], "cancelled": [], "skipped_edited": 0, "skipped_linked": 0, "paired": [], "missing": [], "restored": []}
     report["warnings"] = []
-    by_hash = _document_rows(owners, report)
+    report.update(duplicates=[], anchors=[], transfer_accounts=[], overlap_skipped=0)
+    by_hash, docs = _document_rows(owners, report)
     if report["owner_names"] and not db.owner_names():  # dökümden öğrenilen sahip: kart sahipleri kişi kalsın
         owners[:] = [o for o in owners if o in report["owner_names"]]
 
@@ -198,10 +291,60 @@ def repair(apply: bool = False) -> dict:
                     c.execute("UPDATE own_transfers SET description = ?, raw = ? WHERE id = ?", (label[:500], raw[:500], o["id"]))
         report["restored"] = [{"id": None, "date": r["date"], "amount": r["amount"], "was": r["description"]} for r in wrong]
         known -= {r["hash"] for r in wrong}
-        report["missing"] = [{"id": None, "date": r["date"], "amount": r["amount"], "was": r["description"]}
-                             for h, r in by_hash.items() if h not in known and r["type"] in ("gelir", "gider")
-                             and r not in wrong]
-        to_add = wrong + [r for h, r in by_hash.items() if h not in known and r["type"] in ("gelir", "gider") and r not in wrong]
+        # PDF + Excel iki kez yüklenmiş hareketler: fazlası (sonra yüklenen belgeninki) silinir
+        dups = _duplicates(c, docs)
+        for r in dups:
+            if r["table"] == "entries" and (_linked(c, r["id"]) or c.execute(
+                    "SELECT 1 FROM entries WHERE id = ? AND (debt_id IS NOT NULL OR recurring_id IS NOT NULL)",
+                    (r["id"],)).fetchone()):
+                report["skipped_linked"] += 1
+                continue
+            report["duplicates"].append({"id": r["id"], "date": r["date"], "amount": r["amount"], "was": r["desc"],
+                                         "why": f"{r['table']}, belge #{r['doc_id']} ile ikinci kez"})
+            if apply:
+                c.execute(f"DELETE FROM {r['table']} WHERE id = ?", (r["id"],))
+        # dökümde olup kaydı olmayan: belge başına, başka biçimde zaten yüklü olanlar (çakışma) hariç
+        missing = []
+        for full, rows in docs:
+            unknown = [r for r in rows if r["hash"] not in known and r.get("alt_hash") not in known]
+            if not unknown:
+                continue
+            ov = db.import_overlaps(rows, full.get("account_id"), full.get("bank") or "", known)
+            report["overlap_skipped"] += len(ov["rows"])
+            missing += [r for i, r in enumerate(rows) if i not in ov["rows"] and r in unknown
+                        and r["type"] in ("gelir", "gider") and r not in wrong]
+        report["missing"] = [{"id": None, "date": r["date"], "amount": r["amount"], "was": r["description"]} for r in missing]
+        to_add = wrong + missing
+        # hesap çapası: yeniden eskiye sıralı dökümde günün son hareketi (önceden ilk hareketi alınıyordu)
+        from app.bank_import import last_balance
+
+        accs = {r["id"]: dict(r) for r in c.execute("SELECT * FROM accounts")}
+        for full, rows in docs:
+            a = accs.get(full.get("account_id"))
+            lb = last_balance(rows)
+            if not a or not lb or a.get("source") != "dokum" or a.get("as_of") != lb[0]:
+                continue
+            old = max(((r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None))
+            if money_ne(old[2], lb[1]) and money_eq(a["balance"], old[2]):
+                report["anchors"].append({"id": a["id"], "date": lb[0], "amount": lb[1], "was": f"{a['name']} {old[2]:,.2f}",
+                                          "now": f"{lb[1]:,.2f}"})
+                if apply:
+                    c.execute("UPDATE accounts SET balance = ? WHERE id = ?", (lb[1], a["id"]))
+        # e-postadan gelmiş virman: hesabı (account_id) yoksa bakiyeye giremez
+        from app.bank_import import short_bank
+
+        names = {}
+        for r in c.execute("SELECT id, name, alias FROM accounts WHERE kind = 'banka'"):
+            names.setdefault(r["name"], r["id"])
+            if r["alias"]:
+                names.setdefault(r["alias"], r["id"])
+        for o in [dict(x) for x in c.execute("SELECT * FROM own_transfers WHERE account_id IS NULL AND account IS NOT NULL")]:
+            aid = names.get(short_bank(o["account"] or ""))
+            if aid:
+                report["transfer_accounts"].append({"id": o["id"], "date": o["transfer_date"], "amount": o["amount"],
+                                                    "was": o["description"], "now": f"hesap #{aid}"})
+                if apply:
+                    c.execute("UPDATE own_transfers SET account_id = ? WHERE id = ?", (aid, o["id"]))
         # iptal çiftinin kendi hesabına giden yarısı eskiden own_transfers'a yazılmış olabilir
         for h, r in by_hash.items():
             if r["type"] == "iptal" and c.execute("SELECT 1 FROM own_transfers WHERE import_hash = ?", (h,)).fetchone():
@@ -215,7 +358,7 @@ def repair(apply: bool = False) -> dict:
         # bakiye verilmez: eski bir satır hesabın güncel bakiyesini ezmesin
         for acc in {r["account_id"] for r in to_add}:
             part = [{**r, "balance": None} for r in to_add if r["account_id"] == acc]
-            db.import_bank_rows(part, account=part[0]["bank"], owners=owners, account_id=acc)
+            db.import_bank_rows(part, account=part[0]["bank"], owners=owners, account_id=acc, check_overlap=False)
         # açıklaması kesik kalmış (dosyası yok) giden kendi transferleri: karşı hesaba giriş artık own_transfers'ta
         report["paired"] = [{"id": m["id"], "date": m["entry_date"], "amount": -m["amount"], "was": m["description"]}
                             for m in db.repair_own_transfers(owners)]
@@ -232,7 +375,10 @@ def _print(rep: dict, apply: bool) -> None:
     for key, title in (("to_own_transfer", "kendi hesapları arası → virman"), ("cancelled", "iptal çifti → silinir"),
                        ("paired", "giden transfer karşılığıyla eşleşti → virman"),
                        ("restored", "yanlışlıkla virman sayılmış gider → geri eklendi"),
-                       ("missing", "dökümde var, kaydı yok → eklendi")):
+                       ("missing", "dökümde var, kaydı yok → eklendi"),
+                       ("duplicates", "aynı hareket iki belgeden (PDF + Excel) → fazlası silinir"),
+                       ("anchors", "hesap bakiyesi (yeniden eskiye sıralı döküm) → günün son hareketi"),
+                       ("transfer_accounts", "e-postadan gelen virmanın hesabı → bakiyeye girer")):
         rows = rep[key]
         print(f"\n{title}: {len(rows)} kayıt, toplam {sum(r['amount'] for r in rows):,.2f}")
         for r in rows:
@@ -254,7 +400,8 @@ def _print(rep: dict, apply: bool) -> None:
     print(f"\nUYARI (gönderenin mesajı kayboluyor): {len(rep['warnings'])}")
     for w in rep["warnings"]:
         print("  " + w)
-    print(f"\ndokunulmayan: elle değiştirilmiş {rep['skipped_edited']}, bağlantılı {rep['skipped_linked']}")
+    print(f"\ndokunulmayan: elle değiştirilmiş {rep['skipped_edited']}, bağlantılı {rep['skipped_linked']}; "
+          f"başka belgeden zaten yüklü (çakışma, eklenmedi) {rep.get('overlap_skipped', 0)}")
 
 
 def main(argv: list[str]) -> int:

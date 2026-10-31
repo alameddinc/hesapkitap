@@ -1555,13 +1555,15 @@ def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> d
     if len(rows) == 1:
         warnings.append("Belgede tek hareket var: bu bir dekont olabilir. Dekontsa Ekstreler'e bırak; bakiyeye dokunmadan "
                         "tek işlem olarak eklenir.")
-    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
+    from app.bank_import import last_balance
+
+    lb = last_balance(rows)  # yeniden eskiye sıralı dosyada da günün son hareketi
     am = _account_match(account, iban) if account else {}
     aid = am.get("account_id") or am.get("default_id")
     acc = next((a for a in db.list_accounts() if a["id"] == aid), None) if aid else None
     change = None
-    if with_bal and acc and acc["as_of"]:
-        d, _, new = max(with_bal)
+    if lb and acc and acc["as_of"]:
+        d, new = lb
         cur = acc["current"] if acc["current"] is not None else acc["balance"]
         if d >= acc["as_of"]:  # daha eski döküm bakiyeyi değiştirmez
             change = {"account": acc["name"], "current": round(cur, 2), "new": round(new, 2), "date": d}
@@ -1571,6 +1573,24 @@ def _balance_check(rows: list[dict], account: str, iban: str | None = None) -> d
                 warnings.append(f"{acc['name']} bakiyesi {cur:,.2f} ₺ → {new:,.2f} ₺ olacak (büyük değişiklik). "
                                 "Arada yüklenmemiş bir dönem ya da yanlış belge olabilir.")
     return {"balance_change": change, "checks": warnings}
+
+
+def _preview_counts(parsed: list[dict], account: str, iban: str | None) -> tuple[dict, dict | None]:
+    """Önizleme sayaçları: tür başına; "tekrar" (parmak izi, eski biçim dahil) ve "cakisma" (aynı hesapta aynı gün ve
+    tutarla başka belgeden yüklü). overlap: {count, from, to, message} ya da None (hesap belli değilse de None)."""
+    with db.connect() as c:
+        seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
+                                        "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL "
+                                        "UNION SELECT import_hash FROM card_payments WHERE import_hash IS NOT NULL")}
+    am = _account_match(account, iban) if (account or iban) else {}
+    ov = db.import_overlaps(parsed, am.get("account_id") or am.get("default_id"), account, seen)
+    counts: dict[str, int] = {}
+    for i, r in enumerate(parsed):
+        if r["type"] == "gider" and db.match_card_payment(abs(r["amount"]), r["date"]):
+            r["type"] = "kart_odemesi"  # tutar bir ekstreyle birebir → kart ödemesi (önizlemede de görünsün)
+        k = ("tekrar" if r["hash"] in seen or r.get("alt_hash") in seen else "cakisma" if i in ov["rows"] else r["type"])
+        counts[k] = counts.get(k, 0) + 1
+    return counts, ({k: ov[k] for k in ("count", "from", "to", "message")} if ov["count"] else None)
 
 
 @app.post("/api/bank-import/preview")
@@ -1585,19 +1605,13 @@ def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form
     doc = _doc_check(file)
     if (file.filename or "").lower().endswith(".pdf"):
         parsed, meta = _read_bank_pdf(file, password)
-        with db.connect() as c:
-            seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
-        counts: dict[str, int] = {}
+        counts, overlap = _preview_counts(parsed, meta.get("bank") or "", meta.get("iban"))
         for r in parsed:
-            if r["type"] == "gider" and db.match_card_payment(abs(r["amount"]), r["date"]):
-                r["type"] = "kart_odemesi"
-            k = "tekrar" if r["hash"] in seen else r["type"]
-            counts[k] = counts.get(k, 0) + 1
             if r["type"] in ("gelir", "gider"):
                 r["who"] = bank_import.counterparty(r["description"], r["amount"], [meta.get("owner_name")] if meta.get("owner_name") else _owners())
         _charge_if_new(doc, counts)
         return {"pdf": True, **meta, "header_row": 0, "columns": [], "mapping": {}, "profile_saved": False,
-                "total": len(parsed), "counts": counts, "sample": parsed[:200], "raw_preview": [],
+                "total": len(parsed), "counts": counts, "overlap": overlap, "sample": parsed[:200], "raw_preview": [],
                 **_balance_check(parsed, meta.get("bank") or "", meta.get("iban")),
                 "account_match": _account_match(meta.get("bank") or "", meta.get("iban"))}
 
@@ -1611,14 +1625,10 @@ def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form
     if header_row is not None:
         det["header_row"], det["columns"] = header_row, rows[header_row]
     parsed = bank_import.parse(rows, det["mapping"], det["header_row"], _owners())
-    with db.connect() as c:
-        seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL")}
-    counts: dict[str, int] = {}
-    for r in parsed:
-        if r["type"] == "gider" and db.match_card_payment(abs(r["amount"]), r["date"]):
-            r["type"] = "kart_odemesi"  # tutar bir ekstreyle birebir → kart ödemesi (önizlemede de görünsün)
-        k = "tekrar" if r["hash"] in seen else r["type"]
-        counts[k] = counts.get(k, 0) + 1
+    from app import sync
+
+    iban = sync.find_iban_rows(rows)
+    counts, overlap = _preview_counts(parsed, "", iban)
     # güvenlik ağı: neredeyse hiç eksi tutar yok ve bakiye sütunu yoksa kart dökümü olabilir (harcamalar gelir görünür)
     warning = None
     amounts = [r["amount"] for r in parsed if r.get("amount") is not None]
@@ -1626,11 +1636,9 @@ def bank_import_preview(file: UploadFile = File(...), mapping: str | None = Form
         warning = ("Bu dosyada tutarların neredeyse hepsi artı ve bakiye sütunu yok: bir kredi kartı dökümü olabilir. "
                    "Öyleyse içe aktarma — harcamalar gelir sayılır. Kart dökümünü Ekstreler sayfasına bırak; tanınmazsa "
                    "bize bildir.")
-    from app import sync
-
-    iban = sync.find_iban_rows(rows)
     _charge_if_new(doc, counts)
-    return {**det, "profile_saved": bool(saved), "total": len(parsed), "counts": counts, "sample": parsed[:15],
+    return {**det, "profile_saved": bool(saved), "total": len(parsed), "counts": counts, "overlap": overlap,
+            "sample": parsed[:15],
             "raw_preview": rows[det["header_row"]: det["header_row"] + 6], "warning": warning, "iban": iban,
             "account_match": _account_match("", iban)}
 
