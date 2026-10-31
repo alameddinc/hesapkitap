@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send } from "lucide-react";
 import { useMeta } from "../components/hooks";
 import { periodRange } from "../components/MonthPicker";
@@ -77,7 +78,7 @@ function KeyRow({ c }: { c: ConfigItem }) {
           <input className="input min-w-0 flex-1" type={c.secret ? "password" : "text"} autoComplete="off" value={value}
             placeholder={c.source === "app" ? "Değiştirmek için yeni değeri yapıştır" : "Yapıştır"} onChange={(e) => setValue(e.target.value)} />
           <button className="btn-primary" disabled={!value.trim()} onClick={() => save.mutate(value, onErr)}>Kaydet</button>
-          {c.source === "app" && <button className="btn-ghost" onClick={() => confirm("Silinsin mi?") && save.mutate(null, onErr)}>Sil</button>}
+          {c.source === "app" && <button className="btn-ghost" onClick={() => void ask("Silinsin mi?").then((ok) => { if (ok) save.mutate(null, onErr); })}>Sil</button>}
         </div>
       )}
       <div className="flex flex-wrap gap-2">
@@ -88,7 +89,7 @@ function KeyRow({ c }: { c: ConfigItem }) {
         )}
         {c.name === "BACKUP_PASSPHRASE" && !locked && (
           <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
-            onClick={() => (c.source === "none" || confirm("Yeni şifre üretilsin mi? Eski yedekler eski şifreyle açılır.")) && gen.mutate(undefined, onErr)}>
+            onClick={async () => (c.source === "none" || (await ask("Yeni şifre üretilsin mi? Eski yedekler eski şifreyle açılır."))) && gen.mutate(undefined, onErr)}>
             <KeyRound size={14} /> Güçlü şifre üret
           </button>
         )}
@@ -216,7 +217,7 @@ interface SettingsStatus {
 async function post<T>(url: string): Promise<T> {
   const r = await fetch(url, { method: "POST" });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 }
 
@@ -471,8 +472,7 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
               <span>{dateTR(f.created)} <span className="text-xs text-stone-500">· {(f.size / 1024).toFixed(0)} KB</span></span>
               <span className="flex gap-1">
                 <button className="btn-ghost px-2 py-1 text-xs" disabled={backTo.isPending}
-                  onClick={() => confirm(`${dateTR(f.created)} yedeğine dönülsün mü? Şu anki kayıtların yerini alır (önce şu anki hal yedeklenir).`)
-                    && backTo.mutate(f.name, onErr)}>Bu yedeğe dön</button>
+                  onClick={() => void ask(`${dateTR(f.created)} yedeğine dönülsün mü? Şu anki kayıtların yerini alır (önce şu anki hal yedeklenir).`).then((ok) => { if (ok) backTo.mutate(f.name, onErr); })}>Bu yedeğe dön</button>
                 <a className="btn-ghost px-2 py-1" href={`/api/settings/backup/${f.name}`} download><Download size={14} /> İndir</a>
               </span>
             </li>

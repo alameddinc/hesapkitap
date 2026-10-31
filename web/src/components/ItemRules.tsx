@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { Plus, Scissors, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useUI } from "../ui";
@@ -11,7 +12,7 @@ interface ItemRule { id: number; keywords: string; category: string }
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 };
 
@@ -27,7 +28,7 @@ function RuleRow({ r, cats }: { r: ItemRule; cats: string[] }) {
       <div className="flex gap-2">
         <div className="flex-1"><CategoryPicker value={cat} onChange={setCat} options={cats} /></div>
         {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}
-        <button className="btn-danger p-2" aria-label="Sil" onClick={() => confirm("Kalem kuralı silinsin mi?") && del.mutate(undefined)}>
+        <button className="btn-danger p-2" aria-label="Sil" onClick={() => void ask("Kalem kuralı silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
         </button>
       </div>

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { Copy, Share2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { tsDateTR } from "../format";
@@ -104,7 +105,7 @@ export default function ShareSetup() {
             <li key={t.id} className="flex items-center justify-between gap-2 py-1.5">
               <span>{t.name ?? "Anahtar"} · oluşturuldu {tsDateTR(t.created_at)}{t.last_used ? ` · son kullanım ${tsDateTR(t.last_used)}` : " · hiç kullanılmadı"}</span>
               <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Anahtarı sil"
-                onClick={() => window.confirm("Anahtar silinsin mi? Onu kullanan kısayol çalışmaz.") && del.mutate(t.id)}><Trash2 size={13} /></button>
+                onClick={() => void ask("Anahtar silinsin mi? Onu kullanan kısayol çalışmaz.").then((ok) => { if (ok) del.mutate(t.id); })}><Trash2 size={13} /></button>
             </li>
           ))}
         </ul>

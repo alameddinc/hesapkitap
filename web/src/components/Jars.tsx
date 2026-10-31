@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { Camera, ChevronDown, Minus, Coins, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
@@ -31,7 +32,7 @@ const isUnit = (j?: { unit?: string }) => !!j?.unit && j.unit !== "TRY";
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 };
 
@@ -340,7 +341,7 @@ export default function Jars() {
                             onClick={() => setFix({ jar: j, move: m })}><Pencil size={12} /></button>
                         )}
                         <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Hareketi sil"
-                          onClick={() => window.confirm("Bu hareket silinsin mi?") && delMove.mutate(m.id)}><Trash2 size={12} /></button>
+                          onClick={() => void ask("Bu hareket silinsin mi?").then((ok) => { if (ok) delMove.mutate(m.id); })}><Trash2 size={12} /></button>
                       </span>
                     </li>
                   ))}
@@ -351,7 +352,7 @@ export default function Jars() {
                   <button className="btn-ghost px-2 py-1" onClick={() => patch.mutate({ id: j.id, body: { closed: !j.closed_at } })}>
                     {j.closed_at ? "Yeniden aç" : "Kapat (hedefe ulaştım / vazgeçtim)"}
                   </button>
-                  <button className="btn-danger px-2 py-1" onClick={() => window.confirm(`${j.name} ve tüm hareketleri silinsin mi?`) && del.mutate(j.id)}>Sil</button>
+                  <button className="btn-danger px-2 py-1" onClick={() => void ask(`${j.name} ve tüm hareketleri silinsin mi?`).then((ok) => { if (ok) del.mutate(j.id); })}>Sil</button>
                 </div>
               </div>
             )}

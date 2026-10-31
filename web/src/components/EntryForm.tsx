@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
@@ -166,7 +167,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     <Modal title={title} onClose={onClose} footer={
       <>
         {(editingEntry || rec) && !member && (
-          <button className="btn-danger" onClick={() => confirm("Silinsin mi?") && del.mutate(undefined)}>
+          <button className="btn-danger" onClick={() => void ask("Silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
             <Trash2 size={16} /> Sil
           </button>
         )}
@@ -191,7 +192,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             {docLocked ? <>
               Tutar ve tarih {editingEntry?.bank_doc_id ? "hesap dökümünden" : "eşleşen banka kaydından"} geliyor; değiştirirsen dökümdeki bakiyeyle tutmayabilir.{" "}
               <button type="button" className="font-medium text-blue-700 underline dark:text-blue-400"
-                onClick={() => window.confirm("Tutar ya da tarih değişirse dökümdeki bakiyeyle tutmayabilir. Yine de değiştirilsin mi?") && setUnlock(true)}>
+                onClick={() => void ask("Tutar ya da tarih değişirse dökümdeki bakiyeyle tutmayabilir. Yine de değiştirilsin mi?", { title: "Tutar / tarih değiştirilsin mi?", confirm: "Yine de değiştir" }).then((ok) => { if (ok) setUnlock(true); })}>
                 Tutarı / tarihi yine de değiştir</button>
             </> : "Dikkat: tutar ya da tarih belgedekinden farklı olursa dökümdeki bakiyeyle tutmayabilir."}
           </div>
@@ -433,7 +434,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
                 const r = await fetch(`/api/entries/${editingEntry.id}/to-opening`, { method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ account_id: accountId }) });
                 const j = await r.json();
-                if (!r.ok) return setErr(detailText(j.detail, r.status));
+                if (!r.ok) return setErr(errorText(j, r.status));
                 qc.invalidateQueries();
                 done(j.message);
               }}>{accountId ? "Hesap bakiyesine çevir" : "Önce hesabı seç"}</button>

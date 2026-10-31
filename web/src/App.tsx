@@ -35,6 +35,8 @@ import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks";
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
+import ConfirmHost from "./components/ConfirmHost";
+import { send } from "./lib/apiError";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
   ozet: Dashboard,
@@ -93,10 +95,12 @@ type ModalState =
 export default function App() {
   const auth = useQuery({
     queryKey: ["auth"],
-    queryFn: () => fetch("/api/auth/status").then((r) => r.json() as Promise<{
+    // ağ hatası / sunucu yanıt vermiyor: hata ekranı (çevrimdışı mı sunucu mu ayrı), uygulama boş açılmaz
+    queryFn: () => send<{
       required: boolean; authenticated: boolean; setup_required?: boolean; setup_code_needed?: boolean;
       user?: { username: string; role: string; must_change_password: boolean } | null; demo?: boolean;
-    }>),
+    }>("/api/auth/status"),
+    retry: 1,
   });
   const [hash, setHash] = useState(window.location.hash);
   useEffect(() => {
@@ -105,6 +109,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   if (auth.isLoading) return null;
+  if (auth.error && !auth.data) return <Unreachable message={(auth.error as Error).message} retry={() => void auth.refetch()} busy={auth.isFetching} />;
   if (auth.data?.setup_required) return <Setup codeNeeded={!!auth.data.setup_code_needed} />;
   if (auth.data && !auth.data.authenticated) return hash.startsWith("#/kayit") ? <Register /> : hash.startsWith("#/sifre") ? <ForgotPassword /> : <Login />;
   if (auth.data?.user?.must_change_password) return <ChangePassword username={auth.data.user.username} />;
@@ -112,6 +117,24 @@ export default function App() {
     try { if (sessionStorage.getItem("hk-revealed") === null) sessionStorage.setItem("hk-revealed", "1"); } catch { /* özel mod */ }
   }
   return <Shell />;
+}
+
+/** Açılışta sunucuya ulaşılamadı: neden (çevrimdışı / sunucu) ve "Tekrar dene"; bağlantı gelince kendiliğinden dener. */
+function Unreachable({ message, retry, busy }: { message: string; retry: () => void; busy: boolean }) {
+  useEffect(() => {
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [retry]);
+  return (
+    <div className="flex min-h-dvh items-center justify-center px-4">
+      <div className="card w-full max-w-sm space-y-3 p-6 text-center" role="alert">
+        <img src="/icons/icon-192.png" alt="" className="mx-auto size-14 rounded-2xl" />
+        <h1 className="text-lg font-semibold">{navigator.onLine === false ? "Çevrimdışısın" : "Sunucuya ulaşılamadı"}</h1>
+        <p className="text-sm text-stone-600 dark:text-stone-300">{message}</p>
+        <button className="btn-primary w-full justify-center py-2" disabled={busy} onClick={retry}>{busy ? "Deneniyor…" : "Tekrar dene"}</button>
+      </div>
+    </div>
+  );
 }
 
 const readFlash = () => { try { return sessionStorage.getItem("hk-flash"); } catch { return null; } };
@@ -273,6 +296,7 @@ function Shell() {
       {modal?.type === "pay" && <PayForm p={modal.p} onClose={close} onSaved={setToast} />}
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
 
+      <ConfirmHost />
       {toastMsg && (
         <div className="fixed inset-x-0 bottom-[calc(6rem+var(--sab))] z-[60] flex justify-center px-4 md:bottom-6" role="status">
           <div className="rounded-full bg-stone-900 px-4 py-2 text-sm text-white shadow-lg dark:bg-stone-100 dark:text-stone-900">{toastMsg}</div>

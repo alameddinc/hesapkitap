@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
@@ -244,7 +245,7 @@ export default function Savings() {
                   <button className="btn-ghost px-2 py-1 text-xs" onClick={() => patchGoal.mutate({ id: g.id, active: !g.active })}>
                     {g.active ? "Durdur" : "Devam"}
                   </button>
-                  <button className="btn-danger p-1.5" aria-label="Sil" onClick={() => confirm("Hedef silinsin mi?") && delGoal.mutate(g.id)}>
+                  <button className="btn-danger p-1.5" aria-label="Sil" onClick={() => void ask("Hedef silinsin mi?").then((ok) => { if (ok) delGoal.mutate(g.id); })}>
                     <Trash2 size={14} />
                   </button>
                 </div>

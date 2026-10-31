@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
+import { ask } from "../lib/ask";
 import { useState } from "react";
 import { api, type Payable, type Statement } from "../api";
 import { cx, dateTR, tl, todayISO, tsDateTR } from "../format";
@@ -129,7 +130,7 @@ export default function StatementCard({ s }: { s: Statement }) {
             )}
             <div className="flex-1" />
             <button className="btn-danger px-2 text-xs" disabled={del.isPending}
-              onClick={() => window.confirm(`${s.card_no} ${dateTR(s.period_end)} ekstresi ve içindeki ${s.txn_count} işlem silinsin mi? Yanlış dosyaysa sonra doğrusunu yükleyebilirsin.`) && del.mutate(undefined)}>
+              onClick={() => void ask(`${s.card_no} ${dateTR(s.period_end)} ekstresi ve içindeki ${s.txn_count} işlem silinsin mi? Yanlış dosyaysa sonra doğrusunu yükleyebilirsin.`).then((ok) => { if (ok) del.mutate(undefined); })}>
               <Trash2 size={14} aria-hidden /> Ekstreyi sil</button>
           </div>
           {(confirm.error || del.error || unconfirm.error) && (

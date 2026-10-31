@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { CheckCircle2, ChevronDown, ChevronRight, Circle, X } from "lucide-react";
 import { useState } from "react";
 import { useUI, type Route } from "../ui";
@@ -33,7 +34,7 @@ export default function Onboarding() {
           <p className="text-xs text-stone-500">{isOpen ? "Birkaç adımda kur; sonra her şey kendiliğinden işler." : `Sıradaki: ${next?.title ?? ""}`}</p>
         </button>
         <button className="btn-ghost p-1 text-stone-400" aria-label="Rehberi kapat" title="Rehberi kapat"
-          onClick={() => window.confirm("Başlarken rehberi kapatılsın mı?") && dismiss.mutate(undefined)}><X size={16} /></button>
+          onClick={() => void ask("Başlarken rehberi kapatılsın mı?\n\nAyarlar'dan yeniden açabilirsin.", { confirm: "Kapat", danger: false }).then((ok) => { if (ok) dismiss.mutate(undefined); })}><X size={16} /></button>
       </div>
       <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800">
         <div className="h-full rounded-full bg-green-600" style={{ width: `${(d.done / d.total) * 100}%` }} />

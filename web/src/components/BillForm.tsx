@@ -1,4 +1,5 @@
 import { FileText, Trash2 } from "lucide-react";
+import { ask } from "../lib/ask";
 import { useState } from "react";
 import { parseAmount } from "../format";
 import { api, type BillDraft } from "../api";
@@ -32,7 +33,7 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
   return (
     <Modal title={draft.id ? "Faturayı düzenle" : "Fatura ekle"} onClose={onClose} footer={
       <>
-        {draft.id && <button className="btn-danger" onClick={() => confirm("Fatura silinsin mi?") && del.mutate(undefined)}><Trash2 size={16} /> Sil</button>}
+        {draft.id && <button className="btn-danger" onClick={() => void ask("Fatura silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}><Trash2 size={16} /> Sil</button>}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
         <button className="btn-primary" disabled={save.isPending}

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { ChevronDown, Info, Moon, Plus, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useSave } from "../components/hooks";
@@ -30,7 +31,7 @@ interface ZakatData {
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -176,7 +177,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               )}
               {h.days_left <= 0 && (
                 <button className="btn-primary px-2 py-1 text-xs"
-                  onClick={() => window.confirm("Yeni zekât yılı başlasın mı? (bu yılın ödemeleri geçmişte kalır)") && nextYear.mutate(undefined, onErr)}>
+                  onClick={() => void ask("Yeni zekât yılı başlasın mı?\n\nBu yılın ödemeleri geçmişte kalır.", { confirm: "Yeni yıl başlat" }).then((ok) => { if (ok) nextYear.mutate(undefined, onErr); })}>
                   Yeni yılı başlat
                 </button>
               )}
@@ -205,7 +206,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                     <span>{dateTR(x.pay_date)} {x.note && `· ${x.note}`}</span>
                     <span className="flex items-center gap-1 tabular-nums">{tl(x.amount)}
                       <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Ödemeyi sil"
-                        onClick={() => window.confirm("Ödeme silinsin mi?") && delPay.mutate(x.id)}><Trash2 size={12} /></button>
+                        onClick={() => void ask("Ödeme silinsin mi?").then((ok) => { if (ok) delPay.mutate(x.id); })}><Trash2 size={12} /></button>
                     </span>
                   </li>
                 ))}
@@ -251,7 +252,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                 </span>
                 <span className="flex items-center gap-1 tabular-nums">{x.value != null ? tl(x.value) : "?"}
                   {x.id && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil"
-                    onClick={() => window.confirm(`${x.label} silinsin mi?`) && delAsset.mutate(x.id!)}><Trash2 size={12} /></button>}
+                    onClick={() => void ask(`${x.label} silinsin mi?`).then((ok) => { if (ok) delAsset.mutate(x.id!); })}><Trash2 size={12} /></button>}
                 </span>
               </li>
             ))}
@@ -269,7 +270,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               if (v) setStart.mutate(v, onErr);
             }}>Yıl başlangıcını değiştir</button>}
             {!p.is_self && <button className="btn-danger px-2 py-1 text-xs"
-              onClick={() => window.confirm(`${p.name} ve varlıkları silinsin mi?`) && delPerson.mutate(undefined, onErr)}>Kişiyi sil</button>}
+              onClick={() => void ask(`${p.name} ve varlıkları silinsin mi?`).then((ok) => { if (ok) delPerson.mutate(undefined, onErr); })}>Kişiyi sil</button>}
           </div>
         </div>
       )}

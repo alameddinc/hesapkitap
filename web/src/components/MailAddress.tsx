@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { ChevronDown, Copy, Crown, Inbox, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, type MailLogItem } from "../api";
@@ -53,8 +54,7 @@ export default function MailAddress() {
         <button className="btn-primary" onClick={copy}><Copy size={16} /> Kopyala</button>
       </div>
       <button className="btn-ghost px-2 py-1 text-xs" disabled={regen.isPending}
-        onClick={() => confirm("Yeni adres oluşturulsun mu?\n\nEski adres hemen çalışmaz olur: oraya yönlendirdiğin mailler artık işlenmez, Gmail/Outlook yönlendirmesini yeni adresle güncellemen gerekir.")
-          && regen.mutate(undefined, onErr)}>
+        onClick={() => void ask("Yeni adres oluşturulsun mu?\n\nEski adres hemen çalışmaz olur: oraya yönlendirdiğin mailler artık işlenmez, Gmail/Outlook yönlendirmesini yeni adresle güncellemen gerekir.").then((ok) => { if (ok) regen.mutate(undefined, onErr); })}>
         <RefreshCw size={14} className={cx(regen.isPending && "animate-spin")} /> Adresi yenile
       </button>
 

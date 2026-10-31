@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { ArrowLeftRight, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, errStatus, type MatchRule, type Rule } from "../api";
@@ -20,7 +21,7 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
       <div className="flex gap-2 sm:w-72">
         <div className="flex-1"><CategoryPicker value={category} onChange={setCategory} options={cats} /></div>
         {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}
-        <button className="btn-danger p-2" aria-label="Sil" onClick={() => confirm("Kural silinsin mi?") && del.mutate(undefined)}>
+        <button className="btn-danger p-2" aria-label="Sil" onClick={() => void ask("Kural silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
         </button>
       </div>
@@ -35,8 +36,8 @@ function LearnedMatches() {
   const del = useSave((id: number) => api.deleteMatchRule(id), () => ui.toast("Öğrenilen eşleşme silindi"));
   if (q.isPending || (q.error && errStatus(q.error) === 403)) return null;
   const rules = q.data ?? [];
-  const remove = (r: MatchRule) => {
-    if (!confirm(`“${r.bank_label} ↔ ${r.entry_label}” eşleşmesi unutulsun mu?\n\nŞimdiye kadar birleşen kayıtlar olduğu gibi kalır; bundan sonra bu ikisi yeniden sorulur.`)) return;
+  const remove = async (r: MatchRule) => {
+    if (!(await ask(`“${r.bank_label} ↔ ${r.entry_label}” eşleşmesi unutulsun mu?\n\nŞimdiye kadar birleşen kayıtlar olduğu gibi kalır; bundan sonra bu ikisi yeniden sorulur.`))) return;
     del.mutate(r.id, { onError: (e) => ui.toast(e.message) });
   };
   return (
