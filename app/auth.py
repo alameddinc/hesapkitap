@@ -44,9 +44,26 @@ def enabled() -> bool:
     return not disabled()
 
 
+class Busy(Exception):
+    """Aynı anda çok fazla şifre hesabı (PBKDF2) bekliyor: istek 503 alır, iş parçacığı havuzu tıkanmaz (S18)."""
+
+
+_KDF = threading.BoundedSemaphore(max(1, int(os.environ.get("HESAPKITAP_KDF_SLOTS", "4"))))
+KDF_WAIT = 10  # saniye
+
+
+def _kdf(pw: str, salt: bytes, iterations: int) -> bytes:
+    if not _KDF.acquire(timeout=KDF_WAIT):
+        raise Busy()
+    try:
+        return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, iterations)
+    finally:
+        _KDF.release()
+
+
 def _hash(pw: str, salt: bytes | None = None) -> str:
     salt = salt or os.urandom(16)
-    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, PBKDF2_ITER)
+    h = _kdf(pw, salt, PBKDF2_ITER)
     return f"pbkdf2${PBKDF2_ITER}${salt.hex()}${h.hex()}"
 
 
@@ -62,7 +79,7 @@ def _dummy_hash() -> str:
 def _verify(pw: str, stored: str) -> bool:
     try:
         _, it, salt, h = stored.split("$")
-        calc = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(it))
+        calc = _kdf(pw, bytes.fromhex(salt), int(it))
         return hmac.compare_digest(calc.hex(), h)
     except ValueError:
         return False
@@ -280,6 +297,24 @@ def rate_limited(ip: str) -> bool:
         while q and q[0] < now - FAIL_WINDOW:
             q.popleft()
         return len(q) >= MAX_FAILS
+
+
+_attempts: dict[str, deque] = defaultdict(deque)
+
+
+def attempt_limited(ip: str) -> bool:
+    """IP başı şifre hesabı gerektiren deneme sayısı (sonuçtan bağımsız; giriş, kayıt, sıfırlama, kurulum): pencere
+    başına HESAPKITAP_AUTH_ATTEMPTS (varsayılan 30 / 15 dk). Sınırda değilse denemeyi sayar."""
+    limit = int(os.environ.get("HESAPKITAP_AUTH_ATTEMPTS", "30"))
+    now = time.time()
+    with _fails_lock:
+        q = _attempts[ip]
+        while q and q[0] < now - FAIL_WINDOW:
+            q.popleft()
+        if limit and len(q) >= limit:
+            return True
+        q.append(now)
+        return False
 
 
 def record_fail(ip: str) -> None:

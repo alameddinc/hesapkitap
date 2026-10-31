@@ -42,6 +42,7 @@ def _fixture_pdfs(monkeypatch):
     from app import auth
 
     auth._account_fails.clear()  # hesap başı giriş sayacı süreç geneli; testler birbirini kilitlemesin
+    auth._attempts.clear()  # IP başı deneme sayacı (S18) da
 
 
 @pytest.fixture(autouse=True)
