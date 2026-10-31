@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, CreditCard, GitMerge, Landmark, Plus, Trash2, Wallet } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, CreditCard, GitMerge, Landmark, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
 import type { CardCycle } from "../api";
 import { cx, dateTR, parseAmount, tl } from "../format";
@@ -18,6 +18,28 @@ interface NW {
   credit_cards: { title: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
     unpaid: number; next_estimate: number | null; next_due: string | null; cycle: CardCycle | null }[];
   stale: string[];
+  /** sunucu toplamları (istemci toplamaz); card_overdue: ödenmemiş eski ekstreler, kalanı son ekstrede (toplamda yok) */
+  totals?: { card_debt: number; card_estimated: number; card_overdue: number; cash: number; spendable: number; net: number };
+  card_overdue?: { title: string; amount: number; due_date: string; statement_id: number; rolled_into: number | null }[];
+}
+
+/** Sunucu totals'ı varsa o, yoksa (eski sunucu) üst düzey alanlar. */
+const tot = (d: NW) => d.totals ?? { card_debt: d.card_debt, card_estimated: d.card_estimated, card_overdue: 0, cash: d.cash, spendable: d.spendable, net: d.net };
+
+/** Gecikmiş kart ekstresi uyarısı: ödenmemiş eski ekstre (kalanı son ekstreye devretti; toplamlara ayrıca girmez). */
+function CardOverdue({ d, compact }: { d: NW; compact?: boolean }) {
+  const list = d.card_overdue ?? [];
+  if (!list.length) return null;
+  return (
+    <span className={cx("flex gap-1.5 rounded-lg bg-red-50 p-2 text-xs text-red-800 dark:bg-red-950/40 dark:text-red-300", compact ? "mt-1.5" : "")} role="note">
+      <AlertTriangle size={14} className="mt-px shrink-0" aria-hidden />
+      <span>
+        <b>Gecikmiş kart ödemesi:</b>{" "}
+        {list.map((o) => `${o.title} (son ödeme ${dateTR(o.due_date)}, ${tl(o.amount)})`).join(" · ")}.{" "}
+        Kalanı sonraki ekstreye devretti ve kart borcunda zaten sayılıyor; gecikme faizi işler.
+      </span>
+    </span>
+  );
 }
 
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
@@ -77,11 +99,11 @@ function Headline({ d }: { d: NW }) {
     <span className="mb-1 grid grid-cols-2 gap-3">
       <span title="Bankada − ödenecek kart ekstresi − borçların − kumbaraya ayrılan. Altın/döviz, alacak ve yemek/hediye kartı dahil değil.">
         <span className="block text-xs text-stone-500">Harcanabilir TL</span>
-        <span className={cx("block text-lg font-semibold tabular-nums", tone(d.spendable))}>{tl(d.spendable)}</span>
+        <span className={cx("block text-lg font-semibold tabular-nums", tone(tot(d).spendable))}>{tl(tot(d).spendable)}</span>
       </span>
       <span title="Sahip olduğun her şey: bankada + altın/döviz + kartlarda − kart borcu ± borç/alacak">
         <span className="block text-xs text-stone-500">Net durum{d.holdings ? " (altın/döviz dahil)" : ""}</span>
-        <span className={cx("block text-lg font-semibold tabular-nums", tone(d.net))}>{tl(d.net)}</span>
+        <span className={cx("block text-lg font-semibold tabular-nums", tone(tot(d).net))}>{tl(tot(d).net)}</span>
       </span>
     </span>
   );
@@ -120,7 +142,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             <Headline d={d} />
             {/* döküm telefonda gizli: karta dokununca Hesaplar'da tamamı */}
             <span className="hidden text-xs text-stone-500 sm:block">
-              Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu −${tl(d.card_debt)}` : ""}
+              Bankada {tl(tot(d).cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{tot(d).card_debt ? ` · kart borcu −${tl(tot(d).card_debt)}` : ""}
               {d.receivable ? ` · alacak +${tl(d.receivable)}` : ""}{d.payable ? ` · borç −${tl(d.payable)}` : ""}
               {d.zakat_due ? ` · zekât borcu −${tl(d.zakat_due)}` : ""}
             </span>
@@ -128,6 +150,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             {d.unknown_banks.length > 0 && (
               <span className="block text-xs text-amber-600">Bakiyesi girilmemiş: {d.unknown_banks.join(", ")}</span>
             )}
+            <CardOverdue d={d} compact />
           </span>
         )}
         <ChevronRight size={16} className="shrink-0 text-stone-400" />
@@ -141,10 +164,11 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
         <div className="min-w-0 flex-1">
           <Headline d={d} />
           <div className="text-xs text-stone-500">
-            Bankada {tl(d.cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{d.card_debt ? ` · kart borcu ${tl(d.card_debt)}` : ""}
-            {d.card_estimated ? ` · kesilecek ekstreler ~${tl(d.card_estimated)}` : ""}
+            Bankada {tl(tot(d).cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{tot(d).card_debt ? ` · kart borcu ${tl(tot(d).card_debt)}` : ""}
+            {tot(d).card_estimated ? ` · kesilecek ekstreler ~${tl(tot(d).card_estimated)}` : ""}
           </div>
           {d.reserved > 0 && <div className="text-xs text-stone-500">Kumbaralarda ayrılan {tl(d.reserved)}</div>}
+          <CardOverdue d={d} />
         </div>
         <ChevronDown size={16} className={cx("text-stone-400 transition-transform", open && "rotate-180")} />
       </button>
@@ -243,8 +267,8 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             </ul>
           )}
           <Wallets />
-          {d.card_estimated > 0 && (
-            <p className="text-xs text-stone-500">Henüz kesilmemiş ekstreler (tahmini {tl(d.card_estimated)}) düşülünce: <b>{tl(d.net_after_estimates)}</b></p>
+          {tot(d).card_estimated > 0 && (
+            <p className="text-xs text-stone-500">Henüz kesilmemiş ekstreler (tahmini {tl(tot(d).card_estimated)}) düşülünce: <b>{tl(d.net_after_estimates)}</b></p>
           )}
           <p className="text-xs text-stone-500">
             Banka bakiyesini elle girebilirsin; hesap dökümü yüklersen (elle, e-postayla ya da Telegram'dan) kendiliğinden güncellenir.

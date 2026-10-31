@@ -56,6 +56,7 @@ export default function SimpleDashboard() {
                   <span className="block break-words font-medium">{p.title}</span>
                   <span className={`text-base ${p.status === "gecikti" ? "text-red-600" : "text-stone-500"}`}>
                     {p.status === "gecikti" ? "gecikti · " : ""}son gün {dateTR(p.due_date)}{p.status === "tahmini" ? " · tahmini" : ""}
+                    {p.in_total === false && p.rolled_into ? " · kalanı sonraki ekstreye devretti" : ""}
                   </span>
                 </span>
                 <span className="shrink-0 font-semibold tabular-nums">{tl(p.amount - (p.paid_amount ?? 0))}</span>

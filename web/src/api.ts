@@ -251,6 +251,15 @@ export interface Payable {
   note?: string | null;
   description?: string | null;
   cycle?: CardCycle | null; // tahmini ekstre: dökümü
+  /** toplama girer mi (sunucu); false: ödenmemiş eski ekstre, kalanı rolled_into'daki son ekstreye devretti */
+  in_total?: boolean;
+  rolled_into?: number | null;
+}
+
+/** GET /api/payables?totals=1 toplamları: istemci toplamaz (finance.payables_totals). */
+export interface PayableTotals {
+  open: number; open_count: number; card_debt: number; statements: number; bills: number; debts: number;
+  overdue: number; overdue_count: number; estimated: number;
 }
 
 export interface BillDraft {
@@ -476,6 +485,7 @@ export const api = {
   skipRecurring: (id: number, month: string) => req("POST", `/api/recurring/${id}/skip`, { month }),
 
   payables: () => req<Payable[]>("GET", "/api/payables"),
+  payablesWithTotals: () => req<{ items: Payable[]; totals: PayableTotals }>("GET", "/api/payables?totals=1"),
   budgets: (month: string) =>
     req<{ limits: Record<string, number>; status: Budget[]; last_month: Record<string, number> }>("GET", `/api/budgets?month=${month}`),
   setBudget: (category: string, monthly_limit: number | null) => req("PUT", "/api/budgets", { category, monthly_limit }),

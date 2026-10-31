@@ -19,25 +19,30 @@ function DueBadge({ p }: { p: Payable }) {
 
 export default function Payables() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["payables"], queryFn: api.payables });
-  const items = q.data ?? [];
-  const open = items.filter((p) => p.status !== "odendi" && p.status !== "tahmini");
-  const totalOpen = open.reduce((a, p) => a + p.amount - (p.paid_amount ?? 0), 0);
+  // toplamlar sunucudan: eski ödenmemiş ekstre (kalanı son ekstreye devretti) iki kez sayılmasın
+  const q = useQuery({ queryKey: ["payables", "totals"], queryFn: api.payablesWithTotals });
+  const items = q.data?.items ?? [];
+  const t = q.data?.totals;
+  const rolled = (p: Payable) => p.in_total === false && !!p.rolled_into;
 
   return (
     <section className="card overflow-hidden">
       <div className="flex items-center justify-between gap-2 border-b border-stone-100 px-3 py-2.5 sm:px-4 dark:border-stone-800">
         <div>
           <h2 className="font-semibold">Ödemeler</h2>
-          <p className="text-xs text-stone-500">{open.length ? `${open.length} ödeme bekliyor · ${tl(totalOpen)}` : "Bekleyen ödeme yok 🎉"}</p>
+          <p className="text-xs text-stone-500 dark:text-stone-400">{t && t.open_count ? `${t.open_count} ödeme bekliyor · ${tl(t.open)}` : t ? "Bekleyen ödeme yok 🎉" : "…"}</p>
+          {!!t?.overdue_count && (
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              + {t.overdue_count} eski ekstre ödenmemiş ({tl(t.overdue)}); kalanı sonraki ekstreye devretti, toplama ayrıca girmez</p>
+          )}
         </div>
-        <button className="btn-ghost border border-stone-300 text-xs dark:border-stone-700" onClick={() => ui.openBill()}>
+        <button className="btn-ghost shrink-0 border border-stone-300 text-xs whitespace-nowrap dark:border-stone-700" onClick={() => ui.openBill()}>
           <Receipt size={14} /> Fatura ekle
         </button>
       </div>
       <ul className="divide-y divide-stone-100 dark:divide-stone-800">
         {items.map((p) => (
-          <li key={`${p.type}-${p.id ?? p.title}`} className={cx("flex items-center gap-3 px-3 py-2.5 sm:px-4", p.status === "odendi" && "opacity-60")}>
+          <li key={`${p.type}-${p.id ?? p.title}`} className={cx("flex items-center gap-3 px-3 py-2.5 sm:px-4", (p.status === "odendi" || rolled(p)) && "opacity-60")}>
             <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500 dark:bg-stone-800">
               {p.type === "bill" ? <FileText size={15} /> : p.type === "debt" ? <HandCoins size={15} /> : <CreditCard size={15} />}
             </span>
@@ -51,6 +56,7 @@ export default function Payables() {
               <div className="mt-0.5 text-xs text-stone-500">
                 {p.subtitle} · son ödeme {dateTR(p.due_date)}
                 {p.min_payment != null && p.min_payment < p.amount && p.status !== "odendi" && ` · asgari ${tl(p.min_payment)}`}
+                {rolled(p) && <span className="block text-stone-600 dark:text-stone-300">Ödenmedi; kalanı sonraki ekstreye devretti (orada sayılıyor, toplama ayrıca girmez)</span>}
                 {p.cycle && <CycleLine c={p.cycle} />}
                 {p.has_file && p.id && <> · <a className="text-blue-600 underline" href={`/api/bills/${p.id}/file`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>dosya</a></>}
               </div>
