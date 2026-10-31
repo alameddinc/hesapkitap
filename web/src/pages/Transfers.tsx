@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, GitMerge, HandCoins, Pencil, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
@@ -47,7 +48,7 @@ const shortBank = (b: string | null) => (b ? b.replace(/\s+(KATILIM\s+)?BANKASI.
 async function json<T>(method: string, url: string, body: object): Promise<T> {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Kaydedilemedi");
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 }
 const putPerson = (name: string, body: object) => json<{ updated: number }>("PUT", `/api/transfers/people/${encodeURIComponent(name)}`, body);

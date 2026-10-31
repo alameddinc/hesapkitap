@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { Eye, EyeOff, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { dateTR, parseAmount, tlShown } from "../format";
@@ -18,7 +19,7 @@ interface Data { items: Item[]; zakat_payments: ZP[]; pending: Pending[]; years:
 const call = async (method: string, url: string, body?: unknown) => {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j;
 };
 const today = () => new Date().toISOString().slice(0, 10);

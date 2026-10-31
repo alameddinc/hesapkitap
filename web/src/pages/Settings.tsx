@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send } from "lucide-react";
 import { useMeta } from "../components/hooks";
 import { periodRange } from "../components/MonthPicker";
@@ -215,7 +216,7 @@ interface SettingsStatus {
 async function post<T>(url: string): Promise<T> {
   const r = await fetch(url, { method: "POST" });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 }
 

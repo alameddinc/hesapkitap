@@ -1,3 +1,4 @@
+import { detailText } from "./lib/apiError";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
@@ -439,10 +440,10 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   }
   const res = await fetch(url, init);
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
+    let msg = detailText(undefined, res.status);
     try {
       const j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+      msg = detailText(j.detail, res.status);
     } catch {
       /* gövde JSON değil */
     }

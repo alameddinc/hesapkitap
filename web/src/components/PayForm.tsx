@@ -139,7 +139,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
             <div className="mt-2"><button className="btn-primary px-3 py-1 text-xs" onClick={onClose}>Tamam</button></div>
           </div>
         )}
-        {save.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
+        {(save.error || undo.error) && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{((save.error || undo.error) as Error).message}</p>}
       </div>
     </Modal>
   );

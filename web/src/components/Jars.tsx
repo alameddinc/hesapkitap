@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { Camera, ChevronDown, Minus, Coins, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
@@ -30,7 +31,7 @@ const isUnit = (j?: { unit?: string }) => !!j?.unit && j.unit !== "TRY";
 const json = async <T,>(method: string, url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(detailText(j.detail, r.status));
   return j as T;
 };
 

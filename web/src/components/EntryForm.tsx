@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { detailText } from "../lib/apiError";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
@@ -432,7 +433,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
                 const r = await fetch(`/api/entries/${editingEntry.id}/to-opening`, { method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ account_id: accountId }) });
                 const j = await r.json();
-                if (!r.ok) return setErr(j.detail ?? "Çevrilemedi");
+                if (!r.ok) return setErr(detailText(j.detail, r.status));
                 qc.invalidateQueries();
                 done(j.message);
               }}>{accountId ? "Hesap bakiyesine çevir" : "Önce hesabı seç"}</button>
