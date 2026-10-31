@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import "./components/InstallApp"; // beforeinstallprompt erken yakalansın
 import App from "./App";
 import { setRefreshHandler } from "./lib/apiError";
+import { installIdempotency, setStuckHandler } from "./lib/idem";
 import "./index.css";
 
 // Mağaza uygulaması (Capacitor): <html class="in-app">. Android'de kenardan kenara çizilir; güvenli alan değerleri
@@ -29,6 +30,9 @@ const qc = new QueryClient({
 });
 // 404 + refresh: true (kayıt başka cihazda silinmiş/değişmiş): ekrandaki listeler tazelensin
 setRefreshHandler(() => void qc.invalidateQueries());
+// yazma isteklerine Idempotency-Key ve güvenli yeniden deneme (lib/idem.ts)
+installIdempotency();
+setStuckHandler(() => void qc.invalidateQueries());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

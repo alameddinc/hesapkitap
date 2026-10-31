@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
+import { newKey, withAction } from "../lib/idem";
 import { api, type Row } from "../api";
 import { addMonths, periodOf } from "../format";
 
@@ -7,9 +9,13 @@ export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta })
 /** Her yazma işleminden sonra tüm sorguları tazele: veri küçük, basitlik daha değerli. */
 export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void) {
   const qc = useQueryClient();
+  // eylem anahtarı (Idempotency-Key): başarıya kadar aynı kalır — ağ hatasından sonra tekrar basılan "Kaydet"
+  // aynı anahtarla gider, sunucu işlemi ikinci kez yapmaz; başarıdan sonra sıradaki eylem yeni anahtar alır
+  const key = useRef<string | null>(null);
   return useMutation({
-    mutationFn: fn,
+    mutationFn: (a: A) => withAction(key.current ??= newKey(), () => fn(a)),
     onSuccess: (r) => {
+      key.current = null;
       qc.invalidateQueries();
       onDone?.(r);
     },
