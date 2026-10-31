@@ -4,6 +4,7 @@ import { LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import { inApp, toLauncher } from "../components/AppServer";
 import { isEmail, loginKind } from "../components/hooks";
+import VerifyEmail from "../components/VerifyEmail";
 import PendingDeletion, { isPendingDeletion, type PendingDeletionInfo } from "../components/PendingDeletion";
 
 export default function Login() {
@@ -13,6 +14,7 @@ export default function Login() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingDeletionInfo | null>(null); // hesap silinmek üzere (409)
+  const [verify, setVerify] = useState<{ email: string; message?: string } | null>(null); // e-posta doğrulanmamış (403)
   const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
   const open = !!status.data?.open_signup; // barındırılan sürüm: herkes hesap açabilir
   const email = loginKind(status.data) === "email"; // hazır sürüm: giriş e-postayla
@@ -29,13 +31,19 @@ export default function Login() {
       qc.invalidateQueries();
     } catch (x) {
       const { status, body } = x as { status?: number; body?: unknown };
-      if (status === 409 && isPendingDeletion(body)) setPending(body);
+      const b = body as { detail?: string; email?: string; message?: string } | null;
+      if (status === 403 && b?.detail === "email_unverified") setVerify({ email: b.email || user.trim(), message: b.message });
+      else if (status === 409 && isPendingDeletion(body)) setPending(body);
       else setErr((x as Error).message || "Giriş başarısız");
     } finally {
       setBusy(false); // ağ hatasında da düğme kilitli kalmaz
     }
   }
 
+  if (verify) return (
+    <VerifyEmail email={verify.email} onBack={() => { setVerify(null); setPw(""); }}
+      intro={`${verify.message || "E-postana gönderdiğimiz kodla hesabını doğrula."} Yeni bir kod gönderdik.`} />
+  );
   if (pending) return <PendingDeletion info={pending} onCancel={() => { setPending(null); setPw(""); }} />;
 
   return (
