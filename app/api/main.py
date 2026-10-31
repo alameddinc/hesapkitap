@@ -557,14 +557,59 @@ def _signup_record(ip: str) -> None:
         _signups.setdefault(ip, []).append(time.time())
 
 
+INVITE_REASONS = {"used": "Bu davet kodu kullanılmış; davet edenden yeni bağlantı iste.",
+                  "expired": "Bu davetin süresi dolmuş; davet edenden yeni bağlantı iste.",
+                  "unknown": "Davet kodu bulunamadı; kodu kontrol et ya da davet edenden yeni bağlantı iste."}
+
+
+def _public_base(request: Request) -> str:
+    """Bağlantılar için sunucunun dış adresi: HESAPKITAP_PUBLIC_URL, yoksa isteğin adresi (vekil başlığıyla https)."""
+    env = os.environ.get("HESAPKITAP_PUBLIC_URL", "").strip().rstrip("/")
+    if env:
+        return env
+    scheme = "https" if request.headers.get("x-forwarded-proto") == "https" else request.url.scheme
+    return f"{scheme}://{request.headers.get('host') or request.url.netloc}"
+
+
+def _invite_out(inv: dict, request: Request) -> dict:
+    """Davet + bağlantıları. link: web (telefonda uygulama yüklüyse ileride evrensel bağlantı), QR'a bu yazılır;
+    app_link: mobil uygulamanın derin bağlantısı (HESAPKITAP_APP_SCHEME, varsayılan hesapkitap)."""
+    from app import book
+
+    code = inv["code"]
+    scheme = os.environ.get("HESAPKITAP_APP_SCHEME", "hesapkitap")
+    out = {**inv, "link": f"{_public_base(request)}/#/kayit?kod={code}", "app_link": f"{scheme}://kayit?kod={code}",
+           "kind": "book" if inv.get("member_of") else "account"}
+    if inv.get("member_of"):
+        out["role_label"] = book.ROLE_LABELS.get(inv.get("book_role") or "editor")
+    return out
+
+
 @app.get("/api/auth/invite/{code}")
-def invite_check(code: str):
-    return {"valid": system.valid_invite(code)}
+def invite_check(code: str, request: Request):
+    """Davet bağlantısı açılınca (kayıttan önce): geçerli mi, hangi deftere, hangi yetkiyle. Geçersizse Türkçe neden.
+    {valid, reason?, message?, kind: book|account, book?: sahibin görünen adı, role?, role_label?, expires_at?}"""
+    from app import book
+
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    inv, status = system.invite_status(code)
+    if status != "ok":
+        auth.record_fail(ip)  # kod tahmini yavaşlasın
+        return {"valid": False, "reason": status, "message": INVITE_REASONS[status]}
+    out = {"valid": True, "kind": "book" if inv.get("member_of") else "account", "expires_at": inv["expires_at"]}
+    if inv.get("member_of"):
+        owner = system.user(inv["member_of"]) or {}
+        out.update(book=(owner.get("username") or "").split("@")[0], role=inv.get("book_role") or "editor",
+                   role_label=book.ROLE_LABELS.get(inv.get("book_role") or "editor"))
+    return out
 
 
 class SocialIn(BaseModel):
     id_token: str
     consent: list[str] | None = None  # yeni hesap açılacaksa hazır sürümde gerekli
+    invite: str | None = None         # davet bağlantısıyla gelen: yeni hesap ortak deftere üye olur
 
 
 @app.post("/api/auth/google")
@@ -613,6 +658,22 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         email_verify.mark_verified(u["id"])
         email_verify.notify_taken_over(u)
         u = system.user(u["id"])
+    inv = None
+    if not u and body.invite:  # davet bağlantısıyla Google/Apple: yeni hesap davetin defterine üye olur
+        inv, status = system.invite_status(body.invite)
+        if status != "ok":
+            raise HTTPException(403, INVITE_REASONS[status])
+    if not u and inv:
+        if not _consent_ok(body.consent):
+            raise HTTPException(409, "consent_required")
+        u = auth.create_user(who["email"], secrets.token_urlsafe(32), member_of=inv.get("member_of"),
+                             book_role=inv.get("book_role"))
+        if not system.use_invite(inv["code"], u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
+            system.delete_user(u["id"])
+            raise HTTPException(409, "Davet kodu az önce kullanıldı")
+        system.put(f"pw_unset:{u['id']}", "1")
+        _record_consent(u["id"], request)
+        created = True
     if not u:
         if not plans.open_signup():
             raise HTTPException(403, "Bu e-postayla bir hesap yok")
@@ -884,9 +945,9 @@ class InviteIn(BaseModel):
 
 
 @app.get("/api/admin/users")
-def admin_users():
+def admin_users(request: Request):
     _require_admin()
-    return {"users": [_user_row(u) for u in system.users()], "invites": system.invites(),
+    return {"users": [_user_row(u) for u in system.users()], "invites": [_invite_out(i, request) for i in system.invites()],
             "default_quota": system.ai_quota({"role": "user"}), "hosted": plans.hosted()}
 
 
@@ -965,9 +1026,9 @@ def admin_deleted_accounts(email: str | None = None):
 
 
 @app.post("/api/admin/invites")
-def admin_create_invite(body: InviteIn):
+def admin_create_invite(body: InviteIn, request: Request):
     _require_admin()
-    return system.create_invite(body.note, body.days)
+    return _invite_out(system.create_invite(body.note, body.days), request)
 
 
 @app.delete("/api/admin/invites/{code}")
@@ -3635,7 +3696,7 @@ def book_me():
 
 
 @app.get("/api/book")
-def book_overview():
+def book_overview(request: Request):
     from app import book
 
     u = _book_owner()
@@ -3645,7 +3706,7 @@ def book_overview():
     return {"members": [{"id": m["id"], "username": m["username"], "last_login": m["last_login"], "disabled": bool(m["disabled"]),
                          "role": book.role(m), "own_rules": book.has_own_rules(m["id"]), "rules": book.rules(m["id"])}
                         for m in system.members(u["id"])],
-            "invites": [i for i in system.invites() if i.get("member_of") == u["id"] and not i["used_at"]],
+            "invites": [_invite_out(i, request) for i in system.invites() if i.get("member_of") == u["id"] and not i["used_at"]],
             "rules": book.rules(), "cards": list(cards.values()),
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in db.list_accounts()],
             "pages": book.PAGE_LABELS, "roles": book.ROLE_LABELS}
@@ -3692,11 +3753,21 @@ def book_patch_member(uid: int, body: BookMemberPatch):
 
 
 @app.post("/api/book/invites")
-def book_invite(body: InviteIn):
+def book_invite(body: InviteIn, request: Request):
     u = _book_owner()
     if plans.seats_left(u["id"]) == 0:
         raise HTTPException(409, f"Aile paketi {plans.FAMILY_SEATS} kişilik; yer açmak için bir üyeyi ya da bekleyen daveti kaldır")
-    return system.create_invite(body.note, body.days, member_of=u["id"], book_role=body.book_role)
+    return _invite_out(system.create_invite(body.note, body.days, member_of=u["id"], book_role=body.book_role), request)
+
+
+@app.post("/api/book/invites/{code}/renew")
+def book_renew_invite(code: str, request: Request):
+    """Daveti yenile (bağlantı paylaşıldı ama kullanılmadı ya da süresi doldu): eski kod geçersiz, yeni kod ve süre."""
+    u = _book_owner()
+    inv = system.invite(code)
+    if not inv or inv.get("member_of") != u["id"] or inv["used_at"]:
+        raise HTTPException(404, "Davet yok ya da kullanılmış")
+    return _invite_out(system.renew_invite(code), request)
 
 
 @app.delete("/api/book/invites/{code}")

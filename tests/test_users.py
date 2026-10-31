@@ -23,7 +23,7 @@ def _new_client():
 def test_invite_register_flow(admin_client):
     inv = admin_client.post("/api/admin/invites", json={"note": "Ayşe"}).json()
     c = _new_client()
-    assert c.get(f"/api/auth/invite/{inv['code']}").json() == {"valid": True}
+    assert c.get(f"/api/auth/invite/{inv['code']}").json()["valid"] is True  # (M12: tür, süre gibi alanlar da döner)
     assert c.post("/api/auth/register", json={"code": "YANL-IS00-KOD0", "username": "ayse",
                                               "password": "ayse-sifre-12345"}).status_code == 403
     r = c.post("/api/auth/register", json={"code": inv["code"].lower(), "username": "ayse", "password": "ayse-sifre-12345"})
