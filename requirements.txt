@@ -7,12 +7,13 @@ dkimpy==1.1.8
 pdfplumber==0.11.10
 # fiş/fatura fotoğrafı: yön, küçültme, EXIF/konum silme (app/images.py) ve yerel OCR ön işleme. pdfplumber zaten
 # getiriyor; doğrudan kullanıldığı için sürümü sabit (pdfplumber bağımlılığını değiştirirse sessizce kırılmasın)
-pillow==12.3.0
+pillow==13.0.0
 # banka hesap hareketleri (Excel) içe aktarma
 openpyxl==3.1.5
 xlrd==2.0.2
-# pdfminer'ın bağımlılığı. 50.x arm64 Docker Desktop'ta "Illegal instruction" (exit 132) ile çöküyor
-cryptography==46.0.3
+# pdfminer'ın bağımlılığı. 50.x arm64 Docker Desktop'ta "Illegal instruction" (exit 132) ile çöküyor; 49.x'te
+# kalan tek açık (PYSEC-2026-3552, pkcs7_decrypt) kullanılmıyor, CI'daki pip-audit'te istisna olarak yazılı
+cryptography==49.0.0
 pytest==9.1.1
 # python:3.12-slim'de sistem saat dilimi verisi yok; zoneinfo için
 tzdata==2026.5
