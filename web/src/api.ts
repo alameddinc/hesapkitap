@@ -24,6 +24,9 @@ export interface Row {
   created_by?: number | null; // ekleyen kullanıcı (ortak defter)
   fx: string | null;
   note: string | null;
+  /** sunucu 90ed954: ham banka açıklaması (yoksa null) ve kullanıcının kendi notu; note ikisinin birleşik hâli */
+  raw?: string | null;
+  note_user?: string | null;
   deleted: boolean;
   recurring_id?: number | null;
   skipped?: boolean;

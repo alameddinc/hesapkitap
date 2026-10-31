@@ -5,6 +5,7 @@ import { useUI } from "../ui";
 import { useAccounts } from "./AccountSelect";
 import { usePeople } from "./hooks";
 import { MatchBadge } from "./MatchInfo";
+import { userNote } from "./BankText";
 
 const BADGE: Record<string, string> = {
   iade: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
@@ -104,7 +105,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
                 {r.match ? <MatchBadge m={r.match} />
                   : r.linked && <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 dark:bg-green-950 dark:text-green-300">Ekstreyle eşleşti</span>}
               </div>
-              {r.note && <div className="mt-0.5 text-xs break-words text-stone-500 dark:text-stone-400">{r.note}</div>}
+              {userNote(r) && <div className="mt-0.5 text-xs break-words text-stone-500 dark:text-stone-400">{userNote(r)}</div>}
               {r.pending && <PendingActions r={r} />}
             </div>
           </div>
