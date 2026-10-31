@@ -2513,21 +2513,28 @@ def interest_charges(period: str) -> list[dict]:
     return out
 
 
-def card_debt_at(d: str) -> float:
-    """O gün kartlara borç: her kartın o tarihe kadar kesilmiş EN SON ekstresi, o gün ödenmemişse (kısmi ödeme düşülür).
-    Eski ekstreler sayılmaz: ödenmeyen kısımları zaten yeni ekstrenin toplamında."""
-    latest: dict[tuple, dict] = {}
-    for st in list_statements():
-        if st["period_end"] <= d:
-            k = (st["bank"], st["card_no"])
-            if k not in latest or st["period_end"] > latest[k]["period_end"]:
-                latest[k] = st
-    total = 0.0
-    for st in latest.values():
-        if st["paid_at"] and st["paid_at"] <= d:
-            continue
-        total += max(0.0, (st["total_debt"] or 0) - (st["paid_amount"] or 0 if st["paid_at"] and st["paid_at"] <= d else 0))
-    return round(total, 2)
+def statement_remaining(st: dict, d: str | None = None) -> float:
+    """Ekstrenin d günü ödenmemiş kısmı (d yoksa bugün itibarıyla bilinen). Kısmi ödeme düşülür; 1 kuruşluk eksik
+    ödeme ödendi sayılır (finance._status ile aynı)."""
+    paid = (st["paid_amount"] or 0) if st["paid_at"] and (d is None or st["paid_at"] <= d) else 0
+    rem = (st["total_debt"] or 0) - paid
+    return money.money(rem) if money.diff_k(rem, 0) > 1 else 0.0
+
+
+def latest_card_statements(d: str, statements: list[dict] | None = None) -> dict[str, dict]:
+    """Kart (kart numarası) başına d gününe kadar kesilmiş EN SON ekstre. Kartın borcu yalnız budur: ödenmeyen eski
+    ekstreler yeni ekstrenin devreden borcunda zaten var (iki kez sayılırsa net durum ve zekât yanlış çıkar)."""
+    latest: dict[str, dict] = {}
+    for st in statements if statements is not None else list_statements():
+        if st["period_end"] <= d and (st["card_no"] not in latest or st["period_end"] > latest[st["card_no"]]["period_end"]):
+            latest[st["card_no"]] = st
+    return latest
+
+
+def card_debt_at(d: str, statements: list[dict] | None = None) -> float:
+    """O gün kartlara borç: her kartın o tarihe kadar kesilmiş EN SON ekstresi, o gün ödenmemiş kısmı (kısmi ödeme
+    düşülür). Eski ekstreler sayılmaz: ödenmeyen kısımları zaten yeni ekstrenin toplamında."""
+    return money.money(sum(statement_remaining(st, d) for st in latest_card_statements(d, statements).values()))
 
 
 def card_payments_without_statement() -> list[dict]:

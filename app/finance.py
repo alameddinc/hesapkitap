@@ -941,19 +941,27 @@ def payables(today: date | None = None) -> list[dict]:
     today = today or date.today()
     out = []
     statements = db.list_statements()
+    latest = {st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
+    by_card = {st["card_no"]: st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     for st in statements:
         if not st["due_date"]:
             continue
         status = _status(st["total_debt"], st["paid_amount"], st["due_date"], today)
         age = (today - date.fromisoformat(st["due_date"])).days
+        is_latest = st["id"] in latest
         if status == "odendi" and age > PAYABLE_WINDOW:
             continue
-        if status != "odendi" and age > 120:  # çok eski ve işaretlenmemiş: muhtemelen ödenmiş, listeyi kirletmesin
+        if status != "odendi" and age > 120 and not is_latest:  # çok eski, işaretlenmemiş ve devredilmiş: listeyi kirletmesin
             continue
-        out.append({"type": "statement", "id": st["id"], "title": f"{st['bank']} {st['card_no']}",
-                    "subtitle": f"Ekstre · kesim {date.fromisoformat(st['period_end']):%d.%m}",
-                    "amount": st["total_debt"], "min_payment": st["min_payment"], "due_date": st["due_date"],
-                    "days_left": -age, "paid_amount": st["paid_amount"], "paid_at": st["paid_at"], "status": status})
+        item = {"type": "statement", "id": st["id"], "title": f"{st['bank']} {st['card_no']}",
+                "subtitle": f"Ekstre · kesim {date.fromisoformat(st['period_end']):%d.%m}",
+                "amount": st["total_debt"], "min_payment": st["min_payment"], "due_date": st["due_date"],
+                "days_left": -age, "paid_amount": st["paid_amount"], "paid_at": st["paid_at"], "status": status,
+                "in_total": is_latest and status != "odendi"}
+        if not is_latest and status != "odendi" and by_card.get(st["card_no"]):
+            # ödenmemiş eski ekstre: kalanı kartın son ekstresine devretti; gecikmiş bilgisi, toplama girmez
+            item["rolled_into"] = by_card[st["card_no"]]
+        out.append(item)
     for b in db.list_bills():
         status = _status(b["amount"], b["paid_amount"], b["due_date"], today)
         if status == "odendi" and b["paid_at"] and (today - date.fromisoformat(b["paid_at"])).days > PAYABLE_WINDOW:
@@ -963,7 +971,7 @@ def payables(today: date | None = None) -> list[dict]:
                     "amount": b["amount"], "min_payment": None, "due_date": b["due_date"],
                     "days_left": (date.fromisoformat(b["due_date"]) - today).days,
                     "paid_amount": b["paid_amount"], "paid_at": b["paid_at"], "status": status,
-                    "has_file": bool(b["file_name"]), "category": b["category"], "note": b["note"],
+                    "in_total": status != "odendi", "has_file": bool(b["file_name"]), "category": b["category"], "note": b["note"],
                     "description": b["description"]})
     # Vadeli borçlarım (kişilere): TL ise tutar, değilse birimiyle (ortak defterde Borç sayfası kapalıysa gösterilmez)
     from app import book
@@ -979,16 +987,34 @@ def payables(today: date | None = None) -> list[dict]:
                     "subtitle": " · ".join(x for x in ("Borç", d["note"]) if x),
                     "amount": d["amount"], "min_payment": None, "due_date": d["due_date"],
                     "days_left": (date.fromisoformat(d["due_date"]) - today).days,
-                    "paid_amount": d["paid_amount"] or None, "paid_at": d["settled_at"], "status": status})
+                    "paid_amount": d["paid_amount"] or None, "paid_at": d["settled_at"], "status": status,
+                    "in_total": status != "odendi"})
     # Kesilmemiş ekstreler: tahmini tutar, ödeme butonu yok
     for d in plan(3, today=today)["dues"]:
         if d["estimated"] and (date.fromisoformat(d["date"]) - today).days <= 45:
             out.append({"type": "estimate", "id": None, "title": f"{d['bank']} {d['account']}",
                         "subtitle": "Sonraki ekstre (tahmini)", "amount": d["amount"] or 0, "min_payment": None,
                         "due_date": d["date"], "days_left": (date.fromisoformat(d["date"]) - today).days,
-                        "paid_amount": None, "paid_at": None, "status": "tahmini", "cycle": d.get("cycle")})
+                        "paid_amount": None, "paid_at": None, "status": "tahmini", "cycle": d.get("cycle"),
+                        "in_total": False})
     order = {"gecikti": 0, "kismi": 1, "bekliyor": 2, "tahmini": 3, "odendi": 4}
     return sorted(out, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
+
+
+def payables_totals(today: date | None = None, items: list[dict] | None = None) -> dict:
+    """Ödemeler toplamı (istemci kendisi toplamasın). open: toplama giren kalemlerin (in_total) kalanı; card_debt:
+    kart başına son ekstrenin kalanı (net durumla aynı kural); overdue: kalanı yeni ekstreye devretmiş, ödenmemiş eski
+    ekstreler (bilgi; toplamda yok); estimated: kesilmemiş ekstrelerin tahmini."""
+    today = today or date.today()
+    items = payables(today) if items is None else items
+    rem = lambda p: max(0.0, p["amount"] - (p["paid_amount"] or 0))  # noqa: E731
+    inc = [p for p in items if p.get("in_total")]
+    by = {t: _round(sum(rem(p) for p in inc if p["type"] == t)) for t in ("statement", "bill", "debt")}
+    rolled = [p for p in items if p.get("rolled_into")]
+    return {"open": _round(sum(rem(p) for p in inc)), "open_count": len(inc),
+            "card_debt": db.card_debt_at(today.isoformat()), "statements": by["statement"], "bills": by["bill"],
+            "debts": by["debt"], "overdue": _round(sum(rem(p) for p in rolled)), "overdue_count": len(rolled),
+            "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate"))}
 
 
 # ---------------------------------------------------------------- birimler (borç/alacak: TL, döviz, altın)
@@ -1476,13 +1502,20 @@ def net_worth(today: date | None = None) -> dict:
     today = today or date.today()
     accounts = db.list_accounts()
     cash = sum(a["current"] for a in accounts if a["current"] is not None)
-    cards = []
+    statements = db.list_statements()
+    cards, overdue = [], []
+    # kart borcu: kart başına yalnız SON ekstrenin kalanı (db.card_debt_at ile aynı kural; Ödemeler toplamı da bu)
+    for st in sorted(db.latest_card_statements(today.isoformat(), statements).values(), key=lambda x: x["period_end"]):
+        left = db.statement_remaining(st, today.isoformat())
+        if left:
+            cards.append({"title": f"{st['bank']} {st['card_no']}", "amount": left, "due_date": st["due_date"],
+                          "estimated": False, "statement_id": st["id"]})
     for p in payables(today):
-        if p["type"] == "statement" and p["status"] != "odendi":
-            cards.append({"title": p["title"], "amount": _round(p["amount"] - (p["paid_amount"] or 0)), "due_date": p["due_date"],
-                          "estimated": False})
-        elif p["type"] == "estimate":
+        if p["type"] == "estimate":
             cards.append({"title": p["title"], "amount": p["amount"], "due_date": p["due_date"], "estimated": True})
+        elif p.get("rolled_into"):  # gecikmiş eski ekstre: bilgi, toplamda yok (kalanı son ekstrede)
+            overdue.append({"title": p["title"], "amount": _round(p["amount"] - (p["paid_amount"] or 0)),
+                            "due_date": p["due_date"], "statement_id": p["id"], "rolled_into": p["rolled_into"]})
     card_debt = sum(c["amount"] for c in cards if not c["estimated"])
     card_est = sum(c["amount"] for c in cards if c["estimated"])
     open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
@@ -1492,15 +1525,12 @@ def net_worth(today: date | None = None) -> dict:
     accounts = [a for a in accounts if a["as_of"]]  # bakiyesi bilinmeyenler unknown_banks'ta
     wallets = [{"id": w["id"], "name": w["name"], "card_type": w["card_type"], "balance": w["current"]} for w in db.list_wallets()]
     # ekstresi olan her kredi kartı (hepsi ödenmiş olsa da): son ekstre + sonraki tahmini
-    latest: dict[str, dict] = {}
-    for st in db.list_statements():
-        if st["card_no"] not in latest:
-            latest[st["card_no"]] = st
+    latest = db.latest_card_statements(today.isoformat(), statements)
     est = {p["title"]: p for p in payables(today) if p["type"] == "estimate"}
     credit_cards = []
-    for card_no, st in latest.items():
+    for card_no, st in sorted(latest.items(), key=lambda kv: kv[1]["period_end"], reverse=True):
         title = f"{st['bank']} {card_no}"
-        unpaid = _round(max(0.0, st["total_debt"] - (st["paid_amount"] or 0))) if st["due_date"] else 0.0
+        unpaid = db.statement_remaining(st, today.isoformat())
         nxt = est.get(title)
         credit_cards.append({"title": title, "bank": st["bank"], "card_no": card_no, "last_period_end": st["period_end"],
                              "last_total": st["total_debt"], "last_due": st["due_date"], "paid_at": st["paid_at"],
@@ -1533,6 +1563,11 @@ def net_worth(today: date | None = None) -> dict:
             "net": _round(cash + in_wallets + hold["self_total"] - card_debt + receivable - payable - zakat_due),
             "net_after_estimates": _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable
                                           - zakat_due),
+            "card_overdue": overdue,  # ödenmemiş eski ekstreler (kalanı son ekstrede; toplamlara girmez)
+            "totals": {"card_debt": _round(card_debt), "card_estimated": _round(card_est),
+                       "card_overdue": _round(sum(o["amount"] for o in overdue)), "cash": _round(cash),
+                       "spendable": _round(spendable), "net": _round(cash + in_wallets + hold["self_total"] - card_debt
+                                                                    + receivable - payable - zakat_due)},
             "stale": stale}
 
 
