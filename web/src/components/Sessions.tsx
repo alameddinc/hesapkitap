@@ -8,10 +8,9 @@ import { useSave } from "./hooks";
 
 interface Sess { id: string; kind: "web" | "mobile" | "eski"; device: string; created_at: string; last_seen: string; current: boolean }
 
-// DİKKAT: bu uçta zamanlar sunucunun yerel saatiyle ve saat dilimi yazılmadan geliyor (app/sessions.py time.localtime;
-// kurulumlarda TZ=Europe/Istanbul) — diğer *_at alanları gibi UTC değil. Saat dilimi yazılıysa parseTs, yoksa yerel.
+// created_at / last_seen: diğer *_at gibi UTC, saat dilimsiz (sunucu ee4f359) → parseTs ile yerel saat
 const when = (ts: string) => {
-  const d = /[zZ]|[+-]\d{2}:?\d{2}$/.test(ts) ? parseTs(ts) : new Date(ts);
+  const d = parseTs(ts);
   if (isNaN(d.getTime())) return ts;
   const mins = Math.round((Date.now() - d.getTime()) / 60000);
   if (mins < 2) return "şimdi";
