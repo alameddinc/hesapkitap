@@ -373,6 +373,24 @@ def repair(apply: bool = False) -> dict:
     # ekstrelerin ödendi işaretleri: bütün kart ödemelerinden yeniden (eski algoritma aynı ödemeyi birden çok ekstreye
     # yazıyordu, yükleme sırasına bağlıydı); elle işaretlenenlere dokunulmaz
     report["statements"] = db.reassign_statement_payments(apply=apply)["changed"]
+    # kişi adlarının başındaki banka artığı (eski sürüm 'Bank', 'Cumhuriyeti' atmıyordu): ad düzelir, aynı kişi
+    # varsa birleşir (kayıtlar, 'Ad · not' açıklamaları, borç defteri, kişi kategorisi/ayarı yeni ada geçer)
+    report["names"] = []
+    with db.connect() as c:
+        names = sorted({n for (n,) in c.execute(
+            "SELECT counterparty FROM entries WHERE counterparty IS NOT NULL UNION SELECT name FROM counterparties "
+            "UNION SELECT person FROM debts") if n})
+    for n in names:
+        new = bank_import.clean_person_name(n)
+        if new and new != n:
+            with db.connect() as c:
+                cnt = c.execute("SELECT COUNT(*) FROM entries WHERE counterparty = ?", (n,)).fetchone()[0]
+                exists = c.execute("SELECT 1 FROM entries WHERE counterparty = ? UNION SELECT 1 FROM counterparties "
+                                   "WHERE name = ? UNION SELECT 1 FROM debts WHERE person = ?", (new, new, new)).fetchone()
+            report["names"].append({"id": None, "date": "", "amount": cnt, "was": n, "now": new,
+                                    "why": "mevcut kişiyle birleşir" if exists else "ad düzelir"})
+            if apply:
+                db.rename_counterparty(n, new)
     after = {a["id"]: a["current"] for a in db.list_accounts()}
     report["balances"] = [{"account": name, "before": cur, "after": after.get(aid),
                            "diff": round((after.get(aid) or 0) - (cur or 0), 2) if cur is not None else None}
@@ -403,6 +421,10 @@ def _print(rep: dict, apply: bool) -> None:
             why = f"  [{r['why']}]" if r.get("why") else ""
             eff = f"  bakiye etkisi {r['effect']:+,.2f}" if key == "transfer_balance" else ""
             print(f"  #{r['id'] or '-'} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:60]}{extra}{why}{eff}")
+    names = rep.get("names", [])
+    print(f"\nkişi adının başındaki banka artığı (Bank, Cumhuriyeti…) → düzelir/birleşir: {len(names)} kişi")
+    for r in names:
+        print(f"  {r['was']!r} → {r['now']!r}  ({r['amount']} kayıt; {r['why']})")
     print(f"\naçıklama/kişi düzeltilen: {len(rep['updated'])}")
     for r in rep["updated"]:
         print(f"  #{r['id']} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:45]!r} → {r['now']!r} {r['fields']}")

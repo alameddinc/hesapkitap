@@ -354,3 +354,52 @@ def test_own_transfer_edit_and_not_transfer(client, tmpdb):
                                                     "balance": 500.0}], [OWNER]), account="VakıfBank", owners=[OWNER])
     assert st["tekrar"] == 1 and _gider(db) == 28500
     assert client.patch("/api/own-transfers/999", json={"note": "x"}).status_code == 404
+
+
+# --- kişi adının başındaki banka artığı (canlı bulgu; adlar uydurma) ---------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("bank", ["Türkiye Cumhuriyeti Ziraat Bankası A.Ş.", "Enpara Bank A.Ş.", "QNB Bank A.Ş.",
+                                  "Kuveyt Türk Katılım Bankası A.Ş.", "Türkiye Finans Katılım Bankası A.Ş.",
+                                  "Odeabank A.Ş.", "T.C. Ziraat Bankası", "Burgan Bank A.Ş."])
+def test_counterparty_has_no_bank_residue(bank):
+    from app.bank_import import counterparty
+
+    d = f"FAST Anlık Ödeme kira (123456789 sorgu no'lu VakıfBank AYŞE DEMİR hesabından {bank} ALİ VELİ hesabına giden)"
+    assert counterparty(d, -100.0, ["AYŞE DEMİR"]) == "Ali Veli"
+
+
+def test_clean_person_name_keeps_real_names():
+    from app.bank_import import clean_person_name
+
+    assert clean_person_name("Bank Ayşe Örnek") == "Ayşe Örnek"
+    assert clean_person_name("Cumhuriyeti Ali Veli Yılmaz") == "Ali Veli Yılmaz"
+    assert clean_person_name("Deniz Yılmaz") == "Deniz Yılmaz"  # ad olabilecek kelime atılmaz
+    assert clean_person_name("Ayşe Bankacı") == "Ayşe Bankacı"
+
+
+def test_repair_merges_bank_prefixed_person(tmpdb):
+    """Eski sürümün yazdığı 'Cumhuriyeti Ali Veli' mevcut 'Ali Veli' ile birleşir: kayıtlar, açıklama, borç, kategori."""
+    from app import bank_repair
+
+    with tmpdb.connect() as c:
+        for cp, desc in (("Cumhuriyeti Ali Veli", "Cumhuriyeti Ali Veli · kira"), ("Ali Veli", "Ali Veli"),
+                         ("Bank Zeynep Kaya", "Bank Zeynep Kaya")):
+            c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, category, counterparty) "
+                      "VALUES ('2026-10-05', '2026-10', ?, 100, 'gider', 'Diğer', ?)", (desc, cp))
+        c.execute("INSERT INTO counterparties (name, category) VALUES ('Cumhuriyeti Ali Veli', 'Kira & Aidat')")
+        c.execute("INSERT INTO debts (person, direction, asset, amount, debt_date) VALUES ('Bank Zeynep Kaya', 'alacak', "
+                  "'TRY', 500, '2026-10-01')")
+    rep = bank_repair.repair(apply=False)
+    assert sorted((r["was"], r["now"], r["why"]) for r in rep["names"]) == [
+        ("Bank Zeynep Kaya", "Zeynep Kaya", "ad düzelir"), ("Cumhuriyeti Ali Veli", "Ali Veli", "mevcut kişiyle birleşir")]
+    with tmpdb.connect() as c:  # kuru çalıştırma yazmaz
+        assert c.execute("SELECT COUNT(*) FROM entries WHERE counterparty LIKE 'Cumhuriyeti%'").fetchone()[0] == 1
+    bank_repair.repair(apply=True)
+    with tmpdb.connect() as c:
+        assert sorted(r[0] for r in c.execute("SELECT DISTINCT counterparty FROM entries")) == ["Ali Veli", "Zeynep Kaya"]
+        assert c.execute("SELECT description FROM entries WHERE description LIKE '%kira'").fetchone()[0] == "Ali Veli · kira"
+        assert c.execute("SELECT category FROM counterparties WHERE name = 'Ali Veli'").fetchone()[0] == "Kira & Aidat"
+        assert c.execute("SELECT person FROM debts").fetchone()[0] == "Zeynep Kaya"
