@@ -29,6 +29,15 @@ export async function withAction<T>(key: string, fn: () => Promise<T>): Promise<
   try { return await fn(); } finally { action = prev; }
 }
 
+let onUnauthorized: (() => void) | null = null;
+/** 401 (oturum kapandı: başka cihazdan "her yerden çık", süre doldu): giriş ekranına dönülür. /api/auth/* hariç
+ *  (yanlış şifre de 401). */
+export const setUnauthorizedHandler = (fn: (() => void) | null) => { onUnauthorized = fn; };
+const watch401 = (p: string) => (res: Response) => {
+  if (res.status === 401 && !p.startsWith("/api/auth/")) onUnauthorized?.();
+  return res;
+};
+
 /** Yanıt alınamadı: Türkçe metinli hata (status 0). */
 const netError = (cause?: unknown) => Object.assign(new Error(networkText()), { status: 0, cause });
 
@@ -49,9 +58,10 @@ function path(input: RequestInfo | URL) {
 export function installIdempotency() {
   const orig = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (!path(input).startsWith("/api/") || input instanceof Request) return orig(input, init);
+    const p = path(input);
+    if (!p.startsWith("/api/") || input instanceof Request) return orig(input, init);
     // okuma: yeniden deneme yok; ağ hatası İngilizce "Failed to fetch" yerine Türkçe (çevrimdışı / sunucu)
-    if (!WRITE.has(method(input, init))) return orig(input, init).catch(() => { throw netError(); });
+    if (!WRITE.has(method(input, init))) return orig(input, init).then(watch401(p), () => { throw netError(); });
     const headers = new Headers(init?.headers);
     if (!headers.has(HEADER)) headers.set(HEADER, action ? `${action.key}:${++action.n}` : newKey());
     const send = () => orig(input, { ...init, headers });
@@ -79,7 +89,7 @@ export function installIdempotency() {
           continue;
         }
       }
-      return res;
+      return watch401(p)(res);
     }
   };
 }

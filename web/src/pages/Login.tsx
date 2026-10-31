@@ -12,10 +12,19 @@ export default function Login() {
   const [user, setUser] = useState(() => { try { return localStorage.getItem("hk-username") ?? ""; } catch { return ""; } });
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  // oturum başka yerden kapatıldıysa (401) ya da "her yerden çık" sonrası: bir kez gösterilir
+  const [ended] = useState(() => {
+    try {
+      const m = sessionStorage.getItem("hk-session-ended");
+      sessionStorage.removeItem("hk-session-ended");
+      sessionStorage.removeItem("hk-logged-out");
+      return m;
+    } catch { return null; }
+  });
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingDeletionInfo | null>(null); // hesap silinmek üzere (409)
   const [verify, setVerify] = useState<{ email: string; message?: string } | null>(null); // e-posta doğrulanmamış (403)
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   const open = !!status.data?.open_signup; // barındırılan sürüm: herkes hesap açabilir
   const email = loginKind(status.data) === "email"; // hazır sürüm: giriş e-postayla
   const canReset = !!status.data?.reset; // sunucuda e-posta ayarlı: kodla şifre yenileme (#/sifre)
@@ -54,6 +63,7 @@ export default function Login() {
           <h1 className="text-lg font-semibold">HesapKitap</h1>
           <p className="flex items-center gap-1 text-xs text-stone-500"><LockKeyhole size={12} /> {open ? "Ekstre ve fiş at, gerisini o yapsın" : "Kişisel finans · kendi sunucunda"}</p>
         </div>
+        {ended && <p className="mb-3 rounded-lg bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" role="status">{ended}</p>}
         <label className="label" htmlFor="user">{email ? "E-posta" : "Kullanıcı adı ya da e-posta"}</label>
         <input id="user" className="input mb-3" type={email ? "email" : "text"} inputMode={email ? "email" : undefined}
           autoComplete={email ? "email username" : "username"} autoCapitalize="none" autoCorrect="off" spellCheck={false}

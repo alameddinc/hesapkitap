@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
-import { errorText } from "../lib/apiError";
+import Sessions from "../components/Sessions";
+import { errorText, send } from "../lib/apiError";
 import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send } from "lucide-react";
 import { useMeta } from "../components/hooks";
 import { periodRange } from "../components/MonthPicker";
@@ -152,7 +153,7 @@ function CycleForm() {
 
 function PdfPasswords() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["pdf-pw"], queryFn: () => fetch("/api/settings/pdf-passwords").then((r) => r.json() as Promise<{ index: number; hint: string }[]>) });
+  const q = useQuery({ queryKey: ["pdf-pw"], queryFn: () => send<{ index: number; hint: string }[]>("/api/settings/pdf-passwords") });
   const del = useSave((i: number) => fetch(`/api/settings/pdf-passwords/${i}`, { method: "DELETE" }), () => ui.toast("Şifre silindi"));
   if (!q.data?.length) return null;
   return (
@@ -193,7 +194,7 @@ function PasswordForm() {
   const save = useSave(async () => {
     const r = await fetch("/api/settings/password", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ current: cur, new: nw }) });
-    if (!r.ok) throw new Error((await r.json()).detail);
+    if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), r.status));
   }, () => { setCur(""); setNw(""); ui.toast("Şifre değişti; diğer cihazlarda yeniden giriş gerekir"); });
   return (
     <section className="card space-y-2 p-4">
@@ -299,6 +300,7 @@ function MemberSettings({ owner, role, roleLabel }: { owner: string; role?: stri
       <ViewPrefs />
       <ShareSetup />
       <PasswordForm />
+      <Sessions />
       <LogoutButton />
     </div>
   );
@@ -317,7 +319,7 @@ function MyBookNote() {
 /** Sahip ya da üyenin kendi defteri (ownBook: ortak defter ayarı yok, geçiş var). */
 function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
   const ui = useUI();
-  const st = useQuery({ queryKey: ["settings"], queryFn: () => fetch("/api/settings").then((r) => r.json() as Promise<SettingsStatus>) });
+  const st = useQuery({ queryKey: ["settings"], queryFn: () => send<SettingsStatus>("/api/settings") });
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
   const [pairInfo, setPairInfo] = useState<{ code: string; bot: string; link: string } | null>(null);
   const pair = useSave(() => post<{ code: string; bot: string; link: string }>("/api/settings/telegram/pair"), setPairInfo);
@@ -331,8 +333,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
   const backupNow = useSave(() => post<{ path: string }>("/api/settings/backup/now"), (r) => ui.toast(`Yedek alındı: ${r.path}`));
   const backTo = useSave((name: string) => restoreNamed(name), (r) => ui.toast(restoredMsg(r)));
   const s = st.data;
-  const cfg = useQuery({ queryKey: ["config"], queryFn: () => fetch("/api/settings/config").then((r) => r.json() as Promise<ConfigItem[]>) });
-  const auth = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const cfg = useQuery({ queryKey: ["config"], queryFn: () => send<ConfigItem[]>("/api/settings/config") });
+  const auth = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   const isAdmin = !auth.data?.user || auth.data.user.role === "admin";
   // barındırılan sürüm: anahtar/Telegram/e-posta kutusu ayarı yok; yapay zekâ paketin kotasıyla sunucudan
   const locked = !!useMeta().data?.plan?.hosted && !isAdmin;
@@ -489,6 +491,7 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       <CycleForm />
       <PdfPasswords />
       {auth.data?.password_source === "app" && <PasswordForm />}
+      {auth.data?.required && <Sessions />}
     </div>
   );
 }
@@ -509,7 +512,7 @@ function MailSection({ keys }: { keys: ConfigItem[] }) {
   const ui = useUI();
   const st = useQuery({
     queryKey: ["mail"],
-    queryFn: () => fetch("/api/mail/status").then((r) => r.json() as Promise<{ enabled: boolean; last_poll: string | null; poll_minutes: number; log: MailLog[] }>),
+    queryFn: () => send<{ enabled: boolean; last_poll: string | null; poll_minutes: number; log: MailLog[] }>("/api/mail/status"),
   });
   const poll = useSave(() => post<{ processed: number; ok: number; error: number }>("/api/mail/poll"),
     (r) => ui.toast(r.processed ? `${r.processed} yeni mail · ${r.ok} içe aktarıldı${r.error ? ` · ${r.error} hata` : ""}` : "Yeni mail yok"));
