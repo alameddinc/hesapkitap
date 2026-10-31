@@ -414,6 +414,30 @@ def invite(code: str) -> dict | None:
         return dict(r) if r else None
 
 
+def invite_status(code: str) -> tuple[dict | None, str]:
+    """(davet, durum): durum ok | used | expired | unknown."""
+    inv = invite(code or "")
+    if not inv:
+        return None, "unknown"
+    if inv["used_at"]:
+        return inv, "used"
+    with connect() as c:
+        expired = c.execute("SELECT ? < date('now')", (inv["expires_at"],)).fetchone()[0] if inv["expires_at"] else 0
+    return inv, "expired" if expired else "ok"
+
+
+def renew_invite(code: str) -> dict | None:
+    """Kullanılmamış daveti yenile: eski kod geçersiz, aynı not/yetki/defterle yeni kod ve yeni süre."""
+    inv = invite(code or "")
+    if not inv or inv["used_at"]:
+        return None
+    with connect() as c:
+        days = c.execute("SELECT MAX(1, CAST(julianday(?) - julianday(?) AS INTEGER))",
+                         (inv["expires_at"] or "", (inv["created_at"] or "")[:10])).fetchone()[0] if inv["expires_at"] else 14
+    delete_invite(inv["code"])
+    return create_invite(inv["note"], int(days or 14), member_of=inv.get("member_of"), book_role=inv.get("book_role"))
+
+
 def valid_invite(code: str) -> bool:
     with connect() as c:
         return bool(c.execute("SELECT 1 FROM invites WHERE code = ? AND used_at IS NULL AND "
@@ -428,7 +452,7 @@ def use_invite(code: str, uid: int) -> bool:
 
 def delete_invite(code: str) -> bool:
     with connect() as c:
-        return c.execute("DELETE FROM invites WHERE code = ? AND used_at IS NULL", (code,)).rowcount > 0
+        return c.execute("DELETE FROM invites WHERE code = ? AND used_at IS NULL", ((code or "").strip().upper(),)).rowcount > 0
 
 
 # ---------------------------------------------------------------- okuma kotası
