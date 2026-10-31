@@ -256,8 +256,8 @@ def handle_pdf(name: str, data: bytes) -> str:
         res = bank_pdf.parse_account_pdf(data, passwords)
         owners = [res.get("owner_name") or ""] if res.get("owner_name") else []
         rows = bank_import.finalize(res["rows"], owners or db.card_holders())
-        if not res.get("verified"):  # bakiye zinciri tutmadı: kullanıcı görmeden içe aktarılmaz, onay bekler (S6)
-            chk = verification.account_check(res)
+        chk = verification.account_check(res)
+        if not chk["verified"] and verification.hold_enabled():  # zincir tutmadı: kullanıcı görmeden içe aktarılmaz (S6)
             iid = verification.hold("dokum", name, data, {"bank": res.get("bank") or "", "iban": res.get("iban"),
                                                           "owner_name": res.get("owner_name") or "", "rows": rows}, chk)
             return verification.held(f"Hesap dökümü ({res.get('bank') or 'banka'}): {terms.EQ_BAD}, içe aktarılmadı · "
@@ -267,6 +267,12 @@ def handle_pdf(name: str, data: bytes) -> str:
         st = db.import_bank_rows(rows, account=res.get("bank") or "", owners=owners or db.card_holders(),
                                  iban=res.get("iban"))  # banka adı okunamasa da IBAN hesabı bulur
         db.auto_link()
+        if not chk["verified"]:  # bekletme kapalı: kaydedildi ama dosya 'doğrulanamadı' (Yapılacaklar: dokum_kontrol)
+            doc_id = db.save_bank_document(data, name if name.lower().endswith(".pdf") else f"{name}.pdf",
+                                           res.get("bank") or None)
+            if doc_id:
+                db.link_bank_document(doc_id, [r.get("hash") for r in rows])
+                verification.set_document(doc_id, False)
         if any(st[k] for k in ("gelir", "gider", "kart_odemesi", "virman")):  # hepsi zaten vardıysa hak düşmez
             doc_reads.charge(data)
         warn = "" if res.get("verified") else f" · ⚠️ {terms.EQ_BAD}: hareketleri belgeyle karşılaştır"
@@ -282,7 +288,7 @@ def handle_pdf(name: str, data: bytes) -> str:
         from app import verification
 
         chk = verification.statement_check(stmt)
-        if not chk["verified"]:
+        if not chk["verified"] and verification.hold_enabled():  # kapalıyken kaydedilir; Yapılacaklar: ekstre_kontrol
             iid = verification.hold("ekstre", name, data,
                                     {"statement": verification._jsonable_statement(stmt), "bank": stmt.bank}, chk)
             return verification.held(f"💳 {stmt.bank} {stmt.card_no} ekstresi: {terms.EQ_BAD}, kaydedilmedi · "
