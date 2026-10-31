@@ -42,7 +42,8 @@ export default function InviteCard({ inv, fallbackLink, roleLabel, onCopy, onRen
   onCopy: (t: string) => void; onRenew: () => void; onCancel: () => void;
 }) {
   const link = inv.link || fallbackLink;
-  const expired = !!inv.expires_at && inv.expires_at < new Date().toISOString().slice(0, 10);
+  const [today] = useState(() => new Date().toISOString().slice(0, 10)); // render saf kalsın: bugün bir kez okunur
+  const expired = !!inv.expires_at && inv.expires_at < today;
   const canShare = typeof navigator !== "undefined" && "share" in navigator;
   return (
     <li className="py-2">
