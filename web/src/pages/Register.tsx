@@ -3,6 +3,7 @@ import { send } from "../lib/apiError";
 import { UserPlus } from "lucide-react";
 import { useState } from "react";
 import DataPrivacy from "../components/DataPrivacy";
+import VerifyEmail from "../components/VerifyEmail";
 import { isEmail, loginKind } from "../components/hooks";
 
 const codeFromHash = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("kod") ?? "";
@@ -16,6 +17,8 @@ export default function Register() {
   const [pw2, setPw2] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [verify, setVerify] = useState<string | null>(null); // kod adımı: e-posta
+  const [done, setDone] = useState(false); // nötr yanıt, oturum açılmadı
   const [agree, setAgree] = useState({ kosullar: false, acik_riza: false }); // KVKK: iki onay, işaretsiz başlar
   const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
   // barındırılan sürüm: herkes kod olmadan hesap açar; davet bağlantısıyla gelen (ortak defter) yine kodu kullanır
@@ -39,16 +42,38 @@ export default function Register() {
     setBusy(true);
     setErr(null);
     try {
-      await send("/api/auth/register", { method: "POST", json: { code: askCode ? code.trim() : null, username: user.trim(), password: pw, ...(needAgree ? { consent } : {}) } });
+      const r = await send<{ ok: boolean; verify_required?: boolean; email?: string }>("/api/auth/register",
+        { method: "POST", json: { code: askCode ? code.trim() : null, username: user.trim(), password: pw, ...(needAgree ? { consent } : {}) } });
       try { localStorage.setItem("hk-username", user.trim()); } catch { /* özel mod */ }
-      window.location.hash = "/ozet";
-      qc.invalidateQueries();
+      // hazır sürüm: e-posta doğrulanana kadar oturum açılmaz → kod adımı
+      if (r?.verify_required) { setVerify(r.email || user.trim()); return; }
+      // yanıt nötr (e-posta kayıtlıysa oturum açılmaz, adrese bilgi gider): oturum açıldı mı bak
+      const st = await send<{ authenticated?: boolean }>("/api/auth/status").catch(() => null);
+      if (st?.authenticated) {
+        window.location.hash = "/ozet";
+        qc.invalidateQueries();
+      } else setDone(true);
     } catch (x) {
       setErr((x as Error).message || "Kayıt başarısız");
     } finally {
       setBusy(false);
     }
   }
+
+  if (verify) return (
+    <VerifyEmail email={verify} onBack={() => { setVerify(null); setPw(""); setPw2(""); }}
+      intro="Bu adrese 6 haneli bir kod gönderdik; kodu girince hesabın açılır. Bu e-postayla zaten bir hesabın varsa kod yerine bilgi e-postası gönderdik: giriş yapabilir ya da şifreni yenileyebilirsin." />
+  );
+  if (done) return (
+    <div className="flex min-h-dvh items-center justify-center px-4">
+      <div className="card w-full max-w-sm space-y-3 p-6 text-center" role="status">
+        <h1 className="text-lg font-semibold">E-postanı kontrol et</h1>
+        <p className="text-sm text-stone-600 dark:text-stone-300">
+          Bu e-postayla zaten bir hesabın varsa e-postana bilgi gönderdik; giriş yapabilir ya da şifreni yenileyebilirsin.</p>
+        <a href="#/" className="btn-primary w-full justify-center py-2">Giriş ekranına dön</a>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
