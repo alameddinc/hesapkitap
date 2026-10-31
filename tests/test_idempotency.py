@@ -130,3 +130,23 @@ def test_cors_allows_header(client):
     r = client.options("/api/entries", headers={"Origin": "capacitor://localhost", "Access-Control-Request-Method": "POST",
                                                 "Access-Control-Request-Headers": "idempotency-key,content-type"})
     assert r.status_code == 200 and "idempotency-key" in r.headers["access-control-allow-headers"].lower()
+
+
+def test_demo_mode_idempotency(tmpdb, monkeypatch):
+    """Demo: aynı demo kopyası + anahtar ile iki POST tek kayıt; başka demo ziyaretçisinin aynı anahtarı çakışmaz."""
+    from fastapi.testclient import TestClient
+
+    from app.api.main import app
+
+    monkeypatch.setenv("HESAPKITAP_DEMO", "1")
+    monkeypatch.delenv("HESAPKITAP_NO_AUTH", raising=False)
+    a, b = TestClient(app), TestClient(app)
+    h = {"Idempotency-Key": "demo-kayit-0001"}
+    n0 = len([e for e in a.get("/api/transactions").json() if e["description"] == "Kahve"])
+    r1 = a.post("/api/entries", json=ENTRY, headers=h)
+    r2 = a.post("/api/entries", json=ENTRY, headers=h)
+    assert r1.status_code == r2.status_code == 200 and r1.content == r2.content
+    assert r2.headers["Idempotent-Replayed"] == "true" and r2.headers["X-Demo-Sid"] == r1.headers["X-Demo-Sid"]
+    assert len([e for e in a.get("/api/transactions").json() if e["description"] == "Kahve"]) == n0 + 1
+    r3 = b.post("/api/entries", json=ENTRY, headers=h)  # başka ziyaretçi: kendi kopyasında yeni kayıt
+    assert r3.status_code == 200 and "Idempotent-Replayed" not in r3.headers
