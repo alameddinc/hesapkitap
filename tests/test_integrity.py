@@ -111,3 +111,81 @@ def test_job_registered_for_every_space():
 def test_cli(client, capsys):
     assert integrity.main([]) == 0
     assert '"counts"' in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- yanlış pozitif testleri (canlı bulguları, uydurma veri)
+
+def _stmt(c, h, prev, pay, act, fees, total, txns=(), deleted=()):
+    sid = c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, previous_balance, payments, "
+                    "period_activity, interest_fees, total_debt) VALUES (?, 'Banka Z', ?, '2026-10-16', '2026-10-26', "
+                    "?, ?, ?, ?, ?)", (h, f"**** {h[-4:]}", prev, pay, act, fees, total)).lastrowid
+    for a in txns:
+        c.execute("INSERT INTO transactions (statement_id, txn_date, description, amount, txn_type) "
+                  "VALUES (?, '2026-10-01', 'Alışveriş', ?, 'harcama')", (sid, a))
+    for a in deleted:
+        c.execute("INSERT INTO transactions (statement_id, txn_date, description, amount, txn_type, is_deleted) "
+                  "VALUES (?, '2026-10-02', 'Silinen', ?, 'harcama', 1)", (sid, a))
+    return sid
+
+
+def test_statement_equation_holds_not_flagged(tmpdb):
+    with db.connect() as c:
+        # faiz ayrı satır: 1000 − 1000 + 2000 + 50 = 2050 (tutuyor); okunan satırlar 2000 + faiz 50
+        a = _stmt(c, "h0001", 1000, 1000, 2000, 50, 2050, txns=(2000,))
+        c.execute("INSERT INTO transactions (statement_id, txn_date, description, amount, txn_type) "
+                  "VALUES (?, '2026-10-03', 'Faiz', 50, 'faiz_ucret')", (a,))
+        # faiz işlemlerin içinde, özette faiz yok: 3000 − 3000 + 4000 = 4000
+        _stmt(c, "h0002", 3000, 3000, 4000, None, 4000, txns=(3900, 100))
+        # kullanıcı bir satırı sildi: okunanlar 900 + silinen 100 = özet 1000 → bilinçli silme, ihlal değil
+        _stmt(c, "h0003", 0, 0, 1000, None, 1000, txns=(900,), deleted=(100,))
+        bad = _stmt(c, "h0004", 0, 0, 1000, None, 1500, txns=(1000,))  # denklem tutmuyor (500 fark)
+        miss = _stmt(c, "h0005", 0, 0, 1000, None, 1000, txns=(800,))  # satır kayıp, silme yok
+    r = integrity.check(date(2026, 10, 31))["refs"]
+    assert r.get("ekstre_denklem") == [f"statement:{bad}"]
+    assert r.get("ekstre_satir_farki") == [f"statement:{miss}"]  # 'bad'in satırları özetle aynı
+
+
+def _acc(c, name):
+    return c.execute("INSERT INTO accounts (name, kind, balance, as_of, source) VALUES (?, 'banka', 0, '2026-10-31', "
+                     "'dokum')", (name,)).lastrowid
+
+
+def _cover(c, aid, h):
+    for d in ("2026-10-01", "2026-10-30"):
+        c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, import_hash, account_id) "
+                  "VALUES (?, '2026-10', 'x', 1, 'gider', ?, ?)", (d, f"{h}{d}", aid))
+
+
+def test_own_transfer_to_untracked_bank_is_normal(tmpdb):
+    with db.connect() as c:
+        a, b = _acc(c, "Halkbank"), _acc(c, "VakıfBank")
+        _cover(c, a, "a"), _cover(c, b, "b")
+        for amt, desc in ((-500, "Kendi hesabına · Halkbank → Akbank"),  # Akbank takip edilmiyor: normal
+                          (700, "Kendi hesabından · Vakıf Katılım → Halkbank"),  # takip edilmiyor: normal
+                          (-300, "Kendi hesabına · Halkbank"),  # karşı banka bilinmiyor: sayılmaz
+                          (-900, "Kendi hesabına · Halkbank → VakıfBank")):  # VakıfBank takipte, karşılık yok: ihlal
+            c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, account_id) "
+                      "VALUES ('2026-10-10', ?, 'Halkbank', ?, ?)", (amt, desc, a))
+        bad = c.execute("SELECT id FROM own_transfers WHERE amount = -900").fetchone()[0]
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, account_id) "
+                  "VALUES ('2026-10-12', -250, 'Halkbank', 'Kendi hesabına · Halkbank → VakıfBank', ?)", (a,))
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, account_id) "
+                  "VALUES ('2026-10-12', 250, 'VakıfBank', 'Kendi hesabından · Halkbank → VakıfBank', ?)", (b,))
+    assert integrity.check(date(2026, 10, 31))["refs"].get("virman_tek_bacak") == [f"own_transfer:{bad}"]
+
+
+def test_debt_checks_separate(tmpdb):
+    with db.connect() as c:
+        over = c.execute("INSERT INTO debts (person, direction, amount, paid_amount, debt_date, settled_at) "
+                         "VALUES ('Ali Örnek', 'borc', 100, 100, '2026-09-01', '2026-09-20')").lastrowid
+        for a in (100, 30):  # A4 öncesi fazla ödeme
+            c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at) VALUES (?, ?, '2026-09-20')", (over, a))
+        ok = c.execute("INSERT INTO debts (person, direction, amount, paid_amount, debt_date, settled_at) "
+                       "VALUES ('Veli Örnek', 'alacak', 100, 100, '2026-09-01', '2026-09-20')").lastrowid
+        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at) VALUES (?, 100, '2026-09-20')", (ok,))
+        odd = c.execute("INSERT INTO debts (person, direction, amount, paid_amount, debt_date) "
+                        "VALUES ('Can Örnek', 'borc', 100, 40, '2026-09-01')").lastrowid
+        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at) VALUES (?, 60, '2026-09-20')", (odd,))
+    r = integrity.check(date(2026, 10, 31))["refs"]
+    assert r.get("borc_fazla_odeme") == [f"debt:{over}"]
+    assert r.get("borc_odenen_tutarsiz") == [f"debt:{odd}"]
