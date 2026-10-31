@@ -491,9 +491,12 @@ export const api = {
     req<{ ok: boolean; card_payment_id: number | null; linked: boolean; link?: "elle" | "dokum" | null; warning?: string }>(
       "POST", `/api/statements/${id}/pay`, { amount, paid_at, ...(account_id !== undefined ? { account_id } : {}) }),
   unpayStatement: (id: number) => req("DELETE", `/api/statements/${id}/pay`),
+  /** payment_id (sunucu a211704): bu ödemeyi tek başına geri almak için → undoDebtPayment */
   payDebt: (id: number, amount: number | null, paid_at: string, account_id?: number | null) =>
-    req("POST", `/api/debts/${id}/pay`, { amount, paid_at, account_id: account_id ?? null }),
+    req<{ ok: boolean; payment_id?: number }>("POST", `/api/debts/${id}/pay`, { amount, paid_at, account_id: account_id ?? null }),
   unpayDebt: (id: number) => req("DELETE", `/api/debts/${id}/pay`),
+  /** tek borç ödemesini geri al (öncekiler kalır); idempotent */
+  undoDebtPayment: (pid: number) => req<{ ok: boolean; deleted: boolean }>("DELETE", `/api/debt-payments/${pid}`),
   people: () => req<{ people: { name: string }[] }>("GET", "/api/transfers").then((t) => t.people.map((p) => p.name)),
   parseBill: (file: File | Blob, name: string) => {
     const fd = new FormData();
