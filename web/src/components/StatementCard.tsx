@@ -8,26 +8,21 @@ import { useSave } from "./hooks";
 /** Ekstredeki faiz ve ücret (sunucunun fees alanı; eski sunucuda interest_fees). */
 export const feesOf = (s: Statement) => s.fees ?? s.interest_fees ?? 0;
 
-/**
- * Denklem: önceki borç − ödemeler + harcamalar (+ faiz ve ücret) = yeni borç. Okuyucuların bir kısmı dönem içi işlemlere
- * faizi katıyor, bir kısmı ayrı veriyor: önce faizsiz, tutmazsa faiz eklenerek denenir (mobil Ekstreler ile aynı).
- */
-export function equation(s: Statement): { ok: boolean; withFees: boolean; diff: number } | null {
-  if (s.previous_balance == null || s.payments == null || s.period_activity == null) return null;
-  const base = s.previous_balance - s.payments + s.period_activity;
-  const fees = feesOf(s);
-  if (Math.abs(base - s.total_debt) < 1) return { ok: true, withFees: false, diff: 0 };
-  if (fees > 0 && Math.abs(base + fees - s.total_debt) < 1) return { ok: true, withFees: true, diff: 0 };
-  return { ok: false, withFees: fees > 0, diff: s.total_debt - (base + fees) };
+/** Denklemi sunucu kurar (app/parsers/base.py equation): faizin harcamaların içinde mi ayrı mı olduğu ve fark.
+ *  ok: null (özet rakamları okunamadı) | true | false. */
+export function equation(s: Statement): { ok: boolean | null; diff: number | null; feesIncluded: boolean | null } {
+  const has = s.previous_balance != null && s.payments != null && s.period_activity != null;
+  const diff = has ? s.equation_diff ?? null : null;
+  return { ok: diff == null ? null : Math.abs(diff) < 1, diff, feesIncluded: s.fees_included ?? null };
 }
 
-/** Durum: denklem ve okunan işlemler tutuyor mu, kullanıcı onayladı mı. */
+/** Durum: sunucunun needs_check'i (denklem ya da okunan işlemler tutmuyor, onay yok); onaylıysa "confirmed". */
 export function statementStatus(s: Statement): "ok" | "confirmed" | "check" | null {
+  if (s.needs_check) return "check";
   const eq = equation(s);
   const recOff = !!s.reconciliation_diff && Math.abs(s.reconciliation_diff) >= 1;
-  const bad = s.needs_check || recOff || eq?.ok === false;
-  if (bad) return s.confirmed_at ? "confirmed" : "check";
-  return eq || s.reconciliation_diff != null ? "ok" : null;
+  if ((eq.ok === false || recOff) && s.confirmed_at) return "confirmed";
+  return eq.ok != null || s.reconciliation_diff != null ? "ok" : null;
 }
 
 const Line = ({ l, v, tone }: { l: string; v: string; tone?: string }) => (
@@ -71,36 +66,36 @@ export default function StatementCard({ s }: { s: Statement }) {
 
       {open && (
         <div id={id} className="space-y-3 border-t border-stone-100 px-3 pt-3 pb-3 text-sm dark:border-stone-800">
-          {eq && (
+          {eq.ok != null && (
             <div className="space-y-1.5 rounded-lg bg-stone-50 p-3 text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
               <Line l="Önceki borç" v={tl(s.previous_balance!)} />
               <Line l="− Ödemeler" v={tl(s.payments!)} />
-              <Line l="+ Harcamalar" v={tl(s.period_activity!)} />
-              {eq.withFees && <Line l="+ Faiz ve ücret" v={tl(fees)} tone="text-red-600 dark:text-red-400" />}
+              <Line l={eq.feesIncluded === true && fees > 0 ? `+ Harcamalar (faiz ${tl(fees)} dahil)` : "+ Harcamalar"} v={tl(s.period_activity!)} />
+              {eq.feesIncluded === false && <Line l="+ Faiz ve ücret" v={tl(fees)} tone="text-red-600 dark:text-red-400" />}
               <div className="flex justify-between gap-3 border-t border-stone-200 pt-1.5 font-semibold text-stone-900 dark:border-stone-700 dark:text-stone-100">
                 <span>= Yeni borç</span>
                 <span className={cx("shrink-0 tabular-nums", eq.ok || s.confirmed_at ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-300")}>
                   {tl(s.total_debt)} {eq.ok || s.confirmed_at ? "✓" : "⚠"}</span>
               </div>
-              {!eq.ok && <Line l="Fark" v={tl(eq.diff)} tone="text-amber-700 dark:text-amber-300" />}
+              {!eq.ok && <Line l="Fark" v={tl(eq.diff!)} tone="text-amber-700 dark:text-amber-300" />}
             </div>
           )}
           <p className="text-xs text-stone-500 dark:text-stone-400">
             {status === "check"
-              ? eq && !eq.ok
-                ? `Denklem ${tl(Math.abs(eq.diff))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
+              ? eq.ok === false
+                ? `Denklem ${tl(Math.abs(eq.diff!))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
                 : `PDF'i aç ve işlemleri ekstreyle karşılaştır. Rakamlar aynıysa "Doğru, onayla" de.`
               : status === "confirmed" ? `Rakamları ekstreyle karşılaştırıp doğru dedin${s.confirmed_at ? ` (${tsDateTR(s.confirmed_at)})` : ""}.`
-              : eq?.withFees ? "Denklem tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı."
-              : eq ? "Denklem tuttu: okunan rakamlar ekstreyle aynı." : "Bu ekstrede özet rakamları okunamadı."}
+              : eq.ok && eq.feesIncluded != null ? "Denklem tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı."
+              : eq.ok ? "Denklem tuttu: okunan rakamlar ekstreyle aynı." : "Bu ekstrede özet rakamları okunamadı."}
           </p>
           {!!s.reconciliation_diff && Math.abs(s.reconciliation_diff) >= 1 && (
             <p className="text-xs text-amber-700 dark:text-amber-300">
               Okunan işlemlerin toplamı ekstre özetinden {tl(Math.abs(s.reconciliation_diff))} {s.reconciliation_diff > 0 ? "fazla" : "eksik"}: bir işlem eksik ya da fazla okunmuş olabilir.
             </p>
           )}
-          {fees > 0 && !eq?.withFees && (
-            <p className="text-xs text-red-600 dark:text-red-400">Bu ekstrede {tl(fees)} faiz ve ücret var{eq?.ok ? " (harcamaların içinde)" : ""}.</p>
+          {fees > 0 && eq.ok == null && (
+            <p className="text-xs text-red-600 dark:text-red-400">Bu ekstrede {tl(fees)} faiz ve ücret var.</p>
           )}
 
           <div className="flex flex-wrap items-center gap-2">
