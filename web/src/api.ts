@@ -175,6 +175,9 @@ export interface Statement {
   paid_at?: string | null;
   /** kullanıcı "rakamlar doğru" dedi (POST /api/statements/{id}/confirm) */
   confirmed_at?: string | null;
+  /** ödemenin bağlı olduğu banka/nakit hesabı ve bağın kaynağı (elle seçildi / dökümden geldi) */
+  paid_account_id?: number | null;
+  paid_link?: "elle" | "dokum" | null;
   /** okunan işlemler ya da denklem ekstre özetiyle tutmuyor ve onay yok (sunucu) */
   needs_check?: boolean;
   /** faiz ve ücret: true harcamaların içinde, false ayrı satır, null faiz yok / hesaplanamaz (sunucu) */
@@ -478,9 +481,10 @@ export const api = {
   setBudget: (category: string, monthly_limit: number | null) => req("PUT", "/api/budgets", { category, monthly_limit }),
   /** account_id (banka/nakit, isteğe bağlı): o hesaptan çıkan kart ödemesi kaydı (gider değil, bakiye düşer);
    *  linked: dökümdeki aynı ödemeye bağlandı. */
+  // account_id: undefined → anahtar gönderilmez (bağlı hesap korunur, tutar/tarih güncellenir); null → hesap kaydı kaldırılır
   payStatement: (id: number, amount: number, paid_at: string, account_id?: number | null) =>
-    req<{ ok: boolean; card_payment_id: number | null; linked: boolean }>("POST", `/api/statements/${id}/pay`,
-      { amount, paid_at, ...(account_id ? { account_id } : {}) }),
+    req<{ ok: boolean; card_payment_id: number | null; linked: boolean; link?: "elle" | "dokum" | null; warning?: string }>(
+      "POST", `/api/statements/${id}/pay`, { amount, paid_at, ...(account_id !== undefined ? { account_id } : {}) }),
   unpayStatement: (id: number) => req("DELETE", `/api/statements/${id}/pay`),
   payDebt: (id: number, amount: number | null, paid_at: string, account_id?: number | null) =>
     req("POST", `/api/debts/${id}/pay`, { amount, paid_at, account_id: account_id ?? null }),

@@ -16,7 +16,9 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   // ekstre/fatura "ödenen tutar"ı yazar (üstüne eklemez); borçta ödeme eklenir → varsayılan kalanın tamamı
   const left = Math.max(0, p.amount - (p.paid_amount ?? 0));
   const full = debt ? left : p.amount;
-  const [amount, setAmount] = useState(String(paid ? p.paid_amount ?? p.amount : full));
+  // düzeltme: ödenmiş (ya da kısmi ödenmiş) ekstrede kayıtlı ödenen tutar
+  const [amount, setAmount] = useState(String(paid || (p.type === "statement" && (p.paid_amount ?? 0) > 0) ? p.paid_amount ?? p.amount : full));
+  const [warn, setWarn] = useState<string | null>(null); // sunucu uyarısı (ör. dökümden gelen ödeme tutarı farklı)
   const [date, setDate] = useState((p.paid_at ?? todayISO()).slice(0, 10));
   const [payment, setPayment] = useState<Payment>("havale");
   // borç: parayı hangi hesaptan ödedin (varsayılan: borcun kayıtlı hesabı)
@@ -24,7 +26,13 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const [acc, setAcc] = useState<number | null | undefined>(undefined);
   const debtAcc = acc !== undefined ? acc : debts.data?.find((d) => d.id === p.id)?.account_id ?? null;
   // ekstre: ödemenin çıktığı banka/nakit hesabı (isteğe bağlı, varsayılan "Belirtme")
-  const [stAcc, setStAcc] = useState<number | null>(null);
+  // düzeltmede sunucudaki bağ: paid_account_id (seçili gelir), paid_link "dokum" ise hesap değiştirilemez
+  const sts = useQuery({ queryKey: ["statements"], queryFn: api.statements, enabled: p.type === "statement" });
+  const st = sts.data?.find((x) => x.id === p.id);
+  const savedAcc = st?.paid_account_id ?? null;
+  const fromDokum = st?.paid_link === "dokum";
+  const [stPick, setStPick] = useState<number | null | undefined>(undefined); // undefined: kullanıcı değiştirmedi
+  const stAcc = stPick !== undefined ? stPick : savedAcc;
   const amt = parseAmount(amount);
   const valid = Number.isFinite(amt) && amt > 0;
   const partial = valid && amt + 0.01 < full;
@@ -33,13 +41,16 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const save = useSave(async () => {
     if (!valid) throw new Error("Ödenen tutarı yaz");
     if (date > todayISO()) throw new Error("Ödeme tarihi ileri bir gün olamaz");
-    if (p.type === "statement") return api.payStatement(p.id!, amt, date, stAcc);
+    // hesap değişmediyse anahtar gönderilmez (bağlı hesap korunur, tutar/tarih güncellenir); "Hesaptan değil" → null
+    if (p.type === "statement") return api.payStatement(p.id!, amt, date, fromDokum || stPick === undefined || stPick === savedAcc ? undefined : stPick);
     if (debt) return api.payDebt(p.id!, partial ? amt : null, date, debtAcc);
     return api.payBill(p.id!, amt, date, payment);
   }, (r) => {
     const linked = !!r && typeof r === "object" && "linked" in r && r.linked;
+    const warning = r && typeof r === "object" && "warning" in r && typeof r.warning === "string" ? r.warning : null;
     onSaved?.(`${partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`}${linked ? " · dökümdeki ödemeyle eşleşti" : ""}`);
-    onClose();
+    if (warning) setWarn(warning); // kayıt yapıldı; uyarı okunsun diye pencere açık kalır
+    else onClose();
   });
   const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!)
     : debt ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
@@ -56,7 +67,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
         )}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
-        <button className="btn-primary" disabled={save.isPending || !valid} onClick={() => save.mutate(undefined)}>
+        <button className="btn-primary" disabled={save.isPending || !valid || !!warn} onClick={() => save.mutate(undefined)}>
           {save.isPending ? "Kaydediliyor…" : "Kaydet"}</button>
       </>
     }>
@@ -114,17 +125,20 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
         )}
         {p.type === "statement" && (<>
           <div>
-            <AccountSelect id="p-stacc" label="Hangi hesaptan? (isteğe bağlı)" value={stAcc} onChange={setStAcc} kinds={["banka", "nakit"]} />
+            <AccountSelect id="p-stacc" label="Hangi hesaptan? (isteğe bağlı)" value={stAcc} onChange={setStPick} kinds={["banka", "nakit"]}
+              noneLabel="Hesaptan değil" disabled={fromDokum || (paid && sts.isLoading)} />
             <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-              Seçersen bakiyen hemen düşer; banka dökümü gelince aynı ödeme otomatik eşleşir, iki kez sayılmaz. Gider sayılmaz.
+              {fromDokum ? "Bu ödeme banka dökümünden geldi; hesap hareketi değişmez."
+                : "Seçersen bakiyen hemen düşer; banka dökümü gelince aynı ödeme otomatik eşleşir, iki kez sayılmaz. Gider sayılmaz."}
             </p>
-            {(p.paid_amount ?? 0) > 0 && (
-              <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-                Daha önce seçtiğin hesap burada görünmez; "Belirtme" bırakırsan önceki hesap kaydı değişmez. Hesabı değiştirmek için yenisini seç.
-              </p>
-            )}
           </div>
         </>)}
+        {warn && (
+          <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" role="alert">
+            <b>Kaydedildi, ama:</b> {warn}
+            <div className="mt-2"><button className="btn-primary px-3 py-1 text-xs" onClick={onClose}>Tamam</button></div>
+          </div>
+        )}
         {save.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
       </div>
     </Modal>
