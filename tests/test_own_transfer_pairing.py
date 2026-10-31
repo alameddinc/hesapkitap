@@ -86,3 +86,40 @@ def test_bank_repair_restores_wrong_own_transfer_without_file(tmpdb):
         assert [r[0] for r in c.execute("SELECT import_hash FROM own_transfers")] == ["own-ok"]
         e = c.execute("SELECT kind, amount, not_virman FROM entries WHERE import_hash = 'out-2'").fetchone()
     assert tuple(e) == ("gider", 60300.0, 1)
+
+
+def test_incoming_leg_paired_when_outgoing_is_own_transfer(tmpdb):
+    """Canlı bulgu: VakıfBank → Halkbank çıkışı virman, Halkbank'taki giriş ('X,X 'DAN GELEN FAST') gelir kalmıştı.
+    Hesap sahibinin adı bilinmese de gönderen = alıcı kalıbı ve karşı çıkış varsa giriş de virmana bağlanır."""
+    from app import bank_repair
+
+    with tmpdb.connect() as c:
+        tmpdb.add_own_transfer(c, "2026-06-30", -29000.0, "VakıfBank", "Kendi hesabına", "vb-out", [])
+        for h, desc in (("hb-in", "AYŞE ÖRNEK,AYŞE ÖRNEK 'DAN GELEN FAST ODEMESI"),
+                        ("hb-other", "Kira,MEHMET ÖRNEK 'DAN GELEN FAST ODEMESI"),  # başka kişi: gelir kalır
+                        ("hb-plain", "EFT GELEN ODEME")):  # gönderen bilinmiyor: gelir kalır
+            c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, import_hash, note) "
+                      "VALUES ('2026-06-30', '2026-06', ?, 29000, 'gelir', ?, NULL)", (desc, h))  # ham satırı notta yok
+    import pytest
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(bank_repair, "_owners", lambda: [])
+    try:
+        rep = bank_repair.repair(apply=True)
+    finally:
+        mp.undo()
+    assert [p["amount"] for p in rep["paired"]] == [29000.0]
+    with tmpdb.connect() as c:
+        left = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE kind = 'gelir'")}
+        moved = c.execute("SELECT amount FROM own_transfers WHERE import_hash = 'hb-in'").fetchone()
+    assert left == {"hb-other", "hb-plain"} and moved[0] == 29000.0
+    assert not tmpdb.repair_own_transfers([])  # ikinci çalıştırma: değişiklik yok
+
+
+def test_incoming_import_pairs_with_existing_outgoing(tmpdb):
+    owners = ["AYŞE ÖRNEK"]
+    tmpdb.import_bank_rows([{"date": "2026-06-30", "description": "Kendi hesabına", "amount": -500.0, "type": "virman",
+                             "hash": "o-1"}], account="VakıfBank", owners=owners)
+    st = tmpdb.import_bank_rows([{"date": "2026-07-01", "description": "AYŞE ÖRNEK hesabından gelen", "amount": 500.0,
+                                  "type": "gelir", "hash": "i-1"}], account="Halkbank", owners=owners)
+    assert st["virman"] == 1 and st["gelir"] == 0

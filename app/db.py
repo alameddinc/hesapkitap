@@ -2081,6 +2081,23 @@ def _pairs_own_transfer(amount: float, day: str, desc: str, owners: list[str] | 
                          (money.kurus(amount), account or "", day, day)).fetchone() is not None
 
 
+def _pairs_own_transfer_in(amount: float, day: str, desc: str, owners: list[str] | None, account: str) -> bool:
+    """Gelen transferin karşılığı: aynı tutar, ±1 gün, BAŞKA kendi hesabından ÇIKIŞ zaten virman (own_transfers).
+    Gönderen kullanıcının kendisi olmalı: adı açıklamada geçiyor ya da kalıp gönderen = alıcı diyor (Halkbank
+    "X,X 'DAN GELEN FAST": hesap sahibinin adı bilinmese de). Açıklama gönderenle alıcıyı farklı kişi yazıyorsa olmaz."""
+    from app.bank_import import _sender_receiver
+
+    sr = _sender_receiver(desc)
+    if sr and len(sr[0]) >= 6 and sr[0] != sr[1]:
+        return False
+    if not (sr and len(sr[0]) >= 6 and sr[0] == sr[1]) and not _names_owner(desc, owners):
+        return False
+    with connect() as c:
+        return c.execute("SELECT 1 FROM own_transfers WHERE amount < 0 AND ROUND(-amount * 100) = ? "
+                         "AND COALESCE(account, '') <> ? AND transfer_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') "
+                         "LIMIT 1", (money.kurus(amount), account or "", day, day)).fetchone() is not None
+
+
 def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, import_hash: str | None,
                      owners: list[str] | None = None, account_id: int | None = None) -> None:
     """Kendi hesapları arası aktarım kaydı: açıklama temiz (yön, bankalar, gönderenin mesajı), ham metin raw'da."""
@@ -2153,6 +2170,13 @@ def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:
             "SELECT id, entry_date, amount, description, note, account_id, import_hash FROM entries "
             "WHERE kind = 'gider' AND import_hash IS NOT NULL AND import_hash NOT LIKE 'dekont:%' "
             "AND COALESCE(payment, '') <> 'kredi_karti' AND wallet_id IS NULL AND not_virman = 0")]
+        # gelen bacak: karşı hesaptan çıkış zaten virman ama giriş gelir sayılmış (eski sınıflama, ad öğrenilmemişti)
+        incoming = [dict(r) for r in c.execute(
+            "SELECT id, entry_date, amount, description, note, account_id, import_hash, 'gelir' AS kind FROM entries "
+            "WHERE kind = 'gelir' AND import_hash IS NOT NULL AND import_hash NOT LIKE 'dekont:%' AND wallet_id IS NULL "
+            "AND not_virman = 0 AND debt_id IS NULL AND recurring_id IS NULL AND linked_txn_id IS NULL "
+            "AND id NOT IN (SELECT entry_id FROM entry_matches) AND id NOT IN (SELECT entry_id FROM debt_payments "
+            "WHERE entry_id IS NOT NULL)")]
     for e in cands:
         acc = accounts.get(e["account_id"], "")
         if not _pairs_own_transfer(e["amount"], e["entry_date"], e["description"], owners, acc):
@@ -2161,6 +2185,15 @@ def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:
             add_own_transfer(c, e["entry_date"], -e["amount"], acc, _raw_note(e), e["import_hash"], owners)
             c.execute("DELETE FROM entries WHERE id = ?", (e["id"],))
         moved.append(e)
+    for e in incoming:
+        acc = accounts.get(e["account_id"], "")
+        raw = _raw_note(e)
+        if not _pairs_own_transfer_in(e["amount"], e["entry_date"], raw, owners, acc):
+            continue
+        with connect() as c:
+            add_own_transfer(c, e["entry_date"], e["amount"], acc, raw, e["import_hash"], owners, e["account_id"])
+            c.execute("DELETE FROM entries WHERE id = ?", (e["id"],))
+        moved.append({**e, "amount": -e["amount"]})  # rapor: imzalı tutar −(−x) = +x (bank_repair 'paired' −amount yazar)
     return moved
 
 
@@ -2296,7 +2329,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                               (money.kurus(r["amount"]), r["date"], r["date"]))
                 add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
             continue
-        if r["type"] == "gider" and _pairs_own_transfer(abs(r["amount"]), r["date"], r["description"], owners, account):
+        if (r["type"] == "gider" and _pairs_own_transfer(abs(r["amount"]), r["date"], r["description"], owners, account)
+                or r["type"] == "gelir" and _pairs_own_transfer_in(r["amount"], r["date"], r["description"], owners,
+                                                                    account)):
             # karşılığı kendi başka hesabına giriş olarak zaten var (ör. Halkbank → VakıfBank): harcama değil, virman
             stats["virman"] += 1
             with connect() as c:
