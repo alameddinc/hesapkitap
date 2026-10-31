@@ -158,8 +158,16 @@ def run_session_cleanup(today: date) -> int:
     return sessions.cleanup()
 
 
+def run_integrity(today: date) -> dict:
+    """Gece doğruluk denetimi (app/integrity.py): yalnız sayılar döner; ayrıntı defterin kendi ayarında."""
+    from app import integrity
+
+    return integrity.run(today)
+
+
+INTEGRITY_HOUR = 4
 JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads),
-        ("sessions", 3, run_session_cleanup)]
+        ("sessions", 3, run_session_cleanup), ("integrity", INTEGRITY_HOUR, run_integrity)]
 MAIN_ONLY = {"remind", "sessions"}  # Telegram'a yazan ve sistem veritabanına bakan işler yalnız yöneticinin alanında
 
 
@@ -249,6 +257,12 @@ async def scheduler() -> None:
                 log.info("silinmiş hesap klasörleri temizlendi: %s", removed)
         except Exception:  # noqa: BLE001
             log.exception("purge_deleted failed")
+        try:  # dünkü/bugünkü doğruluk denetiminin yönetici özeti (yalnız sayılar), günde bir kez
+            from app import integrity
+
+            await asyncio.to_thread(integrity.report_admin, now)
+        except Exception:  # noqa: BLE001
+            log.exception("integrity report failed")
         for path, user in spaces():
             with db.use_space(path, user):  # her kullanıcının işi kendi veritabanında (to_thread bağlamı taşır)
                 for name, fn in due_jobs(now):

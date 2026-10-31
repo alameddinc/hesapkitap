@@ -318,6 +318,17 @@ def _esitleme(upload: bool) -> list[dict]:
     return out
 
 
+def _dogruluk() -> list[dict]:
+    """Gece doğruluk denetimi ihlal bulduysa "Rakamları kontrol et" (app/integrity.py; kimlik dogruluk:<imza>)."""
+    from app import book, integrity
+
+    m = book.member()
+    if m and book.role(m) == "viewer":
+        return []
+    t = integrity.todo()
+    return [t] if t else []
+
+
 def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
     """Bugün gösterilecek hatırlatmalar (önce acil olanlar)."""
     now = now or today()
@@ -330,6 +341,7 @@ def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
     if not _page_hidden("ekstreler"):
         items += _odeme(now)
     items += _esitleme(upload)
+    items += _dogruluk()
     st = _state()
     if not include_hidden:
         items = [i for i in items if not _hidden(i["id"], st, now)]

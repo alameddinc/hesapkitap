@@ -2437,7 +2437,7 @@ def onboarding_dismiss():
 # ---------------------------------------------------------------- hatırlatmalar (Yapılacaklar; ileride push)
 
 REMINDER_ID = (r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|"
-               r"(hesap|borc):\d{1,12}:\d{1,12}|kart:\d{1,12})$")
+               r"(hesap|borc):\d{1,12}:\d{1,12}|kart:\d{1,12}|dogruluk:[0-9a-f]{10})$")
 
 
 class SnoozeIn(BaseModel):
