@@ -25,6 +25,11 @@ if (/HesapKitapApp\//.test(navigator.userAgent)) {
   }
 }
 
+// Evrensel davet bağlantısı (https://<adres>/davet/<kod>; mobilde uygulama yüklüyse uygulama açılır): web'de kayıt
+// ekranına kod dolu gider. Sunucu bilinmeyen yolda index.html verir; yol hash rotasına çevrilir, eski #/kayit?kod= de çalışır.
+const davet = window.location.pathname.match(/^\/davet\/([A-Za-z0-9-]{4,64})\/?$/);
+if (davet) window.history.replaceState(null, "", `/${window.location.search}#/kayit?kod=${encodeURIComponent(davet[1])}`);
+
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: false, retry: 1 } },
 });
