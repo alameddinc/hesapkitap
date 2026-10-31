@@ -1,6 +1,7 @@
+import type { ReactNode } from "react";
 import { cx, tl } from "../format";
 
-export default function Kpi({ label, value, sub, tone }: { label: string; value: number; sub?: string; tone?: "red" | "green" }) {
+export default function Kpi({ label, value, sub, tone }: { label: ReactNode; value: number; sub?: string; tone?: "red" | "green" }) {
   return (
     <div className="card p-3 sm:p-4">
       <div className="text-xs text-stone-500">{label}</div>

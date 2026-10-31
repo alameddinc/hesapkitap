@@ -152,7 +152,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
-    : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti" : "Kaydedildi"));
+    : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti, bir kez sayılır" : "Kaydedildi"));
   const link = useSave((txnId: number | null) => api.linkEntry(editingEntry!.id, txnId),
     () => done("Eşleşme güncellendi"));
 

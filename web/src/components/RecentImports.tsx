@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { TERIM } from "../lib/terimler";
 import { ask } from "../lib/ask";
 import { History, Undo2 } from "lucide-react";
 import { useState } from "react";
@@ -9,7 +10,7 @@ import { parseTs } from "../format";
 
 const NAMES: Record<string, string> = {
   entries: "kayıt", transactions: "kart işlemi", statements: "ekstre", accounts: "hesap",
-  own_transfers: "hesaplar arası aktarım", card_payments: "kart ödemesi", recurring: "sabit kalem",
+  own_transfers: TERIM.kendiHesaplar.ad.toLocaleLowerCase("tr"), card_payments: "kart ödemesi", recurring: "sabit kalem",
 };
 
 function describe(b: ImportBatch) {

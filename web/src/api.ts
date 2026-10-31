@@ -209,7 +209,16 @@ export interface Summary {
     balance: number; // devreden + net
     estimated_expense?: number; // tahmini (ekstre bekleniyor): expense'e dahil DEĞİL
     estimated_income?: number; // tahmini maaş (döküm yok): income'a dahil DEĞİL
+    // sunucu a18ac2a (S1): istemci hesaplamaz; eski sunucuda yok
+    left?: number; // Artan: gelir − gider
+    left_after_savings?: number; // Elde kalan (sade): gelir − gider − birikim
+    card_pending?: number;
+    card_spend_incl_pending?: number;
+    manual_expense_excl_card_pending?: number;
+    fees_hidden?: boolean; // ortak defterde faiz gizli: Faiz kutusu gösterilmez
   };
+  /** rakam tanımları (i) için: expense, income, left, left_after_savings, cash_net */
+  definitions?: Partial<Record<"expense" | "income" | "left" | "left_after_savings" | "cash_net", string>>;
   estimated_items?: EstimateItem[];
   pending: { income: number; expense: number; count: number };
   budgets: Budget[];
