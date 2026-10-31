@@ -17,11 +17,12 @@ export const rememberAccount = (id: number | null) => {
 };
 
 /** Banka / nakit hesabı seçimi (gelirin girdiği, giderin çıktığı hesap). Boş = belirtilmedi. */
-export default function AccountSelect({ value, onChange, label, id }: {
+export default function AccountSelect({ value, onChange, label, id, kinds }: {
   value: number | null; onChange: (v: number | null) => void; label: string; id?: string;
+  /** yalnız bu türler (ör. ["banka", "nakit"]) */ kinds?: string[];
 }) {
   const q = useAccounts();
-  const accs = q.data?.accounts ?? [];
+  const accs = (q.data?.accounts ?? []).filter((a) => !kinds || kinds.includes(a.kind));
   return (
     <div>
       <label className="label" htmlFor={id}>{label}</label>
