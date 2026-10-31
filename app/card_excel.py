@@ -73,6 +73,8 @@ def _period_end(d: date, cut_day: int) -> date:
 
 
 def to_statements(rows: list[list[str]], info: dict, cut_day: int, bank: str, existing: set[str]) -> list[Statement]:
+    """existing: kartın kayıtlı kesim tarihleri; kesimi ±5 gün içinde olan dönem (PDF ekstresi ya da önceki Excel)
+    üretilmez (kesim hafta sonuna kaymış olabilir)."""
     c = info["cols"]
     groups: dict[date, list[Transaction]] = defaultdict(list)
     # Taksit satırı alışverişin İLK tarihiyle gelir ama dosya faturalanma sırasına göre dizilidir: taksit satırı,
@@ -103,8 +105,9 @@ def to_statements(rows: list[list[str]], info: dict, cut_day: int, bank: str, ex
             d = parsed[near][0]
         groups[_period_end(d, cut_day)].append(t)
     out = []
+    known = [date.fromisoformat(x) for x in existing]
     for pe, txns in sorted(groups.items()):
-        if pe.isoformat() in existing:  # PDF ekstresi zaten var
+        if any(abs((pe - k).days) <= 5 for k in known):  # o dönemin ekstresi zaten var
             continue
         charges = round(sum(t.amount for t in txns if t.txn_type != PAYMENT), 2)
         paid = round(-sum(t.amount for t in txns if t.txn_type == PAYMENT), 2)
@@ -142,9 +145,9 @@ def import_file(data: bytes, filename: str) -> dict | None:
     saved = 0
     for st in stmts:
         key = f"kart-excel:{st.card_no}:{st.period_end}".encode()  # dönem başına tekil; tekrar yükleme eklemez
-        if db.statement_exists(key, st):
+        if db.statement_exists(key, st, source="excel"):
             continue
-        db.save_statement(key, filename, st)
+        db.save_statement(key, filename, st, source="excel")
         saved += 1
     # kural tabanlı kategori bulunamayanlara sektörden kategori
     with db.connect() as c:

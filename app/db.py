@@ -436,7 +436,8 @@ MIGRATIONS = [
     ("entries", "bill_provider", "TEXT"),       # dökümdeki fatura tahsilatı: kurum (Vodafone, İGDAŞ…) — Faturalar özeti
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
     ("own_transfers", "note", "TEXT"),          # kullanıcının notu
-    ("own_transfers", "account_id", "INTEGER"),  # dökümün hesabı: e-postadan gelen virman çapadan sonra bakiyeye girer
+    ("own_transfers", "account_id", "INTEGER"),
+    ("statements", "source", "TEXT"),           # 'excel': kart işlem dökümünden üretilmiş (borç alanı kurgu; borca girmez)  # dökümün hesabı: e-postadan gelen virman çapadan sonra bakiyeye girer
     ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
     ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)
     ("card_payments", "statement_id", "INTEGER"), # elle "ödendi" denen ekstre (POST /api/statements/{id}/pay)
@@ -585,6 +586,8 @@ def init_db() -> None:
             if col not in cols:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         _migrate_subscription_state(c)
+        c.execute("UPDATE statements SET source = 'excel' WHERE source IS NULL AND (lower(filename) LIKE '%.xlsx' "
+                  "OR lower(filename) LIKE '%.xls' OR lower(filename) LIKE '%.csv')")  # eski kart Excel'i ekstreleri
         _backfill_statements(c)
         index_local_files(c)
         if not c.execute("SELECT 1 FROM settings WHERE key = 'item_rules_seeded'").fetchone():
@@ -706,30 +709,52 @@ def file_hash(data: bytes) -> str:
 
 # ---------------------------------------------------------------- statements
 
-def statement_exists(data: bytes, stmt: Statement) -> bool:
+SAME_PERIOD_DAYS = 5  # aynı kartın kesimi bu kadar gün içindeyse aynı dönem (hafta sonuna kayan kesim, farklı banka yazımı)
+
+
+def same_period(c, card_no: str, period_end: str, days: int = SAME_PERIOD_DAYS) -> list[dict]:
+    """Aynı kartın (son 4 hane) aynı dönemi: kesimi ±days gün içindeki ekstreler."""
+    return rows(c.execute(
+        "SELECT * FROM statements WHERE substr(card_no, -4) = ? AND ABS(julianday(period_end) - julianday(?)) <= ?",
+        ((card_no or "")[-4:], period_end, days)))
+
+
+def statement_exists(data: bytes, stmt: Statement, source: str | None = None) -> bool:
+    """Aynı dosya, aynı (banka, kart, kesim) ya da aynı kartın aynı dönemi (±5 gün) zaten var mı? PDF ekstresi, aynı
+    dönemin kart Excel'inden üretilmiş ekstresinin yerini alır (save_statement): o durumda var sayılmaz."""
     with connect() as c:
-        return c.execute(
-            "SELECT 1 FROM statements WHERE file_hash = ? OR (bank = ? AND card_no = ? AND period_end = ?)",
-            (file_hash(data), stmt.bank, stmt.card_no, stmt.period_end.isoformat()),
-        ).fetchone() is not None
+        if c.execute("SELECT 1 FROM statements WHERE file_hash = ? OR (bank = ? AND card_no = ? AND period_end = ? "
+                     "AND (? = 'excel' OR COALESCE(source, '') <> 'excel'))",
+                     (file_hash(data), stmt.bank, stmt.card_no, stmt.period_end.isoformat(), source or "")).fetchone():
+            return True
+        same = same_period(c, stmt.card_no, stmt.period_end.isoformat())
+    if source == "excel":
+        return bool(same)  # Excel: o dönem (PDF ya da Excel) zaten var
+    return any(s.get("source") != "excel" for s in same)  # PDF: başka bir PDF (farklı banka yazımı) varsa tekrar
 
 
 def _iso(d):
     return d.isoformat() if d else None
 
 
-def save_statement(data: bytes, filename: str, stmt: Statement) -> int:
+def save_statement(data: bytes, filename: str, stmt: Statement, source: str | None = None) -> int:
+    """source='excel': kart işlem dökümünden üretilmiş ekstre (borç alanı kurgu: borç ve ödendi eşleşmesine girmez).
+    PDF ekstresi kaydedilince aynı kartın aynı dönemindeki (±5 gün) Excel ekstresi silinir: harcamalar bir kez sayılır."""
     with connect() as c:
         rules = load_rules(c)
+        if source != "excel":
+            for old in same_period(c, stmt.card_no, stmt.period_end.isoformat()):
+                if old.get("source") == "excel":
+                    c.execute("DELETE FROM statements WHERE id = ?", (old["id"],))  # işlemleri de (ON DELETE CASCADE)
         cur = c.execute(
             """INSERT INTO statements (file_hash, filename, bank, card_no, period_end, due_date, total_debt,
                min_payment, credit_limit, previous_balance, period_activity, interest_fees, payments,
-               next_period_end, next_due_date)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               next_period_end, next_due_date, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (file_hash(data), filename, stmt.bank, stmt.card_no, stmt.period_end.isoformat(),
              _iso(stmt.due_date), stmt.total_debt, stmt.min_payment, stmt.credit_limit, stmt.previous_balance,
              stmt.period_activity, stmt.interest_fees, stmt.payments,
-             _iso(stmt.next_period_end), _iso(stmt.next_due_date)),
+             _iso(stmt.next_period_end), _iso(stmt.next_due_date), source),
         )
         sid = cur.lastrowid
         for t in stmt.transactions:
@@ -739,7 +764,8 @@ def save_statement(data: bytes, filename: str, stmt: Statement) -> int:
             row["statement_id"] = sid
             cols = ", ".join(row)
             c.execute(f"INSERT INTO transactions ({cols}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
-    _store_quietly("uploads", f"{file_hash(data)}.pdf", data, "application/pdf")  # sınır/depo hatası: kayıt var, dosya yok
+    if source != "excel":  # Excel ekstresinin "dosyası" yok (anahtar baytları); asıl Excel saklanmaz
+        _store_quietly("uploads", f"{file_hash(data)}.pdf", data, "application/pdf")  # sınır/depo hatası: kayıt var, dosya yok
     return sid
 
 
@@ -1313,8 +1339,9 @@ def reassign_statement_payments(apply: bool = True) -> dict:
     Kaynağı bilinmeyen eski işaret: ödemelerden birine denk geliyorsa yeniden hesaplanır, gelmiyorsa (elle) korunur.
     Dönüş: {marked, cleared, changed: [...]}."""
     with connect() as c:
+        # kart Excel'inden üretilen ekstrenin borcu kurgu: ödemeler ona yazılmaz (gerçek ekstre gelince ona gider)
         sts = rows(c.execute("SELECT id, card_no, bank, period_end, due_date, next_period_end, total_debt, min_payment, "
-                             "paid_amount, paid_at, paid_source FROM statements"))
+                             "paid_amount, paid_at, paid_source FROM statements WHERE COALESCE(source, '') <> 'excel'"))
         pays = _payment_evidence(c)
     win = _statement_windows(sts)
     manual = {s["id"] for s in sts if s["paid_source"] == "elle"}
@@ -1972,7 +1999,7 @@ def match_card_payment(amount: float, on: str, only_unpaid: bool = False):
     d = _date.fromisoformat(on)
     with connect() as c:
         return c.execute(
-            f"""SELECT * FROM statements WHERE due_date IS NOT NULL
+            f"""SELECT * FROM statements WHERE due_date IS NOT NULL AND COALESCE(source, '') <> 'excel'
                 AND (ABS(total_debt - ?) <= 1 OR ABS(COALESCE(min_payment, -1) - ?) <= 1
                      OR ABS(COALESCE(paid_amount, -1) - ?) <= 1)
                 AND ? BETWEEN period_end AND date(due_date, '+10 days')
@@ -2588,11 +2615,14 @@ def statement_remaining(st: dict, d: str | None = None) -> float:
     return money.money(rem) if money.diff_k(rem, 0) > 1 else 0.0
 
 
-def latest_card_statements(d: str, statements: list[dict] | None = None) -> dict[str, dict]:
+def latest_card_statements(d: str, statements: list[dict] | None = None, include_excel: bool = False) -> dict[str, dict]:
     """Kart (kart numarası) başına d gününe kadar kesilmiş EN SON ekstre. Kartın borcu yalnız budur: ödenmeyen eski
-    ekstreler yeni ekstrenin devreden borcunda zaten var (iki kez sayılırsa net durum ve zekât yanlış çıkar)."""
+    ekstreler yeni ekstrenin devreden borcunda zaten var (iki kez sayılırsa net durum ve zekât yanlış çıkar). Kart
+    Excel'inden üretilmiş ekstre (borcu kurgu) sayılmaz; include_excel: kart listesi için."""
     latest: dict[str, dict] = {}
     for st in statements if statements is not None else list_statements():
+        if not include_excel and st.get("source") == "excel":
+            continue
         if st["period_end"] <= d and (st["card_no"] not in latest or st["period_end"] > latest[st["card_no"]]["period_end"]):
             latest[st["card_no"]] = st
     return latest
