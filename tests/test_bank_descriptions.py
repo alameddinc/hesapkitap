@@ -403,3 +403,38 @@ def test_repair_merges_bank_prefixed_person(tmpdb):
         assert c.execute("SELECT description FROM entries WHERE description LIKE '%kira'").fetchone()[0] == "Ali Veli · kira"
         assert c.execute("SELECT category FROM counterparties WHERE name = 'Ali Veli'").fetchone()[0] == "Kira & Aidat"
         assert c.execute("SELECT person FROM debts").fetchone()[0] == "Zeynep Kaya"
+
+
+def test_repair_names_without_document_and_in_dry_run(tmpdb, capsys):
+    """Canlı bulgu: dosyası saklanmamış kayıt (bank_doc_id yok) ve kuru çalıştırma (kopya üzerinde uygulanır) 'banka
+    artığı: 0 kişi' gösteriyordu; açıklama/kişi bölümü adı önce düzeltip birleşmeyi atlıyordu."""
+    import os
+    import sqlite3
+    import tempfile
+
+    from app import bank_repair, db
+
+    note = ("Hesap hareketi · FAST Anlık Ödeme nakliye (12/12/2024 tarihli 123456789 sorgu no'lu VakıfBank AYŞE DEMİR "
+            "hesabından Enpara Bank AYŞE ÖRNEK hesabına giden)")
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, category, counterparty, note, "
+                  "import_hash) VALUES ('2024-12-12', '2024-12', 'Bank Ayşe Örnek · nakliye', 500, 'gider', 'Diğer', "
+                  "'Bank Ayşe Örnek', ?, 'h-bank-1')", (note,))
+        c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, category, counterparty) "  # elle değişmiş
+                  "VALUES ('2024-12-20', '2024-12', 'Taşınma ücreti', 300, 'gider', 'Diğer', 'Bank Ayşe Örnek')")
+        c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, category, counterparty) "
+                  "VALUES ('2025-01-05', '2025-01', 'Ayşe Örnek', 200, 'gider', 'Diğer', 'Ayşe Örnek')")
+    # main()'in kuru çalıştırması: kopya üzerinde uygula, raporla
+    tmp = os.path.join(tempfile.mkdtemp(), "kopya.db")
+    with sqlite3.connect(db.db_path()) as src, sqlite3.connect(tmp) as dst:
+        src.backup(dst)
+    with db.use_space(tmp, None):
+        rep = bank_repair.repair(apply=True)
+    assert [(r["was"], r["now"], r["amount"], r["why"]) for r in rep["names"]] == [
+        ("Bank Ayşe Örnek", "Ayşe Örnek", 2, "mevcut kişiyle birleşir")]
+    with tmpdb.connect() as c:  # canlı (asıl) defter değişmedi
+        assert c.execute("SELECT COUNT(*) FROM entries WHERE counterparty = 'Bank Ayşe Örnek'").fetchone()[0] == 2
+    bank_repair.repair(apply=True)
+    with tmpdb.connect() as c:
+        rows = sorted(tuple(r) for r in c.execute("SELECT counterparty, description FROM entries"))
+    assert rows == [("Ayşe Örnek", "Ayşe Örnek"), ("Ayşe Örnek", "Ayşe Örnek · nakliye"), ("Ayşe Örnek", "Taşınma ücreti")]
