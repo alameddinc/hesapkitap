@@ -23,6 +23,8 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const debts = useQuery({ queryKey: ["debts"], queryFn: () => fetch("/api/debts").then((r) => r.json() as Promise<Debt[]>), enabled: debt });
   const [acc, setAcc] = useState<number | null | undefined>(undefined);
   const debtAcc = acc !== undefined ? acc : debts.data?.find((d) => d.id === p.id)?.account_id ?? null;
+  // ekstre: ödemenin çıktığı banka/nakit hesabı (isteğe bağlı, varsayılan "Belirtme")
+  const [stAcc, setStAcc] = useState<number | null>(null);
   const amt = parseAmount(amount);
   const valid = Number.isFinite(amt) && amt > 0;
   const partial = valid && amt + 0.01 < full;
@@ -31,10 +33,14 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const save = useSave(async () => {
     if (!valid) throw new Error("Ödenen tutarı yaz");
     if (date > todayISO()) throw new Error("Ödeme tarihi ileri bir gün olamaz");
-    if (p.type === "statement") return api.payStatement(p.id!, amt, date);
+    if (p.type === "statement") return api.payStatement(p.id!, amt, date, stAcc);
     if (debt) return api.payDebt(p.id!, partial ? amt : null, date, debtAcc);
     return api.payBill(p.id!, amt, date, payment);
-  }, () => { onSaved?.(partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`); onClose(); });
+  }, (r) => {
+    const linked = !!r && typeof r === "object" && "linked" in r && r.linked;
+    onSaved?.(`${partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`}${linked ? " · dökümdeki ödemeyle eşleşti" : ""}`);
+    onClose();
+  });
   const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!)
     : debt ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
     () => { onSaved?.("Ödeme geri alındı"); onClose(); });
@@ -44,7 +50,9 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
     <Modal title={paid ? "Ödemeyi düzelt" : "Ödedim"} onClose={onClose} footer={
       <>
         {(paid || (p.paid_amount ?? 0) > 0) && (
-          <button className="btn-danger" disabled={undo.isPending} onClick={() => undo.mutate(undefined)}>Ödemeyi geri al</button>
+          <button className="btn-danger" disabled={undo.isPending} onClick={() => window.confirm(p.type === "statement"
+            ? "Ödeme geri alınsın mı? Bir hesaptan ödendiğini seçtiysen o kart ödemesi kaydı silinir ve hesabın bakiyesi geri gelir; ödeme banka dökümünden geldiyse yalnız ekstreyle bağı kopar, döküm satırı kalır."
+            : "Ödeme geri alınsın mı?") && undo.mutate(undefined)}>Ödemeyi geri al</button>
         )}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
@@ -104,11 +112,19 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
             </p>
           </div>
         )}
-        {p.type === "statement" && (
-          <p className="text-xs text-stone-500 dark:text-stone-400">
-            Kart ekstresi ödemesi gider olarak eklenmez; harcamalar zaten ekstreden sayılıyor.
-          </p>
-        )}
+        {p.type === "statement" && (<>
+          <div>
+            <AccountSelect id="p-stacc" label="Hangi hesaptan? (isteğe bağlı)" value={stAcc} onChange={setStAcc} kinds={["banka", "nakit"]} />
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+              Seçersen bakiyen hemen düşer; banka dökümü gelince aynı ödeme otomatik eşleşir, iki kez sayılmaz. Gider sayılmaz.
+            </p>
+            {(p.paid_amount ?? 0) > 0 && (
+              <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                Daha önce seçtiğin hesap burada görünmez; "Belirtme" bırakırsan önceki hesap kaydı değişmez. Hesabı değiştirmek için yenisini seç.
+              </p>
+            )}
+          </div>
+        </>)}
         {save.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
       </div>
     </Modal>

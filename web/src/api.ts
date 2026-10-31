@@ -476,7 +476,11 @@ export const api = {
   budgets: (month: string) =>
     req<{ limits: Record<string, number>; status: Budget[]; last_month: Record<string, number> }>("GET", `/api/budgets?month=${month}`),
   setBudget: (category: string, monthly_limit: number | null) => req("PUT", "/api/budgets", { category, monthly_limit }),
-  payStatement: (id: number, amount: number, paid_at: string) => req("POST", `/api/statements/${id}/pay`, { amount, paid_at }),
+  /** account_id (banka/nakit, isteğe bağlı): o hesaptan çıkan kart ödemesi kaydı (gider değil, bakiye düşer);
+   *  linked: dökümdeki aynı ödemeye bağlandı. */
+  payStatement: (id: number, amount: number, paid_at: string, account_id?: number | null) =>
+    req<{ ok: boolean; card_payment_id: number | null; linked: boolean }>("POST", `/api/statements/${id}/pay`,
+      { amount, paid_at, ...(account_id ? { account_id } : {}) }),
   unpayStatement: (id: number) => req("DELETE", `/api/statements/${id}/pay`),
   payDebt: (id: number, amount: number | null, paid_at: string, account_id?: number | null) =>
     req("POST", `/api/debts/${id}/pay`, { amount, paid_at, account_id: account_id ?? null }),

@@ -1,7 +1,7 @@
-import { AlertTriangle, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
-import { api, type Statement } from "../api";
-import { cx, dateTR, tl, tsDateTR } from "../format";
+import { api, type Payable, type Statement } from "../api";
+import { cx, dateTR, tl, todayISO, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
@@ -42,6 +42,15 @@ export default function StatementCard({ s }: { s: Statement }) {
   const unconfirm = useSave(() => api.unconfirmStatement(s.id), () => ui.toast("Onay geri alındı"));
   const del = useSave(() => api.deleteStatement(s.id), () => ui.toast("Ekstre silindi"));
   const pdf = `/api/statements/${s.id}/file`;
+  // "Ödedim" penceresi (Payables ile aynı): ekstreden ödenecek kalem
+  const paid = s.paid_amount != null && s.paid_amount >= s.total_debt - 0.01;
+  const payable: Payable | null = s.due_date ? {
+    type: "statement", id: s.id, title: `${s.bank} ${s.card_no}`, subtitle: `Ekstre · kesim ${dateTR(s.period_end).slice(0, 5)}`,
+    amount: s.total_debt, min_payment: s.min_payment, due_date: s.due_date,
+    days_left: Math.round((new Date(`${s.due_date}T00:00:00`).getTime() - new Date(`${todayISO()}T00:00:00`).getTime()) / 864e5),
+    paid_amount: s.paid_amount ?? null, paid_at: s.paid_at ?? null,
+    status: paid ? "odendi" : s.paid_amount ? "kismi" : s.due_date < todayISO() ? "gecikti" : "bekliyor",
+  } : null;
   const id = `st-${s.id}`;
 
   return (
@@ -107,6 +116,13 @@ export default function StatementCard({ s }: { s: Statement }) {
             </>) : (
               <a className="btn-ghost" href={pdf} target="_blank" rel="noreferrer"><FileText size={15} aria-hidden /> PDF'i aç</a>
             )}
+            {payable && s.total_debt > 0 && (paid || s.paid_amount ? (
+              <button className="btn-ghost" onClick={() => ui.openPay(payable)}>
+                <Check size={15} aria-hidden /> {paid ? `Ödendi ${s.paid_at ? dateTR(s.paid_at) : ""}` : `${tl(s.paid_amount!)} ödendi`} · düzelt</button>
+            ) : (
+              <button className="btn border border-stone-300 text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-800"
+                onClick={() => ui.openPay(payable)}><Check size={15} aria-hidden /> Ödedim</button>
+            ))}
             {status === "confirmed" && (
               <button className="btn-ghost" disabled={unconfirm.isPending} onClick={() => unconfirm.mutate(undefined)}>
                 <Undo2 size={15} aria-hidden /> Onayı geri al</button>
