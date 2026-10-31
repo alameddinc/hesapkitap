@@ -202,3 +202,10 @@ def test_switch_default_on(hosted, monkeypatch):
     assert email_verify.required()
     monkeypatch.setenv("HESAPKITAP_EMAIL_VERIFY", "0")
     assert not email_verify.required() and email_verify.protected()
+
+
+@pytest.mark.parametrize("switch", ["0", "1"])
+def test_bad_email_is_422_in_both_modes(hosted, monkeypatch, switch):
+    monkeypatch.setenv("HESAPKITAP_EMAIL_VERIFY", switch)
+    r = _register(_app(), "ayse@", "ayse-sifre-123")
+    assert r.status_code == 422 and "e-posta" in r.json()["detail"]

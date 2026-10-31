@@ -748,6 +748,11 @@ def _register_with_code(body: RegisterIn, request: Request, ip: str) -> dict:
         raise HTTPException(422, errors.user_text(e, 422)) from e
     pw_hash = auth._hash(body.password)  # her yolda aynı iş: yanıt süresi de bir şey söylemesin
     u = system.user_by_name(name)
+    if not u:
+        try:
+            system.check_username(name)
+        except ValueError as e:  # e-posta biçimi (hesap var mı yok mu söylemeden önce)
+            raise HTTPException(422, errors.user_text(e, 422)) from e
     try:
         if u and email_verify.unverified(u["id"]):
             # doğrulanmamış hesap (belki başkası açtı): yeni şifre, yeni kod; kodu giren (e-postanın sahibi) hesabı alır
@@ -785,7 +790,10 @@ def _register_without_code(body: RegisterIn, request: Request, response: Respons
     if u:
         email_verify.notify_existing(u)
         return {"ok": True}
-    u = system.create_user(name, pw_hash)
+    try:
+        u = system.create_user(name, pw_hash)
+    except ValueError as e:  # e-posta biçimi
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     email_verify.mark_unverified(u["id"])
     _signup_record(ip)
     _record_consent(u["id"], request)
