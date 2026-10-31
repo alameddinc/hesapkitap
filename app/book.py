@@ -210,6 +210,84 @@ def can_see_txn(txn_id: int) -> bool:
     return any(t["id"] == txn_id for t in db.card_transactions(include_deleted=True))
 
 
+def can_see_statement(sid: int) -> bool:
+    with db.connect() as c:
+        s = c.execute("SELECT * FROM statements WHERE id = ?", (sid,)).fetchone()
+    return bool(s) and bool(filter_statements([dict(s)]))
+
+
+def can_see_account(aid: int) -> bool:
+    r = active()
+    return not r or aid not in set(r["hidden_accounts"])
+
+
+CAN_SEE = {"entry": can_see_entry, "txn": can_see_txn, "card": can_see_txn, "statement": can_see_statement,
+           "account": can_see_account}
+# yoldaki id → nesne türü. Bu uçlardaki her istek (okuma ve yazma) üyenin göremediği nesnede 404 alır; uç kendi
+# kontrolünü unutsa da (ör. gizli kaydı id ile silmek) middleware'de durur.
+PATH_TARGETS = [
+    (re.compile(r"/api/entries/(\d+)(?:/.*)?"), "entry"),
+    (re.compile(r"/api/card-transactions/(\d+)(?:/.*)?"), "txn"),
+    (re.compile(r"/api/statements/(\d+)(?:/.*)?"), "statement"),
+    (re.compile(r"/api/accounts/(\d+)(?:/.*)?"), "account"),
+    (re.compile(r"/api/(?:splits|donations/mark)/(entry|card)/(\d+)"), None),  # tür yolda
+]
+
+
+def visible(kind: str, oid: int | None) -> bool:
+    """Üye bu nesneyi görebilir mi? (sahip ve "Benim" defteri: her zaman; id yoksa denetlenecek bir şey yok)"""
+    if oid is None or not member():
+        return True
+    return CAN_SEE[kind](int(oid))
+
+
+def hidden_target(path: str) -> bool:
+    """Yol, üyenin göremediği (gizli kart/hesap, gizli işaretli) bir nesneyi mi gösteriyor?"""
+    for rx, kind in PATH_TARGETS:
+        m = rx.fullmatch(path)
+        if m:
+            k, oid = (m.group(1), m.group(2)) if kind is None else (kind, m.group(1))
+            return not visible(k, int(oid))
+    return False
+
+
+def filter_rules(rules_: list[dict]) -> list[dict]:
+    """Kategori kuralları satıcı adından öğrenilir (ör. gizli kartta sık geçen mağaza). Üyeye, yalnız göremediği
+    işlemlerle eşleşen kural gösterilmez: hem gizli kartta hem görünen yerde geçen kural kalır."""
+    if not active():
+        return rules_
+    from app.textnorm import normalize
+
+    with db.connect() as c:
+        txns = [dict(r) for r in c.execute(
+            "SELECT t.id, t.description, t.hidden, t.txn_type, s.card_no AS account FROM transactions t "
+            "JOIN statements s ON s.id = t.statement_id")]
+        ents = [dict(r) for r in c.execute("SELECT * FROM entries")]
+    seen_t = {t["id"] for t in filter_card_txns(txns)}
+    seen_e = {e["id"] for e in filter_entries(ents)}
+    shown = [normalize(t["description"] or "") for t in txns if t["id"] in seen_t]
+    shown += [normalize(e["description"] or "") for e in ents if e["id"] in seen_e]
+    secret = [normalize(t["description"] or "") for t in txns if t["id"] not in seen_t]
+    secret += [normalize(e["description"] or "") for e in ents if e["id"] not in seen_e]
+    if not secret:
+        return rules_
+
+    def hits(rx, texts):
+        return any(rx.search(t) for t in texts)
+
+    out = []
+    for r in rules_:
+        try:
+            rx = re.compile(r["pattern"])
+        except re.error:
+            out.append(r)
+            continue
+        if hits(rx, secret) and not hits(rx, shown):
+            continue
+        out.append(r)
+    return out
+
+
 def people() -> list[dict]:
     """Defterdeki kişiler (sahip + üyeler): kayıtlarda "kim ekledi" baş harfi için."""
     from app import system
