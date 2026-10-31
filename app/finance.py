@@ -909,6 +909,8 @@ def plan(months: int = 6, today: date | None = None) -> dict:
 
     dues = []
     for s in statements:
+        if s.get("source") == "excel":
+            continue
         if s["due_date"] and s["due_date"] >= today.isoformat() and not (
                 s["paid_amount"] is not None and money.diff_k(s["paid_amount"], s["total_debt"]) >= -1):
             dues.append({"date": s["due_date"], "account": s["card_no"], "bank": s["bank"],
@@ -944,7 +946,7 @@ def payables(today: date | None = None) -> list[dict]:
     latest = {st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     by_card = {st["card_no"]: st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     for st in statements:
-        if not st["due_date"]:
+        if not st["due_date"] or st.get("source") == "excel":  # kart Excel'inden üretilen ekstre: borç ve son ödeme kurgu
             continue
         status = _status(st["total_debt"], st["paid_amount"], st["due_date"], today)
         age = (today - date.fromisoformat(st["due_date"])).days
@@ -1525,12 +1527,12 @@ def net_worth(today: date | None = None) -> dict:
     accounts = [a for a in accounts if a["as_of"]]  # bakiyesi bilinmeyenler unknown_banks'ta
     wallets = [{"id": w["id"], "name": w["name"], "card_type": w["card_type"], "balance": w["current"]} for w in db.list_wallets()]
     # ekstresi olan her kredi kartı (hepsi ödenmiş olsa da): son ekstre + sonraki tahmini
-    latest = db.latest_card_statements(today.isoformat(), statements)
+    latest = db.latest_card_statements(today.isoformat(), statements, include_excel=True)
     est = {p["title"]: p for p in payables(today) if p["type"] == "estimate"}
     credit_cards = []
     for card_no, st in sorted(latest.items(), key=lambda kv: kv[1]["period_end"], reverse=True):
         title = f"{st['bank']} {card_no}"
-        unpaid = db.statement_remaining(st, today.isoformat())
+        unpaid = 0.0 if st.get("source") == "excel" else db.statement_remaining(st, today.isoformat())
         nxt = est.get(title)
         credit_cards.append({"title": title, "bank": st["bank"], "card_no": card_no, "last_period_end": st["period_end"],
                              "last_total": st["total_debt"], "last_due": st["due_date"], "paid_at": st["paid_at"],
