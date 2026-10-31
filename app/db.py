@@ -2379,6 +2379,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         seen.add(r["hash"])
     # hesabın son bakiyesi: dökümdeki en son hareketin bakiyesi (kayıtlar yazıldıktan sonra çapalanır; yeniden eskiye
     # sıralı dosyada günün son hareketi üstteki satır: bank_import.last_balance)
+    fit_overflowing_splits()  # elle girilen bölünmüş kayıt bankadaki (daha küçük) tutarı aldıysa
     from app.bank_import import last_balance
 
     lb = last_balance(rows)
@@ -2712,16 +2713,31 @@ def delete_debt(debt_id: int) -> bool:
         return c.execute("DELETE FROM debts WHERE id = ?", (debt_id,)).rowcount > 0
 
 
+class OverpayError(ValueError):
+    """Ödeme kalan borçtan fazla (ya da kayıt kapanmış): kullanıcıya gösterilecek Türkçe neden."""
+
+
 def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None) -> None:
     """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
-    entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz."""
+    entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz.
+    Kalandan fazla ödeme reddedilir (OverpayError): önce borç "kapandı" görünürken fazlası da akışa/bakiyeye giriyordu."""
     with connect() as c:
         d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
         if not d:
             raise KeyError(debt_id)
-        amt = amount if amount is not None else d["amount"] - d["paid_amount"]
-        if d["asset"] == "TRY":  # altın/döviz borcunda tutar miktardır (gram, adet): yuvarlanmaz
+        paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (debt_id,)).fetchone()[0]
+        left = d["amount"] - paid
+        try_ = d["asset"] == "TRY"
+        unit = "TL" if try_ else d["asset"]
+        if d["written_off_at"] or (money.le(left, 0) if try_ else left <= 1e-9):
+            raise OverpayError("Bu kayıt kapanmış; yeni ödeme yazılamaz")
+        amt = amount if amount is not None else left
+        if try_:  # altın/döviz borcunda tutar miktardır (gram, adet): yuvarlanmaz
             amt = money.money(amt)
+        if (money.gt(amt, left) if try_ else amt > left + 1e-9):
+            fmt = lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")  # noqa: E731
+            raise OverpayError(f"Kalan {fmt(left)} {unit}; {fmt(amt)} {unit} ödeme yazılamaz. Fazlası ayrı bir "
+                               f"{'alacak' if d['direction'] == 'borc' else 'borç'} kaydı olarak girilebilir.")
         c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id) VALUES (?, ?, ?, ?, ?)",
                   (debt_id, amt, on, entry_id, account_id))
         if entry_id:
@@ -2800,12 +2816,18 @@ def link_debt_movement(person: str | None, kind: str, amount: float, on: str, en
     open_ = [d for d in debts_ if d["direction"] == pay_dir and not d["settled_at"] and d["debt_date"] <= on]
     for d in open_:
         if money.eq(d["remaining"], amount):
-            pay_debt(d["id"], amount, on, entry_id)
+            try:
+                pay_debt(d["id"], amount, on, entry_id)
+            except OverpayError:
+                continue
             return "odeme", d
     # kısmi: kişinin TEK açık kaydı varsa, tutar kalandan azsa ve hareket açıkça borç hareketiyse (300'ün 250'si)
     if len(open_) == 1 and money.lt(amount, open_[0]["remaining"]) and (open_[0].get("split_id") or _says_debt(entry_id)):
         # (bölünmüş harcamanın payı: kişinin borcu belli, ondan gelen havale tahsilattır)
-        pay_debt(open_[0]["id"], amount, on, entry_id)
+        try:
+            pay_debt(open_[0]["id"], amount, on, entry_id)
+        except OverpayError:
+            return None
         return "odeme", open_[0]
     return None
 
@@ -3091,6 +3113,42 @@ def _parent_amount(c, target: str, pid: int) -> float:
         if not r or r["kind"] != "harcama":
             raise ValueError("Sadece harcama bölünebilir")
     return r["amount"]
+
+
+def fit_splits(target: str, pid: int, total: float) -> bool:
+    """Ana tutar alt kalemlerin toplamının altına indiyse (ör. bankadaki gerçek tutar elle girilenden az) alt kalemleri
+    orantılı küçült: ana satır eksiye düşmesin (I6). Kişi payı (alacak) da küçülür; tahsil edilmiş paydan aşağı
+    inemiyorsa dokunulmaz (False). Bölme yoksa ya da sığıyorsa True."""
+    col = "entry_id" if target == "entry" else "txn_id"
+    with connect() as c:
+        parts = rows(c.execute(f"SELECT s.*, d.person FROM splits s LEFT JOIN debts d ON d.id = s.debt_id "
+                               f"WHERE s.{col} = ? ORDER BY s.id", (pid,)))
+    used = sum(p["amount"] for p in parts)
+    if not parts or money.le(used, total):
+        return True
+    k = max(0, money.kurus(total))
+    shares = [int(money.kurus(p["amount"]) * k // max(1, money.kurus(used))) for p in parts]
+    shares[-1] += k - sum(shares)  # kuruş artığı son kaleme
+    new = [{"amount": sh / 100, "category": p["category"], "description": p["description"], "person": p.get("person")}
+           for p, sh in zip(parts, shares) if sh > 0]
+    try:
+        set_splits(target, pid, new, origin=parts[0].get("origin") or "manual")
+    except ValueError:
+        return False
+    return True
+
+
+def fit_overflowing_splits() -> list[tuple[str, int]]:
+    """Alt kalem toplamı ana tutarı aşan bütün bölünmüş kayıtlar (ana tutar sonradan düştü: bankadaki gerçek tutarla
+    birleşme, kumbara alımının gerçek fiyatı): alt kalemler orantılı küçültülür. Düzeltilenler."""
+    with connect() as c:
+        over = [("entry", r[0], r[1]) for r in c.execute(
+            "SELECT e.id, e.amount FROM entries e JOIN splits s ON s.entry_id = e.id GROUP BY e.id "
+            "HAVING ROUND(SUM(s.amount) * 100) > ROUND(e.amount * 100)")]
+        over += [("card", r[0], r[1]) for r in c.execute(
+            "SELECT t.id, t.amount FROM transactions t JOIN splits s ON s.txn_id = t.id GROUP BY t.id "
+            "HAVING ROUND(SUM(s.amount) * 100) > ROUND(t.amount * 100)")]
+    return [(t, pid) for t, pid, amt in over if fit_splits(t, pid, amt)]
 
 
 def set_splits(target: str, pid: int, parts: list[dict], origin: str = "manual") -> list[dict]:

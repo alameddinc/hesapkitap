@@ -303,6 +303,7 @@ def reconcile() -> dict:
                 used |= {k1, k2}
                 _merge(c, p, p["auto"])
                 out[p["auto"]] += 1
+    db.fit_overflowing_splits()  # birleşmede bankadaki tutar bölmelerin altına indiyse alt kalemler sığdırılır
     return out
 
 

@@ -86,6 +86,11 @@ async def _limit_error(request: Request, exc: limits.LimitError):
     return JSONResponse({"detail": str(exc)}, status_code=413)
 
 
+def _tl_tr(x: float) -> str:
+    """Hata metinleri için: 1.234,50 TL."""
+    return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " TL"
+
+
 def client_ip(request: Request) -> str:
     """Başlıklara yalnız güvenilir vekilden gelince inanılır (HESAPKITAP_TRUSTED_PROXIES; ayrıntı: app/netaddr.py)."""
     from app import netaddr
@@ -1148,7 +1153,8 @@ def patch_entry(entry_id: int, body: EntryPatch):
         _check_wallet(data)
     split_total = sum(p["amount"] for p in db.splits_map().get(("entry", entry_id), []))
     if "amount" in data and money.lt(data["amount"], split_total):
-        raise HTTPException(422, f"Bu kayıt bölünmüş ({split_total:.2f} alt kalem); tutar bundan az olamaz")
+        raise HTTPException(422, f"Bu kayıt bölünmüş: alt kalemlerin toplamı {_tl_tr(split_total)}. Tutar bundan az "
+                                 "olamaz; önce bölmeyi düzelt.")
     db.update_entry(entry_id, data)
     db.auto_link()
     return {"ok": True}
@@ -2880,6 +2886,11 @@ def create_debt(body: DebtIn):
 @app.patch("/api/debts/{did}")
 def patch_debt(did: int, body: DebtPatch):
     data = body.model_dump(exclude_unset=True)
+    if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
+        with db.connect() as c:
+            paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (did,)).fetchone()[0]
+        if paid and data["amount"] < paid - 1e-9:
+            raise HTTPException(422, f"Bu kaydın {_tl_tr(paid)}'si ödenmiş; tutar bundan az olamaz")
     for k in ("debt_date", "due_date"):
         if data.get(k):
             data[k] = data[k].isoformat()
@@ -2909,6 +2920,8 @@ def pay_debt(did: int, body: DebtPayIn):
         db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
+    except db.OverpayError as e:
+        raise HTTPException(422, str(e)) from e
     return {"ok": True}
 
 
