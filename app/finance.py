@@ -347,9 +347,13 @@ def _apply_splits(rows: list[dict]) -> list[dict]:
             out.append(r)
             continue
         used = sum(p["amount"] for p in parts)
-        out.append({**r, "amount": _round(r["amount"] - used), "split_total": _round(used), "original_amount": r["amount"]})
+        # güvenlik ağı (I6): alt kalemler ana tutarı aşıyorsa ana satır eksiye düşmez, alt kalemler oranla gösterilir
+        # (veri db.fit_overflowing_splits ile düzeltilir); toplam her zaman ana tutar
+        scale = r["amount"] / used if money.gt(used, r["amount"]) and used else 1.0
+        out.append({**r, "amount": _round(max(0.0, r["amount"] - used)), "split_total": _round(min(used, r["amount"])),
+                    "original_amount": r["amount"]})
         for p in parts:
-            child = {**r, "uid": f"{r['uid']}s{p['id']}", "amount": p["amount"], "category": p["category"],
+            child = {**r, "uid": f"{r['uid']}s{p['id']}", "amount": _round(p["amount"] * scale), "category": p["category"],
                      "description": f"{r['description']} · {p['description'] or p['category']}",
                      "split_of": r["uid"], "split_origin": p["origin"]}
             if p.get("debt_id"):  # ortak harcamada başkasının payı: gider değil, ona alacak (para senden çıktı)
