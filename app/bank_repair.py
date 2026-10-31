@@ -18,7 +18,9 @@ Denetim (2026-10-31, M2) düzeltmeleri de buradan onarılır:
 - aynı dönem PDF ve Excel olarak iki kez yüklenmiş hareketler ("duplicates": sonra yüklenen belgenin fazlası silinir;
   elle değiştirilmiş ya da bağlantılı kayda dokunulmaz),
 - yeniden eskiye sıralı dökümde günün ilk hareketinden alınmış hesap bakiyesi ("anchors"),
-- e-postadan gelmiş virmanın hesabı ("transfer_accounts": bakiyeye girmesi için own_transfers.account_id).
+- virmanlara hesap bilgisi (own_transfers.account_id). Dökümden gelen virman zaten çapanın içinde: bakiye değişmez
+  ("transfer_accounts"). Yalnız elle ya da e-posta bildirimiyle gelmiş ve hesabın çapasından SONRAKİ virman bakiyeye
+  girer ("transfer_balance", bakiye etkisiyle). Raporda her hesabın bakiyesi onarım öncesi/sonrası ("balances").
 
 Çalıştırma (önce yedek!):
     python -m app.bank_repair <kullanıcı-adı>            # kuru çalıştırma: ne değişeceğini yazar
@@ -200,7 +202,8 @@ def repair(apply: bool = False) -> dict:
     report = {"docs_read": [], "docs_unread": [], "docs_missing": [], "owner_names": [], "updated": [],
               "to_own_transfer": [], "cancelled": [], "skipped_edited": 0, "skipped_linked": 0, "paired": [], "missing": [], "restored": []}
     report["warnings"] = []
-    report.update(duplicates=[], anchors=[], transfer_accounts=[], overlap_skipped=0)
+    report.update(duplicates=[], anchors=[], transfer_accounts=[], transfer_balance=[], overlap_skipped=0)
+    before = {a["id"]: (a["name"], a["current"]) for a in db.list_accounts()}
     by_hash, docs = _document_rows(owners, report)
     if report["owner_names"] and not db.owner_names():  # dökümden öğrenilen sahip: kart sahipleri kişi kalsın
         owners[:] = [o for o in owners if o in report["owner_names"]]
@@ -330,19 +333,24 @@ def repair(apply: bool = False) -> dict:
                                           "now": f"{lb[1]:,.2f}"})
                 if apply:
                     c.execute("UPDATE accounts SET balance = ? WHERE id = ?", (lb[1], a["id"]))
-        # e-postadan gelmiş virman: hesabı (account_id) yoksa bakiyeye giremez
+        # virmanlara hesap bilgisi. Dökümden gelen virman çapanın içinde (bakiye değişmez); elle ya da e-posta
+        # bildirimiyle gelmiş ve çapadan sonraki virman bakiyeye girer (db._account_balance ile aynı kural)
         from app.bank_import import short_bank
 
-        names = {}
-        for r in c.execute("SELECT id, name, alias FROM accounts WHERE kind = 'banka'"):
+        names, as_of = {}, {}
+        for r in c.execute("SELECT id, name, alias, as_of FROM accounts WHERE kind = 'banka'"):
             names.setdefault(r["name"], r["id"])
+            as_of[r["id"]] = r["as_of"]
             if r["alias"]:
                 names.setdefault(r["alias"], r["id"])
         for o in [dict(x) for x in c.execute("SELECT * FROM own_transfers WHERE account_id IS NULL AND account IS NOT NULL")]:
             aid = names.get(short_bank(o["account"] or ""))
             if aid:
-                report["transfer_accounts"].append({"id": o["id"], "date": o["transfer_date"], "amount": o["amount"],
-                                                    "was": o["description"], "now": f"hesap #{aid}"})
+                counts = ((not o["import_hash"] or o["import_hash"].startswith("mail:")) and as_of.get(aid)
+                          and o["transfer_date"] > as_of[aid])
+                item = {"id": o["id"], "date": o["transfer_date"], "amount": o["amount"], "was": o["description"],
+                        "now": f"hesap #{aid}", "effect": o["amount"] if counts else 0.0}
+                report["transfer_balance" if counts else "transfer_accounts"].append(item)
                 if apply:
                     c.execute("UPDATE own_transfers SET account_id = ? WHERE id = ?", (aid, o["id"]))
         # iptal çiftinin kendi hesabına giden yarısı eskiden own_transfers'a yazılmış olabilir
@@ -365,6 +373,10 @@ def repair(apply: bool = False) -> dict:
     # ekstrelerin ödendi işaretleri: bütün kart ödemelerinden yeniden (eski algoritma aynı ödemeyi birden çok ekstreye
     # yazıyordu, yükleme sırasına bağlıydı); elle işaretlenenlere dokunulmaz
     report["statements"] = db.reassign_statement_payments(apply=apply)["changed"]
+    after = {a["id"]: a["current"] for a in db.list_accounts()}
+    report["balances"] = [{"account": name, "before": cur, "after": after.get(aid),
+                           "diff": round((after.get(aid) or 0) - (cur or 0), 2) if cur is not None else None}
+                          for aid, (name, cur) in before.items()]
     return report
 
 
@@ -378,13 +390,19 @@ def _print(rep: dict, apply: bool) -> None:
                        ("missing", "dökümde var, kaydı yok → eklendi"),
                        ("duplicates", "aynı hareket iki belgeden (PDF + Excel) → fazlası silinir"),
                        ("anchors", "hesap bakiyesi (yeniden eskiye sıralı döküm) → günün son hareketi"),
-                       ("transfer_accounts", "e-postadan gelen virmanın hesabı → bakiyeye girer")):
-        rows = rep[key]
-        print(f"\n{title}: {len(rows)} kayıt, toplam {sum(r['amount'] for r in rows):,.2f}")
+                       ("transfer_accounts", "virmanlara hesap bilgisi eklenir (dökümden gelmiş; bakiye değişmez)"),
+                       ("transfer_balance", "virmanlara hesap bilgisi eklenir (elle/e-postadan, çapadan sonra; bakiyeye girer)")):
+        rows = rep.get(key, [])
+        if key.startswith("transfer_"):
+            net = sum(r.get("effect", 0.0) for r in rows)
+            print(f"\n{title}: {len(rows)} kayıt, bakiye etkisi {net:+,.2f}")
+        else:
+            print(f"\n{title}: {len(rows)} kayıt, toplam tutar {sum(r['amount'] for r in rows):,.2f}")
         for r in rows:
             extra = f" → {r['now']!r}" if r.get("now") else ""
             why = f"  [{r['why']}]" if r.get("why") else ""
-            print(f"  #{r['id'] or '-'} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:60]}{extra}{why}")
+            eff = f"  bakiye etkisi {r['effect']:+,.2f}" if key == "transfer_balance" else ""
+            print(f"  #{r['id'] or '-'} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:60]}{extra}{why}{eff}")
     print(f"\naçıklama/kişi düzeltilen: {len(rep['updated'])}")
     for r in rep["updated"]:
         print(f"  #{r['id']} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:45]!r} → {r['now']!r} {r['fields']}")
@@ -400,6 +418,13 @@ def _print(rep: dict, apply: bool) -> None:
     print(f"\nUYARI (gönderenin mesajı kayboluyor): {len(rep['warnings'])}")
     for w in rep["warnings"]:
         print("  " + w)
+    bal = rep.get("balances", [])
+    print(f"\nHESAP BAKİYELERİ (onarım öncesi → sonrası{', kopya üzerinde' if not apply else ''}):")
+    for b in bal:
+        fmt = lambda v: "—" if v is None else f"{v:,.2f}"  # noqa: E731
+        mark = "  " if not b["diff"] else "≠ "
+        print(f"  {mark}{b['account'][:28]:28} {fmt(b['before']):>14} → {fmt(b['after']):>14}"
+              + (f"  (fark {b['diff']:+,.2f})" if b["diff"] else ""))
     print(f"\ndokunulmayan: elle değiştirilmiş {rep['skipped_edited']}, bağlantılı {rep['skipped_linked']}; "
           f"başka belgeden zaten yüklü (çakışma, eklenmedi) {rep.get('overlap_skipped', 0)}")
 
