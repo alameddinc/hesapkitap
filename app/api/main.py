@@ -3689,10 +3689,21 @@ def payables():
     return finance.payables()
 
 
+class StatementPayIn(PayIn):
+    account_id: int | None = None  # ödemenin çıktığı banka/nakit hesabı (isteğe bağlı)
+
+
 @app.post("/api/statements/{sid}/pay")
-def pay_statement(sid: int, body: PayIn):
-    db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat())
-    return {"ok": True}
+def pay_statement(sid: int, body: StatementPayIn):
+    """Ekstre ödendi. account_id verilirse o hesaptan çıkan kart ödemesi kaydı (gider değil, bakiye düşer); dökümde aynı
+    ödeme gelince birleşir. Dönüş: {ok, card_payment_id, linked} (linked: dökümdeki mevcut ödemeye bağlandı)."""
+    if not any(x["id"] == sid for x in db.list_statements()):
+        raise HTTPException(404, "Ekstre bulunamadı")
+    try:
+        r = db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat(), body.account_id)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"ok": True, **r}
 
 
 @app.delete("/api/statements/{sid}/pay")
