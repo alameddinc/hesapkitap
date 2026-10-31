@@ -5,6 +5,11 @@ services:
     image: ghcr.io/alameddinc/hesapkitap:latest
     container_name: hesapkitap
     restart: unless-stopped
+    logging:  # günlük döndürme: en çok 5 × 10 MB (KVKK: süresiz saklanmasın; deploy/logging.md)
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       - TZ=Europe/Istanbul
     volumes:
