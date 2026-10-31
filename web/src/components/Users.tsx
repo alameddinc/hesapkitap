@@ -184,7 +184,7 @@ function DeletedAccounts() {
   const [term, setTerm] = useState("");
   const list = useQuery({
     queryKey: ["admin-deleted", term], enabled: open,
-    queryFn: () => call<{ records: DeletedRow[]; keep_days: number }>(`/api/admin/deleted${term ? `?email=${encodeURIComponent(term)}` : ""}`, "GET"),
+    queryFn: () => call<{ records: DeletedRow[]; keep_days: number }>("/api/admin/deleted", "POST", { email: term || null }),
   });
   const rows = list.data?.records ?? [];
   const warned = rows.filter((r) => r.warnings.length).length;
