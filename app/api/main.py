@@ -114,6 +114,34 @@ async def _http_error(request: Request, exc: StarletteHTTPException):
     return JSONResponse({"detail": detail, **extra}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
 
+@app.exception_handler(auth.Busy)
+async def _auth_busy(request: Request, exc: auth.Busy):
+    return JSONResponse({"detail": "Sunucu şu an çok yoğun; birkaç saniye sonra tekrar dene."}, status_code=503,
+                        headers={"Retry-After": "5"})
+
+
+def _attempt_gate(request: Request) -> None:
+    """Şifre hesabı (PBKDF2) gerektiren kimliksiz uçlar: IP başı deneme sınırı (sonuçtan bağımsız, S18)."""
+    if auth.attempt_limited(client_ip(request)):
+        raise HTTPException(429, "Bu bağlantıdan çok fazla deneme yapıldı. 15 dakika sonra tekrar dene.")
+
+
+def _signup_daily_full() -> bool:
+    """Hazır sürüm: sunucu geneli günlük yeni hesap sınırı (toplu sahte hesap; HESAPKITAP_SIGNUP_DAILY, varsayılan
+    300; 0 = sınırsız). Kendi sunucusunda yok."""
+    if not plans.hosted():
+        return False
+    cap = int(os.environ.get("HESAPKITAP_SIGNUP_DAILY", "300"))
+    if not cap:
+        return False
+    with system.connect() as c:
+        n = c.execute("SELECT COUNT(*) FROM users WHERE created_at >= date('now')").fetchone()[0]
+    return n >= cap
+
+
+SIGNUP_FULL = "Bugün çok sayıda yeni hesap açıldı; kayıt yarın yeniden açılacak. Davet kodun varsa onunla kayıt olabilirsin."
+
+
 @app.exception_handler(limits.LimitError)
 async def _limit_error(request: Request, exc: limits.LimitError):
     """Kaynak sınırı (app/limits.py) hangi uçta aşılırsa aşılsın anlamlı Türkçe 413."""
@@ -536,6 +564,7 @@ def login(body: LoginIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    _attempt_gate(request)
     acct = auth.account_key(body.username)
     if auth.account_locked(acct):  # IP'den bağımsız: dağıtık deneme de hesabı geçici kilitler
         raise HTTPException(429, "Bu hesap için çok fazla hatalı deneme yapıldı. 15 dakika sonra tekrar dene.")
@@ -747,6 +776,8 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
             raise HTTPException(409, "consent_required")
         if _signup_limited(ip):
             raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
+        if _signup_daily_full():
+            raise HTTPException(429, SIGNUP_FULL)
         # şifresiz hesap olmasın (boş şifre eski tek kullanıcılı girişe düşerdi): kimsenin bilmediği rastgele şifre;
         # isterse "Şifremi unuttum" ile kendi şifresini koyar
         u = auth.create_user(who["email"], secrets.token_urlsafe(32))
@@ -806,6 +837,7 @@ def reset_password(body: ResetIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    _attempt_gate(request)
     try:
         auth._check_strength(body.password)
     except ValueError as e:
@@ -831,11 +863,14 @@ def register(body: RegisterIn, request: Request, response: Response):
     ip = client_ip(request)
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    _attempt_gate(request)
     if not _consent_ok(body.consent):
         raise HTTPException(422, "Devam etmek için iki onay kutusunu da işaretle")
     if not body.code and plans.open_signup():
         if _signup_limited(ip):
             raise HTTPException(429, "Bu bağlantıdan çok fazla hesap açıldı. Bir saat sonra tekrar dene.")
+        if _signup_daily_full():
+            raise HTTPException(429, SIGNUP_FULL)
         from app import email_verify
 
         if email_verify.required():  # hazır sürüm: e-posta koduyla doğrulanmadan oturum açılmaz (app/email_verify.py)

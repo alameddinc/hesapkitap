@@ -105,6 +105,53 @@ def _check_quota() -> None:
                            "istemezsen Ayarlar'dan kendi Gemini anahtarını girebilirsin.")
 
 
+class DailyLimitError(ReceiptError):
+    """Kullanıcı başı günlük yapay zekâ çağrısı sınırı (S18): istemci elle girişe yönlendirir."""
+
+    def fields(self) -> dict:
+        return {"manual": True, "daily_limit": True}
+
+
+def daily_cap() -> int:
+    """HESAPKITAP_AI_DAILY (0 = sınırsız). Varsayılan: hazır sürümde 150 çağrı/gün, kendi sunucusunda sınırsız."""
+    from app import plans
+
+    v = os.environ.get("HESAPKITAP_AI_DAILY")
+    return int(v) if v and v.strip().isdigit() else (150 if plans.hosted() else 0)
+
+
+def _daily_user() -> dict | None:
+    """Sınır kime uygulanır: ortak anahtarı kullanan yönetici-olmayan kullanıcı (kendi anahtarı olan sayılmaz)."""
+    from app import db
+
+    u = db.current_user()
+    if not u or u.get("role") == "admin" or not u.get("id") or config.own_ai_key():
+        return None
+    return u
+
+
+def _daily_gate() -> None:
+    """Çağrıdan önce: bugünkü çağrı sayısı sınırdaysa DailyLimitError; değilse sayar (başarısız çağrı da maliyettir)."""
+    from datetime import date as _date
+
+    from app import system
+
+    cap, u = daily_cap(), _daily_user()
+    if not cap or not u:
+        return
+    day = _date.today().isoformat()
+    with system.connect() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS ai_daily (user_id INTEGER NOT NULL, day TEXT NOT NULL, "
+                  "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, day))")
+        r = c.execute("SELECT n FROM ai_daily WHERE user_id = ? AND day = ?", (u["id"], day)).fetchone()
+        if r and r[0] >= cap:
+            raise DailyLimitError("Bugünkü yapay zekâ okuma sınırına ulaştın; yarın yeniden açılır. Bu arada kaydı "
+                                  "elle ekleyebilirsin.")
+        c.execute("INSERT INTO ai_daily (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT(user_id, day) DO UPDATE SET "
+                  "n = n + 1", (u["id"], day))
+        c.execute("DELETE FROM ai_daily WHERE day < date(?, '-7 days')", (day,))
+
+
 def _count_usage() -> None:
     from app import system
 
@@ -186,6 +233,7 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
     docs = [(data, mime), *(more or [])]
     if sum(len(d) for d, _ in docs) > MAX_BYTES:
         raise ReceiptError("Dosya çok büyük (en fazla 15 MB)")
+    _daily_gate()
     model = model or config.get("GEMINI_MODEL") or DEFAULT_MODEL
     body = {
         "contents": [{"parts": [
