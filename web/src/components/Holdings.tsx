@@ -13,7 +13,8 @@ interface Item {
   acquired: string | null; cost: number | null; gain: number | null; gain_pct: number | null; note: string | null; is_jewelry: number;
   estimated: number;
 }
-interface Data { items: Item[]; self_total: number; family_total: number; updated: string | null }
+interface GainTotals { value: number; cost: number; gain: number; gain_pct: number | null; count: number; with_cost: number }
+interface Data { items: Item[]; self_total: number; family_total: number; updated: string | null; totals?: { self: GainTotals; family: GainTotals } }
 interface ZakatMeta { people: { id: number; name: string }[]; kinds: Record<string, { label: string; unit: string }> }
 
 /** Altın, döviz ve elde tutulan para: bugünkü değer, aldığından beri kazanç. Zekât sayfasıyla aynı liste. */
@@ -28,8 +29,10 @@ export default function Holdings() {
   }), () => ui.toast("Miktar güncellendi"));
   const d = q.data;
   if (!d) return null;
-  const cost = d.items.filter((i) => i.is_self && i.cost).reduce((s, i) => s + (i.cost ?? 0), 0);
-  const gain = d.items.filter((i) => i.is_self && i.gain != null).reduce((s, i) => s + (i.gain ?? 0), 0);
+  // alıştan beri: sunucu totals.self (cost ve gain aynı kümeden: alış bedeli ve bugünkü değeri bilinen kalemler); eski sunucuda satırlar
+  const ts = d.totals?.self;
+  const cost = ts ? ts.cost : d.items.filter((i) => i.is_self && i.cost).reduce((s, i) => s + (i.cost ?? 0), 0);
+  const gain = ts ? ts.gain : d.items.filter((i) => i.is_self && i.gain != null).reduce((s, i) => s + (i.gain ?? 0), 0);
 
   return (
     <section className="card p-4">

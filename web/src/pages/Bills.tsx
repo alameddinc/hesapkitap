@@ -22,9 +22,11 @@ export interface BillSeries {
   last: { month: string; amount: number } | null;
   max: { month: string; amount: number } | null;
   vs_prev_month: Change | null;
+  average_12?: number; // sunucu 77a6c75: son ödemeli aydan geriye 12 ayın ödemeli aylarının ortalaması
   vs_last_year: Change | null;
 }
-interface BillSummary { providers: BillSeries[]; categories: BillSeries[]; window: { start: string; end: string } }
+/** overall (sunucu 77a6c75): tüm faturaların genel toplamı, son ay, değişimler, average_12 — istemci toplamaz */
+interface BillSummary { providers: BillSeries[]; categories: BillSeries[]; overall?: BillSeries | null; window: { start: string; end: string } }
 
 const fetchSummary = (until: string) => send<BillSummary>(`/api/bills/summary?months=24&until=${until}`);
 
@@ -57,17 +59,20 @@ export default function Bills() {
   const d = q.data;
   const unpaid = (pay.data ?? []).filter((p) => p.type === "bill" && p.status !== "odendi");
 
-  // toplam: kategorilerin aylık toplamı (her ödeme bir kez)
+  // genel rakamlar sunucunun overall'ından; eski sunucuda kategorilerin aylık toplamı (her ödeme bir kez)
+  const o = d?.overall;
   const totalOf = (ym: string) => (d?.categories ?? []).reduce((a, c) => a + (c.months.find((m) => m.month === ym)?.amount ?? 0), 0);
-  const lastMonth = d ? [...new Set(d.categories.flatMap((c) => c.months.filter((m) => m.count).map((m) => m.month)))].sort().pop() ?? null : null;
-  const lastTotal = lastMonth ? totalOf(lastMonth) : 0;
-  const prevTotal = lastMonth ? totalOf(addMonths(lastMonth, -1)) : 0;
-  const yearAgo = lastMonth ? totalOf(addMonths(lastMonth, -12)) : 0;
+  const lastMonth = o !== undefined ? o?.last?.month ?? null : d ? [...new Set(d.categories.flatMap((c) => c.months.filter((m) => m.count).map((m) => m.month)))].sort().pop() ?? null : null;
+  const amountOf = (ym: string) => (o ? o.months.find((m) => m.month === ym)?.amount ?? 0 : totalOf(ym));
+  const lastTotal = o?.last?.amount ?? (lastMonth ? totalOf(lastMonth) : 0);
+  const yearAgo = o ? o.vs_last_year?.amount ?? 0 : lastMonth ? totalOf(addMonths(lastMonth, -12)) : 0;
   const change = (now: number, before: number, month: string): Change | null =>
     before > 0 ? { month, amount: before, diff: now - before, pct: Math.round(((now - before) / before) * 1000) / 10 } : null;
+  const vsPrev = o ? o.vs_prev_month : lastMonth ? change(lastTotal, totalOf(addMonths(lastMonth, -1)), addMonths(lastMonth, -1)) : null;
+  const vsYear = o ? o.vs_last_year : lastMonth ? change(lastTotal, yearAgo, addMonths(lastMonth, -12)) : null;
   const last12 = lastMonth ? Array.from({ length: 12 }, (_, i) => addMonths(lastMonth, -i)) : [];
-  const paid12 = last12.filter((m) => totalOf(m) > 0);
-  const avg12 = paid12.length ? paid12.reduce((a, m) => a + totalOf(m), 0) / paid12.length : 0;
+  const paid12 = last12.filter((m) => amountOf(m) > 0); // yalnız alt satırdaki "N ay" sayısı için
+  const avg12 = o?.average_12 ?? (paid12.length ? paid12.reduce((a, m) => a + totalOf(m), 0) / paid12.length : 0);
   const detail = sel && d ? (sel.kind === "provider" ? d.providers : d.categories).find((x) => x.name === sel.name) : null;
 
   return (
@@ -91,12 +96,12 @@ export default function Bills() {
           <div className="card p-3 sm:p-4">
             <div className="text-xs text-stone-500 dark:text-stone-400">{monthYear(lastMonth)} faturaları</div>
             <div className="mt-1 text-lg font-semibold tabular-nums sm:text-xl">{tl(lastTotal)}</div>
-            <div className="mt-0.5"><ChangeTag c={change(lastTotal, prevTotal, addMonths(lastMonth, -1))} /></div>
+            <div className="mt-0.5"><ChangeTag c={vsPrev} /></div>
           </div>
           <div className="card p-3 sm:p-4">
             <div className="text-xs text-stone-500 dark:text-stone-400">Geçen yıl {monthYear(addMonths(lastMonth, -12))}</div>
             <div className="mt-1 text-lg font-semibold tabular-nums sm:text-xl">{yearAgo > 0 ? tl(yearAgo) : "—"}</div>
-            <div className="mt-0.5"><ChangeTag c={change(lastTotal, yearAgo, addMonths(lastMonth, -12))} what="geçen yıla göre" /></div>
+            <div className="mt-0.5"><ChangeTag c={vsYear} what="geçen yıla göre" /></div>
           </div>
           <div className="card p-3 sm:p-4">
             <div className="text-xs text-stone-500 dark:text-stone-400">Aylık ortalama</div>
