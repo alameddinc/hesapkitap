@@ -436,6 +436,7 @@ MIGRATIONS = [
     ("entries", "bill_provider", "TEXT"),       # dökümdeki fatura tahsilatı: kurum (Vodafone, İGDAŞ…) — Faturalar özeti
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
     ("own_transfers", "note", "TEXT"),          # kullanıcının notu
+    ("own_transfers", "account_id", "INTEGER"),  # dökümün hesabı: e-postadan gelen virman çapadan sonra bakiyeye girer
     ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
     ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)
     ("card_payments", "statement_id", "INTEGER"), # elle "ödendi" denen ekstre (POST /api/statements/{id}/pay)
@@ -2001,13 +2002,14 @@ def _pairs_own_transfer(amount: float, day: str, desc: str, owners: list[str] | 
 
 
 def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, import_hash: str | None,
-                     owners: list[str] | None = None) -> None:
+                     owners: list[str] | None = None, account_id: int | None = None) -> None:
     """Kendi hesapları arası aktarım kaydı: açıklama temiz (yön, bankalar, gönderenin mesajı), ham metin raw'da."""
     from app.bank_import import own_label
 
-    c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash, raw) "
-              "VALUES (?, ?, ?, ?, ?, ?)", (day, amount, account, own_label(raw or "", amount, account, owners)[:500],
-                                            import_hash, (raw or "")[:500]))
+    c.execute("INSERT OR IGNORE INTO own_transfers (transfer_date, amount, account, description, import_hash, raw, account_id) "
+              "VALUES (?, ?, ?, ?, ?, ?, ?)", (day, money.money(amount), account,
+                                               own_label(raw or "", amount, account, owners)[:500], import_hash,
+                                               (raw or "")[:500], account_id))
 
 
 def update_own_transfer(tid: int, description: str | None = None, note: str | None = None) -> dict | None:
@@ -2081,8 +2083,61 @@ def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:
     return moved
 
 
+def import_overlaps(rows: list[dict], acc_id: int | None, account: str = "", seen: set | None = None) -> dict:
+    """Aynı hesabın aynı hareketi başka biçimde (PDF ↔ Excel/CSV) zaten yüklenmiş mi? Parmak izi tutmasa da aynı gün,
+    aynı tutar ve yönde, dökümden gelmiş kayıt varsa çakışma sayılır (iki kez sayılmasın). Sayım çokluğa göre: o gün o
+    tutarda kayıtlı hareket sayısından, bu belgede parmak iziyle zaten tanınanlar düşülür (eş satırlar korunur).
+    {"rows": belgedeki çakışan satır sıraları, "count", "from", "to", "message"}."""
+    from collections import Counter
+
+    empty = {"rows": set(), "count": 0, "from": None, "to": None, "message": None}
+    if not acc_id or not rows:
+        return empty
+    if seen is None:
+        with connect() as c:
+            seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
+                                            "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL "
+                                            "UNION SELECT import_hash FROM card_payments WHERE import_hash IS NOT NULL")}
+    days = [r["date"] for r in rows if r.get("date")]
+    lo, hi = min(days), max(days)
+    doc = "import_hash IS NOT NULL AND import_hash NOT LIKE 'mail:%' AND import_hash NOT LIKE 'dekont:%'"
+    have: Counter = Counter()
+    with connect() as c:
+        for d, k, amt in c.execute(f"SELECT entry_date, kind, amount FROM entries WHERE account_id = ? AND {doc} "
+                                   "AND entry_date BETWEEN ? AND ?", (acc_id, lo, hi)):
+            have[(d, money.kurus(amt if k == "gelir" else -amt))] += 1
+        for d, amt in c.execute(f"SELECT pay_date, amount FROM card_payments WHERE account_id = ? AND {doc} "
+                                "AND pay_date BETWEEN ? AND ?", (acc_id, lo, hi)):
+            have[(d, money.kurus(-amt))] += 1
+        for d, amt in c.execute(f"SELECT transfer_date, amount FROM own_transfers WHERE {doc} AND (account_id = ? "
+                                "OR (account_id IS NULL AND account = ?)) AND transfer_date BETWEEN ? AND ?",
+                                (acc_id, account or "", lo, hi)):
+            have[(d, money.kurus(amt))] += 1
+    key = lambda r: (r["date"], money.kurus(r["amount"]))  # noqa: E731
+    for r in rows:  # bu belgede parmak iziyle tanınanlar (tekrar) o günün kayıtlı hareketlerinden biridir
+        if r.get("amount") is not None and (r["hash"] in seen or r.get("alt_hash") in seen):
+            have[key(r)] -= 1
+    out = set()
+    for i, r in enumerate(rows):
+        if r.get("amount") is None or r["hash"] in seen or r.get("alt_hash") in seen or str(r["hash"]).startswith("mail:"):
+            continue
+        if have[key(r)] > 0:
+            have[key(r)] -= 1
+            out.add(i)
+    if not out:
+        return empty
+    ds = sorted(rows[i]["date"] for i in out)
+    msg = (f"Bu hesabın {_tr_day(ds[0])}–{_tr_day(ds[-1])} aralığındaki {len(out)} hareket başka bir belgeden (ör. aynı "
+           "dönemin PDF'i ya da Excel'i) zaten yüklü: aynı gün ve tutarla kayıtlı olduğu için tekrar eklenmedi.")
+    return {"rows": out, "count": len(out), "from": ds[0], "to": ds[-1], "message": msg}
+
+
+def _tr_day(d: str) -> str:
+    return f"{d[8:10]}.{d[5:7]}.{d[:4]}"
+
+
 def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | None = None, account_id: int | None = None,
-                     iban: str | None = None, new_account: bool = False) -> dict:
+                     iban: str | None = None, new_account: bool = False, check_overlap: bool = True) -> dict:
     """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner.
     account: dökümün bankası (metin); account_id: kullanıcının seçtiği hesap (yoksa IBAN / banka adıyla bulunur)."""
     import re as _re
@@ -2111,8 +2166,17 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     with connect() as c:
         people |= {n for (n,) in c.execute("SELECT DISTINCT counterparty FROM entries WHERE counterparty IS NOT NULL")}
     # elle girilenle kesin eşleşme için: bu dökümdeki diğer yeni satırlar (aynı tutarda ikinci satır varsa sorulur)
+    for x in rows:  # eski biçim parmak iziyle yüklenmiş hareket: kayıtlı izi kullan (tekrar sayılır, belge bağı korunur)
+        if x["hash"] not in seen and x.get("alt_hash") in seen:
+            x["hash"] = x["alt_hash"]
     batch = [x for x in rows if x.get("type") in ("gelir", "gider") and x.get("amount") is not None and x["hash"] not in seen]
-    for r in rows:
+    overlap = import_overlaps(rows, acc_id, account, seen) if check_overlap else import_overlaps([], None)
+    if overlap["count"]:
+        stats["cakisma"] = overlap["count"]
+        stats["uyari"] = overlap["message"]
+    for i_row, r in enumerate(rows):
+        if i_row in overlap["rows"]:  # başka biçimde (PDF ↔ Excel) zaten yüklenmiş hareket: iki kez sayılmaz
+            continue
         # dekontla önceden eklenmiş aynı işlem: dökümdeki satırla birleşir (iki kez sayılmaz)
         if acc_id and r["hash"] not in seen and r.get("amount") is not None:
             with connect() as c:
@@ -2147,13 +2211,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                     c.execute("DELETE FROM own_transfers WHERE import_hash LIKE 'mail:%' AND ROUND(amount * 100) = ? "
                               "AND transfer_date BETWEEN date(?, '-2 days') AND date(?, '+2 days')",
                               (money.kurus(r["amount"]), r["date"], r["date"]))
-                add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners)
+                add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
             continue
         if r["type"] == "gider" and _pairs_own_transfer(abs(r["amount"]), r["date"], r["description"], owners, account):
             # karşılığı kendi başka hesabına giriş olarak zaten var (ör. Halkbank → VakıfBank): harcama değil, virman
             stats["virman"] += 1
             with connect() as c:
-                add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners)
+                add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
             seen.add(r["hash"])
             continue
         if r["type"] == "gider" and match_card_payment(abs(r["amount"]), r["date"]):
@@ -2286,10 +2350,13 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             stats["borc_hareketi"] = stats.get("borc_hareketi", 0) + 1
         stats[kind] += 1
         seen.add(r["hash"])
-    # hesabın son bakiyesi: dökümdeki en son satırın bakiyesi (kayıtlar yazıldıktan sonra çapalanır)
-    with_bal = [(r["date"], i, r["balance"]) for i, r in enumerate(rows) if r.get("balance") is not None]
-    if with_bal and acc_id:  # (dekontlar bu yola girmez: app/dekont.py, bakiyeye dokunmaz)
-        d_, _, bal = max(with_bal)
+    # hesabın son bakiyesi: dökümdeki en son hareketin bakiyesi (kayıtlar yazıldıktan sonra çapalanır; yeniden eskiye
+    # sıralı dosyada günün son hareketi üstteki satır: bank_import.last_balance)
+    from app.bank_import import last_balance
+
+    lb = last_balance(rows)
+    if lb and acc_id:  # (dekontlar bu yola girmez: app/dekont.py, bakiyeye dokunmaz)
+        d_, bal = lb
         with connect() as c:
             acc_name = c.execute("SELECT name FROM accounts WHERE id = ?", (acc_id,)).fetchone()[0]
         set_account_balance(acc_name, bal, d_, source="dokum")
@@ -3058,11 +3125,16 @@ def _account_balance(c, a: dict) -> float | None:
     flows = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) FROM entries
                          WHERE account_id = ? AND skipped = 0 AND (entry_date > ? OR (entry_date = ? AND id > ?))""",
                       (a["id"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0)).fetchone()[0]
-    # elle girilmiş kart ekstresi ödemesi (gider değil, hesaptan para çıktı); dökümden gelenler çapanın içinde
-    cards = c.execute("""SELECT COALESCE(SUM(amount), 0) FROM card_payments WHERE account_id = ? AND import_hash IS NULL
+    # elle girilmiş ya da e-posta bildiriminden gelmiş kart ekstresi ödemesi ve virman (gider değil, hesaptan para çıktı
+    # ya da girdi); dökümden gelenler çapanın içinde (döküm gelince bildirim kayıtları silinir)
+    cards = c.execute("""SELECT COALESCE(SUM(amount), 0) FROM card_payments WHERE account_id = ?
+                         AND (import_hash IS NULL OR import_hash LIKE 'mail:%')
                          AND (pay_date > ? OR (pay_date = ? AND COALESCE(created_at, '') > COALESCE(?, '')))""",
                       (a["id"], a["as_of"], a["as_of"], a.get("updated_at"))).fetchone()[0]
     flows -= cards
+    flows += c.execute("""SELECT COALESCE(SUM(amount), 0) FROM own_transfers WHERE account_id = ?
+                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%') AND transfer_date > ?""",
+                       (a["id"], a["as_of"])).fetchone()[0]
     debt = 0.0
     for d in debt_rows():
         if d.get("account_id") == a["id"] and d["date"] > a["as_of"] and d["step"] != "vazgecildi":
