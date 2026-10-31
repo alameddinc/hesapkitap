@@ -37,6 +37,7 @@ CAPABILITIES = (
     "verification",           # belge verification alanları, belge_dogrulanamadi, documents/{id}/confirm
     "inbox_documents",        # Gelen kutusu kind dokum|ekstre, /api/inbox/{id}/import ve /file
     "cards_summary",          # GET /api/cards/summary; /api/transactions?card=
+    "universal_links",        # davet link'i https://<adres>/davet/<kod> (+ web_link eski biçim)
 )
 
 

@@ -667,14 +667,17 @@ def _public_base(request: Request) -> str:
 
 
 def _invite_out(inv: dict, request: Request) -> dict:
-    """Davet + bağlantıları. link: web (telefonda uygulama yüklüyse ileride evrensel bağlantı), QR'a bu yazılır;
-    app_link: mobil uygulamanın derin bağlantısı (HESAPKITAP_APP_SCHEME, varsayılan hesapkitap)."""
+    """Davet + bağlantıları. link: https://<dış adres>/davet/<kod> — telefonda uygulama yüklüyse evrensel bağlantı
+    (iOS apple-app-site-association, Android assetlinks.json) uygulamayı açar, yoksa web kayıt sayfasına yönlenir; QR'a
+    bu yazılır. web_link: eski biçim (#/kayit?kod=, hâlâ çalışır). app_link: mobil derin bağlantı (HESAPKITAP_APP_SCHEME,
+    varsayılan hesapkitap)."""
     from app import book
 
     code = inv["code"]
     scheme = os.environ.get("HESAPKITAP_APP_SCHEME", "hesapkitap")
-    out = {**inv, "link": f"{_public_base(request)}/#/kayit?kod={code}", "app_link": f"{scheme}://kayit?kod={code}",
-           "kind": "book" if inv.get("member_of") else "account"}
+    base = _public_base(request)
+    out = {**inv, "link": f"{base}/davet/{code}", "web_link": f"{base}/#/kayit?kod={code}",
+           "app_link": f"{scheme}://kayit?kod={code}", "kind": "book" if inv.get("member_of") else "account"}
     if inv.get("member_of"):
         out["role_label"] = book.ROLE_LABELS.get(inv.get("book_role") or "editor")
     return out
@@ -5231,6 +5234,42 @@ def backup_download(name: str):
     if name not in {b["name"] for b in backup.list_backups()}:
         raise HTTPException(404, errors.GENERIC[404])
     return FileResponse(os.path.join(backup.backup_dir(), name), filename=name, media_type="application/octet-stream")
+
+
+# ---------------------------------------------------------------- evrensel bağlantı (davet → uygulama)
+
+IOS_APP_ID = os.environ.get("HESAPKITAP_IOS_APP_ID", "D78HMKA7Z8.com.alameddinc.hesapkitap")
+ANDROID_PACKAGE = os.environ.get("HESAPKITAP_ANDROID_PACKAGE", "com.alameddinc.hesapkitap")
+
+
+@app.get("/.well-known/apple-app-site-association", include_in_schema=False)
+def apple_app_site_association():
+    """iOS evrensel bağlantı: /davet/* uygulamayı açar (hash rotası #/kayit evrensel bağlantıda eşleşmez)."""
+    body = {"applinks": {"apps": [], "details": [{"appIDs": [IOS_APP_ID], "appID": IOS_APP_ID, "paths": ["/davet/*"],
+                                                    "components": [{"/": "/davet/*", "comment": "davet bağlantısı"}]}]}}
+    return JSONResponse(body, headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/.well-known/assetlinks.json", include_in_schema=False)
+def android_assetlinks():
+    """Android App Links: HESAPKITAP_ANDROID_SHA256 (Play Console → Uygulama imzalama, virgülle birden çok) yoksa 404."""
+    fps = [f.strip().upper() for f in os.environ.get("HESAPKITAP_ANDROID_SHA256", "").split(",") if f.strip()]
+    if not fps:
+        raise HTTPException(404, errors.GENERIC[404])
+    body = [{"relation": ["delegate_permission/common.handle_all_urls"],
+             "target": {"namespace": "android_app", "package_name": ANDROID_PACKAGE, "sha256_cert_fingerprints": fps}}]
+    return JSONResponse(body, headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/davet/{code}", include_in_schema=False)
+def invite_redirect(code: str):
+    """Uygulama yüklü değilse (ya da masaüstünde) davet bağlantısı web kayıt sayfasını açar."""
+    from urllib.parse import quote
+
+    from fastapi.responses import RedirectResponse
+
+    ok = re.fullmatch(r"[A-Za-z0-9-]{1,40}", code or "")
+    return RedirectResponse("/#/kayit" + (f"?kod={quote(code.upper())}" if ok else ""), status_code=302)
 
 
 # ---------------------------------------------------------------- tanıtım ve hukuk sayfaları (isteğe bağlı)
