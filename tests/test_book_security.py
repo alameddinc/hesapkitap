@@ -110,3 +110,12 @@ def test_rules_do_not_leak_hidden_card_merchants(owner):
     r = full.get("/api/rules")
     assert r.status_code == 200 and "HENNES" not in r.text
     assert len(r.json()) > 0  # gizli kartla ilgisi olmayan kurallar duruyor
+
+
+def test_viewer_cannot_delete_debt_payment(owner):
+    did = owner.post("/api/debts", json={"person": "Örnek Kişi", "direction": "borc", "amount": 100,
+                                         "debt_date": "2026-09-01"}).json()["id"]
+    pid = owner.post(f"/api/debts/{did}/pay", json={"amount": 40, "paid_at": "2026-10-01"}).json()["payment_id"]
+    viewer = _member(owner, "izleyici", "viewer")
+    assert viewer.delete(f"/api/debt-payments/{pid}").status_code == 403
+    assert owner.delete(f"/api/debt-payments/{pid}").json()["deleted"] is True
