@@ -9,7 +9,25 @@ import MonthBars from "../components/MonthBars";
 import { addMonths, cx, dateTR, maskText, monthLabel, tl, todayISO } from "../format";
 import { useUI } from "../ui";
 
-interface BillItem { id: number; source: "entry" | "card"; date: string; amount: number; description: string; invoice: string | null; due: string | null }
+/** sunucu df7a018: bill_month faturanın ait olduğu ay (dönem > son ödeme > ödeme günü; month_source), paid_date ödeme günü */
+interface BillItem { id: number; source: "entry" | "card"; date: string; amount: number; description: string; invoice: string | null; due: string | null;
+  paid_date?: string; bill_month?: string; month_source?: "donem" | "son_odeme" | "odeme" }
+
+// "4 Mayıs'ta ödendi": ay adına göre ek (Türkçe ses uyumu)
+const MONTHS_TR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
+const LOC = ["'ta", "'ta", "'ta", "'da", "'ta", "'da", "'da", "'ta", "'de", "'de", "'da", "'ta"];
+const MONTH_SRC = { donem: "faturadaki döneme göre", son_odeme: "son ödeme tarihine göre", odeme: "ödeme gününe göre" } as const;
+
+/** Kalem satırı: ödendiği gün; fatura başka bir ayınsa vurgulu "Mart faturası · 4 Mayıs'ta ödendi". */
+function PaidLine({ it }: { it: BillItem }) {
+  const paid = it.paid_date ?? it.date;
+  const late = !!it.bill_month && paid.slice(0, 7) !== it.bill_month;
+  const m = Number(paid.slice(5, 7)) - 1;
+  return late ? (
+    <span className="font-medium text-amber-700 dark:text-amber-400" title={it.month_source ? `Ayı ${MONTH_SRC[it.month_source]}` : undefined}>
+      {monthLabel(it.bill_month!).split(" ")[0]} faturası · {Number(paid.slice(8, 10))} {MONTHS_TR[m]}{LOC[m]} ödendi</span>
+  ) : <>Ödendi: {dateTR(paid)}</>;
+}
 interface BillMonth { month: string; amount: number; count: number; items: BillItem[] }
 interface Change { month: string; amount: number; diff: number; pct: number }
 export interface BillSeries {
@@ -26,7 +44,8 @@ export interface BillSeries {
   vs_last_year: Change | null;
 }
 /** overall (sunucu 77a6c75): tüm faturaların genel toplamı, son ay, değişimler, average_12 — istemci toplamaz */
-interface BillSummary { providers: BillSeries[]; categories: BillSeries[]; overall?: BillSeries | null; window: { start: string; end: string } }
+interface BillSummary { providers: BillSeries[]; categories: BillSeries[]; overall?: BillSeries | null; window: { start: string; end: string };
+  month_basis?: "bill_month" | "paid" }
 
 const fetchSummary = (until: string) => send<BillSummary>(`/api/bills/summary?months=24&until=${until}`);
 
@@ -147,7 +166,7 @@ export default function Bills() {
       )}
       <p className="text-xs text-stone-500 dark:text-stone-400">Kira, aidat ve abonelikler gibi tutarı her ay aynı olanlar Planlama'daki sabit kalemlerde.</p>
 
-      {detail && lastMonth && <SeriesDetail s={detail} end={until} onClose={() => setSel(null)} />}
+      {detail && lastMonth && <SeriesDetail s={detail} end={until} onClose={() => setSel(null)} byBill={d?.month_basis === "bill_month"} />}
     </div>
   );
 }
@@ -182,7 +201,7 @@ function SeriesList({ title, items, onPick }: { title: string; items: BillSeries
 
 /** Kurum / tür detayı: son 12 ay grafik, önceki ay ve geçen yılın aynı ayına göre değişim, ortalama, en yüksek ay,
  *  ay ay liste (kayıtlara dokununca düzenleme). */
-function SeriesDetail({ s, end, onClose }: { s: BillSeries; end: string; onClose: () => void }) {
+function SeriesDetail({ s, end, onClose, byBill }: { s: BillSeries; end: string; onClose: () => void; byBill?: boolean }) {
   const ui = useUI();
   const openRow = useOpenRow();
   const [openM, setOpenM] = useState<string | null>(null);
@@ -202,7 +221,7 @@ function SeriesDetail({ s, end, onClose }: { s: BillSeries; end: string; onClose
   return (
     <Modal title={s.name} onClose={onClose}>
       <div className="space-y-4">
-        <p className="-mt-1 text-sm text-stone-500 dark:text-stone-400">{s.category ? `${s.category} · ` : ""}aylık ödenen tutar</p>
+        <p className="-mt-1 text-sm text-stone-500 dark:text-stone-400">{s.category ? `${s.category} · ` : ""}{byBill ? "faturanın ait olduğu aya göre" : "aylık ödenen tutar"}</p>
         <div className="card p-3"><MonthBars data={bars} average={s.average} label={`${s.name} son 12 ay`} /></div>
         <dl className="grid grid-cols-2 gap-2 text-sm">
           <div className="rounded-lg bg-stone-50 p-2.5 dark:bg-stone-800/60">
@@ -238,6 +257,7 @@ function SeriesDetail({ s, end, onClose }: { s: BillSeries; end: string; onClose
                     onClick={() => (one ? edit(m.items[0]) : setOpenM(open ? null : m.month))}>
                     <span className="min-w-0 flex-1">
                       <span className="block font-medium">{monthYear(m.month)}{!one && <span className="font-normal text-stone-500 dark:text-stone-400"> · {m.count} ödeme</span>}</span>
+                      {one && <span className="block text-xs text-stone-500 dark:text-stone-400"><PaidLine it={m.items[0]} /></span>}
                       <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
                         <ChangeTag c={change(m.month, 1)} compact />
                         {change(m.month, 12) && <span className="text-xs text-stone-500 dark:text-stone-400">geçen yıl: <ChangeTag c={change(m.month, 12)} compact /></span>}
@@ -254,7 +274,7 @@ function SeriesDetail({ s, end, onClose }: { s: BillSeries; end: string; onClose
                           <button className="flex w-full items-start gap-2 py-2 pr-3 pl-6 text-left hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => edit(it)}>
                             <span className="min-w-0 flex-1">
                               <span className="block break-words">{maskText(it.description)}</span>
-                              <span className="block text-xs text-stone-500 dark:text-stone-400">{dateTR(it.date)}{it.source === "card" ? " · kart" : ""}{it.invoice ? ` · fatura no ${it.invoice}` : ""}</span>
+                              <span className="block text-xs text-stone-500 dark:text-stone-400"><PaidLine it={it} />{it.source === "card" ? " · kart" : ""}{it.invoice ? ` · fatura no ${it.invoice}` : ""}</span>
                             </span>
                             <span className="shrink-0 tabular-nums">{tl(it.amount)}</span>
                           </button>
