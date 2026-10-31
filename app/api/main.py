@@ -182,6 +182,41 @@ def _visible_or_404(kind: str, oid: int | None) -> None:
         raise HTTPException(404, "Bulunamadı")
 
 
+# Okuma sırası. Aynı süreçte eşzamanlı ağır okumalar (Özet açılışında 14 GET) GIL ve SQLite çekişmesiyle 2–5 kat
+# yavaşlıyordu; sırayla çalışınca hem toplam süre hem her isteğin süresi kısalıyor (önbellek de ilk istekte dolar).
+# Defter başına 1, süreç geneli HESAPKITAP_READ_SLOTS (varsayılan 2): bir kullanıcının fırtınası diğerini durdurmaz.
+# Sırada bekleyen istek iş parçacığı tutmaz (asyncio). Yazmalar sıraya girmez.
+_READ_BOOK: dict = {}
+_READ_ALL: dict = {}
+
+
+class _read_slot:
+    def __init__(self, book: str | None):
+        loop = asyncio.get_running_loop()  # semaforlar döngüye bağlı (testler kendi döngüsünü açar)
+        key = (id(loop), book or "")
+        self.book = _READ_BOOK.setdefault(key, asyncio.Semaphore(1))
+        self.all = _READ_ALL.setdefault(id(loop), asyncio.Semaphore(max(1, int(os.environ.get("HESAPKITAP_READ_SLOTS", "2")))))
+
+    async def __aenter__(self):
+        await self.book.acquire()
+        try:
+            await self.all.acquire()
+        except BaseException:
+            self.book.release()
+            raise
+
+    async def __aexit__(self, *exc):
+        self.all.release()
+        self.book.release()
+
+
+async def _run(request: Request, call_next, book: str | None, path: str):
+    if request.method == "GET" and path.startswith("/api/"):
+        async with _read_slot(book):
+            return await call_next(request)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
@@ -220,9 +255,9 @@ async def require_login(request: Request, call_next):
         user, db_file = gate
     if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
         with db.use_space(db_file, user):
-            response = await call_next(request)
+            response = await _run(request, call_next, db_file, path)
     else:
-        response = await call_next(request)
+        response = await _run(request, call_next, None, path)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
