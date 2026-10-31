@@ -178,19 +178,25 @@ def data_root() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(_path())), "users")
 
 
-def create_user(username: str, password_hash: str | None, role: str = "user", main_db: bool = False,
-                must_change: bool = False, member_of: int | None = None, book_role: str | None = None) -> dict:
-    """main_db: yöneticinin eski tek kullanıcılı veritabanını kullanması (db_file NULL).
-    member_of: ortak defter üyesi; kendi dosyası olmaz, o kullanıcının defterini açar."""
-    name = username.strip()
+def check_username(username: str) -> str:
+    """Kullanıcı adı / e-posta biçimi; geçerliyse saklanacak hâli (e-posta küçük harf)."""
+    name = (username or "").strip()
     if "@" in name:  # mobil uygulama ve hazır sürüm: e-posta ile kayıt (büyük/küçük harf fark etmez: COLLATE NOCASE)
         import re
 
         if len(name) > 120 or not re.fullmatch(r"[^@\s]{1,64}@[^@\s]+\.[^@\s.]{2,24}", name):
             raise ValueError("Geçerli bir e-posta yaz")
-        name = name.lower()
-    elif not (3 <= len(name) <= 32) or not all(ch.isalnum() or ch in "._-" for ch in name):
+        return name.lower()
+    if not (3 <= len(name) <= 32) or not all(ch.isalnum() or ch in "._-" for ch in name):
         raise ValueError("Kullanıcı adı 3–32 karakter; harf, rakam, nokta, alt çizgi ya da tire")
+    return name
+
+
+def create_user(username: str, password_hash: str | None, role: str = "user", main_db: bool = False,
+                must_change: bool = False, member_of: int | None = None, book_role: str | None = None) -> dict:
+    """main_db: yöneticinin eski tek kullanıcılı veritabanını kullanması (db_file NULL).
+    member_of: ortak defter üyesi; kendi dosyası olmaz, o kullanıcının defterini açar."""
+    name = check_username(username)
     with connect() as c:
         if c.execute("SELECT 1 FROM users WHERE username = ?", (name,)).fetchone():
             raise ValueError("Bu kullanıcı adı alınmış")
