@@ -11,11 +11,13 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from app import auth, backup, config, db, deletion, donations, finance, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, errors, finance, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -78,6 +80,35 @@ Money = Annotated[float, AfterValidator(money.money)]
 
 
 app = FastAPI(title="HesapKitap", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+
+MACHINE_CODES = {"consent_required": "Devam etmek için koşulları ve açık rızayı onayla."}
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    """Geçersiz istek gövdesi/parametre: Türkçe tek cümle (istemciler detail metnini gösterir). errors: alan ve tür."""
+    errs = exc.errors()
+    return JSONResponse({"detail": errors.validation_text(errs),
+                         "errors": [{"loc": list(e.get("loc", ())), "type": e.get("type")} for e in errs]}, status_code=422)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request: Request, exc: StarletteHTTPException):
+    """Çıplak İngilizce (Starlette'in "Not Found", "Method Not Allowed") ve boş metinler Türkçe; makine kodlarına
+    (consent_required) code ve message eklenir (istemci detail'e göre davranmaya devam eder)."""
+    detail = exc.detail
+    extra = {}
+    if exc.status_code == 404 and detail == "Not Found":
+        detail = "Böyle bir adres yok; uygulama güncel değil olabilir."
+    elif isinstance(detail, str) and detail in MACHINE_CODES:
+        extra = {"code": detail, "message": MACHINE_CODES[detail]}
+    elif not detail or detail in ("Method Not Allowed", "Internal Server Error", "Bad Request", "Unauthorized",
+                                  "Forbidden", "Conflict", "Unprocessable Entity", "Unprocessable Content"):
+        detail = errors.GENERIC.get(exc.status_code, errors.GENERIC[400 if exc.status_code < 500 else 500])
+    if exc.status_code == 404:
+        extra["refresh"] = True  # istemci listeyi tazelesin (kayıt başka cihazda silinmiş/değişmiş olabilir)
+    return JSONResponse({"detail": detail, **extra}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
 
 @app.exception_handler(limits.LimitError)
@@ -153,7 +184,8 @@ def _access(request: Request, method: str, path: str, user: dict) -> "tuple[dict
     kuralları. İzin varsa (kullanıcı, veritabanı dosyası); yoksa hazır hata yanıtı."""
     # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
     if user["must_change_password"] and path != "/api/settings/password":
-        return JSONResponse({"detail": "password_change_required"}, status_code=403)
+        return JSONResponse({"detail": "password_change_required", "code": "password_change_required",
+                             "message": "Önce kendi şifreni belirle."}, status_code=403)
     feature = plans.gate_for(path, method)
     if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
         return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
@@ -241,7 +273,8 @@ async def require_login(request: Request, call_next):
                                                        "/api/me/restore")  # geri alma: oturum yok, giriş belgesiyle
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
-            return JSONResponse({"detail": "setup_required"}, status_code=401)
+            return JSONResponse({"detail": "setup_required", "code": "setup_required",
+                                 "message": "Önce kurulumu tamamla (yönetici şifresi)."}, status_code=401)
         user = auth.token_user(request.cookies.get(auth.COOKIE))
         if not user and _bearer(request):  # mobil uygulama: oturum anahtarı başlıkta
             user = auth.token_user(_bearer(request))
@@ -307,7 +340,8 @@ def _pending_deletion(u: dict) -> JSONResponse:
     """Kimliği doğrulandı ama hesap silinmek üzere bekliyor: oturum açılmaz. İstemci "geri almak ister misin?" sorar,
     evet derse restore_token ile POST /api/me/restore. Sahibi defteri sildiği için silinen üye kendi başına geri alamaz."""
     ok = deletion.restorable(u)
-    return JSONResponse({"detail": "account_pending_deletion", "delete_after": u.get("delete_after"),
+    return JSONResponse({"detail": "account_pending_deletion", "code": "account_pending_deletion",
+                         "message": "Bu hesap silinmek üzere; geri almak istersen devam et.", "delete_after": u.get("delete_after"),
                          "deleted_at": u.get("deleted_at"), "username": u["username"], "restorable": ok,
                          "restore_token": auth.make_restore_token(u) if ok else None,
                          "subscription": plans.subscription(u)}, status_code=409)
@@ -366,7 +400,7 @@ def setup(body: SetupIn, request: Request, response: Response):
     try:
         u = auth.create_admin(body.username, body.password)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     from app import templates
 
     templates.set_sharing(body.share_templates)
@@ -408,7 +442,7 @@ def change_password(body: PasswordChange, request: Request, response: Response):
     try:
         auth.set_password(u["id"], body.new)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     _start_session(request, response, u)  # eski oturumlar düştü; bu cihazda oturum devam etsin
     return {"ok": True}
 
@@ -498,7 +532,7 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         who = verify(body.id_token)
     except social.SocialError as e:
         auth.record_fail(ip)
-        raise HTTPException(401, str(e)) from e
+        raise HTTPException(401, errors.user_text(e, 401)) from e
     u = system.user_by_name(who["email"])
     created = False
     if u and u["disabled"]:
@@ -574,7 +608,7 @@ def reset_password(body: ResetIn, request: Request, response: Response):
     try:
         auth._check_strength(body.password)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     u = reset.verify(body.email, body.code)
     if not u:
         auth.record_fail(ip)
@@ -600,7 +634,7 @@ def register(body: RegisterIn, request: Request, response: Response):
         try:
             u = auth.create_user(body.username, body.password)
         except ValueError as e:
-            raise HTTPException(422, str(e)) from e
+            raise HTTPException(422, errors.user_text(e, 422)) from e
         _signup_record(ip)
         _record_consent(u["id"], request)
         _start_session(request, response, u)
@@ -612,7 +646,7 @@ def register(body: RegisterIn, request: Request, response: Response):
     try:  # ortak defter davetiyse: kayıt olan, daveti oluşturanın defterine üye olur
         u = auth.create_user(body.username, body.password, member_of=inv.get("member_of"), book_role=inv.get("book_role"))
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     if not system.use_invite(body.code, u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
         system.delete_user(u["id"])
         raise HTTPException(409, "Davet kodu az önce kullanıldı")
@@ -671,7 +705,7 @@ def admin_create_user(body: AdminUserIn):
     try:
         u = auth.create_user(body.username, temp, must_change=True)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"user": _user_row(u), "temp_password": temp}
 
 
@@ -843,7 +877,7 @@ async def revenuecat_webhook(request: Request):
 
     secret = os.environ.get("REVENUECAT_WEBHOOK_AUTH", "")
     if not plans.hosted() or not secret or not hmac.compare_digest(request.headers.get("authorization", ""), secret):
-        raise HTTPException(404, "Yok")
+        raise HTTPException(404, errors.GENERIC[404])
     body = await request.json()
     res = await asyncio.to_thread(plans.apply_revenuecat, body.get("event") or {})  # SQLite yazma: döngü beklemesin
     import logging
@@ -861,7 +895,7 @@ async def mail_inbound(request: Request):
 
     secret = os.environ.get("HESAPKITAP_INBOUND_SECRET", "")
     if not secret or not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {secret}"):
-        raise HTTPException(404, "Yok")
+        raise HTTPException(404, errors.GENERIC[404])
     raw = await request.body()
     if len(raw) > 20 * 1024 * 1024:
         raise HTTPException(413, "Mail çok büyük")
@@ -1146,7 +1180,7 @@ def create_entry(body: EntryIn):
                                                   and isinstance(p.get("amount"), (int, float))], origin="fis")
         except ValueError as e:
             db.delete_entry(eid)
-            raise HTTPException(422, str(e)) from e
+            raise HTTPException(422, errors.user_text(e, 422)) from e
     db.auto_link()  # ekstre önceden yüklendiyse hemen eşleşsin
     from app import sync
 
@@ -1222,7 +1256,7 @@ def link_entry(entry_id: int, body: LinkIn):
     try:
         db.link_entry(entry_id, body.txn_id)
     except ValueError as e:
-        raise HTTPException(409, str(e)) from e
+        raise HTTPException(409, errors.user_text(e, 409)) from e
     return {"ok": True}
 
 
@@ -1255,7 +1289,7 @@ def match_entry(entry_id: int, body: MatchIn):
             b["summary"] = res
         return {**res, "undo_id": b["id"]}
     except sync.SyncError as e:
-        raise HTTPException(409, str(e)) from e
+        raise HTTPException(409, errors.user_text(e, 409)) from e
 
 
 @app.post("/api/entries/{entry_id}/unmatch")
@@ -1271,7 +1305,7 @@ def unmatch_entry(entry_id: int):
     except KeyError as e:
         raise HTTPException(404, "Kayıt bulunamadı") from e
     except sync.SyncError as e:
-        raise HTTPException(409, str(e)) from e
+        raise HTTPException(409, errors.user_text(e, 409)) from e
     return {**res, "undo_id": b["id"]}
 
 
@@ -1551,7 +1585,7 @@ def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple[list[
         try:
             res = bank_pdf.parse_account_pdf(data, ([password] if password else []) + db.pdf_passwords())
         except (bank_pdf.BankPdfError, receipt.ReceiptError) as e:
-            raise HTTPException(422, str(e)) from e
+            raise HTTPException(422, errors.user_text(e, 422)) from e
         with _PDF_CACHE_LOCK:
             _PDF_CACHE[key] = res
             while len(_PDF_CACHE) > 8:
@@ -1571,7 +1605,7 @@ def _read_bank_file(file: UploadFile):
     try:
         rows = bank_import.read_rows(data, file.filename or "dosya.csv")
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(422, f"Dosya okunamadı: {e}") from e
+        raise HTTPException(422, errors.user_text(e, 422, "Dosya okunamadı; Excel (.xlsx, .xls) ya da CSV dosyası olduğundan emin ol.")) from e
     if not rows:
         raise HTTPException(422, "Dosya boş")
     from app import card_excel
@@ -1822,7 +1856,7 @@ def create_wallet(body: WalletIn):
     try:
         wid = db.create_wallet(body.name, body.card_type, body.balance, body.expires_at.isoformat() if body.expires_at else None)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     if body.monthly_amount:
         db.set_wallet_schedule(wid, body.monthly_amount, body.load_day, finance.current_period(), body.name.strip())
     return {"id": wid}
@@ -1916,7 +1950,7 @@ def entry_to_opening(entry_id: int, body: ToOpening):
     try:
         return {"message": db.entry_to_opening_balance(entry_id, body.account_id)}
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 class PaymentAccount(BaseModel):
@@ -2227,9 +2261,9 @@ def add_jar_move(jid: int, body: JarMoveIn):
     try:
         return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note)}
     except LookupError as e:
-        raise HTTPException(404, str(e)) from e
+        raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.post("/api/jars/{jid}/buy")
@@ -2239,9 +2273,9 @@ def buy_into_jar(jid: int, body: JarBuy):
         return {"id": db.buy_into_jar(jid, body.quantity, body.cost, (body.buy_date or date.today()).isoformat(),
                                       body.account_id, body.payment, body.note)}
     except LookupError as e:
-        raise HTTPException(404, str(e)) from e
+        raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 class JarMovePatch(BaseModel):
@@ -2297,7 +2331,7 @@ def donations_add(body: DonationIn):
         return {"id": donations.add(body.kind, body.amount, (body.given_date or date.today()).isoformat(), body.recipient,
                                     body.note, body.account_id, body.as_expense)}
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.delete("/api/donations/{did}")
@@ -2313,9 +2347,9 @@ def donations_mark(body: DonationMarkIn):
         return donations.mark(body.source, body.id, body.kind, body.person_id,
                               body.year_start.isoformat() if body.year_start else None, body.recipient)
     except LookupError as e:
-        raise HTTPException(404, str(e)) from e
+        raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.get("/api/donations/mark/{source}/{sid}")
@@ -2392,9 +2426,9 @@ def holding_estimate(kind: str, cost: float, day: date):
     try:
         return zakat.estimate_quantity(kind, cost, day)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     except Exception as e:  # noqa: BLE001 - fiyat servisine ulaşılamadı
-        raise HTTPException(502, f"Geçmiş fiyat alınamadı: {e}") from e
+        raise HTTPException(502, errors.user_text(e, 502, "Geçmiş fiyat alınamadı; biraz sonra tekrar dene.")) from e
 
 
 @app.get("/api/holdings/candidates")
@@ -2498,7 +2532,7 @@ def zakat_history(pid: int):
     try:
         return zakat.history(pid)
     except LookupError as e:
-        raise HTTPException(404, str(e)) from e
+        raise HTTPException(404, errors.user_text(e, 404)) from e
 
 
 @app.post("/api/zakat/people/{pid}/next-year")
@@ -2506,7 +2540,7 @@ def zakat_next_year(pid: int):
     try:
         return {"hawl_start": zakat.next_year(pid)}
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.post("/api/zakat/people/{pid}/payments")
@@ -2515,9 +2549,9 @@ def zakat_add_payment(pid: int, body: ZakatPaymentIn):
         return {"id": zakat.add_payment(pid, body.amount, (body.pay_date or date.today()).isoformat(), body.note,
                                         body.year_start.isoformat() if body.year_start else None)}
     except LookupError as e:
-        raise HTTPException(404, str(e)) from e
+        raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 class ZakatPaymentPatch(BaseModel):
@@ -2537,7 +2571,7 @@ def zakat_update_payment(pay_id: int, body: ZakatPaymentPatch):
     try:
         r = zakat.update_payment(pay_id, data)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     if r is None:
         raise HTTPException(404, "Ödeme yok")
     return r
@@ -2557,7 +2591,7 @@ def zakat_add_asset(body: ZakatAssetIn):
                                       body.acquired.isoformat() if body.acquired else None, body.cost,
                                       body.estimated)}
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.patch("/api/zakat/assets/{aid}")
@@ -2607,7 +2641,7 @@ def template_submit(body: dict, request: Request):
     from app import templates
 
     if not templates.is_hub():
-        raise HTTPException(404)
+        raise HTTPException(404, errors.GENERIC[404])
     ip = client_ip(request)
     now = _t.time()
     hits = [x for x in _tpl_hits.get(ip, []) if now - x < 3600]
@@ -2648,7 +2682,7 @@ def templates_review(sid: int, status: Literal["onaylandi", "reddedildi", "bekli
     if not config.is_admin():
         raise HTTPException(403, "Sadece yönetici")
     if not templates.review(sid, status):
-        raise HTTPException(404)
+        raise HTTPException(404, errors.GENERIC[404])
     return {"ok": True}
 
 
@@ -2701,7 +2735,7 @@ def merge_account(aid: int, body: AccountMergeIn):
             res = sync.merge_accounts(aid, body.into)
             b["summary"] = res
     except sync.SyncError as e:
-        raise HTTPException(409, str(e)) from e
+        raise HTTPException(409, errors.user_text(e, 409)) from e
     return {**res, "undo_id": b["id"]}
 
 
@@ -2770,7 +2804,7 @@ def put_splits(target: Literal["entry", "card"], pid: int, body: SplitsIn):
     try:
         return db.set_splits(target, pid, [p.model_dump() for p in body.parts])
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 class SplitProposalIn(BaseModel):
@@ -2839,7 +2873,7 @@ def create_item_rule(body: ItemRuleIn):
     try:
         return {"id": db.save_item_rule(body.keywords, body.category)}
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.put("/api/item-rules/{rid}")
@@ -2847,7 +2881,7 @@ def update_item_rule(rid: int, body: ItemRuleIn):
     try:
         return {"id": db.save_item_rule(body.keywords, body.category, rid)}
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.delete("/api/item-rules/{rid}")
@@ -2957,7 +2991,7 @@ def pay_debt(did: int, body: DebtPayIn):
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     except db.OverpayError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"ok": True}
 
 
@@ -3044,7 +3078,7 @@ def rename_person(name: str, body: PersonRename):
     try:
         return db.rename_counterparty(name, body.name)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 # ---------------------------------------------------------------- statements
@@ -3124,12 +3158,12 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         try:
             limits.check_size(data)
         except limits.LimitError as e:
-            results.append({**res, "status": "error", "message": str(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e)})
             continue
         try:  # hazır sürüm: her yeni belge 1 okuma hakkı; doluysa bu dosya okunmaz
             doc_reads.check(data)
         except doc_reads.QuotaError as e:
-            results.append({**res, "status": "error", "message": str(e), **e.fields()})
+            results.append({**res, "status": "error", "message": errors.user_text(e), **e.fields()})
             continue
         if name.endswith((".xlsx", ".xls", ".csv")):  # tablo: kart işlem dökümü mü, hesap hareketleri mi?
             from app import card_excel
@@ -3137,7 +3171,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             try:
                 imp = card_excel.import_file(data, f.filename or "kart.xlsx")
             except limits.LimitError as e:  # zip bombası vb.: hesap hareketleri akışına da gönderilmez
-                results.append({**res, "status": "error", "message": str(e)})
+                results.append({**res, "status": "error", "message": errors.user_text(e)})
                 continue
             except Exception:  # noqa: BLE001 - okunamazsa hesap hareketleri akışı denesin
                 imp = None
@@ -3153,7 +3187,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         try:
             guess = _statement_kind(data, tried)
         except limits.LimitError as e:  # çok sayfalı / çok uzun süren PDF: bu dosya okunmaz, diğerleri sürer
-            results.append({**res, "status": "error", "message": str(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e)})
             continue
         kind = forced or guess
         if not forced and guess == "account" and not getattr(guess, "sure", True):
@@ -3176,7 +3210,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                     msg = mailbox.handle_pdf(f.filename or "dekont.pdf", data)
                 results.append({**res, "status": "saved", "message": msg, "dekont": True})
             except Exception as e:  # noqa: BLE001
-                results.append({**res, "status": "error", "message": str(e)})
+                results.append({**res, "status": "error", "message": errors.user_text(e)})
             continue
         if kind == "account":  # vadesiz hesap dökümü: arayüz hesap hareketleri önizlemesine yönlendirir
             if password and remember:
@@ -3186,10 +3220,10 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         try:
             stmt = parse_statement(data, passwords=tried)
         except PasswordRequired as e:
-            results.append({**res, "status": "password_required", "message": str(e) if password else "PDF şifreli"})
+            results.append({**res, "status": "password_required", "message": errors.user_text(e) if password else "PDF şifreli"})
             continue
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
-            results.append({**res, "status": "error", "message": str(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e)})
             continue
         if password and remember:
             db.remember_pdf_password(password)
@@ -3473,7 +3507,7 @@ def demo_stats(request: Request, days: int = 7):
 
     key = os.environ.get("DEMO_STATS_KEY", "")
     if not demo_mode.enabled() or not key or not hmac.compare_digest(request.headers.get("x-stats-key", ""), key):
-        raise HTTPException(404, "Yok")
+        raise HTTPException(404, errors.GENERIC[404])
     return demo_mode.stats(max(1, min(days, 365)))
 
 
@@ -3490,7 +3524,7 @@ def admin_demo_stats(days: int = 7):
         r = httpx.get(url, params={"days": days}, headers={"x-stats-key": key}, timeout=10)
         r.raise_for_status()
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"Demoya ulaşılamadı: {e}") from e
+        raise HTTPException(502, errors.user_text(e, 502, "Demoya ulaşılamadı; biraz sonra tekrar dene.")) from e
     return {"configured": True, **r.json()}
 
 
@@ -3517,11 +3551,11 @@ def demo_waitlist(body: WaitlistIn, request: Request):
     from app import demo_mode
 
     if not demo_mode.enabled():
-        raise HTTPException(404, "Yok")
+        raise HTTPException(404, errors.GENERIC[404])
     try:
         new = demo_mode.join_waitlist(request.cookies.get(demo_mode.COOKIE) or "", body.email, body.platform, body.note, body.tester)
     except demo_mode.WaitlistError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"ok": True, "new": new}
 
 
@@ -3594,7 +3628,7 @@ def _check_regex(p: str | None):
     try:
         re.compile(p)
     except re.error as e:
-        raise HTTPException(422, f"Geçersiz regex: {e}") from e
+        raise HTTPException(422, "Kural geçerli bir arama kalıbı (düzenli ifade) değil: parantezler ve köşeli parantezler kapanmalı") from e
 
 
 @app.get("/api/rules")
@@ -3656,7 +3690,7 @@ def parse_receipt(file: UploadFile = File(...)):
     try:
         out = receipt.parse_receipt(data, mime, cats)
     except receipt.ReceiptError as e:
-        raise HTTPException(502, str(e)) from e
+        raise HTTPException(502, errors.user_text(e, 502)) from e
     doc_reads.charge(original)
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
     _auto_reread(out, data, mime)
@@ -3868,7 +3902,7 @@ def pay_statement(sid: int, body: StatementPayIn):
     try:
         r = db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat(), acc)
     except ValueError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"ok": True, **r}
 
 
@@ -3918,7 +3952,7 @@ def parse_bill(file: UploadFile = File(...)):
             doc_reads.check(data)  # hazır sürüm: hak doluysa dosya saklanır ama okunmaz (elle girilir)
         parsed = receipt.parse_bill(read, read_mime) if receipt.enabled() else {}
     except receipt.ReceiptError as e:
-        parsed = {"error": str(e), **(e.fields() if isinstance(e, doc_reads.QuotaError) else {})}
+        parsed = {"error": errors.user_text(e, 502), **(e.fields() if isinstance(e, doc_reads.QuotaError) else {})}
     if parsed and "error" not in parsed:
         doc_reads.charge(data)
     warn = db.take_storage_warning()
@@ -4032,7 +4066,7 @@ def shared_inbox_close(iid: int, action: Literal["kaydedildi", "silindi"]):
     from app import share as share_mod
 
     if not share_mod.close(iid, action):
-        raise HTTPException(404, "Yok")
+        raise HTTPException(404, errors.GENERIC[404])
     return {"ok": True}
 
 
@@ -4058,7 +4092,7 @@ def create_token(body: TokenIn):
 def delete_token(tid: int):
     u = db.current_user() or auth.admin()
     if not u or not system.delete_token(u["id"], tid):
-        raise HTTPException(404, "Yok")
+        raise HTTPException(404, errors.GENERIC[404])
     return {"ok": True}
 
 
@@ -4098,7 +4132,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
     try:
         doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)
     except receipt.ReceiptError as e:
-        raise HTTPException(502, str(e)) from e
+        raise HTTPException(502, errors.user_text(e, 502)) from e
     doc_reads.charge(key)
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
@@ -4246,7 +4280,7 @@ def _reread_photo(name: str | None, total: float | None) -> dict:
     try:
         out = receipt.reread_items(data, "image/jpeg", total)
     except receipt.ReceiptError as e:
-        raise HTTPException(502, str(e)) from e
+        raise HTTPException(502, errors.user_text(e, 502)) from e
     db.set_setting(key, _json.dumps({"day": today, "n": used + 1}))
     out["check"] = receipt_check.check(out["items"], total if total is not None else out.get("total"))
     out["receipt_file"] = name
@@ -4318,7 +4352,7 @@ def pay_bill(bid: int, body: PayIn):
     try:
         return {"entry_id": db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment)}
     except ValueError as e:
-        raise HTTPException(404, str(e)) from e
+        raise HTTPException(404, errors.user_text(e, 404)) from e
 
 
 @app.delete("/api/bills/{bid}/pay")
@@ -4331,7 +4365,7 @@ def unpay_bill(bid: int):
 def bill_file(bid: int):
     b = db.get_bill(bid)
     if not b or not b["file_name"]:
-        raise HTTPException(404)
+        raise HTTPException(404, errors.GENERIC[404])
     return _stored_file("bills", b["file_name"], f"{b['provider']}-{b['due_date']}")
 
 
@@ -4400,7 +4434,7 @@ def mail_poll():
     try:
         return mailbox.poll()
     except mailbox.MailError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, errors.user_text(e, 400)) from e
 
 
 @app.get("/api/settings/config")
@@ -4445,7 +4479,7 @@ def test_config(name: str):
         try:
             r = httpx.get("https://generativelanguage.googleapis.com/v1beta/models", headers={"x-goog-api-key": key}, timeout=15)
         except httpx.HTTPError as e:
-            raise HTTPException(502, f"Google'a ulaşılamadı: {e}") from e
+            raise HTTPException(502, errors.user_text(e, 502, "Google'a ulaşılamadı; biraz sonra tekrar dene.")) from e
         if r.status_code != 200:
             raise HTTPException(400, "Anahtar geçersiz görünüyor")
         model = config.get("GEMINI_MODEL")
@@ -4459,14 +4493,14 @@ def test_config(name: str):
         try:
             return {"ok": True, "detail": mailbox.test_connection()}
         except mailbox.MailError as e:
-            raise HTTPException(400, str(e)) from e
+            raise HTTPException(400, errors.user_text(e, 400)) from e
     if name == "TELEGRAM_BOT_TOKEN":
         try:
             me = telegram._call("getMe")
         except telegram.TelegramError as e:
-            raise HTTPException(400, str(e)) from e
+            raise HTTPException(400, errors.user_text(e, 400)) from e
         return {"ok": True, "detail": f"Bot: @{me.get('username')}"}
-    raise HTTPException(404)
+    raise HTTPException(404, errors.GENERIC[404])
 
 
 @app.post("/api/settings/config/generate-backup-passphrase")
@@ -4486,7 +4520,7 @@ def telegram_pair():
     try:
         return telegram.start_pairing()
     except telegram.TelegramError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, errors.user_text(e, 400)) from e
 
 
 @app.post("/api/settings/telegram/connect")
@@ -4496,7 +4530,7 @@ def telegram_connect():
         telegram.send("✅ HesapKitap bağlandı. Son ödeme hatırlatmaları ve günlük şifreli yedek buraya gelecek.")
         return info
     except telegram.TelegramError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, errors.user_text(e, 400)) from e
 
 
 @app.post("/api/settings/telegram/disconnect")
@@ -4515,7 +4549,7 @@ def telegram_test():
             telegram.send(m)
         return {"sent": len(msgs) + 1}
     except telegram.TelegramError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, errors.user_text(e, 400)) from e
 
 
 @app.post("/api/settings/telegram/report")
@@ -4525,7 +4559,7 @@ def telegram_report(month: str | None = None):
     try:
         telegram.send(finance.period_report(m))
     except telegram.TelegramError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, errors.user_text(e, 400)) from e
     return {"month": m}
 
 
@@ -4534,7 +4568,7 @@ def backup_now():
     try:
         return {"path": os.path.basename(jobs.run_backup(date.today()))}
     except telegram.TelegramError as e:
-        raise HTTPException(502, f"Yedek alındı ama Telegram'a gönderilemedi: {e}") from e
+        raise HTTPException(502, errors.user_text(e, 502, "Yedek alındı ama Telegram'a gönderilemedi; bot anahtarını ve sohbeti kontrol et.")) from e
 
 
 @app.get("/api/settings/export.zip")
@@ -4563,26 +4597,26 @@ def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(N
     try:
         return backup.restore(_file_bytes(file), file.filename or "", passphrase)
     except backup.RestoreError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.post("/api/settings/backup/{name}/restore")
 @_heavy
 def backup_restore_named(name: str):
     if name not in {b["name"] for b in backup.list_backups()}:
-        raise HTTPException(404)
+        raise HTTPException(404, errors.GENERIC[404])
     with open(os.path.join(backup.backup_dir(), name), "rb") as f:
         data = f.read()
     try:
         return backup.restore(data, name)
     except backup.RestoreError as e:
-        raise HTTPException(422, str(e)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.get("/api/settings/backup/{name}")
 def backup_download(name: str):
     if name not in {b["name"] for b in backup.list_backups()}:
-        raise HTTPException(404)
+        raise HTTPException(404, errors.GENERIC[404])
     return FileResponse(os.path.join(backup.backup_dir(), name), filename=name, media_type="application/octet-stream")
 
 
@@ -4602,7 +4636,7 @@ def _site_route(page: str):
     def serve():
         f = os.path.join(_site_dir(), SITE_PAGES[page])
         if not os.path.isfile(f):
-            raise HTTPException(404)
+            raise HTTPException(404, errors.GENERIC[404])
         return FileResponse(f, media_type="text/html", headers={"Cache-Control": "public, max-age=300"})
 
     app.add_api_route(f"/{page}", serve, methods=["GET"], include_in_schema=False)
@@ -4622,7 +4656,7 @@ if WEB_DIST and os.path.isdir(WEB_DIST):
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
         if path.startswith("api/"):
-            raise HTTPException(404)
+            raise HTTPException(404, errors.GENERIC[404])
         f = os.path.realpath(os.path.join(_dist, path))
         if path and f.startswith(_dist + os.sep) and os.path.isfile(f):
             # service worker ve manifest her açılışta tazelensin
