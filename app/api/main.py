@@ -398,8 +398,12 @@ def _pending_deletion(u: dict) -> JSONResponse:
 def _start_session(request: Request, response: Response, user: dict) -> None:
     # HTTPS arkasındaysa (doğrudan ya da proxy başlığıyla) çerez otomatik Secure olur
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    token = auth.make_token(system.user(user["id"]))
-    if request.headers.get("x-hk-client") == "mobile":  # mobil uygulama: anahtarı kendisi saklar (Keychain)
+    from app import sessions
+
+    mobile = request.headers.get("x-hk-client") == "mobile"
+    token = auth.make_token(system.user(user["id"]), "mobile" if mobile else "web",
+                            sessions.device_name(request.headers.get("user-agent"), mobile))
+    if mobile:  # mobil uygulama: anahtarı kendisi saklar
         response.headers["X-Session-Token"] = token
         return
     response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400,
@@ -1040,9 +1044,63 @@ def restore_me(body: RestoreIn, request: Request, response: Response):
 
 
 @app.post("/api/auth/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    """Bu oturumu kapat: anahtar (çerez ya da Bearer) sunucuda da geçersiz olur."""
+    from app import sessions
+
+    token = request.cookies.get(auth.COOKIE) or _bearer(request)
+    nonce = auth.token_nonce(token)
+    if nonce:
+        u = auth.token_user(token)
+        sessions.revoke(u["id"] if u else None, nonce)
     response.delete_cookie(auth.COOKIE, path="/")
     return {"ok": True}
+
+
+def _current_nonce(request: Request) -> str | None:
+    return auth.token_nonce(request.cookies.get(auth.COOKIE) or _bearer(request))
+
+
+@app.get("/api/me/sessions")
+def my_sessions(request: Request):
+    """Açık oturumlar: [{id, kind (web | mobile | eski), device, created_at, last_seen, current}] (en son kullanılan önce)."""
+    from app import sessions
+
+    u = db.current_user()
+    if not u:
+        return []
+    return sessions.listing(u["id"], _current_nonce(request))
+
+
+@app.delete("/api/me/sessions/{sid}")
+def revoke_my_session(sid: str, request: Request):
+    from app import sessions
+
+    u = db.current_user()
+    if not u or not re.fullmatch(r"[\w-]{6,40}", sid) or not sessions.revoke_public(u["id"], sid):
+        raise HTTPException(404, errors.GENERIC[404])
+    return {"ok": True}
+
+
+class RevokeAllIn(BaseModel):
+    keep_current: bool = True  # bu cihazda oturum açık kalsın (yeni anahtar verilir)
+
+
+@app.post("/api/me/sessions/revoke-all")
+def revoke_all_sessions(request: Request, response: Response, body: RevokeAllIn | None = None):
+    """Tümünden çık: bütün oturumlar (hiç kullanılmamış eski anahtarlar dahil) geçersiz. keep_current: bu cihaza yeni
+    anahtar (web: çerez; mobil: X-Session-Token başlığı)."""
+    from app import sessions
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(401, errors.GENERIC[401])
+    n = sessions.revoke_all(u["id"])
+    if (body or RevokeAllIn()).keep_current:
+        _start_session(request, response, system.user(u["id"]))
+    else:
+        response.delete_cookie(auth.COOKIE, path="/")
+    return {"ok": True, "revoked": n}
 
 Kind = Literal["gelir", "gider"]
 Payment = Literal["kredi_karti", "nakit", "havale", "kart"]  # kart: ön ödemeli (yemek/hediye/giyim), wallet_id ile

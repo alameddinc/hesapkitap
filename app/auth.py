@@ -196,10 +196,23 @@ def _sign(payload: str) -> str:
     return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def make_token(u: dict) -> str:
-    exp = int(time.time()) + SESSION_DAYS * 86400
-    payload = f"{exp}.{u['id']}.{u['session_version']}.{secrets.token_hex(8)}"
+def make_token(u: dict, kind: str = "web", device: str | None = None) -> str:
+    """Oturum anahtarı: imzalı (süre, kullanıcı, oturum sürümü, oturum kimliği). Oturum sunucuda da kayıtlı
+    (app/sessions.py): çıkış ve "tümünden çık" anahtarı gerçekten geçersiz kılar; kayan süre orada."""
+    from app import sessions
+
+    days = sessions.MOBILE_MAX_DAYS if kind == "mobile" else SESSION_DAYS
+    nonce = secrets.token_hex(16)
+    exp = int(time.time()) + days * 86400
+    payload = f"{exp}.{u['id']}.{u['session_version']}.{nonce}"
+    sessions.create(u["id"], nonce, kind, device)
     return f"{payload}.{_sign(payload)}"
+
+
+def token_nonce(token: str | None) -> str | None:
+    """Anahtarın oturum kimliği (imza denetlenmeden: yalnız çıkış ve listede "bu cihaz" için)."""
+    parts = (token or "").split(".")
+    return parts[3] if len(parts) == 5 and parts[3] else None
 
 
 def token_user(token: str | None) -> dict | None:
@@ -214,6 +227,10 @@ def token_user(token: str | None) -> dict | None:
     u = system.user(int(uid))
     if not u or u["disabled"] or u.get("deleted_at") or u["session_version"] != int(ver):
         return None  # silinmek üzere bekleyen hesap: giriş yapıp geri alana kadar hiçbir oturum çalışmaz
+    from app import sessions
+
+    if not sessions.check(u["id"], nonce):  # çıkış yapılmış, kapatılmış ya da süresi (kayan) dolmuş oturum
+        return None
     return u
 
 
