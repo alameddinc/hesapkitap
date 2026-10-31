@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import auth, backup, config, db, deletion, donations, finance, jobs, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, finance, jobs, limits, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -55,16 +55,30 @@ _HEAVY = threading.BoundedSemaphore(max(1, int(os.environ.get("HESAPKITAP_PARSE_
 
 
 def _heavy(fn):
+    """Ağır okuma yuvası. Sırada HESAPKITAP_PARSE_WAIT saniyeden uzun beklenirse 503: istek iş parçacığını sonsuza
+    dek tutmaz, istemci (Cloudflare 100 sn) zaman aşımına düşüp aynı belgeyi yeniden göndermez."""
     import functools
+
+    from app import limits
 
     @functools.wraps(fn)
     def run(*a, **kw):
-        with _HEAVY:
+        if not _HEAVY.acquire(timeout=limits.parse_wait()):
+            raise HTTPException(503, "Sunucu şu an başka belgeleri okuyor; biraz sonra tekrar dene")
+        try:
             return fn(*a, **kw)
+        finally:
+            _HEAVY.release()
     return run
 
 
 app = FastAPI(title="HesapKitap", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+
+@app.exception_handler(limits.LimitError)
+async def _limit_error(request: Request, exc: limits.LimitError):
+    """Kaynak sınırı (app/limits.py) hangi uçta aşılırsa aşılsın anlamlı Türkçe 413."""
+    return JSONResponse({"detail": str(exc)}, status_code=413)
 
 
 def client_ip(request: Request) -> str:
@@ -2983,9 +2997,13 @@ def _classify_pdf(data: bytes, passwords: list[str]) -> tuple[str, bool] | None:
     from app.mailbox import classify
     from app.parsers import extract_text
 
+    from app.limits import LimitError
+
     for pw in [None, *passwords]:
         try:
             text = extract_text(data, pw)
+        except LimitError:
+            raise  # şifreyle ilgisi yok: her şifreyle yeniden denemek aynı süreyi tekrar harcar
         except Exception:  # noqa: BLE001 - şifreli: sıradaki
             continue
         return classify(text)
@@ -2999,6 +3017,7 @@ def upload_statements(files: list[UploadFile] = File(...), password: str | None 
                       kind: Literal["card", "account", "dekont"] | None = Form(None)):
     from app import undo
 
+    limits.check_count(len(files))  # 413, Türkçe neden (web tüm seçimi tek istekte gönderir)
     names = ", ".join(f.filename or "dosya" for f in files)
     with undo.batch(f"Ekstre: {names[:120]}") as b:
         results = _upload_statements(files, password, remember, kind)
@@ -3018,6 +3037,11 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         data = _file_bytes(f)
         res = {"filename": f.filename}
         name = (f.filename or "").lower()
+        try:
+            limits.check_size(data)
+        except limits.LimitError as e:
+            results.append({**res, "status": "error", "message": str(e)})
+            continue
         try:  # hazır sürüm: her yeni belge 1 okuma hakkı; doluysa bu dosya okunmaz
             doc_reads.check(data)
         except doc_reads.QuotaError as e:
@@ -3028,6 +3052,9 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
 
             try:
                 imp = card_excel.import_file(data, f.filename or "kart.xlsx")
+            except limits.LimitError as e:  # zip bombası vb.: hesap hareketleri akışına da gönderilmez
+                results.append({**res, "status": "error", "message": str(e)})
+                continue
             except Exception:  # noqa: BLE001 - okunamazsa hesap hareketleri akışı denesin
                 imp = None
             if imp:
@@ -3039,7 +3066,11 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             else:
                 results.append({**res, "status": "account_statement"})
             continue
-        guess = _statement_kind(data, tried)
+        try:
+            guess = _statement_kind(data, tried)
+        except limits.LimitError as e:  # çok sayfalı / çok uzun süren PDF: bu dosya okunmaz, diğerleri sürer
+            results.append({**res, "status": "error", "message": str(e)})
+            continue
         kind = forced or guess
         if not forced and guess == "account" and not getattr(guess, "sure", True):
             # hesap dökümü olduğundan emin değil: tahminle bakiyeyi bozma, kullanıcıya sor
@@ -3411,6 +3442,7 @@ def demo_waitlist(body: WaitlistIn, request: Request):
 
 
 @app.post("/api/demo/sample/{key}")
+@_heavy
 def demo_sample(key: str):
     """Örnek ekstre / fiş: gerçek yükleme yolundan geçer (hazır okuyucu, genel okuyucu, yerel OCR)."""
     from app import demo_mode, undo
@@ -3823,7 +3855,11 @@ async def share(request: Request, file: list[UploadFile] = File(...)):
         if len(data) > SHARE_MAX_BYTES:
             out.append(f"{f.filename}: dosya çok büyük")
             continue
-        res = await asyncio.to_thread(share_mod.process, f.filename or "dosya", data, f.content_type or "")
+        try:
+            res = await asyncio.to_thread(_heavy(share_mod.process), f.filename or "dosya", data, f.content_type or "")
+        except (HTTPException, limits.LimitError) as e:
+            out.append(f"{f.filename}: {getattr(e, 'detail', None) or e}")
+            continue
         out.append(res["message"])
         if res.get("storage_warning"):
             out.append(res["storage_warning"])
@@ -3885,7 +3921,11 @@ async def share_target(request: Request):
                 if len(data) > SHARE_MAX_BYTES:
                     msgs.append(f"{f.filename}: dosya çok büyük")
                     continue
-                res = await asyncio.to_thread(_heavy(share_mod.process), f.filename or "dosya", data, f.content_type or "")
+                try:
+                    res = await asyncio.to_thread(_heavy(share_mod.process), f.filename or "dosya", data, f.content_type or "")
+                except (HTTPException, limits.LimitError) as e:
+                    msgs.append(f"{f.filename}: {getattr(e, 'detail', None) or e}")
+                    continue
                 msgs.append(res["message"])
     from urllib.parse import quote
 
@@ -3935,11 +3975,14 @@ def delete_token(tid: int):
 
 
 @app.post("/api/documents/parse")
+@_heavy
 def parse_document(file: list[UploadFile] = File(...)):
     """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
     Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4)."""
     files = file[:4]
     data = _file_bytes(files[0])
+    for f in files:
+        limits.check_size(_file_bytes(f), f.filename)
     mime = files[0].content_type or ""
     if mime not in BILL_TYPES or any((f.content_type or "") not in BILL_TYPES for f in files[1:]):
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
@@ -4427,6 +4470,7 @@ def export_xlsx():
 
 
 @app.post("/api/settings/backup/restore")
+@_heavy
 def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(None)):
     try:
         return backup.restore(_file_bytes(file), file.filename or "", passphrase)
@@ -4435,6 +4479,7 @@ def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(N
 
 
 @app.post("/api/settings/backup/{name}/restore")
+@_heavy
 def backup_restore_named(name: str):
     if name not in {b["name"] for b in backup.list_backups()}:
         raise HTTPException(404)

@@ -39,6 +39,10 @@ def read_rows(data: bytes, filename: str) -> list[list[str]]:
     if name.endswith(".xlsx"):
         from openpyxl import load_workbook
 
+        from app import limits
+
+        limits.check_zip(data, limits.XLSX_MAX_TOTAL, "Excel dosyası")  # xlsx bir zip: açmadan önce bomba denetimi
+
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         ws = wb.worksheets[0]
         return [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]
