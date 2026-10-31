@@ -6,11 +6,15 @@ kılınır, oturumlar düşer, hesap doğrulanmış olur (main._social_login). A
 yeni şifre ve yeni kod (kodu kim girerse hesap onun), doğrulanmışsa yanıt yine nötr; adrese "zaten hesabın var" maili.
 Şifre sıfırlama kodu da e-postayı doğrular.
 
+HESAPKITAP_EMAIL_VERIFY=0: kod adımı yok (kayıt hemen oturum açar), ama hesap yine "doğrulanmamış" işaretlenir: Google/
+Apple girişi gelince şifre geçersiz, oturumlar düşer; kayıt yanıtı nötr kalır.
+
 Durum sistem veritabanında: "email_unverified:<id>" (yoksa doğrulanmış sayılır: eski hesaplar, davetle açılanlar,
 Google/Apple ile açılanlar). Kod yalnız özetiyle durur; 30 dakika, en çok 5 deneme, dakikada en fazla bir gönderim.
 """
 import hashlib
 import hmac
+import os
 import secrets
 import time
 
@@ -31,9 +35,16 @@ CREATE TABLE IF NOT EXISTS email_codes (
 """
 
 
+def protected() -> bool:
+    """Önceden ele geçirme korumaları (hazır sürüm + açık kayıt): şifreli kayıt "doğrulanmamış" işaretlenir (Google/
+    Apple girişi gelince e-postanın sahibi hesabı alır), kayıt yanıtı nötr, girişte sahte PBKDF2."""
+    return plans.hosted() and plans.open_signup()
+
+
 def required() -> bool:
-    """Şifreli açık kayıtta doğrulama istenir mi? Hazır sürüm + açık kayıt + giden posta ayarlı."""
-    return plans.hosted() and plans.open_signup() and mailer.enabled()
+    """Kayıt sonrası kod adımı istenir mi? Korumalar açık + giden posta ayarlı + HESAPKITAP_EMAIL_VERIFY != "0".
+    Anahtar yalnız kod adımını kapatır (kod adımı olmayan eski mobil sürüm takılmasın); diğer korumalar sürer."""
+    return protected() and mailer.enabled() and os.environ.get("HESAPKITAP_EMAIL_VERIFY", "1") != "0"
 
 
 def unverified(uid: int | None) -> bool:

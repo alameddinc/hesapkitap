@@ -153,3 +153,52 @@ def test_login_unknown_user_does_dummy_hash(monkeypatch, tmpdb):
     monkeypatch.setattr(auth, "_verify", lambda pw, h: (calls.append(1), real(pw, h))[1])
     assert auth.login("yok@example.com", "bir-sifre-123") is None
     assert calls  # var olmayan hesapta da PBKDF2 çalışır (zamanlama farkı yok)
+
+
+# --- HESAPKITAP_EMAIL_VERIFY=0: kod adımı yok, diğer korumalar sürer -------------------------------------------------
+
+@pytest.fixture()
+def no_code(hosted, monkeypatch):
+    monkeypatch.setenv("HESAPKITAP_EMAIL_VERIFY", "0")
+    return hosted
+
+
+def test_switch_off_signup_opens_session(no_code):
+    from app import email_verify, system
+
+    c = _app()
+    r = _register(c, "ayse@example.com", "ayse-sifre-123")
+    assert r.json() == {"ok": True} and c.get("/api/transactions").status_code == 200  # eski mobil sürüm takılmaz
+    assert email_verify.unverified(system.user_by_name("ayse@example.com")["id"])  # ama işaretli
+    assert _app().post("/api/auth/login", json={"username": "ayse@example.com", "password": "ayse-sifre-123"}).status_code == 200
+    assert not any("doğrulama kodun" in s for a, s, t in no_code)
+
+
+def test_switch_off_prehijack_still_reversed(no_code):
+    attacker = _app()
+    assert _register(attacker, "kurban@example.com", "saldirgan-sifre-1").json() == {"ok": True}
+    assert attacker.get("/api/transactions").status_code == 200  # kod adımı kapalı: oturum var
+    victim = _app()
+    assert victim.post("/api/auth/google", json={"id_token": "x", "consent": CONSENT}).json()["created"] is False
+    assert attacker.get("/api/transactions").status_code == 401  # Google girişi saldırganın oturumunu düşürdü
+    assert _app().post("/api/auth/login", json={"username": "kurban@example.com", "password": "saldirgan-sifre-1"}).status_code == 401
+
+
+def test_switch_off_register_still_neutral(no_code):
+    c = _app()
+    _register(c, "ayse@example.com", "ayse-sifre-123")
+    r = _register(_app(), "ayse@example.com", "baska-sifre-12")
+    assert r.status_code == 200 and r.json() == {"ok": True} and "alınmış" not in r.text
+    assert _app().post("/api/auth/login", json={"username": "ayse@example.com", "password": "ayse-sifre-123"}).status_code == 200
+    assert _app().post("/api/auth/login", json={"username": "ayse@example.com", "password": "baska-sifre-12"}).status_code == 401
+
+
+def test_switch_default_on(hosted, monkeypatch):
+    from app import email_verify
+
+    monkeypatch.delenv("HESAPKITAP_EMAIL_VERIFY", raising=False)
+    assert email_verify.required()
+    monkeypatch.setenv("HESAPKITAP_EMAIL_VERIFY", "1")
+    assert email_verify.required()
+    monkeypatch.setenv("HESAPKITAP_EMAIL_VERIFY", "0")
+    assert not email_verify.required() and email_verify.protected()
