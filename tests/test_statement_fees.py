@@ -55,3 +55,25 @@ def test_confirm_statement_clears_check(client, tmpdb):
     assert client.delete(f"/api/statements/{sid}/confirm").json()["confirmed_at"] is None
     assert client.get("/api/statements").json()[0]["needs_check"]
     assert client.post("/api/statements/999/confirm").status_code == 404
+
+
+def test_fees_inside_activity_not_added_again(client, tmpdb):
+    """Kuveyt Türk 9106: 30.000,00 − 30.000,00 + 25.000,00 = 25.000,00; 150,00 faiz harcamaların İÇİNDE. Ayrıca
+    eklenmez (eskiden 74.070,64 → KONTROL)."""
+    st = Statement(bank="Kuveyt Türk", card_no="4111********3333", period_end=date(2026, 10, 15), due_date=date(2026, 10, 25),
+                   total_debt=25000.00, min_payment=None, credit_limit=None, previous_balance=30000.00,
+                   period_activity=25000.00, interest_fees=0.0, payments=30000.00,
+                   transactions=[Transaction(date(2026, 10, 1), "MARKET", 24850.00, PURCHASE, "4111********3333"),
+                                 Transaction(date(2026, 10, 15), "FAIZ", 150.00, FEE, "4111********3333")])
+    assert st.reconciliation_diff() == 0
+    tmpdb.save_statement(b"x-kuveyt", "k.pdf", st)
+    s = client.get("/api/statements").json()[0]
+    assert s["fees"] == 150.00 and s["fees_included"] is True and s["equation_diff"] == 0 and not s["needs_check"]
+
+
+def test_equation_neither_form_picks_smaller_and_flags():
+    from app.parsers.base import equation
+
+    e = equation(1000, 1000, 900, 50, 990)  # içinde: 90, ayrı: 40 → ayrı, yine tutmuyor
+    assert e == {"fees_included": False, "diff": 40.0, "ok": False}
+    assert equation(1000, 1000, 900, 50, 950)["ok"] and equation(1000, 1000, 950, 50, 950)["fees_included"] is True

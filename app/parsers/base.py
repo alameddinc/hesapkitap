@@ -66,8 +66,24 @@ def reconciliation_diff(parsed: float, activity: float | None, interest_fees: fl
     Özetteki faiz satırı okunamadıysa (interest_fees 0) hangisi olduğu denklemden anlaşılır."""
     activity = activity or 0.0
     extra = interest_fees or 0.0
-    if not extra and fees and None not in (previous, payments, total):
-        separate = abs(previous - payments + activity + fees - total) < 1
-        included = abs(previous - payments + activity - total) < 1
-        extra = fees if separate and not included else 0.0
+    if not extra and fees:
+        inc = equation(previous, payments, activity, fees, total)["fees_included"]
+        extra = 0.0 if inc in (True, None) else fees
     return round(parsed - (activity + extra), 2)
+
+
+def equation(previous: float | None, payments: float | None, activity: float | None, fees: float | None,
+             total: float | None) -> dict:
+    """Ekstre denklemi: önceki − ödemeler + harcamalar (+ faiz ve ücret) = yeni borç. Faiz bazı ekstrelerde "dönem içi
+    işlemler"in içindedir, bazılarında ayrı satırdır: hangi biçim denklemi tutturuyorsa o seçilir; ikisi de tutmuyorsa
+    farkı küçük olan. {fees_included: bool|None (faiz yok/hesaplanamaz), diff: yeni borç − hesap, ok}."""
+    if None in (previous, payments, activity, total):
+        return {"fees_included": None, "diff": None, "ok": None}
+    base = previous - payments + activity
+    d_in = round(total - base, 2)
+    if not fees:
+        return {"fees_included": None, "diff": d_in, "ok": abs(d_in) < 1}
+    d_sep = round(total - (base + fees), 2)
+    included = abs(d_in) <= abs(d_sep)
+    diff = d_in if included else d_sep
+    return {"fees_included": included, "diff": diff, "ok": abs(diff) < 1}
