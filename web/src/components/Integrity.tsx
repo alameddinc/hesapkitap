@@ -14,10 +14,11 @@ export interface IntegrityItem { ref: string; date: string | null; amount: numbe
 export interface IntegrityDetail { code: string; label: string; count: number; hint?: string; route?: string; items?: IntegrityItem[] }
 interface RunResult { last: { day: string; ran_at: string | null } | null; details: IntegrityDetail[]; total: number; rerun?: number }
 
-/** "2026-10-31" ya da "2026-10-31 18:02:11" (UTC) → yerel "31.10.2026" / "31.10.2026 21:02". */
+/** "2026-10-31" ya da "2026-10-31 18:02:11" (UTC) → yerel "31.10.2026" / "31.10.2026 21:02"; eski "2026-10-31T21:02:11" yerel. */
 function when(ts: string) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return dateTR(ts);
-  const d = parseTs(ts);
+  // sunucu UTC naive "YYYY-MM-DD HH:MM:SS" verir; eski kayıt yerel ISO ("…T…", bölgesiz) — o zaten yerel saat
+  const d = /T/.test(ts) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(ts) ? new Date(ts) : parseTs(ts);
   return isNaN(d.getTime()) ? ts : d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
