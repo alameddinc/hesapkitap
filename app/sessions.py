@@ -122,6 +122,11 @@ def revoke_all(uid: int) -> int:
     return n
 
 
+def _utc(ts: float) -> str:
+    """Diğer *_at alanları gibi: UTC, saat dilimisiz, 'YYYY-MM-DD HH:MM:SS' (SQLite CURRENT_TIMESTAMP biçimi)."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ts))
+
+
 def listing(uid: int, current_nonce: str | None) -> list[dict]:
     now = time.time()
     cur = _h(current_nonce) if current_nonce else None
@@ -134,8 +139,7 @@ def listing(uid: int, current_nonce: str | None) -> list[dict]:
         if now - seen > idle_days(kind) * 86400:
             continue
         out.append({"id": pid, "kind": kind, "device": device or "", "current": h == cur,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(created)),
-                    "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(seen))})
+                    "created_at": _utc(created), "last_seen": _utc(seen)})
     return out
 
 
