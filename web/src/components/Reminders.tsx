@@ -16,7 +16,9 @@ export interface Reminder {
   title: string; text: string; cta: string; route: Route | "gelen";
   action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm";
   // S6: belge_onay (Gelen kutusu'nda bekleyen belge), belge_dogrulanamadi (yüklenen döküm/ekstre kontrol bekliyor)
-  inbox_id?: number; document_id?: number; due: string; severity: "info" | "warn" | "urgent"; tag?: string; bank?: string; last4?: string;
+  inbox_id?: number; document_id?: number;
+  /** sunucu 8a38d60: onay düğmesinin adı (sözlük: "Rakamlar doğru"); cta: ana düğme ("Bak", "Yükle"…) */
+  confirm_label?: string; due: string; severity: "info" | "warn" | "urgent"; tag?: string; bank?: string; last4?: string;
   statement_id?: number;
   // esles: "Bu ikisi aynı mı?"
   entry_id?: number; other?: string; reason?: "tarih" | "tutar" | "aday"; source?: "dokum" | "ekstre";
@@ -273,6 +275,8 @@ function DebtQuestion({ r }: { r: Reminder }) {
 }
 
 /** Özet'te "Yapılacaklar": kesilen ekstre, ayı kapanan hesap dökümü, yaklaşan son ödeme. Boşsa hiç görünmez. */
+const TERIM_OK = "Rakamlar doğru"; // eski sunucu confirm_label vermezse
+
 /** Sayfadaki bir bölüme kaydır; yoksa (bileşen Özet'te kapalı) Özet'e git. */
 function scrollTo(id: string, ui: { go: (r: Route) => void; toast: (m: string) => void }) {
   const el = document.getElementById(id);
@@ -299,10 +303,10 @@ function DocCheck({ r }: { r: Reminder }) {
         <p className="break-words text-xs text-stone-500 dark:text-stone-400">{r.text}</p>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        <button className="btn-ghost border border-stone-300 px-3 dark:border-stone-700" onClick={look}>Bak</button>
+        <button className="btn-ghost border border-stone-300 px-3 dark:border-stone-700" onClick={look}>{r.cta || "Bak"}</button>
         <button className="btn-primary px-3" disabled={ok.isPending}
           onClick={() => void ask(`${doc ? "Dökümdeki" : "Ekstredeki"} rakamlar doğru mu?\n\nBelgeyle karşılaştırdıysan ve hareketler doğruysa onayla; bu belge bir daha sorulmaz.`,
-            { confirm: "Rakamlar doğru", danger: false }).then((y: boolean) => { if (y) ok.mutate(undefined); })}>Rakamlar doğru</button>
+            { confirm: r.confirm_label || TERIM_OK, danger: false }).then((y: boolean) => { if (y) ok.mutate(undefined); })}>{r.confirm_label || TERIM_OK}</button>
         <Menu r={r} onDone={ui.toast} />
       </div>
     </li>
@@ -354,7 +358,7 @@ export default function Reminders() {
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <button className="btn-primary shrink-0 px-3" onClick={() => run(r)}>
-                {r.action === "upload" ? <><FileText size={14} />Yükle</> : r.action === "inbox_review" ? "Gelen kutusu" : "Bak"}</button>
+                {r.action === "upload" ? <><FileText size={14} />{r.cta || "Yükle"}</> : r.cta || (r.action === "inbox_review" ? "Gelen kutusu" : "Bak")}</button>
               <Menu r={r} onDone={ui.toast} />
             </div>
           </li>
