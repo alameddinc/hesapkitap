@@ -102,3 +102,27 @@ def test_no_raw_money_thresholds_left():
             if rx.search(code) and not any(rel == a and s in line for a, s in ALLOWED):
                 bad.append(f"{rel}:{n}: {line.strip()}")
     assert not bad, "\n".join(bad)
+
+
+def test_tl_single_format():
+    """S4: sunucu metinlerinde istemcilerle aynı biçim ₺1.234,50 (tek yardımcı)."""
+    from app.money import tl
+
+    assert tl(126.46) == "₺126,46" and tl(1234.5) == "₺1.234,50" and tl(-1000) == "−₺1.000,00"
+    assert tl(1234, trim=True) == "₺1.234" and tl(1234.5, trim=True) == "₺1.234,50"
+    assert tl(47012.6, decimals=0) == "₺47.013" and tl(0.005) == "₺0,01"
+
+
+def test_no_suffix_currency_in_server_texts():
+    """'126,46 ₺' / '… TL' biçimi sunucu metinlerinde kalmadı (ayrıştırıcılar ve yapay zekâ istemleri hariç)."""
+    rx = re.compile(r"""\}\s?(₺|TL)\b|:,\.2f\}\s?(₺|TL)""")
+    skip = ("app/parsers/", "app/receipt.py", "app/replay_check.py", "app/share.py")
+    bad = []
+    for f in sorted((ROOT / "app").rglob("*.py")):
+        rel = f.relative_to(ROOT).as_posix()
+        if rel.startswith(skip):
+            continue
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if rx.search(line.split("#", 1)[0]):
+                bad.append(f"{rel}:{n}: {line.strip()}")
+    assert not bad, "\n".join(bad)

@@ -166,7 +166,7 @@ def _bill(name: str, data: bytes, mime: str) -> str:
     for b in db.list_bills():
         if b["provider"] == parsed["provider"] and b["due_date"] == parsed["due_date"] \
                 and money.eq(b["amount"], parsed["amount"]):
-            return f"Fatura {parsed['provider']} {parsed['amount']:,.2f} TL: zaten vardı"
+            return f"Fatura {parsed['provider']} {money.tl(parsed['amount'])}: zaten vardı"
     file_name = db.save_bill_file(data, ".pdf") if mime == "application/pdf" else None
     db.create_bill({"provider": parsed["provider"], "amount": parsed["amount"], "due_date": parsed["due_date"],
                     "category": parsed["category"], "description": parsed.get("description") or None,
@@ -178,7 +178,7 @@ def _bill(name: str, data: bytes, mime: str) -> str:
         pct = round((parsed["amount"] - prev[0]["amount"]) / prev[0]["amount"] * 100)
         if abs(pct) >= 25:
             change = f" · geçen faturadan %{abs(pct)} {'fazla' if pct > 0 else 'az'}"
-    return f"🧾 {parsed['provider']} faturası: {parsed['amount']:,.2f} TL · son ödeme {parsed['due_date'][8:]}.{parsed['due_date'][5:7]}{change}"
+    return f"🧾 {parsed['provider']} faturası: {money.tl(parsed['amount'])} · son ödeme {parsed['due_date'][8:]}.{parsed['due_date'][5:7]}{change}"
 
 
 def _max_pdfs(kind: str | None, ctx: dict) -> int:

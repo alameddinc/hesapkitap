@@ -83,7 +83,7 @@ def test_bill_by_mail_and_change_warning(owner, monkeypatch):
     sig = signed("enerjisa.com.tr")
     assert inbound.handle(_raw("efatura@enerjisa.com.tr", pdf=b"%PDF-1", mid="<b1@x>"), to, verify=sig)["status"] == "ok"
     r = inbound.handle(_raw("efatura@enerjisa.com.tr", body="Faturanız 845,30 TL", mid="<b2@x>"), to, verify=sig)
-    assert r["kind"] == "fatura" and "845.30 TL" in r["detail"].replace(",", "")
+    assert r["kind"] == "fatura" and "₺845,30" in r["detail"]
     assert "%41 fazla" in r["detail"]  # 600 → 845,30
     dup = inbound.handle(_raw("efatura@enerjisa.com.tr", mid="<b3@x>"), to, verify=sig)
     assert "zaten vardı" in dup["detail"]

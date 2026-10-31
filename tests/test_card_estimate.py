@@ -182,7 +182,7 @@ def test_card_payment_without_statement_is_not_spending(client, tmpdb):
     assert d["expense"] == 1000 and d["estimated_expense"] == 47000 and d["estimated_count"] == 1
     assert all(x["name"] != finance.CARD_ESTIMATE_CATEGORY for x in d["top"])
     rep = finance.period_report("2026-10")
-    assert "Gider 1.000" in rep and "tahmini ~47.000" in rep
+    assert "Gider ₺1.000" in rep and "tahmini ~₺47.000" in rep
     # Planlama / harcanabilir / ödemeler kart borcunu ekstreden ayrıca hesaplar: tahmini satırdan etkilenmez
     assert all(l["description"] != "VakıfBank …1111 ödemesi (ekstre yok, tahmini harcama)"
                for m in finance.plan(2, today=date(2026, 10, 30))["months"] for l in m["lines"])

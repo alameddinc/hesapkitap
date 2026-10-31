@@ -39,6 +39,16 @@ def money(x):
     return float(_dec(x).quantize(_Q, rounding=ROUND_HALF_UP))
 
 
+def tl(x, trim: bool = False, decimals: int = 2) -> str:
+    """Kullanıcıya giden metinlerde TL tutarı, istemcilerle aynı biçim: ₺1.234,50 (eksi: −₺1.234,50). trim: ",00"
+    kuruşu atılır (₺1.234); decimals=0: kuruşsuz. Sunucunun tek para biçimi yardımcısı."""
+    v = money(x) if decimals == 2 else round(float(x), decimals)
+    s = f"{abs(v):,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if trim and s.endswith(",00"):
+        s = s[:-3]
+    return ("−" if v < 0 else "") + "₺" + s
+
+
 def kurus(x) -> int:
     """Tutar → kuruş (tam sayı), money() ile aynı yuvarlama."""
     return int(_dec(x).quantize(_Q, rounding=ROUND_HALF_UP).scaleb(2))

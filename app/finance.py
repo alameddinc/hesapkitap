@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db, money, rawnote
+from app import db, money, rawnote, terms
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
@@ -410,12 +410,12 @@ def counts(r: dict) -> tuple[bool, bool]:
     return _spends(r), r["kind"] == INCOME
 
 
-TOTALS_DEFINITIONS = {
+TOTALS_DEFINITIONS = {  # metinler app/terms.py terimleriyle
     "expense": "Gider: kart harcaması + faiz/ücret + elle gider − iadeler. Birikime ayrılan (altın/döviz alımı), kart "
                "ödemesi, borç hareketi ve bekleyen kayıtlar dahil değil.",
     "income": "Gelir: gerçekleşen gelir kayıtları (bekleyenler dahil değil).",
-    "left": "Kalan: gelir − gider.",
-    "left_after_savings": "Kalan (sade görünüm): gelir − gider − birikime ayrılan.",
+    "left": f"{terms.LEFT}: gelir − gider.",
+    "left_after_savings": f"{terms.LEFT_AFTER_SAVINGS}: gelir − gider − birikime ayrılan (altın/döviz alımı).",
     "cash_net": "Eldeki paraya etkisi: gelir − gider − birikime ayrılan ± borç/alacak hareketleri.",
 }
 
@@ -888,7 +888,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
                 if rest > 0:
                     lines.append({"type": "degisken", "kind": EXPENSE, "amount": rest, "account": acc,
                                   "description": f"{acc} kesime kadar tahmini kart harcaması"
-                                                 + (f" (girilen {_round(cyc['spent']):,.0f} ₺ hariç)".replace(",", ".") if cyc["spent"] else "")})
+                                                 + (f" (girilen {money.tl(cyc['spent'], decimals=0)} hariç)" if cyc["spent"] else "")})
             elif p["variable_avg"] > 0:
                 lines.append({"type": "degisken", "kind": EXPENSE, "amount": p["variable_avg"],
                               "description": f"{acc} tahmini kart harcaması (son {p['variable_periods']} dönem medyanı)",
@@ -903,7 +903,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
                 l["amount"] = _round(l["amount"] * (var_total - cut) / var_total)
                 l["description"] += f" − kısma hedefleri"
             lines.append({"type": "tasarruf_notu", "kind": "bilgi", "amount": _round(cut),
-                          "description": f"Kısma hedefleriyle {_round(cut):,.0f} ₺ daha az harcama varsayıldı".replace(",", ".")})
+                          "description": f"Kısma hedefleriyle {money.tl(cut, decimals=0)} daha az harcama varsayıldı"})
 
         # --- tekrarlayan
         for r in recurring:
@@ -1089,7 +1089,7 @@ def fmt_asset(x: float, asset: str) -> str:
 # ---------------------------------------------------------------- insights
 
 def _tl(x: float) -> str:
-    return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " ₺"
+    return money.tl(x)
 
 
 def _fold(s: str) -> str:
@@ -1127,7 +1127,7 @@ def interest_alarm(month: str) -> list[dict]:
                     reasons.append(f"önceki ekstrenin son ödemesi {due:%d.%m}, ödeme {date.fromisoformat(first_late['pay_date']):%d.%m}: "
                                    f"{days} gün geç. Bir gün geç ödemek bile dönem borcunun tamamına faiz işletir")
                 elif paid < (prev["total_debt"] or 0) - 1:
-                    reasons.append(f"önceki dönem borcunun {_tl(paid)}'si ödendi, kalan {_tl(prev['total_debt'] - paid)}'ye faiz işledi")
+                    reasons.append(f"önceki dönem borcundan {_tl(paid)} ödendi, kalan {_tl(prev['total_debt'] - paid)} için faiz işledi")
             elif not pays:
                 reasons.append(f"önceki ekstreye ({_tl(prev['total_debt'] or 0)}, son ödeme {due:%d.%m}) ödeme görünmüyor")
         if vade:
@@ -1628,7 +1628,7 @@ def net_worth(today: date | None = None) -> dict:
             "stale": stale}
 
 
-SPENDABLE_EXPLAIN = ("Harcanabilir: bankadaki ve nakit para − ödenecek kart ekstresi − TL borçların − kumbaraya ayrılan − "
+SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − ödenecek kart ekstresi − TL borçların − kumbaraya ayrılan − "
                      "ödenmemiş zekât. Altın/döviz, alacakların ve yemek/hediye kartları dahil değil; eksiye düştüyse "
                      "ödenecekler eldeki parayı aşıyor demektir.")
 

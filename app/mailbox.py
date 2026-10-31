@@ -19,7 +19,7 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import parseaddr, parsedate_to_datetime
 
-from app import config, db
+from app import config, db, money, terms
 
 log = logging.getLogger("hesapkitap.mail")
 
@@ -245,11 +245,11 @@ def handle_pdf(name: str, data: bytes) -> str:
     if dekont.is_dekont(text):
         d = dekont.import_text(text)
         if d["status"] == "duplicate":
-            return f"Dekont {d['date']} {d['amount']:,.2f} TL: zaten vardı"
+            return f"Dekont {d['date']} {money.tl(d['amount'])}: zaten vardı"
         if d["status"] == "updated":  # önceki kayıt vardı: hak düşmez
-            return f"🧾 Dekont {d['amount']:,.2f} TL: önceki kayıt güncellendi ({d['counterparty'] or 'kişi okunamadı'})"
+            return f"🧾 Dekont {money.tl(d['amount'])}: önceki kayıt güncellendi ({d['counterparty'] or 'kişi okunamadı'})"
         doc_reads.charge(data)
-        return f"🧾 Dekont: {d['amount']:,.2f} TL {d['kind']} ({d['bank'] or 'hesap'}) · bakiye değişmedi"
+        return f"🧾 Dekont: {money.tl(d['amount'])} {d['kind']} ({d['bank'] or 'hesap'}) · bakiye değişmedi"
     if _looks_like_account_statement(text):
         res = bank_pdf.parse_account_pdf(data, passwords)
         owners = [res.get("owner_name") or ""] if res.get("owner_name") else []
@@ -261,7 +261,7 @@ def handle_pdf(name: str, data: bytes) -> str:
         db.auto_link()
         if any(st[k] for k in ("gelir", "gider", "kart_odemesi", "virman")):  # hepsi zaten vardıysa hak düşmez
             doc_reads.charge(data)
-        warn = "" if res.get("verified") else " · ⚠️ bakiye zinciri tutmadı, kontrol et"
+        warn = "" if res.get("verified") else f" · ⚠️ {terms.EQ_BAD}: hareketleri belgeyle karşılaştır"
         return (f"Hesap dökümü ({res.get('bank') or 'banka'}): {st['gelir']} gelir, {st['gider']} gider, "
                 f"{st['virman']} kendi hesapların arası, {st['tekrar']} zaten vardı{warn}")
     try:
@@ -275,7 +275,7 @@ def handle_pdf(name: str, data: bytes) -> str:
     db.auto_link()
     db.auto_mark_paid()
     db.auto_update_cycle()
-    return (f"💳 {stmt.bank} {stmt.card_no} ekstresi: {stmt.total_debt:,.2f} TL · son ödeme "
+    return (f"💳 {stmt.bank} {stmt.card_no} ekstresi: {money.tl(stmt.total_debt)} · son ödeme "
             f"{stmt.due_date:%d.%m}" if stmt.due_date else f"💳 {stmt.bank} {stmt.card_no} ekstresi kaydedildi")
 
 
@@ -323,12 +323,12 @@ def handle_notification(text: str, mail_date: str, mid: str) -> str | None:
     if rows:
         st = db.import_bank_rows(rows, account=raw.get("bank") or "", owners=owners)
         parts += [f"{k} {v}" for k, v in (("gelir", st["gelir"]), ("gider", st["gider"]), ("kart ödemesi", st["kart_odemesi"]),
-                                         ("virman", st["virman"]), ("zaten vardı", st["tekrar"] + st["eslesen_elle"])) if v]
+                                         (terms.OWN_TRANSFER, st["virman"]), ("zaten vardı", st["tekrar"] + st["eslesen_elle"])) if v]
     if card:
         parts.append(f"kart harcaması {card}")
     if card or (rows and any(st[k] for k in ("gelir", "gider", "kart_odemesi", "virman"))):
         doc_reads.charge(f"mail:{mid}")
-    lines = [f"{'+' if r['amount'] > 0 else ''}{r['amount']:,.2f} TL · {r.get('who') or r['description'][:50]}" for r in rows]
+    lines = [f"{'+' if r['amount'] > 0 else ''}{money.tl(r['amount'])} · {r.get('who') or r['description'][:50]}" for r in rows]
     return (f"🏦 {raw.get('bank') or 'Banka'} bildirimi: " + ", ".join(parts)
             + ("".join(f"\n{x}" for x in lines[:5]) if lines else "")) if parts else "Bildirim okundu, yeni hareket yok"
 
