@@ -2767,7 +2767,7 @@ class OverpayError(ValueError):
     """Ödeme kalan borçtan fazla (ya da kayıt kapanmış): kullanıcıya gösterilecek Türkçe neden."""
 
 
-def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None) -> None:
+def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None) -> int:
     """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
     entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz.
     Kalandan fazla ödeme reddedilir (OverpayError): önce borç "kapandı" görünürken fazlası da akışa/bakiyeye giriyordu."""
@@ -2788,11 +2788,12 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
             fmt = lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")  # noqa: E731
             raise OverpayError(f"Kalan {fmt(left)} {unit}; {fmt(amt)} {unit} ödeme yazılamaz. Fazlası ayrı bir "
                                f"{'alacak' if d['direction'] == 'borc' else 'borç'} kaydı olarak girilebilir.")
-        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id) VALUES (?, ?, ?, ?, ?)",
-                  (debt_id, amt, on, entry_id, account_id))
+        pid = c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id) VALUES (?, ?, ?, ?, ?)",
+                        (debt_id, amt, on, entry_id, account_id)).lastrowid
         if entry_id:
             c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, entry_id))
         _recalc_debt(c, debt_id)
+        return pid
 
 
 def _recalc_debt(c, debt_id: int) -> None:
@@ -2811,6 +2812,22 @@ def unpay_debt(debt_id: int) -> None:
         c.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
         c.execute("UPDATE debts SET written_off_at = NULL WHERE id = ?", (debt_id,))
         _recalc_debt(c, debt_id)
+
+
+def delete_debt_payment(payment_id: int) -> int | None:
+    """Tek bir ödemeyi/tahsilatı geri al (Geri al): yalnız o ödeme silinir; bağlı hareket yeniden normal gelir/gider
+    olur (aynı borcun başka ödemesi onu kullanmıyorsa), hesaba bağlı ödemenin bakiyeye etkisi kalkar, borç kapanmışsa
+    yeniden açılır. Ödeme yoksa None (idempotent: ikinci çağrı da hatasız). Dönüş: borcun id'si."""
+    with connect() as c:
+        p = c.execute("SELECT * FROM debt_payments WHERE id = ?", (payment_id,)).fetchone()
+        if not p:
+            return None
+        c.execute("DELETE FROM debt_payments WHERE id = ?", (payment_id,))
+        if p["entry_id"] and not c.execute("SELECT 1 FROM debt_payments WHERE debt_id = ? AND entry_id = ?",
+                                           (p["debt_id"], p["entry_id"])).fetchone():
+            c.execute("UPDATE entries SET debt_id = NULL WHERE id = ? AND debt_id = ?", (p["entry_id"], p["debt_id"]))
+        _recalc_debt(c, p["debt_id"])
+        return p["debt_id"]
 
 
 def write_off_debt(debt_id: int, on: str) -> None:

@@ -87,3 +87,31 @@ def test_debt_amount_not_below_paid(client, tmpdb):
     r = client.patch(f"/api/debts/{did}", json={"amount": 200})
     assert r.status_code == 422 and "300,00 TL" in r.json()["detail"]
     assert client.patch(f"/api/debts/{did}", json={"amount": 300}).status_code == 200
+
+
+def test_delete_single_debt_payment(client, tmpdb):
+    """Geri al: yalnız o ödeme silinir, borç yeniden açılır, bağlı hareket normal gidere döner; idempotent."""
+    client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": 1000, "as_of": "2026-10-01"})
+    aid = next(a["id"] for a in client.get("/api/accounts").json()["accounts"] if a["name"] == "Örnek Banka")
+    did = client.post("/api/debts", json={"person": "Ayşe Örnek", "direction": "borc", "amount": 300,
+                                          "debt_date": "2026-09-01"}).json()["id"]
+    p1 = client.post(f"/api/debts/{did}/pay", json={"amount": 100, "paid_at": "2026-10-02", "account_id": aid}).json()
+    assert p1["ok"] and isinstance(p1["payment_id"], int)
+    bal = lambda: next(a for a in client.get("/api/accounts").json()["accounts"] if a["id"] == aid)["current"]  # noqa: E731
+    assert bal() == 900
+    eid = client.post("/api/entries", json={"entry_date": "2026-10-03", "description": "Havale", "amount": 200,
+                                            "kind": "gider"}).json()["id"]
+    p2 = client.post(f"/api/debts/{did}/pay", json={"amount": 200, "paid_at": "2026-10-03", "entry_id": eid}).json()
+    debt = lambda: next(d for d in client.get("/api/debts").json() if d["id"] == did)  # noqa: E731
+    assert debt()["settled_at"]
+
+    r = client.delete(f"/api/debt-payments/{p2['payment_id']}").json()
+    assert r == {"ok": True, "deleted": True, "debt_id": did}
+    d = debt()
+    assert not d["settled_at"] and d["paid_amount"] == 100  # yeniden açıldı, öbür ödeme duruyor
+    with tmpdb.connect() as c:
+        assert c.execute("SELECT debt_id FROM entries WHERE id = ?", (eid,)).fetchone()[0] is None
+    assert client.delete(f"/api/debt-payments/{p2['payment_id']}").json()["deleted"] is False  # idempotent
+
+    client.delete(f"/api/debt-payments/{p1['payment_id']}")
+    assert bal() == 1000 and debt()["paid_amount"] == 0  # hesaptan çıkan ödeme geri geldi

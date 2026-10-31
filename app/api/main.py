@@ -2302,6 +2302,14 @@ def set_debt_payment_account(pid: int, body: PaymentAccount):
     return {"ok": True}
 
 
+@app.delete("/api/debt-payments/{pid}")
+def delete_debt_payment(pid: int):
+    """Tek ödemeyi geri al (DELETE /api/debts/{id}/pay hepsini siler). İdempotent: ödeme zaten yoksa da 200,
+    deleted: false. Dönüş: {ok, deleted, debt_id}."""
+    did = db.delete_debt_payment(pid)
+    return {"ok": True, "deleted": did is not None, "debt_id": did}
+
+
 @app.get("/api/onboarding")
 def onboarding(v: int = 1):
     """Başlarken: hangi adımlar tamam (Özet'teki rehber kartı). v=2: mobil sırası (hesap → gelir → kart → sabit
@@ -3325,12 +3333,12 @@ def pay_debt(did: int, body: DebtPayIn):
         if e["debt_id"] or db._entry_is_debt_linked(body.entry_id):
             raise HTTPException(409, "Bu hareket zaten bir borca bağlı")
     try:
-        db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id)
+        pid = db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     except db.OverpayError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
-    return {"ok": True}
+    return {"ok": True, "payment_id": pid}  # Geri al: DELETE /api/debt-payments/{payment_id}
 
 
 class DebtWriteOffIn(BaseModel):
