@@ -3183,9 +3183,8 @@ def delete_item_rule(rule_id: int) -> bool:
         return c.execute("DELETE FROM item_rules WHERE id = ?", (rule_id,)).rowcount > 0
 
 
-def match_item(name: str, rules: list[dict] | None = None) -> str | None:
-    """Fiş satırı hangi kalem kuralına giriyor? Kelime başında eşleşir ('KENT' ✓, 'KENTUCKY' ✗ değil: 'kent' kelime
-    sınırıyla aranır; 4+ harfli kelimeler satırın içinde de bulunur, fişteki bitişik yazımlar için)."""
+def match_item_rule(name: str, rules: list[dict] | None = None) -> dict | None:
+    """match_item ile aynı kural; eşleşen kural {id, category, keyword} (deneme kutusu için)."""
     import re as _re
 
     from app.textnorm import normalize
@@ -3194,11 +3193,16 @@ def match_item(name: str, rules: list[dict] | None = None) -> str | None:
     for r in rules if rules is not None else list_item_rules():
         for kw in (k.strip() for k in r["keywords"].split(",")):
             k = normalize(kw)
-            if not k:
-                continue
-            if _re.search(rf"(?<![A-Z]){_re.escape(k)}(?![A-Z])", n) or (len(k) >= 6 and k in n):
-                return r["category"]
+            if k and (_re.search(rf"(?<![A-Z]){_re.escape(k)}(?![A-Z])", n) or (len(k) >= 6 and k in n)):
+                return {"id": r["id"], "category": r["category"], "keyword": kw}
     return None
+
+
+def match_item(name: str, rules: list[dict] | None = None) -> str | None:
+    """Fiş satırı hangi kalem kuralına giriyor? Kelime başında eşleşir ('KENT' ✓, 'KENTUCKY' ✗ değil: 'kent' kelime
+    sınırıyla aranır; 6+ harfli kelimeler satırın içinde de bulunur, fişteki bitişik yazımlar için)."""
+    hit = match_item_rule(name, rules)
+    return hit["category"] if hit else None
 
 
 def splits_map() -> dict[tuple[str, int], list[dict]]:

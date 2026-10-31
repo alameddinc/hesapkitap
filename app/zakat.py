@@ -506,7 +506,8 @@ def holdings() -> dict:
     aile üyelerininki ayrı gösterilir. Varlık yoksa fiyat çekilmez."""
     ps = people()
     if not any(p["assets"] for p in ps):
-        return {"items": [], "self_total": 0.0, "family_total": 0.0, "updated": None}
+        return {"items": [], "self_total": 0.0, "family_total": 0.0, "updated": None,
+                "totals": {"self": _gain_totals([]), "family": _gain_totals([])}}
     pd = prices()
     pr = pd["prices"]
     items = []
@@ -521,7 +522,18 @@ def holdings() -> dict:
                           "gain_pct": round(gain / a["cost"] * 100, 1) if gain is not None else None})
     return {"items": items, "updated": pd["updated"],
             "self_total": round(sum(i["value"] or 0 for i in items if i["is_self"]), 2),
-            "family_total": round(sum(i["value"] or 0 for i in items if not i["is_self"]), 2)}
+            "family_total": round(sum(i["value"] or 0 for i in items if not i["is_self"]), 2),
+            "totals": {"self": _gain_totals([i for i in items if i["is_self"]]),
+                       "family": _gain_totals([i for i in items if not i["is_self"]])}}
+
+
+def _gain_totals(items: list[dict]) -> dict:
+    """Alıştan beri: yalnız alış bedeli girilmiş VE bugünkü değeri bilinen kalemler (cost ile gain aynı kümeden)."""
+    known = [i for i in items if i.get("cost") and i.get("gain") is not None]
+    cost = round(sum(i["cost"] for i in known), 2)
+    gain = round(sum(i["gain"] for i in known), 2)
+    return {"value": round(sum(i.get("value") or 0 for i in items), 2), "cost": cost, "gain": gain,
+            "gain_pct": round(gain / cost * 100, 1) if cost else None, "count": len(items), "with_cost": len(known)}
 
 
 # ---------------------------------------------------------------- geçmiş yıllar (kaza zekâtı)

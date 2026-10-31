@@ -3260,8 +3260,11 @@ def delete_item_rule(rid: int):
 
 @app.post("/api/item-rules/test")
 def test_item_rule(body: dict):
-    """Kurallar sayfasında deneme: 'MARLBORO TOUCH' → Sigara"""
-    return {"category": db.match_item(str(body.get("text") or ""))}
+    """Kurallar sayfasında deneme: 'MARLBORO TOUCH' → Sigara. rule_id / keyword: eşleşen kural ve kelime (yoksa null)."""
+    text = str(body.get("text") or "")
+    hit = db.match_item_rule(text)
+    return {"category": hit["category"] if hit else None, "rule_id": hit["id"] if hit else None,
+            "keyword": hit["keyword"] if hit else None}
 
 
 # ---------------------------------------------------------------- borç / alacak
@@ -3401,6 +3404,7 @@ def transfers(month: str | None = None, start: str | None = None, end: str | Non
     from app import rawnote, sync
 
     out = db.transfers_overview(month, start, end)
+    out["totals"] = _transfer_totals(out)
     info = sync.match_info()
     for key in ("items", "self"):
         for i in out.get(key) or []:
@@ -3409,6 +3413,18 @@ def transfers(month: str | None = None, start: str | None = None, end: str | Non
                 rawnote.raw_of(i.get("note"))
             i["note_user"] = rawnote.user_note(i.get("note"))
     return out
+
+
+def _transfer_totals(out: dict) -> dict:
+    """Aralığın toplamları (istemci toplamasın): kişilere giden/gelen (kendin hariç), kendi hesapların arası giriş/çıkış."""
+    rng = out["range"]
+    start, end = (f"{rng['month']}-01", f"{rng['month']}-31") if rng.get("month") else (rng.get("start"), rng.get("end"))
+    own = [o for o in out["own"] if (not start or o["transfer_date"] >= start) and (not end or o["transfer_date"] <= end)]
+    sent = money.money(sum(p["sent"] for p in out["people"]))
+    received = money.money(sum(p["received"] for p in out["people"]))
+    return {"sent": sent, "received": received, "net": money.money(received - sent),
+            "own_in": money.money(sum(o["amount"] for o in own if o["amount"] > 0)),
+            "own_out": money.money(-sum(o["amount"] for o in own if o["amount"] < 0)), "own_count": len(own)}
 
 
 @app.put("/api/transfers/people/{name}")
@@ -4050,13 +4066,28 @@ def delete_rule(rule_id: int):
 
 
 @app.get("/api/rules/test")
-def test_rule(pattern: str, text: str):
+def test_rule(text: str, pattern: str | None = None):
+    """pattern verilirse yalnız o desen denenir (eski biçim). Verilmezse sunucunun gerçek sırasıyla (öncelik, id) TÜM
+    kurallar: ilk eşleşen kural (rule: {id, pattern, category, priority} | null) ve işlemin alacağı kategori — istemci
+    kendi regex/normalize kopyasını çalıştırmasın."""
     import re
 
+    from app.categorize import UNCATEGORIZED
     from app.textnorm import normalize
 
-    _check_regex(pattern)
-    return {"normalized": normalize(text), "match": bool(re.search(pattern, normalize(text)))}
+    n = normalize(text)
+    if pattern is not None:
+        _check_regex(pattern)
+        return {"normalized": n, "match": bool(re.search(pattern, n))}
+    from app import book
+
+    for r in book.filter_rules(db.list_rules()):
+        try:
+            if re.search(r["pattern"], n):
+                return {"normalized": n, "match": True, "rule": r, "category": r["category"]}
+        except re.error:
+            continue
+    return {"normalized": n, "match": False, "rule": None, "category": UNCATEGORIZED}
 
 
 # ---------------------------------------------------------------- receipt
@@ -4246,7 +4277,8 @@ def list_budgets(month: str | None = None):
     m = month or finance.current_period()
     # öneri için son ekstre ayının kategori harcaması
     last = {g["name"]: g["amount"] for g in finance.summary(finance.reference_month())["by_category"]}
-    return {"limits": db.list_budgets(), "status": finance.budgets(m), "last_month": last}
+    status = finance.budgets(m)
+    return {"limits": db.list_budgets(), "status": status, "last_month": last, "totals": finance.budgets_totals(status)}
 
 
 @app.put("/api/budgets")
