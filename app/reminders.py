@@ -229,6 +229,76 @@ def _odeme(now: date) -> list[dict]:
     return out
 
 
+def _tl(x: float) -> str:
+    s = f"{abs(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return "₺" + (s[:-3] if s.endswith(",00") else s)
+
+
+CARD_POST_DAYS = 5  # harcama ekstreye birkaç gün geç düşebilir: kesimden bu kadar önceki harcama sonraki ekstrede
+
+
+def _kart_eslesmedi() -> list[dict]:
+    """Kartla elle girilmiş gider, içermesi gereken ekstre yüklendiği hâlde ekstredeki bir satıra bağlanmamış (tutar ya
+    da tarih toleransın dışında: döviz kuru, geç işlenen işlem). Hem elle kayıt hem kart satırı gider sayılıyor olabilir.
+    Kimlik: kart:<kayıt id>. Ekstrede karşılığı bulunup eşleşince (linked_txn_id) kendiliğinden düşer."""
+    from datetime import date as _date, timedelta as _td
+
+    sts = db.list_statements()
+    if not sts:
+        return []
+    with db.connect() as c:
+        ents = db.rows(c.execute("SELECT * FROM entries WHERE payment = 'kredi_karti' AND kind = 'gider' AND skipped = 0 "
+                                 "AND linked_txn_id IS NULL AND import_hash IS NULL"))
+    from app import book
+
+    ents = book.filter_entries(ents)
+    cards: dict[str, list[str]] = {}
+    for st in sts:
+        cards.setdefault(st["card_no"][-4:], []).append(st["period_end"])
+    out = []
+    for e in ents:
+        d = _date.fromisoformat(e["entry_date"])
+        need = (d + _td(days=CARD_POST_DAYS)).isoformat()
+        active = (d + _td(days=40)).isoformat()
+        mine = [e["card_last4"]] if e.get("card_last4") and e["card_last4"] in cards else \
+            [k for k, pes in cards.items() if min(pes) <= active]  # kart belli değil: o dönem ekstresi olan her kart
+        if not mine or not all(any(pe >= need for pe in cards[k]) for k in mine):
+            continue
+        pe = min(pe for k in mine for pe in cards[k] if pe >= need)
+        out.append({"id": f"kart:{e['id']}", "kind": "kart_eslesmedi", "severity": "warn",
+                    "title": "Kart harcaması ekstrede bulunamadı",
+                    "text": f"Kartla girdiğin “{e['description']}” {_tl(e['amount'])} ({_d(d)}), "
+                            f"{_d(_date.fromisoformat(pe))} kesimli ekstrede eşleşmedi. Ekstrede farklı tutar ya da tarihle "
+                            "geçtiyse eşleştir; geçmediyse ödeme şeklini düzelt. Yoksa iki kez sayılabilir.",
+                    "cta": "Eşleştir", "route": "islemler", "action": "card_match", "due": e["entry_date"],
+                    "period": e["month"], "entry_id": e["id"]})
+    return out
+
+
+def _borc_sorulari() -> list[dict]:
+    """"Bu havale borçtan mı?": kişinin tek açık borcu/alacağı varken o kişiyle olan, kalandan küçük hareket artık
+    kendiliğinden borca yazılmıyor (ilgisiz havale gelir/giderden düşüyordu). Kimlik: borc:<kayıt id>:<borç id>.
+    Cevap: POST /api/debts/{borç}/pay {amount, paid_at, entry_id} (evet) ya da dismiss (hayır)."""
+    from app import book
+
+    m = book.member()
+    if m and book.role(m) == "viewer":
+        return []
+    out = []
+    for q in db.debt_questions():
+        e, d = q["entry"], q["debt"]
+        yon = "geri ödemesi" if d["direction"] == "borc" else "tahsilatı"
+        out.append({"id": f"borc:{e['id']}:{d['id']}", "kind": "borc_odeme", "severity": "info",
+                    "title": "Bu havale borçtan mı?",
+                    "text": f"{e['counterparty']} ile {_tl(e['amount'])} ({_d(date.fromisoformat(e['entry_date']))}) "
+                            f"hareketi, {d['person']} ile kalan {_tl(d['remaining'])} borcun {yon} mı? Evet dersen "
+                            "gelir/gider sayılmaz, borçtan düşülür.",
+                    "cta": "Evet, borçtan", "route": "borclar", "action": "debt_pay", "due": e["entry_date"],
+                    "period": e["month"], "entry_id": e["id"], "debt_id": d["id"],
+                    "pay": {"amount": e["amount"], "paid_at": e["entry_date"], "entry_id": e["id"]}})
+    return out
+
+
 def _esitleme(upload: bool) -> list[dict]:
     """"Bu ikisi aynı mı?" (elle girilen ↔ döküm/ekstre; yazma yetkisi olana) ve "Bu döküm X hesabına mı ait?"
     (hesapları yönetebilene). Kimlikler: esles:<kayıt id>:<e|t><id>, hesap:<dökümden açılan>:<elle açılan>."""
@@ -238,6 +308,10 @@ def _esitleme(upload: bool) -> list[dict]:
     if m and book.role(m) == "viewer":
         return []
     out = sync.questions()
+    asked = {q.get("entry_id") for q in out}
+    out += [q for q in _kart_eslesmedi() if q["entry_id"] not in asked]
+    if not _page_hidden("borclar"):
+        out += _borc_sorulari()
     if upload and not _page_hidden("hesaplar"):
         visible = {a["id"] for a in db.list_accounts()}  # ortak defter: gizli hesap sorulmaz
         out += [q for q in sync.account_questions() if q["account_id"] in visible and q["into"] in visible]
