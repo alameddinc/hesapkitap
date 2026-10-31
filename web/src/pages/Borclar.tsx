@@ -19,7 +19,7 @@ export default function Borclar() {
         <h1 className="text-xl font-semibold">Borç / Alacak</h1>
         <p className="text-sm text-stone-500">
           Borç verip almak gelir ya da gider değildir: verdiğin gün elindeki para azalır, geri aldığın gün artar; aylık
-          harcaman değişmez. Geri gelmeyecekse "Vazgeçtim" de, kalan o gün gider olur.
+          harcaman değişmez. Geri gelmeyecekse "Alamayacağım" de, kalan o gün gider olur; karşı taraf borcunu sildiyse "Borcu sildi", kalan o gün gelir olur.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">

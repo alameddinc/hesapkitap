@@ -35,7 +35,7 @@ function AddForm({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Sadaka / bağış ekle" onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -111,7 +111,7 @@ export default function Sadaka() {
               <li key={`${p.source}${p.id}`} className="flex flex-wrap items-center justify-between gap-2 py-2">
                 <span className="min-w-0">{dateTR(p.date)} · <span className="text-stone-500">{p.description}</span> · {m(p.amount)}</span>
                 <select className="input w-auto px-2 py-1 text-xs" defaultValue="" aria-label="Tür seç"
-                  onChange={(e) => e.target.value && mark.mutate({ p, kind: e.target.value }, { onError: (err) => ui.toast(err.message) })}>
+                  onChange={(e) => e.target.value && mark.mutate({ p, kind: e.target.value }, { onError: (err) => ui.error(err.message) })}>
                   <option value="" disabled>Seç…</option>
                   <option value="zekat">Zekât (bu yılın)</option>
                   {Object.entries(DONATION_KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}

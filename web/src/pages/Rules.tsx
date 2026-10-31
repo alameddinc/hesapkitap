@@ -20,7 +20,7 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
       <input className="input font-mono text-base sm:flex-1 sm:text-xs" value={pattern} onChange={(e) => setPattern(e.target.value)} aria-label="Pattern" />
       <div className="flex gap-2 sm:w-72">
         <div className="flex-1"><CategoryPicker value={category} onChange={setCategory} options={cats} /></div>
-        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}
+        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}
         <button className="btn-danger p-2" aria-label="Sil" disabled={del.isPending} onClick={() => void ask("Kural silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
         </button>
@@ -38,7 +38,7 @@ function LearnedMatches() {
   const rules = q.data ?? [];
   const remove = async (r: MatchRule) => {
     if (!(await ask(`“${r.bank_label} ↔ ${r.entry_label}” eşleşmesi unutulsun mu?\n\nŞimdiye kadar birleşen kayıtlar olduğu gibi kalır; bundan sonra bu ikisi yeniden sorulur.`))) return;
-    del.mutate(r.id, { onError: (e) => ui.toast(e.message) });
+    del.mutate(r.id, { onError: (e) => ui.error(e.message) });
   };
   return (
     <section className="card p-3 sm:p-4" aria-labelledby="learned-h">
@@ -122,7 +122,7 @@ export default function Rules() {
           <input className="input font-mono text-base sm:flex-1 sm:text-xs" placeholder="ör. NETFLIX|DISNEY" value={np} onChange={(e) => setNp(e.target.value)} />
           <div className="sm:w-56"><CategoryPicker value={nc} onChange={setNc} options={meta.data?.categories ?? []} placeholder="Kategori" /></div>
           <button className="btn-primary justify-center" disabled={!np || !nc}
-            onClick={() => add.mutate(undefined, { onError: (e) => ui.toast(e.message) })}><Plus size={16} /> Ekle</button>
+            onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e.message) })}><Plus size={16} /> Ekle</button>
         </div>
         <input className="input" placeholder="Test için örnek açıklama yaz: IYZICO/SPOTIFY.COM/ISTANBUL" value={sample} onChange={(e) => setSample(e.target.value)} />
         {test.data && (

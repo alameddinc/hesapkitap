@@ -78,7 +78,7 @@ function History({ p }: { p: Person }) {
             {!y.error && (y.remaining ?? 0) > 0 && (
               <button className="btn-ghost mt-1 border border-stone-300 px-2 py-0.5 text-xs dark:border-stone-700" onClick={() => {
                 const v = window.prompt(`${dateTR(y.end)}'de biten yıl için ödediğin tutar:`, String(y.remaining).replace(".", ","));
-                if (v && parseAmount(v) > 0) pay.mutate({ y, amount: parseAmount(v) }, { onError: (e) => ui.toast(e.message) });
+                if (v && parseAmount(v) > 0) pay.mutate({ y, amount: parseAmount(v) }, { onError: (e) => ui.error(e.message) });
               }}>Ödedim</button>
             )}
           </li>
@@ -97,7 +97,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const [paying, setPaying] = useState(false);
   const [payAmt, setPayAmt] = useState("");
   const [hist, setHist] = useState(false);
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
   const setMinor = useSave((v: boolean) => json("PATCH", `/api/zakat/people/${p.id}`, { is_minor: v }));
   const setCheck = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { check_date: v }));
@@ -309,7 +309,7 @@ function ZakatTab() {
   const [newPerson, setNewPerson] = useState("");
   const [showRules, setShowRules] = useState(false);
   const [closing, setClosing] = useState(false);
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const addPerson = useSave(() => json("POST", "/api/zakat/people", { name: newPerson }), () => setNewPerson(""));
   const settings = useSave((b: object) => json("PUT", "/api/zakat/settings", b));
   const refresh = useSave(() => json("POST", "/api/zakat/prices/refresh"), () => ui.toast("Fiyatlar güncellendi"));

@@ -54,10 +54,12 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
   const open = debts.filter((d) => !d.settled_at);
   const closed = debts.filter((d) => d.settled_at);
 
-  const del = useSave((id: number) => json("DELETE", `/api/debts/${id}`), () => ui.toast("Silindi"));
+  const del = useSave((id: number) => json("DELETE", `/api/debts/${id}`), () => ui.toast("Kayıt silindi"));
   const unpay = useSave((id: number) => json("DELETE", `/api/debts/${id}/pay`), () => ui.toast("Yeniden açıldı"));
+  // geri al = DELETE /pay (tüm ödemeler + vazgeçme silinir): yalnız önceden ödeme yoksa önceki duruma birebir döner
+  const reopen = (d: Debt) => () => json("DELETE", `/api/debts/${d.id}/pay`);
   const writeOff = useSave((d: Debt) => json("POST", `/api/debts/${d.id}/write-off`, { on: today() }),
-    () => ui.toast("Kapatıldı; kalan bugünün gider/gelirine yazıldı"));
+    (_r, d) => ui.toast("Kapatıldı; kalan bugünün gider/gelirine yazıldı", d.paid_amount > 0 ? undefined : { undo: reopen(d) }));
 
   const accounts = useAccounts();
   const accName = (id: number | null) => accounts.data?.accounts.find((a) => a.id === id)?.name;
@@ -110,25 +112,23 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
       </div>
       <div className="mt-1.5 flex flex-wrap items-center justify-end gap-2">
         {d.settled_at ? (
-          <button className="btn-ghost p-1.5 text-stone-400" aria-label="Yeniden aç" onClick={() => unpay.mutate(d.id)}><RotateCcw size={14} /></button>
+          <button className="btn-ghost px-2 py-1 text-xs text-stone-500" disabled={unpay.isPending}
+            onClick={() => void ask(`${d.person} kaydı yeniden açılsın mı?\n\n${d.written_off_at ? "Kapatma geri alınır" : "Yazılan ödemeler silinir"}; bağlı havaleler yeniden normal gelir/gider sayılır.`,
+              { confirm: "Yeniden aç", danger: false }).then((ok) => { if (ok) unpay.mutate(d.id); })}>
+            <RotateCcw size={14} aria-hidden /> Yeniden aç</button>
         ) : (
           <button className="btn-primary px-2 py-1 text-xs" onClick={() => setPaying(d)}>
             <Check size={14} /> {d.direction === "borc" ? "Ödedim" : "Aldım"}
           </button>
         )}
         {!d.settled_at && (
-          <button className="btn-ghost px-1.5 py-1 text-xs text-stone-500" title={d.direction === "alacak"
-            ? "Geri gelmeyecek: kalan bugün gider olur" : "Karşı taraf sildi: kalan bugün gelir olur"}
+          <button className="btn-ghost px-1.5 py-1 text-xs text-stone-500" disabled={writeOff.isPending}
             onClick={() => void ask(d.direction === "alacak"
               ? `${d.person} ödemeyecek mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gider olarak yazılır.`
               : `${d.person} borcu sildi mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gelir olarak yazılır.`, { confirm: "Evet, kapat", danger: true }).then((ok) => { if (ok) writeOff.mutate(d); })}>
-            Vazgeçtim
+            {d.direction === "alacak" ? "Alamayacağım (vazgeç)" : "Borcu sildi (affetti)"}
           </button>
         )}
-        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
-          onClick={() => void ask("Kayıt silinsin mi? Bağlı havaleler yeniden normal gelir/gider sayılır.").then((ok) => { if (ok) del.mutate(d.id); })}>
-          <Trash2 size={14} />
-        </button>
       </div>
       {openId === d.id && (
         <div className="mt-2 space-y-2">
@@ -137,6 +137,13 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
             <div className="text-xs font-medium text-stone-500">Önceki ödemelerin hesabı</div>
             {accountsOf({ ...d, payments: d.payments })}
           </>)}
+          {/* silme satırdaki günlük eylemlerden (Ödedim, Borcu sildi) ayrı: yalnız düzenleme açıkken */}
+          <div className="flex justify-end border-t border-stone-100 pt-2 dark:border-stone-800">
+            <button className="btn-ghost px-2 py-1 text-xs text-red-600 dark:text-red-400" disabled={del.isPending}
+              onClick={() => void ask(`${d.person} kaydı silinsin mi?\n\nBağlı havaleler yeniden normal gelir/gider sayılır.`).then((ok) => { if (ok) { del.mutate(d.id); setOpenId(null); } })}>
+              <Trash2 size={14} aria-hidden /> Kaydı sil
+            </button>
+          </div>
         </div>
       )}
       </li>
@@ -256,7 +263,12 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
   const [accountId, setAccountId] = useState<number | null>(d.account_id);
   const save = useSave(() => json("POST", `/api/debts/${d.id}/pay`, { amount: parseAmount(amount), paid_at: date,
     account_id: d.asset === "TRY" ? accountId : null }),
-    () => { ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı"); onDone(); }, { inline: true });
+    // ilk ödemede "Geri al" (DELETE /pay önceki duruma döner); önceden ödeme varsa hepsini silerdi → sunulmaz
+    () => {
+      ui.toast(parseAmount(amount) + 1e-6 < d.remaining ? "Kısmi ödeme kaydedildi" : "Kapandı",
+        d.paid_amount > 0 ? undefined : { undo: () => json("DELETE", `/api/debts/${d.id}/pay`) });
+      onDone();
+    }, { inline: true });
   return (
     <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50/50 p-3 dark:border-blue-900 dark:bg-blue-950/20">
       <div className="text-sm">

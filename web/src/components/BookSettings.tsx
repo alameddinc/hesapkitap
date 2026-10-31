@@ -82,7 +82,7 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
   const ui = useUI();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState<string | null>(null);
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const setRole = useSave((role: BookRole) => call(`/api/book/members/${m.id}`, "PATCH", { book_role: role }), () => ui.toast("Yetki değişti"));
   const setRules = useSave((r: Partial<Rules>) => call(`/api/book/rules?member=${m.id}`, "PUT", r));
   const toShared = useSave(() => call(`/api/book/members/${m.id}/rules`, "DELETE"), () => ui.toast("Ortak kurallar geçerli"));
@@ -155,7 +155,7 @@ export default function BookSettings() {
   const [note, setNote] = useState("");
   const [role, setRole] = useState<BookRole>("editor");
   const [openCode, setOpenCode] = useState<string | null>(null); // QR'ı açık davet
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const invite = useSave(() => call<Invite>("/api/book/invites", "POST", { note, book_role: role }), (i) => {
     setNote(""); setOpenCode(i.code); ui.toast("Davet oluşturuldu: QR'ı okut ya da bağlantıyı paylaş");
   });

@@ -35,7 +35,7 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
   return (
     <Modal title="Varlık ekle" onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(qty) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Ekle</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Ekle</button>}>
       <div className="space-y-3">
         <div>
           <label className="label" htmlFor="z-owner">Kimin?</label>

@@ -22,7 +22,7 @@ function RuleRow({ r, cats }: { r: ItemRule; cats: string[] }) {
     <li className="space-y-2 py-3">
       <div className="flex gap-2">
         <div className="flex-1"><CategoryPicker value={cat} onChange={setCat} options={cats} /></div>
-        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}
+        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}
         <button className="btn-danger p-2" aria-label="Sil" disabled={del.isPending} onClick={() => void ask("Kalem kuralı silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
         </button>
@@ -69,7 +69,7 @@ export default function ItemRules() {
         <CategoryPicker value={cat} onChange={setCat} options={cats} placeholder="Kategori (ör. Alkol)" />
         <input className="input" placeholder="Kelimeler, virgülle: bira, efes, rakı, şarap" value={kw} onChange={(e) => setKw(e.target.value)} />
         <button className="btn-primary" disabled={!kw.trim() || !cat.trim() || add.isPending}
-          onClick={() => add.mutate(undefined, { onError: (e) => ui.toast(e.message) })}><Plus size={16} /> Ekle</button>
+          onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e.message) })}><Plus size={16} /> Ekle</button>
       </div>
       <input className="input" placeholder="Dene: fiş satırı yaz (ör. PARLIAMENT RESERVE)" value={sample} onChange={(e) => setSample(e.target.value)} />
       {sample.trim().length > 1 && test.data && (

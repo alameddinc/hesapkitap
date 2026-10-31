@@ -7,7 +7,7 @@ export default function MailSubject({ subject, className }: { subject: string | 
   const ui = useUI();
   const code = subject?.match(/\d{6,}/)?.[0];
   const copy = (text: string) =>
-    navigator.clipboard.writeText(text).then(() => ui.toast(`Kod kopyalandı: ${text}`), () => ui.toast("Kopyalanamadı; konuyu elle seç"));
+    navigator.clipboard.writeText(text).then(() => ui.toast(`Kod kopyalandı: ${text}`), () => ui.error("Kopyalanamadı; konuyu elle seç"));
   return (
     <span className={className}>
       <span className="break-words select-text">{subject || "(konusuz)"}</span>

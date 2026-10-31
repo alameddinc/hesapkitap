@@ -32,6 +32,7 @@ import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
 import Bills from "./pages/Bills";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
+import Toast, { type ToastState } from "./components/Toast";
 import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks";
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
@@ -178,7 +179,10 @@ function Shell() {
   }, [meta.data, monthInit]);
   const [modal, setModal] = useState<ModalState>(null);
   // girişten önce bırakılan kısa bildirim (ör. şifre yenileme sonrası "Şifren yenilendi")
-  const [toastMsg, setToast] = useState<string | null>(readFlash);
+  const [toast, setToastState] = useState<ToastState | null>(() => { const f = readFlash(); return f ? { msg: f, kind: "ok" } : null; });
+  const setToast = useCallback((msg: string, opts?: { undo?: () => Promise<unknown> }) =>
+    setToastState({ msg, kind: "ok", undo: opts?.undo, id: Date.now() }), []);
+  const setError = useCallback((msg: string) => setToastState({ msg, kind: "error", id: Date.now() }), []);
   useEffect(() => { try { sessionStorage.removeItem("hk-flash"); } catch { /* özel mod */ } }, []); // StrictMode'da başlatıcı iki kez çalışır: silme burada
   const recurring = useQuery({ queryKey: ["recurring"], queryFn: api.recurring, enabled: modal?.type === "recurring" });
 
@@ -194,11 +198,6 @@ function Shell() {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  useEffect(() => {
-    if (!toastMsg) return;
-    const t = setTimeout(() => setToast(null), 3000);
-    return () => clearTimeout(t);
-  }, [toastMsg]);
 
   const close = useCallback(() => setModal(null), []);
   const ui: UI = useMemo(() => ({
@@ -216,7 +215,8 @@ function Shell() {
     openPay: (p) => setModal({ type: "pay", p }),
     openRecurringMonth: (r) => setModal({ type: "rmonth", r }),
     toast: setToast,
-  }), [month, viewer]);
+    error: setError,
+  }), [month, viewer, setToast, setError]);
 
   const Page = PAGES[canSee(route) ? route : "ozet"]; // ortak defterde kapalı sayfa: Özet
   const rec = modal?.type === "recurring" ? recurring.data?.find((r) => r.id === modal.id) : undefined;
@@ -298,11 +298,7 @@ function Shell() {
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
 
       <ConfirmHost />
-      {toastMsg && (
-        <div className="fixed inset-x-0 bottom-[calc(6rem+var(--sab))] z-[60] flex justify-center px-4 md:bottom-6" role="status">
-          <div className="rounded-full bg-stone-900 px-4 py-2 text-sm text-white shadow-lg dark:bg-stone-100 dark:text-stone-900">{toastMsg}</div>
-        </div>
-      )}
+      {toast && <Toast key={toast.id} t={toast} onClose={() => setToastState(null)} />}
     </UIContext.Provider>
   );
 }

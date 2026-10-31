@@ -82,7 +82,7 @@ export default function Statements() {
           <div className="font-medium">Demoda kendi dosyan yüklenmez — örnek bir ekstreyi okut</div>
           <div className="flex flex-wrap justify-center gap-2">
             {demo.samples.filter((s) => s.kind === "statement").map((s) => (
-              <button key={s.key} className="btn-primary" disabled={sample.isPending} onClick={() => sample.mutate(s.key, { onError: (e) => ui.toast(e.message) })}>
+              <button key={s.key} className="btn-primary" disabled={sample.isPending} onClick={() => sample.mutate(s.key, { onError: (e) => ui.error(e.message) })}>
                 {sample.isPending && sample.variables === s.key ? <Loader2 size={16} className="animate-spin" /> : <FileUp size={16} />} {s.label}
               </button>
             ))}

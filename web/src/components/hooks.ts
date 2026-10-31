@@ -11,7 +11,7 @@ export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta })
 /** Her yazma işleminden sonra tüm sorguları tazele: veri küçük, basitlik daha değerli.
  *  Hata: çağrıda onError verilmediyse ve form hatayı kendisi göstermiyorsa (inline) hata bildirimi çıkar —
  *  hiçbir yazma hatası sessiz kalmaz, düğme yeniden açılır. */
-export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void, opts?: { inline?: boolean }) {
+export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R, a: A) => void, opts?: { inline?: boolean }) {
   const qc = useQueryClient();
   const ui = useContext(UIContext);
   // eylem anahtarı (Idempotency-Key): başarıya kadar aynı kalır — ağ hatasından sonra tekrar basılan "Kaydet"
@@ -28,12 +28,12 @@ export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R) => void,
       }
       return r;
     }),
-    onSuccess: (r) => {
+    onSuccess: (r, a) => {
       key.current = null;
       qc.invalidateQueries();
-      onDone?.(r);
+      onDone?.(r, a);
     },
-    onError: (e) => { if (!handled.current && !opts?.inline) ui?.toast(e.message); },
+    onError: (e) => { if (!handled.current && !opts?.inline) ui?.error(e.message); },
   });
   const { mutate: run } = m;
   const mutate = useCallback((...args: Parameters<typeof run>) => { handled.current = !!args[1]?.onError; run(...args); }, [run]) as typeof run;

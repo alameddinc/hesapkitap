@@ -27,7 +27,7 @@ function WalletRow({ w }: { w: Wallet }) {
   const save = useSave((a: { method: string; url: string; body?: unknown; msg: string }) => json(a.method, a.url, a.body),
     (_r) => undefined);
   const act = (method: string, url: string, body: unknown, msg: string) =>
-    save.mutate({ method, url, body, msg }, { onSuccess: () => ui.toast(msg), onError: (e) => ui.toast(e.message) });
+    save.mutate({ method, url, body, msg }, { onSuccess: () => ui.toast(msg), onError: (e) => ui.error(e.message) });
   const ask = (q: string, def = "") => { const v = window.prompt(q, def); return v == null ? null : parseAmount(v); };
   return (
     <li className="py-2">
@@ -128,7 +128,7 @@ export default function Wallets() {
           <p className="text-xs text-stone-500">Yüklemeler "Yan Haklar" geliri, karttan harcamalar gider sayılır; bakiye banka bakiyene karışmaz.</p>
           <div className="flex gap-2">
             <button className="btn-primary" disabled={!f.name.trim() || add.isPending}
-              onClick={() => add.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Ekle</button>
+              onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Ekle</button>
             <button className="btn-ghost" onClick={() => setAdding(false)}>Vazgeç</button>
           </div>
         </div>

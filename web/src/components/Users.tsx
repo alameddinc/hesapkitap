@@ -24,7 +24,7 @@ const inviteLink = (code: string) => `${window.location.origin}/#/kayit?kod=${co
 export default function Users() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => call<AdminData>("/api/admin/users", "GET") });
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const [note, setNote] = useState("");
   const [name, setName] = useState("");
   const email = useLoginKind() === "email"; // hazır sürüm: hesap e-postayla açılır

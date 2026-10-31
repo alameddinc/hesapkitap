@@ -22,7 +22,7 @@ const ghNew = (s: Sub) => `https://github.com/alameddinc/hesapkitap/new/main/tem
 export default function BankTemplates({ isAdmin }: { isAdmin: boolean }) {
   const ui = useUI();
   const q = useQuery({ queryKey: ["bank-templates"], queryFn: () => call("GET", "/api/templates") as Promise<Data> });
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const sharing = useSave((on: boolean) => call("PUT", "/api/templates/sharing", { on }));
   const sync = useSave(() => call("POST", "/api/templates/sync"), (r: { added: number }) => ui.toast(`${r.added} yeni şablon`));
   const review = useSave((a: { id: number; status: string }) => call("POST", `/api/templates/submissions/${a.id}/${a.status}`));
