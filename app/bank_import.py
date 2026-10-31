@@ -325,8 +325,30 @@ def parse(rows: list[list[str]], mapping: dict, header_row: int, owners: list[st
 # ---------------------------------------------------------------- karşı taraf (kişi) çıkarma
 
 _BANK_WORDS = re.compile(r"\b(TURKIYE|T\.?|IS|HALK|ZIRAAT|VAKIFLAR|VAKIFBANK|VAKIF|KUVEYT|TURK|KATILIM|GARANTI|BBVA|YAPI|VE|KREDI|"
-                         r"AKBANK|QNB|FINANSBANK|DENIZBANK|ING|TEB|ALBARAKA|ENPARA|PAPARA|EMLAK|CUMHURIYETI|BANKASI|BANKA|"
-                         r"BANK|A\.?S\.?|T\.?A\.?S\.?|T\.?A\.?O\.?)\b")
+                         r"AKBANK|QNB|FINANSBANK|DENIZBANK|ING|TEB|ALBARAKA|ENPARA|PAPARA|EMLAK|CUMHURIYETI|CUMHURIYET|"
+                         r"\w*BANK\w*|A\.?S\.?|T\.?A\.?S\.?|T\.?A\.?O\.?|T\.?C\.?)\b")
+# Kişi adı banka adının artığıyla başlayamaz ('Bank Ayşe Yılmaz', 'Cumhuriyeti Ali Veli', 'Finans Ali Veli'): eski
+# sürüm BANK ve CUMHURIYETI'yi atmıyordu; listede olmayan banka adları (Türkiye Finans, Odea, Burgan…) de kalabilir.
+# Ad olabilecek kelimeler (Deniz, Şeker) bilerek yok: DenizBank/Şekerbank "BANK" içerdiği için zaten atılır.
+_BANK_PREFIX = {"BANK", "BANKA", "BANKASI", "CUMHURIYETI", "CUMHURIYET", "TURKIYE", "KATILIM", "FINANS", "AS", "TAS", "TAO",
+                "T", "C", "TC", "ZIRAAT", "VAKIF", "VAKIFLAR", "HALK", "KUVEYT", "TURK", "EMLAK", "ALBARAKA", "ENPARA",
+                "PAPARA", "QNB", "ING", "TEB", "GARANTI", "BBVA", "AKBANK", "ODEA", "BURGAN", "FIBA",
+                "AKTIF", "YATIRIM", "ICBC", "HSBC", "ANADOLUBANK", "YAPI", "KREDI", "VE", "IS"}
+
+
+def _strip_bank_prefix(words: list[str]) -> list[str]:
+    """Baştaki banka adı artıklarını at (normalize edilmiş kelimeler); en az bir kelime kalır."""
+    i = 0
+    while i < len(words) - 1 and (words[i] in _BANK_PREFIX or "BANK" in words[i]):
+        i += 1
+    return words[i:]
+
+
+def clean_person_name(name: str) -> str:
+    """Kayıtlı kişi adından baştaki banka artığını at, yazılışı koru: 'Cumhuriyeti Ayşe Yılmaz' → 'Ayşe Yılmaz'."""
+    words = (name or "").split()
+    keep = _strip_bank_prefix([re.sub(r"[^A-Z]", "", normalize(w)) for w in words])
+    return " ".join(words[len(words) - len(keep):]) if words else name
 
 
 def _clean_name(raw: str) -> str:
@@ -339,7 +361,7 @@ def _clean_name(raw: str) -> str:
     cut = next((i for i, w in enumerate(words) if w in _COMPANY_CUT), None)
     if cut:  # şirket: 'ELIF ORNEK EGITIM DANISMANLIK LIMITED SIRKETI' → unvanın başı
         return " ".join(words[max(0, cut - 4):cut][:3])
-    return " ".join(words[-3:])
+    return " ".join(_strip_bank_prefix(words[-3:]))
 
 
 _COMPANY_CUT = {"LIMITED", "LTD", "SIRKETI", "STI", "ANONIM", "TIC", "TICARET", "SAN", "SANAYI", "CORP", "INC", "LLC", "GMBH"}
