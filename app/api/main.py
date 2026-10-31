@@ -339,6 +339,10 @@ async def require_login(request: Request, call_next):
         return JSONResponse({"detail": errors.GENERIC[500]}, status_code=500)
 
 
+# bu önekli uçlarda başarılı yazmadan sonra o defterde doğruluk denetimi yeniden çalışır (app/integrity.after_write)
+_INTEGRITY_WRITES = ("/api/entries", "/api/own-transfers", "/api/debts", "/api/debt-payments", "/api/statements",
+                     "/api/bank-import", "/api/imports", "/api/accounts", "/api/card-transactions", "/api/splits",
+                     "/api/inbox", "/api/bills", "/share-target", "/api/share")
 CSRF_ORIGINS = {o.rstrip("/") for o in APP_ORIGINS} | {
     o.strip().rstrip("/") for o in os.environ.get("HESAPKITAP_CSRF_ORIGINS", "").split(",") if o.strip()}
 _UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
@@ -420,6 +424,10 @@ async def _require_login(request: Request, call_next):
             response = await _run(request, call_next, db_file, path)
     else:
         response = await _run(request, call_next, None, path)
+    if request.method in _UNSAFE and response.status_code < 400 and path.startswith(_INTEGRITY_WRITES):
+        from app import integrity  # düzeltilen sorunun Yapılacaklar maddesi hemen düşsün (arka planda, gecikmeli)
+
+        integrity.after_write(db_file if user else None, user)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -2481,6 +2489,29 @@ def delete_debt_payment(pid: int):
     deleted: false. Dönüş: {ok, deleted, debt_id}."""
     did = db.delete_debt_payment(pid)
     return {"ok": True, "deleted": did is not None, "debt_id": did}
+
+
+@app.get("/api/integrity")
+def integrity_summary():
+    """Gece doğruluk denetiminin son koşusu: {last: {day, ran_at, ms, counts} | null, details: [{code, label, count,
+    hint, route, items: [{ref, date, amount, title, route}]}], total, rerun (bu saat kalan yeniden kontrol hakkı)}."""
+    from app import integrity
+
+    return integrity.summary()
+
+
+@app.post("/api/integrity/run")
+def integrity_rerun():
+    """'Yeniden kontrol et': hemen denetle (saatte 6). Dönüş GET ile aynı; sınırdaysa 429."""
+    from app import book, integrity
+
+    m = book.member()
+    if m and book.role(m) == "viewer":
+        raise HTTPException(403, errors.GENERIC[403])
+    out = integrity.rerun()
+    if out is None:
+        raise HTTPException(429, "Bu saat içinde yeterince kontrol ettik; biraz sonra tekrar dene.")
+    return out
 
 
 @app.get("/api/onboarding")

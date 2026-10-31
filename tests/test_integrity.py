@@ -189,3 +189,60 @@ def test_debt_checks_separate(tmpdb):
     r = integrity.check(date(2026, 10, 31))["refs"]
     assert r.get("borc_fazla_odeme") == [f"debt:{over}"]
     assert r.get("borc_odenen_tutarsiz") == [f"debt:{odd}"]
+
+
+# ---------------------------------------------------------------- anlaşılır madde, yeniden kontrol, yazma sonrası
+
+def test_todo_details_have_items_and_hints(client):
+    eid = _entry(client, "2026-10-06", "Örnek Market", 100)
+    with db.connect() as c:
+        c.execute("INSERT INTO splits (entry_id, amount, category) VALUES (?, 150, 'Sigara')", (eid,))
+        did = c.execute("INSERT INTO debts (person, direction, amount, paid_amount, debt_date) VALUES ('Ali Örnek', "
+                        "'alacak', 100, 100, '2026-09-01')").lastrowid
+        c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at) VALUES (?, 1000, '2026-10-01')", (did,))
+    integrity.run(date(2026, 10, 31))
+    t = next(r for r in client.get("/api/reminders").json() if r["kind"] == "dogruluk")
+    by = {d["code"]: d for d in t["details"]}
+    it = by["bolme_asim"]["items"][0]
+    assert it == {"ref": f"entry:{eid}", "date": "2026-10-06", "amount": -100.0, "title": "Örnek Market",
+                  "route": f"islemler/m{eid}"}
+    assert by["bolme_asim"]["hint"] and by["borc_fazla_odeme"]["items"][0]["route"] == f"borclar/{did}"
+    assert "Ali Örnek" in by["borc_fazla_odeme"]["items"][0]["title"] and t["checked_at"]
+    g = client.get("/api/integrity").json()
+    assert g["total"] == 2 and g["last"]["counts"] == {"bolme_asim": 1, "borc_fazla_odeme": 1}
+    assert {d["code"] for d in g["details"]} == {"bolme_asim", "borc_fazla_odeme"}
+    # yönetici kanalında yine yalnız sayılar
+    assert "Örnek" not in integrity.admin_text(integrity.admin_summary("2026-10-31"))
+
+
+def test_rerun_endpoint_clears_fixed_and_is_limited(client):
+    eid = _entry(client, "2026-10-06", "Örnek Market", 100)
+    with db.connect() as c:
+        sid = c.execute("INSERT INTO splits (entry_id, amount, category) VALUES (?, 150, 'Sigara')", (eid,)).lastrowid
+    assert client.post("/api/integrity/run").json()["total"] == 1
+    with db.connect() as c:
+        c.execute("UPDATE splits SET amount = 50 WHERE id = ?", (sid,))  # kullanıcı düzeltti
+    r = client.post("/api/integrity/run").json()
+    assert r["total"] == 0 and r["details"] == [] and r["rerun"] == integrity.RERUN_PER_HOUR - 2
+    assert not [x for x in client.get("/api/reminders").json() if x["kind"] == "dogruluk"]
+    for _ in range(integrity.RERUN_PER_HOUR - 2):
+        assert client.post("/api/integrity/run").status_code == 200
+    assert client.post("/api/integrity/run").status_code == 429
+
+
+def test_after_write_reruns_in_background(client, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("JOBS_ENABLED", "1")
+    monkeypatch.setattr(integrity, "AFTER_WRITE_DELAY", 0.01)
+    done = threading.Event()
+    real = integrity.run
+    monkeypatch.setattr(integrity, "run", lambda *a, **k: (real(*a, **k), done.set())[0])
+    eid = _entry(client, "2026-10-06", "Örnek Market", 100)
+    with db.connect() as c:
+        c.execute("INSERT INTO splits (entry_id, amount, category) VALUES (?, 150, 'Sigara')", (eid,))
+    real(date(2026, 10, 31))
+    assert integrity.last()["counts"] == {"bolme_asim": 1}
+    assert client.delete(f"/api/entries/{eid}").status_code == 200  # kaydı silmek sorunu giderir
+    assert done.wait(5)
+    assert integrity.last()["counts"] == {}

@@ -542,6 +542,9 @@ def main(argv: list[str]) -> int:
             _print(rep, False)
             return 0
         _print(repair(apply=True), True)
+        from app import integrity  # onarılan sorunların Yapılacaklar maddesi hemen düşsün
+
+        print("doğruluk denetimi:", integrity.run())
     return 0
 
 

@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from datetime import date, datetime
 
@@ -192,29 +193,40 @@ def _kart_borcu(today: date, statements: list[dict]) -> list[str]:
     return [] if money.eq(mine, db.card_debt_at(d, statements)) else ["card_debt"]
 
 
+_REF = {"entries": "entry", "transactions": "txn", "statements": "statement", "debts": "debt",
+        "debt_payments": "debt_payment", "own_transfers": "own_transfer", "card_payments": "card_payment",
+        "accounts": "account", "bills": "bill", "splits": "split"}
+
+
 def _kurus_alti() -> list[str]:
-    with db.connect() as c:  # app/money.py ile aynı tablo/kolon listesi (altın/döviz borcu hariç)
-        return [k for k, n in money.off_cents(c).items() for _ in range(n)]
+    """Kuruş altı tutar taşıyan kayıtlar (app/money.py ile aynı tablo/kolon listesi; altın/döviz borcu hariç)."""
+    out = []
+    with db.connect() as c:
+        for t, col, extra in money._targets(c):
+            for (rid,) in c.execute(f"SELECT rowid FROM {t} WHERE {money._OFF.format(col=col)}{extra}"):
+                out.append(f"{_REF.get(t, t)}:{rid}")
+    return out
 
 
 def _cift_aktarim() -> list[str]:
     with db.connect() as c:
-        same_hash = _q(c, "SELECT import_hash AS h FROM entries WHERE import_hash IS NOT NULL "
-                          "GROUP BY import_hash HAVING COUNT(*) > 1")
+        same_hash = _q(c, "SELECT id FROM entries e WHERE import_hash IS NOT NULL AND EXISTS (SELECT 1 FROM entries o "
+                          "WHERE o.import_hash = e.import_hash AND o.id < e.id)")  # aynı parmak izinin ikinci kaydı
         # aynı hesap, aynı gün, aynı tutar, aynı yön; iki FARKLI belgeden (PDF + Excel aynı dönemi iki kez)
         cross = _q(c, """SELECT a.id FROM entries a JOIN entries b ON b.account_id = a.account_id
                           AND b.entry_date = a.entry_date AND b.kind = a.kind AND ROUND(b.amount * 100) = ROUND(a.amount * 100)
                           AND b.id > a.id AND b.bank_doc_id IS NOT NULL AND a.bank_doc_id IS NOT NULL
                           AND b.bank_doc_id <> a.bank_doc_id
                          WHERE a.import_hash IS NOT NULL AND b.import_hash IS NOT NULL AND a.skipped = 0 AND b.skipped = 0""")
-    return [f"hash:{hashlib.sha256(r['h'].encode()).hexdigest()[:8]}" for r in same_hash] + [f"entry:{r['id']}" for r in cross]
+    return [f"entry:{r['id']}" for r in same_hash + cross]
 
 
 def _cift_ekstre() -> list[str]:
     with db.connect() as c:
-        rows = _q(c, """SELECT card_no || ':' || substr(period_end, 1, 7) AS k FROM statements
-                        WHERE COALESCE(source, '') <> 'excel' GROUP BY card_no, substr(period_end, 1, 7) HAVING COUNT(*) > 1""")
-    return [f"card_month:{hashlib.sha256(r['k'].encode()).hexdigest()[:8]}" for r in rows]  # kart no kimlikte açık değil
+        rows = _q(c, """SELECT s.id FROM statements s WHERE COALESCE(s.source, '') <> 'excel' AND EXISTS (
+                        SELECT 1 FROM statements o WHERE o.card_no = s.card_no AND o.id <> s.id
+                        AND COALESCE(o.source, '') <> 'excel' AND substr(o.period_end, 1, 7) = substr(s.period_end, 1, 7))""")
+    return [f"statement:{r['id']}" for r in rows]
 
 
 # ---------------------------------------------------------------- çalıştırma
@@ -233,7 +245,7 @@ def check(today: date | None = None) -> dict:
     for code, fn in checks:
         try:
             if r := fn():
-                refs[code] = sorted(set(r)) if code != "kurus_alti" else r
+                refs[code] = sorted(set(r))
         except Exception:  # noqa: BLE001 - bir denetimin hatası ötekileri durdurmasın (yalnız kod adı günlüğe)
             log.exception("doğruluk denetimi %s çalışamadı", code)
             refs.setdefault("_hata", []).append(code)
@@ -252,6 +264,7 @@ def last() -> dict | None:
 def run(today: date | None = None) -> dict:
     """Denetle, sonucu deftere yaz (yeni çıkan ihlalleri işaretle). Dönüş yalnız sayılar (günlüğe yazılabilir)."""
     res = check(today)
+    res["ran_at"] = datetime.now().isoformat(timespec="seconds")
     prev = last() or {}
     prev_refs = {(k, r) for k, v in (prev.get("refs") or {}).items() for r in v}
     res["new"] = sum(1 for k, v in res["refs"].items() for r in v if (k, r) not in prev_refs)
@@ -342,23 +355,187 @@ REPORT_HOUR = 5  # denetim 4'te; özet herkesin denetimi bittikten sonra
 
 # ---------------------------------------------------------------- Yapılacaklar maddesi
 
+HINTS = {
+    "bakiye_capa": "Hesabın bakiyesini bankadaki son bakiyeyle karşılaştır; farklıysa güncel bakiyeyi gir ya da eksik "
+                   "dökümü yükle.",
+    "ekstre_denklem": "Ekstreyi PDF'le karşılaştır: önceki borç, ödemeler ve harcamalar doğru okunmuş mu? Doğruysa "
+                      "'Rakamlar doğru' de.",
+    "ekstre_satir_farki": "Ekstrede eksik ya da fazla okunmuş bir işlem olabilir; işlemleri PDF'le karşılaştır.",
+    "odeme_ekstre": "Bu ekstrenin 'ödendi' bilgisi ödemelerinle uyuşmuyor; ödeme tarihini ve tutarını kontrol et.",
+    "virman_tek_bacak": "Bu aktarımın karşı hesaptaki girişi bulunamadı; o hesabın dökümünü yükle ya da aktarım "
+                        "başkasına gittiyse 'Kendi hesaplarım arası değil' de.",
+    "bolme_asim": "Harcamanın parçalarını düzelt: parçaların toplamı harcamadan büyük olamaz.",
+    "borc_fazla_odeme": "Bu borca borcun kendisinden fazla ödeme yazılmış; fazla ödeme satırını sil.",
+    "borc_odenen_tutarsiz": "Borcun ödenen tutarı ödemelerle uyuşmuyor; ödeme satırlarına bak.",
+    "kart_borcu": "Kart borcu iki yoldan farklı çıktı; kartların son ekstrelerine bak.",
+    "kurus_alti": "Tutarda kuruştan küçük basamak var; kaydı açıp tutarı yeniden kaydet.",
+    "cift_aktarim": "Bu hareket iki kez içe aktarılmış görünüyor; fazla olanı sil.",
+    "cift_ekstre": "Aynı kartın aynı ayı için iki ekstre var; yanlış yüklenmiş olanı sil.",
+}
+MAX_ITEMS = 10
+
+
+def _item(c, ref: str) -> dict | None:
+    """Kimliği kullanıcıya gösterilecek öğeye çevir: {ref, date, amount, title, route}. Kayıt silinmişse None.
+    Yalnız kullanıcının kendi istemcisine gider (Yapılacaklar, /api/integrity); yönetici özetinde yok."""
+    kind, _, rid = ref.partition(":")
+    if kind == "card_debt":
+        return {"ref": ref, "date": None, "amount": None, "title": "Kart borcu (tüm kartlar)", "route": "ekstreler"}
+    if not rid.isdigit():
+        return None
+    rid = int(rid)
+    one = lambda sql: c.execute(sql, (rid,)).fetchone()  # noqa: E731
+    if kind == "entry" and (r := one("SELECT entry_date, amount, kind, description, counterparty FROM entries WHERE id = ?")):
+        return {"ref": ref, "date": r["entry_date"], "amount": r["amount"] if r["kind"] == "gelir" else -r["amount"],
+                "title": r["description"] or r["counterparty"] or "Kayıt", "route": f"islemler/m{rid}"}
+    if kind == "txn" and (r := one("SELECT t.txn_date, t.amount, t.description FROM transactions t WHERE t.id = ?")):
+        return {"ref": ref, "date": r["txn_date"], "amount": -r["amount"], "title": r["description"],
+                "route": f"islemler/c{rid}"}
+    if kind == "statement" and (r := one("SELECT bank, card_no, period_end, total_debt FROM statements WHERE id = ?")):
+        l4 = "".join(ch for ch in r["card_no"] or "" if ch.isdigit())[-4:]
+        return {"ref": ref, "date": r["period_end"], "amount": r["total_debt"],
+                "title": f"{r['bank']} ••{l4} ekstresi", "route": f"ekstreler/{rid}"}
+    if kind == "account" and (r := one("SELECT * FROM accounts WHERE id = ?")):
+        return {"ref": ref, "date": r["as_of"], "amount": db._account_balance(c, dict(r)), "title": r["name"],
+                "route": f"hesaplar/{rid}"}
+    if kind == "own_transfer" and (r := one("SELECT transfer_date, amount, description FROM own_transfers WHERE id = ?")):
+        return {"ref": ref, "date": r["transfer_date"], "amount": r["amount"],
+                "title": r["description"] or terms.OWN_TRANSFER, "route": f"transferler/v{rid}"}
+    if kind == "debt" and (r := one("SELECT person, direction, amount, debt_date FROM debts WHERE id = ?")):
+        return {"ref": ref, "date": r["debt_date"], "amount": r["amount"],
+                "title": f"{r['person']} ({'borcun' if r['direction'] == 'borc' else 'alacağın'})", "route": f"borclar/{rid}"}
+    if kind == "debt_payment" and (r := one("SELECT p.paid_at, p.amount, p.debt_id, d.person FROM debt_payments p "
+                                            "JOIN debts d ON d.id = p.debt_id WHERE p.id = ?")):
+        return {"ref": ref, "date": r["paid_at"], "amount": r["amount"], "title": f"{r['person']} · ödeme",
+                "route": f"borclar/{r['debt_id']}"}
+    if kind == "card_payment" and (r := one("SELECT pay_date, amount, description FROM card_payments WHERE id = ?")):
+        return {"ref": ref, "date": r["pay_date"], "amount": -r["amount"], "title": r["description"] or "Kart ödemesi",
+                "route": "ekstreler"}
+    if kind == "bill" and (r := one("SELECT due_date, amount, provider FROM bills WHERE id = ?")):
+        return {"ref": ref, "date": r["due_date"], "amount": r["amount"], "title": r["provider"], "route": "faturalar"}
+    if kind == "split" and (r := one("SELECT entry_id, txn_id, amount, category FROM splits WHERE id = ?")):
+        route = f"islemler/m{r['entry_id']}" if r["entry_id"] else f"islemler/c{r['txn_id']}"
+        return {"ref": ref, "date": None, "amount": r["amount"], "title": f"Bölme parçası · {r['category']}", "route": route}
+    return None
+
+
+def details(r: dict | None = None) -> list[dict]:
+    """Son koşunun kuralları ve kayıtları: [{code, label, count, hint, items: [...en çok 10]}]. Ortak defter üyesine
+    kayıt gösterilmez (gizlenen kart/hesap sızmasın); sayılar ve açıklama kalır."""
+    from app import book
+
+    r = r or last() or {}
+    member = bool(book.active())
+    out = []
+    with db.connect() as c:
+        for code, refs in (r.get("refs") or {}).items():
+            if code not in LABELS:
+                continue
+            items = [] if member else [i for i in (_item(c, x) for x in refs[:MAX_ITEMS]) if i]
+            out.append({"code": code, "label": LABELS[code], "count": len(refs), "hint": HINTS.get(code), "items": items,
+                        "route": ROUTES.get(code, "ozet")})
+    return out
+
+
+def summary() -> dict:
+    """GET /api/integrity: son koşu (gün, saat, sayılar, süre) ve ayrıntılar; hiç çalışmadıysa last null."""
+    r = last()
+    if not r:
+        return {"last": None, "details": [], "total": 0, "rerun": rerun_left()}
+    d = details(r)
+    return {"last": {k: r.get(k) for k in ("day", "ran_at", "ms")} | {"counts": {k: v for k, v in r["counts"].items()
+                                                                                 if k in LABELS}},
+            "details": d, "total": sum(x["count"] for x in d), "rerun": rerun_left()}
+
+
+RERUN_PER_HOUR = 6
+
+
+def _rerun_key() -> str:
+    u = db.current_user()
+    return f"integrity:reruns:{u['id']}" if u and u.get("id") else "integrity:reruns"
+
+
+def rerun_left() -> int:
+    now = time.time()
+    try:
+        ts = [t for t in json.loads(db.get_setting(_rerun_key()) or "[]") if now - t < 3600]
+    except ValueError:
+        ts = []
+    return max(0, RERUN_PER_HOUR - len(ts))
+
+
+def rerun() -> dict | None:
+    """Kullanıcının 'Yeniden kontrol et'i: saatte RERUN_PER_HOUR. Sınırdaysa None."""
+    now = time.time()
+    try:
+        ts = [t for t in json.loads(db.get_setting(_rerun_key()) or "[]") if now - t < 3600]
+    except ValueError:
+        ts = []
+    if len(ts) >= RERUN_PER_HOUR:
+        return None
+    db.set_setting(_rerun_key(), json.dumps(ts + [now]))
+    run()
+    return summary()
+
+
+# ---------------------------------------------------------------- yazmadan sonra (arka planda, gecikmeli)
+
+AFTER_WRITE_DELAY = 3.0  # saniye: art arda düzenlemeler tek koşuda birleşir
+_pending: dict[str, "threading.Timer"] = {}
+_pending_lock = threading.Lock()
+
+
+def auto_enabled() -> bool:
+    """Yazmadan sonra yeniden denetim: zamanlanmış işlerle aynı anahtar (JOBS_ENABLED; testlerde kapalı)."""
+    return os.environ.get("JOBS_ENABLED", "1") == "1" and os.environ.get("HESAPKITAP_INTEGRITY_AUTO", "1") == "1"
+
+
+def after_write(db_file: str | None, user: dict | None) -> None:
+    """Defterde kayıt değişti: AFTER_WRITE_DELAY sonra o defterde integrity.run (düzeltilen sorunun maddesi düşsün).
+    Defter başına tek zamanlayıcı; bekleyen varsa ertelenir. Yalnız daha önce denetlenmiş deftere (koşu kaydı var)."""
+    if not auto_enabled():
+        return
+    key = os.path.abspath(db_file or db.DB_PATH)
+
+    def go():
+        with _pending_lock:
+            _pending.pop(key, None)
+        try:
+            with db.use_space(db_file, user):
+                if last() is not None:
+                    run()
+        except Exception:  # noqa: BLE001 - arka plan: isteği etkilemez
+            log.exception("yazma sonrası doğruluk denetimi")
+
+    with _pending_lock:
+        if old := _pending.pop(key, None):
+            old.cancel()
+        t = threading.Timer(AFTER_WRITE_DELAY, go)
+        t.daemon = True
+        _pending[key] = t
+        t.start()
+
+
 def todo() -> dict | None:
     """Son denetimde ihlal varsa Yapılacaklar maddesi. Kimlik ihlal kümesine bağlı: kapatılırsa aynı küme bir daha
-    sorulmaz, yeni bir ihlal çıkınca yeniden görünür."""
+    sorulmaz, yeni bir ihlal çıkınca yeniden görünür. details[].items: hangi kayıt (kullanıcının kendi istemcisine)."""
     r = last()
     if not r or not any(k != "_hata" for k in r.get("counts") or {}):
         return None
-    counts = {k: v for k, v in r["counts"].items() if k in LABELS}
+    lines = details(r)
+    if not lines:
+        return None
     sig = hashlib.sha256(json.dumps(r["refs"], sort_keys=True).encode()).hexdigest()[:10]
-    lines = [{"code": k, "label": LABELS[k], "count": n} for k, n in counts.items()]
-    n = sum(counts.values())
-    first = next(iter(counts))
+    n = sum(x["count"] for x in lines)
+    when = "Gece yaptığımız kontrolde" if (r.get("ran_at") or "")[11:13] in ("", "03", "04", "05") else "Son kontrolde"
     return {"id": f"dogruluk:{sig}", "kind": "dogruluk", "severity": "warn", "title": "Rakamları kontrol et",
-            "text": f"Gece yaptığımız kontrolde {n} yerde tutmayan bir rakam gördük: "
+            "text": f"{when} {n} yerde tutmayan bir rakam gördük: "
                     + "; ".join(f"{x['label'].lower()} ({x['count']})" for x in lines)
-                    + ". Bunu biz de gördük, inceliyoruz. Bu arada ilgili kayda bir göz atmak istersen buradan açabilirsin.",
-            "cta": terms.CTA_LOOK, "route": ROUTES.get(first, "ozet"), "action": "integrity", "due": r["day"],
-            "period": r["day"][:7], "details": lines, "tag": "Kontrol"}
+                    + ". Bunu biz de gördük, inceliyoruz. Aşağıda hangi kayıt olduğunu ve ne yapabileceğini yazdık.",
+            "cta": terms.CTA_LOOK, "route": lines[0]["route"], "action": "integrity", "due": r["day"],
+            "period": r["day"][:7], "details": lines, "checked_at": r.get("ran_at") or r["day"], "tag": "Kontrol",
+            "rerun": True}
 
 
 # ---------------------------------------------------------------- elle çalıştırma
