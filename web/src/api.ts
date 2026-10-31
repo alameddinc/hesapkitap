@@ -411,6 +411,9 @@ export interface Rule {
 
 export type DocKind = "card" | "account" | "dekont";
 
+/** GET /api/transactions?limit=…: bir sayfa; next null → son sayfa. totals yalnız totals=1 ile (Summary.totals + count). */
+export interface TxnPage { rows: Row[]; next: string | null; totals?: Summary["totals"] & { count: number } }
+
 export interface ImportBatch {
   id: string;
   created_at: string;
@@ -469,6 +472,13 @@ export const api = {
   summary: (month: string) => req<Summary>("GET", `/api/summary${q({ month })}`),
   transactions: (month?: string, includeDeleted = false, includeEstimates = false) =>
     req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted, include_estimates: includeEstimates || undefined })}`),
+  /** Sayfalı (sunucu b185e16): yeniden eskiye limit kadar satır; before = önceki sayfanın next'i; totals=1 → kümenin
+   *  tamamının toplamı (sayfanın değil). Eski sunucu limit'i tanımaz ve düz dizi döner: tek sayfa sayılır. */
+  transactionsPage: async (o: { month?: string; includeDeleted?: boolean; includeEstimates?: boolean; limit: number; before?: string | null; totals?: boolean }) => {
+    const r = await req<Row[] | TxnPage>("GET", `/api/transactions${q({ month: o.month, include_deleted: o.includeDeleted || undefined,
+      include_estimates: o.includeEstimates || undefined, limit: o.limit, before: o.before ?? undefined, totals: o.totals || undefined })}`);
+    return Array.isArray(r) ? { rows: r, next: null } as TxnPage : r;
+  },
   plan: (months: number) => req<Plan>("GET", `/api/plan${q({ months })}`),
 
   patchCard: (id: number, body: Record<string, unknown>) =>
