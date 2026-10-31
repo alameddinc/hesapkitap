@@ -240,3 +240,27 @@ def test_repair_anchor_newest_first(tmpdb):
     assert [(a["amount"], a["was"]) for a in rep["anchors"]] == [(9200.0, "Garanti 9,700.00")]
     bank_repair.repair(apply=True)
     assert next(x for x in tmpdb.list_accounts() if x["id"] == acc)["balance"] == 9200.0
+
+
+def test_repair_transfer_accounts_balance_effect(tmpdb, capsys):
+    """Dökümden gelen virmana hesap yazmak bakiyeyi değiştirmez; yalnız e-postadan gelmiş, çapadan sonraki virman
+    bakiyeye girer. Kuru çalıştırma çıktısında bakiye etkisi ve hesap bakiyeleri önce/sonra."""
+    from app import bank_repair
+
+    acc = _anchored(tmpdb)  # Halkbank, çapa 10.10.2026 = 20.000
+    with tmpdb.connect() as c:  # eski kod: hesap bilgisi yazılmamış virmanlar
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, import_hash) "
+                  "VALUES ('2026-10-05', -1000, 'Halkbank', 'dokumden', 'doc-1')")
+        c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, import_hash) "
+                  "VALUES ('2026-10-15', -2500, 'Halkbank', 'bildirimden', 'mail:x')")
+    rep = bank_repair.repair(apply=False)
+    assert [(t["amount"], t["effect"]) for t in rep["transfer_accounts"]] == [(-1000.0, 0.0)]
+    assert [(t["amount"], t["effect"]) for t in rep["transfer_balance"]] == [(-2500.0, -2500.0)]
+    bank_repair._print(rep, False)
+    out = capsys.readouterr().out
+    assert "bakiye değişmez): 1 kayıt, bakiye etkisi +0.00" in out
+    assert "bakiye etkisi -2,500.00" in out
+    rep = bank_repair.repair(apply=True)
+    b = next(x for x in rep["balances"] if x["account"] == "Halkbank")
+    assert (b["before"], b["after"], b["diff"]) == (20000.0, 17500.0, -2500.0)
+    assert _current(tmpdb, acc) == 17500.0
