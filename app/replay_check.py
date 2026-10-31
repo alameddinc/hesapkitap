@@ -225,7 +225,8 @@ def _measure() -> dict:
                                                  for m, v in card_spend.items() if m not in months},
         "statements": [{k: s.get(k) for k in ("id", "bank", "card_no", "period_end", "previous_balance", "payments",
                                                "period_activity", "fees", "total_debt", "reconciliation_diff",
-                                               "needs_check", "paid_amount", "paid_at", "confirmed_at")} for s in sts],
+                                               "needs_check", "paid_amount", "paid_at", "confirmed_at", "min_payment",
+                                               "fees_included", "equation_diff")} for s in sts],
         "virman": {"count": len(own), "in": round(sum(o["amount"] for o in own if o["amount"] > 0), 2),
                    "out": round(-sum(o["amount"] for o in own if o["amount"] < 0), 2)},
         "people": len(people),
@@ -250,11 +251,9 @@ def compare(new: dict, live: dict, last_bal: dict) -> dict:
     # (2) ekstre denklemi
     eq = []
     for s in new["statements"]:
-        if s["previous_balance"] is None or s["payments"] is None or s["period_activity"] is None:
-            calc = None
-        else:
-            calc = round(s["previous_balance"] - s["payments"] + s["period_activity"] + (s["fees"] or 0), 2)
-        eq.append({**s, "equation": calc, "equation_diff": round(s["total_debt"] - calc, 2) if calc is not None else None})
+        d = s.get("equation_diff")
+        calc = round(s["total_debt"] - d, 2) if d is not None else None
+        eq.append({**s, "equation": calc})
     out["statements"] = eq
     # (3) aylar
     months = []
@@ -270,11 +269,31 @@ def compare(new: dict, live: dict, last_bal: dict) -> dict:
     # (4) ödendi işaretleri
     paid = []
     live_st = {(s["card_no"], s["period_end"]): s for s in live["statements"]}
+
+    def flags(st_list):
+        """(kart, dönem) → işaretler: tutar uyuşmazlığı (ödenen ne borç ne asgari), aynı ödeme birden çok ekstrede."""
+        out_f: dict = defaultdict(list)
+        seen_pay: dict = defaultdict(list)
+        for s in st_list:
+            if s["paid_at"]:
+                seen_pay[((s["card_no"] or "")[-4:], s["paid_at"], s["paid_amount"])].append(s)
+                if abs((s["paid_amount"] or 0) - (s["total_debt"] or 0)) > 1 and \
+                        abs((s["paid_amount"] or 0) - (s.get("min_payment") or -9)) > 1:
+                    out_f[(s["card_no"], s["period_end"])].append("tutar uyuşmazlığı")
+        for group in seen_pay.values():
+            if len(group) > 1:
+                for s in group:
+                    out_f[(s["card_no"], s["period_end"])].append(f"aynı ödeme {len(group)} ekstrede")
+        return out_f
+
+    nf, lf = flags(new["statements"]), flags(live["statements"])
     for s in new["statements"]:
         lv = live_st.get((s["card_no"], s["period_end"]), {})
+        k = (s["card_no"], s["period_end"])
         paid.append({"card": s["card_no"], "period_end": s["period_end"], "total_debt": s["total_debt"],
                      "new_paid": s["paid_amount"], "new_paid_at": s["paid_at"], "live_paid": lv.get("paid_amount"),
-                     "live_paid_at": lv.get("paid_at"), "same": (s["paid_amount"] or 0) == (lv.get("paid_amount") or 0)})
+                     "live_paid_at": lv.get("paid_at"), "new_flags": nf.get(k, []), "live_flags": lf.get(k, []),
+                     "same": (s["paid_amount"] or 0) == (lv.get("paid_amount") or 0) and s["paid_at"] == lv.get("paid_at")})
     out["payments"] = paid
     # (5) virman ve kişiler
     out["virman"] = {"new": new["virman"], "live": live["virman"]}
@@ -355,8 +374,10 @@ def render(r: dict) -> str:
     out += ["", "(2) KART EKSTRELERİ: önceki − ödeme + harcama + faiz/ücret = yeni borç"]
     for s in r["statements"]:
         flag = "OK" if s["equation_diff"] is not None and abs(s["equation_diff"]) < 1 else "KONTROL"
+        fee_txt = (f" + {_tl(s['fees'])}" if s.get("fees_included") is False else
+                   f" (faiz {_tl(s['fees'])} içinde)" if s.get("fees_included") else "")
         out.append(f"  [{flag:7}] {s['bank']} {s['card_no'][-4:]} {s['period_end']}: {_tl(s['previous_balance'])} − "
-                   f"{_tl(s['payments'])} + {_tl(s['period_activity'])} + {_tl(s['fees'])} = {_tl(s['equation'])} / "
+                   f"{_tl(s['payments'])} + {_tl(s['period_activity'])}{fee_txt} = {_tl(s['equation'])} / "
                    f"ekstre {_tl(s['total_debt'])} (fark {_tl(s['equation_diff'])}, okunan−özet {_tl(s['reconciliation_diff'])})")
     out += ["", "(3) AY AY (belgeden gelen kayıtlar): yeni / canlı / fark"]
     for m in r["months"]:
@@ -370,7 +391,8 @@ def render(r: dict) -> str:
     out += ["", "(4) EKSTRE ÖDENDİ İŞARETLERİ: yeni / canlı"]
     for p in r["payments"]:
         out.append(f"  {'  ' if p['same'] else '≠ '}{p['card'][-4:]} {p['period_end']} borç {_tl(p['total_debt'])}: "
-                   f"yeni {_tl(p['new_paid'])} {p['new_paid_at'] or ''} / canlı {_tl(p['live_paid'])} {p['live_paid_at'] or ''}")
+                   f"yeni {_tl(p['new_paid'])} {p['new_paid_at'] or ''} {','.join(p['new_flags'])} / "
+                   f"canlı {_tl(p['live_paid'])} {p['live_paid_at'] or ''} {','.join(p['live_flags'])}")
     v = r["virman"]
     out += ["", "(5) VİRMAN VE KİŞİLER",
             f"  virman: yeni {v['new']['count']} kayıt (giriş {_tl(v['new']['in'])}, çıkış {_tl(v['new']['out'])}) / "

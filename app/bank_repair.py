@@ -219,6 +219,9 @@ def repair(apply: bool = False) -> dict:
         # açıklaması kesik kalmış (dosyası yok) giden kendi transferleri: karşı hesaba giriş artık own_transfers'ta
         report["paired"] = [{"id": m["id"], "date": m["entry_date"], "amount": -m["amount"], "was": m["description"]}
                             for m in db.repair_own_transfers(owners)]
+    # ekstrelerin ödendi işaretleri: bütün kart ödemelerinden yeniden (eski algoritma aynı ödemeyi birden çok ekstreye
+    # yazıyordu, yükleme sırasına bağlıydı); elle işaretlenenlere dokunulmaz
+    report["statements"] = db.reassign_statement_payments(apply=apply)["changed"]
     return report
 
 
@@ -239,6 +242,11 @@ def _print(rep: dict, apply: bool) -> None:
     print(f"\naçıklama/kişi düzeltilen: {len(rep['updated'])}")
     for r in rep["updated"]:
         print(f"  #{r['id']} {r['date']} {r['amount']:>12,.2f}  {(r['was'] or '')[:45]!r} → {r['now']!r} {r['fields']}")
+    sts = rep.get("statements", [])
+    print(f"\nekstre ödendi işareti değişen: {len(sts)}")
+    for ch in sts:
+        print(f"  {ch['card'][-4:]} {ch['period_end']} borç {ch['total_debt']:,.2f}: {ch['was']} → {ch['now']}  "
+              f"ödemeler {ch['payments']}")
     rel = rep.get("relabelled", [])
     print(f"\nvirman açıklaması temizlenen: {len(rel)}")
     for r in rel:
