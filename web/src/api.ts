@@ -436,6 +436,17 @@ export interface UploadResult {
   dekont?: boolean; // tek işlem dekontu: hesaba eklendi, bakiye değişmedi
   card_excel?: { statements: number; transactions: number; range: [string, string] | null; cut_day: number }; // kart işlem Excel'i
   manual?: boolean; quota_full?: boolean; limit?: number; upgrade?: boolean; // hazır sürüm: belge okuma hakkı doldu (okunmadı)
+  /** S6 (sunucu 48d6cc2): ekstre denklemi tuttu mu; dogrulanamadi ise verification_text nedeni söyler */
+  verified?: boolean; verification?: Verification; verification_text?: string | null; equation_diff?: number | null;
+}
+
+/** Belge doğrulama durumu: dogrulandi (rakamlar tuttu), dogrulanamadi (tutmadı), onaylandi (kullanıcı doğru dedi). */
+export type Verification = "dogrulandi" | "dogrulanamadi" | "onaylandi" | null;
+
+/** GET /api/bank-import/documents: yüklenen hesap dökümü dosyaları. */
+export interface BankDocument {
+  id: number; filename: string | null; bank: string | null; account_id: number | null; size: number; stored: number | boolean;
+  uploaded_at: string; verification?: Verification;
 }
 
 export { ApiError };
@@ -527,6 +538,12 @@ export const api = {
   undoImport: (id: string, force = false) =>
     req<{ ok: boolean; conflicts?: string[]; already?: boolean }>("POST", `/api/imports/${id}/undo${force ? "?force=true" : ""}`),
   deleteStatement: (id: number) => req("DELETE", `/api/statements/${id}`),
+  bankDocuments: () => req<BankDocument[]>("GET", "/api/bank-import/documents"),
+  /** bakiye zinciri tutmayan dökümü kullanıcı belgeyle karşılaştırdı, doğru */
+  confirmBankDocument: (id: number) => req<{ ok: boolean; verification: Verification }>("POST", `/api/bank-import/documents/${id}/confirm`),
+  /** Gelen kutusunda onay bekleyen doğrulanamayan belgeyi (dokum | ekstre) kaydet */
+  importInbox: (id: number) =>
+    req<{ ok: boolean; kind: "dokum" | "ekstre"; message: string; statement_id?: number }>("POST", `/api/inbox/${id}/import`),
   confirmStatement: (id: number) => req<{ ok: boolean; confirmed_at: string | null }>("POST", `/api/statements/${id}/confirm`),
   unconfirmStatement: (id: number) => req<{ ok: boolean }>("DELETE", `/api/statements/${id}/confirm`),
 
