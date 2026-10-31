@@ -66,8 +66,13 @@ def _provider_of(desc: str) -> str:
     b = bill_info(desc)
     if b:
         return b["provider"]
-    name = merchant_name(desc) or desc
-    return name.title() if name.isupper() else name
+    name = merchant_name(desc)
+    if not name:
+        return desc
+    # merchant_name eşleştirme anahtarıdır (ASCII, büyük harf): görünen ad metindeki asıl yazılışla ('Örnek Su')
+    from app.bank_import import _pretty_words
+
+    return _pretty_words(name, desc)  # büyük harfli metin Türkçe kurallarla baş harfli ('ŞEKER' → 'Şeker')
 
 
 def _change(series: dict[str, float], month: str, other: str) -> dict | None:

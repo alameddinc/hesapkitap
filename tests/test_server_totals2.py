@@ -130,5 +130,17 @@ def test_paid_bill_record_uses_due_date(client, tmpdb):
                                           "category": "İnternet & TV"}).json()["id"]
     client.post(f"/api/bills/{bid}/pay", json={"amount": 400, "paid_at": "2026-10-02", "payment": "havale"})
     s = client.get("/api/bills/summary", params={"until": "2026-10", "months": 6}).json()
-    p = next(x for x in s["providers"] if x["name"] == "Ornek Internet")
+    p = next(x for x in s["providers"] if x["name"] == "Örnek İnternet")
     assert p["last"]["month"] == "2026-08"
+
+
+
+def test_bill_provider_keeps_turkish_spelling(client, tmpdb):
+    """Görünen kurum adı kullanıcının yazdığı gibi; eşleştirme anahtarı ASCII olsa da 'Örnek Su' 'Ornek Su' olmaz."""
+    for d in ("2026-09-05", "2026-10-05"):
+        _entry(client, d, "Örnek Su", 80, "gider", category="Su")
+    _entry(client, "2026-10-06", "ŞEKER ELEKTRİK", 120, "gider", category="Elektrik")
+    s = client.get("/api/bills/summary", params={"until": "2026-10", "months": 3}).json()
+    names = {p["name"]: p for p in s["providers"]}
+    assert "Örnek Su" in names and names["Örnek Su"]["paid_months"] == 2 and "Ornek Su" not in names
+    assert "Şeker Elektrik" in names
