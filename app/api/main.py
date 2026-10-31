@@ -293,6 +293,17 @@ async def _idempotent(request: Request, call_next):
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+    """Tek ara katman (oturum, defter, okuma sırası, Idempotency-Key). İşlenmemiş hata burada Türkçe 500'e çevrilir:
+    yoksa Starlette'in en dıştaki hata katmanı CORS'un DIŞINDA yanıt üretir, mobil uygulama başlıksız yanıtı CORS
+    hatası ("Sunucuya ulaşılamadı") sanar. Bütün erken dönüşler (401/402/403/404/409/413/422/429/503) zaten CORS içinde."""
+    try:
+        return await _require_login(request, call_next)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("hesapkitap.api").exception("işlenmemiş hata: %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": errors.GENERIC[500]}, status_code=500)
+
+
+async def _require_login(request: Request, call_next):
     path = request.url.path
     user = None
     from app import demo_mode
