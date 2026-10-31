@@ -100,11 +100,11 @@ export default function Planning() {
           <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
             {p.dues.map((d, i) => (
               <li key={i} className="flex items-center justify-between gap-2 py-2">
-                <span>
+                <span className="min-w-0">
                   <b>{dateTR(d.date)}</b> <span className="text-stone-500">· {d.bank} {d.account}</span>
                   {d.estimated && <span className="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-xs dark:bg-stone-800">tahmini</span>}
                 </span>
-                <span className="text-right tabular-nums">
+                <span className="shrink-0 text-right whitespace-nowrap tabular-nums">
                   {d.amount != null ? tl(d.amount) : "—"}
                   {d.min_payment != null && <span className="block text-xs text-stone-500">asgari {tl(d.min_payment)}</span>}
                 </span>
