@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ArrowUpCircle, CheckCircle2, RefreshCw } from "lucide-react";
 import { dateTR } from "../format";
 
@@ -15,9 +16,9 @@ const HOW: Record<V["platform"], React.ReactNode> = {
 
 /** Ayarlar (yönetici): GitHub'da yeni sürüm var mı; varsa ne değişti ve nasıl güncellenir. */
 export default function UpdateNotice() {
-  const q = useQuery({ queryKey: ["version"], queryFn: () => fetch("/api/version").then((r) => r.json() as Promise<V>), staleTime: 3600_000 });
+  const q = useQuery({ queryKey: ["version"], queryFn: () => send<V>("/api/version"), staleTime: 3600_000 });
   const refresh = useQuery({ queryKey: ["version-refresh"], enabled: false,
-    queryFn: () => fetch("/api/version?refresh=true").then((r) => r.json() as Promise<V>) });
+    queryFn: () => send<V>("/api/version?refresh=true") });
   const v = refresh.data ?? q.data;
   if (!v || v.latest === undefined) return null;
   const short = (s: string | null) => (s ? s.slice(0, 7) : "?");

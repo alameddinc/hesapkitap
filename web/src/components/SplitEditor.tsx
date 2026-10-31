@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { errorText } from "../lib/apiError";
+import { errorText, send } from "../lib/apiError";
 import { Plus, Scissors, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cx, parseAmount, tl } from "../format";
@@ -45,7 +45,7 @@ export default function SplitEditor({ target, id, total, onDone }: {
         person: p.share ? p.person.trim() : null })),
   }), () => { ui.toast(parts.length ? "Bölündü" : "Bölme kaldırıldı"); setOpen(false); onDone?.(); });
   const set = (i: number, k: keyof Part, v: string | boolean) => setParts(parts.map((p, j) => (j === i ? { ...p, [k]: v } : p)));
-  const people = useQuery({ queryKey: ["people"], queryFn: () => fetch("/api/transfers").then((r) => r.json())
+  const people = useQuery({ queryKey: ["people"], queryFn: () => send<any>("/api/transfers")
     .then((t: { people: { name: string }[] }) => t.people.map((x) => x.name)) });
 
   const saved = q.data ?? [];

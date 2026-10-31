@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { useState } from "react";
 import { X } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -27,7 +28,7 @@ const short = (d: string) => `${Number(d.slice(8, 10))} ${TR_MON[Number(d.slice(
 
 /** Bir günün harcamaları: kategori özeti + kalem kalem. */
 function DayPanel({ date, all, onClose }: { date: string; all: boolean; onClose: () => void }) {
-  const q = useQuery({ queryKey: ["day", date, all], queryFn: () => fetch(`/api/day/${date}?all=${all}`).then((r) => r.json() as Promise<DayDetail>) });
+  const q = useQuery({ queryKey: ["day", date, all], queryFn: () => send<DayDetail>(`/api/day/${date}?all=${all}`) });
   const d = q.data;
   return (
     <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-700">
@@ -73,7 +74,7 @@ export default function Compare({ month }: { month: string }) {
   const [tab, setTab] = useState<"gunluk" | "gun" | "haftagunu" | "hafta">("gunluk");
   const [which, setWhich] = useState<"bu" | "gecen">("bu");
   const [day, setDay] = useState<string | null>(null);
-  const q = useQuery({ queryKey: ["compare", month, all], queryFn: () => fetch(`/api/compare?month=${month}${all ? "&all=1" : ""}`).then((r) => r.json() as Promise<Cmp>) });
+  const q = useQuery({ queryKey: ["compare", month, all], queryFn: () => send<Cmp>(`/api/compare?month=${month}${all ? "&all=1" : ""}`) });
   const c = q.data;
   if (!c || c.day === 0) return null;
   const data = Array.from({ length: c.length }, (_, i) => ({

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { Coins, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -18,8 +19,8 @@ interface ZakatMeta { people: { id: number; name: string }[]; kinds: Record<stri
 /** Altın, döviz ve elde tutulan para: bugünkü değer, aldığından beri kazanç. Zekât sayfasıyla aynı liste. */
 export default function Holdings() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["holdings"], queryFn: () => fetch("/api/holdings").then((r) => r.json() as Promise<Data>) });
-  const meta = useQuery({ queryKey: ["zakat"], queryFn: () => fetch("/api/zakat").then((r) => r.json() as Promise<ZakatMeta>) });
+  const q = useQuery({ queryKey: ["holdings"], queryFn: () => send<Data>("/api/holdings") });
+  const meta = useQuery({ queryKey: ["zakat"], queryFn: () => send<ZakatMeta>("/api/zakat") });
   const [adding, setAdding] = useState(false);
   const del = useSave((id: number) => fetch(`/api/zakat/assets/${id}`, { method: "DELETE" }), () => ui.toast("Silindi"));
   const fix = useSave((a: { id: number; quantity: number }) => fetch(`/api/zakat/assets/${a.id}`, {

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { dateTR, parseAmount, tl } from "../format";
@@ -14,7 +15,7 @@ interface Holy {
 /** Ramazan, Ramazan Bayramı, Kurban Bayramı (yaklaşık) ve fitre hesabı. */
 export default function HolyDays() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["holy"], queryFn: () => fetch("/api/zakat/holy").then((r) => r.json() as Promise<Holy>) });
+  const q = useQuery({ queryKey: ["holy"], queryFn: () => send<Holy>("/api/zakat/holy") });
   const [amount, setAmount] = useState("");
   const [people, setPeople] = useState("");
   useEffect(() => {

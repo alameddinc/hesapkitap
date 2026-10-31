@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { Share2, Trash2 } from "lucide-react";
 import { useEffect } from "react";
 import { tl } from "../format";
@@ -11,7 +12,7 @@ interface Item { id: number; filename: string; kind: "receipt" | "bill"; doc: Do
 /** Telefondan paylaşılan fiş/faturalar: okundu, onay bekliyor. Dokununca form dolu açılır. */
 export default function SharedInbox() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["inbox"], queryFn: () => fetch("/api/inbox").then((r) => r.json() as Promise<Item[]>) });
+  const q = useQuery({ queryKey: ["inbox"], queryFn: () => send<Item[]>("/api/inbox") });
   const close = useSave((a: { id: number; action: "kaydedildi" | "silindi" }) => fetch(`/api/inbox/${a.id}/${a.action}`, { method: "POST" }));
   // Android paylaşımından dönüşte sonucu göster (#/ozet?paylasim=…)
   useEffect(() => {

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ChevronDown, Search } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, fold, maskText, tl } from "../format";
@@ -96,7 +97,7 @@ export default function PriceWatch() {
   if (s) params.set("since", s);
   if (store) params.set("store", store);
   if (brand) params.set("brand", brand);
-  const q = useQuery({ queryKey: ["prices", params.toString()], queryFn: () => fetch(`/api/prices?${params}`).then((r) => r.json() as Promise<Data>) });
+  const q = useQuery({ queryKey: ["prices", params.toString()], queryFn: () => send<Data>(`/api/prices?${params}`) });
   const d = q.data;
   const match = (p: Product) => !term.trim() || fold(`${p.product} ${p.brand ?? ""}`).includes(fold(term.trim()));
   const prods = (d?.products ?? []).filter(match);

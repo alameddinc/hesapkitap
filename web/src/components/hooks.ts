@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { useRef } from "react";
 import { newKey, withAction } from "../lib/idem";
 import { api, type Row } from "../api";
@@ -66,7 +67,7 @@ export const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim()
 export function useLoginKind(): LoginKind {
   const auth = useQuery({
     queryKey: ["auth"], staleTime: 60_000,
-    queryFn: () => fetch("/api/auth/status").then((r) => r.json() as Promise<{ login?: string }>),
+    queryFn: () => send<{ login?: string }>("/api/auth/status"),
   });
   return loginKind(auth.data);
 }
@@ -76,7 +77,7 @@ export function usePeople() {
   const b = useBook().data;
   const auth = useQuery({
     queryKey: ["auth"], staleTime: 60_000,
-    queryFn: () => fetch("/api/auth/status").then((r) => r.json() as Promise<{ user?: { username: string } | null }>),
+    queryFn: () => send<{ user?: { username: string } | null }>("/api/auth/status"),
   });
   const people = b?.book === "kendi" ? [] : b?.people ?? [];
   // sunucu "me" verir; eski sunucuda ada göre tahmin

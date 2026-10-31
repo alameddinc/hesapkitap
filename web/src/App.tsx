@@ -36,6 +36,7 @@ import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks"
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 import ConfirmHost from "./components/ConfirmHost";
+import PageBoundary from "./components/PageBoundary";
 import { send } from "./lib/apiError";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
@@ -256,7 +257,7 @@ function Shell() {
           <DemoBanner />
         </div>
         <main className={cx("mx-auto w-full min-w-0 px-4 pt-3 pb-[calc(6.5rem+var(--sab))] md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
-          <Page />
+          <PageBoundary resetKey={route}><Page /></PageBoundary>
         </main>
       </div>
 

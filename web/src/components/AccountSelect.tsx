@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { tl } from "../format";
 
 export interface AccountOpt { id: number; name: string; kind: string; current: number | null }
 
 export const useAccounts = () => useQuery({
   queryKey: ["accounts"],
-  queryFn: () => fetch("/api/accounts").then((r) => r.json() as Promise<{ accounts: AccountOpt[]; wallets: AccountOpt[] }>),
+  queryFn: () => send<{ accounts: AccountOpt[]; wallets: AccountOpt[] }>("/api/accounts"),
 });
 
 const LAST = "hk-last-account";

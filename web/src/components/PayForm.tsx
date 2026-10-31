@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { useState } from "react";
 import { api, type Payable, type Payment } from "../api";
@@ -23,7 +24,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const [date, setDate] = useState((p.paid_at ?? todayISO()).slice(0, 10));
   const [payment, setPayment] = useState<Payment>("havale");
   // borç: parayı hangi hesaptan ödedin (varsayılan: borcun kayıtlı hesabı)
-  const debts = useQuery({ queryKey: ["debts"], queryFn: () => fetch("/api/debts").then((r) => r.json() as Promise<Debt[]>), enabled: debt });
+  const debts = useQuery({ queryKey: ["debts"], queryFn: () => send<Debt[]>("/api/debts"), enabled: debt });
   const [acc, setAcc] = useState<number | null | undefined>(undefined);
   const debtAcc = acc !== undefined ? acc : debts.data?.find((d) => d.id === p.id)?.account_id ?? null;
   // ekstre: ödemenin çıktığı banka/nakit hesabı (isteğe bağlı, varsayılan "Belirtme")

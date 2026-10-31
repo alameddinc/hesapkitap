@@ -20,7 +20,7 @@ export default function Register() {
   const [verify, setVerify] = useState<string | null>(null); // kod adımı: e-posta
   const [done, setDone] = useState(false); // nötr yanıt, oturum açılmadı
   const [agree, setAgree] = useState({ kosullar: false, acik_riza: false }); // KVKK: iki onay, işaretsiz başlar
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   // barındırılan sürüm: herkes kod olmadan hesap açar; davet bağlantısıyla gelen (ortak defter) yine kodu kullanır
   const open = !!status.data?.open_signup;
   const askCode = !open || !!codeFromHash();

@@ -1,13 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import Debts, { type Debt } from "../components/Debts";
 import Kpi from "../components/Kpi";
 
 /** Borç / alacak defteri: kim kime ne (TL, döviz, altın) borçlu. Gelir/gider değil, eldeki parayı etkiler. */
 export default function Borclar() {
-  const debts = useQuery({ queryKey: ["debts"], queryFn: () => fetch("/api/debts").then((r) => r.json() as Promise<Debt[]>) });
+  const debts = useQuery({ queryKey: ["debts"], queryFn: () => send<Debt[]>("/api/debts") });
   const people = useQuery({
     queryKey: ["transfers"],
-    queryFn: () => fetch("/api/transfers").then((r) => r.json() as Promise<{ people: { name: string }[] }>),
+    queryFn: () => send<{ people: { name: string }[] }>("/api/transfers"),
   });
   if (!debts.data) return <div className="text-sm text-stone-500">Yükleniyor…</div>;
   const openTry = debts.data.filter((d) => !d.settled_at && d.asset === "TRY");

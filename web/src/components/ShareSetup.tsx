@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { Copy, Share2, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -10,14 +11,14 @@ import InstallApp from "./InstallApp";
 /** Ayarlar: telefondan Paylaş. Android: yüklü uygulama Paylaş menüsünde. iOS: Kısayollar + kişisel anahtar. */
 export default function ShareSetup() {
   const ui = useUI();
-  const q = useQuery({ queryKey: ["tokens"], queryFn: () => fetch("/api/settings/tokens").then((r) => r.json() as Promise<
-    { id: number; name: string | null; created_at: string; last_used: string | null }[]>) });
+  const q = useQuery({ queryKey: ["tokens"], queryFn: () => send<
+    { id: number; name: string | null; created_at: string; last_used: string | null }[]>("/api/settings/tokens") });
   const [token, setToken] = useState<string | null>(null);
   const create = useSave(() => fetch("/api/settings/tokens", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: "iPhone Paylaş" }) }).then((r) => r.json() as Promise<{ token: string }>), (r) => setToken(r.token));
   const del = useSave((id: number) => fetch(`/api/settings/tokens/${id}`, { method: "DELETE" }), () => ui.toast("Anahtar silindi"));
   const url = `${window.location.origin}/api/share`;
-  const sc = useQuery({ queryKey: ["shortcut"], queryFn: () => fetch("/api/share/shortcut").then((r) => r.json() as Promise<{ available: boolean; camera?: boolean }>) });
+  const sc = useQuery({ queryKey: ["shortcut"], queryFn: () => send<{ available: boolean; camera?: boolean }>("/api/share/shortcut") });
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => ui.toast("Kopyalandı"));
   return (
     <section className="card space-y-3 p-4">
