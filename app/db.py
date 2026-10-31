@@ -633,6 +633,128 @@ def init_db() -> None:
         _sync_default_rules(c)
     auto_update_cycle()
     _ensure_imported_bank_accounts()
+    _once("salary_linked_v1", link_salary_entries)
+    _once("cancel_pairs_v1", pair_cancelled_entries)
+
+
+def _once(key: str, fn) -> None:
+    """Eski veride bir kez çalışan onarım (sonraki içe aktarmalar zaten doğru yazar)."""
+    if get_setting(key):
+        return
+    try:
+        fn()
+    except sqlite3.OperationalError:  # çok eski şema (kolon yok): onarılacak veri de yok
+        return
+    set_setting(key, "1")
+
+
+# dökümdeki maaş satırı: "MAAS 2026 OCAK ÖDEMESI", "ISÇI UCRET 2026 TEMMUZ ÜCRET ÖDEM…" (fold_key boşlukları atar);
+# banka metni her ay biraz farklı kısaltıldığı için açıklama eşleşmesi tutmaz
+SALARY_TEXT = re.compile(r"MAAS|UCRETODEM|PERSONELODEM|BORDRO")
+_GENERIC_INCOME = {None, "", "Diğer", "Diğer Gelir", "Kategorisiz"}
+
+
+def is_salary_text(text: str | None) -> bool:
+    from app.categorize import fold_key
+
+    return bool(SALARY_TEXT.search(fold_key(text or "")))
+
+
+def _is_salary_recurring(r: dict) -> bool:
+    from app.categorize import fold_key
+
+    return r["kind"] == "gelir" and ((r.get("category") or "") == "Maaş" or bool(r.get("gross_amount"))
+                                     or "MAAS" in fold_key(r["description"]))
+
+
+def link_salary_entries() -> int:
+    """Maaş satırı gibi görünen gelir kayıtları (bağlanmamış, kategorisi genel): kategori 'Maaş'; tek maaş kalemi varsa
+    (ya da işveren adı tutuyorsa) o dönemin boş maaş yerine bağlanır. Böylece maaş her dönemde bir kez sayılır, gelir
+    kategorilerinde 'Diğer Gelir' görünmez. İdempotent. Dönüş: değişen kayıt sayısı."""
+    from app.categorize import fold_key
+
+    n = 0
+    with connect() as c:
+        recs = [r for r in rows(c.execute("SELECT * FROM recurring")) if _is_salary_recurring(r)]
+        employers = {r["id"]: [fold_key(x["employer"]) for x in rows(c.execute(
+            "SELECT employer FROM salary_changes WHERE recurring_id = ? AND employer IS NOT NULL", (r["id"],)))]
+            for r in recs}
+        taken = {r["id"]: {m for (m,) in c.execute("SELECT month FROM entries WHERE recurring_id = ?", (r["id"],))}
+                 for r in recs}
+        cands = rows(c.execute("SELECT id, description, month, category FROM entries WHERE kind = 'gelir' AND "
+                               "recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL ORDER BY entry_date, amount DESC"))
+        for e in cands:
+            if not is_salary_text(e["description"]) or e["category"] not in _GENERIC_INCOME and e["category"] != "Maaş":
+                continue
+            key = fold_key(e["description"])
+            active = [r for r in recs if r["start_month"] <= e["month"] and (not r["end_month"] or e["month"] <= r["end_month"])]
+            by_emp = [r for r in active if any(x and x in key for x in employers[r["id"]])]
+            rec = by_emp[0] if len(by_emp) == 1 else active[0] if len(active) == 1 else None
+            sets = {}
+            if e["category"] != "Maaş":
+                sets["category"] = "Maaş"
+            if rec and e["month"] not in taken[rec["id"]]:
+                sets["recurring_id"] = rec["id"]
+                taken[rec["id"]].add(e["month"])
+            if sets:
+                c.execute(f"UPDATE entries SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), e["id"]))
+                n += 1
+    return n
+
+
+def pair_cancelled_entries() -> int:
+    """Eski dökümlerden kalan iptal çiftleri: bankanın iptal edip geri ödediği giden ödeme ile iadesi (ör. "FAST Anlık
+    Ödeme İptali"). İçe aktarma bunları artık hiç kaydetmiyor (bank_import.pair_cancellations); önce yüklenmiş
+    dökümlerde ikisi de gider ve gelir sayılıyordu. Eşleşme içe aktarmadakiyle aynı: aynı hesap, aynı tutar, ±2 gün,
+    iade satırı iptal diyor, sorgu numarası varsa aynı. Kullanıcının bağladığı (borç, sabit kalem, fiş, bölme, bakiye
+    çapası) kayıtlara dokunulmaz. İkisi de silinir (birbirini götürür, bakiye değişmez). Dönüş: silinen çift sayısı."""
+    from app.bank_import import is_cancellation
+    from app.textnorm import normalize
+
+    def raw(e):
+        return _raw_note(e) or e["description"] or ""
+
+    def words(t):
+        return {w for w in normalize(t).split() if len(w) > 2 and not w.isdigit()}
+
+    def free(e):
+        return (e["import_hash"] and not e["debt_id"] and not e["recurring_id"] and not e["receipt_file"]
+                and not e["skipped"] and e["id"] not in anchors and e["id"] not in split_ids)
+
+    with connect() as c:
+        anchors = {r[0] for r in c.execute("SELECT anchor_entry_id FROM accounts WHERE anchor_entry_id IS NOT NULL")}
+        split_ids = {r[0] for r in c.execute("SELECT entry_id FROM splits WHERE entry_id IS NOT NULL")}
+        es = rows(c.execute("SELECT * FROM entries WHERE import_hash IS NOT NULL"))
+        out = [e for e in es if e["kind"] == "gider" and free(e)]
+        used: set[int] = set()
+        pairs = []
+        for r in es:
+            if r["kind"] != "gelir" or not free(r) or not is_cancellation(raw(r)):
+                continue
+            refs = set(re.findall(r"\b\d{9,12}\b", raw(r)))
+            d = date.fromisoformat(r["entry_date"][:10])
+            best = None
+            for o in out:
+                if o["id"] in used or o["account_id"] != r["account_id"] or not money.eq(o["amount"], r["amount"]):
+                    continue
+                gap = abs((date.fromisoformat(o["entry_date"][:10]) - d).days)
+                if gap > 2:
+                    continue
+                orefs = set(re.findall(r"\b\d{9,12}\b", raw(o)))
+                if refs and orefs and not refs & orefs:
+                    continue
+                # aynı gün aynı tutarda birden çok giden (ATM'de iki çekim): metni iadeye en çok benzeyen
+                score = (0 if refs & orefs else 1, -len(words(raw(r)) & words(raw(o))), gap)
+                if best is None or score < best[0]:
+                    best = (score, o)
+            if best:
+                used.add(best[1]["id"])
+                pairs.append((best[1]["id"], r["id"]))
+        for ids in pairs:
+            for t in ("receipt_items", "entry_matches", "match_rejects"):
+                c.execute(f"DELETE FROM {t} WHERE entry_id IN (?, ?)", ids)
+            c.execute("DELETE FROM entries WHERE id IN (?, ?)", ids)
+    return len(pairs)
 
 
 def _ensure_imported_bank_accounts() -> None:
@@ -1236,8 +1358,11 @@ def _norm_recurring(data: dict) -> dict:
 def create_recurring(data: dict) -> int:
     data = _norm_recurring({k: data.get(k) for k in RECURRING_FIELDS if k in data})
     with connect() as c:
-        return c.execute(f"INSERT INTO recurring ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
-                         tuple(data.values())).lastrowid
+        rid = c.execute(f"INSERT INTO recurring ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})",
+                        tuple(data.values())).lastrowid
+    if _is_salary_recurring({"category": None, "gross_amount": None, **data}):
+        link_salary_entries()  # dökümden önceden gelmiş maaşlar yeni kaleme bağlansın (tahmini maaş üstüne eklenmesin)
+    return rid
 
 
 def update_recurring(rid: int, data: dict) -> None:
@@ -2441,7 +2566,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                         stats["eslesen_elle"] += 1
                         seen.add(r["hash"])
                         continue
-            category = category or "Diğer Gelir"
+            category = category or ("Maaş" if is_salary_text(desc) else "Diğer Gelir")
         else:
             category = categorize(desc, "harcama", rules)
             if category == "Kategorisiz":
@@ -2499,6 +2624,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     asked = sum(1 for p in sync.find_pairs() if not p["auto"] and p["source"] == "dokum")
     if asked:
         stats["eslesme_sorusu"] = asked
+    link_salary_entries()  # maaş kalemi sonradan açıldıysa ya da banka metni kalemin adını taşımıyorsa
     return stats
 
 
