@@ -46,7 +46,9 @@ interface Own {
   description: string | null;
   note?: string | null;
 }
-interface Data { people: Person[]; own: Own[]; items: Item[]; debts: Debt[]; self?: Item[] }
+/** totals (sunucu 77a6c75): aralığın toplamları — istemci toplamaz */
+interface Data { people: Person[]; own: Own[]; items: Item[]; debts: Debt[]; self?: Item[];
+  totals?: { sent: number; received: number; net: number; own_in: number; own_out: number; own_count: number } }
 
 const shortBank = (b: string | null) => (b ? b.replace(/\s+(KATILIM\s+)?BANKASI.*$/i, "").replace(/\s+A\.?Ş\.?$/i, "") : "Hesap");
 
@@ -82,9 +84,10 @@ export default function Transfers() {
   // kendi hesapların arası: sunucu tüm zamanı verir, dönem seçiliyse burada süzülür
   const ownList = (data?.own ?? []).filter((o) => mode === "tumu" || (o.transfer_date >= from && o.transfer_date <= to));
   const people = (data?.people ?? []).filter((p) => mode === "tumu" ? p.count > 0 || (data?.debts ?? []).some((d) => d.person === p.name) : p.count > 0);
-  const sent = people.reduce((s, p) => s + p.sent, 0);
-  const received = people.reduce((s, p) => s + p.received, 0);
-  const ownIn = ownList.filter((o) => o.amount > 0).reduce((s, o) => s + o.amount, 0);
+  const t = data?.totals;
+  const sent = t?.sent ?? people.reduce((s, p) => s + p.sent, 0);
+  const received = t?.received ?? people.reduce((s, p) => s + p.received, 0);
+  const ownIn = t?.own_in ?? ownList.filter((o) => o.amount > 0).reduce((s, o) => s + o.amount, 0);
   const openDebts = (data?.debts ?? []).filter((d) => !d.settled_at && !d.written_off_at && d.remaining > 0);
   const selfItems = data?.self ?? [];
 
