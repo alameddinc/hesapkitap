@@ -42,7 +42,7 @@ export default function Features({ intro = false }: { intro?: boolean }) {
       {asking === "zekat" && <ZakatConsent onClose={() => setAsking(null)} onDone={() => draft && setDraft({ ...draft, zekat: true })} />}
       <div className="flex flex-wrap gap-2">
         <button className="btn-primary" disabled={save.isPending || (!intro && !draft)}
-          onClick={() => save.mutate(cur, { onError: (e) => ui.toast(e.message) })}>
+          onClick={() => save.mutate(cur, { onError: (e) => ui.error(e.message) })}>
           {intro ? "Bu şekilde başla" : "Kaydet"}
         </button>
         {intro && <button className="btn-ghost" onClick={() => save.mutate(meta.modules!)}>

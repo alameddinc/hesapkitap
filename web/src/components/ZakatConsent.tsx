@@ -33,7 +33,7 @@ export default function ZakatConsent({ onClose, onDone }: { onClose: () => void;
     <Modal title={title} onClose={onClose} footer={<>
       <button className="btn-ghost flex-1 justify-center" onClick={onClose}>Vazgeç</button>
       <button className="btn-primary flex-1 justify-center" disabled={save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>{save.isPending ? "Açılıyor…" : "Aç"}</button>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{save.isPending ? "Açılıyor…" : "Aç"}</button>
     </>}>
       <p className="text-sm leading-relaxed text-stone-600 dark:text-stone-300">{text}</p>
       {details
@@ -61,7 +61,7 @@ export function ZakatOff({ onClose }: { onClose: () => void }) {
     <Modal title="Zekât ve Sadaka kapansın mı?" onClose={onClose} footer={<>
       <button className="btn-ghost flex-1 justify-center" onClick={onClose}>Vazgeç</button>
       <button className={(wipe ? "btn-danger" : "btn-primary") + " flex-1 justify-center"} disabled={save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>{wipe ? "Kapat ve sil" : "Kapat"}</button>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{wipe ? "Kapat ve sil" : "Kapat"}</button>
     </>}>
       <p className="text-sm text-stone-600 dark:text-stone-300">Menüden ve Özet'ten kalkar, rızan geri alınır. Tekrar açınca kayıtların yerinde olur.</p>
       <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm">

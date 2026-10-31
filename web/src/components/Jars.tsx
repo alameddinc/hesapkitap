@@ -53,7 +53,7 @@ function JarForm({ jar, onClose }: { jar?: Jar; onClose: () => void }) {
   return (
     <Modal title={jar ? "Kumbarayı düzenle" : "Yeni kumbara"} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!name.trim() || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
       <div className="space-y-3">
         {!jar && (
           <div>
@@ -115,7 +115,7 @@ function MoveForm({ jar, dir, onClose }: { jar: Jar; dir: "yatir" | "cek"; onClo
   return (
     <Modal title={`${jar.name} · ${dir === "yatir" ? "para ayır" : "para çek"}`} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>{dir === "yatir" ? "Ayır" : "Çek"}</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{dir === "yatir" ? "Ayır" : "Çek"}</button>}>
       <div className="space-y-3">
         <input className="input text-right text-lg" inputMode="decimal" autoFocus placeholder="Tutar" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <input className="input" placeholder="Not (ops.)" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -160,7 +160,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
       if (d.date) setDay(d.date);
       ui.toast(d.total ? `Fişten ${tl(d.total)} okundu; kontrol et` : "Tutar okunamadı; elle yaz");
     } catch (e) {
-      ui.toast((e as Error).message);
+      ui.error((e as Error).message);
     } finally {
       setReading(false);
       void quota.refresh();
@@ -173,7 +173,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   return (
     <Modal title={`${jar.name} · aldım`} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0 || est > 0) || needAccount || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs">Ne kadar ({s})
@@ -213,7 +213,7 @@ function EditPurchase({ jar, move, onClose }: { jar: Jar; move: Move; onClose: (
   return (
     <Modal title={`${jar.name} · alımı düzelt`} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.toast(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs">Miktar ({s})

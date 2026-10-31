@@ -24,6 +24,11 @@ export interface EntryDraft {
   wallet_hint?: string | null; // fişte yazan yemek kartı markası (Multinet…)
 }
 
+export interface ToastOptions {
+  /** işlemi geri alan istek; başarıyla bitince "Geri alındı" denir */
+  undo?: () => Promise<unknown>;
+}
+
 export interface UI {
   month: string;
   setMonth: (m: string) => void;
@@ -35,7 +40,10 @@ export interface UI {
   openBill: (draft?: BillDraft) => void;
   openPay: (p: Payable) => void;
   openRecurringMonth: (r: RecurringMonth) => void;
-  toast: (msg: string) => void;
+  /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo verilirse "Geri al" düğmesi (en az 8 sn). */
+  toast: (msg: string, opts?: ToastOptions) => void;
+  /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. */
+  error: (msg: string) => void;
 }
 
 export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger";

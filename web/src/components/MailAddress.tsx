@@ -23,7 +23,7 @@ export default function MailAddress() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["mail-address"], queryFn: api.mailAddress, enabled: !!plan?.hosted, retry: false });
   const regen = useSave(api.regenerateMailAddress, () => ui.toast("Yeni adres hazır; eskisi artık çalışmıyor"));
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
 
   if (!plan?.hosted || q.isError) return null; // giriş yoksa (409) gösterme
   const d = q.data;
@@ -42,7 +42,7 @@ export default function MailAddress() {
     );
   }
 
-  const copy = () => navigator.clipboard.writeText(d.address).then(() => ui.toast("Adres kopyalandı"), () => ui.toast("Kopyalanamadı"));
+  const copy = () => navigator.clipboard.writeText(d.address).then(() => ui.toast("Adres kopyalandı"), () => ui.error("Kopyalanamadı"));
   return (
     <section className="card space-y-4 p-4">
       <div>
@@ -132,7 +132,7 @@ function Senders({ senders }: { senders: string[] }) {
   const ui = useUI();
   const [value, setValue] = useState("");
   const save = useSave(api.setMailSenders);
-  const onErr = { onError: (e: Error) => ui.toast(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e.message) };
   const v = value.trim().toLowerCase();
   const valid = EMAIL.test(v) && !senders.includes(v);
   const add = () => valid && save.mutate([...senders, v], { ...onErr, onSuccess: () => { setValue(""); ui.toast("Eklendi"); } });

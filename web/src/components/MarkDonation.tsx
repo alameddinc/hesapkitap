@@ -24,7 +24,7 @@ export default function MarkDonation({ source, id }: { source: "entry" | "card";
       <HeartHandshake size={16} className="shrink-0 text-stone-500" />
       <span className="flex-1">Bu bir sadaka / zekât mı?</span>
       <select className="input w-auto px-2 py-1 text-sm" aria-label="Sadaka türü" value={cur}
-        onChange={(e) => mark.mutate(e.target.value, { onError: (err) => ui.toast(err.message) })}>
+        onChange={(e) => mark.mutate(e.target.value, { onError: (err) => ui.error(err.message) })}>
         <option value="">Hayır</option>
         <option value="zekat">Zekât (bu yılın)</option>
         {Object.entries(DONATION_KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}

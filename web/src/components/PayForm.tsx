@@ -9,11 +9,16 @@ import type { Debt } from "./Debts";
 import { useSave } from "./hooks";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
+import { useUI } from "../ui";
 
 /** "Ödedim": kart ekstresi, fatura ya da vadeli borç ödemesini işaretle (tamamı / asgari / kısmi, tarih;
  *  faturada nasıl ödendiği, borçta hangi hesaptan). Mobil: components/planlama/OdemeSheet.tsx PaySheet. */
 export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: () => void; onSaved?: (m: string) => void }) {
+  const ui = useUI();
   const paid = p.status === "odendi";
+  // ilk ödeme mi: geri alma (unpay) önceki duruma birebir döner → bildirimde "Geri al". Önceden ödeme varsa
+  // (düzeltme, kısmi ödemenin devamı) unpay hepsini siler; o zaman Geri al sunulmaz, pencerede "Ödemeyi geri al" var.
+  const fresh = !paid && !((p.paid_amount ?? 0) > 0);
   const debt = p.type === "debt";
   // ekstre/fatura "ödenen tutar"ı yazar (üstüne eklemez); borçta ödeme eklenir → varsayılan kalanın tamamı
   const left = Math.max(0, p.amount - (p.paid_amount ?? 0));
@@ -40,6 +45,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   const partial = valid && amt + 0.01 < full;
   const tooMuch = valid && debt && amt > left + 0.01;
 
+  const unpay = () => (p.type === "statement" ? api.unpayStatement(p.id!) : debt ? api.unpayDebt(p.id!) : api.unpayBill(p.id!));
   const save = useSave(async () => {
     if (!valid) throw new Error("Ödenen tutarı yaz");
     if (date > todayISO()) throw new Error("Ödeme tarihi ileri bir gün olamaz");
@@ -50,12 +56,13 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
   }, (r) => {
     const linked = !!r && typeof r === "object" && "linked" in r && r.linked;
     const warning = r && typeof r === "object" && "warning" in r && typeof r.warning === "string" ? r.warning : null;
-    onSaved?.(`${partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`}${linked ? " · dökümdeki ödemeyle eşleşti" : ""}`);
+    const msg = `${partial ? `${p.title}: ${tl(amt)} ödendi` : `${p.title} ödendi olarak işaretlendi`}${linked ? " · dökümdeki ödemeyle eşleşti" : ""}`;
+    if (fresh) ui.toast(msg, { undo: unpay });
+    else onSaved?.(msg);
     if (warning) setWarn(warning); // kayıt yapıldı; uyarı okunsun diye pencere açık kalır
     else onClose();
   }, { inline: true });
-  const undo = useSave(async () => (p.type === "statement" ? api.unpayStatement(p.id!)
-    : debt ? api.unpayDebt(p.id!) : api.unpayBill(p.id!)),
+  const undo = useSave(unpay,
     () => { onSaved?.("Ödeme geri alındı"); onClose(); }, { inline: true });
   const chip = "btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700";
 
