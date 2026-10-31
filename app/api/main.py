@@ -22,6 +22,9 @@ from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
+from app import logs as _logs  # noqa: E402
+
+_logs.install()  # günlükte kişisel veri maskeleme, erişim günlüğünde sorgu dizgesi yok (S8)
 db.init_db()
 auth.ensure_admin()
 
@@ -37,7 +40,7 @@ def _migrate_user_dbs() -> None:
                 with db.use_space(path, u):
                     pass  # use_space ilk kullanımda init_db çalıştırır
             except Exception:  # noqa: BLE001 - bir kullanıcının dosyası diğerlerini engellemesin
-                logging.getLogger("ekstre").exception("kullanıcı veritabanı göçü: %s", u.get("username"))
+                logging.getLogger("ekstre").exception("kullanıcı veritabanı göçü: u%s", u.get("id"))
 
 
 _migrate_user_dbs()
@@ -1041,9 +1044,20 @@ def admin_delete_user(uid: int):
     return {"ok": True}
 
 
+class DeletedQuery(BaseModel):
+    email: str | None = Field(None, max_length=254)
+
+
+@app.post("/api/admin/deleted")
+def admin_deleted_accounts_post(body: DeletedQuery):
+    """GET ile aynı; e-posta gövdede (adres sorgu dizgesine, dolayısıyla erişim günlüğüne düşmesin — S8)."""
+    return admin_deleted_accounts(body.email)
+
+
 @app.get("/api/admin/deleted")
 def admin_deleted_accounts(email: str | None = None):
-    """Silinen hesapların anonim kaydı. email verilirse özeti hesaplanıp eşleştirilir (düz e-posta saklanmaz)."""
+    """Silinen hesapların anonim kaydı. email verilirse özeti hesaplanıp eşleştirilir (düz e-posta saklanmaz).
+    Yeni istemci POST /api/admin/deleted {email} kullansın (eski GET de çalışır; günlükte sorgu dizgesi yazılmaz)."""
     _require_admin()
     rows = deletion.records(email=(email or "").strip() or None)
     return {"records": [{k: r[k] for k in ("user_id", "deleted_at", "delete_after", "purged_at", "reason", "plan",

@@ -8,7 +8,7 @@ import os
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app import backup, db, finance, money, telegram
+from app import backup, db, finance, logs, money, telegram
 
 log = logging.getLogger("ekstre.jobs")
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "Europe/Istanbul"))
@@ -268,7 +268,7 @@ async def scheduler() -> None:
                 for name, fn in due_jobs(now):
                     try:
                         result = await asyncio.to_thread(fn, now.date())
-                        log.info("job %s %s ok: %s", name, (user or {}).get("username", "ana"), result)
+                        log.info("job %s %s ok: %s", name, logs.user_ref(user), result)  # ad/e-posta değil id (S8)
                     except Exception:  # noqa: BLE001 - bir iş patlarsa diğerleri sürsün
                         log.exception("job %s failed", name)
                     finally:
