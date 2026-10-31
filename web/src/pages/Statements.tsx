@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type DocKind, type UploadResult } from "../api";
@@ -11,6 +11,7 @@ import { useUI } from "../ui";
 import StatementHelp from "../components/StatementHelp";
 import StatementCard from "../components/StatementCard";
 import { QuotaFullModal, useDocQuota, type QuotaFull } from "../components/DocQuota";
+import { prepare, uploadInBatches } from "../lib/batchUpload";
 
 export default function Statements() {
   const ui = useUI();
@@ -28,29 +29,37 @@ export default function Statements() {
   const quota = useDocQuota();
   const [full, setFull] = useState<Partial<QuotaFull> | null>(null);
   const pick = () => (quota.full ? setFull({}) : input.current?.click());
-  const upload = useSave(
-    ({ files, password, kind }: { files: File[]; password?: string; kind?: DocKind }) =>
-      api.upload(files, password, remember, kind),
-    (res: UploadResult[]) => {
-      setPw("");
-      return res;
-    },
-  );
-  const sendFiles = (files: File[], password?: string, kind?: DocKind) =>
-    upload.mutate({ files, password, kind }, {
-      onSuccess: (res) => {
-        // soru cevaplanınca o dosyanın sonucu listede yerini alır
-        setResults((old) => kind ? [...old.filter((o) => !files.some((f) => f.name === o.filename)), ...res] : res);
-        setAsking((a) => [...(kind ? a.filter((f) => !files.includes(f)) : []),
-          ...files.filter((f) => res.some((r) => r.filename === f.name && r.status === "ask"))]);
-        setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required")));
-        const acc = files.filter((f) => res.some((r) => r.filename === f.name && r.status === "account_statement"));
-        if (acc.length) setQueue((q) => [...q, ...acc.map((file) => ({ file, password }))]);
-        const qf = res.find((r) => r.quota_full);
-        if (qf) setFull({ upgrade: qf.upgrade, limit: qf.limit });
-      },
-      onSettled: () => void quota.refresh(),
-    });
+  // yükleme: en fazla 5'erli partiler sırayla (lib/batchUpload.ts); ilerleme "X/Y belge"
+  const qc = useQueryClient();
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const busy = progress != null;
+  const sendFiles = async (files: File[], password?: string, kind?: DocKind) => {
+    if (busy) return;
+    const retry = !!password || !!kind; // şifre / tür sorusunun cevabı: o dosyaların sonucu listede yerini alır
+    setProgress({ done: 0, total: files.length });
+    try {
+      const { send, skipped } = await prepare(files);
+      if (!retry) setResults(skipped);
+      const res = [...skipped, ...await uploadInBatches(send, {
+        password, remember, kind,
+        onProgress: (done, total) => setProgress({ done: done + skipped.length, total: total + skipped.length }),
+        onBatch: (part) => { if (!retry) setResults((old) => [...old, ...part]); },
+      })];
+      if (retry) setResults((old) => [...old.filter((o) => !files.some((f) => f.name === o.filename)), ...res]);
+      if (password) setPw("");
+      setAsking((a) => [...(retry ? a.filter((f) => !files.includes(f)) : []),
+        ...files.filter((f) => res.some((r) => r.filename === f.name && r.status === "ask"))]);
+      setLocked(files.filter((f) => res.some((r) => r.filename === f.name && r.status === "password_required")));
+      const acc = files.filter((f) => res.some((r) => r.filename === f.name && r.status === "account_statement"));
+      if (acc.length) setQueue((q) => [...q, ...acc.map((file) => ({ file, password }))]);
+      const qf = res.find((r) => r.quota_full);
+      if (qf) setFull({ upgrade: qf.upgrade, limit: qf.limit });
+    } finally {
+      setProgress(null);
+      void qc.invalidateQueries();
+      void quota.refresh();
+    }
+  };
 
   const demo = useDemo().data;
   const sample = useSave((key: string) => fetch(`/api/demo/sample/${key}`, { method: "POST" }).then(async (r) => {
@@ -62,7 +71,7 @@ export default function Statements() {
   const send = (files: FileList | null) => {
     if (quota.full) return setFull({});
     const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
-    if (ok.length) sendFiles(ok);
+    if (ok.length) void sendFiles(ok);
   };
 
   return (
@@ -91,8 +100,14 @@ export default function Statements() {
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }}
         className={cx("card flex cursor-pointer flex-col items-center gap-2 border-2 border-dashed p-8 text-center",
           drag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30")}>
-        {upload.isPending ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
-        <div className="font-medium">{upload.isPending ? "İşleniyor…" : "Ekstre ya da hesap dökümü bırak veya seç"}</div>
+        {busy ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
+        <div className="font-medium" aria-live="polite">{progress ? `Okunuyor: ${progress.done}/${progress.total} belge` : "Ekstre ya da hesap dökümü bırak veya seç"}</div>
+        {progress && progress.total > 0 && (
+          <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-stone-200 dark:bg-stone-700" role="progressbar"
+            aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done} aria-label="Yükleme ilerlemesi">
+            <div className="h-full bg-blue-600 transition-[width]" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
+          </div>
+        )}
         <div className="text-xs text-stone-500">
           Kredi kartı ekstresi (PDF) ya da vadesiz hesap dökümü (PDF, Excel, CSV) — hangisi olduğunu kendisi anlar ·
           birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri genel okuyucu, olmazsa yapay zekâ ile)
@@ -105,11 +120,10 @@ export default function Statements() {
           label: kind === "gider" ? "Elle gider" : "Elle gelir",
           onClick: () => { setFull(null); ui.openEntry(undefined, { kind }); },
         }))} />}
-      {upload.error && <p className="text-sm text-red-600">{(upload.error as Error).message}</p>}
 
       {locked.length > 0 && (
         <form className="card space-y-2 border-amber-300 p-3 dark:border-amber-800"
-          onSubmit={(e) => { e.preventDefault(); if (pw) sendFiles(locked, pw); }}>
+          onSubmit={(e) => { e.preventDefault(); if (pw) void sendFiles(locked, pw); }}>
           <div className="flex items-center gap-2 text-sm font-medium"><KeyRound size={16} className="text-amber-600" />
             {locked.length} PDF şifreli
           </div>
@@ -119,7 +133,7 @@ export default function Statements() {
           <div className="flex flex-wrap gap-2">
             <input className="input min-w-0 flex-1" type="password" autoComplete="off" placeholder="PDF şifresi" value={pw}
               onChange={(e) => setPw(e.target.value)} autoFocus />
-            <button className="btn-primary" disabled={!pw || upload.isPending}>Aç</button>
+            <button className="btn-primary" disabled={!pw || busy}>Aç</button>
           </div>
           <label className="flex items-center gap-2 text-xs">
             <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
@@ -128,6 +142,21 @@ export default function Statements() {
         </form>
       )}
 
+      {results.length > 1 && (() => {
+        const n = (f: (r: UploadResult) => boolean) => results.filter(f).length;
+        const parts = [
+          [n((r) => r.status === "saved" || r.status === "account_statement"), "okundu"],
+          [n((r) => r.status === "duplicate"), "zaten vardı / aynı dosya"],
+          [n((r) => r.status === "ask" || r.status === "password_required"), "senden bilgi bekliyor"],
+          [n((r) => r.status === "error"), "okunamadı"],
+        ].filter(([c]) => c) as [number, string][];
+        return (
+          <p className="text-sm text-stone-600 dark:text-stone-300" role="status">
+            {results.length} dosya: {parts.map(([c, l]) => `${c} ${l}`).join(" · ")}
+            {progress ? " (sürüyor)" : ""}
+          </p>
+        );
+      })()}
       {results.length > 0 && (
         <ul className="space-y-2">
           {results.map((r, i) => (
@@ -141,7 +170,7 @@ export default function Statements() {
                 <div className="font-medium">{r.filename}</div>
                 {r.status === "error" && <div className="text-red-600">{r.message}</div>}
                 {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
-                {r.status === "duplicate" && <div className="text-stone-500">Zaten yüklü, atlandı.</div>}
+                {r.status === "duplicate" && <div className="text-stone-500 dark:text-stone-400">{r.message ?? "Zaten yüklü, atlandı."}</div>}
                 {r.status === "ask" && (() => {
                   const file = asking.find((f) => f.name === r.filename);
                   const opts: [DocKind, string, string][] = [
@@ -157,7 +186,7 @@ export default function Statements() {
                       <div className="flex flex-wrap gap-2">
                         {opts.map(([k, label, hint]) => (
                           <button key={k} className={cx("btn-ghost border border-stone-200 text-left dark:border-stone-700", k === r.guess && "ring-2 ring-blue-400")} title={hint}
-                            disabled={!file || upload.isPending} onClick={() => file && sendFiles([file], undefined, k)}>
+                            disabled={!file || busy} onClick={() => file && void sendFiles([file], undefined, k)}>
                             {label}{k === r.guess && <span className="ml-1 text-xs text-stone-500">(tahminim)</span>}
                           </button>
                         ))}
