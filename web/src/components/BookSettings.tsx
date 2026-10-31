@@ -3,16 +3,17 @@ import { ask } from "../lib/ask";
 import { errorText } from "../lib/apiError";
 import { ChevronDown, Copy, EyeOff, KeyRound, Trash2, Users2 } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR, maskText, tsDateTR } from "../format";
+import { cx, maskText, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { type BookRole, useLoginKind, useSave } from "./hooks";
 import { usePlan } from "./Plan";
+import InviteCard, { type Invite } from "./InviteCard";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
 interface Member { id: number; username: string; last_login: string | null; disabled: boolean; role: BookRole; own_rules: boolean; rules: Rules }
 interface Book {
   members: Member[];
-  invites: { code: string; note: string | null; expires_at: string | null; book_role?: BookRole | null }[];
+  invites: Invite[];
   rules: Rules; cards: { card_no: string; bank: string }[]; accounts: { id: number; name: string; kind: string }[];
   pages: Record<string, string>; roles?: Record<string, string>;
 }
@@ -156,12 +157,15 @@ export default function BookSettings() {
   const q = useQuery({ queryKey: ["book"], queryFn: () => call<Book>("/api/book"), retry: false });
   const [note, setNote] = useState("");
   const [role, setRole] = useState<BookRole>("editor");
-  const [shown, setShown] = useState<string | null>(null);
+  const [openCode, setOpenCode] = useState<string | null>(null); // QR'ı açık davet
   const onErr = { onError: (e: Error) => ui.toast(e.message) };
-  const invite = useSave(() => call<{ code: string }>("/api/book/invites", "POST", { note, book_role: role }), (i) => {
-    setNote(""); setShown(link(i.code));
+  const invite = useSave(() => call<Invite>("/api/book/invites", "POST", { note, book_role: role }), (i) => {
+    setNote(""); setOpenCode(i.code); ui.toast("Davet oluşturuldu: QR'ı okut ya da bağlantıyı paylaş");
   });
-  const delInvite = useSave((code: string) => call(`/api/book/invites/${code}`, "DELETE"));
+  const delInvite = useSave((code: string) => call(`/api/book/invites/${code}`, "DELETE"), () => ui.toast("Davet iptal edildi"));
+  const renew = useSave((code: string) => call<Invite>(`/api/book/invites/${code}/renew`, "POST"), (i) => {
+    setOpenCode(i.code); ui.toast("Yeni kod üretildi; eski bağlantı artık çalışmaz");
+  });
   const setRules = useSave((r: Partial<Rules>) => call("/api/book/rules", "PUT", r));
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => ui.toast("Kopyalandı"), () => {});
   const d = q.data;
@@ -197,22 +201,16 @@ export default function BookSettings() {
             </div>
           </div>
         )}
-        {shown && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm dark:border-amber-800 dark:bg-amber-950/40">
-            Davet bağlantısı (14 gün geçerli, tek kullanımlık)
-            <div className="mt-1 flex items-center gap-2"><code className="flex-1 break-all text-xs">{shown}</code>
-              <button className="btn-ghost px-2 py-1" onClick={() => copy(shown)}><Copy size={14} /></button></div>
-          </div>
-        )}
         <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
           {d.members.map((m) => <MemberRow key={m.id} m={m} d={d} />)}
           {d.invites.map((i) => (
-            <li key={i.code} className="flex items-center gap-2 py-2 text-stone-500">
-              <span className="flex-1">Davet {i.note ? `(${i.note})` : ""}{roleLabel(i.book_role) ? ` · ${roleLabel(i.book_role)}` : ""}
-                {i.expires_at ? ` · ${dateTR(i.expires_at)}'e kadar` : ""}</span>
-              <button className="btn-ghost px-2 py-1 text-xs" onClick={() => copy(link(i.code))}><Copy size={14} /> Bağlantı</button>
-              <button className="btn-ghost px-2 py-1 text-xs" onClick={() => delInvite.mutate(i.code, onErr)}><Trash2 size={14} /></button>
-            </li>
+            <InviteCard key={i.code} inv={i} fallbackLink={link(i.code)} roleLabel={roleLabel(i.book_role)}
+              open={openCode === i.code} onToggle={() => setOpenCode(openCode === i.code ? null : i.code)}
+              busy={renew.isPending || delInvite.isPending} onCopy={copy}
+              onRenew={() => void ask("Bu davet için yeni kod üretilsin mi?\n\nEski bağlantı ve QR artık çalışmaz; yenisini paylaşman gerekir.",
+                { confirm: "Yeni kod üret", danger: false }).then((ok) => { if (ok) renew.mutate(i.code, onErr); })}
+              onCancel={() => void ask(`Davet iptal edilsin mi?${i.note ? ` (${i.note})` : ""}\n\nBağlantı ve QR artık çalışmaz.`,
+                { confirm: "Daveti iptal et", danger: true, irreversible: false }).then((ok) => { if (ok) delInvite.mutate(i.code, onErr); })} />
           ))}
           {!d.members.length && !d.invites.length && <li className="py-2 text-stone-500">Henüz üye yok.</li>}
         </ul>
