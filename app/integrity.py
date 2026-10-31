@@ -28,7 +28,7 @@ import os
 import sys
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from app import db, money, terms
 
@@ -264,7 +264,7 @@ def last() -> dict | None:
 def run(today: date | None = None) -> dict:
     """Denetle, sonucu deftere yaz (yeni çıkan ihlalleri işaretle). Dönüş yalnız sayılar (günlüğe yazılabilir)."""
     res = check(today)
-    res["ran_at"] = datetime.now().isoformat(timespec="seconds")
+    res["ran_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")  # UTC naive, diğer *_at alanları gibi
     prev = last() or {}
     prev_refs = {(k, r) for k, v in (prev.get("refs") or {}).items() for r in v}
     res["new"] = sum(1 for k, v in res["refs"].items() for r in v if (k, r) not in prev_refs)
@@ -517,6 +517,21 @@ def after_write(db_file: str | None, user: dict | None) -> None:
         t.start()
 
 
+def _local_hour(ran_at: str | None) -> int | None:
+    """ran_at (UTC naive 'YYYY-MM-DD HH:MM:SS'; eski kayıtta yerel ISO 'T'li) → yerel saat (TZ_NAME)."""
+    if not ran_at:
+        return None
+    from zoneinfo import ZoneInfo
+
+    try:
+        t = datetime.fromisoformat(ran_at)
+    except ValueError:
+        return None
+    if "T" in ran_at:  # eski biçim: zaten yerel saat
+        return t.hour
+    return t.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(os.environ.get("TZ_NAME", "Europe/Istanbul"))).hour
+
+
 def todo() -> dict | None:
     """Son denetimde ihlal varsa Yapılacaklar maddesi. Kimlik ihlal kümesine bağlı: kapatılırsa aynı küme bir daha
     sorulmaz, yeni bir ihlal çıkınca yeniden görünür. details[].items: hangi kayıt (kullanıcının kendi istemcisine)."""
@@ -528,7 +543,7 @@ def todo() -> dict | None:
         return None
     sig = hashlib.sha256(json.dumps(r["refs"], sort_keys=True).encode()).hexdigest()[:10]
     n = sum(x["count"] for x in lines)
-    when = "Gece yaptığımız kontrolde" if (r.get("ran_at") or "")[11:13] in ("", "03", "04", "05") else "Son kontrolde"
+    when = "Gece yaptığımız kontrolde" if _local_hour(r.get("ran_at")) in (None, 3, 4, 5) else "Son kontrolde"
     return {"id": f"dogruluk:{sig}", "kind": "dogruluk", "severity": "warn", "title": "Rakamları kontrol et",
             "text": f"{when} {n} yerde tutmayan bir rakam gördük: "
                     + "; ".join(f"{x['label'].lower()} ({x['count']})" for x in lines)

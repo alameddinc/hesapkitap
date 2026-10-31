@@ -246,3 +246,21 @@ def test_after_write_reruns_in_background(client, monkeypatch):
     assert client.delete(f"/api/entries/{eid}").status_code == 200  # kaydı silmek sorunu giderir
     assert done.wait(5)
     assert integrity.last()["counts"] == {}
+
+
+def test_ran_at_utc_naive_and_night_wording(client, monkeypatch):
+    import re
+
+    eid = _entry(client, "2026-10-06", "Örnek Market", 100)
+    with db.connect() as c:
+        c.execute("INSERT INTO splits (entry_id, amount, category) VALUES (?, 150, 'Sigara')", (eid,))
+    integrity.run(date(2026, 10, 31))
+    r = integrity.last()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", r["ran_at"])
+    assert integrity.todo()["checked_at"] == r["ran_at"]
+    monkeypatch.setenv("TZ_NAME", "Europe/Istanbul")
+    for ran, night in (("2026-10-31 01:00:00", True),    # 04:00 İstanbul (UTC+3): gece koşusu
+                       ("2026-10-31 11:00:00", False),   # 14:00 İstanbul
+                       ("2026-10-31T04:10:00", True)):   # eski biçim (yerel)
+        db.set_setting(integrity.SETTING, __import__("json").dumps({**r, "ran_at": ran}))
+        assert integrity.todo()["text"].startswith("Gece yaptığımız" if night else "Son kontrolde")
