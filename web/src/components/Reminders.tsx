@@ -5,7 +5,7 @@ import { api, ApiError, errStatus, movedCount } from "../api";
 import { cx, dateTR, tl } from "../format";
 import { useUI, type Route } from "../ui";
 import { useOpenRow, useSave } from "./hooks";
-import { detailText } from "../lib/apiError";
+import { errorText } from "../lib/apiError";
 import { PairCards } from "./MatchInfo";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
@@ -247,7 +247,7 @@ function DebtQuestion({ r }: { r: Reminder }) {
     const res = await fetch(`/api/debts/${r.debt_id}/pay`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.pay) });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      throw new ApiError(detailText(j.detail, res.status), res.status);
+      throw new ApiError(errorText(j, res.status), res.status);
     }
     return res.json();
   }, () => ui.toast("Borçtan düşüldü · gelir/gider sayılmaz"));

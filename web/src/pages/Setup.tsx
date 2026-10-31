@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import DataPrivacy from "../components/DataPrivacy";
@@ -19,13 +20,14 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
     if (pw !== pw2) return setErr("Şifreler aynı değil");
     setBusy(true);
     setErr(null);
-    const res = await fetch("/api/auth/setup", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: user.trim() || "admin", password: pw, code: code || null, share_templates: share }),
-    });
-    setBusy(false);
-    if (res.ok) qc.invalidateQueries();
-    else setErr((await res.json().catch(() => ({}))).detail ?? "Kurulum başarısız");
+    try {
+      await send("/api/auth/setup", { method: "POST", json: { username: user.trim() || "admin", password: pw, code: code || null, share_templates: share } });
+      qc.invalidateQueries();
+    } catch (x) {
+      setErr((x as Error).message || "Kurulum başarısız");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./components/InstallApp"; // beforeinstallprompt erken yakalansın
 import App from "./App";
+import { setRefreshHandler } from "./lib/apiError";
 import "./index.css";
 
 // Mağaza uygulaması (Capacitor): <html class="in-app">. Android'de kenardan kenara çizilir; güvenli alan değerleri
@@ -26,6 +27,8 @@ if (/HesapKitapApp\//.test(navigator.userAgent)) {
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: false, retry: 1 } },
 });
+// 404 + refresh: true (kayıt başka cihazda silinmiş/değişmiş): ekrandaki listeler tazelensin
+setRefreshHandler(() => void qc.invalidateQueries());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -1,5 +1,9 @@
-// Sunucu hata gövdesindeki "detail" → kullanıcıya gösterilecek Türkçe cümle. Uçlarımız Türkçe metin döner (string);
-// FastAPI/pydantic doğrulama hatası ise dizi gelir ([{loc, msg, type}]) — ham JSON ya da "[object Object]" görünmesin.
+// Sunucu hata gövdesi → kullanıcıya gösterilecek Türkçe cümle (sunucu c80eb0f sözleşmesi):
+// - 422: detail Türkçe metin (alan/tür ayrıca errors:[{loc, type}]); eski sunucuda pydantic dizisi → burada Türkçeleşir
+// - 404: refresh: true → ilgili listeler tazelenir (kayıt başka cihazda silinmiş/değişmiş olabilir), sunucunun metni gösterilir
+// - makine kodları (consent_required, password_change_required, setup_required, account_pending_deletion): detail kodun
+//   kendisi; yanında code ve Türkçe message → kullanıcıya message, davranış code'a göre (ilgili ekranlar code'a bakar)
+// Ham JSON ya da "[object Object]" hiçbir zaman görünmez.
 
 const FIELD: Record<string, string> = {
   amount: "Tutar", paid_at: "Ödeme tarihi", debt_date: "Tarih", due_date: "Vade", entry_date: "Tarih", person: "Kişi",
@@ -41,4 +45,60 @@ export function detailText(detail: unknown, status: number): string {
   if (status === 429) return "Çok sık denendi; biraz sonra tekrar dene";
   if (status >= 500) return "Sunucuda bir sorun oldu; biraz sonra tekrar dene";
   return `İşlem yapılamadı (${status})`;
+}
+
+/** Sunucunun makine kodları: message gelmezse gösterilecek Türkçe karşılık. */
+const CODES: Record<string, string> = {
+  consent_required: "Devam etmek için koşulları onaylaman gerekiyor",
+  password_change_required: "Devam etmeden önce şifreni değiştirmen gerekiyor",
+  setup_required: "Kurulum tamamlanmamış; ilk kurulumu bitir",
+  account_pending_deletion: "Bu hesap silinmek üzere; geri almak için giriş ekranındaki yönergeyi izle",
+};
+
+type Body = { detail?: unknown; message?: unknown; code?: unknown; refresh?: unknown } | null | undefined;
+
+let onRefresh: (() => void) | null = null;
+/** 404 + refresh: true geldiğinde çağrılır (main.tsx: tüm sorguları tazeler). */
+export const setRefreshHandler = (fn: (() => void) | null) => { onRefresh = fn; };
+
+/** Hata gövdesinin makine kodu (yoksa null): davranış buna göre seçilir. */
+export const errorCode = (b: Body): string | null =>
+  typeof b?.code === "string" ? b.code : typeof b?.detail === "string" && b.detail in CODES ? b.detail : null;
+
+/** Tüm hata gövdesi → Türkçe metin; 404 refresh'te listeleri tazeler. */
+export function errorText(b: Body, status: number): string {
+  if (b?.refresh === true) onRefresh?.();
+  const code = errorCode(b);
+  if (code) return typeof b?.message === "string" && b.message ? b.message : CODES[code] ?? detailText(undefined, status);
+  return detailText(b?.detail, status);
+}
+
+/** Ağ hatası: çevrimdışı mı, sunucu mu? (fetch hiç yanıt alamadı) */
+export function networkText(): string {
+  return typeof navigator !== "undefined" && navigator.onLine === false
+    ? "İnternet bağlantın yok. Bağlanınca tekrar dene."
+    : "Sunucuya ulaşılamadı. İnternetin çalışıyorsa sunucu geçici olarak kapalı olabilir; biraz sonra tekrar dene.";
+}
+
+/** Vekil/sunucu yanıt vermiyor (502/503/504, gövde JSON değil). */
+const GATEWAY = new Set([502, 503, 504]);
+
+/** fetch + JSON gövde; ağ hatası ve hata yanıtı Türkçe metinli Error olarak fırlar (status, body ekli).
+ *  Çağıran try/finally ile "meşgul" durumunu her koşulda bırakır. */
+export async function send<T = unknown>(url: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
+  const { json, ...rest } = init;
+  if (json !== undefined) { rest.body = JSON.stringify(json); rest.headers = { "Content-Type": "application/json", ...rest.headers }; }
+  let res: Response;
+  try {
+    res = await fetch(url, rest);
+  } catch {
+    throw Object.assign(new Error(networkText()), { status: 0, body: null });
+  }
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = body ? errorText(body, res.status)
+      : GATEWAY.has(res.status) ? "Sunucu şu an yanıt vermiyor; biraz sonra tekrar dene." : detailText(undefined, res.status);
+    throw Object.assign(new Error(msg), { status: res.status, body });
+  }
+  return body as T;
 }

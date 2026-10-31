@@ -1,4 +1,4 @@
-import { detailText } from "./lib/apiError";
+import { detailText, errorText, networkText } from "./lib/apiError";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
@@ -438,12 +438,17 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
   }
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    throw new ApiError(networkText(), 0); // çevrimdışı mı sunucu mu: networkText ayırır
+  }
   if (!res.ok) {
-    let msg = detailText(undefined, res.status);
+    let msg = [502, 503, 504].includes(res.status) ? "Sunucu şu an yanıt vermiyor; biraz sonra tekrar dene." : detailText(undefined, res.status);
     try {
       const j = await res.json();
-      msg = detailText(j.detail, res.status);
+      msg = errorText(j, res.status);
     } catch {
       /* gövde JSON değil */
     }

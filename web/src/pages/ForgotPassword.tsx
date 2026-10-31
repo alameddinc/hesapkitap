@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { isEmail } from "../components/hooks";
@@ -28,15 +29,8 @@ const STRENGTH = [
   ["İyi", "bg-green-600", "text-green-600"], ["Güçlü", "bg-green-600", "text-green-600"],
 ] as const;
 
-async function post(path: string, body: unknown) {
-  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const j = await res.json().catch(() => ({}));
-    const detail = j.detail;
-    throw Object.assign(new Error(typeof detail === "string" ? detail : "Bir şeyler ters gitti, tekrar dene"),
-      { status: res.status, body: j });
-  }
-}
+// ağ hatası ve hata yanıtı Türkçe metinli; status ve body ekli (lib/apiError send)
+const post = (path: string, body: unknown) => send(path, { method: "POST", json: body });
 
 /** #/sifre — Şifremi unuttum: 1) e-postaya 6 haneli kod  2) kod + yeni şifre → oturum açılır, ana sayfa. */
 export default function ForgotPassword() {
