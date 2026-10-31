@@ -256,7 +256,8 @@ def handle_pdf(name: str, data: bytes) -> str:
         rows = bank_import.finalize(res["rows"], owners or db.card_holders())
         if res.get("owner_name"):
             db.remember_owner_name(res["owner_name"])
-        st = db.import_bank_rows(rows, account=res.get("bank") or "", owners=owners or db.card_holders())
+        st = db.import_bank_rows(rows, account=res.get("bank") or "", owners=owners or db.card_holders(),
+                                 iban=res.get("iban"))  # banka adı okunamasa da IBAN hesabı bulur
         db.auto_link()
         if any(st[k] for k in ("gelir", "gider", "kart_odemesi", "virman")):  # hepsi zaten vardıysa hak düşmez
             doc_reads.charge(data)

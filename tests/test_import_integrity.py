@@ -264,3 +264,43 @@ def test_repair_transfer_accounts_balance_effect(tmpdb, capsys):
     b = next(x for x in rep["balances"] if x["account"] == "Halkbank")
     assert (b["before"], b["after"], b["diff"]) == (20000.0, 17500.0, -2500.0)
     assert _current(tmpdb, acc) == 17500.0
+
+
+IBAN = "TR120001000000000000000001"  # uydurma
+
+
+def test_b_iban_only_document_resolves_account_and_catches_overlap(client, tmpdb):
+    """Belgede banka adı yok, yalnız IBAN: önizleme hesabı tanıyordu ama içe aktarma hesapsız ekliyordu; çakışma
+    denetimi çalışmıyordu (3 çakışan hareket yeniden eklendi). Artık ikisi aynı çözümlemeyi kullanır."""
+    import json
+
+    acc = tmpdb.ensure_account("Halkbank")
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET iban = ? WHERE id = ?", (IBAN, acc))
+    tmpdb.import_bank_rows(_parse([["Tarih", "Açıklama", "Tutar", "Bakiye"],
+                                   ["03.10.2026", "MARKET", "-100,00", "900,00"],
+                                   ["04.10.2026", "KAFE", "-50,00", "850,00"],
+                                   ["05.10.2026", "KIRA", "-15.000,00", "5.000,00"]]), account="Halkbank", account_id=acc)
+    csv = (f"IBAN;{IBAN}\nTarih;Açıklama;Tutar\n03.10.2026;POS MARKET;-100,00\n04.10.2026;POS KAFE;-50,00\n"
+           "05.10.2026;FAST KIRA;-15.000,00\n06.10.2026;ORNEK ECZANE;-30,00\n").encode()
+    pv = client.post("/api/bank-import/preview", files={"file": ("h.csv", csv, "text/csv")}).json()
+    assert pv["account_match"]["account_id"] == acc
+    assert pv["counts"]["cakisma"] == 3 and pv["overlap"]["count"] == 3
+    assert "eklenmeyecek" in pv["overlap"]["message"]  # önizleme: gelecek zaman
+    r = client.post("/api/bank-import", files={"file": ("h.csv", csv, "text/csv")},
+                    data={"mapping": json.dumps(pv["mapping"]), "header_row": str(pv["header_row"])}).json()
+    assert r["cakisma"] == 3 and r["gider"] == 1 and "eklenmedi" in r["uyari"]  # sonuç: geçmiş zaman
+    assert _sum(tmpdb) == (4, 15180.0)
+    with tmpdb.connect() as c:
+        assert c.execute("SELECT account_id FROM entries WHERE description LIKE '%ECZANE%'").fetchone()[0] == acc
+
+
+def test_iban_without_bank_name_in_mail_path(tmpdb):
+    from app import sync
+
+    acc = tmpdb.ensure_account("Halkbank")
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET iban = ? WHERE id = ?", (IBAN, acc))
+    assert sync.account_for_import(None, IBAN) == acc
+    assert sync.account_for_import(None, "TR990000000000000000000099") is None
+    assert sync.account_for_import(None, None) is None
