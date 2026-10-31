@@ -119,7 +119,7 @@ def _import_bank(doc: dict, passwords: list[str], last_bal: dict) -> dict:
         raise ValueError("satır yok")
     # kullanıcının canlıda seçtiği hesap (aynı adla); yoksa içe aktarmanın kendi seçimi
     chosen = db.ensure_account(doc["account_name"]) if doc.get("account_name") else None
-    acc_id = sync.account_for_import(account or None, iban, chosen, False) if (account or chosen) else None
+    acc_id = sync.account_for_import(account or None, iban, chosen, False)
     stats = db.import_bank_rows(parsed, account=account, owners=owners, account_id=acc_id)
     db.auto_link()
     from app.bank_import import last_balance

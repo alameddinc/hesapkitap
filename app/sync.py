@@ -599,7 +599,9 @@ def resolve_account(bank: str | None, iban: str | None = None) -> dict:
 
 def account_for_import(bank: str | None, iban: str | None, account_id: int | None = None,
                        new_account: bool = False) -> int | None:
-    """İçe aktarmada kullanılacak hesap id'si; seçim/IBAN hesaba yazılır ki sonraki döküm doğrudan gelsin."""
+    """İçe aktarmada kullanılacak hesap id'si; seçim/IBAN hesaba yazılır ki sonraki döküm doğrudan gelsin. Tek yer:
+    web/mobil içe aktarma, e-posta, Telegram ve paylaşım (mailbox.handle_pdf) aynı çözümlemeyi kullanır; önizleme
+    (resolve_account) ile aynı sıra: açık seçim → IBAN → banka adı. Hiçbiri yoksa None (hesapsız)."""
     from app.bank_import import short_bank
 
     name = short_bank(bank) if bank else None
@@ -611,8 +613,9 @@ def account_for_import(bank: str | None, iban: str | None, account_id: int | Non
             c.execute("UPDATE accounts SET iban = COALESCE(iban, ?), alias = CASE WHEN alias IS NULL AND name <> ? "
                       "THEN ? ELSE alias END WHERE id = ?", (iban, name or "", name, account_id))
         return account_id
-    if not name:
-        return None
+    if not name:  # belgede banka adı yok: yalnız IBAN kayıtlı bir hesabı gösteriyorsa o (önizleme de böyle tanır)
+        res = resolve_account(None, iban) if iban else {"status": "none"}
+        return res["account_id"] if res["status"] == "exact" else None
     res = resolve_account(bank, iban)
     if res["status"] == "exact":
         acc = res["account_id"]

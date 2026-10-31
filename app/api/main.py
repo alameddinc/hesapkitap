@@ -1589,7 +1589,7 @@ def _preview_counts(parsed: list[dict], account: str, iban: str | None) -> tuple
                                         "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL "
                                         "UNION SELECT import_hash FROM card_payments WHERE import_hash IS NOT NULL")}
     am = _account_match(account, iban) if (account or iban) else {}
-    ov = db.import_overlaps(parsed, am.get("account_id") or am.get("default_id"), account, seen)
+    ov = db.import_overlaps(parsed, am.get("account_id") or am.get("default_id"), account, seen, preview=True)
     counts: dict[str, int] = {}
     for i, r in enumerate(parsed):
         if r["type"] == "gider" and db.match_card_payment(abs(r["amount"]), r["date"]):
@@ -1684,7 +1684,8 @@ def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), hea
     with undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
         if account_id and not any(a["id"] == account_id and a["kind"] == "banka" for a in db.list_accounts()):
             raise HTTPException(422, "Hesap bulunamadı")
-        acc_id = sync.account_for_import(account or None, iban, account_id, new_account) if (account or account_id) else None
+        # açık seçim yoksa önizlemeyle aynı çözümleme (IBAN → hesap, banka adı → hesap): hesapsız eklenmesin
+        acc_id = sync.account_for_import(account or None, iban, account_id, new_account)
         stats = db.import_bank_rows(parsed, account=account, owners=owners, account_id=acc_id)
         db.auto_link()
         # dökümün kendisi de saklanır (kayıtların detayından indirilir); geri alınınca bağ kopar, gece temizliği siler

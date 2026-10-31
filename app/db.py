@@ -2110,7 +2110,8 @@ def repair_own_transfers(owners: list[str] | None = None) -> list[dict]:
     return moved
 
 
-def import_overlaps(rows: list[dict], acc_id: int | None, account: str = "", seen: set | None = None) -> dict:
+def import_overlaps(rows: list[dict], acc_id: int | None, account: str = "", seen: set | None = None,
+                    preview: bool = False) -> dict:
     """Aynı hesabın aynı hareketi başka biçimde (PDF ↔ Excel/CSV) zaten yüklenmiş mi? Parmak izi tutmasa da aynı gün,
     aynı tutar ve yönde, dökümden gelmiş kayıt varsa çakışma sayılır (iki kez sayılmasın). Sayım çokluğa göre: o gün o
     tutarda kayıtlı hareket sayısından, bu belgede parmak iziyle zaten tanınanlar düşülür (eş satırlar korunur).
@@ -2155,7 +2156,8 @@ def import_overlaps(rows: list[dict], acc_id: int | None, account: str = "", see
         return empty
     ds = sorted(rows[i]["date"] for i in out)
     msg = (f"Bu hesabın {_tr_day(ds[0])}–{_tr_day(ds[-1])} aralığındaki {len(out)} hareket başka bir belgeden (ör. aynı "
-           "dönemin PDF'i ya da Excel'i) zaten yüklü: aynı gün ve tutarla kayıtlı olduğu için tekrar eklenmedi.")
+           f"dönemin PDF'i ya da Excel'i) zaten yüklü: aynı gün ve tutarla kayıtlı olduğu için tekrar "
+           f"{'eklenmeyecek' if preview else 'eklenmedi'}.")
     return {"rows": out, "count": len(out), "from": ds[0], "to": ds[-1], "message": msg}
 
 
@@ -2178,7 +2180,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
 
     from app import sync
 
-    acc_id = sync.account_for_import(account or None, iban, account_id, new_account) if (account or account_id) else None
+    acc_id = sync.account_for_import(account or None, iban, account_id, new_account)
     with connect() as c:
         rules = load_rules(c)
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
