@@ -1,15 +1,15 @@
 """Ekstre 'ödendi' eşleşmesi: her ödeme en fazla bir ekstreye, kart no + tarih penceresi + tutar; kısmi ödemeler
 toplanır; sonuç yükleme sırasından bağımsız; elle işaret korunur. (Canlı hata: aynı 43.000,00 ödemesi 3 ekstrede,
-20.000,00 yanlış ekstrede, 15.540,00 hiç eşleşmemiş.)"""
+45.000,00 yanlış ekstrede, 46.000,00 hiç eşleşmemiş.)"""
 import itertools
 
 from app import bank_import
 
-CARD = "4111********1111"
+CARD = "4111***1111"
 STS = [("2026-02-15", "2026-02-25", 61000.00, 2000), ("2026-04-17", "2026-04-27", 62000.00, 2000),
        ("2026-06-15", "2026-06-25", 43000.00, 2000), ("2026-07-17", "2026-07-27", 44000.00, 2000),
-       ("2026-08-15", "2026-08-25", 20000.00, 2000), ("2026-09-15", "2026-09-25", 15540.00, 2000)]
-PAYS = [("25.06.2026", 43000.00), ("26.08.2026", 20000.00), ("26.09.2026", 15540.00)]
+       ("2026-08-15", "2026-08-25", 45000.00, 2000), ("2026-09-15", "2026-09-25", 46000.00, 2000)]
+PAYS = [("25.06.2026", 43000.00), ("26.08.2026", 45000.00), ("26.09.2026", 46000.00)]
 
 
 def _statements(db):
@@ -31,7 +31,7 @@ def _paid(db):
 
 
 EXPECTED = {"2026-02-15": (None, None), "2026-04-17": (None, None), "2026-06-15": (43000.00, "2026-06-25"),
-            "2026-07-17": (None, None), "2026-08-15": (20000.00, "2026-08-26"), "2026-09-15": (15540.00, "2026-09-26")}
+            "2026-07-17": (None, None), "2026-08-15": (45000.00, "2026-08-26"), "2026-09-15": (46000.00, "2026-09-26")}
 
 
 def test_each_payment_one_statement_any_order(tmpdb):
@@ -49,7 +49,7 @@ def test_old_wrong_marks_are_repaired(tmpdb):
     with tmpdb.connect() as c:  # eski algoritmanın bıraktığı işaretler (kaynağı bilinmiyor)
         c.execute("UPDATE statements SET paid_amount = 43000.00, paid_at = '2026-06-25', paid_source = NULL "
                   "WHERE period_end IN ('2026-02-15', '2026-04-17')")
-        c.execute("UPDATE statements SET paid_amount = 20000.00, paid_at = '2026-08-26', paid_source = NULL "
+        c.execute("UPDATE statements SET paid_amount = 45000.00, paid_at = '2026-08-26', paid_source = NULL "
                   "WHERE period_end = '2026-07-17'")
         c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL, paid_source = NULL WHERE period_end = '2026-09-15'")
         c.execute("UPDATE statements SET paid_amount = 500, paid_at = '2026-03-01', paid_source = NULL "
@@ -70,15 +70,15 @@ def test_manual_mark_kept_and_unknown_old_manual_kept(client, tmpdb):
     _bank(tmpdb)
     p = _paid(tmpdb)
     assert p["2026-07-17"] == (44000.00, "2026-07-25") and p["2026-04-17"] == (62000.00, "2026-04-26")
-    assert p["2026-08-15"] == (20000.00, "2026-08-26")
+    assert p["2026-08-15"] == (45000.00, "2026-08-26")
 
 
 def test_partial_payments_sum_and_unknown_card_by_amount(tmpdb):
     _statements(tmpdb)
-    _bank(tmpdb, [("20.06.2026", 20000.0), ("24.06.2026", 21293.88)])  # iki parça
+    _bank(tmpdb, [("20.06.2026", 20000.0), ("24.06.2026", 23000.00)])  # iki parça
     assert _paid(tmpdb)["2026-06-15"] == (43000.00, "2026-06-24")
-    _bank(tmpdb, [("26.08.2026", 20000.00)], card=False)  # açıklamada kart yok: tutar borçla tutuyor
-    assert _paid(tmpdb)["2026-08-15"] == (20000.00, "2026-08-26")
+    _bank(tmpdb, [("26.08.2026", 45000.00)], card=False)  # açıklamada kart yok: tutar borçla tutuyor
+    assert _paid(tmpdb)["2026-08-15"] == (45000.00, "2026-08-26")
     assert _paid(tmpdb)["2026-07-17"] == (None, None)
 
 
@@ -86,12 +86,12 @@ def test_payment_after_debt_closed_is_not_added(tmpdb):
     """09-15 borcu 09-26'da kapandı; 10-18'deki ödeme (yüklenmemiş Ekim ekstresinin) ona yazılmaz."""
     _statements(tmpdb)
     _bank(tmpdb, [*PAYS, ("18.10.2026", 47000.00)])
-    assert _paid(tmpdb)["2026-09-15"] == (15540.00, "2026-09-26")
+    assert _paid(tmpdb)["2026-09-15"] == (46000.00, "2026-09-26")
     with tmpdb.connect() as c:  # Ekim ekstresi gelince o ödeme ona gider
         c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt, min_payment) "
                   "VALUES ('h-oct', 'VakıfBank', ?, '2026-10-16', '2026-10-26', 47000.00, 2000)", (CARD,))
     tmpdb.auto_mark_paid()
-    assert _paid(tmpdb)["2026-10-16"] == (47000.00, "2026-10-18") and _paid(tmpdb)["2026-09-15"] == (15540.00, "2026-09-26")
+    assert _paid(tmpdb)["2026-10-16"] == (47000.00, "2026-10-18") and _paid(tmpdb)["2026-09-15"] == (46000.00, "2026-09-26")
 
 
 def test_partial_then_close_dates(tmpdb):
@@ -99,5 +99,5 @@ def test_partial_then_close_dates(tmpdb):
     _statements(tmpdb)
     _bank(tmpdb, [("17.06.2026", 2500.0)])
     assert _paid(tmpdb)["2026-06-15"] == (2500.0, "2026-06-17")
-    _bank(tmpdb, [("23.06.2026", 38793.88), ("30.06.2026", 999.0)])
+    _bank(tmpdb, [("23.06.2026", 40500.00), ("30.06.2026", 999.0)])
     assert _paid(tmpdb)["2026-06-15"] == (43000.00, "2026-06-23")  # 30.06'daki fazla ödeme eklenmez

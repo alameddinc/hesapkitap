@@ -45,15 +45,15 @@ def test_open_cycle_counts_receipts_since_last_cut(client, upload):
 
 
 def test_card_last4_from_receipts():
-    assert receipt.card_last4("**** 6081") == "6081" and receipt.card_last4(6081) == "6081"
+    assert receipt.card_last4("**** 2222") == "2222" and receipt.card_last4(2222) == "2222"
     assert receipt.card_last4(None) is None and receipt.card_last4("yok") is None
-    text = "ORNEK MARKET\nTOPLAM *120,00\nKREDI KARTI\n454360******6081\nONAY KODU 123456"
+    text = "ORNEK MARKET\nTOPLAM *120,00\nKREDI KARTI\n400000******2222\nONAY KODU 123456"
     import app.ocr as o
 
     orig = o.text_of
     o.text_of = lambda d, m: text
     try:
-        assert o.parse(b"x", "image/jpeg", ["Diğer"])["card_last4"] == "6081"
+        assert o.parse(b"x", "image/jpeg", ["Diğer"])["card_last4"] == "2222"
     finally:
         o.text_of = orig
 

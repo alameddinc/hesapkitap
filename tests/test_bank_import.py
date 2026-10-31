@@ -113,9 +113,9 @@ def test_card_payment_detected_by_amount(client, tmpdb):
     """Başka bankanın kartına EFT: açıklamada 'kart' yok; tutar ekstreyle birebir → gider sayılmaz."""
     with tmpdb.connect() as c:
         c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt, min_payment) "
-                  "VALUES ('k', 'Kuveyt Türk', '4111***1111', '2026-10-15', '2026-10-26', 25000.00, 20800.00)")
+                  "VALUES ('k', 'Kuveyt Türk', '4111***1111', '2026-10-15', '2026-10-26', 52000.00, 20800.00)")
     csv = ("Tarih;Açıklama;Tutar\n"
-           "20.10.2026;EFT KUVEYT TURK KATILIM BANKASI;-25.000,00\n"
+           "20.10.2026;EFT KUVEYT TURK KATILIM BANKASI;-52.000,00\n"
            "21.10.2026;EFT AHMET ORNEK KIRA;-22.000,00\n").encode()
     pv = _upload(client, csv, "h.csv").json()
     assert pv["counts"] == {"kart_odemesi": 1, "gider": 1}
@@ -197,7 +197,7 @@ def test_counterparty_company_and_casing():
     cp = bank_import.counterparty
     assert cp("GIDEN FAST - AYŞE YILMAZ TARAFINDAN GÖNDERILEN,Zeynep Örnek Egitim ve Danismanlik Limited Sirketi,"
               "Kuveyt Türk Katilim Bankasi A.S.,TR00", -2000, ["AYŞE YILMAZ"]) == "Zeynep Örnek Egitim"
-    assert cp("Not,Esra ÖRNEK,Akbank T.A.S.,TR00", -4850, ["AYŞE YILMAZ"]) == "Esra Örnek"
+    assert cp("Not,Defne ÖRNEK,Akbank T.A.S.,TR00", -4850, ["AYŞE YILMAZ"]) == "Defne Örnek"
     assert cp("GIDEN FAST - AYŞE DEMIR TARAFINDAN GÖNDERILEN,Elif Demir,Türkiye Is Bankasi A.S.,TR00", -8000,
               ["AYŞE DEMIR"]) == "Elif Demir"
 

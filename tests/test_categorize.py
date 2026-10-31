@@ -77,7 +77,7 @@ def test_duplicate_subscription_charges_warned(tmpdb):
     from app import finance
 
     with tmpdb.connect() as c:
-        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end) VALUES ('d', 'VakıfBank', '5400********2222', '2026-06-30')")
+        c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end) VALUES ('d', 'VakıfBank', '5400***2222', '2026-06-30')")
         sid = c.execute("SELECT id FROM statements").fetchone()[0]
         for d, desc, amt in (("2026-06-15", "PADDLE.NET* GEOGUESSR/08081781535", 968.52),
                              ("2026-06-19", "PADDLE.NET* GEOGUESSR/London", 948.0),

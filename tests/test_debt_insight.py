@@ -10,7 +10,7 @@ def _debt_insights(db):
 
 def test_settled_receivable_not_in_insight(tmpdb):
     db = tmpdb
-    did = db.create_debt({"person": "Deniz Ak", "direction": "alacak", "amount": 742.25, "debt_date": "2026-10-29"})
+    did = db.create_debt({"person": "Deniz Ak", "direction": "alacak", "amount": 650.0, "debt_date": "2026-10-29"})
     ins = _debt_insights(db)
     assert len(ins) == 1 and ins[0]["link"] == "borclar" and "Borç / Alacak sayfasından" in ins[0]["detail"]
     db.pay_debt(did, None, "2026-10-30")

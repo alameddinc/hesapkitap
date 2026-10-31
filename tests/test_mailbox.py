@@ -48,7 +48,7 @@ def test_notification_creates_transfer_and_card_notice(tmpdb, notif):
 
     notif["raw"] = {"is_transaction": True, "bank": "VakıfBank", "transactions": [
         {"date": "2026-10-20", "amount": -200, "type": "fast", "description": "FAST gönderimi", "counterparty": "ALİ ÖRNEK"},
-        {"date": "2026-10-20", "amount": -675, "type": "kart_harcama", "merchant": "ESPRESSOLAB", "card_last4": "6613"},
+        {"date": "2026-10-20", "amount": -675, "type": "kart_harcama", "merchant": "ESPRESSOLAB", "card_last4": "1111"},
     ]}
     r = mailbox.process("<1@x>", _mail())
     assert r["status"] == "ok" and r["kind"] == "bildirim"

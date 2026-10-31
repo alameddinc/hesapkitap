@@ -127,7 +127,7 @@ def _join(parts: list[str]) -> str:
         if not p:
             continue
         if out and ((out[-1].isalpha() and p[0].isalpha() and p[0].islower() and p.split()[0] not in _SMALL_WORDS)
-                    or (p[0].isdigit() and re.search(r"TR\d+$", out))):  # IBAN da bölünür: 'TR12000150' + '0158…'
+                    or (p[0].isdigit() and re.search(r"TR\d+$", out))):  # IBAN da bölünür: 'TR12000100' + '0001…'
             out += p
         else:
             out = f"{out} {p}" if out else p
