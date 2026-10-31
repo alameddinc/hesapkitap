@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { send } from "../lib/apiError";
 import { useState } from "react";
 import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
@@ -43,7 +44,7 @@ function Item({ icon, label, onClick, route }: { icon: React.ReactNode; label: s
 export default function More() {
   const ui = useUI();
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Diğer</h1>
@@ -63,7 +64,8 @@ export default function More() {
         <Item icon={<Settings2 size={18} />} label="Ayarlar: Telegram, yedekler" onClick={() => ui.go("ayarlar")} route="ayarlar" />
         {status.data?.required && (
           <Item icon={<LogOut size={18} />} label="Çıkış yap" onClick={async () => {
-            await fetch("/api/auth/logout", { method: "POST" });
+            try { sessionStorage.setItem("hk-logged-out", "1"); } catch { /* özel mod */ }
+            await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
             document.cookie = "hk_book=; path=/; max-age=0; SameSite=Lax"; // ortak/kendi defter seçimi kişiye ait
             qc.invalidateQueries();
           }} />
@@ -75,11 +77,13 @@ export default function More() {
 
 export function LogoutButton() {
   const qc = useQueryClient();
-  const status = useQuery({ queryKey: ["auth"], queryFn: () => fetch("/api/auth/status").then((r) => r.json()) });
+  const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   if (!status.data?.required) return null;
   return (
     <button className="btn-ghost w-full" onClick={async () => {
-      await fetch("/api/auth/logout", { method: "POST" });
+      try { sessionStorage.setItem("hk-logged-out", "1"); } catch { /* özel mod */ }
+      // sunucu oturum anahtarını geçersiz kılar (214e4d8); ağ hatasında da bu cihazda çıkış yapılır
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
       document.cookie = "hk_book=; path=/; max-age=0; SameSite=Lax"; // ortak/kendi defter seçimi kişiye ait
       qc.invalidateQueries();
     }}>
