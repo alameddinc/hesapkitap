@@ -428,6 +428,13 @@ def _start_session(request: Request, response: Response, user: dict) -> None:
 
 @app.get("/api/auth/status")
 def auth_status(request: Request):
+    """Giriş durumu + sunucu el sıkışması (api_version, capabilities, flags; girişten önce de gerekir: kayıt adımı)."""
+    from app import version
+
+    return {**_auth_status(request), **version.handshake()}
+
+
+def _auth_status(request: Request):
     from app import demo_mode
 
     if demo_mode.enabled():
@@ -1311,7 +1318,16 @@ def meta():
         "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
         "module_consent_title": {k: prefs.CONSENT_TITLE.get(k) for k in prefs._consent_needed()},
         "plan": _plan_info(),
+        **_handshake(),  # server: api_version, capabilities, flags, version (S17)
     }
+
+
+def _handshake() -> dict:
+    from app import version
+
+    h = version.handshake(with_version=True)
+    return {"api_version": h["api_version"], "capabilities": h["capabilities"],
+            "server": {"version": h["version"], "flags": h["flags"]}}
 
 
 def _plan_info() -> dict:
