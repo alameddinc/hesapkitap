@@ -477,7 +477,7 @@ def login(body: LoginIn, request: Request, response: Response):
     auth.clear_account_fails(acct)
     from app import email_verify
 
-    if email_verify.unverified(u["id"]):  # şifre doğru ama e-posta doğrulanmamış: oturum yok, kod (yeniden) gider
+    if email_verify.required() and email_verify.unverified(u["id"]):  # şifre doğru, e-posta doğrulanmamış: kod gider
         try:
             email_verify.send_code(u)
         except Exception:  # noqa: BLE001
@@ -708,6 +708,8 @@ def register(body: RegisterIn, request: Request, response: Response):
 
         if email_verify.required():  # hazır sürüm: e-posta koduyla doğrulanmadan oturum açılmaz (app/email_verify.py)
             return _register_with_code(body, request, ip)
+        if email_verify.protected():  # kod adımı kapalı (HESAPKITAP_EMAIL_VERIFY=0): nötr yanıt, işaretli hesap
+            return _register_without_code(body, request, response, ip)
         try:
             u = auth.create_user(body.username, body.password)
         except ValueError as e:
@@ -763,6 +765,32 @@ def _register_with_code(body: RegisterIn, request: Request, ip: str) -> dict:
     except Exception:  # noqa: BLE001 - posta gönderilemese de yanıt aynı (kod yeniden istenebilir)
         logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
     return {"ok": True, "verify_required": True, "email": name}
+
+
+def _register_without_code(body: RegisterIn, request: Request, response: Response, ip: str) -> dict:
+    """Kod adımı kapalıyken kayıt: yeni e-postada hesap açılır ve oturum başlar, ama hesap "doğrulanmamış" işaretlenir
+    (Google/Apple ile e-postanın sahibi gelirse şifre geçersiz, oturumlar düşer). Kayıtlı e-postada yanıt yine
+    {"ok": true} (e-postanın kayıtlı olduğu söylenmez), hesaba dokunulmaz, adrese bilgi maili gider."""
+    from app import email_verify
+
+    name = (body.username or "").strip()
+    if "@" not in name:
+        raise HTTPException(422, "E-posta adresini yaz")
+    try:
+        auth._check_strength(body.password)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    pw_hash = auth._hash(body.password)  # her yolda aynı iş
+    u = system.user_by_name(name)
+    if u:
+        email_verify.notify_existing(u)
+        return {"ok": True}
+    u = system.create_user(name, pw_hash)
+    email_verify.mark_unverified(u["id"])
+    _signup_record(ip)
+    _record_consent(u["id"], request)
+    _start_session(request, response, u)
+    return {"ok": True}
 
 
 class VerifyEmailIn(BaseModel):
