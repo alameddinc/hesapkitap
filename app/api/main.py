@@ -117,6 +117,11 @@ async def _limit_error(request: Request, exc: limits.LimitError):
     return JSONResponse({"detail": str(exc)}, status_code=413)
 
 
+class FastJSON(JSONResponse):
+    """Hazır JSON (yalnız str/int/float/bool/None/list/dict içeren içerik): FastAPI'nin jsonable_encoder'ı atlanır —
+    büyük listelerde sürenin çoğu oradaydı. Çıktı JSONResponse ile aynı biçim."""
+
+
 def _tl_tr(x: float) -> str:
     """Hata metinleri için: ₺1.234,50 (money.tl, istemcilerle aynı biçim)."""
     return money.tl(x)
@@ -1363,7 +1368,8 @@ def summary(month: str | None = None):
 
 @app.get("/api/transactions")
 def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
-                 totals: bool = False):
+                 totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),
+                 before: str | None = Query(None, max_length=80)):
     """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
     include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz.
     Her satırda counts_as_spend / counts_as_income: gider/gelir toplamına girer mi (sunucu kuralı, finance.counts);
@@ -1378,9 +1384,35 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
         r.setdefault("raw", None)
         r.setdefault("note_user", r.get("note"))
         r["counts_as_spend"], r["counts_as_income"] = finance.counts(r)
-    if totals:
-        return {"rows": rows, "totals": {**finance._totals([r for r in rows if not r.get("estimated")]), "count": len(rows)}}
-    return rows
+    if not (totals or limit or before):
+        return FastJSON(rows)  # eski biçim: düz dizi (jsonable_encoder atlanır; içerik bayt bayt aynı)
+    out: dict = {}
+    if totals:  # toplamlar sayfanın değil, istenen kümenin tamamı (ay ya da tüm geçmiş)
+        out["totals"] = {**finance._totals([r for r in rows if not r.get("estimated")]), "count": len(rows)}
+    if limit or before:
+        page, nxt = _paginate(rows, limit or 500, before)
+        out.update(rows=page, next=nxt)
+    else:
+        out["rows"] = rows
+    return FastJSON(out)
+
+
+def _cursor(r: dict) -> str:
+    return f"{r['date'][:10]}|{r['uid']}"
+
+
+def _paginate(rows: list[dict], limit: int, before: str | None) -> tuple[list[dict], str | None]:
+    """Sayfalama (satırlar tarih ve uid'ye göre yeniden eskiye): before = önceki sayfanın next'i ("YYYY-MM-DD|uid"),
+    bu satırdan SONRAKİLER (daha eskiler) döner. next: sıradaki sayfanın imleci, son sayfada null."""
+    start = 0
+    if before:
+        d, _, uid = before.partition("|")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) or not uid:
+            raise HTTPException(422, "before biçimi: YYYY-MM-DD|uid (önceki yanıtın next alanı)")
+        key = (d, uid)
+        start = next((i for i, r in enumerate(rows) if (r["date"][:10], r["uid"]) < key), len(rows))
+    page = rows[start:start + limit]
+    return page, (_cursor(page[-1]) if start + limit < len(rows) and page else None)
 
 
 @app.get("/api/plan")

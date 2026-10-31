@@ -88,3 +88,34 @@ def test_meta_period_bounds(client):
     cur = m["current_month"]
     p = m["period"]
     assert p["month"] == cur and p["start"] <= date.today().isoformat() <= p["end"]
+
+
+def test_transactions_fast_json_identical(client, upload):
+    """S10: jsonable_encoder atlandı; parametresiz yanıt eskisiyle bayt bayt aynı."""
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+
+    upload()
+    _seed(client)
+    r = client.get("/api/transactions")
+    assert r.content == JSONResponse(jsonable_encoder(r.json())).body
+    assert isinstance(r.json(), list)
+
+
+def test_transactions_pagination(client, upload):
+    upload()
+    _seed(client)
+    full = client.get("/api/transactions").json()
+    got, cur, n = [], None, 0
+    while True:
+        p = client.get("/api/transactions", params={"limit": 7, **({"before": cur} if cur else {})}).json()
+        got += p["rows"]
+        cur, n = p["next"], n + 1
+        if not cur:
+            break
+    assert [x["uid"] for x in got] == [x["uid"] for x in full] and n == -(-len(full) // 7)
+    t = client.get("/api/transactions", params={"limit": 3, "totals": 1}).json()
+    assert len(t["rows"]) == 3 and t["totals"]["count"] == len(full)  # toplamlar kümenin tamamı
+    assert client.get("/api/transactions", params={"before": "dün|x"}).status_code == 422
+    m = client.get("/api/transactions", params={"month": M, "limit": 2}).json()
+    assert all(x["month"] == M for x in m["rows"])
