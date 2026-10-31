@@ -123,6 +123,41 @@ async def _demo_request(request: Request, call_next):
     return response
 
 
+def _access(request: Request, method: str, path: str, user: dict) -> "tuple[dict, str | None] | JSONResponse":
+    """Oturumu doğrulanmış kullanıcı bu isteği yapabilir mi? Tek yer: /api/ middleware'i ve /api/ dışındaki yazma
+    uçları (/share-target) aynı kontrolden geçer: zorunlu şifre değişimi, paket kapısı, ortak defter yetkisi ve
+    kuralları. İzin varsa (kullanıcı, veritabanı dosyası); yoksa hazır hata yanıtı."""
+    # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
+    if user["must_change_password"] and path != "/api/settings/password":
+        return JSONResponse({"detail": "password_change_required"}, status_code=403)
+    feature = plans.gate_for(path, method)
+    if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
+        return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
+    db_file = system.user_db_path(user)
+    if user.get("member_of") and (request.headers.get("x-hk-book") == "kendi" or request.cookies.get("hk_book") == "kendi"):
+        # ortak defter üyesi kendi özel defterinde: kurallar yok, tam yetki; paket yine defter sahibinden
+        return {**user, "own_book": True}, system.own_db_path(user)
+    if user.get("member_of"):  # ortak defter üyesi: yetkisi ve sahibin kurallarıyla sınırlı
+        from app import book
+
+        with db.use_space(db_file, user):
+            why = book.denied(method, path)
+            hidden = not why and book.hidden_target(path)
+        if why:
+            return JSONResponse({"detail": why}, status_code=403)
+        if hidden:  # gizli kayıt/ekstre/hesap: var olduğu da belli olmasın
+            return JSONResponse({"detail": "Bulunamadı"}, status_code=404)
+    return user, db_file
+
+
+def _visible_or_404(kind: str, oid: int | None) -> None:
+    """Gövdede gelen id (bağlanacak işlem, ödemenin çıktığı hesap…) üyenin görebildiği bir nesne mi?"""
+    from app import book
+
+    if not book.visible(kind, oid):
+        raise HTTPException(404, "Bulunamadı")
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
@@ -155,23 +190,10 @@ async def require_login(request: Request, call_next):
             user = system.token_owner(_bearer(request) or "") if _bearer(request) else None
         if not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
-        # yöneticinin verdiği geçici şifreyle girenler önce kendi şifresini belirler
-        if user["must_change_password"] and path != "/api/settings/password":
-            return JSONResponse({"detail": "password_change_required"}, status_code=403)
-        feature = plans.gate_for(path, request.method)
-        if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
-            return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
-        db_file = system.user_db_path(user)
-        if user.get("member_of") and (request.headers.get("x-hk-book") == "kendi" or request.cookies.get("hk_book") == "kendi"):
-            # ortak defter üyesi kendi özel defterinde: kurallar yok, tam yetki; paket yine defter sahibinden
-            user, db_file = {**user, "own_book": True}, system.own_db_path(user)
-        elif user.get("member_of"):  # ortak defter üyesi: yetkisi ve sahibin kurallarıyla sınırlı
-            from app import book
-
-            with db.use_space(db_file, user):
-                why = book.denied(request.method, path)
-            if why:
-                return JSONResponse({"detail": why}, status_code=403)
+        gate = _access(request, request.method, path, user)
+        if isinstance(gate, JSONResponse):
+            return gate
+        user, db_file = gate
     if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
         with db.use_space(db_file, user):
             response = await call_next(request)
@@ -1036,6 +1058,7 @@ class EntryPatch(BaseModel):
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba kayıt yazamaz
     data = body.model_dump(exclude={"legal_name", "splits", "items", "branch"})
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
@@ -1081,6 +1104,7 @@ def patch_entry(entry_id: int, body: EntryPatch):
     from app import book
 
     data = body.model_dump(exclude_unset=True)
+    _visible_or_404("account", data.get("account_id"))
     if (m := book.member()):  # üye: görebildiği kayıt; başkasının kaydında sadece kategori/not/açıklama
         if not book.can_see_entry(entry_id):
             raise HTTPException(404, "Kayıt bulunamadı")
@@ -1134,6 +1158,7 @@ def link_candidates(entry_id: int):
 
 @app.post("/api/entries/{entry_id}/link")
 def link_entry(entry_id: int, body: LinkIn):
+    _visible_or_404("txn", body.txn_id)
     try:
         db.link_entry(entry_id, body.txn_id)
     except ValueError as e:
@@ -1161,6 +1186,7 @@ def match_entry(entry_id: int, body: MatchIn):
     from app import sync, undo
 
     _match_guard(entry_id)
+    _visible_or_404("entry" if body.other[0] == "e" else "txn", int(body.other[1:]))
     try:
         if not body.same:
             return sync.decide(entry_id, body.other, False)
@@ -1817,6 +1843,7 @@ class ToOpening(BaseModel):
 @app.post("/api/entries/{entry_id}/to-opening")
 def entry_to_opening(entry_id: int, body: ToOpening):
     """Gelir olarak girilmiş başlangıç bakiyesini hesabın bakiyesine çevir."""
+    _visible_or_404("account", body.account_id)
     try:
         return {"message": db.entry_to_opening_balance(entry_id, body.account_id)}
     except ValueError as e:
@@ -3456,7 +3483,9 @@ def _check_regex(p: str | None):
 
 @app.get("/api/rules")
 def list_rules():
-    return db.list_rules()
+    from app import book
+
+    return book.filter_rules(db.list_rules())  # ortak defter üyesi: gizli karttan öğrenilen kural görünmez
 
 
 @app.post("/api/rules")
@@ -3714,6 +3743,7 @@ def pay_statement(sid: int, body: StatementPayIn):
     gelen kayda yazılmaz (tutar farklıysa warning). Dönüş: {ok, card_payment_id, linked, link, warning?}."""
     if not any(x["id"] == sid for x in db.list_statements()):
         raise HTTPException(404, "Ekstre bulunamadı")
+    _visible_or_404("account", body.account_id)
     acc = body.account_id if "account_id" in body.model_fields_set else db._KEEP  # anahtar yok: bağlı hesabı koru
     try:
         r = db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat(), acc)
@@ -3777,6 +3807,9 @@ def parse_bill(file: UploadFile = File(...)):
 
 # ---------------------------------------------------------------- telefondan Paylaş
 
+SHARE_MAX_BYTES = 15 * 1024 * 1024  # paylaşılan dosya başına (hazır sürümde nginx de 15 MB)
+
+
 @app.post("/api/share")
 async def share(request: Request, file: list[UploadFile] = File(...)):
     """iOS Kısayollar / uygulama: paylaşılan PDF ve fotoğraflar. Yanıt düz metin (Kısayol bildirim olarak gösterir)."""
@@ -3787,7 +3820,7 @@ async def share(request: Request, file: list[UploadFile] = File(...)):
     out = []
     for f in file[:5]:
         data = await f.read()
-        if len(data) > 15 * 1024 * 1024:
+        if len(data) > SHARE_MAX_BYTES:
             out.append(f"{f.filename}: dosya çok büyük")
             continue
         res = await asyncio.to_thread(share_mod.process, f.filename or "dosya", data, f.content_type or "")
@@ -3837,13 +3870,22 @@ async def share_target(request: Request):
     u = auth.token_user(request.cookies.get(auth.COOKIE)) if auth.enabled() else None
     if auth.enabled() and not u:
         return RedirectResponse("/#/ozet", status_code=303)
+    db_file = None
+    if u:  # /api/ dışında: middleware'den geçmez; /api/share ile aynı yetki, paket ve şifre kontrolü
+        gate = _access(request, "POST", "/api/share", u)
+        if isinstance(gate, JSONResponse):
+            return gate
+        u, db_file = gate
     form = await request.form()
     msgs = []
-    with db.use_space(system.user_db_path(u) if u else None, u):
+    with db.use_space(db_file, u):
         for f in form.getlist("file")[:5]:
             if hasattr(f, "read"):
                 data = await f.read()
-                res = await asyncio.to_thread(share_mod.process, f.filename or "dosya", data, f.content_type or "")
+                if len(data) > SHARE_MAX_BYTES:
+                    msgs.append(f"{f.filename}: dosya çok büyük")
+                    continue
+                res = await asyncio.to_thread(_heavy(share_mod.process), f.filename or "dosya", data, f.content_type or "")
                 msgs.append(res["message"])
     from urllib.parse import quote
 
