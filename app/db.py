@@ -3377,26 +3377,31 @@ def ensure_account(name: str, kind: str = "banka") -> int:
                          (name, kind)).lastrowid
 
 
-def _account_balance(c, a: dict) -> float | None:
-    """Çapa + çapadan sonraki hareketler (elle girilen, e-posta bildirimi, borç hareketleri). Bakiyesi hiç girilmemiş: None."""
+def _account_balance(c, a: dict, until: str | None = None) -> float | None:
+    """Çapa + çapadan sonraki hareketler (elle girilen, e-posta bildirimi, borç hareketleri). Bakiyesi hiç girilmemiş: None.
+    until (YYYY-MM-DD): o günün sonundaki bakiye (çapa tarihinden önce olamaz; geçmiş için zakat.account_balances_at)."""
     if not a["as_of"]:
         return None
+    hi = until or "9999-12-31"
     flows = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) FROM entries
-                         WHERE account_id = ? AND skipped = 0 AND (entry_date > ? OR (entry_date = ? AND id > ?))""",
-                      (a["id"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0)).fetchone()[0]
+                         WHERE account_id = ? AND skipped = 0 AND (entry_date > ? OR (entry_date = ? AND id > ?))
+                         AND entry_date <= ?""",
+                      (a["id"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0, hi)).fetchone()[0]
     # elle girilmiş ya da e-posta bildiriminden gelmiş kart ekstresi ödemesi ve virman (gider değil, hesaptan para çıktı
     # ya da girdi); dökümden gelenler çapanın içinde (döküm gelince bildirim kayıtları silinir)
     cards = c.execute("""SELECT COALESCE(SUM(amount), 0) FROM card_payments WHERE account_id = ?
                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%')
-                         AND (pay_date > ? OR (pay_date = ? AND COALESCE(created_at, '') > COALESCE(?, '')))""",
-                      (a["id"], a["as_of"], a["as_of"], a.get("updated_at"))).fetchone()[0]
+                         AND (pay_date > ? OR (pay_date = ? AND COALESCE(created_at, '') > COALESCE(?, '')))
+                         AND pay_date <= ?""",
+                      (a["id"], a["as_of"], a["as_of"], a.get("updated_at"), hi)).fetchone()[0]
     flows -= cards
     flows += c.execute("""SELECT COALESCE(SUM(amount), 0) FROM own_transfers WHERE account_id = ?
-                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%') AND transfer_date > ?""",
-                       (a["id"], a["as_of"])).fetchone()[0]
+                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%') AND transfer_date > ?
+                          AND transfer_date <= ?""",
+                       (a["id"], a["as_of"], hi)).fetchone()[0]
     debt = 0.0
     for d in debt_rows():
-        if d.get("account_id") == a["id"] and d["date"] > a["as_of"] and d["step"] != "vazgecildi":
+        if d.get("account_id") == a["id"] and a["as_of"] < d["date"] <= hi and d["step"] != "vazgecildi":
             debt += d["flow"] * d["amount"]
     return round(a["balance"] + flows + debt, 2)
 
