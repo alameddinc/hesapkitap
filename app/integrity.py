@@ -7,11 +7,13 @@ kullanıcı verisi, tutar, açıklama, ad yok.
 
 Değişmezler (kod → anlamı):
   bakiye_capa         hesap bakiyesi iki yoldan (çapa + sonraki hareketler / geçmiş bakiye hesabı) farklı çıkıyor (I1)
-  ekstre_denklem      ekstre denklemi tutmuyor ya da okunan işlemler özetle uyuşmuyor, kullanıcı onaylamamış (I3)
+  ekstre_denklem      ekstre özet denklemi tutmuyor (faiz içinde/ayrı biçimi dahil), kullanıcı onaylamamış (I3)
+  ekstre_satir_farki  okunan işlemler özetle uyuşmuyor; kullanıcının sildiği satırlarla açıklanan fark sayılmaz (I3)
   odeme_ekstre        ödendi işaretleri ödemelerden yeniden hesaplanınca değişiyor: bir ödeme yanlış ekstrede (I4)
-  virman_tek_bacak    iki hesabın dökümü de o günü kapsıyor ama kendi hesapların arası aktarımın karşılığı yok (I5)
+  virman_tek_bacak    karşı hesap da takip ediliyor (dökümü o günü kapsıyor) ama aktarımın karşı bacağı yok (I5)
   bolme_asim          alt kalemlerin toplamı harcamanın tutarını aşıyor (I6)
-  borc_fazla_odeme    borca ödenen toplam borcun tutarını aşıyor ya da ödenen alanı ödemelerle uyuşmuyor (I7)
+  borc_fazla_odeme    borca ödenen satırların toplamı borcun tutarını aşıyor (I7; A4 öncesi eski veri olabilir)
+  borc_odenen_tutarsiz  debts.paid_amount ödeme satırlarıyla uyuşmuyor (I7)
   kart_borcu          kart borcu iki yoldan farklı (her kartın son ekstresi kuralı) (I12)
   kurus_alti          kuruştan küçük basamaklı tutar (F1.2)
   cift_aktarim        aynı hareket iki ayrı belgeden iki kez içe aktarılmış ya da aynı parmak izi iki kez (I11)
@@ -34,18 +36,20 @@ SETTING = "integrity:last"
 
 LABELS = {
     "bakiye_capa": "Hesap bakiyesi iki hesaplamada farklı çıkıyor",
-    "ekstre_denklem": "Ekstrenin rakamları kendi içinde tutmuyor",
+    "ekstre_denklem": "Ekstrenin özet rakamları kendi içinde tutmuyor",
+    "ekstre_satir_farki": "Ekstreden okunan işlemlerin toplamı ekstre özetiyle uyuşmuyor",
     "odeme_ekstre": "Bir kart ödemesi yanlış ekstreye bağlanmış olabilir",
     "virman_tek_bacak": "Kendi hesapların arası bir aktarımın öbür hesapta karşılığı yok",
     "bolme_asim": "Bölünmüş bir harcamanın parçaları harcamadan büyük",
     "borc_fazla_odeme": "Bir borca, borcun kendisinden fazla ödeme yazılmış",
+    "borc_odenen_tutarsiz": "Bir borcun ödenen tutarı ödemelerin toplamıyla uyuşmuyor",
     "kart_borcu": "Kart borcu iki hesaplamada farklı çıkıyor",
     "kurus_alti": "Kuruştan küçük basamaklı tutar var",
     "cift_aktarim": "Aynı hareket iki kez içe aktarılmış olabilir",
     "cift_ekstre": "Aynı kartın aynı ayı için iki ekstre var",
 }
-ROUTES = {"ekstre_denklem": "ekstreler", "odeme_ekstre": "ekstreler", "cift_ekstre": "ekstreler", "kart_borcu": "ekstreler",
-          "bakiye_capa": "hesaplar", "virman_tek_bacak": "transferler", "borc_fazla_odeme": "borclar"}
+ROUTES = {"ekstre_denklem": "ekstreler", "ekstre_satir_farki": "ekstreler", "odeme_ekstre": "ekstreler", "cift_ekstre": "ekstreler", "kart_borcu": "ekstreler",
+          "bakiye_capa": "hesaplar", "virman_tek_bacak": "transferler", "borc_fazla_odeme": "borclar", "borc_odenen_tutarsiz": "borclar"}
 
 def _q(c, sql: str, *args) -> list:
     return [dict(r) for r in c.execute(sql, args)]
@@ -79,29 +83,72 @@ def _bakiye_capa(today: date) -> list[str]:
 
 
 def _ekstre_denklem(statements: list[dict]) -> list[str]:
-    return [f"statement:{s['id']}" for s in statements if s.get("needs_check") and s.get("source") != "excel"]
+    """I3, özet denklemi: önceki − ödemeler + harcamalar (+ faiz, ekstrenin biçimine göre içinde ya da ayrı) = yeni borç.
+    list_statements'ın equation_diff'i (parsers.base.equation, fees_included dahil). Kullanıcının onayladığı ekstre ve
+    kart Excel'inden üretilen (borcu kurgu) ekstre sayılmaz. Okunan satırlar ile özetin farkı ayrı denetim (satır farkı)."""
+    return [f"statement:{s['id']}" for s in statements if s.get("source") != "excel" and not s.get("confirmed_at")
+            and s.get("equation_diff") is not None and money.diff_k(abs(s["equation_diff"]), 1) >= 0]
+
+
+def _ekstre_satir_farki(statements: list[dict]) -> list[str]:
+    """I3, satırlar: okunan işlemler (ödeme hariç) − özet ≥ 1 TL. Fark kullanıcının sildiği satırlardan geliyorsa
+    (silinenler dahil edilince kapanıyorsa) bilinçli silmedir, ihlal değil."""
+    cand = [s for s in statements if s.get("source") != "excel" and not s.get("confirmed_at")
+            and s.get("reconciliation_diff") is not None and money.diff_k(abs(s["reconciliation_diff"]), 1) >= 0]
+    if not cand:
+        return []
+    with db.connect() as c:
+        deleted = {r["statement_id"]: r["t"] for r in _q(
+            c, "SELECT statement_id, SUM(amount) AS t FROM transactions WHERE is_deleted = 1 AND txn_type <> 'odeme' "
+               "GROUP BY statement_id")}
+    return [f"statement:{s['id']}" for s in cand
+            if money.diff_k(abs(s["reconciliation_diff"] + deleted.get(s["id"], 0.0)), 1) >= 0]
 
 
 def _odeme_ekstre() -> list[str]:
     return [f"statement:{ch['id']}" for ch in db.reassign_statement_payments(apply=False)["changed"]]
 
 
+def _other_bank(t: dict) -> str | None:
+    """Aktarımın karşı bankası, temiz açıklamadan ('Kendi hesabına · Halkbank → VakıfBank'; bank_import.own_label)."""
+    part = next((p for p in (t.get("description") or "").split(" · ") if " → " in p), None)
+    if not part:
+        return None
+    src, dst = (x.strip() for x in part.split(" → ", 1))
+    other = dst if t["amount"] < 0 else src
+    return None if other in ("", "?") else other
+
+
 def _virman_tek_bacak() -> list[str]:
+    """I5: kendi hesapların arası aktarımın karşı bacağı yok — YALNIZ karşı hesap da takip ediliyorsa (hesaplarda var
+    ve dökümü o günü kapsıyor). Takip edilmeyen bir hesaba (dökümü yüklenmemiş başka banka) giden/gelen aktarım tek
+    bacaklıdır ve normaldir; karşı banka açıklamadan anlaşılamıyorsa da sayılmaz."""
+    from app.bank_import import short_bank
+
     with db.connect() as c:
-        ts = _q(c, "SELECT id, transfer_date, amount, account_id FROM own_transfers WHERE account_id IS NOT NULL")
+        ts = _q(c, "SELECT id, transfer_date, amount, account_id, description FROM own_transfers WHERE account_id IS NOT NULL")
+        accs = _q(c, "SELECT id, name, alias FROM accounts WHERE kind = 'banka'")
         cover = {r["account_id"]: (r["lo"], r["hi"]) for r in _q(
             c, "SELECT account_id, MIN(entry_date) AS lo, MAX(entry_date) AS hi FROM entries "
                "WHERE import_hash IS NOT NULL AND account_id IS NOT NULL GROUP BY account_id")}
+    by_name: dict[str, set[int]] = {}
+    for a in accs:
+        for n in {a["name"], a["alias"], short_bank(a["name"])} - {None, ""}:
+            by_name.setdefault(n, set()).add(a["id"])
     out = []
     for t in ts:
-        d = date.fromisoformat(t["transfer_date"][:10])
-        paired = any(o["id"] != t["id"] and o["account_id"] != t["account_id"] and money.eq(o["amount"], -t["amount"])
-                     and abs((date.fromisoformat(o["transfer_date"][:10]) - d).days) <= 3 for o in ts)
-        if paired:
+        day = t["transfer_date"][:10]
+        other = _other_bank(t)
+        if not other:
             continue
-        # karşı hesabın dökümü bu günü kapsıyorsa karşılık olmalıydı (dökümü yüklenmemiş hesaba giden virman doğal)
-        others = [aid for aid, (lo, hi) in cover.items() if aid != t["account_id"] and lo <= t["transfer_date"][:10] <= hi]
-        if others and len(cover) >= 2:
+        targets = {aid for aid in by_name.get(other, set()) | by_name.get(short_bank(other), set())
+                   if aid != t["account_id"] and aid in cover and cover[aid][0] <= day <= cover[aid][1]}
+        if not targets:  # karşı hesap takip edilmiyor ya da bilinmiyor: tek bacak doğal
+            continue
+        d = date.fromisoformat(day)
+        paired = any(o["id"] != t["id"] and o["account_id"] in targets and money.eq(o["amount"], -t["amount"])
+                     and abs((date.fromisoformat(o["transfer_date"][:10]) - d).days) <= 3 for o in ts)
+        if not paired:
             out.append(f"own_transfer:{t['id']}")
     return out
 
@@ -116,12 +163,21 @@ def _bolme_asim() -> list[str]:
     return [r["ref"] for r in rows]
 
 
-def _borc_fazla_odeme() -> list[str]:
+def _borc_rows() -> list[dict]:
     with db.connect() as c:
-        rows = _q(c, """SELECT d.id, d.amount, d.paid_amount, COALESCE(SUM(p.amount), 0) AS paid
-                          FROM debts d LEFT JOIN debt_payments p ON p.debt_id = d.id GROUP BY d.id""")
-    return [f"debt:{r['id']}" for r in rows
-            if money.gt(r["paid"], r["amount"]) or money.ne(r["paid_amount"] or 0, min(r["paid"], r["amount"]))]
+        return _q(c, """SELECT d.id, d.amount, d.paid_amount, COALESCE(SUM(p.amount), 0) AS paid, COUNT(p.id) AS n
+                         FROM debts d LEFT JOIN debt_payments p ON p.debt_id = d.id GROUP BY d.id""")
+
+
+def _borc_fazla_odeme() -> list[str]:
+    """I7: ödeme satırlarının toplamı borcun tutarını aşıyor (A4 öncesi fazla ödeme kabul ediliyordu; paid_amount
+    tutarla sınırlı tutulduğu için borç 'kapandı' görünür, fazlası nakit akışında sayılır)."""
+    return [f"debt:{r['id']}" for r in _borc_rows() if money.gt(r["paid"], r["amount"])]
+
+
+def _borc_odenen_tutarsiz() -> list[str]:
+    """I7: debts.paid_amount ≠ min(Σ ödemeler, tutar) — özet alanı ödeme satırlarıyla uyuşmuyor."""
+    return [f"debt:{r['id']}" for r in _borc_rows() if money.ne(r["paid_amount"] or 0, min(r["paid"], r["amount"]))]
 
 
 def _kart_borcu(today: date, statements: list[dict]) -> list[str]:
@@ -170,8 +226,9 @@ def check(today: date | None = None) -> dict:
     statements = db.list_statements()
     refs: dict[str, list[str]] = {}
     checks = (("bakiye_capa", lambda: _bakiye_capa(today)), ("ekstre_denklem", lambda: _ekstre_denklem(statements)),
+              ("ekstre_satir_farki", lambda: _ekstre_satir_farki(statements)),
               ("odeme_ekstre", _odeme_ekstre), ("virman_tek_bacak", _virman_tek_bacak), ("bolme_asim", _bolme_asim),
-              ("borc_fazla_odeme", _borc_fazla_odeme), ("kart_borcu", lambda: _kart_borcu(today, statements)),
+              ("borc_fazla_odeme", _borc_fazla_odeme), ("borc_odenen_tutarsiz", _borc_odenen_tutarsiz), ("kart_borcu", lambda: _kart_borcu(today, statements)),
               ("kurus_alti", _kurus_alti), ("cift_aktarim", _cift_aktarim), ("cift_ekstre", _cift_ekstre))
     for code, fn in checks:
         try:

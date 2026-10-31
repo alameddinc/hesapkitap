@@ -2067,6 +2067,13 @@ def _pairs_own_transfer(amount: float, day: str, desc: str, owners: list[str] | 
     kullanıcının kendisi olmalı; Halkbank gibi bankalar giden açıklamada alıcıyı kesebiliyor, eşleşme bunu tamamlar."""
     if not _names_owner(desc, owners):
         return False
+    from app.bank_import import _sender_receiver
+
+    sr = _sender_receiver(desc)
+    if sr and len(sr[0]) >= 6 and sr[0] != sr[1]:
+        # açıklama alıcıyı açıkça yazıyor ve gönderen değil (Halkbank havale 'X TARAFINDAN GÖNDERILEN,X,TR..,Y,TR..'):
+        # başka kişiye ödeme; aynı gün aynı tutarda kendi hesabına giriş tesadüf ya da para geri dönmüş
+        return False
     with connect() as c:
         # yalnız GİRİŞ (amount > 0): başka hesaptan aynı gün aynı tutarda çıkış (ör. Halkbank → VakıfBank 35.000, sonra
         # VakıfBank'tan kiraya 35.000) karşılık değildir

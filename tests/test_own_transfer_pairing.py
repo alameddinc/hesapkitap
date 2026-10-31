@@ -42,3 +42,47 @@ def test_same_amount_to_someone_else_stays_expense(tmpdb):
     other = {"date": "18.10.2026", "description": "GIDEN FAST - MEHMET YILMAZ TARAFINA", "amount": -120000.0}
     db.import_bank_rows(_rows([other]), account="Halkbank", owners=["AYŞE YILMAZ"])
     assert _gider(db) == 120000
+
+
+HAVALE_ES = ("HAVALE - AYŞE ÖRNEK TARAFINDAN GÖNDERILEN,AYŞE ÖRNEK,TR000001000000000000000001,MEHMET ÖRNEK,"
+             "TR000006000000000000000002")
+
+
+def test_havale_to_other_person_not_paired_as_own_transfer(tmpdb):
+    """Canlı bulgu: sahibin gönderdiği, alıcısı başka kişi olan Halkbank havalesi; aynı gün aynı tutarda başka kendi
+    hesabına giriş var diye virman sayılıyordu. Alıcı açıkça farklıysa gider kalır (uydurma ad/IBAN)."""
+    owners = ["AYŞE ÖRNEK"]
+    tmpdb.import_bank_rows([{"date": "2026-10-10", "description": "Kendi hesabından gelen", "amount": 60300.0,
+                             "type": "virman", "hash": "in-1"}], account="VakıfBank", owners=owners)
+    st = tmpdb.import_bank_rows([{"date": "2026-10-10", "description": HAVALE_ES, "amount": -60300.0, "type": "gider",
+                                  "hash": "out-1"}], account="Halkbank", owners=owners)
+    assert st["gider"] == 1 and st["virman"] == 0
+    e = next(x for x in tmpdb.list_entries() if x["import_hash"] == "out-1")
+    assert e["kind"] == "gider" and e["counterparty"] and "Mehmet" in e["counterparty"]
+    assert not tmpdb.repair_own_transfers(owners)  # onarım da taşımıyor
+
+
+def test_bank_repair_restores_wrong_own_transfer_without_file(tmpdb):
+    from app import bank_repair
+
+    owners = ["AYŞE ÖRNEK"]
+    with tmpdb.connect() as c:
+        tmpdb.add_own_transfer(c, "2026-10-10", -60300.0, "Halkbank", HAVALE_ES, "out-2", owners)
+        tmpdb.add_own_transfer(c, "2026-10-11", -100.0, "Halkbank",
+                               "HAVALE - AYŞE ÖRNEK TARAFINDAN GÖNDERILEN,AYŞE ÖRNEK,TR01,AYŞE ÖRNEK,TR02", "own-ok", owners)
+    import pytest
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(bank_repair, "_owners", lambda: owners)
+    try:
+        dry = bank_repair.repair(apply=False)
+        assert [r["amount"] for r in dry["restored"]] == [-60300.0]  # kuru çalıştırmada görünür, yazılmaz
+        with tmpdb.connect() as c:
+            assert c.execute("SELECT COUNT(*) FROM own_transfers").fetchone()[0] == 2
+        bank_repair.repair(apply=True)
+    finally:
+        mp.undo()
+    with tmpdb.connect() as c:
+        assert [r[0] for r in c.execute("SELECT import_hash FROM own_transfers")] == ["own-ok"]
+        e = c.execute("SELECT kind, amount, not_virman FROM entries WHERE import_hash = 'out-2'").fetchone()
+    assert tuple(e) == ("gider", 60300.0, 1)

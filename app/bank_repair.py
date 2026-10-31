@@ -191,6 +191,14 @@ _BANKISH = re.compile(r"\b(FAST|EFT|HAVALE|POS|REF|SORGU|IBAN|TR\d{2}|ODEME|ÖDE
                       r"GİDEN|HESAB|NOLU|NO'LU|PARA|MASRAF|KOMISYON|AIDAT|SATIS|ALIS)\b|\d{6,}", re.I)
 
 
+def _other_person(raw: str) -> bool:
+    """Ham metin gönderen ve alıcıyı açıkça yazıyor ve ikisi farklı kişi: kendi hesapların arası değil."""
+    from app.bank_import import _sender_receiver
+
+    sr = _sender_receiver(raw)
+    return bool(sr and len(sr[0]) >= 6 and sr[0] != sr[1])
+
+
 def _looks_bank_text(desc: str) -> bool:
     """Açıklama hâlâ bankanın ham metni mi (kullanıcı değiştirmemiş)? Büyük harf ağırlıklı ve banka sözcükleri/uzun
     numara içeriyor."""
@@ -340,6 +348,7 @@ def repair(apply: bool = False) -> dict:
         # (Halkbank → VakıfBank 35.000, aynı gün VakıfBank'tan kiraya 35.000): geri alınır, gider olarak eklenir
         wrong = []
         # ya da eski kural ('kendi adı açıklamada iki kez') üçüncü kişiye ödemeyi / kurumdan geleni virman saymış olabilir
+        to_entry = []  # dosyası olmayan, ham metni alıcıyı başka kişi diye yazan virman: gider/gelir kaydına döner
         for o in [dict(x) for x in c.execute("SELECT * FROM own_transfers WHERE import_hash IS NOT NULL")]:
             r = by_hash.get(o["import_hash"])
             if r and (r["type"] == "gelir" or (r["type"] == "gider" and not db._pairs_own_transfer(
@@ -347,6 +356,8 @@ def repair(apply: bool = False) -> dict:
                 wrong.append(r)
                 if apply:
                     c.execute("DELETE FROM own_transfers WHERE id = ?", (o["id"],))
+            elif not r and o.get("raw") and _other_person(o["raw"]):
+                to_entry.append(o)
             elif not o.get("raw"):  # eski kayıt: açıklama ham banka metni → temiz etiket, ham metin raw'a
                 raw = r["description"] if r else o["description"] or ""
                 label = bank_import.own_label(raw, o["amount"], o["account"], owners)
@@ -356,6 +367,8 @@ def repair(apply: bool = False) -> dict:
                 if apply:
                     c.execute("UPDATE own_transfers SET description = ?, raw = ? WHERE id = ?", (label[:500], raw[:500], o["id"]))
         report["restored"] = [{"id": None, "date": r["date"], "amount": r["amount"], "was": r["description"]} for r in wrong]
+        report["restored"] += [{"id": o["id"], "date": o["transfer_date"], "amount": o["amount"], "was": o["description"],
+                                "why": "alıcı başka kişi (gönderen ≠ alıcı)"} for o in to_entry]
         known -= {r["hash"] for r in wrong}
         # PDF + Excel iki kez yüklenmiş hareketler: fazlası (sonra yüklenen belgeninki) silinir
         dups = _duplicates(c, docs)
@@ -423,6 +436,8 @@ def repair(apply: bool = False) -> dict:
                 if apply:
                     c.execute("DELETE FROM own_transfers WHERE import_hash = ?", (h,))
     if apply:
+        for o in to_entry:  # 'virman değil' düğmesiyle aynı: kayıt not_virman, onarım/eşleme bir daha taşımaz
+            db.own_transfer_to_entry(o["id"], owners)
         for name in report["owner_names"]:
             db.remember_owner_name(name)
         # eksik / geri alınan satırlar içe aktarmanın kendisiyle eklenir (kişi, kategori, eşleşme kuralları aynı);
