@@ -6,19 +6,22 @@ import { useEffect, useRef, useState } from "react";
 import { api, errStatus, movedCount } from "../api";
 import { cx, dateTR, tl } from "../format";
 import { useUI, type Route } from "../ui";
-import { useOpenRow, useSave } from "./hooks";
+import { isViewer, useBook, useOpenRow, useSave } from "./hooks";
+import IntegrityDialog, { type IntegrityDetail } from "./Integrity";
 import { bodyOf, call } from "../lib/apiError";
 import { PairCards } from "./MatchInfo";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
-  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi";
+  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi" | "dogruluk";
   title: string; text: string; cta: string; route: Route | "gelen";
-  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm";
+  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm" | "integrity";
   // S6: belge_onay (Gelen kutusu'nda bekleyen belge), belge_dogrulanamadi (yüklenen döküm/ekstre kontrol bekliyor)
   inbox_id?: number; document_id?: number;
   /** sunucu 8a38d60: onay düğmesinin adı (sözlük: "Rakamlar doğru"); cta: ana düğme ("Bak", "Yükle"…) */
-  confirm_label?: string; due: string; severity: "info" | "warn" | "urgent"; tag?: string; bank?: string; last4?: string;
+  confirm_label?: string;
+  // dogruluk (sunucu dc17f43): kural başına kayıtlar; checked_at son kontrol; rerun: "Yeniden kontrol et" sunulur
+  details?: IntegrityDetail[]; checked_at?: string | null; rerun?: boolean; due: string; severity: "info" | "warn" | "urgent"; tag?: string; bank?: string; last4?: string;
   statement_id?: number;
   // esles: "Bu ikisi aynı mı?"
   entry_id?: number; other?: string; reason?: "tarih" | "tutar" | "aday"; source?: "dokum" | "ekstre";
@@ -322,12 +325,16 @@ export default function Reminders() {
   const pay = useQuery({ queryKey: ["payables"], queryFn: api.payables });
   const [all, setAll] = useState(false);
   const answers = useAnswers();
+  const viewer = isViewer(useBook().data);
+  const [integrity, setIntegrity] = useState<Reminder | null>(null);
   const items = q.data ?? [];
   if (!items.length) return null;
   const shown = all ? items : items.slice(0, 3);
   const run = (r: Reminder) => {
     const p = r.action === "pay" ? pay.data?.find((x) => x.type === "statement" && x.id === r.statement_id) : undefined;
     if (p) return ui.openPay(p);
+    // doğruluk maddesi: hangi kural, hangi kayıtlar — pencerede
+    if (r.kind === "dogruluk" && r.details) return setIntegrity(r);
     // belge_onay: Gelen kutusu Özet'te (bu bölümün üstünde) — oraya kaydır
     if (r.route === "gelen" || r.action === "inbox_review") return scrollTo("gelen-kutusu", ui);
     ui.go(r.action === "upload" ? "ekstreler" : r.route);
@@ -364,6 +371,8 @@ export default function Reminders() {
           </li>
         ))}
       </ul>
+      {integrity && <IntegrityDialog details={integrity.details ?? []} checkedAt={integrity.checked_at}
+        rerun={!!integrity.rerun && !viewer} onClose={() => setIntegrity(null)} />}
     </section>
   );
 }

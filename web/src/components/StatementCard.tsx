@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
 import { TERIM } from "../lib/terimler";
 import { ask } from "../lib/ask";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api, type Payable, type Statement } from "../api";
 import { cx, dateTR, tl, todayISO, tsDateTR } from "../format";
 import { useUI } from "../ui";
@@ -36,7 +36,13 @@ const Line = ({ l, v, tone }: { l: string; v: string; tone?: string }) => (
 export default function StatementCard({ s }: { s: Statement }) {
   const ui = useUI();
   const status = statementStatus(s);
-  const [open, setOpen] = useState(status === "check");
+  // #/ekstreler?ekstre=<id> (Yapılacaklar → doğruluk ayrıntısı): o ekstre açık gelir ve görünür yere kayar
+  const focused = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("ekstre") === String(s.id);
+  const [open, setOpen] = useState(status === "check" || focused);
+  const liRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) liRef.current?.scrollIntoView({ block: "start" });
+  }, [focused]);
   const eq = equation(s);
   const fees = feesOf(s);
   const name = `${s.bank} · ${s.card_no}`;
@@ -56,7 +62,8 @@ export default function StatementCard({ s }: { s: Statement }) {
   const id = `st-${s.id}`;
 
   return (
-    <li className={cx("card overflow-hidden", status === "check" && "border-amber-300 dark:border-amber-800")}>
+    <li ref={liRef} className={cx("card scroll-mt-16 overflow-hidden", status === "check" && "border-amber-300 dark:border-amber-800",
+      focused && "ring-2 ring-blue-500")}>
       <button className="flex w-full items-start gap-3 p-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50"
         aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
         <div className="min-w-0 flex-1">

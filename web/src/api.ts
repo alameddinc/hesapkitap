@@ -548,6 +548,8 @@ export const api = {
   undoImport: (id: string, force = false) =>
     req<{ ok: boolean; conflicts?: string[]; already?: boolean }>("POST", `/api/imports/${id}/undo${force ? "?force=true" : ""}`),
   deleteStatement: (id: number) => req("DELETE", `/api/statements/${id}`),
+  /** gece doğruluk denetimini hemen çalıştır (saatte 6; 429 Türkçe metin) */
+  integrityRun: () => req<unknown>("POST", "/api/integrity/run"),
   bankDocuments: () => req<BankDocument[]>("GET", "/api/bank-import/documents"),
   /** bakiye zinciri tutmayan dökümü kullanıcı belgeyle karşılaştırdı, doğru */
   confirmBankDocument: (id: number) => req<{ ok: boolean; verification: Verification }>("POST", `/api/bank-import/documents/${id}/confirm`),
