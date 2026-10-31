@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { Coins, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, parseAmount, tl } from "../format";
@@ -74,7 +75,7 @@ export default function Holdings() {
                 )}
               </span>
               <button className="btn-ghost p-1 text-stone-400 hover:text-red-600" aria-label="Sil"
-                onClick={() => window.confirm(`${i.label} silinsin mi?`) && del.mutate(i.id)}><Trash2 size={13} /></button>
+                onClick={() => void ask(`${i.label} silinsin mi?`).then((ok) => { if (ok) del.mutate(i.id); })}><Trash2 size={13} /></button>
             </span>
           </li>
         ))}

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { Copy, Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, tsDateTR } from "../format";
@@ -19,7 +20,7 @@ async function call<T>(url: string, method = "POST", body?: unknown): Promise<T>
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 }
 
@@ -117,9 +118,9 @@ export default function Users() {
                 </label>
                 {d?.hosted && (
                   <select className="input w-auto px-2 py-1 text-xs" value="" aria-label="Paket ver"
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const [plan, days] = e.target.value.split(":");
-                      if (plan && confirm(plan === "free" ? `${u.username} ücretsiz pakete dönsün mü?` : `${u.username} için ${days} gün ${plan === "aile" ? "Aile" : "Premium"} verilsin mi?`))
+                      if (plan && (await ask(plan === "free" ? `${u.username} ücretsiz pakete dönsün mü?` : `${u.username} için ${days} gün ${plan === "aile" ? "Aile" : "Premium"} verilsin mi?`)))
                         patch.mutate({ id: u.id, body: { plan, plan_days: days ? Number(days) : undefined } }, onErr);
                     }}>
                     <option value="">Paket ver…</option>
@@ -131,7 +132,7 @@ export default function Users() {
                   </select>
                 )}
                 <button className="btn-ghost border border-stone-300 px-2 py-1 dark:border-stone-700"
-                  onClick={() => confirm(`${u.username} için yeni geçici şifre üretilsin mi? Açık oturumları kapanır.`) && reset.mutate(u, onErr)}>
+                  onClick={() => void ask(`${u.username} için yeni geçici şifre üretilsin mi? Açık oturumları kapanır.`).then((ok) => { if (ok) reset.mutate(u, onErr); })}>
                   Şifre sıfırla
                 </button>
                 <button className="btn-ghost border border-stone-300 px-2 py-1 dark:border-stone-700"
@@ -139,7 +140,7 @@ export default function Users() {
                   {u.disabled ? "Aç" : "Kapat"}
                 </button>
                 <button className="btn-danger px-2 py-1"
-                  onClick={() => confirm(`${u.username} silinsin mi? Giriş yapamaz; veri dosyası sunucuda arşive taşınır.`) && del.mutate(u, onErr)}>
+                  onClick={() => void ask(`${u.username} silinsin mi? Giriş yapamaz; veri dosyası sunucuda arşive taşınır.`).then((ok) => { if (ok) del.mutate(u, onErr); })}>
                   <Trash2 size={14} /> Sil
                 </button>
               </div>

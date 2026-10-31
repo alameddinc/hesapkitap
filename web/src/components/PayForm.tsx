@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { useState } from "react";
 import { api, type Payable, type Payment } from "../api";
 import { dateTR, parseAmount, tl, todayISO } from "../format";
@@ -61,9 +62,9 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
     <Modal title={paid ? "Ödemeyi düzelt" : "Ödedim"} onClose={onClose} footer={
       <>
         {(paid || (p.paid_amount ?? 0) > 0) && (
-          <button className="btn-danger" disabled={undo.isPending} onClick={() => window.confirm(p.type === "statement"
+          <button className="btn-danger" disabled={undo.isPending} onClick={() => void ask(p.type === "statement"
             ? "Ödeme geri alınsın mı? Bir hesaptan ödendiğini seçtiysen o kart ödemesi kaydı silinir ve hesabın bakiyesi geri gelir; ödeme banka dökümünden geldiyse yalnız ekstreyle bağı kopar, döküm satırı kalır."
-            : "Ödeme geri alınsın mı?") && undo.mutate(undefined)}>Ödemeyi geri al</button>
+            : "Ödeme geri alınsın mı?").then((ok) => { if (ok) undo.mutate(undefined); })}>Ödemeyi geri al</button>
         )}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>

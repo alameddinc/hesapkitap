@@ -1,5 +1,6 @@
 import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { useState } from "react";
 import { cx, dateTR, maskText, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -44,7 +45,7 @@ export function fmtAsset(x: number, asset: string) {
 const json = async (method: string, url: string, body?: unknown) => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j;
 };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -123,14 +124,14 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
         {!d.settled_at && (
           <button className="btn-ghost px-1.5 py-1 text-xs text-stone-500" title={d.direction === "alacak"
             ? "Geri gelmeyecek: kalan bugün gider olur" : "Karşı taraf sildi: kalan bugün gelir olur"}
-            onClick={() => window.confirm(d.direction === "alacak"
+            onClick={() => void ask(d.direction === "alacak"
               ? `${d.person} ödemeyecek mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gider olarak yazılır.`
-              : `${d.person} borcu sildi mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gelir olarak yazılır.`) && writeOff.mutate(d)}>
+              : `${d.person} borcu sildi mi? Kalan ${fmtAsset(d.remaining, d.asset)} bugün gelir olarak yazılır.`, { confirm: "Evet, kapat", danger: true }).then((ok) => { if (ok) writeOff.mutate(d); })}>
             Vazgeçtim
           </button>
         )}
         <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil"
-          onClick={() => window.confirm("Kayıt silinsin mi? Bağlı havaleler yeniden normal gelir/gider sayılır.") && del.mutate(d.id)}>
+          onClick={() => void ask("Kayıt silinsin mi? Bağlı havaleler yeniden normal gelir/gider sayılır.").then((ok) => { if (ok) del.mutate(d.id); })}>
           <Trash2 size={14} />
         </button>
       </div>

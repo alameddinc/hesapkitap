@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { detailText } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import { errorText } from "../lib/apiError";
 import { ChevronDown, Copy, EyeOff, KeyRound, Trash2, Users2 } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, maskText, tsDateTR } from "../format";
@@ -25,7 +26,7 @@ const ROLES: { value: BookRole; label: string; sub: string }[] = [
 const call = async <T,>(url: string, method = "GET", body?: unknown): Promise<T> => {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(detailText(j.detail, r.status));
+  if (!r.ok) throw new Error(errorText(j, r.status));
   return j as T;
 };
 const link = (code: string) => `${window.location.origin}/#/kayit?kod=${code}`;
@@ -112,7 +113,7 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
         </select>
         <button className="btn-ghost px-2 py-1 text-xs" title="Şifre sıfırla" onClick={() => reset.mutate(undefined, onErr)}><KeyRound size={14} /></button>
         <button className="btn-danger px-2 py-1 text-xs" title="Çıkar"
-          onClick={() => confirm(`${m.username} ortak defterden çıkarılsın mı? Eklediği kayıtlar defterde kalır.`) && remove.mutate(undefined, onErr)}>
+          onClick={() => void ask(`${m.username} ortak defterden çıkarılsın mı? Eklediği kayıtlar defterde kalır.`).then((ok) => { if (ok) remove.mutate(undefined, onErr); })}>
           <Trash2 size={14} /></button>
       </div>
       {shown && (

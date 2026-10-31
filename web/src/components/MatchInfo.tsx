@@ -1,4 +1,5 @@
 import { Landmark, Link2, Loader2, PenLine, Undo2 } from "lucide-react";
+import { ask } from "../lib/ask";
 import { useState } from "react";
 import { api, type EntryMatch } from "../api";
 import { cx, dateTR, tl } from "../format";
@@ -40,9 +41,9 @@ export function MatchPanel({ entryId, m, onUndone }: { entryId: number; m: Entry
   const undo = useSave(() => api.unmatchEntry(entryId), () =>
     onUndone(m.source === "dokum" ? "Eşleşme geri alındı · dökümdeki satır ayrı kayıt oldu" : "Eşleşme geri alındı · ekstredeki işlem ayrı sayılıyor"));
   const where = m.source === "dokum" ? "Dökümde" : "Ekstrede";
-  const run = () => {
+  const run = async () => {
     const what = m.source === "dokum" ? "dökümdeki satır" : "ekstredeki işlem";
-    if (!confirm(`Eşleşme geri alınsın mı?\n\nElle girdiğin kayıt ile ${what} yeniden iki ayrı kayıt olur ve ikisi de sayılır. Bu ikisi bir daha kendiliğinden birleşmez.`)) return;
+    if (!(await ask(`Eşleşme geri alınsın mı?\n\nElle girdiğin kayıt ile ${what} yeniden iki ayrı kayıt olur ve ikisi de sayılır. Bu ikisi bir daha kendiliğinden birleşmez.`))) return;
     setErr(null);
     undo.mutate(undefined, { onError: (e) => setErr(e.message) });
   };

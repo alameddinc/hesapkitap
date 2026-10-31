@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { ask } from "../lib/ask";
 import { History, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { api, type ImportBatch } from "../api";
@@ -29,12 +30,12 @@ export default function RecentImports() {
   const q = useQuery({ queryKey: ["imports"], queryFn: api.imports });
   const undo = useSave(({ id, force }: { id: string; force?: boolean }) => api.undoImport(id, force));
 
-  const run = (b: ImportBatch) => {
-    if (!confirm(`"${b.label}" yüklemesi geri alınsın mı?\n\n${describe(b)}\n\nBu yüklemenin eklediği her şey silinir, değiştirdiği her şey (bakiye, eşleşmeler) eski haline döner.`)) return;
+  const run = async (b: ImportBatch) => {
+    if (!(await ask(`"${b.label}" yüklemesi geri alınsın mı?\n\n${describe(b)}\n\nBu yüklemenin eklediği her şey silinir, değiştirdiği her şey (bakiye, eşleşmeler) eski haline döner.`))) return;
     undo.mutate({ id: b.id }, {
-      onSuccess: (r) => {
+      onSuccess: async (r) => {
         if (r.ok) return ui.toast("Yükleme geri alındı");
-        if (confirm(`Bu yüklemeden sonra ${r.conflicts?.length} satırı elle değiştirmişsin (ör. kategori). Geri alırsan o değişiklikler de gider. Yine de geri alınsın mı?`))
+        if ((await ask(`Bu yüklemeden sonra ${r.conflicts?.length} satırı elle değiştirmişsin (ör. kategori). Geri alırsan o değişiklikler de gider. Yine de geri alınsın mı?`)))
           undo.mutate({ id: b.id, force: true }, { onSuccess: () => ui.toast("Yükleme geri alındı") });
       },
     });

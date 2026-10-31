@@ -1,4 +1,5 @@
 import { ArrowRight, CheckCircle2, GitMerge, Loader2, Undo2 } from "lucide-react";
+import { ask } from "../lib/ask";
 import { useId, useState } from "react";
 import { api, errStatus, movedCount, type AccountMergeResult } from "../api";
 import { cx, dateTR, tl } from "../format";
@@ -29,9 +30,9 @@ export default function AccountMerge({ from, accounts, onClose }: { from: MergeA
     const ok = () => { setUndone(true); ui.toast("Birleştirme geri alındı"); };
     undo.mutate({ id: done.undo_id }, {
       onError: fail,
-      onSuccess: (r) => {
+      onSuccess: async (r) => {
         if (r.ok) return ok();
-        if (confirm(`Birleştirmeden sonra ${r.conflicts?.length ?? 0} satırı değiştirmişsin (ör. kategori). Geri alırsan o değişiklikler de gider. Yine de geri alınsın mı?`))
+        if ((await ask(`Birleştirmeden sonra ${r.conflicts?.length ?? 0} satırı değiştirmişsin (ör. kategori). Geri alırsan o değişiklikler de gider. Yine de geri alınsın mı?`)))
           undo.mutate({ id: done.undo_id, force: true }, { onError: fail, onSuccess: ok });
       },
     });
