@@ -11,6 +11,7 @@ import Modal from "../components/Modal";
 import MonthPicker from "../components/MonthPicker";
 import Segmented from "../components/Segmented";
 import { cx, dateTR, maskText, monthLabel, periodBounds, periodOf, tl } from "../format";
+import { userNote } from "../components/BankText";
 import { useUI } from "../ui";
 
 interface Person {
@@ -33,6 +34,9 @@ interface Item {
   category: string;
   counterparty: string;
   note: string | null;
+  /** sunucu 90ed954: ham banka metni ve kullanıcının notu (note ikisinin birleşimi) */
+  raw?: string | null;
+  note_user?: string | null;
 }
 interface Own {
   id: number;
@@ -233,9 +237,9 @@ function MoveRow({ i, onEdit }: { i: Item; onEdit?: (i: Item) => void }) {
     <>
       <span className="w-20 shrink-0 text-xs text-stone-500 dark:text-stone-400">{dateTR(i.entry_date)}</span>
       <span className="min-w-0 flex-1">
-        <span className="block break-words">{maskText(i.note || i.description)}</span>
+        <span className="block break-words">{maskText(i.description)}</span>
         {(() => {
-          const sub = [i.category, i.note && i.note !== i.description ? maskText(i.description) : null].filter(Boolean).join(" · ");
+          const sub = [i.category, userNote(i) ? maskText(userNote(i)!) : null].filter(Boolean).join(" · ");
           return sub ? <span className="block text-xs text-stone-500 dark:text-stone-400">{sub}</span> : null;
         })()}
       </span>

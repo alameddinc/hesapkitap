@@ -18,6 +18,7 @@ import Modal from "./Modal";
 import Segmented from "./Segmented";
 import { MatchPanel } from "./MatchInfo";
 import ReceiptItems, { checkSentence } from "./receipt/ReceiptItems";
+import { BankText, userNote } from "./BankText";
 import SavedReceiptItems from "./receipt/SavedReceiptItems";
 import { checkItems, toServer, type ReceiptItem } from "./receipt/check";
 
@@ -50,7 +51,8 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [amount, setAmount] = useState(String(rec?.amount ?? row?.original_amount ?? row?.amount ?? draft?.amount ?? ""));
   const [date, setDate] = useState(row?.date?.slice(0, 10) ?? draft?.entry_date ?? today());
   const [category, setCategory] = useState(rec?.category ?? row?.category ?? draft?.category ?? "");
-  const [note, setNote] = useState(rec?.note ?? row?.note ?? draft?.note ?? "");
+  // not alanı yalnız kullanıcının notu: ham banka satırı (raw) ayrı gösterilir, sunucu onu korur (90ed954)
+  const [note, setNote] = useState(rec?.note ?? (row ? userNote(row) : draft?.note) ?? "");
   const [isRecurring, setRecurring] = useState(!!rec || !!draft?.recurring);
   const [day, setDay] = useState(() => String(rec?.day_of_month ?? new Date().getDate()));
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
@@ -379,6 +381,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
         <div>
           <label className="label" htmlFor="e-note">Not</label>
           <input id="e-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+          {editingEntry?.raw && <BankText raw={editingEntry.raw} />}
         </div>
         {fromReceipt && kind === "gider" && (
           <ReceiptItems items={items} total={parseAmount(amount) || null} onChange={setItems} photo={draft?.photo_url}

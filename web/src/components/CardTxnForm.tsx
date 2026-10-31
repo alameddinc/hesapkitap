@@ -1,6 +1,7 @@
 import { ArrowDownRight, Ban, EyeOff, Repeat, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { api, type Row } from "../api";
+import { BankText, userNote } from "./BankText";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import CategoryPicker from "./CategoryPicker";
 import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
@@ -15,7 +16,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   const [category, setCategory] = useState(row.category);
   const [kind, setKind] = useState(row.kind);
   const [description, setDescription] = useState(row.description);
-  const [note, setNote] = useState(row.note ?? "");
+  const [note, setNote] = useState(userNote(row) ?? "");
   const [makeRule, setMakeRule] = useState(true);
   const [hidden, setHidden] = useState(!!row.hidden);
   const bookInfo = useBook().data;
@@ -38,7 +39,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
     if (categoryChanged) Object.assign(body, { category, create_rule: makeRule });
     if (kind !== row.kind) body.txn_type = kind;
     if (description !== row.description) body.description = description;
-    if (note !== (row.note ?? "")) body.note = note;
+    if (note !== (userNote(row) ?? "")) body.note = note;
     if (hidden !== !!row.hidden) body.hidden = hidden;
     if (Object.keys(body).length === 0) return onClose();
     save.mutate(body);
@@ -119,6 +120,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           <label className="label" htmlFor="c-note">Not</label>
           <input id="c-note" className="input" value={note} onChange={(e) => setNote(e.target.value)}
             placeholder="ör. iş gideri, hediye" />
+          {row.raw && <BankText raw={row.raw} />}
         </div>
         {row.kind === "harcama" && !row.deleted && <SplitEditor target="card" id={row.id} total={row.original_amount ?? row.amount} />}
         {(save.error || subSave.error) && (
