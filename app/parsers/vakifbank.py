@@ -147,6 +147,8 @@ def _parse_txn_line(line: str, card: str, holder: str) -> Transaction | None:
 
 
 def parse_pdf(fp) -> Statement:
+    from app.parsers import page_texts
+
     with pdfplumber.open(fp) as pdf:
-        text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        text = "\n".join(page_texts(pdf))
     return parse_text(text)

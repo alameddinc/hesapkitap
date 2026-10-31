@@ -144,10 +144,16 @@ def restore(data: bytes, filename: str = "", passphrase: str | None = None) -> d
     """Yedeği geri yükle. Önce mevcut veritabanı 'geri yükleme öncesi' olarak yedeklenir."""
     files: list[tuple[str, bytes]] = []
     if data[:2] == b"PK":
+        from app import limits
+
         try:
             z = zipfile.ZipFile(__import__("io").BytesIO(data))
         except zipfile.BadZipFile as e:
             raise RestoreError("Zip açılamadı") from e
+        try:  # z.read() üyeyi belleğe açar: açılmış boyut ve oran önce denetlenir (zip bombası)
+            limits.check_zip(data, limits.BACKUP_MAX_TOTAL, "yedek")
+        except limits.LimitError as e:
+            raise RestoreError(str(e)) from e
         if DB_NAME not in z.namelist():
             raise RestoreError(f"Zip içinde {DB_NAME} yok; HesapKitap'tan alınmış bir yedek seç")
         raw = z.read(DB_NAME)

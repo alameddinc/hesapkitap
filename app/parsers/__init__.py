@@ -17,19 +17,64 @@ class PasswordRequired(ValueError):
     """PDF şifreli ve verilen şifre(ler) açmadı."""
 
 
+def page_texts(pdf) -> list[str]:
+    """Sayfa sayfa metin; her sayfadan sonra page.close(): pdfplumber açık belgede her sayfanın nesnelerini tutuyor,
+    bellek sayfa sayısıyla doğrusal büyüyordu (60 sayfa ≈ +316 MB → ≈ +20 MB; metin birebir aynı)."""
+    from app import limits
+
+    pages = pdf.pages
+    if len(pages) > limits.pdf_max_pages():
+        raise limits.LimitError(f"PDF {len(pages)} sayfa; en fazla {limits.pdf_max_pages()} sayfa okunur")
+    deadline = limits.Deadline()
+    out = []
+    for p in pages:
+        deadline.check()
+        try:
+            out.append(p.extract_text() or "")
+        finally:
+            p.close()
+    return out
+
+
+# Aynı yükleme aynı PDF'i iki kez metne çeviriyordu (önce tür tahmini, sonra okuyucu): son birkaç belgenin metni
+# (içerik özeti + şifre ile) tutulur. Metin küçük (60 sayfa ≈ 150 KB); belgenin kendisi tutulmaz.
+_TEXTS: "dict[tuple[bytes, str], tuple[str, list[str]]]" = {}
+_TEXTS_MAX = 4
+
+
 def extract_text(data: bytes, password: str | None = None) -> str:
+    import hashlib
+
+    key = (hashlib.blake2b(data, digest_size=16).digest(), password or "")
+    with _PAGES_LOCK:
+        hit = _TEXTS.get(key)
+    if hit:
+        _remember_pages(*hit)
+        return hit[0]
+    text, pages = _extract(data, password)
+    with _PAGES_LOCK:
+        _TEXTS[key] = (text, pages)
+        while len(_TEXTS) > _TEXTS_MAX:
+            _TEXTS.pop(next(iter(_TEXTS)))
+    _remember_pages(text, pages)
+    return text
+
+
+def _extract(data: bytes, password: str | None) -> tuple[str, list[str]]:
     from pdfminer.pdfdocument import PDFPasswordIncorrect
 
     try:
         with pdfplumber.open(io.BytesIO(data), password=password or "") as pdf:
-            pages = [p.extract_text() or "" for p in pdf.pages]
+            pages = page_texts(pdf)
     except Exception as e:  # noqa: BLE001
+        from app.limits import LimitError
+
+        if isinstance(e, LimitError):
+            raise
         if e.args and isinstance(e.args[0], PDFPasswordIncorrect):
             raise PasswordRequired("PDF şifreli") from e
         raise
-    text = "\n".join(pages)
-    _remember_pages(text, pages)
-    return text
+    return "\n".join(pages), pages
 
 
 # Sayfa sınırları: metin tek parça döner (tüm okuyucular onu bekler); sayfa başlığı/altlığını ayıklamak isteyen
@@ -82,6 +127,12 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
         text, used_pw = _text_with_passwords(data, passwords or [])
     except PasswordRequired:
         raise
+    except ValueError as e:
+        from app.limits import LimitError
+
+        if isinstance(e, LimitError):
+            raise
+        raise ValueError(f"PDF açılamadı: {e}") from e
     except Exception as e:  # noqa: BLE001 - bozuk PDF
         raise ValueError(f"PDF açılamadı: {e}") from e
     if st := parse_text(text):
