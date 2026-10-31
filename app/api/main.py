@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from app import auth, backup, config, db, deletion, donations, errors, finance, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, errors, finance, idempotency, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -246,7 +246,49 @@ async def _run(request: Request, call_next, book: str | None, path: str):
     if request.method == "GET" and path.startswith("/api/"):
         async with _read_slot(book):
             return await call_next(request)
+    if request.method in idempotency.METHODS and path.startswith("/api/") and request.headers.get("idempotency-key"):
+        return await _idempotent(request, call_next)
     return await call_next(request)
+
+
+async def _idempotent(request: Request, call_next):
+    """Idempotency-Key'li yazma (app/idempotency.py): ilk istek işlenir ve yanıtı saklanır; tekrarı ilk yanıtı alır."""
+    from fastapi.responses import Response as RawResponse
+
+    key = request.headers["idempotency-key"].strip()
+    fp = idempotency.fingerprint(request.method, request.url.path, request.url.query, await request.body(),
+                                 request.headers.get("content-type"))
+    uid = (db.current_user() or {}).get("id")
+    for _ in range(2):  # önceki deneme sunucu hatasıyla bittiyse kayıt silinmiştir: bu istek yeniden ilk sayılır
+        try:
+            row = idempotency.begin(uid, key, fp)
+        except idempotency.KeyError_ as e:
+            return JSONResponse({"detail": str(e)}, status_code=e.status)
+        if row is None:
+            break
+        loop = asyncio.get_running_loop()
+        end = loop.time() + idempotency.WAIT
+        while row and row["state"] == "running" and loop.time() < end:
+            await asyncio.sleep(0.1)
+            row = idempotency.get(uid, key)
+        if row is None:
+            continue
+        if row["state"] == "running":
+            return JSONResponse({"detail": "İşlem sürüyor; birkaç saniye sonra listeyi yenile, tekrar gönderme."},
+                                status_code=409, headers={"Retry-After": "2"})
+        return RawResponse(row["body"] or b"", status_code=row["status"], media_type=row["content_type"],
+                           headers={"Idempotent-Replayed": "true"})
+    try:
+        response = await call_next(request)
+        body = b"".join([chunk async for chunk in response.body_iterator])
+    except BaseException:
+        idempotency.abort(uid, key)
+        raise
+    idempotency.finish(uid, key, response.status_code, body, response.headers.get("content-type"))
+    out = RawResponse(body, status_code=response.status_code)
+    out.raw_headers = [h for h in out.raw_headers if h[0] == b"content-length"] + [
+        h for h in response.raw_headers if h[0] != b"content-length"]  # çoklu Set-Cookie korunur
+    return out
 
 
 @app.middleware("http")
@@ -4667,5 +4709,5 @@ if WEB_DIST and os.path.isdir(WEB_DIST):
 
 # en dışta olmalı (en son eklenen en dışta çalışır): ön istek (OPTIONS) ve 401 yanıtları da CORS başlığı alsın
 app.add_middleware(CORSMiddleware, allow_origins=APP_ORIGINS, allow_credentials=False, allow_methods=["*"],
-                   allow_headers=["Authorization", "Content-Type", "X-HK-Client", "X-Demo-Sid", "X-HK-Book"],
-                   expose_headers=["X-Session-Token", "X-Demo-Sid"], max_age=86400)
+                   allow_headers=["Authorization", "Content-Type", "X-HK-Client", "X-Demo-Sid", "X-HK-Book", "Idempotency-Key"],
+                   expose_headers=["X-Session-Token", "X-Demo-Sid", "Idempotent-Replayed", "Retry-After"], max_age=86400)

@@ -273,6 +273,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- Idempotency-Key: aynı yazma isteği (ağ zaman aşımı sonrası tekrar) ikinci kez işlenmez, ilk yanıt döner (24 saat)
+CREATE TABLE IF NOT EXISTS idempotency (
+    key TEXT PRIMARY KEY,          -- "<kullanıcı id>:<istemci anahtarı>"
+    fingerprint TEXT NOT NULL,     -- sha256(yöntem + yol + sorgu + gövde)
+    state TEXT NOT NULL,           -- running | done
+    status INTEGER,
+    body BLOB,
+    content_type TEXT,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS rules (
     id INTEGER PRIMARY KEY,
     pattern TEXT NOT NULL,
