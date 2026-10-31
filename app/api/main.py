@@ -2022,7 +2022,8 @@ def onboarding_dismiss():
 
 # ---------------------------------------------------------------- hatırlatmalar (Yapılacaklar; ileride push)
 
-REMINDER_ID = r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|hesap:\d{1,12}:\d{1,12})$"
+REMINDER_ID = (r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|"
+               r"(hesap|borc):\d{1,12}:\d{1,12}|kart:\d{1,12})$")
 
 
 class SnoozeIn(BaseModel):
@@ -2860,6 +2861,7 @@ class DebtPayIn(BaseModel):
     amount: float | None = Field(default=None, gt=0)  # boş → kalanın tamamı
     paid_at: date
     account_id: int | None = None  # banka/nakit hesabı
+    entry_id: int | None = None    # var olan hareket bu ödemedir (Yapılacaklar "Bu havale borçtan mı?" → Evet)
 
 
 @app.get("/api/debts")
@@ -2895,8 +2897,16 @@ def delete_debt(did: int):
 
 @app.post("/api/debts/{did}/pay")
 def pay_debt(did: int, body: DebtPayIn):
+    if body.entry_id is not None:
+        _visible_or_404("entry", body.entry_id)
+        with db.connect() as c:
+            e = c.execute("SELECT debt_id FROM entries WHERE id = ?", (body.entry_id,)).fetchone()
+        if not e:
+            raise HTTPException(404, "Kayıt yok")
+        if e["debt_id"] or db._entry_is_debt_linked(body.entry_id):
+            raise HTTPException(409, "Bu hareket zaten bir borca bağlı")
     try:
-        db.pay_debt(did, body.amount, body.paid_at.isoformat(), account_id=body.account_id)
+        db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     return {"ok": True}

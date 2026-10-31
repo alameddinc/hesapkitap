@@ -2739,10 +2739,16 @@ def _entry_is_debt_linked(entry_id: int | None) -> bool:
         return bool(r and r["debt_id"])
 
 
+DEBT_WORDS = r"\bBORC|\bBORCU|\bBORCUM|\bTAKSIT|\bGERI\s?ODEME|\bGERI\b|\bODUNC|\bALACAK"
+
+
 def link_debt_movement(person: str | None, kind: str, amount: float, on: str, entry_id: int | None) -> tuple[str, dict] | None:
     """Kişiye/kişiden TL hareketi açık bir borç kaydına ait mi?
     1) Borcun VERİLİŞİ: aynı tutar, borç tarihine ±3 gün (alacak → giden para, borç → gelen para)
     2) ÖDEME/TAHSİLAT: kalan tutar birebir (borcum → giden para, alacağım → gelen para)
+    3) KISMİ: yalnız açıkça borç hareketiyse (kayıt "Borç / Alacak" kategorisinde, banka metninde borç/taksit/geri
+       ödeme geçiyor ya da borç bölünmüş harcamanın payı) ve kişinin TEK açık kaydı varsa. Aksi hâlde o kişiyle olan her küçük havale borca yazılıyordu;
+       şimdi Yapılacaklar'da sorulur (reminders "borc:<kayıt>:<borç>").
     Bağlanan hareket gelir/gider sayılmaz. Döner: ("verildi" | "odeme", borç) ya da None."""
     from datetime import date as _date
 
@@ -2766,11 +2772,58 @@ def link_debt_movement(person: str | None, kind: str, amount: float, on: str, en
         if money.eq(d["remaining"], amount):
             pay_debt(d["id"], amount, on, entry_id)
             return "odeme", d
-    # kısmi: kişinin TEK açık kaydı varsa ve gelen/giden tutar kalandan azsa ondan düşülür (300'ün 250'si)
-    if len(open_) == 1 and amount < open_[0]["remaining"]:
+    # kısmi: kişinin TEK açık kaydı varsa, tutar kalandan azsa ve hareket açıkça borç hareketiyse (300'ün 250'si)
+    if len(open_) == 1 and money.lt(amount, open_[0]["remaining"]) and (open_[0].get("split_id") or _says_debt(entry_id)):
+        # (bölünmüş harcamanın payı: kişinin borcu belli, ondan gelen havale tahsilattır)
         pay_debt(open_[0]["id"], amount, on, entry_id)
         return "odeme", open_[0]
     return None
+
+
+def _says_debt(entry_id: int | None) -> bool:
+    """Kayıt açıkça borç hareketi mi: kategorisi "Borç / Alacak" ya da açıklamasında/banka metninde borç sözcüğü."""
+    import re as _re
+
+    from app.textnorm import normalize
+
+    if not entry_id:
+        return False
+    with connect() as c:
+        e = c.execute("SELECT category, description, note FROM entries WHERE id = ?", (entry_id,)).fetchone()
+    if not e:
+        return False
+    return e["category"] == "Borç / Alacak" or bool(_re.search(DEBT_WORDS, normalize(f"{e['description']} {e['note'] or ''}")))
+
+
+def debt_questions() -> list[dict]:
+    """Kısmi ödeme olabilecek ama otomatik bağlanmamış hareketler: kişinin tek açık TL borcu/alacağı, yönü uyuyor,
+    tutar kalandan az, borç tarihinden sonra (en fazla 180 gün). Yapılacaklar'da "Bu havale borçtan mı?" diye sorulur."""
+    from datetime import date as _date
+
+    out = []
+    debts_ = [d for d in list_debts(open_only=True) if d["asset"] == "TRY" and not d["settled_at"]]
+    by_person: dict[str, list] = {}
+    for d in debts_:
+        by_person.setdefault(_name_key(d["person"]), []).append(d)
+    if not by_person:
+        return out
+    with connect() as c:
+        ents = rows(c.execute("SELECT * FROM entries WHERE debt_id IS NULL AND counterparty IS NOT NULL AND skipped = 0 "
+                              "AND id NOT IN (SELECT entry_id FROM debt_payments WHERE entry_id IS NOT NULL)"))
+    for e in ents:
+        ds = by_person.get(_name_key(e["counterparty"]))
+        if not ds:
+            continue
+        pay_dir = "borc" if e["kind"] == "gider" else "alacak"
+        same = [d for d in ds if d["direction"] == pay_dir]
+        if len(same) != 1:
+            continue
+        d = same[0]
+        days = (_date.fromisoformat(e["entry_date"]) - _date.fromisoformat(d["debt_date"])).days
+        if (0 <= days <= 180 and money.lt(e["amount"], d["remaining"]) and e["id"] != d.get("given_entry_id")
+                and not d.get("split_id")):
+            out.append({"entry": e, "debt": d})
+    return out
 
 
 def settle_debt_by_transfer(person: str | None, kind: str, amount: float, on: str, entry_id: int | None) -> dict | None:

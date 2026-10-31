@@ -74,9 +74,11 @@ _M_BANK = """SELECT e.* FROM entries e LEFT JOIN accounts a ON a.id = e.account_
     WHERE e.import_hash IS NULL AND e.skipped = 0 AND e.wallet_id IS NULL AND e.debt_id IS NULL
       AND e.linked_txn_id IS NULL AND COALESCE(e.payment, '') NOT IN ('kredi_karti', 'kart')
       AND (a.id IS NULL OR a.kind = 'banka') AND COALESCE(e.category, '') <> ?"""
-# Dökümden gelmiş, henüz bir elle kayda bağlanmamış kayıtlar (maaş sabit kalemi, borç hareketi, bölünmüş olanlar hariç)
+# Dökümden ya da banka e-posta bildiriminden (mail:) gelmiş, henüz bir elle kayda bağlanmamış kayıtlar (maaş sabit
+# kalemi, borç hareketi, bölünmüş olanlar hariç). Bildirim önce gelip elle kayıt sonra girilince de eşleşir.
 _I_BANK = """SELECT e.* FROM entries e
-    WHERE e.import_hash IS NOT NULL AND e.import_hash NOT LIKE '%:%' AND e.note LIKE 'Hesap hareketi%'
+    WHERE e.import_hash IS NOT NULL AND (e.import_hash NOT LIKE '%:%' OR e.import_hash LIKE 'mail:%')
+      AND e.note LIKE 'Hesap hareketi%'
       AND e.skipped = 0 AND e.wallet_id IS NULL AND e.debt_id IS NULL AND e.recurring_id IS NULL
       AND e.id NOT IN (SELECT entry_id FROM entry_matches)
       AND e.id NOT IN (SELECT entry_id FROM splits WHERE entry_id IS NOT NULL)"""
