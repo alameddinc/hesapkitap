@@ -457,6 +457,16 @@ MIGRATIONS = [
     ("bank_documents", "verified", "INTEGER"),    # bakiye zinciri: 1 tuttu, 0 tutmadı, 2 kullanıcı onayladı (app/verification.py)
 ]
 
+# Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
+# defterlere ALTER ile ekleniyor, SCHEMA içinde olsalar eski dosyada "no such column" verirdi. Sorgu sonucu değişmez,
+# yalnız plan: hesap bakiyesi (accounts, net-worth, reminders) ve içe aktarmada satır başı tekrar/dekont kontrolü
+# tam tarama yerine indeksten okur.
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_entries_import_hash ON entries(import_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_entries_account_date ON entries(account_id, entry_date)",
+    "CREATE INDEX IF NOT EXISTS ix_card_payments_stmt ON card_payments(statement_id)",
+]
+
 
 # ---------------------------------------------------------------- aktif kullanıcının alanı
 # Her istek (ve zamanlanmış iş) giriş yapan kullanıcının veritabanında çalışır. Bağlam boşsa ana veritabanı
@@ -615,6 +625,8 @@ def init_db() -> None:
             cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
             if col not in cols:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+        for sql in INDEXES:
+            c.execute(sql)
         _migrate_subscription_state(c)
         c.execute("UPDATE statements SET source = 'excel' WHERE source IS NULL AND (lower(filename) LIKE '%.xlsx' "
                   "OR lower(filename) LIKE '%.xls' OR lower(filename) LIKE '%.csv')")  # eski kart Excel'i ekstreleri
@@ -3510,9 +3522,10 @@ def _account_balance(c, a: dict, until: str | None = None) -> float | None:
         return None
     hi = until or "9999-12-31"
     flows = c.execute("""SELECT COALESCE(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE -amount END), 0) FROM entries
-                         WHERE account_id = ? AND skipped = 0 AND (entry_date > ? OR (entry_date = ? AND id > ?))
-                         AND entry_date <= ?""",
-                      (a["id"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0, hi)).fetchone()[0]
+                         WHERE account_id = ? AND skipped = 0 AND entry_date >= ?
+                         AND (entry_date > ? OR (entry_date = ? AND id > ?)) AND entry_date <= ?""",
+                      (a["id"], a["as_of"], a["as_of"], a["as_of"], a["anchor_entry_id"] or 0, hi)).fetchone()[0]
+    # "entry_date >= çapa" sonucu değiştirmez (alttaki OR zaten bunu gerektirir); ix_entries_account_date aralığı daralsın
     # elle girilmiş ya da e-posta bildiriminden gelmiş kart ekstresi ödemesi ve virman (gider değil, hesaptan para çıktı
     # ya da girdi); dökümden gelenler çapanın içinde (döküm gelince bildirim kayıtları silinir)
     cards = c.execute("""SELECT COALESCE(SUM(amount), 0) FROM card_payments WHERE account_id = ?
