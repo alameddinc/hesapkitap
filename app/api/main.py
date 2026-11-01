@@ -5103,6 +5103,14 @@ def settings_status():
     }
 
 
+@app.get("/api/settings/web-only")
+def settings_web_only(request: Request):
+    """Mobilde kurulamayan, web Ayarlar'da kurulan ayarlar (C9): {self_hosted, url, items[]}. Yetenek: web_only_settings."""
+    from app import web_settings
+
+    return web_settings.info(_public_base(request))
+
+
 class CycleIn(BaseModel):
     mode: Literal["auto", "manual"] = "manual"
     day: int | None = Field(default=None, ge=1, le=28)  # manual için

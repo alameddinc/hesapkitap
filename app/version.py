@@ -41,6 +41,7 @@ CAPABILITIES = (
     "bills_by_bill_month",    # /api/bills/summary months[] faturanın ait olduğu aya göre (paid_date / bill_month)
     "universal_links",        # davet link'i https://<adres>/davet/<kod> (+ web_link eski biçim)
     "insights_hidden",        # GET /api/insights/hidden: gizlenen Özet uyarıları (Geri getir: POST /api/insights/restore)
+    "web_only_settings",      # GET /api/settings/web-only: mobilde olmayan, web Ayarlar'da kurulan ayarlar + web adresi
 )
 
 
