@@ -42,6 +42,7 @@ CAPABILITIES = (
     "universal_links",        # davet link'i https://<adres>/davet/<kod> (+ web_link eski biçim)
     "insights_hidden",        # GET /api/insights/hidden: gizlenen Özet uyarıları (Geri getir: POST /api/insights/restore)
     "web_only_settings",      # GET /api/settings/web-only: mobilde olmayan, web Ayarlar'da kurulan ayarlar + web adresi
+    "social_nonce",           # POST /api/auth/social/nonce; /api/auth/{google,apple} gövdesinde nonce (D1)
 )
 
 

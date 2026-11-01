@@ -180,3 +180,10 @@ def test_social_nonce_can_be_required(google, monkeypatch):
     assert r.status_code == 200
     monkeypatch.delenv("HESAPKITAP_SOCIAL_NONCE")
     assert TestClient(app).post("/api/auth/google", json={"id_token": t}).status_code == 200  # varsayılan: geçiş dönemi
+
+
+def test_social_nonce_capability_before_login():
+    """Mobil, girişten önce /api/auth/status yeteneklerinde social_nonce görünce nonce ister (eski sunucuda istemez)."""
+    from app.api.main import app
+
+    assert "social_nonce" in TestClient(app).get("/api/auth/status").json()["capabilities"]
