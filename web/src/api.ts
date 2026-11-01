@@ -155,6 +155,8 @@ export interface Insight {
   link?: string;
   /** gecikmiş / kısmi ödenmiş kalem: "Ödedim" düğmesi bu ödemeyi açar (/api/payables içinde type + id) */
   pay?: { type: "statement" | "bill" | "debt"; id: number };
+  /** kararlı anahtar (tür + kapsam): POST /api/insights/dismiss ile kişi başına gizlenir; koşul değişince yeniden çıkar */
+  key?: string;
 }
 
 export interface Statement {
@@ -470,6 +472,9 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
 export const api = {
   meta: () => req<Meta>("GET", "/api/meta"),
   summary: (month: string) => req<Summary>("GET", `/api/summary${q({ month })}`),
+  /** Özet uyarısını kişi başına gizle / gizlemeyi geri al (summary.insights[].key) */
+  dismissInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/dismiss", { key }),
+  restoreInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/restore", { key }),
   transactions: (month?: string, includeDeleted = false, includeEstimates = false) =>
     req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted, include_estimates: includeEstimates || undefined })}`),
   /** Sayfalı (sunucu b185e16): yeniden eskiye limit kadar satır; before = önceki sayfanın next'i; totals=1 → kümenin

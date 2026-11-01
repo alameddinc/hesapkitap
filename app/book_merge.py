@@ -46,7 +46,7 @@ from app import db
 
 # hazır sürüme / hedef kullanıcıya / cihaza ait: hedefteki değer kalır, kaynaktaki atılır
 TARGET_KEYS = {"modules", "onboarding_dismissed", "posta:senders", "storage:full_warned"}
-TARGET_PREFIXES = ("consent:", "ui:", "reminders:state", "integrity:", "digest_seen:", "book:rules", "receipt_reread:",
+TARGET_PREFIXES = ("consent:", "ui:", "reminders:state", "insights:dismissed", "integrity:", "digest_seen:", "book:rules", "receipt_reread:",
                    "budget:")
 # kendi sunucusuna ait (IMAP, Telegram, uygulama şifresi, yedek, kendi yapay zekâ anahtarı, zamanlanmış iş damgaları):
 # taşınmaz. Hazır sürümde bu anahtarlar zaten kullanılmaz (config.locked)

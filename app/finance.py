@@ -1201,6 +1201,32 @@ def _fold(s: str) -> str:
     return fold_key(s)
 
 
+def _slug(x: str) -> str:
+    """Uyarı anahtarında ad: küçük harf, boşluk yerine tire (kararlı; görünen metinden bağımsız)."""
+    return re.sub(r"[\s/:]+", "-", (x or "").strip().casefold())[:60] or "-"
+
+
+def _fp(*parts) -> str:
+    """Uyarının kapsamındaki kayıtların parmak izi: kayıtlar ya da tutarlar değişince anahtar da değişir."""
+    import hashlib
+
+    return hashlib.sha1("|".join(map(str, parts)).encode()).hexdigest()[:10]
+
+
+def _tx(month: str | None, title: str, **f) -> dict:
+    """İşlemler hedefi (mobil: #/islemler/suz/…): month None ise tüm aylar; f: kind, category, merchant, uids, fx, pending, awaiting."""
+    return {"screen": "islemler", "month": month, "title": title, **{k: v for k, v in f.items() if v not in (None, False, [], "")}}
+
+
+# uyarının "link"i (web sayfası) → platformdan bağımsız hedef ekranı (target.screen)
+LINK_TARGET = {"plan": "planlama", "zekat": "zekat", "hesaplar": "hesaplar", "tasarruf": "tasarruf", "borclar": "borclar",
+               "fiyatlar": "fiyatlar", "ekstreler": "ekstreler", "transferler": "transferler", "istatistik": "istatistik"}
+# hedef ekranı → özellik (prefs.MODULES): özellik kapalıysa o hedefe gidilmez
+TARGET_MODULE = {"planlama": "plan", "taksitler": "plan", "oneriler": "plan", "zekat": "zekat", "hesaplar": "hesaplar",
+                 "kumbara": "hesaplar", "tasarruf": "tasarruf", "abonelikler": "tasarruf", "borclar": "borclar",
+                 "fiyatlar": "fiyatlar", "transferler": "transferler", "istatistik": "istatistik"}
+
+
 def interest_alarm(month: str) -> list[dict]:
     """Faiz alarmı: bu dönem ödenen faiz / vade farkı ve NEDENİ (geç ödeme, eksik ödeme, taksit vade farkı)."""
     from app import book
@@ -1241,7 +1267,7 @@ def interest_alarm(month: str) -> list[dict]:
                                "Ekstrede faiz, vade farkı ya da faize bağlı vergi var.")
                               + (f" (gecikme faizi {_tl(late)}, alışveriş faizi {_tl(shop)})" if late or shop else "")
                               + " Önlem: bankada son ödeme gününde dönem borcunun tamamı için otomatik ödeme talimatı ver.",
-                    "filter": {"kind": FEE}})
+                    "filter": {"kind": FEE}, "key": f"faiz:{_slug(card)}:{month}"})
     # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): arındır
     inc = [r for r in transactions(month) if r["kind"] == INCOME and not r.get("pending")
            and any(k in _fold(r["description"]) for k in ("FAIZ", "FAİZ", "NEMA"))]
@@ -1249,7 +1275,8 @@ def interest_alarm(month: str) -> list[dict]:
         out.append({"level": "uyari", "title": f"Faiz geliri: {_tl(sum(r['amount'] for r in inc))} (arındırılacak)",
                     "detail": "Hesabına faiz işlemiş görünüyor. Faizden uzak durmak istiyorsan bu tutarı sevap beklemeden "
                               "ihtiyaç sahibine vererek arındırabilirsin; hesap türünü (ör. katılım ya da faizsiz vadesiz) kontrol et.",
-                    "filter": {"kind": INCOME}})
+                    "filter": {"kind": INCOME}, "key": f"faiz_geliri:{month}:{_fp(*sorted(r['uid'] for r in inc))}",
+                    "target": _tx(month, "Faiz geliri", kind=INCOME, uids=[r["uid"] for r in inc])})
     return out
 
 
@@ -1286,7 +1313,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             "level": "kritik", "title": f"{_tl(t['fees'])} faiz ve vergi ödedin",
             "detail": "Ekstre borcunun tamamı son ödeme tarihine kadar ödenmediğinde alışveriş faizi, geç "
                       "ödendiğinde gecikme faizi işler; üstüne BSMV ve KKDF eklenir. Asgari değil, toplam borcu öde.",
-            "filter": {"kind": FEE}}]
+            "filter": {"kind": FEE}, "key": f"faiz:{month}"}]
 
     # 2) Gecikmiş veya kısmi ödenmiş (yaklaşanlar "Ödemeler" kartında)
     for x in payables(today):
@@ -1294,11 +1321,14 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             out.append({"level": "kritik", "title": f"{x['title']}: son ödeme {abs(x['days_left'])} gün geçti",
                         "detail": f"{_tl(x['amount'])} ödenmedi olarak görünüyor. Ödediysen \"Ödedim\" ile işaretle; "
                                   "ödemediysen gecikme faizi işliyor.",
-                        "pay": {"type": x["type"], "id": x["id"]}})
+                        "pay": {"type": x["type"], "id": x["id"]}, "key": f"gecikti:{x['type']}:{x['id']}:{x.get('due_date') or ''}",
+                        "target": {"screen": "odemeler", "type": x["type"], "id": x["id"]}})
         elif x["status"] == "kismi":
             out.append({"level": "uyari", "title": f"{x['title']}: {_tl(x['amount'] - x['paid_amount'])} kaldı",
                         "detail": "Kısmi ödeme yaptın; kalan borca faiz işler.",
-                        "pay": {"type": x["type"], "id": x["id"]}})
+                        "pay": {"type": x["type"], "id": x["id"]},
+                        "key": f"kismi:{x['type']}:{x['id']}:{_round(x['amount'] - x['paid_amount']):g}",
+                        "target": {"screen": "odemeler", "type": x["type"], "id": x["id"]}})
 
     # 2-) Altın/döviz kumbarası: bu ayın alım günü geldi, henüz alınmadı
     for j in db.list_jars(today, include_closed=False):
@@ -1317,7 +1347,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         out.append({"level": "bilgi", "title": f"{j['name']}: bu ay {qty} {label.lower()} alma günü"
                     + (f" (≈ {_tl(approx)})" if approx else ""),
                     "detail": "Aldıktan sonra Hesaplar → Kumbaralar'da \"Aldım\" de; altın varlıklarına alış tarihiyle eklenir.",
-                    "link": "hesaplar"})
+                    "link": "hesaplar", "key": f"kumbara:{j['id']}:{today:%Y-%m}", "target": {"screen": "kumbara", "id": j["id"]}})
 
     # 2a) Ramazan / fitre / Kurban yaklaşıyor
     try:
@@ -1336,7 +1366,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         top = ", ".join(f"{(s['category'] or 'ödeme').split(' & ')[0]} {_tl(s['amount'])}" for s in sug[:2])  # kişi adı yok
         out.append({"level": "bilgi", "title": f"Her ay tekrarlayan {len(sug)} ödeme sabit kalem değil",
                     "detail": f"{top}{' …' if len(sug) > 2 else ''}. Sabit kalem yaparsan gelecek aylar planlamaya girer.",
-                    "link": "plan"})
+                    "link": "plan", "key": f"sabit_oneri:{_fp(*sorted(s['key'] for s in sug))}", "target": {"screen": "oneriler"}})
 
     # 1z) Zekât günü / ek kontrol günü yaklaşıyor
     try:
@@ -1347,12 +1377,12 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             if z["kind"] == "zekat":
                 out.append({"level": "uyari", "title": f"🌙 {z['name']}: zekât günü {when} ({_tl(z['amount'])})",
                             "detail": f"{z['date'][8:10]}.{z['date'][5:7]}.{z['date'][:4]} · {z['hijri']}. Verince Zekât sayfasında \"Ödeme ekle\".",
-                            "link": "zekat"})
+                            "link": "zekat", "key": f"zekat:{_fp(z['name'])}:{z['date']}"})
             else:
                 out.append({"level": "uyari", "title": f"🌙 {z['name']}: zekât kontrolü {when}",
                             "detail": f"{z['date'][8:10]}.{z['date'][5:7]}.{z['date'][:4]} · {z['hijri']}. Bugünkü toplamla yeniden hesapla; "
                                       f"fark {_tl(z['amount'])}" + (" — tamamla." if z["amount"] > 0 else " — ek ödeme gerekmiyor."),
-                            "link": "zekat"})
+                            "link": "zekat", "key": f"zekat_kontrol:{_fp(z['name'])}:{z['date']}"})
     except Exception:  # noqa: BLE001 - zekât (fiyat servisi) özeti bozmasın
         pass
 
@@ -1370,7 +1400,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                         "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında dökümde maaş yok. "
                                   "Maaş kalemin varsa o aylarda tahmini tutar gelire yazılır; kesin tutar için maaşın yattığı hesabın bu aylara "
                                   "ait dökümünü yükle.",
-                        "link": "ekstreler"})
+                        "link": "ekstreler", "key": f"maas_yok:{gaps[0]}:{gaps[-1]}:{len(gaps)}", "target": {"screen": "ekstreler"}})
 
     # 2b) Hesaptan kart ödemesi var ama ekstresi yok → o dönemin harcamaları hiç sayılmamış
     # (kartın yüklenen ilk ekstresinden eski ödemeler — bankanın arşivi — hiç gösterilmez)
@@ -1388,7 +1418,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                               "bilinmiyor. Ödenen tutar harcamana katılmadı, \"tahmini\" olarak ayrı gösteriliyor. Ödemeler: "
                               + ", ".join(f"{x['pay_date'][8:10]}.{x['pay_date'][5:7]} {_tl(x['amount'])}" for x in ps)
                               + ". Ekstreler sayfasından o ayların kart ekstresini yükle.",
-                    "link": "ekstreler"})
+                    "link": "ekstreler", "key": f"ekstre_yok:{last4}:{_fp(*sorted(x['pay_date'] for x in ps))}"})
 
     # 2c) Ödemeler kartında görünmeyen açık borçlar (vadesiz ya da döviz/altın)
     open_debt = [d for d in db.list_debts(open_only=True) if d["direction"] == "borc" and d["remaining"] > 0
@@ -1397,7 +1427,9 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         out.append({"level": "bilgi", "title": f"{len(open_debt)} açık borcun var",
                     "detail": " · ".join(f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
                                          + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else "")
-                                         for d in open_debt) + ". Borç / Alacak sayfasından takip et.", "link": "borclar"})
+                                         for d in open_debt) + ". Borç / Alacak sayfasından takip et.", "link": "borclar",
+                    "key": f"borc:{_fp(*sorted((d['id'], d['remaining']) for d in open_debt))}",
+                    "target": {"screen": "borclar", **({"person": open_debt[0]["person"]} if len(open_debt) == 1 else {})}})
 
     # 2e) Fiyatı belirgin artan ürünler (fişlerden; son 120 gün içinde alınmış olanlar)
     recent = (today - timedelta(days=120)).isoformat()
@@ -1405,7 +1437,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     if up:
         out.append({"level": "bilgi", "title": f"{len(up)} üründe zam var (fişlerinden)",
                     "detail": " · ".join(f"{p['product']}: {_tl(p['first_price'])} → {_tl(p['last_price'])} (+%{p['change_pct']:g})"
-                                         for p in up) + ".", "link": "fiyatlar"})
+                                         for p in up) + ".", "link": "fiyatlar",
+                    "key": f"zam:{_fp(*((p['product'], p['last_price']) for p in up))}"})
 
     # 2d) Bekleyen alacaklar (sana borçlu olanlar)
     # kapanmış (settled_at) ya da kalanı sıfır olan (tamamı tahsil edilmiş / vazgeçilmiş) alacak sayılmaz
@@ -1418,7 +1451,9 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         out.append({"level": "uyari" if overdue else "bilgi",
                     "title": f"{len(open_rec)} alacağın var" + (" — vadesi geçen var" if overdue else ""),
                     "detail": " · ".join(parts) + ". Borç / Alacak sayfasından takip et; havale gelince TL alacaklar "
-                              "kendiliğinden kapanır.", "link": "borclar"})
+                              "kendiliğinden kapanır.", "link": "borclar",
+                    "key": f"alacak:{_fp(*sorted((d['id'], d['remaining']) for d in open_rec))}:{int(overdue)}",
+                    "target": {"screen": "borclar", **({"person": open_rec[0]["person"]} if len(open_rec) == 1 else {})}})
 
     # 3) Açık veren aylar
     has_income = any(r["kind"] == INCOME for r in p["recurring"]) or any(
@@ -1432,7 +1467,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                         "title": f"Önümüzdeki {len(p['months'])} aydan {len(neg)} tanesinde kesin giderler geliri aşıyor",
                         "detail": f"Toplam açık {_tl(-sum(mm['net'] for mm in neg))}; en kötü ay {worst['month']} "
                                   f"({_tl(-worst['net'])}). Taksit, abonelik, sabit gider ve faturalar dahil.",
-                        "link": "plan"})
+                        "link": "plan", "key": f"acik:{current_period(today)}:{len(neg)}"})
         else:
             tight = [mm for mm in p["months"] if mm["net_with_estimate"] < 0 and mm["estimated"]]
             if tight:
@@ -1440,11 +1475,11 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                             "title": f"Harcamalar son aylardaki gibi giderse {len(tight)} ayda sıkışabilirsin",
                             "detail": f"Kesin giderler gelirin altında; ama tahmini kart harcamasıyla {tight[0]['month']} "
                                       f"için net {_tl(tight[0]['net_with_estimate'])}. Bütçe veya kısma hedefi koymayı düşün.",
-                            "link": "plan"})
+                            "link": "plan", "key": f"sikisma:{current_period(today)}:{len(tight)}"})
     else:
         out.append({"level": "bilgi", "title": "Gelirin tanımlı değil",
                     "detail": "Maaşını Planlama → Sabit kalemler'e eklersen her ay ne kadar artı/eksi verdiğini görürsün.",
-                    "link": "plan", "soft_link": True})
+                    "link": "plan", "soft_link": True, "key": "gelir_yok"})
 
     # 4) Taksit yükü
     next_m = add_months(current_period(today), 1)
@@ -1455,7 +1490,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         if nxt["income"]:
             msg += f" Gelirine oranı: %{inst / nxt['income'] * 100:.0f}."
         out.append({"level": "uyari" if nxt["income"] and inst / nxt["income"] > 0.3 else "bilgi",
-                    "title": "Gelecek ayın taksit yükü", "detail": msg, "link": "plan", "soft_link": True})
+                    "title": "Gelecek ayın taksit yükü", "detail": msg, "link": "plan", "soft_link": True,
+                    "key": f"taksit_yuku:{next_m}", "target": {"screen": "taksitler"}})
 
     # 5a) Taksitlendirme maliyeti (vade farkı/kâr payı + BSMV + KKDF taksitleri)
     fee_inst = [i for acc in p["projection"] for i in acc["installments"] if i.get("fee")]
@@ -1465,7 +1501,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         out.append({"level": "uyari", "title": f"Taksitlendirme sana {_tl(total)} daha vade farkı ve vergi ödetecek",
                     "detail": f"Önümüzdeki {months_left} ay boyunca. Taksitli alışverişte vade farkı tutarın ~%25-35'ine "
                               "çıkabiliyor; mümkünse tek çekim yap ya da taksitleri erken kapat.",
-                    "filter": {"kind": FEE}})
+                    "filter": {"kind": FEE}, "key": f"vade_farki:{current_period(today)}:{_round(total):g}",
+                    "target": {"screen": "taksitler"}})
 
     # 5) Biten taksitler (rahatlama)
     ending: dict[str, list] = defaultdict(list)
@@ -1477,17 +1514,19 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     for m, items in sorted(ending.items())[:2]:
         top = ", ".join(i["description"] for i in sorted(items, key=lambda i: -i["amount"])[:3])
         out.append({"level": "iyi", "title": f"{m} ekstresinden sonra aylık {_tl(sum(i['amount'] for i in items))} taksit bitiyor",
-                    "detail": f"Son taksitler: {top}", "link": "plan", "soft_link": True})
+                    "detail": f"Son taksitler: {top}", "link": "plan", "soft_link": True,
+                    "key": f"taksit_bitiyor:{m}", "target": {"screen": "taksitler"}})
 
     # 5b) Bütçe
     for b in budgets(month):
         if b["pct"] >= 100:
             out.append({"level": "kritik", "title": f"{b['category']} bütçesi aşıldı (%{b['pct']:.0f})",
                         "detail": f"{_tl(b['spent'])} / {_tl(b['limit'])} · {_tl(-b['remaining'])} fazla",
-                        "filter": {"category": b["category"]}})
+                        "filter": {"category": b["category"]}, "key": f"butce:{_slug(b['category'])}:{month}"})
         elif b["pct"] >= 80:
             out.append({"level": "uyari", "title": f"{b['category']}: bütçenin %{b['pct']:.0f} kadarı harcandı",
-                        "detail": f"Kalan {_tl(b['remaining'])} (limit {_tl(b['limit'])})", "filter": {"category": b["category"]}})
+                        "detail": f"Kalan {_tl(b['remaining'])} (limit {_tl(b['limit'])})", "filter": {"category": b["category"]},
+                        "key": f"butce_yakin:{_slug(b['category'])}:{month}"})
 
     # 6) Kategori artışı
     prev = add_months(month, -1)
@@ -1502,18 +1541,22 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             base = prev_c.get(cat, 0)
             if base > 500 and amt > base * 1.3 and amt - base > 1000:
                 out.append({"level": "uyari", "title": f"{cat} harcaması %{(amt / base - 1) * 100:.0f} arttı",
-                            "detail": f"{prev}: {_tl(base)} → {month}: {_tl(amt)}", "filter": {"category": cat}})
+                            "detail": f"{prev}: {_tl(base)} → {month}: {_tl(amt)}", "filter": {"category": cat},
+                            "key": f"artis:{_slug(cat)}:{month}"})
 
     # 7) Abonelikler
     for sub in subscriptions():
         if sub["status"] == "iptal" and sub["charged_after_cancel"]:
             out.append({"level": "kritik", "title": f"{sub['merchant'].title()} iptal edilmişti ama yine çekildi",
                         "detail": f"{date.fromisoformat(sub['cancelled_at']):%d.%m} iptalinden sonra {_tl(sub['charged_after_cancel'])} "
-                                  "çekim var. İptal tamamlanmamış olabilir; hesabını kontrol et, iade iste.", "link": "tasarruf"})
+                                  "çekim var. İptal tamamlanmamış olabilir; hesabını kontrol et, iade iste.", "link": "tasarruf",
+                        "key": f"iptal_cekim:{_slug(sub['merchant'])}:{_round(sub['charged_after_cancel']):g}",
+                        "target": {"screen": "abonelikler"}})
         if sub["status"] == "dusuruldu" and sub["overcharged"]:
             out.append({"level": "uyari", "title": f"{sub['merchant'].title()} paketi düşmemiş görünüyor",
                         "detail": f"Yeni paket {_tl(sub['new_amount'])} olmalıydı; {_tl(sub['overcharged'])} fazla çekildi.",
-                        "link": "tasarruf"})
+                        "link": "tasarruf", "key": f"paket:{_slug(sub['merchant'])}:{_round(sub['overcharged']):g}",
+                        "target": {"screen": "abonelikler"}})
     # 7a) Aynı abonelik satıcısına kısa sürede benzer tutarlı birden çok ödeme: çift üyelik / çift çekim olabilir
     out += duplicate_charges(today)
     subs = [s for acc in p["projection"] for s in acc["subscriptions"]]
@@ -1522,21 +1565,22 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         names = ", ".join(s["description"].title() for s in sorted(subs, key=lambda s: -s["amount"])[:5])
         out.append({"level": "bilgi", "title": f"Aylık abonelik yükü ≈ {_tl(total)}",
                     "detail": f"{len(subs)} abonelik: {names}… Tasarruf sayfasından kullanmadıklarını iptal edildi diye işaretle.",
-                    "link": "tasarruf"})
+                    "link": "tasarruf", "key": f"abonelik_yuku:{_round(total):g}", "target": {"screen": "abonelikler"}})
 
     # 7b) Kısma hedefleri: bu ay hedefi aştıysa
     for g in goals_review(today):
         cur = next((m for m in g["months"] if m["month"] == month), None)
         if g["active"] and cur and cur["spent"] > g["target"]:
             out.append({"level": "uyari", "title": f"{g['name']} hedefini aştın: {_tl(cur['spent'])} / {_tl(g['target'])}",
-                        "detail": g["note"] or "Kısma hedefi", "link": "tasarruf"})
+                        "detail": g["note"] or "Kısma hedefi", "link": "tasarruf",
+                        "key": f"hedef:{g.get('id') or _slug(g['name'])}:{month}"})
 
     # 8) Döviz
     fx = [r for r in live if r.get("fx")]
     if fx:
         out.append({"level": "bilgi", "title": f"{_tl(sum(r['amount'] for r in fx))} dövizli harcama",
                     "detail": f"{len(fx)} işlem dolar/euro bazlı; kur artınca bu kalemler kendiliğinden pahalanır.",
-                    "filter": {"fx": True}})
+                    "filter": {"fx": True}, "key": f"doviz:{month}"})
 
     # 9) Limit kullanımı
     for s in statements:
@@ -1546,7 +1590,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             if ratio > 0.5:
                 out.append({"level": "uyari", "title": f"{s['card_no']} limit doluluğu: %{ratio * 100:.0f}",
                             "detail": "Ödenmemiş ekstre borcu limite göre yüksek; kredi notunu olumsuz etkiler.",
-                            "link": "ekstreler"})
+                            "link": "ekstreler", "key": f"limit:{_slug(s['card_no'])}:{month}"})
 
     # 9b) Aynı gelir bu dönemde birden fazla (ör. ay dönümü kayınca ya da yanlış tarihle girilince)
     incomes = defaultdict(list)
@@ -1558,14 +1602,15 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             dates = ", ".join(f"{date.fromisoformat(r['date'][:10]):%d.%m.%Y}" for r in sorted(rs, key=lambda r: r["date"]))
             out.append({"level": "uyari", "title": f"\"{rs[0]['description']}\" bu dönemde {len(rs)} kez görünüyor",
                         "detail": f"Tarihler: {dates}. Biri yanlış tarihle girilmiş olabilir; İşlemler → Gelir'den düzelt.",
-                        "filter": {"kind": INCOME}})
+                        "filter": {"kind": INCOME}, "key": f"gelir_tekrar:{_fp(*sorted(r['uid'] for r in rs))}",
+                        "target": _tx(month, rs[0]["description"], kind=INCOME, uids=[r["uid"] for r in rs])})
 
     # 10) Kategorisiz
     unc = [r for r in live if r["category"] == "Kategorisiz"]
     if unc:
         out.append({"level": "bilgi", "title": f"{len(unc)} işlem kategorisiz",
                     "detail": "İşlemler sayfasında kategori ata; aynı işyeri için kural otomatik oluşur.",
-                    "filter": {"category": "Kategorisiz"}})
+                    "filter": {"category": "Kategorisiz"}, "key": f"kategorisiz:{month}:{_fp(*sorted(r['uid'] for r in unc))}"})
 
     # 11) Ekstre bekleyen kredi kartı girişleri (eski olanlar eşleşmemiş demektir)
     waiting = [r for r in rows if r.get("awaiting_statement")]
@@ -1574,19 +1619,25 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         out.append({"level": "uyari", "title": f"{len(stale)} kredi kartı gideri ekstreyle eşleşmedi",
                     "detail": "45 günden eski ama ekstrede karşılığı bulunamadı. Kayda dokunup elle eşleştir "
                               "ya da ödeme şeklini düzelt; yoksa iki kez sayılabilir.",
-                    "filter": {"awaiting": True}})
+                    "filter": {"awaiting": True}, "key": f"eslesmedi:{_fp(*sorted(r['uid'] for r in stale))}",
+                    "target": _tx(month, "Ekstreyle eşleşmeyenler", awaiting=True, uids=[r["uid"] for r in stale])})
 
     # 12) Bekleyen sabit kalemler
     pend = [r for r in rows if r.get("pending")]
     if pend and month <= current_period(today):
         out.append({"level": "bilgi", "title": f"{len(pend)} sabit kalem onay bekliyor",
                     "detail": ", ".join(r["description"] for r in pend[:4]) + " — gerçekleştiyse İşlemler'den onayla.",
-                    "filter": {"pending": True}})
+                    "filter": {"pending": True}, "key": f"onay:{month}:{_fp(*sorted(r['uid'] for r in pend))}",
+                    "target": _tx(month, "Onay bekleyen sabit kalemler", pending=True)})
 
     order = {"kritik": 0, "uyari": 1, "bilgi": 2, "iyi": 3}
     from app import prefs
 
     mods = prefs.modules()  # kapatılan özelliğin uyarıları gösterilmez
+    from app import book
+
+    mem = book.member()  # ortak defter üyesine kapalı sayfaya hedef verilmez
+    hidden_pages = set(book.rules(mem["id"])["hidden_pages"]) if mem else set()
     # kapatılan özelliğin uyarıları gösterilmez; "soft_link": uyarı kendi başına anlamlı, yalnız bağlantı düşer
     kept = []
     for i in out:
@@ -1595,8 +1646,39 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             if not soft:
                 continue
             i.pop("link", None)
+            i.pop("target", None)
+        _target(i, month, mods, hidden_pages)
         kept.append(i)
     return sorted(kept, key=lambda i: order[i["level"]])
+
+
+def _target(i: dict, month: str, mods: dict[str, bool], hidden_pages: set[str] = frozenset()) -> None:
+    """Her uyarıya dokununca gidilecek yer (target): {"screen": <ekran>, ...parametreler}. Ekranlar platformdan
+    bağımsızdır (mobil kendi yoluna çevirir): islemler (süzgeç: month, kind, category, merchant, uids, fx, pending,
+    awaiting; month None = tüm aylar), odemeler (type, id), kumbara (id), borclar (person), planlama, taksitler,
+    oneriler (sabit kalem önerileri), abonelikler, tasarruf, zekat, ekstreler, hesaplar, fiyatlar, transferler, istatistik.
+    Açıkça verilmemişse süzgeçten (işlemler) ya da bağlantıdan türer; özelliği kapalı hedef düşer, süzgeç varsa ona döner.
+    Anahtarı (key) olmayan uyarıya başlıktan kararlı bir anahtar verilir (kapatılabilsin)."""
+    def ok(t: dict | None) -> bool:
+        page = TARGET_MODULE.get(t["screen"], t["screen"]) if t else ""
+        return bool(t) and mods.get(page, True) and page not in hidden_pages
+
+    t = i.get("target")
+    if not ok(t):
+        t = None
+    if not t and i.get("filter"):
+        f = i["filter"]
+        t = _tx(month, i["title"], kind=f.get("kind"), category=f.get("category"), fx=f.get("fx"),
+                pending=f.get("pending"), awaiting=f.get("awaiting"))
+    if not t and i.get("link") in LINK_TARGET:
+        t = {"screen": LINK_TARGET[i["link"]]}
+    if t and not ok(t):
+        t = None
+    if t:
+        i["target"] = t
+    else:
+        i.pop("target", None)
+    i.setdefault("key", f"x:{_fp(i['title'])}")
 
 
 # ---------------------------------------------------------------- "Alırsam ne olur?" simülasyonu
@@ -1807,7 +1889,10 @@ def duplicate_charges(today: date | None = None, days: int = 7, lookback: int = 
                                       + ", ".join(_tl(t['amount']) for t in group)
                                       + (f" ({', '.join(cards)} kartlarından)" if len(cards) > 1 else "")
                                       + ". Aynı üyelik iki kez alınmış ya da iki hesap açılmış olabilir; satıcıdan kontrol et, "
-                                        "gerekirse iade iste.", "link": "tasarruf"})
+                                        "gerekirse iade iste.", "link": "tasarruf",
+                            "key": f"dup:{_slug(m)}:{a['txn_date'][:7]}",
+                            "target": _tx(a["period"] if len({t["period"] for t in group}) == 1 else None, m.title(),
+                                          uids=[f"c{t['id']}" for t in group])})
                 break
     return out
 

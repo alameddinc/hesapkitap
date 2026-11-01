@@ -1507,7 +1507,32 @@ def _history_gate(month: str | None) -> None:
 def summary(month: str | None = None):
     """month verilmezse içinde bulunulan dönem (mobil uygulama ayı beklemeden ister)."""
     _history_gate(month)
-    return finance.summary(month or finance.current_period())
+    from app import insight_state
+
+    out = finance.summary(month or finance.current_period())
+    out["insights_hidden"] = insight_state.hidden_count(out["insights"])  # kişinin kapattığı uyarılar (önbellek dışında süzülür)
+    out["insights"] = insight_state.visible(out["insights"])
+    return out
+
+
+class InsightKeyIn(BaseModel):
+    key: str = Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x1f]+$")
+
+
+@app.post("/api/insights/dismiss")
+def insights_dismiss(body: InsightKeyIn):
+    """Özet uyarısını kişi başına gizle (summary.insights[].key). Koşul değişince anahtar değişir, uyarı yeniden çıkar."""
+    from app import insight_state
+
+    return insight_state.dismiss(body.key)
+
+
+@app.post("/api/insights/restore")
+def insights_restore(body: InsightKeyIn):
+    """Gizlemeyi geri al ("Geri al")."""
+    from app import insight_state
+
+    return insight_state.restore(body.key)
 
 
 @app.get("/api/cards/summary")

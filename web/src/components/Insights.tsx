@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertOctagon, AlertTriangle, Check, CheckCircle2, ChevronRight, Info, ListFilter } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertOctagon, AlertTriangle, Check, CheckCircle2, ChevronRight, EyeOff, Info, ListFilter } from "lucide-react";
+import { useState } from "react";
 import { api, type Insight } from "../api";
 import { cx, maskText } from "../format";
 import { useUI, type Route } from "../ui";
@@ -23,6 +24,7 @@ const LINK_LABEL: Partial<Record<Route, string>> = {
  * - pay: gecikmiş / kısmi ödenmiş ekstre, fatura ya da borç → "Ödedim" (tutar, tarih, hesap)
  * - link: ilgili sayfa (kapalıysa düğme gösterilmez)
  * - filter: bu dönemin ilgili işlemleri (aşağıda açılır)
+ * - Gizle: uyarı kişi başına gizlenir (key; "Geri al" bildirimi); koşul değişince yeniden çıkar
  * Metin hiç kesilmez: anlamı çoğu zaman son cümlede ("Ödediysen 'Ödedim' ile işaretle").
  */
 export default function Insights({ items, active, onFilter }: {
@@ -35,7 +37,31 @@ export default function Insights({ items, active, onFilter }: {
   const meta = useMeta().data;
   const needPay = items.some((i) => i.pay);
   const pay = useQuery({ queryKey: ["payables"], queryFn: api.payables, enabled: needPay });
-  if (!items.length) return null;
+  const qc = useQueryClient();
+  const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  const mark = (k: string, on: boolean) => setGone((g) => { const n = new Set(g); if (on) n.add(k); else n.delete(k); return n; });
+  const shown = items.filter((i) => !i.key || !gone.has(i.key));
+  if (!shown.length) return null;
+
+  const hide = async (i: Insight) => {
+    const k = i.key!;
+    mark(k, true);
+    try {
+      await api.dismissInsight(k);
+    } catch (e) {
+      mark(k, false);
+      ui.error(e instanceof Error ? e.message : "Uyarı gizlenemedi");
+      return;
+    }
+    void qc.invalidateQueries({ queryKey: ["summary"] });
+    ui.toast("Uyarı gizlendi", {
+      undo: async () => {
+        await api.restoreInsight(k);
+        mark(k, false);
+        await qc.invalidateQueries({ queryKey: ["summary"] });
+      },
+    });
+  };
 
   const openPay = (i: Insight) => {
     const p = pay.data?.find((x) => x.type === i.pay!.type && x.id === i.pay!.id);
@@ -45,18 +71,18 @@ export default function Insights({ items, active, onFilter }: {
 
   return (
     <ul className="grid gap-2 md:grid-cols-2">
-      {items.map((i, n) => {
+      {shown.map((i, n) => {
         const s = STYLE[i.level];
         const link = i.link && LINK_LABEL[i.link as Route] && routeVisible(book, i.link, meta?.modules) ? (i.link as Route) : null;
         const filter = !!i.filter && !!onFilter;
         const on = !!active && active.title === i.title;
         return (
-          <li key={n} className={cx("flex h-full gap-3 rounded-xl border p-3", s.cls)}>
+          <li key={i.key ?? n} className={cx("flex h-full gap-3 rounded-xl border p-3", s.cls)}>
             <s.icon size={18} className={cx("mt-0.5 shrink-0", s.ic)} aria-label={s.label} />
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="block text-sm font-medium">{maskText(i.title)}</span>
               <span className="mt-0.5 text-xs text-stone-600 dark:text-stone-400">{maskText(i.detail)}</span>
-              {(i.pay || link || filter) && (
+              {(i.pay || link || filter || i.key) && (
                 <div className="mt-auto flex flex-wrap gap-2 pt-2">
                   {i.pay && (
                     <button className="btn-primary px-3 py-1 text-xs" onClick={() => openPay(i)}>
@@ -75,6 +101,12 @@ export default function Insights({ items, active, onFilter }: {
                         on ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700"
                           : "border-stone-300 bg-white/70 text-stone-700 hover:bg-white dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-200 dark:hover:bg-stone-800")}>
                       <ListFilter size={14} aria-hidden /> {on ? "İşlemleri gizle" : "İşlemleri göster"}
+                    </button>
+                  )}
+                  {i.key && (
+                    <button aria-label={`Uyarıyı gizle: ${maskText(i.title)}`} onClick={() => void hide(i)}
+                      className="btn ml-auto px-2 py-1 text-xs text-stone-500 hover:bg-white/70 hover:text-stone-700 dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-200">
+                      <EyeOff size={14} aria-hidden /> Gizle
                     </button>
                   )}
                 </div>

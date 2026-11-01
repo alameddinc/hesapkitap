@@ -426,13 +426,16 @@ def holy_insights(today: date | None = None) -> list[dict]:
     out = []
     if h["in_ramadan"]:
         out.append({"level": "bilgi", "title": f"Fitreyi bayramdan önce ver (bayrama {d['ramazan_bayrami']['days_left']} gün)",
-                    "detail": f"Fitre: {fitre}.".replace("<b>", "").replace("</b>", ""), "link": "zekat"})
+                    "detail": f"Fitre: {fitre}.".replace("<b>", "").replace("</b>", ""), "link": "zekat",
+                    "key": f"fitre:{d['ramazan_bayrami']['date'][:4]}"})
     elif d["ramazan"]["days_left"] <= 30:
         out.append({"level": "bilgi", "title": f"Ramazan'a {d['ramazan']['days_left']} gün (≈ {d['ramazan']['date'][8:10]}.{d['ramazan']['date'][5:7]})",
-                    "detail": f"Fitre: {fitre}.".replace("<b>", "").replace("</b>", ""), "link": "zekat"})
+                    "detail": f"Fitre: {fitre}.".replace("<b>", "").replace("</b>", ""), "link": "zekat",
+                    "key": f"ramazan:{d['ramazan']['date'][:4]}"})
     if d["kurban"]["days_left"] <= 45:
         out.append({"level": "bilgi", "title": f"Kurban Bayramı'na {d['kurban']['days_left']} gün (≈ {d['kurban']['date'][8:10]}.{d['kurban']['date'][5:7]})",
-                    "detail": "Kurban hissesi için şimdiden para ayırmak istersen bir kumbara aç.", "link": "hesaplar"})
+                    "detail": "Kurban hissesi için şimdiden para ayırmak istersen bir kumbara aç.", "link": "hesaplar",
+                    "key": f"kurban:{d['kurban']['date'][:4]}"})
     return out
 
 
