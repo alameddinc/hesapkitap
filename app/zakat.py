@@ -819,14 +819,37 @@ def add_person(name: str) -> int:
         return c.execute("INSERT INTO zakat_people (name) VALUES (?)", (name.strip(),)).lastrowid
 
 
+def _chain_shift(old: str, new: str) -> int:
+    """Zekât yılı başlangıcı elle düzeltilince yıl zinciri (başlangıç ± k×354 gün) kaç gün kaydı? Tam yıl ilerletme
+    (next_year gibi) zinciri değiştirmez: 0. Sonuç (-177, 177] aralığında."""
+    r = (date.fromisoformat(new) - date.fromisoformat(old)).days % LUNAR_YEAR_DAYS
+    return r - LUNAR_YEAR_DAYS if r > LUNAR_YEAR_DAYS // 2 else r
+
+
 def update_person(pid: int, data: dict) -> bool:
+    """I8: hawl_start elle düzeltilirse ödemeler kendi zekât yılında kalır. Ödemeler yıla year_start eşitliğiyle bağlı
+    (compute, history); eski zincirdeki yıl başlangıçları (eski başlangıç − k×354) aynı gün sayısı kadar kaydırılır.
+    Zincirde olmayan (elle başka yıla yazılmış) ödemeye dokunulmaz."""
     data = {k: v for k, v in data.items() if k in ("name", "hawl_start", "note", "is_minor", "check_date")}
     if not data:
         return False
     with db.connect() as c:
         _init(c)
-        return c.execute(f"UPDATE zakat_people SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?",
-                         (*data.values(), pid)).rowcount > 0
+        prev = c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()
+        ok = c.execute(f"UPDATE zakat_people SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?",
+                       (*data.values(), pid)).rowcount > 0
+        old, new = (prev["hawl_start"] if prev else None), data.get("hawl_start")
+        if ok and old and new and old != new and (shift := _chain_shift(old, new)):
+            o = date.fromisoformat(old)
+            for pay in c.execute("SELECT id, year_start FROM zakat_payments WHERE person_id = ?", (pid,)).fetchall():
+                try:
+                    ys = date.fromisoformat(pay["year_start"])
+                except (TypeError, ValueError):
+                    continue
+                if (o - ys).days % LUNAR_YEAR_DAYS == 0:
+                    c.execute("UPDATE zakat_payments SET year_start = ? WHERE id = ?",
+                              ((ys + timedelta(days=shift)).isoformat(), pay["id"]))
+        return ok
 
 
 def delete_person(pid: int) -> bool:

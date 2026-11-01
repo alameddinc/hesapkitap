@@ -286,9 +286,13 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
 
 
 def transactions(month: str | None, include_deleted: bool = False, include_estimates: bool = False) -> list[dict]:
-    """Birleşik işlem listesi. TAHMİNİ satırlar (ekstresiz kart ödemesi, dökümü olmayan ayın maaşı) gerçek değildir:
-    varsayılan listede ve hiçbir gerçek toplamda (özet, bütçe, istatistik, kıyas, dönem özeti) yer almaz;
-    ayrı gösterilmek için include_estimates=True ya da estimates()."""
+    """Birleşik işlem listesi. TAHMİNİ satırlar (estimated: ekstresiz kart ödemesi) gerçek değildir: varsayılan listede
+    ve hiçbir gerçek toplamda (özet, bütçe, istatistik, kıyas, dönem özeti) yer almaz; ayrı gösterilmek için
+    include_estimates=True ya da estimates().
+    Değişmez I9'un bilinçli istisnası (kullanıcı kararı 30.10): dökümü olmayan GEÇMİŞ ayın maaş tahmini estimated
+    DEĞİLDİR (salary_estimate=True); gerçek gelire sayılır, aksi hâlde döküm yüklemeyen kullanıcıda geçmiş aylar
+    gelirsiz görünür. O ayın gerçek maaşı (döküm ya da elle kayıt) gelince tahmin kendiliğinden kalkar.
+    Test: tests/test_card_estimate.py::test_salary_estimated_for_months_without_statement."""
     rows = _all_rows(month, include_deleted)
     return rows if include_estimates else [r for r in rows if not r.get("estimated")]
 

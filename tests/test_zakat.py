@@ -386,3 +386,24 @@ def test_bank_at_uses_account_id_rename_safe(client, tmpdb):
     client.patch(f"/api/accounts/{aid}", json={"name": "Maaş Hesabım"})  # yeniden adlandır
     assert {d: zakat._bank_at(d) for d in before} == {d: (v[0], [n.replace("Örnek Banka", "Maaş Hesabım") for n in v[1]])
                                                       for d, v in before.items()}
+
+
+def test_correcting_hawl_start_keeps_payments_in_their_year(client, tmpdb):
+    """I8: yıl başlangıcı elle düzeltilince (3 gün) bu yılın ve geçmiş yılın ödemeleri kendi yıllarında kalır; tam bir
+    kameri yıl geri/ileri almak zinciri değiştirmez, ödemelere dokunulmaz."""
+    from app import zakat
+
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "TRY", "quantity": 1000000})
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2026-01-01"})
+    client.post(f"/api/zakat/people/{me}/payments", json={"amount": 5000})
+    zakat.add_payment(me, 700, "2025-12-20", None, year_start="2025-01-12")  # geçen yıl (2026-01-01 − 354 gün)
+    zakat.add_payment(me, 40, "2025-06-01", None, year_start="2025-03-03")   # zincir dışı: elle başka güne yazılmış
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2026-01-04"})
+    h = _person(client.get("/api/zakat").json(), "Ben")["hawl"]
+    assert h["start"] == "2026-01-04" and h["paid"] == 5000 and h["remaining"] == 20000  # önce: paid 0, kalan 25000
+    starts = sorted(p["year_start"] for p in zakat.people() if p["id"] == me for p in p["payments"])
+    assert starts == ["2025-01-15", "2025-03-03", "2026-01-04"]
+    client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2025-01-15"})  # tam bir yıl geri: kaydırma yok
+    assert sorted(p["year_start"] for p in zakat.people() if p["id"] == me for p in p["payments"]) == starts
+    assert zakat._chain_shift("2026-01-01", "2026-12-21") == 0 and zakat._chain_shift("2026-01-10", "2026-01-01") == -9

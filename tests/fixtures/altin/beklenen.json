@@ -1,0 +1,45 @@
+{
+  "_aciklama": "Altın fikstür seti: her belgenin beklenen toplamı ve son bakiyesi, belgenin kendisinden ELLE yazıldı (uydurma veri). tests/test_golden_fixtures.py okur.",
+  "hesap": [
+    {
+      "dosya": "hesap-eskiden-yeniye.csv",
+      "not": "eskiden yeniye, tek tutar sütunu, Türkçe sayı biçimi; aynı gün aynı tutarlı iki eş satır (F3.2)",
+      "satir": 8,
+      "giren": 60012.34,
+      "cikan": 20575.69,
+      "son_bakiye": 49436.65,
+      "son_bakiye_tarihi": "2026-09-15"
+    },
+    {
+      "dosya": "hesap-yeniden-eskiye.xlsx",
+      "not": "yeniden eskiye, Borç/Alacak sütunları; son günde iki hareket, çapa günün son hareketi (F3.3c)",
+      "satir": 7,
+      "giren": 3120.00,
+      "cikan": 2055.15,
+      "son_bakiye": 6064.85,
+      "son_bakiye_tarihi": "2026-10-08"
+    }
+  ],
+  "kart": [
+    {
+      "dosya": "../vakifbank_a.txt",
+      "not": "VakıfBank düzeni, ek kart bölümü, döviz ve taksitli satırlar",
+      "kesim": "2026-10-13",
+      "son_odeme": "2026-10-23",
+      "islem": 11,
+      "harcama_toplami": 17752.21,
+      "odeme": 20000.00,
+      "donem_borcu": 17752.21
+    },
+    {
+      "dosya": "../kuveytturk.txt",
+      "not": "Kuveyt Türk düzeni, taksit + vade farkı/BSMV/KKDF satırları",
+      "kesim": "2026-10-15",
+      "son_odeme": "2026-10-26",
+      "islem": 16,
+      "harcama_toplami": 7102.38,
+      "odeme": 10000.00,
+      "donem_borcu": 7102.38
+    }
+  ]
+}

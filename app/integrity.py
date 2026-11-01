@@ -19,6 +19,10 @@ Değişmezler (kod → anlamı):
   cift_aktarim        aynı hareket iki ayrı belgeden iki kez içe aktarılmış ya da aynı parmak izi iki kez (I11)
   cift_ekstre         aynı kartın aynı ayı için iki ekstre (I11)
 
+Denetlenmeyen, kodda korunan değişmez:
+  I9  tahmini satırlar (ekstresiz kart ödemesi) gerçek toplamlara girmez (finance.transactions). BİLİNÇLİ İSTİSNA
+      (30.10): dökümü olmayan geçmiş ayın maaş tahmini gerçek gelir sayılır (salary_estimate); ihlal değildir.
+
 Elle çalıştırma: python -m app.integrity [kullanıcı adı]   (ad yoksa ana defter; --all: herkes)
 """
 import hashlib

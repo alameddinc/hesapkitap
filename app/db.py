@@ -1152,17 +1152,22 @@ ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:
-    """Taksitli kredi kartı harcaması: (sıra, dönem, tutar). Tek çekimde tek parça. Kuruş farkı son taksitte."""
+    """Taksitli kredi kartı harcaması: (sıra, dönem, tutar). Tek çekimde tek parça.
+    Bankaların yöntemi (F1.3): her taksit tutar/n'nin kuruşa AŞAĞI yuvarlanmışı, artan kuruşlar İLK taksitte
+    (100/6 → 16,70 + 5×16,66; eskiden 5×16,67 + 16,65). Kuruş tam sayısıyla hesaplanır, toplam her zaman tutara eşit."""
     n = int(e.get("installments") or 1)
     if n <= 1 or e.get("payment") != "kredi_karti" or e.get("kind") != "gider":
         return [(0, e["month"], e["amount"])]
-    part = round(e["amount"] / n, 2)
+    total = money.kurus(e["amount"])
+    sign = -1 if total < 0 else 1
+    rest = abs(total) // n
+    first = abs(total) - rest * (n - 1)
     y, m = map(int, e["month"].split("-"))
     out = []
     for k in range(n):
         mm = (m - 1 + k) % 12 + 1
         yy = y + (m - 1 + k) // 12
-        out.append((k, f"{yy:04d}-{mm:02d}", part if k < n - 1 else round(e["amount"] - part * (n - 1), 2)))
+        out.append((k, f"{yy:04d}-{mm:02d}", sign * (first if k == 0 else rest) / 100))
     return out
 
 
