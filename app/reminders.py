@@ -168,11 +168,22 @@ def _uploaded_dates(c, acc: dict) -> list[date]:
 
 
 def _dokum(now: date) -> list[dict]:
-    """Takvim ayı kapanınca: döküm kullanan her banka hesabı için o ayın dökümü yoksa ayrı hatırlatma."""
-    m_end = now.replace(day=1) - timedelta(days=1)
-    m_start = m_end.replace(day=1)
-    ay = AY[m_end.month - 1]
-    since = (now - m_end).days  # ayın 1'i = 1
+    """Dönem kapanınca: döküm kullanan her banka hesabı için o dönemin dökümü yoksa ayrı hatırlatma. Takvim ayı
+    kullananda ay sonu; ay dönümü ayarlıysa (ör. 17'si) dönem sonu (16'sı): 'Kasım dönemi 17 Eki – 16 Kas' görünen
+    kullanıcıya 1 Kasım'da 'Ekim dökümü' sorulmaz."""
+    from app.finance import add_months, period_bounds
+
+    cycle = db.cycle_start_day() > 1
+    if cycle:
+        period = add_months(db.period_of(now), -1)
+        m_start, m_end = period_bounds(period)
+        ay = f"{AY[int(period[5:]) - 1]} dönemi"
+        span = f" ({m_start.day} {AY[m_start.month - 1][:3]} – {m_end.day} {AY[m_end.month - 1][:3]})"
+    else:
+        m_end = now.replace(day=1) - timedelta(days=1)
+        m_start = m_end.replace(day=1)
+        ay, span = AY[m_end.month - 1], ""
+    since = (now - m_end).days  # dönem bitiminin ertesi günü = 1
     out = []
     with db.connect() as c:
         for a in db.list_accounts():
@@ -194,12 +205,14 @@ def _dokum(now: date) -> list[dict]:
                 continue
             if lo and date.fromisoformat(lo) > m_end:
                 continue
-            out.append({"id": f"dokum:{a['id']}:{_month(m_end)}", "kind": "dokum",
-                        "severity": "warn" if now.day > DOKUM_WARN_DAY else "info",
+            kapandi = "Dönem kapandı" if cycle else "Ay kapandı"
+            out.append({"id": f"dokum:{a['id']}:{period if cycle else _month(m_end)}", "kind": "dokum",
+                        "severity": "warn" if since > DOKUM_WARN_DAY else "info",
                         "title": f"{a['name']} · {ay} dökümü",
-                        "text": f"Ay kapandı. {ay} hesap dökümünü yükle; maaş ve havaleler otomatik eşleşsin.",
+                        "text": f"{kapandi}. {ay}{span} hesap dökümünü yükle; maaş ve havaleler otomatik eşleşsin.",
                         "cta": "Dökümü yükle", "route": "ekstreler", "action": "upload", "due": m_end.isoformat(),
-                        "tag": "Ay kapandı" if since <= DOKUM_WARN_DAY else _ago(since), "period": _month(m_end),
+                        "tag": kapandi if since <= DOKUM_WARN_DAY else _ago(since),
+                        "period": period if cycle else _month(m_end),
                         "bank": a["name"], "account_id": a["id"]})
     return out
 
