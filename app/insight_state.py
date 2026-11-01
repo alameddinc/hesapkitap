@@ -62,3 +62,10 @@ def visible(items: list[dict]) -> list[dict]:
 def hidden_count(items: list[dict]) -> int:
     st = _state()
     return sum(1 for i in items if i.get("key") and i["key"] in st)
+
+
+def hidden(items: list[dict]) -> list[dict]:
+    """Kişinin bu dönemde gizlediği uyarılar ("N gizli uyarı · Göster"): anahtar, başlık, düzey, metin."""
+    st = _state()
+    return [{"key": i["key"], "title": i.get("title", ""), "level": i.get("level", "bilgi"), "detail": i.get("detail", "")}
+            for i in items if i.get("key") and i["key"] in st]

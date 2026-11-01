@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { api, type Insight, type Row } from "../api";
 import BarList from "../components/BarList";
 import { BudgetForm, BudgetList } from "../components/Budgets";
-import Insights from "../components/Insights";
+import Insights, { HiddenInsights } from "../components/Insights";
 import Kpi from "../components/Kpi";
 import NetWorth, { ZakatDue } from "../components/NetWorth";
 import Onboarding from "../components/Onboarding";
@@ -221,6 +221,7 @@ export default function Dashboard() {
               <ChevronDown size={16} className={cx("transition-transform", allInsights && "rotate-180")} />
             </button>
           )}
+          <HiddenInsights count={s.insights_hidden ?? 0} month={month} />
         </section>);
       case "net": return <NetWorth compact month={month} />;
       case "zekat": return <ZakatDue />;

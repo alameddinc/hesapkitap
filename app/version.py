@@ -40,6 +40,7 @@ CAPABILITIES = (
     "integrity_details",      # dogruluk details[].items/hint, GET /api/integrity, POST /api/integrity/run
     "bills_by_bill_month",    # /api/bills/summary months[] faturanın ait olduğu aya göre (paid_date / bill_month)
     "universal_links",        # davet link'i https://<adres>/davet/<kod> (+ web_link eski biçim)
+    "insights_hidden",        # GET /api/insights/hidden: gizlenen Özet uyarıları (Geri getir: POST /api/insights/restore)
 )
 
 

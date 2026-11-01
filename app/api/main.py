@@ -1519,6 +1519,15 @@ class InsightKeyIn(BaseModel):
     key: str = Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x1f]+$")
 
 
+@app.get("/api/insights/hidden")
+def insights_hidden(month: str | None = None):
+    """Bu dönemin gizlenen uyarıları: [{key, title, level, detail}] (Özet'te "N gizli uyarı · Göster" → Geri getir)."""
+    _history_gate(month)
+    from app import insight_state
+
+    return insight_state.hidden(finance.summary(month or finance.current_period())["insights"])
+
+
 @app.post("/api/insights/dismiss")
 def insights_dismiss(body: InsightKeyIn):
     """Özet uyarısını kişi başına gizle (summary.insights[].key). Koşul değişince anahtar değişir, uyarı yeniden çıkar."""

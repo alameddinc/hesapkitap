@@ -232,7 +232,12 @@ export interface Summary {
   statements: Statement[];
   trend: { month: string; income: number; expense: number; net: number; estimated_expense?: number; estimated_income?: number }[];
   insights: Insight[];
+  /** kişinin bu dönemde gizlediği uyarı sayısı (listesi: api.hiddenInsights) */
+  insights_hidden?: number;
 }
+
+/** GET /api/insights/hidden: gizlenen uyarı (Geri getir: restoreInsight) */
+export interface HiddenInsight { key: string; title: string; level: Insight["level"]; detail?: string }
 
 export type PlanLineType = "kart_gercek" | "taksit" | "abonelik" | "degisken" | "sabit" | "tek_seferlik" | "fatura" | "tasarruf_notu";
 
@@ -475,6 +480,7 @@ export const api = {
   /** Özet uyarısını kişi başına gizle / gizlemeyi geri al (summary.insights[].key) */
   dismissInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/dismiss", { key }),
   restoreInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/restore", { key }),
+  hiddenInsights: (month?: string) => req<HiddenInsight[]>("GET", `/api/insights/hidden${q({ month })}`),
   transactions: (month?: string, includeDeleted = false, includeEstimates = false) =>
     req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted, include_estimates: includeEstimates || undefined })}`),
   /** Sayfalı (sunucu b185e16): yeniden eskiye limit kadar satır; before = önceki sayfanın next'i; totals=1 → kümenin

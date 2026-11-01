@@ -70,6 +70,19 @@ def test_budget_key_stable_within_month(client):
     assert not any("Market & Gıda bütçesi" in i["title"] for i in _insights(client))
 
 
+def test_hidden_list_and_restore(client):
+    _entry(client, "Örnek Market", 120, "Kategorisiz")
+    assert client.get("/api/insights/hidden").json() == []
+    unc = _by_title(client, "1 işlem kategorisiz")
+    client.post("/api/insights/dismiss", json={"key": unc["key"]})
+    hid = client.get("/api/insights/hidden").json()
+    assert hid == [{"key": unc["key"], "title": unc["title"], "level": unc["level"], "detail": unc["detail"]}]
+    assert client.get("/api/summary").json()["insights_hidden"] == len(hid)
+    client.post("/api/insights/restore", json={"key": unc["key"]})
+    assert client.get("/api/insights/hidden").json() == []
+    assert "insights_hidden" in client.get("/api/meta").json()["capabilities"]
+
+
 def test_bad_key_rejected(client):
     assert client.post("/api/insights/dismiss", json={"key": ""}).status_code == 422
     assert client.post("/api/insights/dismiss", json={"key": "x" * 201}).status_code == 422
