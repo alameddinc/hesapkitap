@@ -4,7 +4,6 @@ Böylece hızlı kurulumda hiç .env gerekmez: anahtarlar Ayarlar sayfasından g
 Değerler API'den asla tam haliyle geri dönmez (sadece son 4 karakter).
 """
 import os
-import secrets
 from contextvars import ContextVar
 
 from app import db
@@ -135,14 +134,3 @@ def migrate_globals() -> None:
             old = db.get_setting(f"cfg:{name}")
             if old and not system.get(f"cfg:{name}"):
                 system.put(f"cfg:{name}", old)
-
-
-def secret_key() -> str:
-    """Sunucu geneli gizli anahtar (sistem veritabanında): env yoksa ilk açılışta üretilip saklanır."""
-    from app import system
-
-    v = os.environ.get("SECRET_KEY") or system.get("secret_key")
-    if not v:
-        v = secrets.token_hex(32)
-        system.put("secret_key", v)
-    return v

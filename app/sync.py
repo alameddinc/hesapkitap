@@ -33,7 +33,6 @@ NEAR_PCT = 0.02
 RULE_HITS = 2
 ASK_LIMIT = 20
 GENERIC_CATEGORIES = {None, "", "Diğer", "Kategorisiz", "Diğer Gelir"}
-AY = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
 
 
 class SyncError(ValueError):
@@ -56,11 +55,6 @@ def _tl(x: float) -> str:
     from app import money
 
     return money.tl(abs(x), trim=True)
-
-
-def _dm(d: str) -> str:
-    x = date.fromisoformat(d[:10])
-    return f"{x.day} {AY[x.month - 1]}"
 
 
 def _user_id() -> int | None:

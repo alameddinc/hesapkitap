@@ -3143,12 +3143,6 @@ def debt_questions() -> list[dict]:
     return out
 
 
-def settle_debt_by_transfer(person: str | None, kind: str, amount: float, on: str, entry_id: int | None) -> dict | None:
-    """Geriye uyumluluk: hareket bir borca bağlandıysa o borç."""
-    r = link_debt_movement(person, kind, amount, on, entry_id)
-    return r[1] if r else None
-
-
 def _link_existing_given(debt_id: int) -> None:
     """Borç sonradan yazıldıysa: o gün civarı o kişiye/kişiden aynı tutarlı hareket zaten varsa verilişe bağla."""
     from datetime import date as _date, timedelta
