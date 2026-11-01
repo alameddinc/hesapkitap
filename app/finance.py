@@ -451,6 +451,7 @@ def reference_month(today: date | None = None) -> str:
     return max(periods) if periods else add_months(ym(today or date.today()), -1)
 
 
+@_memo  # her ekran /api/meta'yı çağırıyor: tüm kart işlemleri ve kayıtlar her istekte okunmasın
 def available_months() -> list[str]:
     ms = {t["period"] for t in db.card_transactions()} | {e["month"] for e in db.list_entries()}
     ms.add(current_period())
@@ -592,13 +593,20 @@ def budgets_totals(status: list[dict]) -> dict:
             "count": len(status)}
 
 
+@_memo
+def category_spend(month: str) -> list[dict]:
+    """Dönemin kategori bazında gideri: summary(month)["by_category"] ile aynı süzgeç ve aynı toplam, ama özetin
+    geri kalanı (tüm geçmiş, trend, içgörüler) hesaplanmadan. Bütçe ekranı ve öneriler bunu kullanır."""
+    live = [r for r in transactions(month) if not r.get("pending") and not r.get("skipped") and not r.get("linked")]
+    return _group([r for r in live if _spends(r)], "category")
+
+
 def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
     limits = db.list_budgets()
     if not limits:
         return []
     if by_category is None:
-        live = [r for r in transactions(month) if not r.get("pending") and not r.get("skipped") and not r.get("linked")]
-        by_category = _group([r for r in live if _spends(r)], "category")
+        by_category = category_spend(month)
     spent = {g["name"]: g["amount"] for g in by_category}
     out = []
     for cat, limit in limits.items():
@@ -924,6 +932,7 @@ def _json_setting(key: str, default):
     return json.loads(v) if v else default
 
 
+@_memo  # yalnız defter verisine ve güne bağlı; Planlama, Özet (summary/insights) ve hatırlatmalar aynı sonucu paylaşır
 def plan(months: int = 6, today: date | None = None) -> dict:
     today = today or date.today()
     start = current_period(today)
@@ -937,6 +946,14 @@ def plan(months: int = 6, today: date | None = None) -> dict:
     bills = db.list_bills()
     goals = db.list_goals(active_only=True)
     overrides = db.recurring_overrides()
+    # ay döngüsünde her ay tüm kayıtları taramamak için bir kez: sabit kalemin o ayki kaydı (ilk eşleşen, eskisiyle
+    # aynı) ve tek seferlik kayıtların taksit parçaları (kayıt sırası korunur → satır sırası değişmez)
+    rec_entry: dict[tuple, dict] = {}
+    for e in entries:
+        if e["recurring_id"]:
+            rec_entry.setdefault((e["recurring_id"], e["month"]), e)
+    one_off = [(e, db.installment_parts(e)) for e in entries
+               if not (e["recurring_id"] or e["skipped"] or e["linked_txn_id"] or e.get("debt_id"))]
 
     result = []
     cumulative = cumulative_est = 0.0
@@ -988,7 +1005,7 @@ def plan(months: int = 6, today: date | None = None) -> dict:
         for r in recurring:
             if not is_active(r, m):
                 continue
-            e = next((e for e in entries if e["recurring_id"] == r["id"] and e["month"] == m), None)
+            e = rec_entry.get((r["id"], m))
             if e and e["skipped"]:
                 continue
             planned = db.planned_amount(r, m, overrides)
@@ -996,10 +1013,8 @@ def plan(months: int = 6, today: date | None = None) -> dict:
                           "description": r["description"], "recurring_id": r["id"], "confirmed": bool(e),
                           "custom": not e and planned != r["amount"], "template_amount": r["amount"], "month": m})
         # --- tek seferlik elle girilenler
-        for e in entries:
-            if e["recurring_id"] or e["skipped"] or e["linked_txn_id"] or e.get("debt_id"):
-                continue
-            for k, pm, amt in db.installment_parts(e):  # taksitliyse her taksit kendi ayında
+        for e, parts in one_off:
+            for k, pm, amt in parts:  # taksitliyse her taksit kendi ayında
                 if pm == m:
                     n = int(e.get("installments") or 1)
                     lines.append({"type": "tek_seferlik", "kind": e["kind"], "amount": amt, "entry_id": e["id"],

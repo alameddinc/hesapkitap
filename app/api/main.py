@@ -174,9 +174,9 @@ def is_local_request(request: Request) -> bool:
                                                              request.headers))
 
 
-from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
+from app.compress import GZip  # noqa: E402
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)  # JS ~880 KB → ~250 KB; API yanıtları da küçülür
+app.add_middleware(GZip)  # JS ~880 KB → ~250 KB; API yanıtları da küçülür. <1 KB, resim/PDF/zip/yedek sıkıştırılmaz
 
 # Mobil uygulama (Capacitor): arayüz telefonun içinde (capacitor://localhost, https://localhost), API bu sunucuda.
 # Çerez yok: oturum anahtarı X-Session-Token başlığıyla gelir, Authorization: Bearer ile geri gönderilir.
@@ -4463,7 +4463,7 @@ class BudgetIn(BaseModel):
 def list_budgets(month: str | None = None):
     m = month or finance.current_period()
     # öneri için son ekstre ayının kategori harcaması
-    last = {g["name"]: g["amount"] for g in finance.summary(finance.reference_month())["by_category"]}
+    last = {g["name"]: g["amount"] for g in finance.category_spend(finance.reference_month())}  # tam özet gerekmez
     status = finance.budgets(m)
     return {"limits": db.list_budgets(), "status": status, "last_month": last, "totals": finance.budgets_totals(status)}
 

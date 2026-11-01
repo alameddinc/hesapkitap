@@ -18,6 +18,7 @@ o da yoksa kullanıcının girdiği gram altın fiyatı kullanılır.
 """
 import json
 import logging
+import sqlite3
 import threading
 import time
 from datetime import date, timedelta
@@ -397,9 +398,13 @@ def holy(today: date | None = None) -> dict:
         days.append({"key": key, "name": name, "date": when.isoformat(), "days_left": (when - today).days,
                      "hijri": to_hijri(when)})
     amount = float(db.get_setting("zakat:fitre_amount") or 0)
+    # yalnız okuma (Özet her açılışta buradan geçiyor): zekât hiç kullanılmadıysa tablo/varsayılan "Ben" kurulmaz;
+    # kişi yoksa da 1 sayılır, yani _init'in ekleyeceği "Ben" ile aynı sonuç
     with db.connect() as c:
-        _init(c)
-        family = c.execute("SELECT COUNT(*) FROM zakat_people").fetchone()[0]
+        try:
+            family = c.execute("SELECT COUNT(*) FROM zakat_people").fetchone()[0]
+        except sqlite3.OperationalError:  # tablo yok
+            family = 0
     people = int(db.get_setting("zakat:fitre_people") or 0) or max(1, family)
     return {"days": days, "in_ramadan": hijri_parts(today)[1] == 9,
             "fitre": {"amount": amount, "people": people, "total": round(amount * people, 2)}}
@@ -655,7 +660,7 @@ def account_balances_at(day: date) -> dict[int, float | None]:
             dates = [r[0] for r in c.execute("SELECT entry_date FROM entries WHERE account_id = ? AND skipped = 0", (a["id"],))]
             dates += [x["date"] for x in extra]
             if d >= a["as_of"]:
-                out[a["id"]] = db._account_balance(c, a, until=d)
+                out[a["id"]] = db._account_balance(c, a, until=d, debts=debts)  # vazgeçilenler zaten sayılmıyor
                 continue
             if not dates or min(dates) > d:
                 out[a["id"]] = None
@@ -965,9 +970,15 @@ def upcoming_checks(today: date | None = None, window: int = 7) -> list[dict]:
     """Özet uyarısı: zekât günü ya da ek kontrol günü yaklaşan / yeni geçmiş kişiler (fiyat sadece gerekirse çekilir)."""
     today = today or date.today()
     lo, hi = (today - timedelta(days=3)).isoformat(), (today + timedelta(days=window)).isoformat()
+    q = "SELECT hawl_start, check_date FROM zakat_people WHERE is_minor = 0"
     with db.connect() as c:
-        _init(c)
-        rows = c.execute("SELECT hawl_start, check_date FROM zakat_people WHERE is_minor = 0").fetchall()
+        try:  # Özet her açılışta buradan geçiyor: önce yalnız oku (zekât hiç kullanılmadıysa yazma yok)
+            rows = c.execute(q).fetchall()
+        except sqlite3.OperationalError:
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE name = 'zakat_people'").fetchone():
+                return []  # zekât hiç açılmadı: kişi yok
+            _init(c)  # eski şema (yeni kolon yok): kurup yeniden oku
+            rows = c.execute(q).fetchall()
     if not any((r["check_date"] and lo <= r["check_date"] <= hi) or
                (r["hawl_start"] and lo <= (date.fromisoformat(r["hawl_start"]) + timedelta(days=LUNAR_YEAR_DAYS)).isoformat() <= hi)
                for r in rows):

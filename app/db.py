@@ -628,6 +628,7 @@ def init_db() -> None:
         for sql in INDEXES:
             c.execute(sql)
         _migrate_subscription_state(c)
+        _targets_to_jars(c)  # tek seferlik taşıma açılışta: ilk Özet isteği yazıp okuma önbelleğini düşürmesin
         c.execute("UPDATE statements SET source = 'excel' WHERE source IS NULL AND (lower(filename) LIKE '%.xlsx' "
                   "OR lower(filename) LIKE '%.xls' OR lower(filename) LIKE '%.csv')")  # eski kart Excel'i ekstreleri
         _backfill_statements(c)
@@ -3515,7 +3516,7 @@ def ensure_account(name: str, kind: str = "banka") -> int:
                          (name, kind)).lastrowid
 
 
-def _account_balance(c, a: dict, until: str | None = None) -> float | None:
+def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | None = None) -> float | None:
     """Çapa + çapadan sonraki hareketler (elle girilen, e-posta bildirimi, borç hareketleri). Bakiyesi hiç girilmemiş: None.
     until (YYYY-MM-DD): o günün sonundaki bakiye (çapa tarihinden önce olamaz; geçmiş için zakat.account_balances_at)."""
     if not a["as_of"]:
@@ -3539,7 +3540,7 @@ def _account_balance(c, a: dict, until: str | None = None) -> float | None:
                           AND transfer_date <= ?""",
                        (a["id"], a["as_of"], hi)).fetchone()[0]
     debt = 0.0
-    for d in debt_rows():
+    for d in debt_rows() if debts is None else debts:  # debts: çok hesaplı çağıran bir kez hesaplayıp verir
         if d.get("account_id") == a["id"] and a["as_of"] < d["date"] <= hi and d["step"] != "vazgecildi":
             debt += d["flow"] * d["amount"]
     return round(a["balance"] + flows + debt, 2)
@@ -3549,8 +3550,9 @@ def list_accounts() -> list[dict]:
     """Banka / nakit / diğer hesaplar (ön ödemeli kartlar ayrı: list_wallets). current: bugünkü tahmini bakiye."""
     with connect() as c:
         accs = rows(c.execute("SELECT * FROM accounts WHERE kind <> 'kart' ORDER BY kind, name"))
+        debts = debt_rows() if accs else []  # hesap başına yeniden hesaplanmasın (borç listesi + ödemeler)
         for a in accs:
-            a["current"] = _account_balance(c, a)
+            a["current"] = _account_balance(c, a, debts=debts)
     from app import book
 
     return book.filter_accounts(accs)
@@ -3779,7 +3781,10 @@ def _targets_to_jars(c) -> None:
     Eski tablo yerinde kalır (geri dönüş için)."""
     if c.execute("SELECT 1 FROM settings WHERE key = 'targets_migrated'").fetchone():
         return
-    for t in rows(c.execute("SELECT * FROM saving_targets ORDER BY id")):
+    targets = rows(c.execute("SELECT * FROM saving_targets ORDER BY id"))
+    if not targets:  # taşınacak yok: yazma yok (her okuma isteği önbelleği düşürmesin), sonra eklenen yine taşınır
+        return
+    for t in targets:
         jid = c.execute("INSERT INTO jars (name, goal, deadline, created_at) VALUES (?, ?, ?, ?)",
                         (t["name"], t["amount"], t["deadline"], t["created_at"])).lastrowid
         if t["already"]:

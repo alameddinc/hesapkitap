@@ -114,11 +114,31 @@ def password_source(u: dict | None = None) -> str:
     return "app" if u else "none"
 
 
+# "Kurulum tamam" süreç içinde sistem veritabanı dosyası başına hatırlanır: her API isteğinde sistem şeması, göçler
+# ve eski ayar taşıması yeniden çalışmasın (istek başı ~0,3 ms). Yönetici hesabı silinemediği için bir kez kullanıcı
+# olduktan sonra kurulum yeniden gerekmez; dosya değişirse (inode) yeniden bakılır.
+_setup_done: set[tuple] = set()
+
+
+def _system_file() -> tuple | None:
+    try:
+        return os.path.abspath(system.SYSTEM_DB), os.stat(system.SYSTEM_DB).st_ino
+    except OSError:
+        return None
+
+
 def setup_required() -> bool:
     if disabled():
         return False
+    key = _system_file()
+    if key and key in _setup_done:
+        return False
     ensure_admin()
-    return not system.has_users()
+    if system.has_users():
+        if key := key or _system_file():
+            _setup_done.add(key)
+        return False
+    return True
 
 
 def setup_code() -> str:
