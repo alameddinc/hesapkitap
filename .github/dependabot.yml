@@ -1,0 +1,12 @@
+# GitHub Actions eylemleri commit SHA ile sabit (D11); Dependabot yeni sürüm çıkınca SHA'yı güncelleyen PR açar.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
