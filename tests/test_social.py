@@ -127,3 +127,56 @@ def test_apple_login_same_rules(google, monkeypatch):
     r = c.post("/api/auth/apple", json={"id_token": t(), "consent": ["kosullar", "acik_riza"]})
     assert r.status_code == 200 and r.json()["created"] is True
     assert TestClient(app).post("/api/auth/apple", json={"id_token": google()}).status_code == 401  # Google belgesi geçmez
+
+
+def test_google_aud_must_be_ours_azp_alone_is_not_enough(google):
+    """D1: aud başka bir uygulamanınsa azp bizim olsa bile belge reddedilir."""
+    from app.api.main import app
+
+    r = TestClient(app).post("/api/auth/google", json={"id_token": google(aud="baska.apps.googleusercontent.com",
+                                                                          azp=WEB)})
+    assert r.status_code == 401
+    # Android: aud web client ID'si, azp Android'inki (listede olmasa da) → geçer
+    r = TestClient(app).post("/api/auth/google", json={"id_token": google(azp="android-789.apps.googleusercontent.com"),
+                                                       "consent": ["kosullar", "acik_riza"]})
+    assert r.status_code == 200
+
+
+def test_social_nonce_is_single_use_and_survives_consent_retry(google):
+    """D1: sunucunun verdiği nonce belgede olmalı; onay sorulup aynı belgeyle yeniden denenince geçer, oturum açıldıktan
+    sonra aynı belge (tekrar oynatma) geçmez. Apple tarzı SHA-256 özetli nonce da kabul."""
+    import hashlib
+
+    from app.api.main import app
+
+    c = TestClient(app)
+    n = c.post("/api/auth/social/nonce").json()["nonce"]
+    t = google(nonce=n)
+    assert c.post("/api/auth/google", json={"id_token": t, "nonce": n}).status_code == 409  # önce onay
+    assert c.post("/api/auth/google", json={"id_token": t, "nonce": n,
+                                            "consent": ["kosullar", "acik_riza"]}).status_code == 200
+    assert TestClient(app).post("/api/auth/google", json={"id_token": t, "nonce": n}).status_code == 401  # tekrar
+    # başka bir nonce'la alınmış belge bu nonce'la geçmez; uydurma nonce da geçmez
+    n2 = c.post("/api/auth/social/nonce").json()["nonce"]
+    assert TestClient(app).post("/api/auth/google", json={"id_token": google(nonce="baska"), "nonce": n2}).status_code == 401
+    assert TestClient(app).post("/api/auth/google", json={"id_token": google(nonce="uydurma"),
+                                                          "nonce": "uydurma"}).status_code == 401
+    hashed = google(nonce=hashlib.sha256(n2.encode()).hexdigest())
+    assert TestClient(app).post("/api/auth/google", json={"id_token": hashed, "nonce": n2}).status_code == 200
+
+
+def test_social_nonce_can_be_required(google, monkeypatch):
+    from app import social
+    from app.api.main import app
+
+    from app import auth
+
+    auth.create_user("mehmet@gmail.com", "mehmet-sifre-12345")
+    t = google(email="mehmet@gmail.com")
+    monkeypatch.setenv("HESAPKITAP_SOCIAL_NONCE", "required")
+    assert TestClient(app).post("/api/auth/google", json={"id_token": t}).status_code == 401  # eski istemci
+    n = social.issue_nonce()
+    r = TestClient(app).post("/api/auth/google", json={"id_token": google(email="mehmet@gmail.com", nonce=n), "nonce": n})
+    assert r.status_code == 200
+    monkeypatch.delenv("HESAPKITAP_SOCIAL_NONCE")
+    assert TestClient(app).post("/api/auth/google", json={"id_token": t}).status_code == 200  # varsayılan: geçiş dönemi

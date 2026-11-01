@@ -131,13 +131,29 @@ def _check_db(path: str) -> dict:
         c = sqlite3.connect(path)
         ok = c.execute("PRAGMA integrity_check").fetchone()[0]
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        # D7: HesapKitap şeması tetikleyici, görünüm ya da sanal tablo kullanmaz; elle hazırlanmış yedekte bunlar
+        # uygulamanın her yazmasında/okumasında gizli iş çalıştırabilir (kayıt değiştirme, kota sayacını bozma)
+        foreign = c.execute("SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view') "
+                            "OR (type = 'table' AND sql LIKE 'CREATE VIRTUAL%')").fetchall()
         counts = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("entries", "statements") if t in tables}
         c.close()
     except sqlite3.DatabaseError as e:
         raise RestoreError("Dosya okunamadı: HesapKitap yedeği değil ya da bozuk") from e
     if ok != "ok" or not {"entries", "statements", "settings"} <= tables:
         raise RestoreError("Bu dosya bir HesapKitap yedeği değil ya da bozuk")
+    if foreign:
+        raise RestoreError("Bu yedekte HesapKitap'ın kullanmadığı veritabanı nesneleri var (tetikleyici/görünüm); "
+                           "güvenlik için geri yüklenmedi")
     return counts
+
+
+def _file_index() -> list[tuple]:
+    """Açık defterin dosya dizini (stored_files): geri yüklemeden önce okunur, sonra aynen geri yazılır."""
+    try:
+        with db.connect() as c:
+            return [tuple(r) for r in c.execute("SELECT kind, name, size, legacy, created_at FROM stored_files")]
+    except sqlite3.OperationalError:  # çok eski defter: tablo yok
+        return []
 
 
 def restore(data: bytes, filename: str = "", passphrase: str | None = None) -> dict:
@@ -181,6 +197,7 @@ def restore(data: bytes, filename: str = "", passphrase: str | None = None) -> d
         counts = _check_db(path)
         before = os.path.join(backup_dir(), f"ekstre-{datetime.now():%Y%m%d-%H%M%S}-geri-yukleme-oncesi.db")
         _snapshot(before)
+        index = _file_index()
         src, dst = sqlite3.connect(path), sqlite3.connect(db.db_path())
         try:
             src.backup(dst)  # canlı bağlantılar açıkken de tutarlı kopya
@@ -188,6 +205,13 @@ def restore(data: bytes, filename: str = "", passphrase: str | None = None) -> d
             dst.close()
             src.close()
     db.init_db()  # eski sürümden gelen yedek: göçler uygulanır
+    # D7: dosya dizini yedekten değil, deponun gerçek durumundan gelir. Yedekteki stored_files satırları (boyutu 0 ya da
+    # eksi yazılmış sahte satırlar) alan sınırını aşmaya yarardı; depoda zaten olan dosyalar önceki dizinle aynen
+    # kalır, yedekteki dosyalar aşağıda store_file ile (sınıra tabi) yeniden sayılır.
+    with db.connect() as c:
+        c.execute("DELETE FROM stored_files")
+        c.executemany("INSERT OR IGNORE INTO stored_files (kind, name, size, legacy, created_at) VALUES (?, ?, ?, ?, ?)",
+                      index)
     saved = 0
     for n, blob in files:
         top, _, name = n.partition("/")

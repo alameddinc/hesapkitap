@@ -269,10 +269,64 @@ def purge_due(now: datetime | None = None) -> list[int]:
     return done
 
 
-def admin_deleted(u: dict, now: datetime | None = None) -> None:
-    """Yönetici panelinden silme (veri users/_silinen'e taşınır, ayrı saklama kuralı): yalnız anonim kayıt."""
+def admin_deleted(u: dict, now: datetime | None = None, reason: str = "admin") -> None:
+    """Yönetici panelinden silme (veri users/_silinen'e taşınır, ayrı saklama kuralı): yalnız anonim kayıt.
+    reason "member_removed": ortak defter sahibi üyeyi çıkardı (aynı akış: hesap silinir, veri _silinen'e)."""
     now = now or _now()
-    _record(u, "admin", now, None, purged=False)
+    _record(u, reason, now, None, purged=False)
     with system.connect() as c:
-        c.execute("UPDATE deleted_accounts SET purged_at = ?, reason = COALESCE(reason, 'admin') WHERE user_id = ?",
-                  (_iso(now), u["id"]))
+        c.execute("UPDATE deleted_accounts SET purged_at = ?, reason = COALESCE(reason, ?) WHERE user_id = ?",
+                  (_iso(now), reason, u["id"]))
+
+
+# ---------------------------------------------------------------- yedekten geri dönüşte silinenleri yeniden uygula
+
+def reapply(newer_system_db: str, apply: bool = False, now: datetime | None = None) -> dict:
+    """D12: sunucu (system.db + kullanıcı klasörleri) eski bir yedekten geri yüklenirse, yedekten SONRA silinen
+    hesaplar dirilir. Geri yüklemeden önce kenara alınan güncel system.db'deki silme kayıtları (deleted_accounts)
+    geri yüklenmiş sisteme yeniden uygulanır:
+    - kalıcı silinmiş (purged_at dolu) → hesap ve verisi yine kalıcı silinir,
+    - bekleyen (yumuşak silme) → hesap yine kapanır, aynı bekleme süresiyle; oturumları düşer.
+    apply=False: yalnız ne yapılacağını döner (kuru çalıştırma)."""
+    import sqlite3
+
+    src = sqlite3.connect(f"file:{newer_system_db}?mode=ro", uri=True)
+    src.row_factory = sqlite3.Row
+    try:
+        rows = [dict(r) for r in src.execute("SELECT * FROM deleted_accounts ORDER BY deleted_at")]
+    finally:
+        src.close()
+    out: dict = {"purge": [], "pending": [], "already": []}
+    for r in rows:
+        u = system.user(r["user_id"])
+        if not u or u["role"] == "admin":
+            out["already"].append(r["user_id"])
+            continue
+        kind = "purge" if r.get("purged_at") else "pending"
+        if kind == "pending" and u.get("deleted_at"):
+            out["already"].append(r["user_id"])
+            continue
+        out[kind].append(r["user_id"])
+        if not apply:
+            continue
+        cols = [k for k in r if k != "user_id"]
+        with system.connect() as c:  # kaydı geri yüklenmiş sisteme taşı (fatura/itiraz takibi kaybolmasın)
+            c.execute(f"INSERT OR REPLACE INTO deleted_accounts (user_id, {', '.join(cols)}) "
+                      f"VALUES (?, {', '.join('?' for _ in cols)})", (r["user_id"], *[r[k] for k in cols]))
+        if kind == "purge":
+            purge(u, now)
+        else:
+            system.update_user(u["id"], deleted_at=r["deleted_at"], delete_after=r["delete_after"])
+            system.bump_session(u["id"])
+    log.info("silme kayıtları yeniden uygulandı (apply=%s): %d kalıcı, %d bekleyen", apply, len(out["purge"]),
+             len(out["pending"]))
+    return out
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) >= 3 and sys.argv[1] == "reapply":
+        print(json.dumps(reapply(sys.argv[2], apply="--apply" in sys.argv[3:]), ensure_ascii=False))
+    else:
+        print("Kullanım: python -m app.deletion reapply <geri yüklemeden önceki system.db> [--apply]")

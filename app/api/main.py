@@ -199,7 +199,12 @@ async def _demo_request(request: Request, call_next):
     if demo_mode.closed(path):
         return JSONResponse({"detail": "Demoda kapalı — kendi sunucuna kurunca açılır"}, status_code=403)
     # mobil uygulama çerez tutmaz: demo kopyasının kimliği X-Demo-Sid başlığıyla gider gelir
-    sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE) or request.headers.get("x-demo-sid"))
+    try:
+        sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE) or request.headers.get("x-demo-sid"),
+                                     client_ip(request))
+    except demo_mode.TooManySandboxes:
+        return JSONResponse({"detail": "Bu bağlantıdan çok fazla demo oturumu açıldı; biraz sonra yeniden dene."},
+                            status_code=429, headers={"Retry-After": "600"})
     db_file, user = demo_mode.space(sid)
     with db.use_space(db_file, user):  # okuma sırası ve Idempotency-Key (kapsam: demo kopyası + anahtar) burada da
         response = await _run(request, call_next, db_file, path)
@@ -332,11 +337,14 @@ async def require_login(request: Request, call_next):
     """Tek ara katman (oturum, defter, okuma sırası, Idempotency-Key). İşlenmemiş hata burada Türkçe 500'e çevrilir:
     yoksa Starlette'in en dıştaki hata katmanı CORS'un DIŞINDA yanıt üretir, mobil uygulama başlıksız yanıtı CORS
     hatası ("Sunucuya ulaşılamadı") sanar. Bütün erken dönüşler (401/402/403/404/409/413/422/429/503) zaten CORS içinde."""
+    mark = config.mark_request()  # oturumsuz istekte config.is_admin() False (D3)
     try:
         return await _require_login(request, call_next)
     except Exception:  # noqa: BLE001
         logging.getLogger("hesapkitap.api").exception("işlenmemiş hata: %s %s", request.method, request.url.path)
         return JSONResponse({"detail": errors.GENERIC[500]}, status_code=500)
+    finally:
+        config._in_request.reset(mark)
 
 
 # bu önekli uçlarda başarılı yazmadan sonra o defterde doğruluk denetimi yeniden çalışır (app/integrity.after_write)
@@ -395,7 +403,10 @@ async def _require_login(request: Request, call_next):
     if demo_mode.enabled() and request.method == "GET" and "." not in path.rsplit("/", 1)[-1]:
         # sayfa açılışı: sandbox çerezi HTML ile birlikte verilir; yoksa aynı anda giden ilk API istekleri
         # her biri ayrı kopya açardı
-        sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE))
+        try:
+            sid, new = demo_mode.resolve(request.cookies.get(demo_mode.COOKIE), client_ip(request))
+        except demo_mode.TooManySandboxes:  # sayfa yine açılır; API istekleri 429 alır
+            sid, new = "", False
         response = await call_next(request)
         if new:
             https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
@@ -716,6 +727,17 @@ class SocialIn(BaseModel):
     id_token: str
     consent: list[str] | None = None  # yeni hesap açılacaksa hazır sürümde gerekli
     invite: str | None = None         # davet bağlantısıyla gelen: yeni hesap ortak deftere üye olur
+    nonce: str | None = Field(None, max_length=128)  # POST /api/auth/social/nonce'tan alınan (app/social.py)
+
+
+@app.post("/api/auth/social/nonce")
+def social_nonce(request: Request):
+    """Google/Apple girişinden önce tek kullanımlık nonce: belge bu nonce'ı taşır, sunucu bir kez kabul eder (D1)."""
+    from app import social
+
+    if auth.rate_limited(client_ip(request)):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    return {"nonce": social.issue_nonce(), "expires_in": social.NONCE_TTL}
 
 
 @app.post("/api/auth/google")
@@ -743,7 +765,7 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
     if auth.rate_limited(ip):
         raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
     try:
-        who = verify(body.id_token)
+        who = verify(body.id_token, **({"nonce": body.nonce} if body.nonce else {}))
     except social.SocialError as e:
         auth.record_fail(ip)
         raise HTTPException(401, errors.user_text(e, 401)) from e
@@ -796,6 +818,8 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         _signup_record(ip)
         _record_consent(u["id"], request)
         created = True
+    if not social.consume_nonce(body.nonce):  # aynı nonce'lu belgeyle aynı anda ikinci giriş
+        raise HTTPException(401, "Giriş belgesinin süresi doldu ya da zaten kullanıldı; yeniden dene")
     system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
     _start_session(request, response, system.user(u["id"]))
     return {"ok": True, "created": created}
@@ -4060,6 +4084,7 @@ def book_remove_member(uid: int):
     m = system.user(uid)
     if not m or m.get("member_of") != u["id"]:
         raise HTTPException(404, "Üye yok")
+    deletion.admin_deleted(m, reason="member_removed")  # anonim silme kaydı (D12), yönetici silmesiyle aynı
     system.delete_user(uid)
     system.archive_user_data(m)
     return {"ok": True}
@@ -5347,6 +5372,13 @@ if WEB_DIST and os.path.isdir(WEB_DIST):
             return FileResponse(f, headers=headers)
         return FileResponse(os.path.join(_dist, "index.html"), headers={"Cache-Control": "no-cache"})
 
+
+# tarayıcı güvenlik başlıkları (CSP raporu, HSTS, Permissions-Policy) ve POST /api/csp-report: app/security_headers.py.
+# Yalnız yanıt başlığına ekler; dosya ve akış yanıtlarının gövdesine dokunmaz. CORS'un içinde: ön istek (OPTIONS) CORS'ta biter
+from app.security_headers import SecurityHeaders  # noqa: E402
+
+app.add_middleware(SecurityHeaders, index_file=lambda: os.path.join(WEB_DIST, "index.html") if WEB_DIST else None,
+                   site_paths=[f"/{p}" for p in SITE_PAGES])
 
 # en dışta olmalı (en son eklenen en dışta çalışır): ön istek (OPTIONS) ve 401 yanıtları da CORS başlığı alsın
 app.add_middleware(CORSMiddleware, allow_origins=APP_ORIGINS, allow_credentials=False, allow_methods=["*"],

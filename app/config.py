@@ -5,6 +5,7 @@ Değerler API'den asla tam haliyle geri dönmez (sadece son 4 karakter).
 """
 import os
 import secrets
+from contextvars import ContextVar
 
 from app import db
 
@@ -28,10 +29,26 @@ GLOBAL = {"GEMINI_API_KEY", "GEMINI_MODEL", "TELEGRAM_BOT_TOKEN"}
 ADMIN_ONLY = {"GEMINI_MODEL", "TELEGRAM_BOT_TOKEN"}
 
 
+# HTTP isteğinin içinde miyiz? (api/main.py ara katmanı işaretler.) İstekte bağlamda kullanıcı yoksa (oturumsuz uçlar:
+# /api/auth/*, gelen posta, mağaza bildirimi…) yönetici SAYILMAZ (D3): bir uç yanlışlıkla oturumsuz kalırsa her şeye
+# izin vermesin. Tek kullanıcılı kurulum (HESAPKITAP_NO_AUTH=1) açıkça işaretli olduğu için istekte de yöneticidir.
+_in_request: ContextVar[bool] = ContextVar("hesapkitap_in_request", default=False)
+
+
+def mark_request():
+    """İstek başında: dönen jeton istek sonunda _in_request.reset(...) ile geri alınır."""
+    return _in_request.set(True)
+
+
 def is_admin() -> bool:
-    """Bağlamda kullanıcı yoksa (tek kullanıcılı kurulum, zamanlayıcı ana alanı, testler) yönetici sayılır."""
+    """Bağlamda kullanıcı yoksa: istek dışında (zamanlayıcı ana alanı, komut satırı, testler) ve tek kullanıcılı
+    kurulumda yönetici; oturumsuz bir HTTP isteğinde değil."""
     u = db.current_user()
-    return u is None or u.get("role") == "admin"
+    if u is None:
+        from app import auth
+
+        return auth.disabled() or not _in_request.get()
+    return u.get("role") == "admin"
 
 
 def _system_value(name: str) -> str | None:

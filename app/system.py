@@ -260,7 +260,8 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))
             for sql in ("DELETE FROM password_resets WHERE user_id = ?",   # tablolar ilk kullanımda kurulur (reset, inbound)
-                        "UPDATE inbound SET revoked = 1 WHERE user_id = ?"):
+                        # gelen posta adresi: kod hiç yeniden verilmesin diye satır kalır, hesapla bağı kopar (D12)
+                        "UPDATE inbound SET revoked = 1, user_id = 0 WHERE user_id = ?"):
                 try:
                     c.execute(sql, (uid,))
                 except sqlite3.OperationalError:

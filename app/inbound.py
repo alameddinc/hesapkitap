@@ -110,8 +110,9 @@ def resolve(to: str) -> dict | None:
 
 # ---------------------------------------------------------------- imza
 
-def _dkim_domains(raw: bytes) -> set[str]:
-    """Maildeki DKIM imzalarından doğrulananların alan adları (d=)."""
+def _dkim_domains(raw: bytes, dnsfunc=None) -> set[str]:
+    """Maildeki DKIM imzalarından doğrulananların alan adları (d=). Gövde uzunluğu sınırlı imza (l= etiketi) sayılmaz
+    (D5): imza gövdenin yalnız ilk l baytını kapsar, sonuna eklenen ek (sahte ekstre PDF'i) imzasız kalırdı."""
     import dkim
 
     out: set[str] = set()
@@ -119,8 +120,11 @@ def _dkim_domains(raw: bytes) -> set[str]:
     for i in range(n):
         try:
             d = dkim.DKIM(raw)
-            if d.verify(idx=i):
+            ok = d.verify(idx=i, dnsfunc=dnsfunc) if dnsfunc else d.verify(idx=i)
+            if ok and b"l" not in (d.signature_fields or {}):
                 out.add(d.domain.decode().lower())
+            elif ok:
+                log.info("DKIM imzası l= etiketli (gövdenin bir kısmını kapsıyor): sayılmadı (%s)", d.domain.decode())
         except Exception:  # noqa: BLE001 - bozuk/eksik imza: o imza sayılmaz
             continue
     return out

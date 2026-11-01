@@ -132,3 +132,38 @@ kilitlenir; başarılı girişte sayaç sıfırlanır.
 - **Arkadaşların için:** Ayarlar → Kullanıcılar → Davet oluştur. Her kullanıcının verisi ayrı dosyada.
 - **Başka bir sunucudan taşınıyorsan:** eski sunucuda Ayarlar → Yedekler'den yedeği indir, yeni kurulumda veri
   klasörüne (`/app/data/ekstre.db`) koy.
+
+---
+
+## Güvenlik başlıkları
+
+Uygulama her yanıta `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` ve `Permissions-Policy` ekler.
+HTTPS ile gelen isteklere (TLS'i vekil bitiriyorsa `X-Forwarded-Proto: https`) `Strict-Transport-Security` de eklenir.
+
+| Değişken | Varsayılan | Anlamı |
+|---|---|---|
+| `HESAPKITAP_HSTS_MAX_AGE` | `15552000` (180 gün) | HSTS süresi, saniye. `0`: gönderilmez. `includeSubDomains` eklenmez. |
+| `HESAPKITAP_CSP` | `report` | `report`: CSP yalnız rapor modunda (`Content-Security-Policy-Report-Only`), hiçbir şey engellenmez. `enforce`: engelleyen başlık. `off`: gönderilmez. |
+| `HESAPKITAP_SOCIAL_NONCE` | (boş) | `required`: Google/Apple girişinde sunucudan alınan tek kullanımlık nonce zorunlu olur. Yalnız nonce gönderen mobil sürüm yayındayken açın. |
+
+CSP raporları `POST /api/csp-report` ucuna gelir ve günlüğe `hesapkitap.csp` adıyla `CSP raporu: …` satırı olarak
+düşer. Satırda yalnız yönerge, engellenecek kaynağın alan adı ve sayfanın yolu yazılır, sorgu dizgesi yazılmaz.
+Dakikada en çok 30 satır yazılır. Birkaç gün boyunca rapor gelmezse `HESAPKITAP_CSP=enforce` yapılabilir.
+
+## Yedekten geri dönüş ve silinen hesaplar
+
+Sunucuyu (sistem veritabanı ve kullanıcı klasörleri) eski bir yedekten geri yüklerseniz, yedekten **sonra** silinen
+hesaplar geri gelir. Bunu önlemek için:
+
+1. Geri yüklemeden önce güncel `system.db` dosyasını kenara kopyalayın (ör. `system-once.db`).
+2. Yedeği geri yükleyin.
+3. Önce kuru çalıştırın, sonra uygulayın:
+
+   ```sh
+   python -m app.deletion reapply /yol/system-once.db           # ne yapılacağını gösterir
+   python -m app.deletion reapply /yol/system-once.db --apply   # kalıcı silinenleri yeniden siler, bekleyenleri kapatır
+   ```
+
+Dosyalar bir nesne deposundaysa (S3/R2), kova için **sürümleme (versioning) kapalı** olmalıdır. Sürümleme açıksa
+silinen hesabın dosyaları eski sürüm olarak kalır. Açık tutmak zorundaysanız eski sürümleri birkaç gün içinde silen
+bir yaşam döngüsü kuralı ekleyin.

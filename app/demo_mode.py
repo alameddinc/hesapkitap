@@ -150,10 +150,41 @@ def new_sandbox() -> str:
     return sid
 
 
-def resolve(sid: str | None) -> tuple[str, bool]:
-    """Çerezdeki sandbox geçerliyse o, değilse yenisi. (sid, yeni mi)"""
+# D8: çerezsiz her istek yeni kopya açıyordu; tek bir kaynak saniyede yüzlercesini açıp MAX_SANDBOXES sınırıyla meşru
+# ziyaretçilerin kopyasını sildirebilirdi. Bağlantı (IP) başına saatte en çok NEW_PER_IP yeni kopya; IP saklanmaz,
+# yalnız süreç belleğinde sayılır.
+NEW_PER_IP = int(os.environ.get("HESAPKITAP_DEMO_NEW_PER_IP", "30"))
+_new_by_ip: dict = {}
+_new_lock = __import__("threading").Lock()
+
+
+class TooManySandboxes(Exception):
+    pass
+
+
+def _allow_new(ip: str | None) -> bool:
+    if not ip or NEW_PER_IP <= 0:
+        return True
+    now = time.time()
+    with _new_lock:
+        if len(_new_by_ip) > 10000:  # bellek sınırı: eski kayıtlar düşer
+            for k in [k for k, q in _new_by_ip.items() if not q or q[-1] < now - 3600]:
+                _new_by_ip.pop(k, None)
+        q = [t for t in _new_by_ip.get(ip, []) if t > now - 3600]
+        if len(q) >= NEW_PER_IP:
+            _new_by_ip[ip] = q
+            return False
+        _new_by_ip[ip] = q + [now]
+    return True
+
+
+def resolve(sid: str | None, ip: str | None = None) -> tuple[str, bool]:
+    """Çerezdeki sandbox geçerliyse o, değilse yenisi. (sid, yeni mi). Bu bağlantı saatlik yeni kopya sınırını
+    doldurduysa TooManySandboxes."""
     if _valid(sid) and expires_at(sid) > time.time():
         return sid, False
+    if not _allow_new(ip):
+        raise TooManySandboxes()
     return new_sandbox(), True
 
 

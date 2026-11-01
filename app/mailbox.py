@@ -56,8 +56,34 @@ def enabled() -> bool:
 
 # ---------------------------------------------------------------- posta kutusu
 
+def _check_host(host: str) -> None:
+    """D6: yönetici olmayan kullanıcı IMAP sunucusunu kendisi yazar; iç ağa (sunucunun yerel ağı, docker ağı, bulut
+    meta veri adresi…) bağlantı denemesi ve "Bağlandı / bağlanılamadı" farkıyla ağ taraması olmasın. Adın çözüldüğü
+    BÜTÜN adresler internette olmalı. Yönetici (kendi sunucusunda yerel posta sunucusu olabilir) muaf."""
+    import ipaddress
+    import socket
+
+    if config.is_admin():
+        return
+    try:
+        infos = socket.getaddrinfo(host, 993, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as e:
+        raise MailError(f"Posta sunucusu bulunamadı ({host})") from e
+    for info in infos:
+        try:
+            a = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            continue
+        if getattr(a, "ipv4_mapped", None):
+            a = a.ipv4_mapped
+        if not a.is_global:
+            raise MailError(f"Bu posta sunucusu ({host}) iç ağ adresine çıkıyor; yalnız internetteki posta sunucuları "
+                            "kullanılabilir (yerel sunucuyu yönetici ayarlayabilir)")
+
+
 def _connect() -> imaplib.IMAP4_SSL:
     host = config.get("MAIL_IMAP_HOST") or "imap.gmail.com"
+    _check_host(host)
     try:
         m = imaplib.IMAP4_SSL(host, 993, timeout=30)
         m.login(config.get("MAIL_USER"), config.get("MAIL_PASSWORD"))
