@@ -1357,7 +1357,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         pass
 
     # 2a) Maaş görünmeyen aylar: ilk ve son maaş arasında boşluk → o aylara ait döküm eksik
-    sal = sorted({e["month"] for e in db.list_entries() if e["kind"] == INCOME and e["category"] == "Maaş" and not e["skipped"]})
+    sal_ids = {r["id"] for r in db.list_recurring() if _is_salary(r)}
+    sal = sorted({e["month"] for e in db.list_entries() if e["kind"] == INCOME and not e["skipped"] and _salary_entry(e, sal_ids)})
     if len(sal) >= 2:
         gaps, m = [], sal[0]
         while m < sal[-1]:
@@ -1367,7 +1368,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         if gaps:
             out.append({"level": "uyari", "title": f"{len(gaps)} ayda maaş dökümü yok",
                         "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında dökümde maaş yok. "
-                                  "Maaş kalemin varsa o aylarda tahmini olarak ayrı gösterilir (gelire katılmaz); kesin tutar için maaşın yattığı hesabın bu aylara "
+                                  "Maaş kalemin varsa o aylarda tahmini tutar gelire yazılır; kesin tutar için maaşın yattığı hesabın bu aylara "
                                   "ait dökümünü yükle.",
                         "link": "ekstreler"})
 

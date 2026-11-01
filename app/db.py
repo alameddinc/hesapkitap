@@ -646,7 +646,7 @@ def init_db() -> None:
         _sync_default_rules(c)
     auto_update_cycle()
     _ensure_imported_bank_accounts()
-    _once("salary_linked_v1", link_salary_entries)
+    _once("salary_linked_v2", link_salary_entries)
     _once("cancel_pairs_v1", pair_cancelled_entries)
 
 
@@ -694,6 +694,13 @@ def link_salary_entries() -> int:
             for r in recs}
         taken = {r["id"]: {m for (m,) in c.execute("SELECT month FROM entries WHERE recurring_id = ?", (r["id"],))}
                  for r in recs}
+        salary_ids = {r["id"] for r in recs}
+        # maaş kalemine bağlı ama kategorisi genel kalmış satırlar (öneriden kalem açılınca bağlanan): yalnız kategori
+        for r in rows(c.execute("SELECT id, description, category, recurring_id FROM entries WHERE kind = 'gelir' "
+                                "AND recurring_id IS NOT NULL AND skipped = 0")):
+            if r["recurring_id"] in salary_ids and r["category"] in _GENERIC_INCOME and is_salary_text(r["description"]):
+                c.execute("UPDATE entries SET category = 'Maaş' WHERE id = ?", (r["id"],))
+                n += 1
         cands = rows(c.execute("SELECT id, description, month, category FROM entries WHERE kind = 'gelir' AND "
                                "recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL ORDER BY entry_date, amount DESC"))
         for e in cands:

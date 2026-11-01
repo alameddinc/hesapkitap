@@ -69,10 +69,10 @@ def test_cancelled_transfer_pair_removed(tmpdb):
 def test_repairs_run_once_on_init(tmpdb):
     acc = _acc(tmpdb)
     e = _bank(tmpdb, "2026-02-15", "MAAS 2026 SUBAT ODEMESI", 150000, "gelir", acc, "h1")
-    tmpdb.set_setting("salary_linked_v1", "")
+    tmpdb.set_setting("salary_linked_v2", "")
     tmpdb.init_db()
     assert _get(tmpdb, e)["category"] == "Maaş"
-    assert tmpdb.get_setting("salary_linked_v1") == "1" and tmpdb.get_setting("cancel_pairs_v1") == "1"
+    assert tmpdb.get_setting("salary_linked_v2") == "1" and tmpdb.get_setting("cancel_pairs_v1") == "1"
 
 
 def test_cancel_pairs_with_most_similar_withdrawal(tmpdb):
@@ -84,3 +84,20 @@ def test_cancel_pairs_with_most_similar_withdrawal(tmpdb):
                  800, "gelir", acc, "i1")
     assert tmpdb.pair_cancelled_entries() == 1
     assert _get(tmpdb, first) and _get(tmpdb, second) is None and _get(tmpdb, back) is None
+
+
+def test_linked_salary_line_gets_category_and_insight_sees_it(tmpdb):
+    from app import finance
+
+    acc = _acc(tmpdb)
+    rid = tmpdb.create_recurring({"description": "Maaş", "amount": 200000, "kind": "gelir", "category": "Maaş",
+                                  "day_of_month": 15, "start_month": "2026-01"})
+    ids = [_bank(tmpdb, f"2026-0{m}-15", f"ISÇI UCRET 2026 ÜCRET ÖDEMES M{m}", 200000, "gelir", acc, f"h{m}") for m in (1, 2, 3)]
+    with tmpdb.connect() as c:  # öneriden açılan kalem gibi: bağlı ama kategori genel
+        c.execute("UPDATE entries SET category = 'Diğer Gelir', recurring_id = ? WHERE id = ?", (rid, ids[1]))
+    tmpdb.link_salary_entries()
+    assert _get(tmpdb, ids[1])["category"] == "Maaş"
+    with tmpdb.connect() as c:
+        c.execute("UPDATE entries SET category = 'Diğer Gelir' WHERE id = ?", (ids[1],))
+    ins = [i for i in finance.insights("2026-03") if "maaş dökümü yok" in i["title"]]
+    assert ins == []  # Şubat'ın maaşı metninden tanınır: boşluk yok
