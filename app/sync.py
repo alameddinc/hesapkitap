@@ -368,6 +368,8 @@ def unmatch(entry_id: int) -> dict:
         elif mrow and mrow["source"] == "dokum" and other:
             c.execute(f"UPDATE entries SET {', '.join(f'{k} = ?' for k in _PREV_FIELDS)} WHERE id = ?",
                       (*(prev.get(k) for k in _PREV_FIELDS), entry_id))
+            if "bill_provider" in prev:  # (eski eşleşmelerin prev'inde yok: kurum olduğu gibi kalır)
+                c.execute("UPDATE entries SET bill_provider = ? WHERE id = ?", (prev["bill_provider"], entry_id))
             row = {k: other.get(k) for k in db.ENTRY_FIELDS + ("bank_doc_id",) if k in other}
             row.setdefault("month", db.period_of(row["entry_date"]))
             row["bank_doc_id"] = row.get("bank_doc_id") or (e["bank_doc_id"] if not prev.get("bank_doc_id") else None)
@@ -438,11 +440,66 @@ def attach_row(c, m: dict, r: dict, kind: str, amount: float, acc_id: int | None
     other = {"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
              "payment": payment if kind == "gider" else None, "import_hash": r["hash"], "counterparty": who,
              "account_id": acc_id, "note": f"Hesap hareketi · {r['description']}"}
+    provider = _bill_provider(r["description"], kind)  # fatura tahsilatı: kayıt Faturalar'da kurumuyla görünsün
+    if provider:
+        other["bill_provider"] = provider
     c.execute("UPDATE entries SET import_hash = ?, counterparty = COALESCE(counterparty, ?), "
-              "account_id = COALESCE(account_id, ?) WHERE id = ?", (r["hash"], who, acc_id, m["id"]))
+              "account_id = COALESCE(account_id, ?), bill_provider = COALESCE(bill_provider, ?) WHERE id = ?",
+              (r["hash"], who, acc_id, provider, m["id"]))
     _record(c, m["id"], "dokum", "otomatik", import_hash=r["hash"], bank_date=r["date"], bank_desc_=r["description"],
             bank_amount=amount, balance=r.get("balance"), account_id=acc_id,
-            prev={k: m.get(k) for k in _PREV_FIELDS}, other=other)
+            prev={**{k: m.get(k) for k in _PREV_FIELDS}, "bill_provider": m.get("bill_provider")}, other=other)
+
+
+def _bill_provider(desc: str, kind: str) -> str | None:
+    if kind != "gider":
+        return None
+    from app.bank_import import bill_info
+
+    b = bill_info(desc)
+    return b["provider"] if b else None
+
+
+# Sabit kalemin elle onaylanmış kaydı ile dökümdeki satırı arasında kabul edilen fark: kira birkaç gün geç ödenir,
+# faturanın tutarı plandan farklı gelir. Bunun dışında kalan (ör. aynı kişiye ayrıca küçük bir havale) ayrı kayıttır.
+RECURRING_DAYS = 10
+RECURRING_RATIO = 2.0
+
+
+def attach_recurring_row(c, data: dict, r: dict) -> int | None:
+    """Dökümdeki satır, dökümden ÖNCE elle onaylanmış bir sabit kalem kaydının ta kendisiyse ona bağla (yeni kayıt
+    açılmaz, iki kez sayılmaz). data: satırdan açılacak kayıt (açıklama, kişi, kurum, tutar). Kayıt bankadaki tutarı,
+    kişiyi ve fatura kurumunu alır; tarihi ve dönemi (onaylandığı ay) korunur. "Eşleşmeyi geri al" ayırır."""
+    rec = db.recurring_for(c, data)
+    if not rec:
+        return None
+    d, amount = date.fromisoformat(r["date"]), data["amount"]
+    rejects = _rejects(c)
+    best = None
+    for m in db.rows(c.execute(
+            "SELECT * FROM entries WHERE recurring_id = ? AND import_hash IS NULL AND skipped = 0 AND linked_txn_id IS NULL "
+            "AND wallet_id IS NULL AND debt_id IS NULL AND COALESCE(payment, '') NOT IN ('kredi_karti', 'kart') "
+            "AND id NOT IN (SELECT entry_id FROM entry_matches)", (rec["id"],))):
+        gap = abs((date.fromisoformat(m["entry_date"]) - d).days)
+        if gap > RECURRING_DAYS or (m["id"], f"h:{r['hash']}") in rejects:
+            continue
+        if data.get("account_id") and m["account_id"] and m["account_id"] != data["account_id"]:
+            continue
+        if m["amount"] > 0 and not (m["amount"] / RECURRING_RATIO <= amount <= m["amount"] * RECURRING_RATIO):
+            continue
+        if best is None or gap < best[0]:
+            best = (gap, m)
+    if not best:
+        return None
+    m = best[1]
+    other = {k: data.get(k) for k in db.ENTRY_FIELDS if data.get(k) is not None and k not in ("recurring_id", "month")}
+    c.execute("UPDATE entries SET import_hash = ?, amount = ?, counterparty = COALESCE(counterparty, ?), "
+              "account_id = COALESCE(account_id, ?), bill_provider = COALESCE(bill_provider, ?) WHERE id = ?",
+              (r["hash"], amount, data.get("counterparty"), data.get("account_id"), data.get("bill_provider"), m["id"]))
+    _record(c, m["id"], "dokum", "otomatik", import_hash=r["hash"], bank_date=r["date"], bank_desc_=r["description"],
+            bank_amount=amount, balance=r.get("balance"), account_id=data.get("account_id"),
+            prev={**{k: m.get(k) for k in _PREV_FIELDS}, "bill_provider": m.get("bill_provider")}, other=other)
+    return m["id"]
 
 
 # ---------------------------------------------------------------- arayüz: rozet ve sorular

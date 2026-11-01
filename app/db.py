@@ -1251,6 +1251,15 @@ def recurring_key(description: str | None, counterparty: str | None) -> str:
     return "m:" + fold_key(" ".join(words))
 
 
+def recurring_for(c, data: dict):
+    """Kaydın (açıklama, kişi, yön) ait olduğu sabit kalem: aynı ad ya da aynı eşleştirme anahtarı (kişi/işyeri)."""
+    name = (data.get("description") or "").strip().casefold()
+    key = recurring_key(data.get("description"), data.get("counterparty"))
+    return next((r for r in c.execute("SELECT * FROM recurring").fetchall()
+                 if r["kind"] == data.get("kind") and (r["description"].strip().casefold() == name
+                                                        or (r["match_key"] and r["match_key"] == key))), None)
+
+
 def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
     """Elle girilen kayıt bir sabit kalemle aynı adı taşıyorsa (ör. "Maaş"), tarihine en yakın dönemin
     o sabit kalemine bağla: maaş bir gün erken/geç yatsa da her dönemde tam bir kez sayılır."""
@@ -1258,11 +1267,7 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
 
     if data.get("recurring_id") or data.get("skipped"):
         return
-    name = (data.get("description") or "").strip().casefold()
-    key = recurring_key(data.get("description"), data.get("counterparty"))
-    rec = next((r for r in c.execute("SELECT * FROM recurring").fetchall()
-                if r["kind"] == data.get("kind") and (r["description"].strip().casefold() == name
-                                                       or (r["match_key"] and r["match_key"] == key))), None)
+    rec = recurring_for(c, data)
     if not rec:
         return
     d = _date.fromisoformat(str(data["entry_date"])[:10])
@@ -2616,13 +2621,21 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             desc, note_text = info["description"], info["note"]
         if desc == r["description"] and len(desc) > 120:
             desc = desc[:120]  # uzun banka metni notta tam haliyle kalır
-        eid = create_entry({"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
-                            "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
-                            "note": note_text, "bill_provider": bill_provider,
-                            "import_hash": r["hash"], "counterparty": who, "account_id": acc_id})
+        row = {"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
+               "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
+               "note": note_text, "bill_provider": bill_provider,
+               "import_hash": r["hash"], "counterparty": who, "account_id": acc_id}
+        # sabit kalem dökümden önce elle onaylandıysa (kira birkaç gün geç, fatura plandan farklı tutarda gelir):
+        # o kayıt bu satır olur; yeni kayıt komşu döneme bağlanıp iki kez sayılmaz
+        with connect() as c:
+            eid = sync.attach_recurring_row(c, row, r)
+        if eid:
+            stats["eslesen_elle"] += 1
+        else:
+            eid = create_entry(row)
+            stats[kind] += 1
         if link_debt_movement(who, kind, amount, r["date"], eid):
             stats["borc_hareketi"] = stats.get("borc_hareketi", 0) + 1
-        stats[kind] += 1
         seen.add(r["hash"])
     # hesabın son bakiyesi: dökümdeki en son hareketin bakiyesi (kayıtlar yazıldıktan sonra çapalanır; yeniden eskiye
     # sıralı dosyada günün son hareketi üstteki satır: bank_import.last_balance)
