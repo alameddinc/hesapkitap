@@ -1,0 +1,22 @@
+{
+  "_aciklama": [
+    "Web istemcisinde .reduce( izin listesi (denetim C7, Ek C §5.4). Para rakamı sunucuda hesaplanır, istemci gösterir.",
+    "web/src/parity.test.ts her dosyadaki .reduce( sayısını buradaki sayıyla karşılaştırır (CI: npm test).",
+    "Yeni bir .reduce( eklemen gerekiyorsa: rakam sunucuda yoksa önce sunucuya taşı; para değilse ya da form girdisiyse",
+    "satırın sonuna '// parity-ok: SUNUM' (görsel türetme) ya da '// parity-ok: GİRDİ' (form önizlemesi) yaz.",
+    "Etiketler: SUNUM, GİRDİ, YEDEK (sunucu alanı yoksa eski sunucu için; ?? ile sunucu değeri önce), TAŞI (sunucuya taşınacak)."
+  ],
+  "web/src/api.ts": {"count": 1, "etiket": "SUNUM", "not": "movedCount: birleştirilen satır sayısı, para değil"},
+  "web/src/components/EntryForm.tsx": {"count": 4, "etiket": "GİRDİ", "not": "bölme/paylaşım formunda ayrılan ve kalan önizlemesi"},
+  "web/src/components/SplitEditor.tsx": {"count": 1, "etiket": "GİRDİ", "not": "bölme formunda kullanılan tutar"},
+  "web/src/components/Reminders.tsx": {"count": 1, "etiket": "SUNUM", "not": "metinden renk tonu (karma), para değil"},
+  "web/src/components/PriceWatch.tsx": {"count": 1, "etiket": "TAŞI", "not": "seçimdeki ürünlerin ortalama fiyat değişimi"},
+  "web/src/components/Estimates.tsx": {"count": 3, "etiket": "YEDEK", "not": "summary.totals.estimated_* yoksa"},
+  "web/src/components/Jars.tsx": {"count": 1, "etiket": "YEDEK", "not": "net-worth.reserved yoksa"},
+  "web/src/components/Holdings.tsx": {"count": 2, "etiket": "YEDEK", "not": "holdings totals yoksa"},
+  "web/src/pages/Bills.tsx": {"count": 2, "etiket": "YEDEK", "not": "bills/summary overall yoksa; totalOf aylık seri"},
+  "web/src/pages/Transfers.tsx": {"count": 4, "etiket": "YEDEK", "not": "transfers totals yoksa; sumKind kişi ayrıntısında"},
+  "web/src/pages/Dashboard.tsx": {"count": 1, "etiket": "TAŞI", "not": "bu dönem gelen faturalar toplamı"},
+  "web/src/pages/Table.tsx": {"count": 4, "etiket": "TAŞI", "not": "kategori × ay pivotu; sunucuda /api/table yok"},
+  "web/src/pages/Borclar.tsx": {"count": 1, "etiket": "YEDEK", "not": "net-worth.receivable/payable yoksa"}
+}
