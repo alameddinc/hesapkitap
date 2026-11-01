@@ -130,10 +130,77 @@ kilitlenir; başarılı girişte sayaç sıfırlanır.
   Mac'te `python3 scripts/make_shortcut.py https://adresin` ile üretebilirsin).
 - **Yedek:** Ayarlar → Yedekler'den indir; Telegram bağlıysa her gece şifreli yedek oraya gelir.
 - **Arkadaşların için:** Ayarlar → Kullanıcılar → Davet oluştur. Her kullanıcının verisi ayrı dosyada.
+- **Telefon uygulamasıyla:** IMAP e-posta otomasyonu, Telegram, yedekler, anahtarlar, banka şablonları, paylaş
+  anahtarları ve hatırlanan PDF şifreleri yalnız web'de kurulur (`https://adresin/#/ayarlar`). Sunucu bu listeyi
+  `GET /api/settings/web-only` ile verir; uygulama "bu ayarlar web'de" bağlantısını buradan gösterebilir.
 - **Başka bir sunucudan taşınıyorsan:** eski sunucuda Ayarlar → Yedekler'den yedeği indir, yeni kurulumda veri
   klasörüne (`/app/data/ekstre.db`) koy.
 
 ---
+
+## Google / Apple ile giriş (mobil uygulama)
+
+Telefon uygulaması Google ya da Apple'dan bir kimlik belgesi (ID token) alır ve sunucuya `POST /api/auth/google` /
+`POST /api/auth/apple` ile gönderir. Sunucu belgenin imzasını, süresini ve **kimin için üretildiğini** (`aud`) kontrol
+eder. `aud` aşağıdaki listelerden birinde değilse giriş reddedilir. İkisi de boşsa (varsayılan) giriş ekranında Google
+ve Apple düğmeleri görünmez (`/api/auth/status` → `google: false`, `apple: false`).
+
+| Değişken | Örnek (yer tutucu) | Anlamı |
+|---|---|---|
+| `HESAPKITAP_GOOGLE_CLIENT_IDS` | `<web-client-id>.apps.googleusercontent.com` | Kabul edilen Google OAuth client ID'leri, virgülle. Mobil uygulama hem iOS'ta hem Android'de belgeyi **web client ID** için ister; bu yüzden listede en az web client ID olmalı. |
+| `HESAPKITAP_APPLE_CLIENT_IDS` | `com.ornek.hesapkitap` | Kabul edilen Apple `aud` değerleri, virgülle. iOS uygulamasından girişte bu, uygulamanın **bundle ID**'sidir. |
+| `HESAPKITAP_SOCIAL_NONCE` | `required` | Tek kullanımlık nonce zorunlu (bkz. Güvenlik başlıkları). |
+
+Hangi değerleri yazacağın, hangi mobil uygulamayı kullandığına bağlı:
+
+- **Kendi derlediğin mobil uygulama:** Google Cloud Console'da bir proje aç → *APIs & Services → Credentials*:
+  bir **Web** client (bu ID'yi hem sunucuya hem uygulamanın `VITE_GOOGLE_WEB_CLIENT_ID` değişkenine yaz), bir **iOS**
+  client (bundle ID ile; `VITE_GOOGLE_IOS_CLIENT_ID`) ve bir **Android** client (paket adı + imza SHA-1). Apple için
+  Apple Developer'da uygulamanın App ID'sinde *Sign in with Apple* yeteneğini aç; `HESAPKITAP_APPLE_CLIENT_IDS` =
+  bundle ID (uygulamada `VITE_APPLE_CLIENT_ID` ile aynı).
+- **Mağazadaki hazır uygulamayla kendi sunucuna bağlanıyorsan:** uygulamanın içine gömülü client ID'ler o uygulamayı
+  yayınlayana aittir. Sunucuna bu değerleri yazarsan o uygulamadan Google/Apple girişi çalışır; yazmazsan kullanıcıların
+  e-posta ve şifreyle girer (her zaman çalışır).
+
+Kurallar (her iki sağlayıcı için aynı):
+
+- Aynı e-postayla hesap varsa ona girilir. Şifreyle açılmış ama e-postası doğrulanmamış hesapta Google/Apple e-postanın
+  sahibini kanıtladığı için eski şifre geçersiz olur ve açık oturumlar kapanır.
+- Hesap yoksa: kendi sunucunda (kayıt kapalı) yalnız **davet bağlantısıyla** yeni hesap açılır; davetsiz giriş
+  "Bu e-postayla bir hesap yok" der. Açık kayıt yalnız hazır sürümde (`HESAPKITAP_HOSTED=1` ve
+  `HESAPKITAP_OPEN_SIGNUP=1`).
+- Google/Apple ile açılan hesabın şifresi yoktur. Web'e girmek için "Şifremi unuttum" ile şifre belirlenir (giden
+  posta, yani `SMTP_HOST` + `MAIL_FROM`, ayarlı olmalı). Web'de Google/Apple düğmesi yok.
+
+## Deftere özel posta adresi (ileri düzey)
+
+Hazır sürümde her defterin kendine ait bir adresi olur (`fatura-<kod>@<alan adı>`). Banka e-ekstreleri ve faturalar bu
+adrese yönlendirilir, sunucu DKIM imzasını doğrulayıp içe aktarır. **Kendi sunucunda bunun yerine IMAP kullan**
+(Ayarlar → E-posta otomasyonu): kendi posta kutunu okur, ek bir altyapı gerektirmez. Bu bölüm, posta altyapısını da
+kendin kuracaksan içindir.
+
+| Değişken | Örnek (yer tutucu) | Anlamı |
+|---|---|---|
+| `HESAPKITAP_INBOUND_DOMAIN` | `posta.ornek.com` | Adreslerin alan adı. Bu özelliği kullanacaksan **mutlaka** kendi alan adını yaz; boş bırakılırsa projenin hazır sürümünün alan adı varsayılır ve o adrese giden posta sana ulaşmaz. |
+| `HESAPKITAP_INBOUND_SECRET` | (uzun rastgele dizgi, ör. `openssl rand -hex 32`) | Posta işçisinin sunucuya gönderdiği gizli anahtar. Boşsa `POST /api/mail/inbound` ucu kapalıdır (404). |
+
+Posta işçisinin (ör. Cloudflare Email Routing + Email Worker ya da kendi SMTP sunucunun bir betiği) yapması gereken:
+
+```
+POST https://<adresin>/api/mail/inbound
+Authorization: Bearer <HESAPKITAP_INBOUND_SECRET>
+X-HK-To: fatura-<kod>@<HESAPKITAP_INBOUND_DOMAIN>
+Content-Type: message/rfc822
+
+<ham MIME, en çok 20 MB>
+```
+
+- Alan adının MX kaydı işçiye yönlenmeli; `fatura-*` adreslerinin hepsi aynı işçiye gelmeli.
+- Sunucu kodu adresten çözer (alan adına bakmaz), DKIM'i kendisi doğrular, aynı `Message-ID`'yi ikinci kez işlemez.
+  Yanıt hemen döner, okuma arka planda yapılır.
+- Web ve mobil uygulama adresi yalnız hazır sürümde (`HESAPKITAP_HOSTED=1`) gösterir. Kendi sunucunda bu bölümü
+  açmak için hazır sürüm kipinin diğer sonuçlarını (paketler, ayar kilidi) da kabul etmen gerekir; çoğu kurulum için
+  IMAP daha basittir.
 
 ## Güvenlik başlıkları
 
