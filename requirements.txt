@@ -1,4 +1,7 @@
 fastapi==0.148.0
+# fastapi yalnız starlette>=0.46.0 istiyor (üst sınır yok): sabit değilse yerel, CI ve canlı farklı sürüm kurabiliyor
+# (01ba2c7: Starlette 1.x'te dosya yanıtları 500). Canlıdaki sürüm; fastapi yükseltilirken birlikte denenir
+starlette==1.10.0
 uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 httpx==0.28.1
