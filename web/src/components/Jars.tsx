@@ -329,17 +329,17 @@ export default function Jars() {
                   {j.moves.map((m) => (
                     <li key={m.id} className="flex items-center justify-between gap-2 py-1">
                       <span>{dateTR(m.move_date)} {m.note && <span className="text-stone-500">· {m.note}</span>}</span>
-                      <span className="flex items-center gap-1">
+                      <span className="flex items-center gap-2">
                         <span className={cx("tabular-nums", m.amount < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>
                           {m.amount > 0 ? "+" : "−"}{isUnit(j) ? qty(Math.abs(m.amount), j.unit_symbol ?? sym(j.unit)) : tl(Math.abs(m.amount))}
                           {m.cost != null && <span className="text-stone-500"> · {tl(m.cost)}</span>}
                         </span>
                         {m.cost != null && (
-                          <button className="btn-ghost p-0.5 text-stone-400 hover:text-blue-600" aria-label="Alımı düzelt"
-                            onClick={() => setFix({ jar: j, move: m })}><Pencil size={12} /></button>
+                          <button className="btn-ghost p-1.5 text-stone-400 hover:text-blue-600" aria-label="Alımı düzelt"
+                            onClick={() => setFix({ jar: j, move: m })}><Pencil size={16} /></button>
                         )}
-                        <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Hareketi sil" disabled={delMove.isPending}
-                          onClick={() => void ask("Bu hareket silinsin mi?").then((ok) => { if (ok) delMove.mutate(m.id); })}><Trash2 size={12} /></button>
+                        <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Hareketi sil" disabled={delMove.isPending}
+                          onClick={() => void ask("Bu hareket silinsin mi?").then((ok) => { if (ok) delMove.mutate(m.id); })}><Trash2 size={16} /></button>
                       </span>
                     </li>
                   ))}
@@ -350,7 +350,7 @@ export default function Jars() {
                   <button className="btn-ghost px-2 py-1" onClick={() => patch.mutate({ id: j.id, body: { closed: !j.closed_at } })}>
                     {j.closed_at ? "Yeniden aç" : "Kapat (hedefe ulaştım / vazgeçtim)"}
                   </button>
-                  <button className="btn-danger px-2 py-1" disabled={del.isPending} onClick={() => void ask(`${j.name} ve tüm hareketleri silinsin mi?`).then((ok) => { if (ok) del.mutate(j.id); })}>Sil</button>
+                  <button className="btn-danger px-2 py-1" disabled={del.isPending} onClick={() => void ask(`${j.name} ve tüm hareketleri silinsin mi?\n\nKumbaranın geçmişi de gider. Hedefe ulaştıysan ya da vazgeçtiysen "Kapat" geçmişi saklar.`).then((ok) => { if (ok) del.mutate(j.id); })}>Sil</button>
                 </div>
               </div>
             )}

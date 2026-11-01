@@ -79,7 +79,9 @@ function KeyRow({ c }: { c: ConfigItem }) {
           <input className="input min-w-0 flex-1" type={c.secret ? "password" : "text"} autoComplete="off" value={value}
             placeholder={c.source === "app" ? "Değiştirmek için yeni değeri yapıştır" : "Yapıştır"} onChange={(e) => setValue(e.target.value)} />
           <button className="btn-primary" disabled={!value.trim()} onClick={() => save.mutate(value, onErr)}>Kaydet</button>
-          {c.source === "app" && <button className="btn-ghost" onClick={() => void ask("Silinsin mi?").then((ok) => { if (ok) save.mutate(null, onErr); })}>Sil</button>}
+          {c.source === "app" && <button className="btn-ghost" disabled={save.isPending}
+            onClick={() => void ask(`${c.label} silinsin mi?\n\n${c.default ? `Varsayılan değere (${c.default}) dönülür.` : "Bu ayara bağlı özellik yeniden girene kadar çalışmaz."}`)
+              .then((ok) => { if (ok) save.mutate(null, onErr); })}>Sil</button>}
         </div>
       )}
       <div className="flex flex-wrap gap-2">
@@ -89,7 +91,7 @@ function KeyRow({ c }: { c: ConfigItem }) {
           </button>
         )}
         {c.name === "BACKUP_PASSPHRASE" && !locked && (
-          <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+          <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700" disabled={gen.isPending}
             onClick={async () => (c.source === "none" || (await ask("Yeni şifre üretilsin mi? Eski yedekler eski şifreyle açılır."))) && gen.mutate(undefined, onErr)}>
             <KeyRound size={14} /> Güçlü şifre üret
           </button>

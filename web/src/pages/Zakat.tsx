@@ -199,9 +199,9 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                 {yearPays.map((x) => (
                   <li key={x.id} className="flex items-center justify-between gap-2">
                     <span>{dateTR(x.pay_date)} {x.note && `· ${x.note}`}</span>
-                    <span className="flex items-center gap-1 tabular-nums">{tl(x.amount)}
-                      <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Ödemeyi sil" disabled={delPay.isPending}
-                        onClick={() => void ask("Ödeme silinsin mi?").then((ok) => { if (ok) delPay.mutate(x.id); })}><Trash2 size={12} /></button>
+                    <span className="flex items-center gap-2 tabular-nums">{tl(x.amount)}
+                      <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Ödemeyi sil" disabled={delPay.isPending}
+                        onClick={() => void ask("Ödeme silinsin mi?").then((ok) => { if (ok) delPay.mutate(x.id); })}><Trash2 size={16} /></button>
                     </span>
                   </li>
                 ))}
@@ -245,9 +245,9 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                   {x.note && <span className="text-xs text-stone-500"> · {x.note}</span>}
                   {x.source !== "varlik" && <span className="text-xs text-stone-400"> · uygulamadan</span>}
                 </span>
-                <span className="flex items-center gap-1 tabular-nums">{x.value != null ? tl(x.value) : "?"}
-                  {x.id && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={delAsset.isPending}
-                    onClick={() => void ask(`${x.label} silinsin mi?`).then((ok) => { if (ok) delAsset.mutate(x.id!); })}><Trash2 size={12} /></button>}
+                <span className="flex items-center gap-2 tabular-nums">{x.value != null ? tl(x.value) : "?"}
+                  {x.id && <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={delAsset.isPending}
+                    onClick={() => void ask(`${x.label} silinsin mi?`).then((ok) => { if (ok) delAsset.mutate(x.id!); })}><Trash2 size={16} /></button>}
                 </span>
               </li>
             ))}

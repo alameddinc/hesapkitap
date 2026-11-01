@@ -136,9 +136,13 @@ export default function StatementCard({ s }: { s: Statement }) {
               <button className="btn-ghost" disabled={unconfirm.isPending} onClick={() => unconfirm.mutate(undefined)}>
                 <Undo2 size={15} aria-hidden /> Onayı geri al</button>
             )}
-            <div className="flex-1" />
+          </div>
+          {/* Silme onay/ödeme düğmelerinden ayrı satırda: yanlış dokunuşla yanındaki düğme yerine basılmasın. */}
+          <div className="flex justify-end border-t border-stone-100 pt-2 dark:border-stone-800">
             <button className="btn-danger px-2 text-xs" disabled={del.isPending}
-              onClick={() => void ask(`${s.card_no} ${dateTR(s.period_end)} ekstresi ve içindeki ${s.txn_count} işlem silinsin mi? Yanlış dosyaysa sonra doğrusunu yükleyebilirsin.`).then((ok) => { if (ok) del.mutate(undefined); })}>
+              onClick={() => void ask(`${s.card_no} ${dateTR(s.period_end)} ekstresi ve içindeki ${s.txn_count} işlem silinsin mi?\n\n`
+                + "İşlemlerde yaptığın kategori ve not düzeltmeleri de gider. Bu ekstredeki bir işlemle eşleşmiş elle girdiğin kayıtlar yeniden ayrı gider olarak sayılır.\n\n"
+                + "Yanlış dosyaysa sonra doğrusunu yükleyebilirsin.", { confirm: "Kalıcı olarak sil", irreversible: true }).then((ok) => { if (ok) del.mutate(undefined); })}>
               <Trash2 size={14} aria-hidden /> Ekstreyi sil</button>
           </div>
           {(confirm.error || del.error || unconfirm.error) && (

@@ -133,9 +133,9 @@ export default function Sadaka() {
             .sort((a, b) => b.date.localeCompare(a.date)).map((x) => (
               <li key={x.key} className="flex items-center justify-between gap-2 py-2">
                 <span className="min-w-0">{dateTR(x.date)} · {x.label}{x.who && <span className="text-xs text-stone-500"> · {x.who}</span>}</span>
-                <span className="flex items-center gap-1 tabular-nums">{m(x.amount)}
-                  {x.id != null && <button className="btn-ghost p-0.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
-                    onClick={() => void ask("Kayıt silinsin mi?").then((ok) => { if (ok) del.mutate(x.id!); })}><Trash2 size={12} /></button>}
+                <span className="flex items-center gap-2 tabular-nums">{m(x.amount)}
+                  {x.id != null && <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Sil" disabled={del.isPending}
+                    onClick={() => void ask("Kayıt silinsin mi?").then((ok) => { if (ok) del.mutate(x.id!); })}><Trash2 size={16} /></button>}
                 </span>
               </li>
             ))}

@@ -48,8 +48,10 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   return (
     <Modal title="Kart işlemi" onClose={onClose} footer={
       <>
-        {!member && <button className={row.deleted ? "btn-ghost" : "btn-danger"} onClick={() => save.mutate({ is_deleted: !row.deleted })}>
-          {row.deleted ? <><RotateCcw size={16} /> Geri al</> : <><EyeOff size={16} /> Sil</>}
+        {/* Silmez: işlemi raporlardan çıkarır, aynı düğmeyle geri alınır (is_deleted bayrağı). */}
+        {!member && <button className="btn-ghost" disabled={save.isPending} onClick={() => save.mutate({ is_deleted: !row.deleted })}
+          title={row.deleted ? undefined : "İşlem silinmez; toplamlara ve raporlara girmez. Buradan geri alabilirsin."}>
+          {row.deleted ? <><RotateCcw size={16} /> Hesaba kat</> : <><EyeOff size={16} /> Hesaba katma</>}
         </button>}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
@@ -127,7 +129,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           <p className="text-sm text-red-600 dark:text-red-400" role="alert">{((save.error || subSave.error) as Error).message}</p>
         )}
         {row.kind === "harcama" && !row.deleted && <MarkDonation source="card" id={row.id} />}
-        {row.deleted && <p className="text-sm text-amber-600">Bu işlem silinmiş; raporlara dahil değil.</p>}
+        {row.deleted && <p className="text-sm text-amber-600 dark:text-amber-400">Bu işlem hesaba katılmıyor; toplamlara ve raporlara dahil değil. "Hesaba kat" ile geri alırsın.</p>}
       </div>
     </Modal>
   );
