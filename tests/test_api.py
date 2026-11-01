@@ -1,25 +1,29 @@
 def test_entries_and_recurring_flow(client):
+    from app import finance
+
+    # içinde bulunulan dönem: geçmiş ayda maaş kalemi tahmini gelir sayılır (onay beklemez), test takvime bağlı kalmasın
+    m = finance.current_period()
     r = client.post("/api/recurring", json={"description": "Maaş", "amount": 80000, "kind": "gelir",
                                             "category": "Maaş", "start_month": "2026-01"})
     rid = r.json()["id"]
     client.post("/api/recurring", json={"description": "Kira", "amount": 20000, "kind": "gider",
                                         "category": "Kira & Aidat", "start_month": "2026-01"})
-    client.post("/api/entries", json={"entry_date": "2026-10-10", "description": "Psikolog", "amount": 3000,
+    client.post("/api/entries", json={"entry_date": f"{m}-10", "description": "Psikolog", "amount": 3000,
                                       "kind": "gider", "category": "Sağlık"})
 
-    s = client.get("/api/summary", params={"month": "2026-10"}).json()
+    s = client.get("/api/summary", params={"month": m}).json()
     assert s["totals"]["manual_expense"] == 3000
     assert s["pending"]["count"] == 2  # maaş + kira onay bekliyor
 
-    client.post(f"/api/recurring/{rid}/confirm", json={"month": "2026-10", "amount": 82000})
-    s = client.get("/api/summary", params={"month": "2026-10"}).json()
+    client.post(f"/api/recurring/{rid}/confirm", json={"month": m, "amount": 82000})
+    s = client.get("/api/summary", params={"month": m}).json()
     assert s["totals"]["income"] == 82000 and s["pending"]["count"] == 1
 
-    rows = client.get("/api/transactions", params={"month": "2026-10"}).json()
+    rows = client.get("/api/transactions", params={"month": m}).json()
     psik = next(r for r in rows if r["description"] == "Psikolog")
     client.patch(f"/api/entries/{psik['id']}", json={"amount": 3500})
     client.delete(f"/api/entries/{psik['id']}")
-    assert client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]["manual_expense"] == 0
+    assert client.get("/api/summary", params={"month": m}).json()["totals"]["manual_expense"] == 0
     assert len(client.get("/api/plan", params={"months": 3}).json()["months"]) == 3
 
 
