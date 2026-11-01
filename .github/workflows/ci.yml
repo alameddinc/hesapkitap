@@ -44,4 +44,5 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm test   # biçim (C6) ve eşitlik kuralları (C7); Node'un kendi test koşucusu, .ts tipleri ayıklanarak
       - run: npm run build

@@ -2,15 +2,11 @@ import { Landmark, Link2, Loader2, PenLine, Undo2 } from "lucide-react";
 import { ask } from "../lib/ask";
 import { useState } from "react";
 import { api, type EntryMatch } from "../api";
-import { cx, dateTR, tl } from "../format";
+import { cx, dateTR, dayMonthTR, tl } from "../format";
 import { isViewer, useBook, useSave } from "./hooks";
 
-const MON = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
-/** "2026-10-28" → "28 Eki" */
-export const shortDay = (iso: string) => {
-  const [, m, d] = iso.slice(0, 10).split("-").map(Number);
-  return m && d ? `${d} ${MON[m - 1]}` : iso;
-};
+/** "2026-10-28" → "28 Eki" (format.ts dayMonthTR) */
+const shortDay = dayMonthTR;
 
 const HOW: Record<EntryMatch["how"], string> = {
   otomatik: "tarih ve tutar birebir tuttuğu için kendiliğinden eşleşti",

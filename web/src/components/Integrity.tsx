@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
-import { dateTR, parseTs, tl } from "../format";
+import { dateTimeTR, dateTR, parseTs, tl } from "../format";
 import { useUI, type Route } from "../ui";
 import { useOpenRow, useSave } from "./hooks";
 import Modal from "./Modal";
@@ -19,7 +19,7 @@ function when(ts: string) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return dateTR(ts);
   // sunucu UTC naive "YYYY-MM-DD HH:MM:SS" verir; eski kayıt yerel ISO ("…T…", bölgesiz) — o zaten yerel saat
   const d = /T/.test(ts) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(ts) ? new Date(ts) : parseTs(ts);
-  return isNaN(d.getTime()) ? ts : d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return isNaN(d.getTime()) ? ts : dateTimeTR(d);
 }
 
 const PAGES: Route[] = ["islemler", "ekstreler", "hesaplar", "borclar", "transferler", "faturalar", "plan", "zekat"];

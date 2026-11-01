@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LogOut, Monitor, Smartphone, KeyRound } from "lucide-react";
-import { cx, parseTs } from "../format";
+import { cx, dateTimeTR, parseTs } from "../format";
 import { ask } from "../lib/ask";
 import { send } from "../lib/apiError";
 import { useUI } from "../ui";
@@ -15,7 +15,7 @@ const when = (ts: string) => {
   const mins = Math.round((Date.now() - d.getTime()) / 60000);
   if (mins < 2) return "şimdi";
   if (mins < 60) return `${mins} dk önce`;
-  return d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return dateTimeTR(d);
 };
 const KIND = { web: "Tarayıcı", mobile: "Telefon uygulaması", eski: "Eski oturum" } as const;
 

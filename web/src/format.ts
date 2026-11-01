@@ -8,9 +8,12 @@ let amountsHidden = false;
 export const setAmountsHidden = (v: boolean) => { amountsHidden = v; };
 export const areAmountsHidden = () => amountsHidden;
 
-// işaret ile ₺ arasına görünmez "kelime birleştirici": "-₺1.234" satır sonunda "-" / "₺1.234" diye bölünmesin
+// Biçim kuralı (terim sözlüğü S4, mobil lib/format.ts ile aynı): "₺" önde ("₺1.250,00"); eksi "−₺" (U+2212, kısa
+// çizgi değil). Ortak durum tablosu ve mobil karşılaştırması: format.test.ts (denetim C6).
+// işaret ile ₺ arasına görünmez "kelime birleştirici": "−₺1.234" satır sonunda "−" / "₺1.234" diye bölünmesin
 const WJ = "\u2060";
-const fmt = (x: number) => tlFmt.format(x).replace(/^([-+−])/, `$1${WJ}`);
+const MINUS = "\u2212";
+const fmt = (x: number) => tlFmt.format(x === 0 ? 0 : x).replace(/^-/, MINUS).replace(/^([+−])/, `$1${WJ}`); // -0 → "₺0,00"
 export const tl = (x: number) => (amountsHidden ? MASK : fmt(x));
 /** Genel gizlemeyi yok sayar: kullanıcı o bölümde gözle açıkça "göster" dediyse. */
 export const tlShown = (x: number) => fmt(x);
@@ -26,6 +29,18 @@ export function tlCompact(x: number) {
   if (a >= 1e3) return `${num1.format(x / 1e3)} bin ₺`;
   return `${num1.format(x)} ₺`;
 }
+
+/** Yüzde, işaretsiz: 12.34 → "%12,3" (yön metinle söylenir: "arttı" / "azaldı"). */
+export const pctTR = (p: number) => `%${Math.abs(p).toLocaleString("tr-TR", { maximumFractionDigits: 1 })}`;
+/** Yüzde, işaretli: +12.34 → "+%12,3", −5 → "−%5", 0 → "%0". */
+export const pctSigned = (p: number) => `${p > 0 ? "+" : p < 0 ? "−" : ""}${pctTR(p)}`;
+
+const MON_SHORT = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+/** "2026-10-28" → "28 Eki" (mobil dayMonth ile aynı). Okunamazsa olduğu gibi. */
+export const dayMonthTR = (iso: string) => {
+  const [, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return m && d ? `${d} ${MON_SHORT[m - 1]}` : iso;
+};
 
 export function monthLabel(ym: string, short = false) {
   const [y, m] = ym.split("-").map(Number);
@@ -51,6 +66,10 @@ export function tsDateTR(ts: string) {
   const d = parseTs(ts);
   return isNaN(d.getTime()) ? dateTR(ts) : d.toLocaleDateString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
+
+/** Yerel tarih ve saat: "31.10.2026 21:02". */
+export const dateTimeTR = (d: Date) =>
+  d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /** Bugünün yerel tarihi (YYYY-AA-GG): toISOString UTC verir, gece yarısından sonra bir gün geride kalır. */
 export function todayISO() {

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { ChevronDown, Search } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR, fold, maskText, tl } from "../format";
+import { cx, dateTR, fold, maskText, pctSigned, tl } from "../format";
 import Segmented from "./Segmented";
 
 interface StorePrice { store: string; branch: string | null; price: number; date: string; estimated: boolean; cheapest?: boolean }
@@ -18,7 +18,7 @@ interface Data {
   all_stores: string[]; all_brands: string[];
 }
 
-const pct = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : ""}%${Math.abs(x).toLocaleString("tr-TR", { maximumFractionDigits: 1 })}`;
+const pct = pctSigned;
 const per = (u: Product["unit"]) => (u === "kg" ? "/kg" : u === "lt" ? "/lt" : "");
 const pctClass = (x: number) => (x > 0 ? "text-red-600" : x < 0 ? "text-green-700" : "text-stone-500");
 const SINCE: Record<string, () => string | null> = {

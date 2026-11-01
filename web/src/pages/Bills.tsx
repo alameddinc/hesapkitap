@@ -6,7 +6,7 @@ import { api } from "../api";
 import { isViewer, useBook, useOpenRow } from "../components/hooks";
 import Modal from "../components/Modal";
 import MonthBars from "../components/MonthBars";
-import { addMonths, cx, dateTR, maskText, monthLabel, tl, todayISO } from "../format";
+import { addMonths, cx, dateTR, maskText, monthLabel, pctTR, tl, todayISO } from "../format";
 import { useUI } from "../ui";
 
 /** sunucu df7a018: bill_month faturanın ait olduğu ay (dönem > son ödeme > ödeme günü; month_source), paid_date ödeme günü */
@@ -50,7 +50,6 @@ interface BillSummary { providers: BillSeries[]; categories: BillSeries[]; overa
 const fetchSummary = (until: string) => send<BillSummary>(`/api/bills/summary?months=24&until=${until}`);
 
 const monthYear = (ym: string) => `${monthLabel(ym)}`;
-const pctTR = (p: number) => `%${Math.abs(p).toLocaleString("tr-TR", { maximumFractionDigits: 1 })}`;
 
 /** Değişim rozeti: ok + metin (renk tek başına anlam taşımaz). Artış uyarı rengi (gider arttı), azalış yeşil. */
 export function ChangeTag({ c, what = "önceki aya göre", compact }: { c: Change | null; what?: string; compact?: boolean }) {
