@@ -43,6 +43,12 @@ def _fixture_pdfs(monkeypatch):
 
     auth._account_fails.clear()  # hesap başı giriş sayacı süreç geneli; testler birbirini kilitlemesin
     auth._attempts.clear()  # IP başı deneme sayacı (S18) da
+    from app import zakat
+
+    # fiyat kaynağının negatif önbelleği süreç geneli (C5): bir testin "kaynak çöktü"sü ötekine geçmesin
+    zakat._price_fail_until = 0.0
+    zakat._yahoo_down_until = 0.0
+    zakat._HIST_FAIL.clear()
 
 
 @pytest.fixture(autouse=True)

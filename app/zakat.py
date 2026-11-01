@@ -18,6 +18,7 @@ o da yoksa kullanıcının girdiği gram altın fiyatı kullanılır.
 """
 import json
 import logging
+import threading
 import time
 from datetime import date, timedelta
 
@@ -30,6 +31,9 @@ RATE = 0.025
 LUNAR_YEAR_DAYS = 354
 PRICE_URL = "https://finans.truncgil.com/v4/today.json"
 PRICE_TTL = 3600
+# Kaynak çökükse her istek dışarıda beklemesin: kısa zaman aşımı, başarısızlık 5 dk hatırlanır (negatif önbellek)
+PRICE_TIMEOUT = httpx.Timeout(4.0, connect=2.0)
+PRICE_FAIL_TTL = 300
 
 log = logging.getLogger(__name__)
 
@@ -126,26 +130,76 @@ def _parse(raw: dict) -> dict[str, float]:
     return out
 
 
-def fetch_prices(force: bool = False) -> dict:
-    """{prices: {anahtar: TL}, updated, source}. Sunucu geneli önbellek (system.db); kişisel veri içermez."""
+_EMPTY_PRICES = {"prices": {}, "updated": None, "fetched": 0, "source": None}
+_price_lock = threading.Lock()  # tek uçuş: aynı anda dışarıya tek fiyat isteği
+_price_fail_until = 0.0         # bu ana kadar kaynak denenmez (son deneme başarısız)
+
+
+def _download_prices() -> dict:
+    """Kaynaktan çek ve önbelleğe yaz. Başarısızsa istisna (çağıran son bilinen fiyatı döner)."""
     from app import system
 
-    cached = json.loads(system.get("market_prices") or "null")
-    if cached and not force and time.time() - cached["fetched"] < PRICE_TTL:
-        return cached
+    global _price_fail_until
     try:
-        r = httpx.get(PRICE_URL, timeout=10, headers={"User-Agent": "HesapKitap"})
+        r = httpx.get(PRICE_URL, timeout=PRICE_TIMEOUT, headers={"User-Agent": "HesapKitap"})
         r.raise_for_status()
         raw = r.json()
         prices = _parse(raw)
         if "GRA" not in prices:
             raise ValueError("gram altın fiyatı yok")
-        data = {"prices": prices, "updated": raw.get("Update_Date"), "fetched": time.time(), "source": "truncgil"}
-        system.put("market_prices", json.dumps(data))
-        return data
-    except Exception as e:  # noqa: BLE001 - ağ yoksa son bilinen fiyat
+    except Exception:
+        _price_fail_until = time.time() + PRICE_FAIL_TTL
+        raise
+    data = {"prices": prices, "updated": raw.get("Update_Date"), "fetched": time.time(), "source": "truncgil"}
+    system.put("market_prices", json.dumps(data))
+    _price_fail_until = 0.0
+    return data
+
+
+def _refresh_in_background() -> None:
+    """Kilit çağıranda alındı; iş bitince bırakılır."""
+    try:
+        _download_prices()
+    except Exception as e:  # noqa: BLE001 - son bilinen fiyat kullanılmaya devam eder
         log.warning("fiyatlar alınamadı: %s", e)
-        return cached or {"prices": {}, "updated": None, "fetched": 0, "source": None}
+    finally:
+        _price_lock.release()
+
+
+def fetch_prices(force: bool = False) -> dict:
+    """{prices: {anahtar: TL}, updated, source}. Sunucu geneli önbellek (system.db); kişisel veri içermez.
+    Süresi dolmuş ama bilinen fiyat varsa istek beklemez: o döner, yenileme arka planda (tek uçuş). Önbellek boşsa
+    ya da force (kullanıcı "Fiyatları yenile" dedi) istek içinde çekilir; aynı anda gelenler aynı sonucu bekler.
+    Kaynak ulaşılamazsa PRICE_FAIL_TTL boyunca yeniden denenmez (force hariç)."""
+    from app import system
+
+    def read():
+        return json.loads(system.get("market_prices") or "null")
+
+    cached = read()
+    if cached and not force and time.time() - cached["fetched"] < PRICE_TTL:
+        return cached
+    if not force and time.time() < _price_fail_until:
+        return cached or dict(_EMPTY_PRICES)
+    if cached and not force:
+        if _price_lock.acquire(blocking=False):  # zaten yenileniyorsa ikinci kez çıkma
+            try:
+                threading.Thread(target=_refresh_in_background, name="fiyat-yenile", daemon=True).start()
+            except RuntimeError:  # iş parçacığı açılamadı: kilit asılı kalmasın, sonraki istek yeniden dener
+                _price_lock.release()
+        return cached
+    asked = time.time()
+    with _price_lock:
+        cached = read()  # beklerken başka istek çekmiş olabilir: onu kullan, ikinci kez dışarı çıkma
+        if cached and cached["fetched"] >= asked:
+            return cached
+        if not force and time.time() < _price_fail_until:  # beklediğimiz deneme başarısız oldu
+            return cached or dict(_EMPTY_PRICES)
+        try:
+            return _download_prices()
+        except Exception as e:  # noqa: BLE001 - ağ yoksa son bilinen fiyat
+            log.warning("fiyatlar alınamadı: %s", e)
+            return cached or dict(_EMPTY_PRICES)
 
 
 def prices() -> dict:
@@ -169,6 +223,9 @@ SAFETY = 0.98  # fiyatı %2 düşük varsay → miktar biraz daha fazla çıkar
 YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?period1={p1}&period2={p2}&interval=1d"
 
 
+_yahoo_down_until = 0.0
+
+
 def _yahoo_low(sym: str, day: date) -> float | None:
     """O güne (ya da hemen önceki işlem gününe) ait günlük en düşük değer."""
     return _yahoo(sym, day, "low")
@@ -178,16 +235,42 @@ def _yahoo(sym: str, day: date, field: str = "close") -> float | None:
     """O güne (ya da hemen önceki işlem gününe) ait günlük değer (low/close/high)."""
     import calendar
 
+    global _yahoo_down_until
+    if time.time() < _yahoo_down_until:  # kaynak az önce yanıt vermedi: zekât geçmişinde her yıl ayrı ayrı beklenmesin
+        raise ValueError("Geçmiş fiyat kaynağına şu an ulaşılamıyor")
     p1 = calendar.timegm((day - timedelta(days=6)).timetuple())
     p2 = calendar.timegm((day + timedelta(days=1)).timetuple())
-    r = httpx.get(YAHOO.format(sym=sym, p1=p1, p2=p2), timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-    r.raise_for_status()
+    try:
+        r = httpx.get(YAHOO.format(sym=sym, p1=p1, p2=p2), timeout=PRICE_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+    except httpx.HTTPError:
+        _yahoo_down_until = time.time() + PRICE_FAIL_TTL
+        raise
     res = r.json()["chart"]["result"][0]
     best = None
     for ts, v in zip(res.get("timestamp") or [], res["indicators"]["quote"][0].get(field) or []):
         if v and date.fromtimestamp(ts) <= day:
             best = v
     return best
+
+
+_HIST_FAIL: dict[str, tuple[float, str]] = {}  # anahtar → (bu ana kadar denenmez, son hata metni)
+
+
+def _hist_fetch(key: str, fn):
+    """Geçmiş fiyatı dışarıdan çek; başarısızlık PRICE_FAIL_TTL boyunca hatırlanır (aynı gün için her istek beklemesin)."""
+    hit = _HIST_FAIL.get(key)
+    if hit and time.time() < hit[0]:
+        raise ValueError(hit[1])
+    try:
+        out = fn()
+    except Exception as e:
+        if len(_HIST_FAIL) > 512:
+            _HIST_FAIL.clear()
+        _HIST_FAIL[key] = (time.time() + PRICE_FAIL_TTL, str(e))
+        raise
+    _HIST_FAIL.pop(key, None)
+    return out
 
 
 def historical_gram_price(day: date) -> float:
@@ -197,10 +280,14 @@ def historical_gram_price(day: date) -> float:
     key = f"hist_gram:{day.isoformat()}"
     if v := system.get(key):
         return float(v)
-    ons, usd = _yahoo_low("GC%3DF", day), _yahoo_low("TRY%3DX", day)
-    if not ons or not usd:
-        raise ValueError("O tarihin altın fiyatı bulunamadı")
-    price = round(ons * usd / 31.1035, 2)
+
+    def get():
+        ons, usd = _yahoo_low("GC%3DF", day), _yahoo_low("TRY%3DX", day)
+        if not ons or not usd:
+            raise ValueError("O tarihin altın fiyatı bulunamadı")
+        return round(ons * usd / 31.1035, 2)
+
+    price = _hist_fetch(key, get)
     system.put(key, str(price))
     return price
 
@@ -219,16 +306,21 @@ def historical_prices(day: date, offline: bool = False) -> dict[str, float]:
         return json.loads(v)
     if offline:
         raise LookupError("önbellekte yok")
-    usd = _yahoo("TRY%3DX", day)
-    ons = _yahoo("GC%3DF", day)
-    if not usd or not ons:
-        raise ValueError(f"{day:%d.%m.%Y} fiyatı bulunamadı")
-    out = {"USD": usd, "GRA": round(ons * usd / 31.1035, 2)}
-    for k in ("EUR", "GBP"):
-        if v := _yahoo(_HIST_FX[k], day):
-            out[k] = v
-    if ag := _yahoo("SI%3DF", day):
-        out["GUMUS"] = round(ag * usd / 31.1035, 2)
+
+    def get():
+        usd = _yahoo("TRY%3DX", day)
+        ons = _yahoo("GC%3DF", day)
+        if not usd or not ons:
+            raise ValueError(f"{day:%d.%m.%Y} fiyatı bulunamadı")
+        out = {"USD": usd, "GRA": round(ons * usd / 31.1035, 2)}
+        for k in ("EUR", "GBP"):
+            if v := _yahoo(_HIST_FX[k], day):
+                out[k] = v
+        if ag := _yahoo("SI%3DF", day):
+            out["GUMUS"] = round(ag * usd / 31.1035, 2)
+        return out
+
+    out = _hist_fetch(key, get)
     if day < date.today():  # bugünün fiyatı gün içinde değişir; geçmiş günler sabit
         system.put(key, json.dumps(out))
     return out
