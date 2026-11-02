@@ -75,6 +75,7 @@ export default function Insights({ items, active, onFilter }: {
         const s = STYLE[i.level];
         const link = i.link && LINK_LABEL[i.link as Route] && routeVisible(book, i.link, meta?.modules) ? (i.link as Route) : null;
         const filter = !!i.filter && !!onFilter;
+        const katsiz = !!i.key?.startsWith("kategorisiz:"); // Kategorisizleri düzenle sayfası
         const on = !!active && active.title === i.title;
         return (
           <li key={i.key ?? n} className={cx("flex h-full gap-3 rounded-xl border p-3", s.cls)}>
@@ -82,7 +83,7 @@ export default function Insights({ items, active, onFilter }: {
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="block text-sm font-medium">{maskText(i.title)}</span>
               <span className="mt-0.5 text-xs text-stone-600 dark:text-stone-400">{maskText(i.detail)}</span>
-              {(i.pay || link || filter || i.key) && (
+              {(i.pay || link || filter || i.key || katsiz) && (
                 <div className="mt-auto flex flex-wrap gap-2 pt-2">
                   {i.pay && (
                     <button className="btn-primary px-3 py-1 text-xs" onClick={() => openPay(i)}>
@@ -93,6 +94,11 @@ export default function Insights({ items, active, onFilter }: {
                     <button className="btn border border-stone-300 bg-white/70 px-3 py-1 text-xs text-stone-700 hover:bg-white dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-200 dark:hover:bg-stone-800"
                       onClick={() => ui.go(link)}>
                       {LINK_LABEL[link]} <ChevronRight size={14} aria-hidden />
+                    </button>
+                  )}
+                  {katsiz && (
+                    <button className="btn-primary px-3 py-1 text-xs" onClick={() => ui.go("kategorisiz")}>
+                      Kategorisizleri düzenle <ChevronRight size={14} aria-hidden />
                     </button>
                   )}
                   {filter && (

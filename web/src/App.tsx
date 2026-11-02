@@ -31,6 +31,7 @@ import Accounts from "./pages/Accounts";
 import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
 import Bills from "./pages/Bills";
+import Uncategorized from "./pages/Uncategorized";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 import Toast, { type ToastState } from "./components/Toast";
 import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks";
@@ -57,6 +58,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   istatistik: Stats,
   faturalar: Bills,
   diger: More,
+  kategorisiz: Uncategorized, // menüde yok: İşlemler'den ve Özet uyarısından açılır
 };
 
 const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
@@ -165,7 +167,7 @@ function Shell() {
   const { ui: prefs } = useUiPrefs();
   // sade görünüm: her şey orantılı büyür (rem), menüde sadece temel sayfalar
   useEffect(() => { document.documentElement.style.fontSize = prefs.simple ? "19px" : ""; }, [prefs.simple]);
-  const SIMPLE = ["ozet", "islemler", "ayarlar", "diger"];
+  const SIMPLE = ["ozet", "islemler", "ayarlar", "diger", "kategorisiz"];
   const viewer = isViewer(book.data); // ortak defterde "Sadece görür": ekleme düğmeleri yok
   const canSee = (r: Route) => (prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));

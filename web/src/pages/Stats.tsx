@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
-import { BarChart3, Percent } from "lucide-react";
+import { BarChart3, CalendarRange, ChevronDown, Percent } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useId } from "react";
 import { api, type Insight } from "../api";
@@ -133,6 +133,17 @@ export default function Stats() {
         <h1 className="flex items-center gap-2 text-xl font-semibold"><BarChart3 size={20} /> İstatistik</h1>
         <MonthPicker value={month} onChange={setMonth} />
       </header>
+
+      {/* yıl özeti en altta kalıyordu: üstte giriş (mobilde de İstatistik'in en üstünde) */}
+      <button className="card flex w-full items-center gap-3 p-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" data-testid="yil-ozeti-giris"
+        onClick={() => document.getElementById("yil-ozeti")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white"><CalendarRange size={18} aria-hidden /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold text-blue-700 dark:text-blue-300">{month.slice(0, 4)} yıl özeti</span>
+          <span className="block text-xs text-stone-500 dark:text-stone-400">Yılın ay ay geliri, gideri, kategorileri ve kalanı</span>
+        </span>
+        <ChevronDown size={16} aria-hidden className="text-stone-400" />
+      </button>
 
       <Compare month={month} />
 
