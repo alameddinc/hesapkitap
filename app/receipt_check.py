@@ -15,6 +15,7 @@ Yuvarlama app/money.py ile (yarım yukarı); web karşılığı (web/src/compone
 from app import money
 
 TOL = 0.02
+SUM_TOL = 0.05  # yeniden okuma kararında kalem toplamı ile fiş toplamı arasındaki pay (TL)
 
 
 def _expected(it: dict) -> float | None:
@@ -65,3 +66,15 @@ def check(items: list[dict], receipt_total: float | None) -> dict:
             "ok": not any(mis) and (diff is None or abs(diff) <= TOL),
             "items": [{"index": i, "expected": _expected(it), "mismatch": m} for i, (it, m) in enumerate(zip(items, mis))],
             "shift_start": shift_start, "suggested_shift": suggested}
+
+
+def needs_reread(items: list[dict], chk: dict) -> bool:
+    """Fişi güçlü modelle yeniden okumak gerekir mi? Yalnız kalemler fişi GERÇEKTEN tutmuyorsa: fiyatsız kalem var (satır
+    kayması belirtisi) ya da kalem toplamı (indirim satırları dahil) fiş toplamından ±SUM_TOL'dan fazla sapıyor. Toplam
+    tutuyor da yalnız adet × birim uyuşmuyorsa okunmaz; o kalemler check.items[].mismatch ile işaretli kalır."""
+    if not items:
+        return False
+    if any(it.get("amount") is None for it in items):
+        return True
+    diff = chk.get("diff")
+    return diff is not None and abs(diff) > SUM_TOL

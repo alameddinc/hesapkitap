@@ -5093,8 +5093,9 @@ def _check_score(chk: dict) -> tuple[int, float]:
 
 
 def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) -> None:
-    """Kademeli okuma: kalemler fişi tutmuyorsa (check.ok false) aynı istekte bir kez daha güçlü modelle oku; daha iyiyse
-    onun kalemlerini kullan. Belge hakkı düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
+    """Kademeli okuma: kalemler fişi gerçekten tutmuyorsa (receipt_check.needs_reread: fiyatsız kalem ya da kalem toplamı
+    fiş toplamından ±0,05'ten fazla sapıyor; yalnız adet × birim uyuşmazlığı yetmez, o kalemler check'te işaretli kalır)
+    aynı istekte bir kez daha güçlü modelle oku; daha iyiyse onun kalemlerini kullan. Belge hakkı düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
     doc['reread'] = {tried, used, model}."""
     import json as _json
     from datetime import date as _date
@@ -5102,7 +5103,7 @@ def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) ->
     from app import system
 
     chk = doc.get("check") or {}
-    if chk.get("ok", True) or not doc.get("items") or not receipt.enabled():
+    if not receipt_check.needs_reread(doc.get("items") or [], chk) or not receipt.enabled():
         return
     u = db.current_user()
     key = f"receipt_auto_reread:{u['id'] if u else 0}"

@@ -156,3 +156,46 @@ def test_auto_reread_daily_cap(client, monkeypatch):
     assert len(calls) == 2
     r = client.post("/api/receipts/parse", files={"file": ("g.jpg", jpeg(), "image/jpeg")}).json()
     assert len(calls) == 3 and "reread" not in r  # sınır doldu: yalnız ilk okuma
+
+
+def test_needs_reread_only_when_sum_off_or_priceless():
+    # toplam tutuyor, yalnız adet × birim uyuşmuyor: yeniden okuma yok, kalem işaretli
+    items = [_it("MUZ", 75.0, 2, 40.0), _it("EKMEK", 25.0)]
+    chk = receipt_check.check(items, 100.0)
+    assert not chk["ok"] and chk["items"][0]["mismatch"] and not receipt_check.needs_reread(items, chk)
+    # indirim satırı dahil toplam ±0,05 içinde
+    items = [_it("A", 60.0), _it("B", 45.04), _it("INDIRIM", -5.0)]
+    assert not receipt_check.needs_reread(items, receipt_check.check(items, 100.0))
+    # toplam tutmuyor ya da fiyatsız kalem: yeniden oku
+    items = [_it("A", 60.0), _it("B", 30.0)]
+    assert receipt_check.needs_reread(items, receipt_check.check(items, 100.0))
+    items = [_it("A", 100.0), _it("B", None)]
+    assert receipt_check.needs_reread(items, receipt_check.check(items, 100.0))
+    # fiş toplamı okunamadı, fiyatsız kalem yok: karar verilemez, okunmaz
+    items = [_it("A", 10.0, 2, 4.0)]
+    assert not receipt_check.needs_reread(items, receipt_check.check(items, None))
+    assert not receipt_check.needs_reread([], receipt_check.check([], 100.0))
+
+
+def test_auto_reread_skipped_when_only_unit_price_mismatch(client, monkeypatch):
+    from tests.test_doc_reads import _jpeg as jpeg
+
+    first = {**_FIS, "items": [{"name": "MUZ", "qty": 2, "unit_price": 40.0, "amount": 75.0},
+                               {"name": "EKMEK", "amount": 25.0}]}
+    calls = _ai(monkeypatch, first, {"total": 100, "items": [{"name": "A", "amount": 100.0}]})
+    for url in ("/api/receipts/parse", "/api/documents/parse"):
+        files = {"file": ("f.jpg", jpeg(), "image/jpeg")} if url.endswith("receipts/parse") else \
+            [("file", ("f.jpg", jpeg(), "image/jpeg"))]
+        r = client.post(url, files=files).json()
+        assert "reread" not in r and r["check"]["diff"] == 0 and not r["check"]["ok"]
+        assert [i["mismatch"] for i in r["check"]["items"]] == [True, False]
+    assert len(calls) == 2  # iki okuma, hiç yeniden okuma yok
+
+
+def test_auto_reread_when_priceless_item(client, monkeypatch):
+    from tests.test_doc_reads import _jpeg as jpeg
+
+    first = {**_FIS, "items": [{"name": "A", "amount": 100.0}, {"name": "A DEVAMI", "amount": None}]}
+    calls = _ai(monkeypatch, first, {"total": 100, "items": [{"name": "A A DEVAMI", "amount": 100.0}]})
+    r = client.post("/api/receipts/parse", files={"file": ("f.jpg", jpeg(), "image/jpeg")}).json()
+    assert len(calls) == 2 and r["reread"]["tried"]

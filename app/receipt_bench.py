@@ -290,7 +290,7 @@ def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PR
                                "thoughts": usage.get("thoughtsTokenCount")},
                     "usd": cost_usd(usage, *prices)}
         if reread and b_doc and b_doc.get("type") == "receipt" and b_doc.get("items") and \
-                not receipt_check.check(b_doc["items"], b_doc.get("total"))["ok"]:  # uygulamadaki tetik
+                receipt_check.needs_reread(b_doc["items"], receipt_check.check(b_doc["items"], b_doc.get("total"))):  # uygulamadaki tetik
             res, err, sec = _timed(reread, case, b_doc.get("total"))
             r_doc, r_usage = res if res else (None, {})
             merged = {**b_doc, "items": r_doc["items"]} if r_doc else b_doc
