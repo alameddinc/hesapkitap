@@ -21,11 +21,14 @@ from collections import Counter, defaultdict
 
 from app import db, finance
 from app.categorize import UNCATEGORIZED, categorize, fold_key, suggest_pattern
-from app.textnorm import merchant_name, normalize
+from app.textnorm import drop_gateway, legal_key, merchant_name, normalize
 
 GENERIC = {None, "", "Diğer", "Diğer Gelir", UNCATEGORIZED, "Ödeme"}
 UNDO_LABEL = "Kategori: "
-AI_MAX_KEYS = 40
+RENAME_LABEL = "İşyeri adı: "
+AI_MAX_KEYS = 150   # "Yapay zekâya hepsini sor": tek çağrı (tek hak); yalnız adlar gider, istem kısa kalır
+ONE_OFF_MAX = 250.0  # "Tek seferlikleri Diğer yap": tek işlemli, tutarı bunu aşmayan gider grupları
+BULK_MAX = 500
 
 
 def _tag(kind: str) -> str:
@@ -42,7 +45,8 @@ def _key(r: dict) -> tuple[str, str]:
         name = r["merchant"] or desc
         return f"i:{t}:{fold_key(name)}", name
     # elle/döküm kaydı: anahtar işyeri kökü, görünen ad kullanıcının yazdığı (Türkçe harfler korunur; not kısmı yok)
-    return f"i:{t}:{fold_key(merchant_name(desc) or desc)}", desc.split(" · ")[0].strip() or desc or "?"
+    shown = drop_gateway(desc)  # 'Payco/Örnek Bilişim' → 'Örnek Bilişim' (aracı adı görünmez)
+    return f"i:{t}:{fold_key(merchant_name(desc) or desc)}", shown.split(" · ")[0].strip() or desc or "?"
 
 
 def _rows(month: str | None) -> list[dict]:
@@ -111,7 +115,8 @@ def _sector_of(r: dict) -> str:
     return r.get("note") or ""
 
 
-def groups(month: str | None = None) -> list[dict]:
+def groups(month: str | None = None, sort: str = "count") -> list[dict]:
+    """sort: "count" (en çok işlem önce; eski istemciler) | "total" (en çok tutan önce)."""
     rows = _rows(month)
     by: dict[str, list[dict]] = defaultdict(list)
     labels: dict[str, str] = {}
@@ -137,8 +142,14 @@ def groups(month: str | None = None) -> list[dict]:
             "sample_ids": [r["uid"] for r in rs[:5]],
             "first_date": min(r["date"] for r in rs)[:10], "last_date": max(r["date"] for r in rs)[:10],
             "suggestion": _suggest(k, rs, hist, rules, people),
+            "renamable": any(r["source"] == "card" for r in rs),
         })
-    out.sort(key=lambda g: (-g["count"], -abs(g["total"]), g["label"]))
+        g = out[-1]
+        g["one_off"] = g["flow"] == "gider" and g["count"] == 1 and abs(g["total"]) <= ONE_OFF_MAX
+    if sort == "total":
+        out.sort(key=lambda g: (-abs(g["total"]), -g["count"], g["label"]))
+    else:
+        out.sort(key=lambda g: (-g["count"], -abs(g["total"]), g["label"]))
     return out
 
 
@@ -156,36 +167,58 @@ def _write(c, target: tuple[str, int], category: str) -> None:
         c.execute("UPDATE splits SET category = ? WHERE id = ?", (category, oid))
 
 
-def _remember_rule(rows: list[dict], category: str) -> tuple[str | None, int]:
-    """İşyeri için kural (var olan aynı desenli kuralın kategorisi güncellenir). Sonra: kartta elle atanmamış işlemler
-    yeniden kategorilenir; elle/döküm kayıtlarından desene uyan kategorisizler de bu kategoriyi alır. (desen, ek sayı)."""
-    import re
-
+def _add_rule(c, rows: list[dict], category: str) -> str | None:
+    """İşyeri için kural (var olan aynı desenli kuralın kategorisi güncellenir); desen."""
     base = next((r for r in rows if r["source"] == "card"), rows[0])
     pattern = suggest_pattern(base.get("description") or base.get("merchant") or "")
     if not pattern:
-        return None, 0
-    with db.connect() as c:
-        cur = c.execute("SELECT id FROM rules WHERE pattern = ?", (pattern,)).fetchone()
-        if cur:
-            c.execute("UPDATE rules SET category = ? WHERE id = ?", (category, cur["id"]))
-        else:
-            c.execute("INSERT INTO rules (pattern, category, priority) VALUES (?, ?, 10)", (pattern, category))
-        before = c.execute("SELECT COUNT(*) FROM transactions WHERE category = ?", (UNCATEGORIZED,)).fetchone()[0]
+        return None
+    cur = c.execute("SELECT id FROM rules WHERE pattern = ?", (pattern,)).fetchone()
+    if cur:
+        c.execute("UPDATE rules SET category = ? WHERE id = ?", (category, cur["id"]))
+    else:
+        c.execute("INSERT INTO rules (pattern, category, priority) VALUES (?, ?, 10)", (pattern, category))
+    return pattern
+
+
+def _spread_rules(learned: list[tuple[str, str]], before: int) -> int:
+    """Yeni kurallardan sonra: kartta elle atanmamış işlemler yeniden kategorilenir (tek sefer); elle/döküm
+    kayıtlarından desene uyan kategorisizler de o kategoriyi alır. Ek değişen kayıt sayısı."""
+    import re
+
     db.recategorize_all()
     extra = 0
     with db.connect() as c:
         after = c.execute("SELECT COUNT(*) FROM transactions WHERE category = ?", (UNCATEGORIZED,)).fetchone()[0]
         extra += max(0, before - after)
-        for e in db.rows(c.execute("SELECT id, description FROM entries WHERE category = ? AND counterparty IS NULL "
-                                   "AND kind = 'gider'", (UNCATEGORIZED,))):
-            try:
-                if re.search(pattern, normalize(e["description"] or "")):
+        entries = db.rows(c.execute("SELECT id, description FROM entries WHERE category = ? AND counterparty IS NULL "
+                                    "AND kind = 'gider'", (UNCATEGORIZED,)))
+        for e in entries:
+            text = normalize(e["description"] or "")
+            for pattern, category in learned:
+                try:
+                    hit = re.search(pattern, text)
+                except re.error:
+                    continue
+                if hit:
                     c.execute("UPDATE entries SET category = ? WHERE id = ?", (category, e["id"]))
                     extra += 1
-            except re.error:
-                break
-    return pattern, extra
+                    break
+    return extra
+
+
+def _uncat_cards(c) -> int:
+    return c.execute("SELECT COUNT(*) FROM transactions WHERE category = ?", (UNCATEGORIZED,)).fetchone()[0]
+
+
+def _remember_rule(rows: list[dict], category: str) -> tuple[str | None, int]:
+    """İşyeri için kural + yayılım (bkz. _spread_rules). (desen, ek sayı)."""
+    with db.connect() as c:
+        pattern = _add_rule(c, rows, category)
+        before = _uncat_cards(c)
+    if not pattern:
+        return None, 0
+    return pattern, _spread_rules([(pattern, category)], before)
 
 
 def _remember_person(name: str, category: str) -> None:
@@ -224,6 +257,100 @@ def apply(key: str, category: str, remember: bool, month: str | None = None) -> 
     return out
 
 
+def _by_key(month: str | None) -> dict[str, list[dict]]:
+    by: dict[str, list[dict]] = defaultdict(list)
+    for r in _rows(month):
+        by[_key(r)[0]].append(r)
+    return by
+
+
+def apply_many(items: list[tuple[str, str]], remember: bool, month: str | None = None) -> dict:
+    """Birden çok gruba kategori, TEK geri alma kaydıyla ("Önerilenlerin hepsini uygula", çoklu seçim, "Tek
+    seferlikleri Diğer yap"). items: [(anahtar, kategori)]. remember: apply() ile aynı (işyeri → kural, kişiye giden
+    para → kişi kategorisi); kurallar eklendikten sonra yeniden kategorileme bir kez yapılır.
+    {groups, changed, also_changed, rules, people, skipped: [anahtar], undo_id}."""
+    from app import undo
+
+    by = _by_key(month)
+    todo = [(k, cat) for k, cat in dict(items).items() if by.get(k)]
+    out = {"groups": len(todo), "changed": 0, "also_changed": 0, "rules": 0, "people": 0,
+           "skipped": [k for k, _ in dict(items).items() if not by.get(k)], "undo_id": None}
+    if not todo:
+        return out
+    cats = sorted({cat for _, cat in todo})
+    label = f"{UNDO_LABEL}{len(todo)} grup → {cats[0] if len(cats) == 1 else f'{len(cats)} kategori'}"
+    with undo.batch(label) as b:
+        learned: list[tuple[str, str]] = []
+        with db.connect() as c:
+            for k, cat in todo:
+                rows = by[k]
+                for t in dict.fromkeys(t for r in rows if (t := _target(r))):
+                    _write(c, t, cat)
+                out["changed"] += len(rows)
+                if not remember:
+                    continue
+                if k.startswith("i:") and (p := _add_rule(c, rows, cat)):
+                    learned.append((p, cat))
+            before = _uncat_cards(c)
+        if remember:
+            for k, cat in todo:
+                if k.startswith("k:c:"):
+                    _remember_person(k.split(":", 2)[2], cat)
+                    out["people"] += 1
+        if learned:
+            out["rules"] = len(learned)
+            out["also_changed"] = _spread_rules(learned, before)
+        b["summary"] = {k: out[k] for k in ("groups", "changed", "also_changed", "rules", "people")}
+    out["undo_id"] = b["id"]
+    return out
+
+
+def rename(display: str, key: str | None = None, uid: str | None = None, month: str | None = None) -> dict:
+    """Kullanıcının verdiği görünen işyeri adı (merchant_aliases: kaynak → görünen). Ekstredeki ham açıklama değişmez;
+    bu işyerinin bütün kart işlemleri (her dönem) yeni adla görünür, aynı adla gruplanır. display boşsa takma ad
+    kaldırılır (ekstredeki ada döner). key: Kategorisizler grubu; uid: tek işlem ("c123"). Geri alınabilir.
+    {display, sources, changed, undo_id}."""
+    from app import finance, undo
+
+    display = " ".join((display or "").split())[:60]
+    descs: list[str] = []
+    if key:
+        descs = [r["description"] for r in _by_key(month).get(key, []) if r["source"] == "card"]
+    elif uid and uid.startswith("c") and uid[1:].isdigit():
+        with db.connect() as c:
+            r = c.execute("SELECT description FROM transactions WHERE id = ?", (int(uid[1:]),)).fetchone()
+        descs = [r["description"]] if r else []
+    if not descs:
+        raise KeyError(key or uid)
+    aliases = db.merchant_aliases()
+    old_shown = {finance._display_merchant(d, aliases) for d in descs}
+    sources = set()
+    for d in descs:
+        sources.add(merchant_name(d))
+        if (lk := legal_key(d)) in aliases:  # fişten öğrenilmiş takma ad önce bakılır: o da yeni adı göstersin
+            sources.add(lk)
+    sources.discard("")
+    shown = display or None
+    with undo.batch(f"{RENAME_LABEL}{', '.join(sorted(old_shown))} → {display or 'ekstredeki ad'}") as b:
+        with db.connect() as c:
+            for src in sources:
+                if display and display != src:
+                    c.execute("INSERT OR REPLACE INTO merchant_aliases (source, display) VALUES (?, ?)", (src, display))
+                else:
+                    c.execute("DELETE FROM merchant_aliases WHERE source = ?", (src,))
+            new_shown = display or None
+            if new_shown is None:  # kaldırıldı: tek kaynaksa yeni ad o
+                new_shown = next(iter(sources)) if len(sources) == 1 else None
+            if new_shown:  # işyeri kısma hedefi görünen ada bağlı: adla birlikte taşınır
+                for old in old_shown - {new_shown}:
+                    c.execute("UPDATE savings_goals SET name = ? WHERE kind = 'merchant' AND name = ?", (new_shown, old))
+            changed = sum(1 for r in c.execute("SELECT description FROM transactions WHERE is_deleted = 0")
+                          if merchant_name(r["description"]) in sources or legal_key(r["description"]) in sources)
+        b["summary"] = {"display": shown, "sources": sorted(sources), "changed": changed}
+    return {"display": shown or (next(iter(sources)) if len(sources) == 1 else None), "sources": sorted(sources),
+            "changed": changed, "undo_id": b["id"]}
+
+
 def undo_apply(undo_id: str) -> dict:
     """Yalnız bu özelliğin kaydı geri alınır (yükleme geçmişindeki başka işler değil)."""
     from app import undo
@@ -231,7 +358,7 @@ def undo_apply(undo_id: str) -> dict:
     undo.ensure()
     with db.connect() as c:
         r = c.execute("SELECT label FROM import_batches WHERE id = ?", (undo_id,)).fetchone()
-    if not r or not (r["label"] or "").startswith(UNDO_LABEL):
+    if not r or not (r["label"] or "").startswith((UNDO_LABEL, RENAME_LABEL)):
         raise KeyError(undo_id)
     return undo.undo(undo_id, force=True)
 

@@ -26,7 +26,7 @@ def merchant_name(description: str) -> str:
     """İşyeri gruplaması için kısa ad: 'FACEBK *ABC123XYZ9/Dublin' -> 'FACEBK', 'Uber Eats Yemek' -> 'UBER EATS YEMEK'"""
     import re
 
-    norm = normalize(description)
+    norm = strip_gateway(normalize(description))  # 'PAYCO/ORNEK BILISIM' → 'ORNEK BILISIM' (aracı değil asıl işyeri)
     # Satıcı adına tahsilat yapan aracılar (merchant of record): asıl satıcı yıldızdan sonra
     # 'PADDLE.NET* GEOGUESSR/0808…' -> 'GEOGUESSR', 'FS *SUBLIME HQ' -> 'SUBLIME HQ'
     norm = re.sub(r"^(PADDLE\.NET|PADDLE|FS|2CO\.COM|2CO|LEMSQZY|XSOLLA|DLOCAL)\s*\*\s*", "", norm)
@@ -53,17 +53,54 @@ MERCHANT_ALIASES = {
 }
 
 
-# Ödeme kuruluşları / sanal POS aracıları: asıl satıcı '/' sonrasında yazar
-PAYMENT_GATEWAYS = ("MOKAUNITED", "MOKA UNITED", "MOKA", "IYZICO", "TKPAY", "ODEAL", "PAYTR", "SIPAY",
-                    "PARAM", "CRAFTGATE", "PAPARA", "HEPSIPAY", "ESNEKPOS", "PAYCELL", "HALKODE OD", "NKOLAY")
+# Ödeme kuruluşları / sanal POS aracıları (payment facilitator): kart ekstresinde işyeri adı aracının adıyla başlar,
+# asıl satıcı '/' ya da '*' sonrasında yazar ('PAYCO/ORNEK BILISIM', 'IYZ*ORNEK KITAP', 'ODEAL//ORNEK KASAP').
+# Tek liste: görünen ad (merchant_name), gruplama anahtarı, kural eşleşmesi (categorize) ve kural önerisi
+# (suggest_pattern) hepsi strip_gateway'den geçer. Yeni aracı eklemek için buraya normalize() biçiminde yaz
+# (büyük harf, Türkçe karaktersiz). Ham açıklama (veritabanındaki description) hiç değişmez.
+PAYMENT_GATEWAYS = (
+    "MOKAUNITED", "MOKA UNITED", "MOKA", "IYZICO", "IYZ", "IYZI", "TKPAY", "ODEAL", "PAYTR", "SIPAY", "PARAM",
+    "PARAMPOS", "PARAM POS", "CRAFTGATE", "PAPARA", "HEPSIPAY", "ESNEKPOS", "PAYCELL", "HALKODE OD", "NKOLAY",
+    "PAYCO", "ELEKSE", "TOSLA", "PAYU", "LIDIO", "PAYNET", "IPARA", "PARATIKA", "BIRLESIK ODEME", "PAYGURU",
+)
+_GATEWAYS = frozenset(PAYMENT_GATEWAYS)
+_GATEWAY_HEAD = None
+
+
+def gateway_of(norm: str) -> tuple[str, str] | None:
+    """Baştaki aracı ve kalan metin: 'IYZ*ORNEK KITAP' → ('IYZ', 'ORNEK KITAP'); aracı yoksa None."""
+    import re
+
+    global _GATEWAY_HEAD
+    if _GATEWAY_HEAD is None:
+        _GATEWAY_HEAD = re.compile(r"^\s*([A-Z0-9 .]+?)\s*(?:/+|\*)[\s/*]*(.*)$")
+    m = _GATEWAY_HEAD.match(norm)
+    if not m or m.group(1) not in _GATEWAYS or not m.group(2).strip("/* "):
+        return None
+    return m.group(1), m.group(2)
 
 
 def strip_gateway(norm: str) -> str:
-    """'MOKAUNITED/ORNEK MOBILYA' -> 'ORNEK MOBILYA', 'ODEAL//ORNEK KASAP/ISTANBUL' -> 'ORNEK KASAP/ISTANBUL'"""
-    head, sep, rest = norm.partition("/")
-    if sep and head.strip() in PAYMENT_GATEWAYS and rest.strip("/ "):
-        return rest.lstrip("/ ")
+    """'MOKAUNITED/ORNEK MOBILYA' -> 'ORNEK MOBILYA', 'ODEAL//ORNEK KASAP/ISTANBUL' -> 'ORNEK KASAP/ISTANBUL',
+    'PAYCO/ELEKSE/ORNEK BILISIM' -> 'ORNEK BILISIM' (iç içe aracı), 'IYZ*ORNEK KITAP' -> 'ORNEK KITAP'."""
+    for _ in range(3):
+        g = gateway_of(norm)
+        if not g:
+            break
+        norm = g[1]
     return norm
+
+
+def drop_gateway(text: str) -> str:
+    """strip_gateway'in asıl yazılışı koruyan hâli (görünen ad için): 'Payco/Örnek Bilişim' → 'Örnek Bilişim'."""
+    import re
+
+    for _ in range(3):
+        m = re.match(r"^\s*([^/*]+?)\s*(?:/+|\*)[\s/*]*(.*)$", text, re.S)
+        if not m or normalize(m.group(1)) not in _GATEWAYS or not m.group(2).strip("/* "):
+            break
+        text = m.group(2)
+    return text
 
 
 # Şirket unvanı ekleri: fişte "SAN.VE DIŞ.TİC.LTD.ŞTİ.", ekstrede "SANAYİ VE" — ikisi de aynı köke insin

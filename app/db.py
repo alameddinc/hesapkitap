@@ -648,6 +648,7 @@ def init_db() -> None:
     _ensure_imported_bank_accounts()
     _once("salary_linked_v2", link_salary_entries)
     _once("cancel_pairs_v1", pair_cancelled_entries)
+    _once("gateway_keys_v1", migrate_gateway_keys)
 
 
 def _once(key: str, fn) -> None:
@@ -659,6 +660,49 @@ def _once(key: str, fn) -> None:
     except sqlite3.OperationalError:  # çok eski şema (kolon yok): onarılacak veri de yok
         return
     set_setting(key, "1")
+
+
+def migrate_gateway_keys() -> dict:
+    """Ödeme aracısı önekleri (textnorm.PAYMENT_GATEWAYS) artık işyeri adından atılıyor: 'PAYCO/ORNEK BILISIM' eskiden
+    'PAYCO' adıyla, şimdi 'ORNEK BILISIM' adıyla görünür. İşyeri adı saklanmaz (açıklamadan hesaplanır), göç gerekmez;
+    yalnız işyeri ADINA bağlı iki kullanıcı ayarı yeni ada taşınır, rakam ve kategori değişmez:
+    - abonelik durumu (subscription_state, anahtar = eski ad): yeni adlara kopyalanır (eski satır kalır; INSERT OR IGNORE),
+    - işyeri kısma hedefi (savings_goals kind='merchant'): eski ad tek bir yeni ada gidiyorsa adı güncellenir.
+    Tekrar çalışması bir şey değiştirmez. Rapor settings'te (gateway_keys_v1_report) ve günlükte."""
+    import json
+    import logging
+
+    from app.textnorm import PAYMENT_GATEWAYS, gateway_of, merchant_name, normalize
+
+    gws = set(PAYMENT_GATEWAYS)
+    report = {"subscriptions": 0, "goals": 0, "ambiguous_goals": 0}
+    with connect() as c:
+        subs = {r["merchant"]: dict(r) for r in c.execute("SELECT * FROM subscription_state")
+                if r["merchant"] in gws}
+        goals = [dict(r) for r in c.execute("SELECT id, name FROM savings_goals WHERE kind = 'merchant'")
+                 if normalize(r["name"]) in gws]
+        if not subs and not goals:
+            return report
+        new_names: dict[str, set] = {}
+        for r in c.execute("SELECT DISTINCT description FROM transactions"):
+            g = gateway_of(normalize(r["description"] or ""))
+            if g:
+                new_names.setdefault(g[0], set()).add(merchant_name(r["description"]))
+        for old, st in subs.items():
+            for name in sorted(new_names.get(old, ())):
+                report["subscriptions"] += c.execute(
+                    "INSERT OR IGNORE INTO subscription_state (merchant, status, changed_at, new_amount, note) "
+                    "VALUES (?, ?, ?, ?, ?)", (name, st["status"], st["changed_at"], st.get("new_amount"), st.get("note"))).rowcount
+        for gl in goals:
+            names = new_names.get(normalize(gl["name"]), set())
+            if len(names) == 1:
+                c.execute("UPDATE savings_goals SET name = ? WHERE id = ?", (next(iter(names)), gl["id"]))
+                report["goals"] += 1
+            elif names:
+                report["ambiguous_goals"] += 1
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('gateway_keys_v1_report', ?)", (json.dumps(report),))
+    logging.getLogger(__name__).info("ödeme aracısı göçü: %s", report)
+    return report
 
 
 # dökümdeki maaş satırı: "MAAS 2026 OCAK ÖDEMESI", "ISÇI UCRET 2026 TEMMUZ ÜCRET ÖDEM…" (fold_key boşlukları atar);

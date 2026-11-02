@@ -55,12 +55,17 @@ def categorize(description: str, txn_type: str, rules: list[tuple[str, str]]) ->
     if txn_type == PAYMENT:
         return "Ödeme"
     norm = normalize(description)
-    for pattern, category in rules:
-        try:
-            if re.search(pattern, norm):
-                return category
-        except re.error:
-            continue
+    # Ödeme aracısı önekli satır ('PAYCO/ORNEK KITAP'): kurallar önce asıl işyerine bakar (aracı adına yazılmış bir
+    # kural asıl işyerinin kategorisini ezmesin); hiçbiri tutmazsa tam metne (eski kurallar ve 'IYZICO' gibi
+    # aracı kuralları aynen çalışır)
+    asil = strip_gateway(norm)
+    for text in (asil, norm) if asil != norm else (norm,):
+        for pattern, category in rules:
+            try:
+                if re.search(pattern, text):
+                    return category
+            except re.error:
+                continue
     return UNCATEGORIZED
 
 

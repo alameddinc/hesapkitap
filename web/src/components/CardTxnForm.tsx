@@ -1,4 +1,5 @@
-import { ArrowDownRight, Ban, EyeOff, Repeat, RotateCcw } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowDownRight, Ban, EyeOff, Pencil, Repeat, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { api, type Row } from "../api";
 import { BankText, userNote } from "./BankText";
@@ -9,6 +10,9 @@ import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
 import SplitEditor from "./SplitEditor";
 import MarkDonation from "./MarkDonation";
+import { send } from "../lib/apiError";
+import { AdDuzelt } from "../pages/Uncategorized";
+import { useUI } from "../ui";
 
 /** Ekstreden gelen işlemi düzenle: kategori, tip (faiz → harcama gibi), not, gizle/geri al. */
 export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClose: () => void; onSaved?: (m: string) => void }) {
@@ -28,6 +32,29 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
     onSaved?.(r.rule ? `Kaydedildi · kural: ${r.rule}` : "Kaydedildi");
     onClose();
   }, { inline: true });
+
+  const ui = useUI();
+  const qc = useQueryClient();
+  const [adAc, setAdAc] = useState(false);
+  const tazeleAd = () => {
+    for (const k of ["uncategorized", "summary", "txns", "transactions", "compare", "year-summary", "budgets", "savings"])
+      void qc.invalidateQueries({ queryKey: [k] });
+  };
+  // görünen işyeri adı (merchant_aliases): bu işyerinin bütün kart işlemlerine; ham açıklama değişmez
+  const adDuzelt = useMutation({
+    mutationFn: (display: string) => send<{ display: string | null; changed: number; undo_id: string | null }>("/api/merchants/rename",
+      { method: "POST", json: { uid: `c${row.id}`, display } }),
+    onSuccess: (r) => {
+      setAdAc(false);
+      tazeleAd();
+      onClose();
+      const id = r.undo_id;
+      ui.toast(r.display ? `Ad düzeltildi: ${r.display} (${r.changed} işlem)` : "Ekstredeki ada dönüldü", id ? {
+        undo: async () => { await send("/api/uncategorized/undo", { method: "POST", json: { undo_id: id } }); tazeleAd(); },
+      } : undefined);
+    },
+    onError: (e) => ui.error(e instanceof Error ? e.message : "Ad düzeltilemedi"),
+  });
 
   const categoryChanged = category !== row.category && category !== "";
   const [downgrade, setDowngrade] = useState(false);
@@ -71,6 +98,13 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           </div>
           <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">Tutar ve tarih kart ekstresinden gelir, değiştirilemez; yanlış okunduysa ekstreyi kontrol et.</div>
         </div>
+        {row.merchant && !viewer && (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">Görünen ad: <b>{row.merchant}</b></span>
+            <button type="button" className="btn-ghost px-2 py-1 text-sm" onClick={() => setAdAc(true)}><Pencil size={14} aria-hidden /> Adı düzelt</button>
+          </div>
+        )}
+        {adAc && <AdDuzelt g={{ label: row.merchant }} busy={adDuzelt.isPending} onClose={() => setAdAc(false)} onSave={(d) => adDuzelt.mutate(d)} />}
         {row.subscription && (
           <div className={cx("flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm",
             row.subscription === "aktif" ? "border-stone-200 dark:border-stone-700" : "border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/40")}>
