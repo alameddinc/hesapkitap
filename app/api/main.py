@@ -365,13 +365,18 @@ def _origin_of(url: str | None) -> str | None:
     return f"{u.scheme}://{u.netloc}".lower() if u.scheme and u.netloc else None
 
 
+# Sunucudan sunucuya, çerezsiz çağrılan uçlar: kimlik doğrulaması kendi içinde (Apple: imzalı JWT). Tarayıcı başlığı
+# taşımasa da (bugün geçer) bir vekil Origin eklerse reddedilmesin diye açık istisna.
+CSRF_EXEMPT = frozenset({"/api/auth/apple/notifications"})
+
+
 def _csrf_ok(request: Request) -> bool:
     """Çerezle (tarayıcı) gelen yazma isteği başka siteden mi (S9)? SameSite=Lax tek başına yetmez: aynı alan adındaki
     kardeş siteler 'aynı site' sayılır. Bearer'lı istek (mobil, Kısayollar) çerez taşımaz: denetlenmez.
     İzinli: isteğin kendi adresi (Host), HESAPKITAP_PUBLIC_URL, uygulama kökenleri (APP_ORIGINS) ve
     HESAPKITAP_CSRF_ORIGINS. Sec-Fetch-Site same-origin/none (adres çubuğu, paylaşım hedefi) geçer; same-site ve
     cross-site yalnız izinli Origin'le. Başlık hiç yoksa (eski tarayıcı, sunucudan sunucuya çağrı) geçer."""
-    if request.method not in _UNSAFE or _bearer(request):
+    if request.method not in _UNSAFE or _bearer(request) or request.url.path in CSRF_EXEMPT:
         return True
     sfs = (request.headers.get("sec-fetch-site") or "").lower()
     if sfs in ("same-origin", "none"):
@@ -501,14 +506,14 @@ def _pending_deletion(u: dict) -> JSONResponse:
                          "subscription": plans.subscription(u)}, status_code=409)
 
 
-def _start_session(request: Request, response: Response, user: dict) -> None:
+def _start_session(request: Request, response: Response, user: dict, via: str | None = None) -> None:
     # HTTPS arkasındaysa (doğrudan ya da proxy başlığıyla) çerez otomatik Secure olur
     https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     from app import sessions
 
     mobile = request.headers.get("x-hk-client") == "mobile"
     token = auth.make_token(system.user(user["id"]), "mobile" if mobile else "web",
-                            sessions.device_name(request.headers.get("user-agent"), mobile))
+                            sessions.device_name(request.headers.get("user-agent"), mobile), via)
     if mobile:  # mobil uygulama: anahtarı kendisi saklar
         response.headers["X-Session-Token"] = token
         return
@@ -759,6 +764,35 @@ def apple_login(body: SocialIn, request: Request, response: Response):
     return _social_login(social.verify_apple, body, request, response)
 
 
+@app.post("/api/auth/apple/notifications")
+async def apple_notifications(request: Request):
+    """Sign in with Apple sunucudan sunucuya bildirimleri (App ID'de tanımlı uç). Gövde {"payload": JWT}; imza Apple
+    JWKS'iyle doğrulanır (app/apple.py). Her durumda 200: Apple yeniden denemesin; hatalar loglanır. Oturumsuz,
+    CSRF istisnası (CSRF_EXEMPT)."""
+    import json
+    import logging
+
+    from app import apple
+
+    try:
+        raw = await request.body()
+        if len(raw) > 64 * 1024:
+            raise ValueError("gövde çok büyük")
+        try:
+            payload = (json.loads(raw) or {}).get("payload")
+        except ValueError:
+            from urllib.parse import parse_qs
+
+            payload = (parse_qs(raw.decode("utf-8", "replace")).get("payload") or [None])[0]
+        if isinstance(payload, str) and payload:
+            await asyncio.to_thread(apple.handle_notification, payload)
+        else:
+            logging.getLogger("hesapkitap.apple").warning("apple bildirimi: payload yok")
+    except Exception:  # noqa: BLE001
+        logging.getLogger("hesapkitap.apple").exception("apple bildirimi işlenemedi")
+    return {"ok": True}
+
+
 def _social_login(verify, body: SocialIn, request: Request, response: Response):
     import secrets
 
@@ -828,7 +862,7 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         from app import apple
 
         apple.link(u["id"], who.get("sub"), who.get("aud"), body.authorization_code)
-    _start_session(request, response, system.user(u["id"]))
+    _start_session(request, response, system.user(u["id"]), who.get("via"))
     return {"ok": True, "created": created}
 
 

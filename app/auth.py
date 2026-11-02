@@ -242,7 +242,7 @@ def _sign(payload: str) -> str:
     return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def make_token(u: dict, kind: str = "web", device: str | None = None) -> str:
+def make_token(u: dict, kind: str = "web", device: str | None = None, via: str | None = None) -> str:
     """Oturum anahtarı: imzalı (süre, kullanıcı, oturum sürümü, oturum kimliği). Oturum sunucuda da kayıtlı
     (app/sessions.py): çıkış ve "tümünden çık" anahtarı gerçekten geçersiz kılar; kayan süre orada."""
     from app import sessions
@@ -251,7 +251,7 @@ def make_token(u: dict, kind: str = "web", device: str | None = None) -> str:
     nonce = secrets.token_hex(16)
     exp = int(time.time()) + days * 86400
     payload = f"{exp}.{u['id']}.{u['session_version']}.{nonce}"
-    sessions.create(u["id"], nonce, kind, device)
+    sessions.create(u["id"], nonce, kind, device, via)
     return f"{payload}.{_sign(payload)}"
 
 

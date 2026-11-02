@@ -55,11 +55,17 @@ def _google_keys(force: bool = False) -> dict:
 
 
 def _apple_keys(force: bool = False) -> dict:
+    if force and time.time() - _apple_jwks["at"] < 60 and _apple_keys_ok():
+        force = False  # bilinmeyen kid'li sahte belgeler (bildirim ucu herkese açık) Apple'a istek yağdırmasın
     if force or time.time() - _apple_jwks["at"] > 3600 or not _apple_jwks["keys"]:
         data = httpx.get(APPLE_KEYS, timeout=10).json()
         _apple_jwks["keys"] = {k["kid"]: k for k in data.get("keys", []) if k.get("kty") == "RSA"}
         _apple_jwks["at"] = time.time()
     return _apple_jwks["keys"]
+
+
+def _apple_keys_ok() -> bool:
+    return bool(_apple_jwks["keys"])
 
 
 # ---------------------------------------------------------------- tek kullanımlık nonce (D1: belge tekrar oynatma)
@@ -162,7 +168,7 @@ def verify_google(id_token: str, keys_for=None, nonce: str | None = None) -> dic
     if not c.get("email") or c.get("email_verified") not in (True, "true"):
         raise SocialError("Google hesabının e-postası doğrulanmamış")
     check_nonce(c, nonce)
-    return {"email": c["email"].strip().lower(), "name": c.get("name") or ""}
+    return {"email": c["email"].strip().lower(), "name": c.get("name") or "", "via": "google"}
 
 
 def verify_apple(id_token: str, keys_for=None, nonce: str | None = None) -> dict:

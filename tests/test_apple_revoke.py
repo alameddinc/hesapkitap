@@ -1,6 +1,6 @@
 """Apple ile giriş, sunucu tarafı (app/apple.py): istemci sırrı (ES256), authorizationCode → refresh_token (şifreli),
-hesap kalıcı silinince iptal (hata silmeyi engellemez, yeniden denenir), ayar yokken kapalı.
-Anahtarlar ve kimlikler sahte."""
+hesap kalıcı silinince iptal (hata silmeyi engellemez, yeniden denenir), ayar yokken kapalı; sunucudan sunucuya
+bildirimler (imza, olay türleri, bilinmeyen kimlik, CSRF istisnası). Anahtarlar ve kimlikler sahte."""
 import base64
 import json
 import time
@@ -218,6 +218,8 @@ def test_login_exchanges_code_and_stores_token_encrypted(apple):
     raw = system.get(f"apple:{_uid()}")
     assert apple.fake.refresh_token not in raw  # diskte düz belge yok
     assert a.unseal(a.link_of(_uid())["rt"], f"apple-rt:{_uid()}") == apple.fake.refresh_token
+    with system.connect() as c:  # oturum Apple girişi olarak etiketli (bağ kaldırılınca yalnız o düşer)
+        assert [x[0] for x in c.execute("SELECT via FROM sessions WHERE user_id = ?", (_uid(),))] == ["apple"]
 
 
 def test_consent_retry_keeps_code_for_second_attempt(apple):
@@ -353,3 +355,169 @@ def test_purge_survives_apple_module_crash(apple, monkeypatch):
     monkeypatch.setattr(a, "on_delete", lambda uid, now=None: (_ for _ in ()).throw(RuntimeError("bozuk")))
     uid = _uid()
     assert _purge_now() == [uid] and system.user(uid) is None
+
+
+# ---------------------------------------------------------------- sunucudan sunucuya bildirimler
+
+def _notify(c: TestClient, payload: str, **kw):
+    r = c.post("/api/auth/apple/notifications", json={"payload": payload}, **kw)
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    return r
+
+
+def _status_ok(token: str) -> bool:
+    from app.api.main import app
+
+    return TestClient(app).get("/api/auth/status", headers={"Authorization": f"Bearer {token}"}).json()["authenticated"]
+
+
+def test_notification_email_disabled_and_enabled(apple):
+    from app import system
+    from app.api.main import app
+
+    c = TestClient(app)
+    _login(c, apple)
+    uid = _uid()
+    _notify(c, apple.notification({"type": "email-disabled", "email": RELAY, "is_private_email": "true"}))
+    assert system.get(f"apple_email:{uid}") == "disabled"
+    _notify(c, apple.notification({"type": "email-enabled", "email": RELAY, "is_private_email": "true"}))
+    assert system.get(f"apple_email:{uid}") is None
+
+
+def test_notification_consent_revoked_drops_only_apple_sessions(apple):
+    from app import apple as a
+    from app import auth, system
+    from app.api.main import app
+
+    apple.configure()
+    u = auth.create_user("ali@example.com", "ali-sifre-123456")
+    a.link(u["id"], SUB, BUNDLE, "kod")
+    pw_token = auth.make_token(system.user(u["id"]), "mobile")
+    apple_token = auth.make_token(system.user(u["id"]), "mobile", via="apple")
+    assert _status_ok(pw_token) and _status_ok(apple_token)
+    n = len(apple.fake.calls)
+    _notify(TestClient(app), apple.notification({"type": "consent-revoked"}))
+    assert not _status_ok(apple_token) and _status_ok(pw_token)
+    assert a.link_of(u["id"]) is None and a.user_for_sub(SUB) is None
+    assert len(apple.fake.calls) == n  # Apple belgeyi zaten geçersiz kıldı: iptal çağrısı yok
+    assert system.user(u["id"])["deleted_at"] is None  # hesap ve veri kalır
+
+
+def test_notification_consent_revoked_passwordless_drops_untagged_sessions(apple):
+    """Bu özellikten önce açılmış (etiketsiz) oturumlar: şifresiz (yalnız sosyal girişli) hesapta hepsi düşer."""
+    from app import auth, system
+    from app.api.main import app
+
+    c = TestClient(app)
+    _login(c, apple)
+    old = auth.make_token(system.user(_uid()), "mobile")  # etiketsiz
+    _notify(c, apple.notification({"type": "consent-revoked"}))
+    assert not _status_ok(old)
+
+
+def test_notification_account_delete_unreachable_account_soft_deleted(apple):
+    """Şifresiz + Apple gizli aktarma e-postası: kişi bize ulaşamaz → 7 günlük yumuşak silme (gerekçe kayıtta)."""
+    from app import deletion, system
+    from app.api.main import app
+
+    apple.configure()
+    c = TestClient(app)
+    _login(c, apple)
+    uid = _uid()
+    _notify(c, apple.notification({"type": "account-delete"}))
+    u = system.user(uid)
+    assert u["deleted_at"] and u["delete_after"]
+    assert deletion.record(uid)["reason"] == "apple_account_deleted"
+    _notify(c, apple.notification({"type": "account-delete"}))  # Apple yeniden yollarsa: değişiklik yok
+    assert system.user(uid)["deleted_at"] == u["deleted_at"]
+
+
+def test_notification_account_delete_reachable_account_only_unlinked(apple):
+    """Şifresi olan (ya da gerçek e-postalı) hesap silinmez: yalnız Apple bağı kopar, Apple oturumları düşer."""
+    from app import apple as a
+    from app import auth, system
+    from app.api.main import app
+
+    u = auth.create_user("veli@example.com", "veli-sifre-123456")
+    a.link(u["id"], SUB, BUNDLE)
+    t = auth.make_token(system.user(u["id"]), "mobile", via="apple")
+    _notify(TestClient(app), apple.notification({"type": "account-delete"}))
+    assert system.user(u["id"])["deleted_at"] is None and a.link_of(u["id"]) is None and not _status_ok(t)
+
+
+def test_notification_account_delete_owner_with_members_not_deleted(apple):
+    from app import apple as a
+    from app import auth, system
+    from app.api.main import app
+
+    _login(TestClient(app), apple)
+    uid = _uid()
+    auth.create_user("uye@example.com", "uye-sifre-1234567", member_of=uid, book_role="editor")
+    _notify(TestClient(app), apple.notification({"type": "account-delete"}))
+    assert system.user(uid)["deleted_at"] is None and a.link_of(uid) is None
+    assert system.user_by_name("uye@example.com")["deleted_at"] is None
+
+
+def test_notification_bad_signature_wrong_aud_and_unknown_sub_ignored(apple):
+    from app import system
+    from app.api.main import app
+
+    c = TestClient(app)
+    _login(c, apple)
+    uid = _uid()
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    _notify(c, apple.notification({"type": "account-delete"}, signer=other))  # sahte imza: 200 ama işlem yok
+    _notify(c, apple.notification({"type": "account-delete"}, aud="com.baska.uygulama"))
+    _notify(c, apple.notification({"type": "account-delete"}, iss="https://baska.example"))
+    _notify(c, apple.notification({"type": "account-delete"}, iat=int(time.time()) - 60 * 86400))
+    _notify(c, apple.notification({"type": "account-delete", "sub": "000000.bilinmeyen.0000"}))
+    _notify(c, "bozuk.belge")
+    assert c.post("/api/auth/apple/notifications", content=b"payload=", headers={
+        "content-type": "application/x-www-form-urlencoded"}).status_code == 200
+    assert system.user(uid)["deleted_at"] is None
+
+
+def test_notification_unknown_sub_matched_by_email_for_users_linked_before_feature(apple):
+    """Bu özellikten önce Apple ile girmiş kullanıcının özeti yok: olaydaki e-postayla bulunur, özet yazılır."""
+    from app import apple as a
+    from app import system
+    from app.api.main import app
+
+    c = TestClient(app)
+    _login(c, apple)
+    uid = _uid()
+    a.forget(uid)
+    _notify(c, apple.notification({"type": "email-disabled", "email": RELAY}))
+    assert system.get(f"apple_email:{uid}") == "disabled" and a.user_for_sub(SUB) == uid
+
+
+def test_notification_endpoint_exempt_from_csrf(apple):
+    """Apple çağırır (çerezsiz, sunucudan): başka siteden görünen başlıklarla bile CSRF'e takılmaz; diğer uçlar takılır."""
+    from app import system
+    from app.api.main import app
+
+    c = TestClient(app)
+    _login(c, apple)  # c'de oturum çerezi var
+    hostile = {"origin": "https://kotu.example", "sec-fetch-site": "cross-site"}
+    assert c.post("/api/auth/social/nonce", headers=hostile).status_code == 403
+    _notify(c, apple.notification({"type": "email-disabled", "email": RELAY}), headers=hostile)
+    assert system.get(f"apple_email:{_uid()}") == "disabled"
+
+
+def test_forced_jwks_refresh_is_throttled(monkeypatch):
+    """Bilinmeyen kid'li sahte belgeler Apple JWKS'ine istek yağdırmaz (dakikada en çok bir zorunlu yenileme)."""
+    from app import social
+
+    calls = []
+
+    class R:
+        def json(self):
+            return {"keys": [{"kid": "a1", "kty": "RSA", "n": "AQAB", "e": "AQAB"}]}
+
+    monkeypatch.setattr(social.httpx, "get", lambda url, timeout=10: calls.append(url) or R())
+    monkeypatch.setitem(social._apple_jwks, "at", 0.0)
+    monkeypatch.setitem(social._apple_jwks, "keys", {})
+    social._apple_keys()
+    for _ in range(5):
+        social._apple_keys(force=True)
+    assert len(calls) == 1

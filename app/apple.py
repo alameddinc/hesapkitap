@@ -1,4 +1,5 @@
-"""Apple ile giriş, sunucu tarafı: hesap silinince Apple belgesinin iptali (App Store 5.1.1(v)).
+"""Apple ile giriş, sunucu tarafı: hesap silinince Apple belgesinin iptali (App Store 5.1.1(v)) ve Apple'ın sunucudan
+sunucuya bildirimleri.
 
 Token iptali (isteğe bağlı; üç ayar da varsa açık, yoksa sessizce kapalı ve giriş bugünkü gibi çalışır)
 - HESAPKITAP_APPLE_TEAM_ID, HESAPKITAP_APPLE_KEY_ID, HESAPKITAP_APPLE_PRIVATE_KEY (PEM içerik; satır sonları "\\n" olarak
@@ -11,6 +12,20 @@ Token iptali (isteğe bağlı; üç ayar da varsa açık, yoksa sessizce kapalı
 - Hesap kalıcı silinirken (app/deletion.purge; yönetici silmesi ve üye çıkarma da) POST /auth/revoke
   (token_type_hint=refresh_token). Hata silmeyi hiçbir zaman engellemez: iptal sıraya yazılır, dakikalık iş
   (app/jobs.run_account_purge) artan aralıklarla yeniden dener; 30 gün sonra bırakır ve silme kaydına not düşer.
+
+Sunucudan sunucuya bildirimler (POST /api/auth/apple/notifications; App ID'de tanımlanan uç)
+- Gövde {"payload": "<JWT>"}; Apple'ın JWKS'iyle (RS256) imza, iss, aud (HESAPKITAP_APPLE_CLIENT_IDS) doğrulanır.
+- Kullanıcı Apple kimliğiyle (sub) bulunur. sub düz saklanmaz: HMAC özeti (sunucu anahtarıyla) → kullanıcı id'si.
+  Bu özellikten önce Apple ile girmiş kullanıcının özeti yoktur; olaydaki e-postayla eşleşir, ilk girişte özet yazılır.
+- email-disabled / email-enabled: gizli aktarma adresine yönlendirme kapandı/açıldı → yalnız işaret (apple_email:<id>).
+- consent-revoked: kullanıcı Apple ayarlarından uygulamanın bağını kaldırdı → Apple ile açılmış oturumlar düşer,
+  saklı belge ve bağ silinir. Hesap ve veri kalır (e-posta/şifre ya da yeniden Apple ile girebilir).
+- account-delete: Apple hesabı kalıcı silindi. Kişi bize başka yoldan ulaşamıyorsa (şifresi yok VE e-postası Apple'ın
+  gizli aktarma adresi: o adres de Apple hesabıyla ölür) hesap 7 günlük yumuşak silme akışına girer (app/deletion;
+  abonelik adımı aynı: Google Play yenilemesi durdurulmaya çalışılır, App Store aboneliği zaten Apple hesabıyla biter).
+  Kişi ulaşabiliyorsa (şifresi var ya da gerçek e-posta) ya da ortak defter sahibiyse (üyelerin defteri birlikte
+  silinmesin) yalnız Apple bağı kopar ve oturumlar düşer; hesabı kendisi silebilir. Yönetici hesabı hiç silinmez.
+- Her durumda 200 döner (Apple yeniden denemesin); hatalar loglanır.
 """
 import base64
 import hashlib
@@ -28,8 +43,10 @@ log = logging.getLogger("hesapkitap.apple")
 AUD = "https://appleid.apple.com"
 TOKEN_URL = "https://appleid.apple.com/auth/token"
 REVOKE_URL = "https://appleid.apple.com/auth/revoke"
+RELAY_DOMAIN = "@privaterelay.appleid.com"
 HTTP_CLIENT = None  # testler httpx.MockTransport'lu istemci koyar
 RETRY_GIVE_UP = 30 * 86400
+NOTIFY_MAX_AGE = 30 * 86400  # Apple başarısız bildirimi bir süre yeniden dener; çok eski belge kabul edilmez
 
 
 def _b64e(b: bytes) -> str:
@@ -323,3 +340,109 @@ def retry_pending(now: float | None = None) -> list[int]:
         _attempt(uid, item, now)
         tried.append(uid)
     return tried
+
+
+# ---------------------------------------------------------------- sunucudan sunucuya bildirimler
+
+def _verify_notification(payload: str, keys_for=None) -> dict:
+    from app import social
+
+    c = social._verify_rs256(payload, keys_for or social._apple_keys)
+    now = time.time()
+    if c.get("iss") != social.APPLE_ISSUER:
+        raise social.SocialError("Belge Apple'dan değil")
+    aud = c.get("aud")
+    ids = social.apple_client_ids()
+    if not ids or not (aud in ids or (isinstance(aud, list) and set(aud) & set(ids))):
+        raise social.SocialError("Belge bu uygulama için değil")
+    if c.get("exp") and c["exp"] < now - 60:
+        raise social.SocialError("Belgenin süresi dolmuş")
+    iat = c.get("iat") or now
+    if iat > now + 300 or iat < now - NOTIFY_MAX_AGE:
+        raise social.SocialError("Belge zamanı geçersiz")
+    return c
+
+
+def _find_user(sub: str | None, email: str | None) -> dict | None:
+    uid = user_for_sub(sub) if sub else None
+    if uid:
+        return system.user(uid)
+    if email:  # bu özellikten önce Apple ile girmiş kullanıcı: girişteki gibi e-postayla
+        return system.user_by_name(email.strip().lower())
+    return None
+
+
+def _drop_apple_sessions(u: dict) -> int:
+    from app import auth, sessions
+
+    # şifresiz hesapta etiketsiz oturum şifreyle açılmış olamaz: etiketten önceki (muhtemelen Apple) oturumlar da düşer.
+    # Google ile açılanlar (via google) kalır. Hiç kullanılmamış eski anahtarlar için ayrıca oturum sürümü artar.
+    unset = auth.password_unset(u["id"])
+    n = sessions.revoke_via(u["id"], "apple", untagged=unset)
+    if unset and not _has_google_session(u["id"]):
+        system.bump_session(u["id"])
+    return n
+
+
+def _has_google_session(uid: int) -> bool:
+    with system.connect() as c:
+        try:
+            return bool(c.execute("SELECT 1 FROM sessions WHERE user_id = ? AND via = 'google' AND revoked = 0",
+                                  (uid,)).fetchone())
+        except Exception:  # noqa: BLE001 - tablo henüz yok
+            return False
+
+
+def handle_notification(payload: str, keys_for=None) -> dict:
+    """Doğrulanmış Apple olayını uygula. Hata atmaz: sonucu döner (uç her durumda 200)."""
+    from app import social
+
+    try:
+        c = _verify_notification(payload, keys_for)
+    except social.SocialError as e:
+        log.warning("apple bildirimi reddedildi: %s", e)
+        return {"ok": False, "error": "invalid"}
+    ev = c.get("events")
+    try:
+        ev = json.loads(ev) if isinstance(ev, str) else (ev or {})
+    except ValueError:
+        ev = {}
+    kind, sub = ev.get("type"), ev.get("sub")
+    u = _find_user(sub, ev.get("email"))
+    if not u:
+        log.info("apple bildirimi: %s, kullanıcı bulunamadı", kind)
+        return {"ok": True, "event": kind, "user": None}
+    uid = u["id"]
+    if sub and not link_of(uid):  # e-postayla bulundu: sonraki olaylar için özet yazılır
+        system.put(f"apple_sub:{sub_ref(sub)}", str(uid))
+        system.put(f"apple:{uid}", json.dumps({"ref": sub_ref(sub), "client_id": c.get("aud") if isinstance(c.get("aud"), str) else None}))
+    res: dict = {"ok": True, "event": kind, "user": uid}
+    if kind in ("email-disabled", "email-enabled"):
+        system.put(f"apple_email:{uid}", "disabled" if kind == "email-disabled" else None)
+    elif kind == "consent-revoked":
+        forget(uid)  # Apple belgeyi zaten geçersiz kıldı: iptal gerekmez
+        res["sessions"] = _drop_apple_sessions(u)
+    elif kind == "account-delete":
+        res.update(_apple_account_deleted(u))
+    else:
+        log.info("apple bildirimi: bilinmeyen olay %s", kind)
+        res["ignored"] = True
+    log.info("apple bildirimi: %s kullanıcı %s → %s", kind, uid, {k: v for k, v in res.items() if k not in ("ok", "user")})
+    return res
+
+
+def _apple_account_deleted(u: dict) -> dict:
+    from app import auth, deletion
+
+    uid = u["id"]
+    forget(uid)
+    system.put(f"apple_email:{uid}", None)
+    sessions_dropped = _drop_apple_sessions(u)
+    if u.get("deleted_at"):
+        return {"action": "already_pending", "sessions": sessions_dropped}
+    unreachable = auth.password_unset(uid) and (u["username"] or "").lower().endswith(RELAY_DOMAIN)
+    owner_with_members = not u.get("member_of") and any(not deletion.pending(m) for m in system.members(uid))
+    if u["role"] == "admin" or owner_with_members or not unreachable:
+        return {"action": "unlinked", "sessions": sessions_dropped}
+    out = deletion.request_delete(u, reason="apple_account_deleted")
+    return {"action": "soft_delete", "delete_after": out["delete_after"], "sessions": sessions_dropped}
