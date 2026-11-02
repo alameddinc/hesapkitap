@@ -43,6 +43,8 @@ CAPABILITIES = (
     "insights_hidden",        # GET /api/insights/hidden: gizlenen Özet uyarıları (Geri getir: POST /api/insights/restore)
     "web_only_settings",      # GET /api/settings/web-only: mobilde olmayan, web Ayarlar'da kurulan ayarlar + web adresi
     "social_nonce",           # POST /api/auth/social/nonce; /api/auth/{google,apple} gövdesinde nonce (D1)
+    "uncategorized_groups",   # GET /api/uncategorized/groups, POST /api/uncategorized/apply (remember) ve /undo
+    "uncategorized_ai",       # POST /api/uncategorized/ai-suggest (açık olup olmadığı: groups yanıtında ai.available)
 )
 
 

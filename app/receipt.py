@@ -223,14 +223,14 @@ BILL_CATEGORY = {"elektrik": "Elektrik", "dogalgaz": "Doğalgaz", "su": "Su", "i
                  "telefon": "Telefon", "aidat": "Kira & Aidat"}
 
 
-def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | None = None,
+def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: int | None = None,
                  more: list[tuple[bytes, str]] | None = None, model: str | None = None) -> tuple[dict, dict]:
     """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf)."""
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
     _check_quota()
-    docs = [(data, mime), *(more or [])]
+    docs = ([(data, mime)] if data is not None else []) + list(more or [])
     if sum(len(d) for d, _ in docs) > MAX_BYTES:
         raise ReceiptError("Dosya çok büyük (en fazla 15 MB)")
     _daily_gate()
@@ -263,6 +263,11 @@ def _gemini_json(prompt: str, data: bytes, mime: str, max_output_tokens: int | N
     usage = resp.get("usageMetadata", {})
     return _extract_json(text), {"model": model, "input": usage.get("promptTokenCount"),
                                  "output": usage.get("candidatesTokenCount")}
+
+
+def gemini_text_json(prompt: str, max_output_tokens: int | None = 4096) -> tuple[dict, dict]:
+    """Belgesiz, yalnız metin istemi (ör. işyeri adlarına kategori önerisi). Kota/günlük sınır _gemini_json'daki gibi."""
+    return _gemini_json(prompt, None, "text/plain", max_output_tokens=max_output_tokens)
 
 
 def card_last4(v) -> str | None:
