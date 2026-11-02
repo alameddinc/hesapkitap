@@ -46,6 +46,8 @@ def test_limits_by_plan_and_meta_reads(hosted):
     assert p["reads_by_plan"] == {"free": {"belge": 10, "fis": 30}, "premium": {"belge": 200, "fis": 300},
                                   "aile": {"belge": 200, "fis": 300}}
     assert [x["id"] for x in p["packs"]] == ["okuma_100", "okuma_300"] and p["family_seats"] == 4
+    assert p["limits_by_plan"]["free"] == {"history_months": 1, "plan_months": 1, "budgets": 2}
+    assert p["limits_by_plan"]["premium"] == {"history_months": None, "plan_months": None, "budgets": None}
     for plan, (b, f) in (("premium", (200, 300)), ("aile", (200, 300))):
         system.update_user(u["id"], plan=plan, plan_until=None)
         assert (plans.read_limit(system.user(u["id"]), "belge"), plans.read_limit(system.user(u["id"]), "fis")) == (b, f)

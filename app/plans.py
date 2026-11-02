@@ -319,6 +319,11 @@ def info(u: dict | None) -> dict:
         out["tiers"] = tiers()
         out["table"] = table()
         out["reads_by_plan"] = READS
+        # paket başı sınırlar (karşılaştırma tablosu; None = sınırsız), sayfa tablosuna göre
+        out["limits_by_plan"] = {p_: {"history_months": None if p_ in _tierset(tier("gecmis")) else FREE_HISTORY_MONTHS,
+                                      "plan_months": None if p_ in _tierset(tier("uzun_plan")) else FREE_PLAN_MONTHS,
+                                      "budgets": None if p_ in _tierset(tier("butce")) else FREE_BUDGETS}
+                                 for p_ in TIERS}
         out["packs"] = [{"id": k, "reads": n} for k, n in PACKS.items()]
         out["family_seats"] = FAMILY_SEATS
         out.update(trial(u))
