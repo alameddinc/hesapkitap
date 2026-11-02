@@ -2,13 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 import { rowTotals } from "../lib/counts";
 import { usePagedTxns } from "../lib/pagedTxns";
 import LoadMore from "../components/LoadMore";
-import { ChevronRight, Plus, Search, Tags } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronRight, ListFilter, Plus, Search, Tags, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type Row } from "../api";
 import MonthPicker from "../components/MonthPicker";
 import TxnList from "../components/TxnList";
 import { EstimateSection, splitEstimates } from "../components/Estimates";
-import { cx, fold, tl } from "../format";
+import { cx, fold, maskText, tl } from "../format";
+import { useMeta } from "../components/hooks";
+import { hasTxnFilter, matchTxnFilter, parseTxnFilter, txnFilterLabel } from "../lib/txnFilter";
 import { useUI } from "../ui";
 
 const TABS = [
@@ -24,16 +26,34 @@ const TABS = [
   { key: "deleted", label: "Silinen", test: (r: Row) => r.deleted },
 ] as const;
 
+/** #/islemler?kategori=…&yil=… süzgeci; aynı sayfadayken adres değişirse (yıl özetinden başka satır) yeniden okunur */
+function useHashFilter() {
+  const [hash, setHash] = useState(window.location.hash);
+  useEffect(() => {
+    const on = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return useMemo(() => parseTxnFilter(hash), [hash]);
+}
+
 export default function Transactions() {
   const ui = useUI();
+  const meta = useMeta().data;
+  const sf = useHashFilter();
+  const sfOn = hasTxnFilter(sf);
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
   const needle = fold(q.trim());
   // sayfa sayfa (200): kaydırdıkça sıradaki; sekme ya da arama tüm dönemi gerektirir → kalanlar kendiliğinden gelir
-  const txns = usePagedTxns({ month: ui.month, includeDeleted: true, includeEstimates: true, pageSize: 200, auto: tab !== "all" || !!needle });
+  // yıl süzgecinde tüm geçmiş istenir (sunucu ay ya da hepsi verir), yıl istemcide süzülür; süzgeçte kalanlar kendiliğinden
+  const txns = usePagedTxns({ month: sf.yil ? undefined : ui.month, includeDeleted: true, includeEstimates: true, pageSize: 200,
+    auto: tab !== "all" || !!needle || sfOn });
   // tahmini satırlar ana listede ve sekme sayılarında yok; başta ayrı, katlanır bölümde
-  const [real, estimates] = useMemo(() => splitEstimates(txns.rows), [txns.rows]);
+  const scoped = useMemo(() => (sfOn ? txns.rows.filter((r) => matchTxnFilter(r, sf, meta?.current_month)) : txns.rows),
+    [txns.rows, sf, sfOn, meta?.current_month]);
+  const [real, estimates] = useMemo(() => splitEstimates(scoped), [scoped]);
   const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle);
   const active = TABS.find((x) => x.key === tab)!;
   const rows = real.filter((r) => active.test(r) && match(r));
@@ -41,7 +61,7 @@ export default function Transactions() {
   const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
   // toplam: süzgeç yokken sunucunun dönem toplamı (sayfanın değil); süzgeçte tüm satırlar gelince counts_as_spend bayrağı
-  const filtered = tab !== "all" || !!needle;
+  const filtered = tab !== "all" || !!needle || sfOn;
   const spend = !filtered && txns.totals ? txns.totals.expense : txns.complete ? rowTotals(rows).spend : null;
 
   return (
@@ -49,10 +69,21 @@ export default function Transactions() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">İşlemler</h1>
         <div className="flex items-center gap-2">
-          <MonthPicker value={ui.month} onChange={ui.setMonth} />
+          {sf.yil ? <span className="text-sm font-medium text-stone-600 dark:text-stone-300">{sf.yil} yılı · tüm dönemler</span>
+            : <MonthPicker value={ui.month} onChange={ui.setMonth} />}
           <button className="btn-primary hidden md:inline-flex" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>
         </div>
       </header>
+
+      {sfOn && (
+        <div className="card flex items-center gap-2 p-2.5 pl-3" role="status" data-testid="islem-suzgeci">
+          <ListFilter size={16} aria-hidden className="shrink-0 text-blue-600 dark:text-blue-400" />
+          <span className="min-w-0 flex-1 text-sm break-words"><span className="text-stone-500 dark:text-stone-400">Süzgeç: </span>
+            <b className="font-medium">{txnFilterLabel(sf, maskText)}</b></span>
+          <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-xs" onClick={() => { window.location.hash = "/islemler"; }}>
+            <X size={14} aria-hidden /> Süzgeci kaldır</button>
+        </div>
+      )}
 
       <div className="relative">
         <Search size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-stone-400" />
@@ -73,7 +104,7 @@ export default function Transactions() {
       </div>
 
       {/* Kategorisizleri düzenle: aynı işyerindekileri tek seferde kategorile (sunucu /api/uncategorized) */}
-      {(tab === "all" || tab === "uncat") && !needle && uncat > 0 && (
+      {(tab === "all" || tab === "uncat") && !needle && !sfOn && uncat > 0 && (
         <button className="card flex w-full items-center gap-3 p-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" onClick={() => ui.go("kategorisiz")}>
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300"><Tags size={18} aria-hidden /></span>
           <span className="min-w-0 flex-1">

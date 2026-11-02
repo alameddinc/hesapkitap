@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import { useId } from "react";
 import { api, type Insight } from "../api";
 import BarList from "../components/BarList";
+import { openTxns } from "../lib/txnFilter";
 import Compare from "../components/Compare";
 import MonthPicker from "../components/MonthPicker";
 import YearSummary from "../components/YearSummary";
@@ -157,7 +158,9 @@ export default function Stats() {
 
       {s && s.by_card.length > 0 && (
         <Section title="Kart bazında (bu dönem)">
-          <BarList items={s.by_card} selected={null} onSelect={() => ui.go("islemler")} />
+          {/* satır → o kartın bu dönemdeki gider işlemleri */}
+          <BarList items={s.by_card} onSelect={(c) => c && openTxns({ kart: c, gider: true, faizsiz: true })}
+            label={(i) => `${i.name} kartının bu dönem işlemlerini aç`} />
         </Section>
       )}
 

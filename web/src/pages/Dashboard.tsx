@@ -237,11 +237,13 @@ export default function Dashboard() {
       // dönem başında boş: aynı "henüz harcama yok" yazısı iki kartta tekrarlanmasın
       case "kategoriler": return !s.by_category.length ? null : (
         <Section title="Kategoriye göre">
-          <BarList items={s.by_category} selected={sel?.by === "category" ? sel.name : null} onSelect={select("category")} />
+          <BarList items={s.by_category} selected={sel?.by === "category" ? sel.name : null} onSelect={select("category")}
+            label={(i) => `${i.name} işlemlerini göster`} />
         </Section>);
       case "isyerleri": return !s.by_merchant.length ? null : (
         <Section title="En çok harcanan yerler">
-          <BarList items={s.by_merchant} selected={sel?.by === "merchant" ? sel.name : null} onSelect={select("merchant")} limit={10} />
+          <BarList items={s.by_merchant} selected={sel?.by === "merchant" ? sel.name : null} onSelect={select("merchant")} limit={10}
+            label={(i) => `${i.name} işlemlerini göster`} />
         </Section>);
       case "istatistik-link": return (
         <button className="card flex w-full items-center justify-between p-3 text-left text-sm active:bg-stone-50 dark:active:bg-stone-800" onClick={() => ui.go("istatistik")}>
