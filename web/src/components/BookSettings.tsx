@@ -6,7 +6,7 @@ import { useState } from "react";
 import { cx, maskText, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { type BookRole, useLoginKind, useSave } from "./hooks";
-import { usePlan } from "./Plan";
+import { needLabel, usePlan } from "./Plan";
 import InviteCard, { type Invite } from "./InviteCard";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
@@ -179,7 +179,7 @@ export default function BookSettings() {
       <div className="space-y-2">
         {plan?.features.ortak_defter === false ? (
           <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-            Davet etmek <b>Aile</b> paketinde. Ayarlar → Paketin bölümüne bak.</p>
+            Davet etmek <b>{needLabel(plan, "ortak_defter")}</b> paketinde. Ayarlar → Paketin bölümüne bak.</p>
         ) : (
           <div className="space-y-2">
             <fieldset className="grid gap-1.5 sm:grid-cols-3">

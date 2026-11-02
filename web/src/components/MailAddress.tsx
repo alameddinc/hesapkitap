@@ -7,7 +7,7 @@ import { api, type MailLogItem } from "../api";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
-import { Upgrade, usePlan } from "./Plan";
+import { needLabel, Upgrade, usePlan } from "./Plan";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -37,7 +37,7 @@ export default function MailAddress() {
           Deftere özel bir e-posta adresi: kart ekstreleri, hesap dökümleri, banka bildirimleri ve faturalar bu adrese
           gelince kendiliğinden işlenir.
         </p>
-        <Upgrade need="Premium" />
+        <Upgrade need={needLabel(plan, "posta")} />
       </section>
     );
   }

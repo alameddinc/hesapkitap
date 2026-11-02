@@ -39,6 +39,7 @@ import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 import ConfirmHost from "./components/ConfirmHost";
 import PageBoundary from "./components/PageBoundary";
+import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
 import { send } from "./lib/apiError";
 
 const PAGES: Record<Route, () => React.ReactElement> = {
@@ -240,7 +241,8 @@ function Shell() {
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                   route === n.route ? "bg-stone-100 font-medium dark:bg-stone-800" : "text-stone-600 hover:bg-stone-50 dark:text-stone-400 dark:hover:bg-stone-800/50")}>
-                <n.icon size={16} /> {n.label}
+                <n.icon size={16} /> <span className="min-w-0 flex-1">{n.label}</span>
+                {(() => { const l = lockOf(meta.data?.plan, ROUTE_FEATURE[n.route] ?? ""); return l && <LockBadge need={l.need} />; })()}
               </a>
             ))}
           </nav>
@@ -259,7 +261,7 @@ function Shell() {
           <DemoBanner />
         </div>
         <main className={cx("mx-auto w-full min-w-0 px-4 pt-3 pb-[calc(6.5rem+var(--sab))] md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
-          <PageBoundary resetKey={route}><Page /></PageBoundary>
+          <PageBoundary resetKey={route}><RouteLock route={canSee(route) ? route : "ozet"}><Page /></RouteLock></PageBoundary>
         </main>
       </div>
 

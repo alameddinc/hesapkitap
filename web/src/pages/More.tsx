@@ -6,6 +6,7 @@ import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
 import { inSharedBook, routeVisible, useBook, useMeta } from "../components/hooks";
 import ZakatConsent from "../components/ZakatConsent";
+import { LockBadge, ROUTE_FEATURE, useLock } from "../components/Plan";
 import type { Route } from "../ui";
 
 /** Zekât kapalıyken de listede: dokununca sade "açalım mı?" penceresi (ortak defter üyesine ve sade modda gösterilmez). */
@@ -31,11 +32,13 @@ function ZakatItem() {
 function Item({ icon, label, onClick, route }: { icon: React.ReactNode; label: string; onClick: () => void; route?: Route }) {
   const book = useBook(); // ortak defter üyesine kapalı sayfalar ve kapatılan özellikler listelenmez
   const meta = useMeta();
+  const lock = useLock(route ? ROUTE_FEATURE[route] : undefined); // paketinde kapalı sayfa: listede kalır, kilit rozetiyle
   if (route && (meta.data?.ui?.simple ? route !== "ayarlar" : !routeVisible(book.data, route, meta.data?.modules))) return null;
   return (
     <li>
       <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={onClick}>
-        {icon}<span className="flex-1">{label}</span><ChevronRight size={16} className="text-stone-400" />
+        {icon}<span className="min-w-0 flex-1">{label}</span>
+        {lock && <LockBadge need={lock.need} />}<ChevronRight size={16} className="text-stone-400" />
       </button>
     </li>
   );

@@ -24,6 +24,7 @@ import Jars from "../components/Jars";
 import Holdings from "../components/Holdings";
 import { InterestHistory, TrendChart } from "./Stats";
 import { EstimateNote, isEstimate } from "../components/Estimates";
+import { PlanGate } from "../components/Plan";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
@@ -247,7 +248,7 @@ export default function Dashboard() {
           <span>📊 <b>İstatistik</b><span className="hidden sm:inline"> · geçen dönemlerle karşılaştırma, aylara göre gelir/gider, kartlar, faiz</span></span>
           <ChevronRight size={16} className="text-stone-400" />
         </button>);
-      case "odemeler": return <Payables />;
+      case "odemeler": return <PlanGate feature="odemeler" compact><Payables /></PlanGate>;
       case "trend": return s.trend.length ? <Section title="Aylara göre gelir ve gider"><TrendChart trend={s.trend} onPick={setMonth} /></Section> : null;
       case "karsilastirma": return <Compare month={month} />;
       case "yillik": return <YearSummary />;

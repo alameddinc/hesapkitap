@@ -2,6 +2,7 @@ import { Crown, LayoutGrid } from "lucide-react";
 import { useState } from "react";
 import { useUI } from "../ui";
 import { useMeta, useSave } from "./hooks";
+import { needLabel } from "./Plan";
 import ZakatConsent from "./ZakatConsent";
 
 /** Hangi özellikler açık: kapatılan menüden, Özet'ten ve uyarılardan kalkar (veri silinmez). */
@@ -34,7 +35,7 @@ export default function Features({ intro = false }: { intro?: boolean }) {
           <label key={k} aria-label={v.label} className="flex cursor-pointer items-start gap-2 rounded-lg border border-stone-200 p-2 text-sm dark:border-stone-700">
             <input type="checkbox" className="mt-1" checked={cur[k] !== false} onChange={(e) => set(k, e.target.checked)} />
             <span><span className="font-medium">{v.label}</span>
-              {locked(k) && <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-px align-middle text-[10px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"><Crown size={10} /> Premium</span>}
+              {locked(k) && <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-px align-middle text-[10px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"><Crown size={10} /> {needLabel(meta.plan, k)}</span>}
               <span className="block text-xs text-stone-500">{v.desc}</span></span>
           </label>
         ))}

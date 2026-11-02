@@ -108,6 +108,14 @@ export function PlanGate({ feature, title, children, preview, compact }: {
   );
 }
 
+/** Menüden açılan sayfa paketinde kapalıysa: açıklama + bulanık önizleme (sayfa satırları sunucuda açık). Fiyatlar
+ *  kendi PlanGate'ini kullanır (sunucu da kilitler, önizleme yok). */
+export function RouteLock({ route, children }: { route: Route; children: ReactNode }) {
+  const key = ROUTE_FEATURE[route];
+  if (!key || key === "fiyatlar") return <>{children}</>;
+  return <PlanGate feature={key} preview>{children}</PlanGate>;
+}
+
 /** Bu ayki sayaç: "Belge 3/10 · Fiş 12/30 · Ek 0". */
 export function ReadCounts({ reads, className }: { reads: ReadStatus; className?: string }) {
   const item = (k: ReadKind) => {

@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, Calculator, ChevronDown, Coins, Plus, Repeat } from "lucide-react";
 import Simulator from "../components/Simulator";
 import RecurringSuggestions from "../components/RecurringSuggestions";
+import Modal from "../components/Modal";
+import { LockBadge, LockCard, PlanGate, useLock } from "../components/Plan";
 import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type PlanLineType, type PlanMonth } from "../api";
@@ -79,6 +81,7 @@ export default function Planning() {
   const plan = useQuery({ queryKey: ["plan", horizon], queryFn: () => api.plan(Number(horizon)) });
   const [open, setOpen] = useState<string | null>(null);
   const [simOpen, setSimOpen] = useState(false);
+  const simLock = useLock("alsam_mi"); // Alsam mı? paketinde kapalı: açıklama penceresi
   const p = plan.data;
 
   const chart = p?.months.map((m) => ({ month: m.month, Gelir: m.income, ...m.groups })) ?? [];
@@ -154,10 +157,12 @@ export default function Planning() {
         </section>
       )}
 
-      {simOpen && <Simulator onClose={() => setSimOpen(false)} />}
+      {simOpen && (simLock
+        ? <Modal title={simLock.label} onClose={() => setSimOpen(false)}><LockCard lock={simLock} compact /></Modal>
+        : <Simulator onClose={() => setSimOpen(false)} />)}
       <div className="flex flex-wrap gap-2">
         <button className="btn-primary" onClick={() => setSimOpen(true)}>
-          <Calculator size={16} /> Alırsam ne olur?
+          <Calculator size={16} /> Alırsam ne olur?{simLock && <LockBadge need={simLock.need} className="bg-white/90 dark:bg-amber-900" />}
         </button>
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => ui.openEntry(undefined, { kind: "gider", recurring: true })}>
           <Repeat size={16} /> Sabit kalem ekle
@@ -178,7 +183,7 @@ export default function Planning() {
         ))}
       </ul>
 
-      <RecurringSuggestions />
+      <PlanGate feature="oneriler" compact><RecurringSuggestions /></PlanGate>
 
       {p && (
         <section className="card p-3 sm:p-4">
