@@ -3714,9 +3714,14 @@ def item_kind(name: str, product: str | None = None, amount: float | None = None
 def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str, total: float | None = None,
                        branch: str | None = None) -> int:
     """Fiş satırlarını sakla. Tek bir satırın fiyatı okunamadıysa ve toplam belliyse: toplam − diğerleri (tahmini)."""
-    good = [it for it in items if (it.get("name") or "").strip() and product_key(it.get("product") or it["name"])
-            and item_kind(it["name"], it.get("product"), it.get("amount")) != "discount"]  # indirim satırı ürün değil
-    missing = [it for it in good if not isinstance(it.get("amount"), (int, float)) or it["amount"] <= 0]
+    named = [it for it in items if (it.get("name") or "").strip() and product_key(it.get("product") or it["name"])]
+    # genel indirim satırı (eksi tutar): saklanır ki kalemler fişin toplamını tutsun; fiyat takibine girmez (products)
+    discounts = [it for it in named if item_kind(it["name"], it.get("product"), it.get("amount")) == "discount"
+                 and isinstance(it.get("amount"), (int, float)) and it["amount"] != 0]
+    for it in discounts:
+        it["amount"] = -abs(it["amount"])
+    good = [it for it in named if item_kind(it["name"], it.get("product"), it.get("amount")) != "discount"] + discounts
+    missing = [it for it in good if it not in discounts and (not isinstance(it.get("amount"), (int, float)) or it["amount"] <= 0)]
     known_sum = sum(it["amount"] for it in good if it not in missing)
     inferred = None
     if len(missing) == 1 and total and total - known_sum > 0.009:

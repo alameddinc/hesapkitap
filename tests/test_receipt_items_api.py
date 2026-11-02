@@ -199,3 +199,18 @@ def test_auto_reread_when_priceless_item(client, monkeypatch):
     calls = _ai(monkeypatch, first, {"total": 100, "items": [{"name": "A A DEVAMI", "amount": 100.0}]})
     r = client.post("/api/receipts/parse", files={"file": ("f.jpg", jpeg(), "image/jpeg")}).json()
     assert len(calls) == 2 and r["reread"]["tried"]
+
+
+def test_general_discount_line_is_kept_negative_and_excluded_from_prices(tmpdb):
+    """Fişin genel indirimi ('Satış İndirimi 73,00') eksi kalem olarak saklanır: kalemler fiş toplamını tutar;
+    fiyat takibinde ürün sayılmaz."""
+    eid = tmpdb.create_entry({"entry_date": "2026-10-02", "description": "Örnek Kafe", "amount": 657, "kind": "gider",
+                              "category": "Kafe & Restoran"})
+    items = [{"name": "Ice Americano", "qty": 1, "amount": 190.0}, {"name": "Flat White Kucuk", "qty": 1, "amount": 180.0},
+             {"name": "Latte Kucuk", "qty": 2, "amount": 360.0}, {"name": "Satış İndirimi", "qty": 1, "amount": 73.0}]
+    assert tmpdb.save_receipt_items(eid, items, "Örnek Kafe", "2026-10-02", total=657) == 4
+    with tmpdb.connect() as c:
+        rows = c.execute("SELECT name, amount FROM receipt_items WHERE entry_id = ? ORDER BY id", (eid,)).fetchall()
+    assert round(sum(r[1] for r in rows), 2) == 657.0
+    assert [r[1] for r in rows if "ndirim" in r[0]] == [-73.0]
+    assert "ndirim" not in str(tmpdb.products())  # fiyat takibine girmez

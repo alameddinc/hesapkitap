@@ -32,8 +32,10 @@ ITEM_RULES = """items (sadece fiş, en fazla 40 satır, fişteki sırayla):
     POSET ORTA BOY        *5,00
     MADEN SUYU 6X200      *60,00
   → [{{"name": "POSET ORTA BOY", "qty": 2, "amount": 5.00}}, {{"name": "MADEN SUYU 6X200", "qty": 1, "amount": 60.00}}]
-- Bir ürünün hemen altındaki İNDİRİM/KAMPANYA satırı o ürünün amount'undan düşülür; hangi ürüne ait olduğu belli olmayan genel
-  indirimleri item olarak yazma.
+- Bir ürünün hemen altındaki İNDİRİM/KAMPANYA satırı o ürünün amount'undan düşülür. Hangi ürüne ait olduğu belli olmayan genel
+  indirimi ("İNDİRİMLER", "Satış İndirimi", "TOPLAM İNDİRİM", "İskonto", kupon/puan kullanımı) fişin sonunda TEK kalem olarak
+  yaz: name fişteki adı (ör. "Satış İndirimi"), amount EKSİ (ör. -73.00), qty 1. "TOPLAM İNDİRİM" ile aynı indirimi iki kez yazma.
+  Böylece kalemlerin toplamı GENEL TOPLAM'ı tutar (ör. ara toplam 730,00 − indirim 73,00 = toplam 657,00).
 - Fiyatı okunamayan ürünü amount null ile yine yaz.
 - Birden fazla görüntü varsa hepsi AYNI fişin sırayla parçalarıdır: üst üste binen (iki fotoğrafta da görünen) satırları BİR kez
   yaz; total son parçadaki GENEL TOPLAM'dır.
