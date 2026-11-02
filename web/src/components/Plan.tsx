@@ -210,12 +210,12 @@ export default function PlanSettings() {
       <div className="-mx-1 overflow-x-auto px-1">
         <table className="w-full table-fixed text-sm">
           <caption className="sr-only">Paket karşılaştırması</caption>
-          <colgroup><col /><col className="w-[4.5rem] sm:w-28" /><col className="w-[4.5rem] sm:w-28" /><col className="w-[4.5rem] sm:w-28" /></colgroup>
+          <colgroup><col /><col className="w-[3.25rem] sm:w-28" /><col className="w-[3.4rem] sm:w-28" /><col className="w-[3.25rem] sm:w-28" /></colgroup>
           <thead>
             <tr className="text-xs text-stone-500">
               <th scope="col" className="py-1 text-left font-normal"><span className="sr-only">Özellik</span></th>
               {TIERS.map((k) => (
-                <th key={k} scope="col" className={cx("px-1 py-1 text-center font-medium", p.plan === k && "rounded-t-md bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400")}>
+                <th key={k} scope="col" className={cx("px-0 py-1 text-center text-[11px] font-medium sm:px-1 sm:text-xs", p.plan === k && "rounded-t-md bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400")}>
                   {TIER_LABEL[k]}{p.plan === k && <span className="sr-only"> (senin paketin)</span>}
                 </th>
               ))}
@@ -229,7 +229,7 @@ export default function PlanSettings() {
                   {r.desc && <span className="block text-xs text-stone-500">{r.desc}</span>}
                 </th>
                 {r.cells.map((c, i) => (
-                  <td key={i} className={cx("px-1 py-2 text-center align-top", p.plan === TIERS[i] && "bg-blue-50/60 dark:bg-blue-950/20")}>{c}</td>
+                  <td key={i} className={cx("px-0.5 py-2 text-center align-top sm:px-1", p.plan === TIERS[i] && "bg-blue-50/60 dark:bg-blue-950/20")}>{c}</td>
                 ))}
               </tr>
             ))}
