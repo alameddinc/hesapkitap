@@ -4396,14 +4396,17 @@ def _expense_categories() -> list[str]:
 
 
 @app.get("/api/uncategorized/groups")
-def uncategorized_groups(month: str | None = None):
+def uncategorized_groups(month: str | None = None, sort: Literal["count", "total"] = "count"):
     """Kategorisiz kayıtlar işyerine/kişiye göre gruplu, her gruba ücretsiz öneri (geçmiş/kural/bilinen). Küme Özet'teki
-    "N işlem kategorisiz" uyarısıyla aynı; month yoksa ya da "all" ise tüm zaman. ai: yapay zekâ önerisi açık mı, kalan hak."""
+    "N işlem kategorisiz" uyarısıyla aynı; month yoksa ya da "all" ise tüm zaman. ai: yapay zekâ önerisi açık mı, kalan hak.
+    sort: count (en çok işlem önce) | total (en çok tutan önce). Grupta one_off: tek işlemli, tutarı one_off_max'ı
+    aşmayan gider ("Tek seferlikleri Diğer yap"); renamable: kart işlemi var, adı düzeltilebilir."""
     from app import uncategorized
 
     m = _unc_month(month)
-    gs = uncategorized.groups(m)
-    return {"month": m, "groups": gs, "count": sum(g["count"] for g in gs), "ai": uncategorized.ai_status()}
+    gs = uncategorized.groups(m, sort)
+    return {"month": m, "groups": gs, "count": sum(g["count"] for g in gs), "ai": uncategorized.ai_status(),
+            "one_off_max": uncategorized.ONE_OFF_MAX, "ai_max": uncategorized.AI_MAX_KEYS}
 
 
 class UncApplyIn(BaseModel):
@@ -4426,6 +4429,58 @@ def uncategorized_apply(body: UncApplyIn):
         return uncategorized.apply(body.key, cat, body.remember, _unc_month(body.month))
     except KeyError as e:
         raise HTTPException(404, "Bu grupta kategorisiz kayıt kalmadı") from e
+
+
+class UncItem(BaseModel):
+    key: str = Field(min_length=3, max_length=300)
+    category: str = Field(min_length=1, max_length=80)
+
+
+class UncApplyManyIn(BaseModel):
+    items: list[UncItem] = Field(min_length=1, max_length=500)
+    remember: bool = True
+    month: str | None = None
+
+
+@app.post("/api/uncategorized/apply-many")
+def uncategorized_apply_many(body: UncApplyManyIn):
+    """Birden çok gruba kategori, TEK geri alma kaydıyla (önerilenlerin hepsi, çoklu seçim, tek seferlikler → Diğer).
+    remember tek uygulamadakiyle aynı. Kategorisiz kaydı kalmamış anahtarlar atlanır (skipped). Hiçbiri yoksa 404.
+    Yanıttaki undo_id ile POST /api/uncategorized/undo hepsini birden geri alır."""
+    from app import uncategorized
+
+    items = []
+    for it in body.items:
+        cat = it.category.strip()
+        if not cat or cat == "Kategorisiz":
+            raise HTTPException(422, "Bir kategori seç")
+        items.append((it.key, cat))
+    out = uncategorized.apply_many(items, body.remember, _unc_month(body.month))
+    if not out["groups"]:
+        raise HTTPException(404, "Bu gruplarda kategorisiz kayıt kalmadı")
+    return out
+
+
+class MerchantRenameIn(BaseModel):
+    display: str = Field(max_length=60)
+    key: str | None = Field(default=None, min_length=3, max_length=300)
+    uid: str | None = Field(default=None, max_length=20)
+    month: str | None = None
+
+
+@app.post("/api/merchants/rename")
+def merchant_rename(body: MerchantRenameIn):
+    """Görünen işyeri adını düzelt (ör. ödeme aracısı ya da resmi unvan yerine marka). Ekstredeki ham açıklama
+    değişmez; bu işyerinin bütün kart işlemleri yeni adla görünür ve gruplanır. key (Kategorisizler grubu) ya da uid
+    (kart işlemi "c<id>") verilir. display boşsa düzeltme kaldırılır. Geri al: POST /api/uncategorized/undo."""
+    from app import uncategorized
+
+    if not body.key and not body.uid:
+        raise HTTPException(422, "Grup ya da işlem gerekli")
+    try:
+        return uncategorized.rename(body.display, key=body.key, uid=body.uid, month=_unc_month(body.month))
+    except KeyError as e:
+        raise HTTPException(404, "Bu adla kart işlemi bulunamadı") from e
 
 
 class UncUndoIn(BaseModel):
