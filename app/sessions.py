@@ -46,6 +46,9 @@ def _ensure(c) -> None:
     key = system.SYSTEM_DB
     if key not in _ready:
         c.executescript(SCHEMA)
+        # oturum hangi girişle açıldı (apple | google | NULL: şifre/eski): Apple bağı kaldırılınca yalnız onlar düşer
+        if "via" not in {r[1] for r in c.execute("PRAGMA table_info(sessions)")}:
+            c.execute("ALTER TABLE sessions ADD COLUMN via TEXT")
         _ready.add(key)
 
 
@@ -68,12 +71,13 @@ def device_name(user_agent: str | None, mobile: bool) -> str:
     return f"{br}{' · ' + os_ if os_ else ''}"
 
 
-def create(uid: int, nonce: str, kind: str, device: str | None) -> None:
+def create(uid: int, nonce: str, kind: str, device: str | None, via: str | None = None) -> None:
     now = time.time()
     with _c() as c:
         _ensure(c)
-        c.execute("INSERT OR IGNORE INTO sessions (sid_hash, public_id, user_id, kind, device, created_at, last_seen) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?)", (_h(nonce), secrets.token_urlsafe(9), uid, kind, (device or "")[:80], now, now))
+        c.execute("INSERT OR IGNORE INTO sessions (sid_hash, public_id, user_id, kind, device, created_at, last_seen, via) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                  (_h(nonce), secrets.token_urlsafe(9), uid, kind, (device or "")[:80], now, now, via))
 
 
 def check(uid: int, nonce: str) -> bool:
@@ -112,6 +116,15 @@ def revoke_public(uid: int, public_id: str) -> bool:
         _ensure(c)
         return c.execute("UPDATE sessions SET revoked = 1 WHERE user_id = ? AND public_id = ? AND revoked = 0",
                          (uid, public_id)).rowcount > 0
+
+
+def revoke_via(uid: int, via: str, untagged: bool = False) -> int:
+    """Bu girişle (ör. apple) açılmış açık oturumları kapat; untagged=True ise etiketsizleri (şifreyle ya da etiketten
+    önce açılmış) de. Dönen: kapanan sayısı."""
+    with _c() as c:
+        _ensure(c)
+        return c.execute("UPDATE sessions SET revoked = 1 WHERE user_id = ? AND revoked = 0 AND "
+                         + ("(via = ? OR via IS NULL)" if untagged else "via = ?"), (uid, via)).rowcount
 
 
 def revoke_all(uid: int) -> int:

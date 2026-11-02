@@ -1260,32 +1260,64 @@ def recurring_for(c, data: dict):
                                                         or (r["match_key"] and r["match_key"] == key))), None)
 
 
-def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
-    """Elle girilen kayıt bir sabit kalemle aynı adı taşıyorsa (ör. "Maaş"), tarihine en yakın dönemin
-    o sabit kalemine bağla: maaş bir gün erken/geç yatsa da her dönemde tam bir kez sayılır."""
+def _recurring_gap(rec, month: str, d) -> int:
+    """Kaydın tarihi ile sabit kalemin `month` dönemindeki gününün arası (gün)."""
     from datetime import date as _date
 
+    return abs((_date.fromisoformat(occurrence_date(month, day_at(rec, month))) - d).days)
+
+
+def _nearest_recurring_month(rec, d, taken=()) -> str | None:
+    """Sabit kalem dönem kuralı (tek kaynak): tarihin dönemi ve iki komşusundan, sabit kalemin gününe en yakın ve
+    `taken` içinde olmayan dönem. Hepsi doluysa None. `taken` boşsa doluluğa bakılmaz (en yakın dönem).
+    Ör. ay dönümü 17, kira 17'si: 16 Ekim'de yatan kira Kasım döneminin (17 Eki) kirasıdır, "erken ödendi"."""
+    from datetime import date as _date
+
+    d = _date.fromisoformat(str(d)[:10])
+    cands = [m for m in _months_around(period_of(d)) if m not in taken]
+    return min(cands, key=lambda m: _recurring_gap(rec, m, d)) if cands else None
+
+
+def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
+    """Elle girilen kayıt bir sabit kalemle aynı adı taşıyorsa (ör. "Maaş"), tarihine en yakın boş dönemin
+    o sabit kalemine bağla: maaş bir gün erken/geç yatsa da her dönemde tam bir kez sayılır."""
     if data.get("recurring_id") or data.get("skipped"):
         return
     rec = recurring_for(c, data)
     if not rec:
         return
-    d = _date.fromisoformat(str(data["entry_date"])[:10])
     taken = {r["month"] for r in c.execute(
         "SELECT month FROM entries WHERE recurring_id = ? AND id IS NOT ?", (rec["id"], exclude_id))}
-    cands = [m for m in _months_around(period_of(d)) if m not in taken]
-    if not cands:
+    best = _nearest_recurring_month(rec, data["entry_date"], taken)
+    if best is None:
         return  # komşu dönemlerin hepsi dolu: bağlama, çift kayıt uyarısı görünsün
-    best = min(cands, key=lambda m: abs((_date.fromisoformat(occurrence_date(m, day_at(rec, m))) - d).days))
     data["recurring_id"], data["month"] = rec["id"], best
 
 
-def _nearest_recurring_month(rec, d) -> str:
-    """Tarihe en yakın sabit kalem döneminin ayı (dolu olup olmamasına bakmadan)."""
-    from datetime import date as _date
+def attach_recurring_series(rec, entries: list[dict]) -> dict[int, str]:
+    """Geçmiş kayıtları (öneri kabulü) yeni kayıtlarla AYNI kuralla bağla: tarih sırasıyla, sabit kalemin gününe en
+    yakın boş dönem, her dönem bir kez. Dönüş {kayıt id: dönem}; yazma çağıranda.
 
-    return min(_months_around(period_of(d)),
-               key=lambda m: abs((_date.fromisoformat(occurrence_date(m, day_at(rec, m))) - d).days))
+    İki tur (ikisi de tarih sırasıyla): önce her kayıt kendi en yakın dönemine (boşsa). Kalanlar (aynı döneme ikinci
+    ödeme, ör. bölünmüş kira) yalnız serinin İÇİNDEKİ boş komşu döneme bağlanır; serinin önüne/arkasına (gelecek
+    dönem dahil) taşmaz ve kendisinden sonraki kaydın doğal dönemini kapmaz: tek ekstra ödeme bütün seriyi bir dönem
+    kaydırmasın (zincirleme kayma), gelecek dönem "ödendi" görünmesin. Bağlanmayan kayıt tek seferlik kalır."""
+    es = sorted(entries, key=lambda e: (e["entry_date"], -e["amount"]))
+    out: dict[int, str] = {}
+    rest = []
+    for e in es:
+        m = _nearest_recurring_month(rec, e["entry_date"])
+        if m in out.values():
+            rest.append(e)
+        else:
+            out[e["id"]] = m
+    if out and rest:
+        lo, hi = min(out.values()), max(out.values())
+        for e in rest:
+            m = _nearest_recurring_month(rec, e["entry_date"], set(out.values()))
+            if m and lo <= m <= hi:
+                out[e["id"]] = m
+    return out
 
 
 def set_cycle_start_day(day: int) -> int:

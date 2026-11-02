@@ -223,9 +223,14 @@ def run_global(now: datetime) -> list[str] | None:
 def run_account_purge(now: datetime) -> list[int]:
     """Bekleme süresi dolan (silinmek üzere bekleyen) hesapları kalıcı sil. Her turda: tek ucuz sorgu; böylece
     "6 Kasım'da silinecek" denen hesap o gün silinir, gece 4'ü beklemez."""
-    from app import deletion
+    from app import apple, deletion
 
-    return deletion.purge_due(now)
+    done = deletion.purge_due(now)
+    try:  # Apple belgesi iptali başarısız olduysa (ağ, Apple): zamanı gelenler yeniden denenir
+        apple.retry_pending(now.timestamp())
+    except Exception:  # noqa: BLE001
+        log.exception("apple revoke retry failed")
+    return done
 
 
 async def scheduler() -> None:

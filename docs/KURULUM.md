@@ -150,6 +150,9 @@ ve Apple düğmeleri görünmez (`/api/auth/status` → `google: false`, `apple:
 | `HESAPKITAP_GOOGLE_CLIENT_IDS` | `<web-client-id>.apps.googleusercontent.com` | Kabul edilen Google OAuth client ID'leri, virgülle. Mobil uygulama hem iOS'ta hem Android'de belgeyi **web client ID** için ister; bu yüzden listede en az web client ID olmalı. |
 | `HESAPKITAP_APPLE_CLIENT_IDS` | `com.ornek.hesapkitap` | Kabul edilen Apple `aud` değerleri, virgülle. iOS uygulamasından girişte bu, uygulamanın **bundle ID**'sidir. |
 | `HESAPKITAP_SOCIAL_NONCE` | `required` | Tek kullanımlık nonce zorunlu (bkz. Güvenlik başlıkları). |
+| `HESAPKITAP_APPLE_TEAM_ID` | `<TEAM_ID>` | Apple Developer Team ID (token iptali; aşağıya bak). |
+| `HESAPKITAP_APPLE_KEY_ID` | `<KEY_ID>` | *Sign in with Apple* yetkili anahtarın Key ID'si. |
+| `HESAPKITAP_APPLE_PRIVATE_KEY` | `-----BEGIN PRIVATE KEY-----\n…` | O anahtarın `.p8` içeriği (PEM; tek satırda `\n` olabilir). Ya da `HESAPKITAP_APPLE_PRIVATE_KEY_FILE` = dosya yolu. |
 
 Hangi değerleri yazacağın, hangi mobil uygulamayı kullandığına bağlı:
 
@@ -171,6 +174,25 @@ Kurallar (her iki sağlayıcı için aynı):
   `HESAPKITAP_OPEN_SIGNUP=1`).
 - Google/Apple ile açılan hesabın şifresi yoktur. Web'e girmek için "Şifremi unuttum" ile şifre belirlenir (giden
   posta, yani `SMTP_HOST` + `MAIL_FROM`, ayarlı olmalı). Web'de Google/Apple düğmesi yok.
+
+### Apple: hesap silinince belge iptali ve sunucu bildirimleri
+
+App Store kuralı (5.1.1(v)): Apple ile girilmiş hesap silinince sunucu Apple'daki belgeyi iptal etmeli. Bunun için
+`HESAPKITAP_APPLE_TEAM_ID`, `HESAPKITAP_APPLE_KEY_ID` ve `HESAPKITAP_APPLE_PRIVATE_KEY` (ya da `_FILE`) gerekir.
+Anahtar: Apple Developer → *Certificates, Identifiers & Profiles → Keys* → yeni anahtar, *Sign in with Apple* işaretli,
+uygulamanın App ID'sine bağlı; `.p8` bir kez indirilir, gizli tut (repoya koyma). Üçü de yoksa özellik kapalıdır ve
+giriş bugünkü gibi çalışır.
+
+- Girişte uygulama `authorization_code` da gönderir (yetenek `apple_revoke`); sunucu bunu Apple'da `refresh_token`'a
+  çevirir ve kullanıcı başına şifreli (AES-GCM, anahtar `SECRET_KEY`'den türetilir) saklar. `SECRET_KEY` değişirse saklı
+  belgeler çözülemez: iptal yapılamaz (kaydına not düşer), sonraki girişte yenisi alınır.
+- Hesap kalıcı silinince (7 günlük bekleme sonunda; yönetici silmesi ve ortak defterden çıkarma da) belge Apple'da
+  iptal edilir. Apple'a ulaşılamazsa silme yine tamamlanır; iptal artan aralıklarla 30 gün yeniden denenir.
+- Sunucu bildirimleri: Apple Developer'da App ID → *Sign in with Apple → Configure → Server-to-Server Notification
+  Endpoint* = `https://<sunucu-adresin>/api/auth/apple/notifications`. Bu uç için ayar gerekmez (imza Apple'ın açık
+  anahtarıyla doğrulanır; `HESAPKITAP_APPLE_CLIENT_IDS` dolu olmalı). Kullanıcı uygulamanın bağını kaldırırsa Apple ile
+  açılmış oturumları düşer; Apple hesabını silerse, şifresi yoksa ve e-postası Apple'ın gizli aktarma adresiyse hesap
+  7 günlük silme akışına girer, değilse yalnız Apple bağı kopar.
 
 ## Deftere özel posta adresi (ileri düzey)
 

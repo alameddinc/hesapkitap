@@ -174,7 +174,7 @@ def test_small_extra_payment_to_same_person_stays_separate(client, tmpdb):
 def test_cycle_day_shift_keeps_transfer_listing(client, tmpdb):
     """(d) ay dönümü 17, kira 17'sinde: 16'sında (bir gün erken) yatan kira bir sonraki dönemin kirası sayılır
     (entries.month = sonraki dönem; her dönemde tam bir kira). Transferler ve Faturalar tarihe göre süzer: kayıt
-    takvim ayında, tutarı ve tarihi aynen görünür. (Bilinen davranış; dönem özetinde sonraki döneme yazılır.)"""
+    takvim ayında, tutarı ve tarihi aynen görünür. (Tek dönem kuralı; öneri kabulü de geçmişi aynı kuralla bağlar.)"""
     tmpdb.set_setting("cycle_mode", "manual")
     tmpdb.set_cycle_start_day(17)
     ms = _months(3)
@@ -187,3 +187,76 @@ def test_cycle_day_shift_keeps_transfer_listing(client, tmpdb):
     assert tmpdb.period_of(e["entry_date"]) == nxt and e["month"] == finance.add_months(nxt, 1)
     items = client.get("/api/transfers", params={"month": nxt}).json()["items"]
     assert any(i["id"] == e["id"] and i["amount"] == 15000.0 for i in items)
+
+
+def _rent_by_period(tmpdb, rid, periods):
+    """Her dönemin gideri (Özet toplamı), bağlı kira ve "bekliyor" sayısı."""
+    out = {}
+    for m in periods:
+        s = finance.summary(m)
+        linked = [e for e in tmpdb.list_entries() if e["recurring_id"] == rid and e["month"] == m]
+        out[m] = (s["totals"]["expense"], len(linked), s["pending"]["count"])
+    return out
+
+
+def test_accept_uses_same_period_rule_as_new_entries(client, tmpdb):
+    """Tek dönem kuralı (öneri kabulü = yeni kayıt): ay dönümü 17, kira 17'si; geçmişte bir ay 16'sında (bir gün erken)
+    ödenmiş. Kayıtlar tarih sırasıyla gününe en yakın boş döneme bağlanır, her dönem bir kez.
+
+    Rakam etkisi (m = bu ay; kiralar m-3/17, m-2/16, m-1/17; dönemler P1=m-2, P2=m-1, P3=m):
+      önce: m-3/17 → P1, m-2/16 de P1'e düşüp BAĞLANMIYORDU (tek seferlik gider olarak P1'de kaldı), m-1/17 → P3.
+            P1 gideri 30.000 (iki kira), P2 gideri 0 ve "kira bekliyor", P3 15.000; start_month = m-3 (takvim ayı),
+            yani kiranın hiç olmadığı m-3 dönemi de "bekliyor" gösteriyordu.
+      sonra: P1 15.000, P2 15.000 (16'sındaki kira "erken ödendi"), P3 15.000; start_month = P1, bekleyen yok.
+    Transferler tarih bazlı: kayıtlar takvim aylarında aynen görünür."""
+    tmpdb.set_setting("cycle_mode", "manual")
+    tmpdb.set_cycle_start_day(17)
+    ms = _months(3)
+    tmpdb.import_bank_rows([_rent(f"{ms[0]}-17", "a"), _rent(f"{ms[1]}-16", "b"), _rent(f"{ms[2]}-17", "c")],
+                           account=ACC)
+    tr_before = {i["id"]: (i["entry_date"], i["amount"]) for i in client.get("/api/transfers").json()["items"]}
+    rid = _accept(client, "p:")
+    rec = next(r for r in tmpdb.list_recurring() if r["id"] == rid)
+    p1, p2, p3 = ms[1], ms[2], finance.add_months(ms[2], 1)
+    assert rec["start_month"] == p1  # ilk bağlanan kaydın DÖNEMİ (eskiden takvim ayı ms[0])
+    by_hash = {e["import_hash"]: e for e in tmpdb.list_entries()}
+    assert {h: (by_hash[h]["recurring_id"], by_hash[h]["month"]) for h in "abc"} == \
+        {"a": (rid, p1), "b": (rid, p2), "c": (rid, p3)}  # 16'sındaki kira artık bağlı (eskiden boşta)
+    assert _rent_by_period(tmpdb, rid, [ms[0], p1, p2]) == {
+        ms[0]: (0.0, 0, 0),        # önce: (0, 0, 1) — kirası olmayan dönem "bekliyor"du
+        p1: (15000.0, 1, 0),       # önce: (30000, 1, 0) — 16'sındaki kira da buraya tek seferlik yazılıyordu
+        p2: (15000.0, 1, 0),       # önce: (0, 0, 1) — kirasız ve "bekliyor"
+    }
+    # Transferler tarih bazlı: aynı kayıtlar, aynı tarih/tutar
+    assert {i["id"]: (i["entry_date"], i["amount"]) for i in client.get("/api/transfers").json()["items"]} == tr_before
+
+    # yeni gelen kayıt aynı kural: sonraki ayın 16'sı (bir gün erken) bir sonraki dönemin kirası
+    nxt = finance.add_months(ms[2], 1)
+    tmpdb.import_bank_rows([_rent(f"{nxt}-16", "d")], account=ACC)
+    d = next(e for e in tmpdb.list_entries() if e["import_hash"] == "d")
+    assert d["recurring_id"] == rid and d["month"] == finance.add_months(p3, 1)
+
+
+def test_accept_extra_payment_does_not_shift_series(client, tmpdb):
+    """Aynı döneme ikinci ödeme (bölünmüş/ekstra havale) seriyi kaydırmaz: sonraki kayıtlar kendi dönemlerinde kalır,
+    gelecek dönem "ödendi" görünmez; ekstra ödeme tek seferlik kalır (her dönem bir kez)."""
+    ms = _months(4)
+    tmpdb.import_bank_rows([_rent(f"{ms[0]}-10", "a"), _rent(f"{ms[1]}-10", "b"), _rent(f"{ms[2]}-10", "c"),
+                            _rent(f"{ms[3]}-10", "d"), _rent(f"{ms[0]}-20", "x", amount=500.0),
+                            _rent(f"{ms[3]}-20", "y", amount=500.0)], account=ACC)
+    rid = _accept(client, "p:")
+    by_hash = {e["import_hash"]: e for e in tmpdb.list_entries()}
+    assert [(by_hash[h]["recurring_id"], by_hash[h]["month"]) for h in "abcd"] == [(rid, m) for m in ms]
+    assert by_hash["x"]["recurring_id"] is None and by_hash["x"]["month"] == ms[0]  # serinin önüne taşmadı
+    assert by_hash["y"]["recurring_id"] is None and by_hash["y"]["month"] == ms[3]  # gelecek dönem "ödendi" olmadı
+    assert not [e for e in tmpdb.list_entries() if e["recurring_id"] == rid and e["month"] > ms[3]]
+
+
+def test_accept_calendar_cycle_unchanged(client, tmpdb):
+    """Ay dönümü 1 (takvim ayı) ve düzenli ödeme: kural değişikliği rakam değiştirmez (dönem = takvim ayı)."""
+    ms = _months(3)
+    _history(tmpdb, ms)
+    rid = _accept(client, "p:")
+    rec = next(r for r in tmpdb.list_recurring() if r["id"] == rid)
+    assert rec["start_month"] == ms[0]
+    assert sorted(e["month"] for e in tmpdb.list_entries() if e["recurring_id"] == rid) == ms

@@ -908,18 +908,22 @@ def accept_recurring_suggestion(key: str, description: str | None = None, amount
     if not s:
         raise KeyError(key)
     kind, mkey = key.split(":", 1)
-    rid = db.create_recurring({"description": (description or s["description"]).strip(), "amount": amount or s["amount"],
-                               "kind": kind, "category": s["category"], "day_of_month": s["day_of_month"],
-                               "start_month": s["first_month"], "account_id": s["account_id"], "match_key": mkey})
-    seen = set()
+    rec = {"description": (description or s["description"]).strip(), "amount": amount or s["amount"],
+           "kind": kind, "category": s["category"], "day_of_month": s["day_of_month"],
+           "start_month": s["first_month"], "account_id": s["account_id"], "match_key": mkey}
+    cands = [e for e in db.list_entries()
+             if e["kind"] == kind and not e["recurring_id"] and not e["skipped"]
+             and e["payment"] not in ("kredi_karti", "kart")
+             and db.recurring_key(e["description"], e["counterparty"]) == mkey]
+    # dönem kuralı yeni kayıtlarla aynı (db._nearest_recurring_month): gününe en yakın boş dönem. Başlangıç ayı da
+    # takvim ayı değil ilk bağlanan kaydın DÖNEMİ (ay dönümü 17'de 17 Ağustos kirası Eylül dönemidir)
+    plan = db.attach_recurring_series({**rec, "id": None}, cands)
+    if plan:
+        rec["start_month"] = min(plan.values())
+    rid = db.create_recurring(rec)
     with db.connect() as c:
-        for e in sorted(db.list_entries(), key=lambda e: (e["entry_date"], -e["amount"])):
-            if e["kind"] != kind or e["recurring_id"] or e["skipped"] or e["payment"] in ("kredi_karti", "kart"):
-                continue
-            if db.recurring_key(e["description"], e["counterparty"]) != mkey or e["month"] in seen:
-                continue
-            seen.add(e["month"])
-            c.execute("UPDATE entries SET recurring_id = ? WHERE id = ?", (rid, e["id"]))
+        c.executemany("UPDATE entries SET recurring_id = ?, month = ? WHERE id = ? AND recurring_id IS NULL",
+                      [(rid, m, eid) for eid, m in plan.items()])
     return rid
 
 

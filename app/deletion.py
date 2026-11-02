@@ -194,15 +194,27 @@ def rc_delete_customer(uid: int) -> dict:
     return res
 
 
+def _apple_revoke(uid: int) -> dict:
+    """Apple ile giriş belgesi (varsa) Apple'da iptal edilir; hata sıraya yazılır, silmeyi engellemez (app/apple.py)."""
+    try:
+        from app import apple
+
+        return apple.on_delete(uid)
+    except Exception as e:  # noqa: BLE001
+        log.warning("apple: iptal çağrılamadı (kullanıcı %s): %s", uid, e)
+        return {"error": str(e)[:200]}
+
+
 # ---------------------------------------------------------------- silme, geri alma, kalıcı silme
 
-def request_delete(u: dict, now: datetime | None = None) -> dict:
-    """Kullanıcı kendi hesabını sildi (onay uçta alındı). Dönen: {"delete_after": ISO | None, "purged": bool}."""
+def request_delete(u: dict, now: datetime | None = None, reason: str = "self") -> dict:
+    """Kullanıcı kendi hesabını sildi (onay uçta alındı). Dönen: {"delete_after": ISO | None, "purged": bool}.
+    reason "apple_account_deleted": Apple hesabı silindi bildirimi (app/apple.py; yalnız ulaşılamayan hesapta)."""
     now = now or _now()
     days = grace_days()
     after = _iso(now + timedelta(days=days)) if days else None
     members = [] if u.get("member_of") else [m for m in system.members(u["id"]) if not pending(m)]
-    _record(u, "self", now, after, purged=False)
+    _record(u, reason, now, after, purged=False)
     for m in members:
         _record(m, "owner", now, after, purged=False)
     if u.get("plan_source") == "revenuecat":  # mağazadan almış: Google Play ise yenilemeyi hemen durdurmayı dene
@@ -245,6 +257,7 @@ def purge(u: dict, now: datetime | None = None) -> None:
         _record(u, "owner" if u.get("deleted_with") else "self", now, u.get("delete_after"), purged=False)
     system.purge_user_data(u)
     rc_delete_customer(u["id"])
+    _apple_revoke(u["id"])
     system.delete_user(u["id"])
     for k in ("consent", "pw_unset"):  # KVKK: onay kaydı (IP içerir) da gider
         system.put(f"{k}:{u['id']}", None)
@@ -274,6 +287,7 @@ def admin_deleted(u: dict, now: datetime | None = None, reason: str = "admin") -
     reason "member_removed": ortak defter sahibi üyeyi çıkardı (aynı akış: hesap silinir, veri _silinen'e)."""
     now = now or _now()
     _record(u, reason, now, None, purged=False)
+    _apple_revoke(u["id"])  # hesap satırı çağıranda hemen silinir: Apple belgesi de şimdi iptal (ya da sıraya)
     with system.connect() as c:
         c.execute("UPDATE deleted_accounts SET purged_at = ?, reason = COALESCE(reason, ?) WHERE user_id = ?",
                   (_iso(now), reason, u["id"]))
