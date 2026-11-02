@@ -43,10 +43,10 @@ def test_limits_by_plan_and_meta_reads(hosted):
     c, u = _user(hosted)
     p = c.get("/api/meta").json()["plan"]
     assert p["reads"]["belge"] == {"used": 0, "limit": 10, "left": 0 + 10} and p["reads"]["fis"]["limit"] == 30
-    assert p["reads_by_plan"] == {"free": {"belge": 10, "fis": 30}, "premium": {"belge": 200, "fis": 600},
-                                  "aile": {"belge": 200, "fis": 600}}
+    assert p["reads_by_plan"] == {"free": {"belge": 10, "fis": 30}, "premium": {"belge": 200, "fis": 300},
+                                  "aile": {"belge": 200, "fis": 300}}
     assert [x["id"] for x in p["packs"]] == ["okuma_100", "okuma_300"] and p["family_seats"] == 4
-    for plan, (b, f) in (("premium", (200, 600)), ("aile", (200, 600))):
+    for plan, (b, f) in (("premium", (200, 300)), ("aile", (200, 300))):
         system.update_user(u["id"], plan=plan, plan_until=None)
         assert (plans.read_limit(system.user(u["id"]), "belge"), plans.read_limit(system.user(u["id"]), "fis")) == (b, f)
 
@@ -59,7 +59,7 @@ def test_trial_has_normal_limits_and_is_reported(hosted):
                 "product_id": "premium_monthly", "period_type": "TRIAL", "expiration_at_ms": exp}).status_code == 200
     p = c.get("/api/meta").json()["plan"]
     assert p["plan"] == "premium" and p["trial"] is True and p["trial_days_left"] in (6, 7)
-    assert p["reads"]["belge"]["limit"] == 200 and p["reads"]["fis"]["limit"] == 600
+    assert p["reads"]["belge"]["limit"] == 200 and p["reads"]["fis"]["limit"] == 300
     _set_reads(u["id"], belge=200)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
     assert r["quota_full"] and r["trial"] is True and r["trial_days_left"] in (6, 7) and r["upgrade"] is False

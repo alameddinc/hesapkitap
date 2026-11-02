@@ -145,7 +145,7 @@ def test_free_11th_document_refused_before_reading(hosted, gemini):
     body = r.json()
     assert r.status_code == 502 and body["manual"] is True and body["quota_full"] is True and gemini == []
     assert body["kind"] == "fis" and body["limit"] == 30 and "Bu ayki 30 fiş okuma hakkın doldu" in body["detail"]
-    assert "Premium'da ayda 600 fiş." in body["detail"]
+    assert "Premium'da ayda 300 fiş." in body["detail"]
     assert body["receipt_file"] and body["receipt_file"].endswith(".jpg")
     e = c.post("/api/entries", json={"entry_date": "2026-10-20", "description": "Migros", "amount": 125.5,
                                      "kind": "gider", "category": "Market & Gıda", "payment": "nakit",
@@ -188,7 +188,7 @@ def test_personal_quota_comes_first_and_admin_unlimited(hosted):
 
 
 def test_family_counters_are_per_person_and_members_own_book(tmpdb, monkeypatch):
-    """Aile: kişi başı 200 belge / 600 fiş; ortak defterde her üyenin kendi sayacı. Sahibin hakkı dolu olsa da üye
+    """Aile: kişi başı 200 belge / 300 fiş; ortak defterde her üyenin kendi sayacı. Sahibin hakkı dolu olsa da üye
     okur; üyenin hakkı dolunca ortak defterde de üyenin kendi defterinde de reddedilir."""
     from app import auth, db, doc_reads, system
 
@@ -199,7 +199,7 @@ def test_family_counters_are_per_person_and_members_own_book(tmpdb, monkeypatch)
     with system.connect() as c:  # davetle katılmış üye
         c.execute("UPDATE users SET member_of = ? WHERE id = ?", (o["id"], m["id"]))
     o, m = system.user(o["id"]), system.user(m["id"])
-    _set_reads(o["id"], belge=200, fis=600)
+    _set_reads(o["id"], belge=200, fis=300)
     _set_reads(m["id"], belge=199)
     with db.use_space(system.user_db_path(m), m):
         doc_reads.check(b"belge-200")

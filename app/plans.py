@@ -129,10 +129,10 @@ FREE_BUDGETS = 2
 
 # ---------------------------------------------------------------- okuma hakları (app/doc_reads.py)
 # İki ayrı aylık sayaç: "belge" (kart ekstresi, hesap dökümü, fatura, posta belgesi, yapay zekâ kategori önerisi) ve
-# "fis" (fiş fotoğrafı). Kişi başıdır: ortak defterde her üyenin kendi sayacı var (aile paketi kişi başı 200 / 600).
+# "fis" (fiş fotoğrafı). Kişi başıdır: ortak defterde her üyenin kendi sayacı var (aile paketi kişi başı 200 / 300).
 # Deneme süresinde özel sınır yok: paketin normal hakları.
 BELGE, FIS = "belge", "fis"
-READS = {FREE: {BELGE: 10, FIS: 30}, PREMIUM: {BELGE: 200, FIS: 600}, FAMILY: {BELGE: 200, FIS: 600}}
+READS = {FREE: {BELGE: 10, FIS: 30}, PREMIUM: {BELGE: 200, FIS: 300}, FAMILY: {BELGE: 200, FIS: 300}}
 DOC_READS = {p: v[BELGE] for p, v in READS.items()}  # geriye uyum (eski istemci: plan.ai_docs)
 KIND_LABELS = {BELGE: "belge", FIS: "fiş"}
 # Ek okuma paketi (mağazada tüketilebilir ürün): bitene kadar geçerli, ay dönümünde silinmez, paket değişince de kalır.

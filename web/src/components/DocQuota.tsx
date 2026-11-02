@@ -99,7 +99,7 @@ export function useGoPlan() {
   };
 }
 
-/** Yükleme ekranları: "Bu ay: Belge 3/200 · Fiş 12/600 · Ek 0" (yalnız hazır sürüm, yönetici değil). */
+/** Yükleme ekranları: "Bu ay: Belge 3/200 · Fiş 12/300 · Ek 0" (yalnız hazır sürüm, yönetici değil). */
 export function ReadsLine({ className }: { className?: string }) {
   const { reads } = useDocQuota();
   if (!reads) return null;
