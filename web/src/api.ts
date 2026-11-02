@@ -635,3 +635,15 @@ export const api = {
   testRule: (pattern: string, text: string) =>
     req<{ normalized: string; match: boolean }>("GET", `/api/rules/test${q({ pattern, text })}`),
 };
+
+/** Yönetici: yapay zekâ maliyet özeti (GET/PUT /api/admin/ai-costs). İçerik kaydedilmez, yalnız token sayıları. */
+export interface AiCostKind {
+  kind: "fis" | "belge" | "dokum" | "kategori"; label: string; calls: number; reads: number | null;
+  avg_input: number; avg_output: number; avg_thoughts: number; cost_usd: number; cost_try: number;
+}
+export interface AiCosts {
+  month: string; kinds: AiCostKind[]; calls: number; cost_usd: number; cost_try: number;
+  top_users: { user: string; calls: number; cost_usd: number; cost_try: number }[];
+  prices: Record<string, { input: number; output: number }>; usd_try: number;
+  default_prices: Record<string, { input: number; output: number }>;
+}

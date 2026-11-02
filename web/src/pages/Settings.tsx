@@ -13,6 +13,7 @@ import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 import Users from "../components/Users";
 import PlanTable from "../components/PlanTable";
+import AiCosts from "../components/AiCosts";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
@@ -387,6 +388,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       {isAdmin && <Users />}
 
       {isAdmin && <PlanTable />}
+
+      {isAdmin && <AiCosts />}
 
       {isAdmin && <DemoStats />}
 
