@@ -5023,9 +5023,12 @@ def delete_token(tid: int):
 
 @app.post("/api/documents/parse")
 @_heavy
-def parse_document(file: list[UploadFile] = File(...)):
+def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Form(None),
+                   ocr_source: str | None = Form(None)):
     """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
-    Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4)."""
+    Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4).
+    ocr_text (yetenek receipt_text): telefonda çıkarılmış metin (ocr_source "vision" | "mlkit"); verilirse yapay zekâya
+    fotoğraf yerine bu metin gider, fotoğraf yine saklanır. Metinden çıkan fiş tutarsızsa bir kez fotoğrafla okunur."""
     files = file[:4]
     data = _file_bytes(files[0])
     for f in files:
@@ -5034,10 +5037,46 @@ def parse_document(file: list[UploadFile] = File(...)):
     if mime not in BILL_TYPES or any((f.content_type or "") not in BILL_TYPES for f in files[1:]):
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
     more = [(_file_bytes(f), f.content_type or "") for f in files[1:]]
-    return _read_document(data, mime, more)
+    text = (ocr_text or "").strip() if mime.startswith("image/") else ""
+    if len(text) > receipt.MAX_OCR_CHARS:
+        raise HTTPException(422, "Fişten çıkarılan metin çok uzun")
+    return _read_document(data, mime, more, ocr_text=text or None,
+                          ocr_source=ocr_source if ocr_source in ("vision", "mlkit") else "diger")
 
 
-def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
+def _read_by_text(text: str, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
+                  more: list | None) -> dict:
+    """Metin yolu: telefonda çıkarılmış metin yapay zekâya gider. Metin okunamazsa ya da çıkan fiş tutarsızsa (toplam
+    yok, fiyatsız kalem, kalem toplamı fişi tutmuyor) fotoğrafla bir kez daha okunur; fotoğraf okuması da olmazsa
+    metnin sonucu kalır. doc['ocr'] = {source, used, fallback}."""
+    try:
+        doc = receipt.parse_document_text(text, cats, split)
+    except receipt.ReceiptError:
+        doc = None
+    if doc is not None and doc["type"] == "receipt":
+        items = doc.get("items") or []
+        bad = doc.get("total") is None or receipt_check.needs_reread(items, receipt_check.check(items, doc.get("total")))
+    else:
+        bad = doc is None
+    if not bad:
+        doc["ocr"] = {"source": source, "used": True, "fallback": False}
+        return doc
+    try:
+        again = receipt._parse_document_ai(data, mime, cats, split, more, kind="otomatik_foto") if doc is not None \
+            else receipt.parse_document(data, mime, cats, split, more=more)
+    except receipt.ReceiptError:
+        if doc is None:
+            raise
+        again = None
+    if again is None:
+        doc["ocr"] = {"source": source, "used": True, "fallback": False}
+        return doc
+    again["ocr"] = {"source": source, "used": False, "fallback": True}
+    return again
+
+
+def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: str | None = None,
+                   ocr_source: str | None = None) -> dict:
     """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır."""
     import hashlib
 
@@ -5055,8 +5094,12 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
         doc_reads.check(key, doc_reads.guess_kind(original_mime))  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
+    split = sorted({r["category"] for r in db.list_item_rules()})
     try:
-        doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)
+        if ocr_text and receipt.enabled():
+            doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
+        else:
+            doc = receipt.parse_document(data, mime, cats, split, more=more)
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
     doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")))

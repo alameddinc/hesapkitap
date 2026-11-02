@@ -1,16 +1,18 @@
 """Yapay zekâ maliyet ölçümü: her Gemini çağrısının token sayıları (system.db → ai_calls).
 
-Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | belge | dokum | kategori), model, girdi / çıktı / düşünme
-token'ı. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın özetini görür: tür başına
-çağrı ve okuma sayısı, ortalama token, tahmini maliyet (model fiyat tablosu ve dolar kuru ayarlanabilir) ve en yoğun 10
-kullanıcı (maskeli). Kayıtlar 13 ay tutulur.
+Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | fis_metin | fis_foto | belge | dokum | kategori), model,
+girdi / çıktı / düşünme token'ı. fis_metin: telefonda çıkarılan metinden okunan fiş; fis_foto: o metin tutarsız çıkınca
+fotoğrafla yapılan yedek okuma. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın
+özetini görür: tür başına çağrı ve okuma sayısı, ortalama token, tahmini maliyet (model fiyat tablosu ve dolar kuru
+ayarlanabilir) ve en yoğun 10 kullanıcı (maskeli). Kayıtlar 13 ay tutulur.
 """
 import json
 from datetime import date, datetime, timezone
 
-KINDS = ("fis", "belge", "dokum", "kategori")
-KIND_LABELS = {"fis": "Fiş", "belge": "Belge (ekstre, fatura, posta)", "dokum": "Hesap dökümü",
-               "kategori": "Kategori önerisi"}
+KINDS = ("fis", "fis_metin", "fis_foto", "belge", "dokum", "kategori")
+KIND_LABELS = {"fis": "Fiş", "fis_metin": "Fiş (telefonda okunan metinden)",
+               "fis_foto": "Fiş (metin yetmedi, fotoğrafla yeniden)", "belge": "Belge (ekstre, fatura, posta)",
+               "dokum": "Hesap dökümü", "kategori": "Kategori önerisi"}
 # 1 milyon token başına ABD doları. Düşünme (thinking) token'ı çıktı fiyatıyla ücretlenir.
 DEFAULT_PRICES = {"gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50}}
 DEFAULT_USD_TRY = 42.0

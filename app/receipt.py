@@ -259,11 +259,16 @@ def _check_ai_pages(docs: list[tuple[bytes, str]]) -> None:
                                "dönemli bir döküm indir ya da Excel/CSV dosyasını yükle; harcamaları elle de girebilirsin.")
 
 
+# kind="otomatik…": belge türü yanıttan anlaşılır; fatura → belge, fiş → bu tür (app/ai_costs.py KINDS)
+AUTO_KINDS = {"otomatik": "fis", "otomatik_metin": "fis_metin", "otomatik_foto": "fis_foto"}
+
+
 def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: int | None = None,
                  more: list[tuple[bytes, str]] | None = None, model: str | None = None,
                  kind: str = "belge") -> tuple[dict, dict]:
     """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf). kind: maliyet ölçümünde tür
-    (fis | belge | dokum | kategori; "otomatik": yanıttaki belge türünden — fatura → belge, diğeri → fis)."""
+    (fis | fis_metin | fis_foto | belge | dokum | kategori; AUTO_KINDS'takiler yanıttaki belge türünden — fatura → belge,
+    diğeri → fiş türü)."""
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
@@ -301,8 +306,8 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
     _count_usage()
     usage = resp.get("usageMetadata", {})
     out = _extract_json(text)
-    if kind == "otomatik":
-        kind = "belge" if out.get("doc_type") == "fatura" or out.get("due_date") else "fis"
+    if kind in AUTO_KINDS:
+        kind = "belge" if out.get("doc_type") == "fatura" or out.get("due_date") else AUTO_KINDS[kind]
     _record_cost(kind, model, usage)
     return out, {"model": model, "input": usage.get("promptTokenCount"), "output": usage.get("candidatesTokenCount"),
                  "thoughts": usage.get("thoughtsTokenCount")}
@@ -491,12 +496,41 @@ def _local(data: bytes, mime: str, categories: list[str], reason: str, more: lis
 
 
 def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
-                       more: list[tuple[bytes, str]] | None = None) -> dict:
+                       more: list[tuple[bytes, str]] | None = None, kind: str = "otomatik") -> dict:
     """Tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri; model her fiş satırını bunlardan
-    birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için)."""
+    birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için). kind: maliyet türü (metin yolunun fotoğraf
+    yedeği "otomatik_foto")."""
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
-    raw, meta = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
-                             max_output_tokens=8000, more=more, kind="otomatik")
+    raw, _ = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
+                          max_output_tokens=8000, more=more, kind=kind)
+    return _doc_of(raw, categories)
+
+
+MAX_OCR_CHARS = 20000  # telefonda çıkarılan metin üst sınırı (4 parçalı uzun fiş rahat sığar)
+
+TEXT_INTRO = """Aşağıdaki METİN, bir belgenin fotoğrafından telefonda çıkarılmış yazıdır (OCR). Satır sırası ve satır
+sonları korunmuştur: fişin her satırı metinde ayrı bir satırdır ve aynı satırdaki yazılar (ör. solda ürün adı, sağda
+fiyatı) aynı satırda, aralarında boşlukla durur. OCR harf hataları olabilir (O/0, I/1, S/5, B/8, Türkçe harfin
+düşmesi: Ş→S, İ→I, Ğ→G); bağlamdan düzelt ama metinde olmayan satır UYDURMA. "--- PARÇA n ---" satırı aynı belgenin
+sırayla çekilmiş fotoğraflarını ayırır. Aşağıdaki kurallarda geçen "fotoğraf", "görüntü" ve "satır" bu metni anlatır.
+"""
+
+
+def parse_document_text(text: str, categories: list[str], split_categories: list[str] | None = None) -> dict:
+    """Telefonda (Apple Vision / ML Kit) çıkarılmış metinden fiş ya da fatura: fotoğraf yerine metin gider, istem ve
+    çıktı biçimi parse_document ile aynı. Maliyet türü fiş için fis_metin."""
+    text = (text or "").replace("\r\n", "\n").strip()[:MAX_OCR_CHARS]
+    if not text:
+        raise ReceiptError("Metin boş")
+    split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
+    prompt = (TEXT_INTRO + DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule)
+              + "\nMETİN (satır sonları fişteki gibi):\n<<<\n" + text + "\n>>>\n")
+    raw, _ = _gemini_json(prompt, None, "text/plain", max_output_tokens=8000, kind="otomatik_metin")
+    return _doc_of(raw, categories)
+
+
+def _doc_of(raw: dict, categories: list[str]) -> dict:
+    """Modelin ham JSON'undan fiş/fatura sonucu (fotoğraf ve metin yolu aynı)."""
     if raw.get("doc_type") == "fatura" or raw.get("due_date"):
         return {
             "type": "bill",
