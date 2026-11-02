@@ -19,6 +19,7 @@ import Features from "../components/Features";
 import SimpleDashboard from "../components/SimpleDashboard";
 import Compare from "../components/Compare";
 import YearSummary from "../components/YearSummary";
+import YearShortcut from "../components/YearShortcut";
 import Jars from "../components/Jars";
 import Holdings from "../components/Holdings";
 import { InterestHistory, TrendChart } from "./Stats";
@@ -203,6 +204,8 @@ export default function Dashboard() {
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
         </div>
         <div className="hidden sm:block"><EstimateNote summary={s} /></div>
+        {/* Aralık sonu / Ocak başı: "2026 yılın nasıl geçti?" → yıl özeti (yalnız içinde bulunulan dönemde) */}
+        {month === meta?.current_month && <YearShortcut />}
       </>);
       case "gelenler": return <SharedInbox />;
       // Başlarken (sahibin kurulumu) ve altında Yapılacaklar (belge hatırlatmaları; üyede görebildikleri)

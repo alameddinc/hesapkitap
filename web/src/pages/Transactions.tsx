@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { rowTotals } from "../lib/counts";
 import { usePagedTxns } from "../lib/pagedTxns";
 import LoadMore from "../components/LoadMore";
-import { Plus, Search } from "lucide-react";
+import { ChevronRight, Plus, Search, Tags } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Row } from "../api";
 import MonthPicker from "../components/MonthPicker";
@@ -37,6 +37,7 @@ export default function Transactions() {
   const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle);
   const active = TABS.find((x) => x.key === tab)!;
   const rows = real.filter((r) => active.test(r) && match(r));
+  const uncat = real.filter(TABS.find((x) => x.key === "uncat")!.test).length;
   const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
   // toplam: süzgeç yokken sunucunun dönem toplamı (sayfanın değil); süzgeçte tüm satırlar gelince counts_as_spend bayrağı
@@ -70,6 +71,18 @@ export default function Transactions() {
           );
         })}
       </div>
+
+      {/* Kategorisizleri düzenle: aynı işyerindekileri tek seferde kategorile (sunucu /api/uncategorized) */}
+      {(tab === "all" || tab === "uncat") && !needle && uncat > 0 && (
+        <button className="card flex w-full items-center gap-3 p-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" onClick={() => ui.go("kategorisiz")}>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300"><Tags size={18} aria-hidden /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">Kategorisizleri düzenle</span>
+            <span className="block text-xs text-stone-500 dark:text-stone-400">{uncat} işlem kategorisiz · aynı yerdekiler tek seferde</span>
+          </span>
+          <ChevronRight size={16} aria-hidden className="text-stone-400" />
+        </button>
+      )}
 
       <EstimateSection rows={estShown} summary={!needle ? summary.data : undefined} />
 

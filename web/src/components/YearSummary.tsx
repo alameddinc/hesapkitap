@@ -21,12 +21,16 @@ const chg = (p: number | null, label: string) => (p == null ? null : `${label} $
 
 /** İstatistik → yıllık özet: "bu yıl nereye gitti". */
 export default function YearSummary() {
-  const [year, setYear] = useState(() => new Date().getFullYear());
+  // #/istatistik?yil=2026: Özet'teki mevsimlik kısayol (Ocak'ta geçen yıl) ya da İstatistik'in üstündeki giriş
+  const [year, setYear] = useState(() => {
+    const y = Number(new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("yil"));
+    return y >= 2000 && y <= 2100 ? y : new Date().getFullYear();
+  });
   const q = useQuery({ queryKey: ["year-summary", year], queryFn: () => send<Year>(`/api/year-summary?year=${year}`) });
   const y = q.data;
   if (!y || (!y.months && y.years.length === 0)) return null;
   return (
-    <section className="card space-y-3 p-3 sm:p-4">
+    <section id="yil-ozeti" className="card scroll-mt-36 space-y-3 p-3 sm:p-4 md:scroll-mt-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 font-semibold"><CalendarRange size={18} /> {y.year} yılı</h2>
         <div className="flex gap-1">

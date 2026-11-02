@@ -4300,6 +4300,104 @@ def undo_import(bid: str, force: bool = False):
         raise HTTPException(404, "Yükleme bulunamadı") from e
 
 
+# ---------------------------------------------------------------- kategorisizleri düzenle (app/uncategorized.py)
+
+def _unc_month(month: str | None) -> str | None:
+    if not month or month == "all":
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(422, "Dönem biçimi: month=YYYY-MM ya da month=all")
+    return month
+
+
+def _expense_categories() -> list[str]:
+    return sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories())
+                  - {"Ödeme", "Kategorisiz", "Borç / Alacak", *INCOME_CATEGORIES})
+
+
+@app.get("/api/uncategorized/groups")
+def uncategorized_groups(month: str | None = None):
+    """Kategorisiz kayıtlar işyerine/kişiye göre gruplu, her gruba ücretsiz öneri (geçmiş/kural/bilinen). Küme Özet'teki
+    "N işlem kategorisiz" uyarısıyla aynı; month yoksa ya da "all" ise tüm zaman. ai: yapay zekâ önerisi açık mı, kalan hak."""
+    from app import uncategorized
+
+    m = _unc_month(month)
+    gs = uncategorized.groups(m)
+    return {"month": m, "groups": gs, "count": sum(g["count"] for g in gs), "ai": uncategorized.ai_status()}
+
+
+class UncApplyIn(BaseModel):
+    key: str = Field(min_length=3, max_length=300)
+    category: str = Field(min_length=1, max_length=80)
+    remember: bool = True
+    month: str | None = None
+
+
+@app.post("/api/uncategorized/apply")
+def uncategorized_apply(body: UncApplyIn):
+    """Gruptaki bütün kategorisiz kayıtlara kategori. remember: işyeri → kural (sonraki ekstre/döküm de bu kategoriye
+    düşer), kişiye giden para → kişi kategorisi. Yanıttaki undo_id ile POST /api/uncategorized/undo geri alır."""
+    from app import uncategorized
+
+    cat = body.category.strip()
+    if not cat or cat == "Kategorisiz":
+        raise HTTPException(422, "Bir kategori seç")
+    try:
+        return uncategorized.apply(body.key, cat, body.remember, _unc_month(body.month))
+    except KeyError as e:
+        raise HTTPException(404, "Bu grupta kategorisiz kayıt kalmadı") from e
+
+
+class UncUndoIn(BaseModel):
+    undo_id: str = Field(min_length=1, max_length=40)
+
+
+@app.post("/api/uncategorized/undo")
+def uncategorized_undo(body: UncUndoIn):
+    """Son "Uygula"yı geri al: kayıtların eski kategorisi, eklenen kural ya da kişi kategorisi geri gelir."""
+    from app import uncategorized
+
+    try:
+        return uncategorized.undo_apply(body.undo_id)
+    except KeyError as e:
+        raise HTTPException(404, "Geri alınacak işlem bulunamadı") from e
+
+
+class UncAiIn(BaseModel):
+    keys: list[str] = Field(min_length=1, max_length=200)
+    month: str | None = None
+
+
+@app.post("/api/uncategorized/ai-suggest")
+def uncategorized_ai_suggest(body: UncAiIn):
+    """Önerisi olmayan işyeri grupları için yapay zekâdan kategori (tek çağrı = 1 hak; hazır sürümde belge okuma hakkı,
+    kendi sunucusunda ortak anahtarın kotası). Yalnız işyeri ADLARI gönderilir: tutar, tarih, kişi adı gitmez.
+    Gemini anahtarı yoksa 404; hak doluysa 402."""
+    from app import doc_reads, uncategorized
+
+    if not receipt.enabled():
+        raise HTTPException(404, "Yapay zekâ önerisi bu sunucuda kapalı")
+    names = uncategorized.ai_names(body.keys, _unc_month(body.month))
+    if not names:
+        return {"suggestions": {}, "asked": 0, "ai": uncategorized.ai_status()}
+    try:
+        doc_reads.check()  # hazır sürüm: hak doluysa sorulmaz
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(402, e) from e
+    try:
+        receipt._check_quota()  # kendi sunucusu: ortak anahtarın aylık kotası
+    except receipt.ReceiptError as e:
+        raise HTTPException(402, errors.user_text(e, 402)) from e
+    try:
+        out = uncategorized.ai_suggest(names, _expense_categories())
+    except receipt.DailyLimitError as e:
+        raise HTTPException(429, errors.user_text(e, 429)) from e
+    except receipt.ReceiptError as e:
+        raise HTTPException(502, errors.user_text(e, 502)) from e
+    doc_reads.charge(f"ai-kategori:{date.today().isoformat()}:" + "|".join(sorted(names.values())))
+    return {"suggestions": out, "asked": len(names), "ai": uncategorized.ai_status()}
+
+
 # ---------------------------------------------------------------- rules
 
 class RuleIn(BaseModel):
