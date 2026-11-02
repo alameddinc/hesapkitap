@@ -207,7 +207,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
   if (incoming !== undefined && !file && !busy && !err && !notice) return null;  // tek yükleme alanından gelen bir şey yok
   return (
     <section className="card space-y-3 p-4">
-      {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade}
+      {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade} info={full}
         manual={(["gider", "gelir"] as const).map((kind) => ({
           label: kind === "gider" ? "Elle gider" : "Elle gelir",
           onClick: () => { setFull(null); ui.openEntry(undefined, { kind }); },
@@ -229,7 +229,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
       </div>
       {incoming === undefined && <>
         <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy}
-          onClick={() => (quota.full ? setFull({}) : input.current?.click())}>
+          onClick={() => (quota.full ? setFull({ kind: "belge" }) : input.current?.click())}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Landmark size={16} />} {busy ? "Okunuyor…" : "Dosya seç (.pdf, .xlsx, .xls, .csv)"}
         </button>
         <input ref={input} type="file" accept=".pdf,application/pdf,.xlsx,.xls,.csv,text/csv" className="hidden"

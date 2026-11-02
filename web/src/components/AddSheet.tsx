@@ -4,7 +4,7 @@ import type { BillDraft } from "../api";
 import { useRef, useState } from "react";
 import { useMeta, useDemo } from "./hooks";
 import Modal from "./Modal";
-import { isQuotaFull, QuotaFullModal, useDocQuota, type QuotaFull } from "./DocQuota";
+import { isQuotaFull, QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "./DocQuota";
 import type { EntryDraft } from "../ui";
 
 /** Fotoğrafı yüklemeden önce küçült: mobil fotoğraflar 5-12 MB, 1600px yeterli ve token maliyeti düşer. */
@@ -101,7 +101,12 @@ export default function AddSheet({ onClose, onPick, onBill }: {
   // hazır sürüm: belge okuma hakkı doldu (ön kontrol ya da sunucu reddi) → elle ekleme uyarısı
   const quota = useDocQuota();
   const [full, setFull] = useState<Partial<QuotaFull> | null>(null);
-  const pick = (ref: React.RefObject<HTMLInputElement | null>) => (quota.full ? setFull({}) : ref.current?.click());
+  // kamera: fotoğraf fiş sayacına düşer; dosya fiş de fatura da olabilir: ikisi de bittiyse açılmaz (gerisini sunucu söyler)
+  const pick = (ref: React.RefObject<HTMLInputElement | null>) => {
+    const camera = ref === cameraRef;
+    if (camera ? quota.fullFor("fis") : quota.allFull) return setFull({ kind: camera || quota.fullFor("fis") ? "fis" : "belge" });
+    ref.current?.click();
+  };
 
   // uzun fiş: sırayla çekilen parçalar tek fiş olarak okunur
   const [pages, setPages] = useState<Blob[]>([]);
@@ -182,7 +187,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
 
 
   if (full) return (
-    <QuotaFullModal onClose={onClose} upgrade={full.upgrade} hasPhoto={!!full.receipt_file}
+    <QuotaFullModal onClose={onClose} upgrade={full.upgrade} hasPhoto={!!full.receipt_file} info={full}
       manual={[{ label: "Elle ekle", onClick: () => onPick({ kind: "gider", receipt_file: full.receipt_file ?? null }) }]} />
   );
 
@@ -229,6 +234,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           onClick={() => pick(fileRef)} disabled={busy || meta.data?.receipt_enabled === false} />
         <input ref={fileRef} type="file" accept="application/pdf,image/*" multiple className="hidden"
           onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+        <ReadsLine className="px-1 text-xs text-stone-500" />
         </>}
         <Opt icon={<Minus size={20} className="text-red-600" />} title="Gider" sub="Psikolog, nakit ödeme, havale…"
           onClick={() => onPick({ kind: "gider" })} />

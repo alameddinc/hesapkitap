@@ -11,7 +11,7 @@ import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
 import StatementHelp from "../components/StatementHelp";
 import StatementCard from "../components/StatementCard";
-import { QuotaFullModal, useDocQuota, type QuotaFull } from "../components/DocQuota";
+import { QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "../components/DocQuota";
 import { prepare, uploadInBatches } from "../lib/batchUpload";
 
 export default function Statements() {
@@ -29,7 +29,7 @@ export default function Statements() {
   // hazır sürüm: belge okuma hakkı doldu → dosya seçici açılmaz, elle gider/gelir önerilir
   const quota = useDocQuota();
   const [full, setFull] = useState<Partial<QuotaFull> | null>(null);
-  const pick = () => (quota.full ? setFull({}) : input.current?.click());
+  const pick = () => (quota.full ? setFull({ kind: "belge" }) : input.current?.click());
   // yükleme: en fazla 5'erli partiler sırayla (lib/batchUpload.ts); ilerleme "X/Y belge"
   const qc = useQueryClient();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -54,7 +54,7 @@ export default function Statements() {
       const acc = files.filter((f) => res.some((r) => r.filename === f.name && r.status === "account_statement"));
       if (acc.length) setQueue((q) => [...q, ...acc.map((file) => ({ file, password }))]);
       const qf = res.find((r) => r.quota_full);
-      if (qf) setFull({ upgrade: qf.upgrade, limit: qf.limit });
+      if (qf) setFull({ upgrade: qf.upgrade, limit: qf.limit, kind: qf.kind ?? "belge", extra_left: qf.extra_left });
     } finally {
       setProgress(null);
       void qc.invalidateQueries();
@@ -66,7 +66,7 @@ export default function Statements() {
   const sample = useSave((key: string) => apiSend<UploadResult[]>(`/api/demo/sample/${key}`, { method: "POST" }), (res) => setResults(res));
 
   const send = (files: FileList | null) => {
-    if (quota.full) return setFull({});
+    if (quota.full) return setFull({ kind: "belge" });
     const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
     if (ok.length) void sendFiles(ok);
   };
@@ -109,10 +109,11 @@ export default function Statements() {
           Kredi kartı ekstresi (PDF) ya da vadesiz hesap dökümü (PDF, Excel, CSV) — hangisi olduğunu kendisi anlar ·
           birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri genel okuyucu, olmazsa yapay zekâ ile)
         </div>
+        <ReadsLine />
         <input ref={input} type="file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>
       )}
-      {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade}
+      {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade} info={full}
         manual={(["gider", "gelir"] as const).map((kind) => ({
           label: kind === "gider" ? "Elle gider" : "Elle gelir",
           onClick: () => { setFull(null); ui.openEntry(undefined, { kind }); },

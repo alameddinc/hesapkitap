@@ -9,6 +9,7 @@ import AccountSelect, { useAccounts } from "./AccountSelect";
 import { usePeople, useSave } from "./hooks";
 import Modal from "./Modal";
 import { isQuotaFull, renewDate, useDocQuota } from "./DocQuota";
+import { KIND_LABEL } from "./Plan";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
 interface Jar {
@@ -143,7 +144,8 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   const [reading, setReading] = useState(false);
   const quota = useDocQuota();
   // bu form zaten elle giriş: hak doluysa yalnız kısa uyarı (iç içe pencere açılmaz)
-  const quotaMsg = () => ui.toast(`Bu ayki belge okuma hakkın doldu; ay başında yenilenir (${renewDate()}). Tutarı elle yaz.`);
+  const quotaMsg = (kind: "belge" | "fis" = "fis") =>
+    ui.toast(`Bu ayki ${KIND_LABEL[kind]} okuma hakkın doldu; ay başında yenilenir (${renewDate()}). Tutarı elle yaz. Ek okuma paketi telefondaki uygulamadan alınır.`);
   // kuyumcu fişi: gerçek ödenen tutar ve tarih (yerel OCR ya da yapay zekâ)
   const readReceipt = async (f: File | undefined) => {
     if (!f) return;
@@ -153,7 +155,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
       fd.append("file", f, f.name);
       const r = await fetch("/api/documents/parse", { method: "POST", body: fd });
       const d = await bodyOf(r) as { total?: number; date?: string } | null;
-      if (isQuotaFull(d)) return quotaMsg();
+      if (isQuotaFull(d)) return quotaMsg(d.kind);
       if (!r.ok) throw new Error(failureText(r.status, d));
       if (!d) throw new Error(UNEXPECTED);
       if (d.total) setCost(String(d.total));
@@ -186,7 +188,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
         {est > 0 && !cost && <p className="text-xs text-stone-500">Boş bırakırsan bugünkü fiyatla {tl(est)} yazılır.
           Banka/kart ekstresi gelince gerçek ödenen tutara kendiliğinden düzelir.</p>}
         <button type="button" className="btn-ghost border border-stone-300 px-2 py-1 text-sm dark:border-stone-700" disabled={reading}
-          onClick={() => (quota.full ? quotaMsg() : file.current?.click())}><Camera size={14} /> {reading ? "Okunuyor…" : "Fişi okut (tutar ve tarih dolsun)"}</button>
+          onClick={() => (quota.allFull ? quotaMsg() : file.current?.click())}><Camera size={14} /> {reading ? "Okunuyor…" : "Fişi okut (tutar ve tarih dolsun)"}</button>
         <input ref={file} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
           onChange={(e) => { readReceipt(e.target.files?.[0]); e.target.value = ""; }} />
         <input type="date" className="input" value={day} onChange={(e) => setDay(e.target.value)} aria-label="Alış tarihi" />
