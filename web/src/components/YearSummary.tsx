@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { Group } from "../api";
 import { maskText, monthLabel, tl } from "../format";
 import BarList from "./BarList";
+import { openTxns, type TxnFilter } from "../lib/txnFilter";
 import Kpi from "./Kpi";
 
 interface MonthTotal { month: string; income: number; expense: number; net: number }
@@ -28,6 +29,7 @@ export default function YearSummary() {
   });
   const q = useQuery({ queryKey: ["year-summary", year], queryFn: () => send<Year>(`/api/year-summary?year=${year}`) });
   const y = q.data;
+  const open = (f: TxnFilter) => openTxns({ ...f, yil: year, gider: true });
   if (!y || (!y.months && y.years.length === 0)) return null;
   return (
     <section id="yil-ozeti" className="card scroll-mt-36 space-y-3 p-3 sm:p-4 md:scroll-mt-6">
@@ -58,7 +60,9 @@ export default function YearSummary() {
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <h3 className="mb-1 text-sm font-medium">Nereye gitti</h3>
-            <BarList items={y.categories.map((c) => ({ ...c, name: `${c.name} · %${c.share}` }))} />
+            {/* satır → o kategorinin o yıldaki gider işlemleri (İşlemler süzgeci; tutar ve işlem sayısı aynı küme) */}
+            <BarList items={y.categories.map((c) => ({ ...c, id: c.name, name: `${c.name} · %${c.share}` }))}
+              onSelect={(c) => c && open({ kategori: c })} label={(i) => `${i.id} · ${y.year} işlemlerini aç`} />
             {!!y.estimated_expense && (
               <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-dashed border-stone-300 px-2.5 py-1.5 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-400"
                 data-testid="year-estimate">
@@ -69,7 +73,8 @@ export default function YearSummary() {
           </div>
           <div>
             <h3 className="mb-1 text-sm font-medium">En çok harcanan yerler</h3>
-            <BarList items={y.merchants.map((m) => ({ ...m, name: maskText(m.name) }))} />
+            <BarList items={y.merchants.map((m) => ({ ...m, id: m.name, name: maskText(m.name) }))}
+              onSelect={(m) => m && open({ isyeri: m, faizsiz: true })} label={(i) => `${i.name} · ${y.year} işlemlerini aç`} />
           </div>
         </div>
       </>}
