@@ -223,9 +223,47 @@ BILL_CATEGORY = {"elektrik": "Elektrik", "dogalgaz": "Doğalgaz", "su": "Su", "i
                  "telefon": "Telefon", "aidat": "Kira & Aidat"}
 
 
+def _pdf_pages(data: bytes, mime: str) -> int | None:
+    """Yapay zekâya gidecek belgenin sayfa sayısı: PDF'te sayfa sayısı, PDF'ten çıkarılmış metinde (banka dökümü, şifreli
+    ekstre) bilinen sayfaları; bilinmiyorsa None (sınır uygulanmaz)."""
+    if mime == "application/pdf":
+        try:
+            import io
+
+            import pdfplumber
+
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                return len(pdf.pages)
+        except Exception:  # noqa: BLE001 - açılamayan (şifreli) PDF: model kendi hatasını verir
+            return None
+    if mime == "text/plain":
+        from app import parsers
+
+        try:
+            pages = parsers.pages_of(data.decode())
+        except UnicodeDecodeError:
+            return None
+        return len(pages) if pages else None
+    return None
+
+
+def _check_ai_pages(docs: list[tuple[bytes, str]]) -> None:
+    """Maliyet güvenliği: yapay zekâya en çok limits.ai_max_pages() sayfa (HESAPKITAP_AI_MAX_PAGES, varsayılan 50)."""
+    from app import limits
+
+    most = limits.ai_max_pages()
+    for d, m in docs:
+        n = _pdf_pages(d, m)
+        if n and n > most:
+            raise ReceiptError(f"Bu belge {n} sayfa; yapay zekâ en çok {most} sayfalık belge okur. Bankadan daha kısa "
+                               "dönemli bir döküm indir ya da Excel/CSV dosyasını yükle; harcamaları elle de girebilirsin.")
+
+
 def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: int | None = None,
-                 more: list[tuple[bytes, str]] | None = None, model: str | None = None) -> tuple[dict, dict]:
-    """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf)."""
+                 more: list[tuple[bytes, str]] | None = None, model: str | None = None,
+                 kind: str = "belge") -> tuple[dict, dict]:
+    """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf). kind: maliyet ölçümünde tür
+    (fis | belge | dokum | kategori; "otomatik": yanıttaki belge türünden — fatura → belge, diğeri → fis)."""
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
@@ -233,6 +271,7 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
     docs = ([(data, mime)] if data is not None else []) + list(more or [])
     if sum(len(d) for d, _ in docs) > MAX_BYTES:
         raise ReceiptError("Dosya çok büyük (en fazla 15 MB)")
+    _check_ai_pages(docs)
     _daily_gate()
     model = model or config.get("GEMINI_MODEL") or DEFAULT_MODEL
     body = {
@@ -261,13 +300,28 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
         raise ReceiptError("Yapay zekâ boş yanıt verdi; tekrar dene ya da elle gir") from e
     _count_usage()
     usage = resp.get("usageMetadata", {})
-    return _extract_json(text), {"model": model, "input": usage.get("promptTokenCount"),
-                                 "output": usage.get("candidatesTokenCount")}
+    out = _extract_json(text)
+    if kind == "otomatik":
+        kind = "belge" if out.get("doc_type") == "fatura" or out.get("due_date") else "fis"
+    _record_cost(kind, model, usage)
+    return out, {"model": model, "input": usage.get("promptTokenCount"), "output": usage.get("candidatesTokenCount"),
+                 "thoughts": usage.get("thoughtsTokenCount")}
+
+
+def _record_cost(kind: str, model: str, usage: dict) -> None:
+    """Maliyet ölçümü (app/ai_costs.py): token sayıları; içerik/metin kaydedilmez. Kayıt hatası okumayı bozmaz."""
+    try:
+        from app import ai_costs, db
+
+        u = db.current_user()
+        ai_costs.record((u or {}).get("id"), kind, model, usage)
+    except Exception:  # noqa: BLE001
+        log.warning("yapay zekâ maliyet kaydı yazılamadı", exc_info=True)
 
 
 def gemini_text_json(prompt: str, max_output_tokens: int | None = 4096) -> tuple[dict, dict]:
     """Belgesiz, yalnız metin istemi (ör. işyeri adlarına kategori önerisi). Kota/günlük sınır _gemini_json'daki gibi."""
-    return _gemini_json(prompt, None, "text/plain", max_output_tokens=max_output_tokens)
+    return _gemini_json(prompt, None, "text/plain", max_output_tokens=max_output_tokens, kind="kategori")
 
 
 def card_last4(v) -> str | None:
@@ -442,7 +496,7 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
     birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için)."""
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
     raw, meta = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
-                             max_output_tokens=8000, more=more)
+                             max_output_tokens=8000, more=more, kind="otomatik")
     if raw.get("doc_type") == "fatura" or raw.get("due_date"):
         return {
             "type": "bill",
@@ -474,7 +528,7 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
 
 
 def parse_bill(data: bytes, mime: str) -> dict:
-    raw, meta = _gemini_json(BILL_PROMPT, data, mime)
+    raw, meta = _gemini_json(BILL_PROMPT, data, mime, max_output_tokens=8000, kind="belge")
     return {
         "provider": (raw.get("provider") or "").strip()[:60] or "Fatura",
         "category": BILL_CATEGORY.get(raw.get("type"), "Faturalar"),
@@ -488,7 +542,8 @@ def parse_bill(data: bytes, mime: str) -> dict:
 
 
 def parse_receipt(image: bytes, mime: str, categories: list[str]) -> dict:
-    raw, meta = _gemini_json(PROMPT.format(categories=", ".join(categories)), image, mime)
+    raw, meta = _gemini_json(PROMPT.format(categories=", ".join(categories)), image, mime, max_output_tokens=8000,
+                             kind="fis")
 
     d = _iso(raw.get("date"))
     category = raw.get("category") if raw.get("category") in categories else "Diğer"
@@ -530,6 +585,6 @@ def reread_items(image: bytes, mime: str, total: float | None, more: list[tuple[
             "kaçan ya da kayan satırı bul.\n") if total else ""
     model = reread_model()
     raw, meta = _gemini_json(REREAD_PROMPT.format(total_hint=hint), image, mime, max_output_tokens=8000, model=model,
-                             more=more)
+                             more=more, kind="fis")
     return {"items": _items(raw), "total": _num(raw.get("total")) or total, "model": meta["model"],
             "confidence": raw.get("confidence") or "orta"}

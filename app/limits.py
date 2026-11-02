@@ -6,6 +6,8 @@ Ortam değişkenleriyle değiştirilebilir; varsayılanlar gerçek ekstre/dökü
     HESAPKITAP_PDF_MAX_PAGES    PDF başına sayfa (300)
     HESAPKITAP_PDF_TIMEOUT      PDF metne çevirme süresi, saniye (90; sayfalar arasında denetlenir)
     HESAPKITAP_PARSE_WAIT       ağır okuma sırasında bekleme, saniye (120; dolarsa 503 "sunucu meşgul")
+    HESAPKITAP_AI_MAX_PAGES     yapay zekâya gönderilen PDF başına sayfa (50; yalnız yapay zekâ yolu — banka okuyucusu ve
+                                şablonla okunan PDF'ler HESAPKITAP_PDF_MAX_PAGES'e tabidir)
 Zip (xlsx, yedek): açılmış toplam boyut ve sıkıştırma oranı (zip bombası) üye başlıklarından, açmadan denetlenir.
 """
 import io
@@ -35,6 +37,10 @@ def max_file_bytes() -> int:
 
 def pdf_max_pages() -> int:
     return int(_num("HESAPKITAP_PDF_MAX_PAGES", 300))
+
+
+def ai_max_pages() -> int:
+    return int(_num("HESAPKITAP_AI_MAX_PAGES", 50))
 
 
 def pdf_timeout() -> float:

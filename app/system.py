@@ -72,6 +72,18 @@ CREATE TABLE IF NOT EXISTS read_packs (   -- mağazadan alınan ek paketler; txn
     at TEXT DEFAULT CURRENT_TIMESTAMP,
     refunded INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS ai_calls (     -- yapay zekâ maliyet ölçümü (app/ai_costs.py); içerik/metin YOK, yalnız sayılar
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    month TEXT NOT NULL,
+    user_id INTEGER,                    -- NULL: kullanıcısız çağrı (kendi sunucusu yöneticisi, sistem)
+    kind TEXT NOT NULL,                 -- fis | belge | dokum | kategori
+    model TEXT,
+    input INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0,
+    thoughts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ai_calls_month ON ai_calls(month);
 CREATE TABLE IF NOT EXISTS sys_settings (
     key TEXT PRIMARY KEY,
     value TEXT

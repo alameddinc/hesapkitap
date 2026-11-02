@@ -1169,6 +1169,33 @@ def admin_put_plan_table(body: PlanTableIn):
     return _plan_table_out()
 
 
+class AiCostSettingsIn(BaseModel):
+    prices: dict[str, dict[str, float]] | None = None  # {"model": {"input": $/1M, "output": $/1M}}; {}: varsayılana dön
+    usd_try: float | None = None
+
+
+@app.get("/api/admin/ai-costs")
+def admin_ai_costs(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Yapay zekâ maliyeti (bu ay ya da ?month=YYYY-MM): tür başına çağrı/okuma, ortalama token, tahmini maliyet, en
+    yoğun 10 kullanıcı (maskeli). İçerik kaydedilmez."""
+    from app import ai_costs
+
+    _require_admin()
+    return ai_costs.summary(month)
+
+
+@app.put("/api/admin/ai-costs")
+def admin_put_ai_costs(body: AiCostSettingsIn):
+    from app import ai_costs
+
+    _require_admin()
+    try:
+        ai_costs.set_settings(body.prices, body.usd_try)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return ai_costs.summary()
+
+
 @app.post("/api/admin/users")
 def admin_create_user(body: AdminUserIn):
     """Davetsiz hesap: geçici şifre bir kez gösterilir, ilk girişte değiştirilir."""

@@ -217,6 +217,9 @@ def run_global(now: datetime) -> list[str] | None:
 
     if n := deletion.expire_records(now):  # 1 yılı dolan anonim silme kayıtları
         log.info("eski silme kayıtları düştü: %d", n)
+    from app import ai_costs
+
+    ai_costs.prune()  # 13 aydan eski yapay zekâ maliyet kayıtları
     return system.purge_archived(now=now.timestamp())
 
 

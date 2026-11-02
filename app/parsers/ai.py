@@ -54,7 +54,7 @@ def _mask(card: str | None, fallback: str) -> str:
 
 
 def parse_pdf_with_ai(data: bytes, mime: str = "application/pdf") -> Statement:
-    raw, _ = receipt._gemini_json(PROMPT, data, mime, max_output_tokens=32000)
+    raw, _ = receipt._gemini_json(PROMPT, data, mime, max_output_tokens=32000, kind="belge")
     main = _mask(raw.get("card_no"), "AI***0000")
     period_end = _d(raw.get("period_end"))
     if not period_end:

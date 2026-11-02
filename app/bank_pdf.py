@@ -158,7 +158,7 @@ def _parse_account_text(text: str, allow_ai: bool = True) -> dict:
         raise BankPdfError("Bu bankanın PDF dökümü yapay zekâ ile okunur; Ayarlar → Anahtarlar'dan Gemini anahtarı gir "
                            "ya da bankadan Excel/CSV indir.")
     best = None
-    for _attempt in range(3):  # model bazen bir satır atlar: bakiye zinciri tutana kadar tekrar dene
+    for _attempt in range(2):  # model bazen bir satır atlar: bakiye zinciri tutmazsa bir kez daha (maliyet: en çok 2 çağrı)
         res = _parse_text(text)
         if res["verified"]:
             return res
@@ -169,7 +169,7 @@ def _parse_account_text(text: str, allow_ai: bool = True) -> dict:
 
 
 def _parse_text(text: str) -> dict:
-    raw, _ = receipt._gemini_json(PROMPT, text.encode(), "text/plain", max_output_tokens=60000)
+    raw, _ = receipt._gemini_json(PROMPT, text.encode(), "text/plain", max_output_tokens=60000, kind="dokum")
     rows = []
     for r in raw.get("rows") or []:
         amt, bal = receipt._num(r.get("amount")), receipt._num(r.get("balance"))
