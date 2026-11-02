@@ -1,12 +1,28 @@
 """Fiş okuma kıyası: yerel okuma (Tesseract), yapay zekâ (Gemini) ve karma yol aynı fişlerde ne kadar doğru, ne kadara?
 
     python -m app.receipt_bench --user-id 1 [--user-id 7] [--limit N] [--json] [--no-ai] [--reread]
+                                [--text-dir DIR] [--export-photos DIR]
+    python -m app.receipt_bench --photo-dir DIR [--text-dir DIR] [--limit N] [--json] [--model M]
 
 Yollar:
     A  yerel: app/ocr.py `parse` (yapay zekâsız; belge sunucudan çıkmaz)
     B  yapay zekâ: app/receipt.py `_parse_document_ai` (bugünkü istem ve GEMINI_MODEL)
     C  karma: önce A; `accept_local` koşullarının hepsi tutarsa A'nın sonucu, tutmazsa B'nin (B ayrıca çağrılmaz, B'nin
        ölçülen sonucu ve maliyeti kullanılır)
+    T  metin (--text-dir): telefonda çıkarılmış metin yapay zekâya (app/receipt.py `parse_document_text`), B ile aynı
+       ölçütler. T+ uygulamadaki yol: T tutarsızsa (toplam yok, fiyatsız kalem, kalem toplamı tutmuyor) fotoğrafla bir
+       kez daha okunur (B'nin ölçülen sonucu ve maliyeti kullanılır); maliyet T + gerekirse B.
+
+Metin dosyaları: DIR/<fiş dosyasının adı, uzantısız>.txt (ör. <sha256>.txt). Fotoğrafları macOS'ta metne çevirmek için
+önce `--export-photos DIR` (fotoğraflar DIR'e <ad>.jpg olarak yazılır, kıyas yapılmaz), sonra
+`swift scripts/vision_ocr.swift DIR METIN_DIR` (Apple Vision, telefondaki satır birleştirmeyle aynı). İkisi de repo
+DIŞINDA bir klasör olmalı; kişisel veri.
+
+Klasör kıyası (--photo-dir): defter yerine bir klasördeki fiş fotoğrafları (macOS'ta önce
+`swift scripts/vision_ocr.swift DIR`: her fotoğrafın yanına <ad>.txt). Altın yoktur; her fişte B (fotoğraf → Gemini
+görsel) ve T (metin → Gemini metin) okunur, T+ uygulamadaki yoldur. Ölçütler: fiş sayıldı mı, toplam/tarih/işyeri
+bulundu mu ve T ile B aynısını mı buldu, fiyatsız kalem, kalem toplamı = fiş toplamı, iki satır belirtisi, token ve
+maliyet. Anahtar GEMINI_API_KEY ortam değişkeninden; defter/sistem veritabanı açılmaz.
 
 Gerçek cevap (altın): kayıtlı fişin kaydı — tutar (entries.amount), tarih (entry_date, ±1 gün), işyeri (description,
 normalize benzerlik). Kayıtlı fiş kalemleri (receipt_items) eski yapay zekâ çıktısı olduğundan altın SAYILMAZ; kalemler
@@ -52,6 +68,8 @@ class Case:
     stored_items: list[dict] = field(default_factory=list)  # {amount, price_known}
     categories: list[str] = field(default_factory=list)
     split_categories: list[str] = field(default_factory=list)
+    key: str = ""                     # saklı fiş dosyasının adı (metin dosyası eşlemesi: <key uzantısız>.txt)
+    text: str | None = None           # T yolu için telefonda/macOS'ta çıkarılmış metin (yalnız bellekte)
 
 
 # ---------------------------------------------------------------- ölçütler
@@ -262,6 +280,32 @@ def ai_reread(case: Case, total: float | None) -> tuple[dict, dict]:
     return doc, (seen[-1] if seen else {})
 
 
+def ai_text_read(case: Case) -> tuple[dict, dict]:
+    """T: telefonda çıkarılmış metinden okuma (uygulamanın metin yolu). (sonuç, usageMetadata)."""
+    from app import receipt
+
+    with _isolated_ai() as seen:
+        doc = receipt.parse_document_text(case.text or "", case.categories, case.split_categories or None)
+    return doc, (seen[-1] if seen else {})
+
+
+def text_inconsistent(doc: dict | None) -> bool:
+    """Uygulamadaki metin → fotoğraf yedeğinin tetiği (app/api/main.py `_read_by_text`)."""
+    from app import receipt_check
+
+    if not doc:
+        return True
+    if doc.get("type") != "receipt":
+        return False
+    items = doc.get("items") or []
+    return doc.get("total") is None or receipt_check.needs_reread(items, receipt_check.check(items, doc.get("total")))
+
+
+def _tokens(usage: dict) -> dict:
+    return {"input": usage.get("promptTokenCount"), "output": usage.get("candidatesTokenCount"),
+            "thoughts": usage.get("thoughtsTokenCount")}
+
+
 # ---------------------------------------------------------------- kıyas
 
 def _timed(fn, *a):
@@ -272,8 +316,10 @@ def _timed(fn, *a):
         return None, type(e).__name__, time.perf_counter() - t
 
 
-def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PRICE_IN, PRICE_OUT)) -> dict:
-    """Tek fiş, üç yol. local/ai/reread: test için değiştirilebilir okuyucular; ai None ise B ve C'nin yapay zekâ ayağı yok."""
+def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PRICE_IN, PRICE_OUT),
+               text_ai=ai_text_read) -> dict:
+    """Tek fiş, üç (metin varsa beş) yol. local/ai/reread/text_ai: test için değiştirilebilir okuyucular; ai None ise B,
+    C ve T'nin yapay zekâ ayağı yok. T yalnız case.text varsa."""
     from app import receipt_check
 
     row: dict = {"linked": case.linked}
@@ -298,6 +344,18 @@ def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PR
                          "tokens": {"input": r_usage.get("promptTokenCount"),
                                     "output": r_usage.get("candidatesTokenCount"),
                                     "thoughts": r_usage.get("thoughtsTokenCount")}}
+    if ai and text_ai and case.text:
+        res, err, sec = _timed(text_ai, case)
+        t_doc, t_usage = res if res else (None, {})
+        row["T"] = {**evaluate(t_doc, case), "sec": round(sec, 2), "error": err, "tokens": _tokens(t_usage),
+                    "usd": cost_usd(t_usage, *prices)}
+        fb = text_inconsistent(t_doc)
+        b = row.get("B") or {}
+        use_b = fb and b_doc is not None
+        plus = {k: v for k, v in (b if use_b else row["T"]).items() if k not in ("tokens", "usd", "sec", "error")}
+        row["T+"] = {**plus, "fallback": fb, "error": row["T"]["error"] or (b.get("error") if fb else None),
+                     "usd": row["T"]["usd"] + (b.get("usd", 0.0) if fb else 0.0),
+                     "sec": round(row["T"]["sec"] + (b.get("sec", 0) if fb else 0), 2)}
     c_ev = row["A"] if ok else row.get("B")
     row["C"] = {**(c_ev or evaluate(None, case)), "accepted_local": ok, "reasons": why,
                 "usd": 0.0 if ok else (row.get("B") or {}).get("usd", 0.0),
@@ -319,7 +377,7 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
         return round(100 * sum(1 for x in xs if x) / len(xs), 1) if xs else None
 
     out: dict = {"n": n, "linked": sum(r["linked"] for r in rows), "usd_try": usd_try}
-    for path in ("A", "B", "B+", "C"):
+    for path in ("A", "B", "B+", "C", "T", "T+"):
         rs = [r[path] for r in rows if path in r]
         if not rs:
             continue
@@ -329,14 +387,16 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
              "splits": sum(x["splits"] for x in rs), "receipts_with_splits": sum(1 for x in rs if x["splits"]),
              "avg_sec": round(sum(x["sec"] for x in rs) / len(rs), 2),
              "errors": sum(1 for x in rs if x.get("error"))}
-        if path in ("B", "C"):
+        if path in ("B", "C", "T", "T+"):
             usd = sum(x.get("usd") or 0 for x in rs)
             s.update({"usd_total": round(usd, 6), "usd_per_receipt": round(usd / len(rs), 6),
                       "try_per_receipt": round(usd / len(rs) * usd_try, 4)})
-        if path in ("B", "B+"):
+        if path in ("B", "B+", "T"):
             for k in ("input", "output", "thoughts"):
                 vals = [x["tokens"][k] or 0 for x in rs]
                 s[f"avg_{k}"] = round(sum(vals) / len(vals))
+        if path == "T+":
+            s["fallback"] = sum(1 for x in rs if x["fallback"])
         if path == "C":
             acc = [x for x in rs if x["accepted_local"]]
             s.update({"accepted_local": len(acc), "sent_to_ai": len(rs) - len(acc),
@@ -404,10 +464,194 @@ def load_cases(user_id: int, limit: int | None = None) -> list[Case]:
                 out.append(Case(image=data, mime=storage.content_type(e["receipt_file"]), amount=e["amount"],
                                 on=e["entry_date"], description=e["description"] or "",
                                 linked=bool(e["linked_txn_id"] or e["matched"]), stored_items=items,
-                                categories=cats, split_categories=split_cats))
+                                categories=cats, split_categories=split_cats, key=e["receipt_file"]))
         finally:
             con.close()
     return out
+
+
+def text_for(case: Case, text_dir: str) -> str | None:
+    """case.key'e karşılık gelen metin dosyası (yoksa None: T yolu o fişte çalışmaz)."""
+    if not case.key:
+        return None
+    path = os.path.join(text_dir, os.path.splitext(os.path.basename(case.key))[0] + ".txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def export_photos(user_ids: list[int], out_dir: str, limit: int | None = None) -> int:
+    """Kıyastaki fişlerin fotoğraflarını out_dir'e yaz (<fiş dosyası adı>); yalnız sayı yazdırılır."""
+    here = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    out = os.path.abspath(out_dir)
+    if out == here or out.startswith(here + os.sep):
+        raise SystemExit("fotoğraflar repo dışındaki bir klasöre yazılmalı (kişisel veri)")
+    os.makedirs(out, exist_ok=True)
+    n = 0
+    for uid in user_ids:
+        for case in load_cases(uid, limit):
+            with open(os.path.join(out, os.path.basename(case.key)), "wb") as f:
+                f.write(case.image)
+            n += 1
+    print(f"{n} fotoğraf yazıldı", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------- klasör kıyası: fotoğraf yolu (B) ↔ metin yolu (T)
+
+PHOTO_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+               ".heic": "image/heic"}
+
+
+def iter_dir_cases(photo_dir: str, text_dir: str | None = None, limit: int | None = None):
+    """Klasördeki fiş fotoğrafları (ad sırasıyla; uygulamadaki gibi küçültülüp EXIF'ten arındırılır, açılamayan HEIC
+    özgün haliyle) ve <ad uzantısız>.txt metinleri (varsayılan: fotoğrafın yanında). Altın değer yoktur; yollar
+    birbiriyle kıyaslanır. Fotoğraflar tek tek okunur (hepsi birden belleğe alınmaz)."""
+    from app import categorize, images
+
+    cats = sorted(set(categorize.CATEGORIES) | set(_EXPENSE_CATEGORIES) - {"Ödeme", "Kategorisiz"})
+    n = 0
+    for name in sorted(os.listdir(photo_dir)):
+        mime = PHOTO_TYPES.get(os.path.splitext(name)[1].lower())
+        if not mime or name.startswith("."):
+            continue
+        with open(os.path.join(photo_dir, name), "rb") as f:
+            data = f.read()
+        small = images.prepare(data)
+        if small is not None:
+            data, mime = small, "image/jpeg"
+        case = Case(image=data, mime=mime, amount=None, on=None, description="", linked=False, categories=cats, key=name)
+        case.text = text_for(case, text_dir or photo_dir)
+        yield case
+        n += 1
+        if limit and n >= limit:
+            return
+
+
+def _side(doc: dict | None, usage: dict | None, sec: float, err: str | None, prices=(PRICE_IN, PRICE_OUT)) -> dict:
+    """Bir yolun altınsız ölçütleri: fiş mi, toplam/tarih/işyeri bulundu mu, yapı (fiyatsız kalem, kalem toplamı, iki
+    satır belirtisi), süre, token, maliyet."""
+    rec = bool(doc) and doc.get("type") == "receipt"
+    total = doc.get("total") if rec else None
+    return {"receipt": rec, **structure((doc.get("items") or []) if rec else [], total),
+            "found": {"total": total is not None, "date": rec and bool(doc.get("date")),
+                      "merchant": rec and bool(doc.get("merchant")) and doc.get("merchant") != "Fiş"},
+            "sec": round(sec, 2), "error": err, "tokens": _tokens(usage or {}), "usd": cost_usd(usage, *prices)}
+
+
+def agreement(a: dict | None, b: dict | None) -> dict:
+    """İki yolun sonucu aynı fişi mi anlatıyor (altın yokken): toplam ±TOL, tarih ±1 gün, işyeri benzer."""
+    if not (a and b and a.get("type") == "receipt" and b.get("type") == "receipt"):
+        return {"total": False, "date": False, "merchant": False}
+    ta, tb = a.get("total"), b.get("total")
+    return {"total": ta is not None and tb is not None and abs(ta - tb) <= TOL,
+            "date": _date_ok(a.get("date"), b.get("date")),
+            "merchant": merchant_ok([a.get("merchant"), a.get("legal_name")], b.get("merchant") or b.get("legal_name"))}
+
+
+def bench_pair(case: Case, ai=ai_read, text_ai=ai_text_read, prices=(PRICE_IN, PRICE_OUT)) -> dict:
+    """Tek fiş: B (fotoğraf → yapay zekâ), metin varsa T (metin → yapay zekâ) ve T+ (uygulamadaki yol: T tutarsızsa B'nin
+    sonucu, maliyet T + B). agree: T ile B aynı toplam/tarih/işyerini mi buldu."""
+    res, err, sec = _timed(ai, case)
+    b_doc, b_usage = res if res else (None, {})
+    row: dict = {"has_text": bool(case.text), "B": _side(b_doc, b_usage, sec, err, prices)}
+    if not case.text:
+        return row
+    res, err, sec = _timed(text_ai, case)
+    t_doc, t_usage = res if res else (None, {})
+    row["T"] = t = _side(t_doc, t_usage, sec, err, prices)
+    fb = text_inconsistent(t_doc)
+    final = b_doc if fb and b_doc is not None else t_doc
+    plus = _side(final, {}, 0, None, prices)
+    row["T+"] = {**plus, "fallback": fb, "tokens": None, "usd": t["usd"] + (row["B"]["usd"] if fb else 0.0),
+                 "sec": round(t["sec"] + (row["B"]["sec"] if fb else 0), 2),
+                 "error": t["error"] if not fb else (row["B"]["error"] if b_doc is None else None)}
+    row["agree"] = agreement(t_doc, b_doc)
+    return row
+
+
+def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
+    """Klasör kıyasının özeti: yalnız sayılar ve oranlar."""
+    def pct(xs):
+        return round(100 * sum(1 for x in xs if x) / len(xs), 1) if xs else None
+
+    out: dict = {"n": len(rows), "with_text": sum(r["has_text"] for r in rows), "usd_try": usd_try}
+    for path in ("B", "T", "T+"):
+        rs = [r[path] for r in rows if path in r]
+        if not rs:
+            continue
+        usd = sum(x["usd"] or 0 for x in rs)
+        s = {"n": len(rs), "receipt_pct": pct([x["receipt"] for x in rs]),
+             "total_found_pct": pct([x["found"]["total"] for x in rs]),
+             "date_found_pct": pct([x["found"]["date"] for x in rs]),
+             "merchant_found_pct": pct([x["found"]["merchant"] for x in rs]),
+             "structure_ok_pct": pct([x["ok"] for x in rs]), "sum_ok_pct": pct([x["sum_ok"] for x in rs]),
+             "priceless": sum(x["priceless"] for x in rs), "receipts_with_priceless": sum(1 for x in rs if x["priceless"]),
+             "splits": sum(x["splits"] for x in rs), "receipts_with_splits": sum(1 for x in rs if x["splits"]),
+             "avg_sec": round(sum(x["sec"] for x in rs) / len(rs), 2), "errors": sum(1 for x in rs if x.get("error")),
+             "usd_total": round(usd, 6), "usd_per_receipt": round(usd / len(rs), 6),
+             "try_per_receipt": round(usd / len(rs) * usd_try, 4)}
+        if path != "T+":
+            for k in ("input", "output", "thoughts"):
+                s[f"avg_{k}"] = round(sum(x["tokens"][k] or 0 for x in rs) / len(rs))
+        else:
+            s["fallback"] = sum(1 for x in rs if x["fallback"])
+        out[path] = s
+    ag = [r["agree"] for r in rows if "agree" in r]
+    if ag:
+        out["T_vs_B"] = {"n": len(ag), "total_same_pct": pct([x["total"] for x in ag]),
+                         "date_same_pct": pct([x["date"] for x in ag]),
+                         "merchant_same_pct": pct([x["merchant"] for x in ag])}
+    if "B" in out and "T+" in out and out["B"]["usd_per_receipt"]:
+        out["T+_cost_vs_B_pct"] = round(100 * out["T+"]["usd_per_receipt"] / out["B"]["usd_per_receipt"], 1)
+    return out
+
+
+def render_pair(rows: list[dict], summary: dict) -> str:
+    def side(x: dict) -> str:
+        tk = x.get("tokens") or {}
+        return (f"{_b(x['found']['total'])} {_b(x['found']['date'])} {_b(x['found']['merchant'])} {x['n_items']:>3} "
+                f"{x['priceless']:>3} {x['splits']:>3} {_b(x['sum_ok'])} {_b(x['ok'])} {x['sec']:>5} "
+                f"{tk.get('input') or 0:>5} {tk.get('output') or 0:>5} {x['usd']:.5f}" + (f" !{x['error']}" if x.get("error") else ""))
+
+    lines = ["fiş  | B foto: T D İ kalem fyz bölün Σ yapı sn girdi çıktı $ | T metin: (aynı) | aynı T D İ | yedek"]
+    for i, r in enumerate(rows, 1):
+        line = f"#{i:<3} | {side(r['B'])}"
+        if "T" in r:
+            ag = r["agree"]
+            line += (f" | {side(r['T'])} | {_b(ag['total'])} {_b(ag['date'])} {_b(ag['merchant'])}"
+                     + (" | →foto" if r["T+"]["fallback"] else ""))
+        else:
+            line += " | metin yok"
+        lines.append(line)
+    lines.append("")
+    lines.append(json.dumps(summary, ensure_ascii=False, indent=1))
+    return "\n".join(lines)
+
+
+def run_dir(photo_dir: str, text_dir: str | None, limit: int | None, model: str | None, prices, usd_try: float,
+            as_json: bool) -> int:
+    """--photo-dir: fotoğraf ve metin yolunu klasördeki fişlerde kıyasla. Anahtar ortamdan (GEMINI_API_KEY); defter ve
+    sistem veritabanı açılmaz."""
+    from app import receipt
+
+    if not os.path.isdir(photo_dir):
+        raise SystemExit(f"klasör yok: {photo_dir}")
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise SystemExit("GEMINI_API_KEY ortam değişkeni gerekli (klasör kıyası yapay zekâyla okur)")
+    os.environ["GEMINI_MODEL"] = model or os.environ.get("GEMINI_MODEL") or receipt.DEFAULT_MODEL
+    rows = []
+    for case in iter_dir_cases(photo_dir, text_dir, limit):
+        rows.append(bench_pair(case, prices=prices))
+        case.image, case.text = b"", None
+        print(f"… {len(rows)} fiş", file=sys.stderr)
+    if not rows:
+        raise SystemExit("klasörde fotoğraf yok (jpg, jpeg, png, webp, heic)")
+    summary = summarize_pair(rows, usd_try)
+    print(json.dumps({"rows": rows, "summary": summary}, ensure_ascii=False) if as_json else render_pair(rows, summary))
+    return 0
 
 
 # ---------------------------------------------------------------- çıktı
@@ -430,7 +674,11 @@ def render(rows: list[dict], summary: dict) -> str:
                f"{bt.get('thoughts') or 0:>5} {b['usd']:.5f}" if b else "-")
             + f" | {'KABUL' if c['accepted_local'] else 'yz'}{' YANLIŞ' if c['wrong_accept'] else ''} "
               f"{','.join(c['reasons'])}" + (f" A:{a['error']}" if a.get("error") else "")
-            + (f" B:{b['error']}" if b.get("error") else ""))
+            + (f" B:{b['error']}" if b.get("error") else "")
+            + (f" | T: {_b(r['T']['total_ok'])} {_b(r['T']['date_ok'])} {_b(r['T']['merchant_ok'])} "
+               f"{r['T']['n_items']:>3} {r['T']['priceless']:>3} {r['T']['splits']:>3} {_b(r['T']['ok'])} "
+               f"{r['T']['usd']:.5f}{' →foto' if r['T+']['fallback'] else ''}"
+               + (f" T:{r['T']['error']}" if r["T"].get("error") else "") if "T" in r else ""))
     lines.append("")
     lines.append(json.dumps(summary, ensure_ascii=False, indent=1))
     return "\n".join(lines)
@@ -438,24 +686,38 @@ def render(rows: list[dict], summary: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--user-id", type=int, action="append", required=True, help="birden çok kez verilebilir")
+    p.add_argument("--user-id", type=int, action="append", help="birden çok kez verilebilir")
+    p.add_argument("--photo-dir", metavar="DIR",
+                   help="defter yerine klasördeki fiş fotoğrafları: fotoğraf (B) ↔ metin (T) yolu, metinler yanında <ad>.txt")
+    p.add_argument("--model", help="--photo-dir: Gemini modeli (varsayılan GEMINI_MODEL ya da uygulamanınki)")
     p.add_argument("--limit", type=int, help="kullanıcı başı en çok fiş")
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-ai", action="store_true", help="yalnız yerel okuma (B ve C'nin yapay zekâ ayağı yok)")
     p.add_argument("--reread", action="store_true", help="B kalemleri tutmazsa uygulamadaki gibi güçlü modelle yeniden oku")
+    p.add_argument("--text-dir", help="telefonda/macOS'ta çıkarılmış metinler: <fiş dosyası adı uzantısız>.txt (T, T+ yolları)")
+    p.add_argument("--export-photos", metavar="DIR",
+                   help="kıyas yapma; fotoğrafları DIR'e <ad> olarak yaz (scripts/vision_ocr.swift girdisi; repo dışı)")
     p.add_argument("--price-in", type=float, default=PRICE_IN)
     p.add_argument("--price-out", type=float, default=PRICE_OUT)
     p.add_argument("--usd-try", type=float, default=USD_TRY)
     a = p.parse_args(argv)
     from app import receipt
 
+    if a.photo_dir:
+        return run_dir(a.photo_dir, a.text_dir, a.limit, a.model, (a.price_in, a.price_out), a.usd_try, a.json)
+    if not a.user_id:
+        p.error("--user-id ya da --photo-dir gerekli")
+    if a.export_photos:
+        return export_photos(a.user_id, a.export_photos, a.limit)
     ai = None if a.no_ai or not receipt.enabled() else ai_read
     rows = []
     for uid in a.user_id:
         for case in load_cases(uid, a.limit):
+            if a.text_dir:
+                case.text = text_for(case, a.text_dir)
             rows.append(bench_case(case, ai=ai, reread=ai_reread if (a.reread and ai) else None,
                                    prices=(a.price_in, a.price_out)))
-            case.image = b""  # fotoğraf bellekte de tutulmasın
+            case.image, case.text = b"", None  # fotoğraf ve metin bellekte de tutulmasın
             print(f"… {len(rows)} fiş", file=sys.stderr)
     summary = summarize(rows, a.usd_try)
     print(json.dumps({"rows": rows, "summary": summary}, ensure_ascii=False) if a.json else render(rows, summary))

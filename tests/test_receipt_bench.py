@@ -168,3 +168,110 @@ def test_load_cases_read_only(tmp_path, monkeypatch):
     assert len(cases) == 1 and cases[0].amount == 50.0 and cases[0].image == _jpeg() and not cases[0].linked
     assert cases[0].stored_items == [{"amount": 50.0, "price_known": 1}] and "Diğer" in cases[0].categories
     assert (tmp_path / "isolated.db").stat().st_mtime_ns == before
+
+
+def test_text_path_and_fallback(monkeypatch, tmp_path):
+    from app import ocr
+
+    monkeypatch.setattr(ocr, "text_of", lambda data, mime: FIS)
+    b_doc = {"type": "receipt", "merchant": "Örnek Bakkal", "date": "2026-10-12", "total": 53.70,
+             "items": [_it("SUT 1L", 41.20), _it("EKMEK", 12.50)]}
+    usage = {"promptTokenCount": 1000, "candidatesTokenCount": 200, "thoughtsTokenCount": 0}
+    t_usage = {"promptTokenCount": 400, "candidatesTokenCount": 200, "thoughtsTokenCount": 0}
+    ai = lambda case: (b_doc, usage)  # noqa: E731
+    good = lambda case: (b_doc, t_usage)  # noqa: E731
+    row = rb.bench_case(_case(text=FIS), ai=ai, text_ai=good)
+    assert row["T"]["total_ok"] and row["T"]["ok"] and not row["T+"]["fallback"]
+    assert row["T+"]["usd"] == row["T"]["usd"] < row["B"]["usd"]
+    # metinden fiyatsız kalem: fotoğrafla bir kez daha (B'nin sonucu ve maliyeti eklenir)
+    bad = lambda case: ({**b_doc, "items": [_it("SUT 1L", 41.20), _it("EKMEK", None)]}, t_usage)  # noqa: E731
+    fb = rb.bench_case(_case(text=FIS), ai=ai, text_ai=bad)
+    assert fb["T+"]["fallback"] and fb["T"]["priceless"] == 1 and fb["T+"]["priceless"] == 0
+    assert fb["T+"]["usd"] == pytest.approx(fb["T"]["usd"] + fb["B"]["usd"])
+    assert "T" not in rb.bench_case(_case(), ai=ai, text_ai=good)  # metin yoksa T yok
+    s = rb.summarize([row, fb])
+    assert s["T"]["n"] == 2 and s["T+"]["fallback"] == 1 and s["T"]["avg_input"] == 400 and s["T+"]["sum_ok_pct"] == 100
+    out = rb.render([row, fb], s)
+    assert "→foto" in out and "BAKKAL" not in out and "SUT" not in out
+    # metin dosyası eşlemesi: <fiş dosyası adı uzantısız>.txt
+    (tmp_path / ("a" * 64 + ".txt")).write_text("ORNEK\nTOPLAM 1,00\n", encoding="utf-8")
+    assert rb.text_for(_case(key="a" * 64 + ".jpg"), str(tmp_path)) == "ORNEK\nTOPLAM 1,00"
+    assert rb.text_for(_case(key="b" * 64 + ".jpg"), str(tmp_path)) is None
+
+
+def test_ai_text_read_is_isolated(monkeypatch):
+    sent = []
+    _fake_gemini(monkeypatch, {"doc_type": "fis", "merchant": "Örnek", "total": 5.0, "items": []},
+                 {"promptTokenCount": 300, "candidatesTokenCount": 50})
+    import httpx as _h
+
+    real = _h.post
+    monkeypatch.setattr(_h, "post", lambda *a, **k: sent.append(k["json"]) or real(*a, **k))
+    doc, usage = rb.ai_text_read(_case(text="ORNEK\nTOPLAM 5,00"))
+    assert doc["total"] == 5.0 and usage["promptTokenCount"] == 300
+    assert not any("inline_data" in p for p in sent[0]["contents"][0]["parts"])
+
+
+def test_export_photos_refuses_repo_dir(monkeypatch):
+    import os
+
+    with pytest.raises(SystemExit):
+        rb.export_photos([1], os.path.join(os.path.dirname(rb.__file__), "..", "tmp-fotolar"))
+
+
+def test_dir_mode_photo_vs_text(monkeypatch, tmp_path, capsys):
+    """--photo-dir: klasördeki (uydurma) fotoğraflar; metni olan fişte B ↔ T kıyası, olmayanda yalnız B. Çıktıda dosya
+    adı, işyeri ya da kalem adı yok."""
+    for name in ("fis-ornek-1.jpg", "fis-ornek-2.png"):
+        (tmp_path / name).write_bytes(_jpeg())
+    (tmp_path / "fis-ornek-1.txt").write_text(FIS, encoding="utf-8")
+    (tmp_path / "notlar.md").write_text("fotoğraf değil", encoding="utf-8")
+    cases = list(rb.iter_dir_cases(str(tmp_path)))
+    assert [c.key for c in cases] == ["fis-ornek-1.jpg", "fis-ornek-2.png"]
+    assert cases[0].text and cases[0].text.startswith("ORNEK BAKKAL") and cases[1].text is None
+    assert all(c.mime == "image/jpeg" and c.amount is None for c in cases)  # uygulamadaki gibi JPEG'e hazırlanır
+
+    b_doc = {"type": "receipt", "merchant": "Örnek Bakkal", "date": "2026-10-12", "total": 53.70,
+             "items": [_it("SUT 1L", 41.20), _it("EKMEK", 12.50)]}
+    usage = {"promptTokenCount": 1500, "candidatesTokenCount": 200, "thoughtsTokenCount": 0}
+    t_usage = {"promptTokenCount": 500, "candidatesTokenCount": 200, "thoughtsTokenCount": 0}
+    two_line = {**b_doc, "date": "2026-10-20", "items": [_it("ULKER CIKOLATALI", None), _it("GOFRET", 41.20),
+                                                         _it("EKMEK", 12.50)]}
+    row = rb.bench_pair(cases[0], ai=lambda c: (b_doc, usage), text_ai=lambda c: (b_doc, t_usage))
+    assert row["agree"] == {"total": True, "date": True, "merchant": True} and not row["T+"]["fallback"]
+    assert row["T+"]["usd"] == row["T"]["usd"] < row["B"]["usd"]
+    bad = rb.bench_pair(cases[0], ai=lambda c: (b_doc, usage), text_ai=lambda c: (two_line, t_usage))
+    assert bad["T"]["priceless"] == 1 and bad["T"]["splits"] >= 1 and bad["T+"]["fallback"]
+    assert bad["T+"]["priceless"] == 0 and bad["agree"]["total"] and not bad["agree"]["date"]
+    assert bad["T+"]["usd"] == pytest.approx(bad["T"]["usd"] + bad["B"]["usd"])
+    only_b = rb.bench_pair(cases[1], ai=lambda c: (b_doc, usage), text_ai=lambda c: pytest.fail("metin yok"))
+    assert "T" not in only_b and not only_b["has_text"]
+
+    s = rb.summarize_pair([row, bad, only_b])
+    assert s["n"] == 3 and s["with_text"] == 2 and s["B"]["n"] == 3 and s["T"]["n"] == 2
+    assert s["T"]["receipts_with_priceless"] == 1 and s["T+"]["fallback"] == 1 and s["T"]["avg_input"] == 500
+    assert s["T_vs_B"] == {"n": 2, "total_same_pct": 100.0, "date_same_pct": 50.0, "merchant_same_pct": 100.0}
+    out = rb.render_pair([row, bad, only_b], s)
+    assert "→foto" in out and "metin yok" in out
+    for secret in ("ornek", "Örnek", "BAKKAL", "SUT", "GOFRET", "53.7"):
+        assert secret not in out.split("\n{")[0]  # satırlarda içerik yok (özet yalnız sayı)
+    assert "ornek" not in json.dumps(s).lower()
+
+    # uçtan uca (sahte Gemini): anahtar ortamdan, defter açılmaz, çıktı JSON'unda dosya adı yok
+    _fake_gemini(monkeypatch, {"doc_type": "fis", "merchant": "Örnek Bakkal", "date": "2026-10-12", "total": 53.70,
+                               "items": [{"name": "SUT 1L", "amount": 41.20}, {"name": "EKMEK", "amount": 12.50}]},
+                 {"promptTokenCount": 800, "candidatesTokenCount": 100})
+    assert rb.main(["--photo-dir", str(tmp_path), "--json"]) == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res["summary"]["n"] == 2 and res["summary"]["T"]["n"] == 1 and res["summary"]["T+"]["fallback"] == 0
+    assert "fis-ornek" not in json.dumps(res)
+
+
+def test_dir_mode_needs_key_and_folder(monkeypatch, tmp_path):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        rb.main(["--photo-dir", str(tmp_path / "yok")])
+    with pytest.raises(SystemExit):
+        rb.main(["--photo-dir", str(tmp_path)])  # anahtar yok
+    with pytest.raises(SystemExit):
+        rb.main([])  # ne --user-id ne --photo-dir
