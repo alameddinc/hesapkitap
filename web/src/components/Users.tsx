@@ -5,13 +5,15 @@ import { Copy, Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, tsDateTR } from "../format";
 import { useUI } from "../ui";
-import { isEmail, useLoginKind, useSave } from "./hooks";
+import type { ReadStatus } from "../api";
+import { isEmail, useLoginKind, useMeta, useSave } from "./hooks";
 
 interface UserRow {
   id: number; username: string; role: "admin" | "user"; created_at: string; last_login: string | null;
   disabled: boolean; must_change_password: boolean; ai_used: number; ai_quota: number | null; ai_quota_custom: number | null;
   plan?: "free" | "premium" | "aile"; plan_until?: string | null; plan_source?: string | null;
   deleted_at?: string | null; delete_after?: string | null; // kullanıcı sildi, geri alma süresinde
+  reads?: ReadStatus | null; // hazır sürüm: bu ayki belge / fiş kullanımı ve ek paket bakiyesi
 }
 interface Invite { code: string; note: string | null; created_at: string; expires_at: string | null; used_by_name: string | null; used_at: string | null }
 interface AdminData { users: UserRow[]; invites: Invite[]; default_quota: number; hosted?: boolean }
@@ -23,6 +25,7 @@ const inviteLink = (code: string) => `${window.location.origin}/#/kayit?kod=${co
 /** Yönetici: hesap aç/kapat, davet, şifre sıfırla, yapay zekâ kotası. Kullanıcıların finans verisi burada görünmez. */
 export default function Users() {
   const ui = useUI();
+  const rbp = useMeta().data?.plan?.reads_by_plan; // okuma hakları (sunucudan; sabit yazılmaz)
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => call<AdminData>("/api/admin/users", "GET") });
   const onErr = { onError: (e: Error) => ui.error(e.message) };
   const [note, setNote] = useState("");
@@ -51,7 +54,8 @@ export default function Users() {
       <h2 className="flex items-center gap-2 font-semibold"><UsersIcon size={18} /> Kullanıcılar</h2>
       <p className="text-xs text-stone-500">
         Her kullanıcının verisi ayrı dosyada; buradan sadece hesapları yönetirsin, kimsenin harcamasını göremezsin.
-        {d?.hosted ? "Belge okuma hakkı pakete göre: Ücretsiz ayda 50, Premium ve Aile ayda 1000 (ailede ortak)."
+        {d?.hosted ? (rbp ? ` Okuma hakkı pakete göre (ayda, kişi başı): Ücretsiz ${rbp.free.belge} belge / ${rbp.free.fis} fiş, Premium ve Aile ${rbp.premium.belge} / ${rbp.premium.fis}; ek okuma paketi telefondaki uygulamadan.`
+            : " Okuma hakkı pakete göre: belge ve fiş ayrı sayaç.")
           : `Fiş okuma senin Gemini anahtarınla, kişi başı aylık ${d?.default_quota ?? 100} okuma; kendi anahtarını giren sınırsız.`}
       </p>
 
@@ -93,7 +97,8 @@ export default function Users() {
               </span>
               <span className="text-xs text-stone-500">
                 {u.last_login ? `son giriş ${tsDateTR(u.last_login)}` : "hiç girmedi"}
-                {u.ai_quota !== null && <> · {d?.hosted ? "belge okuma" : "yapay zekâ"} {u.ai_used}/{u.ai_quota}</>}
+                {u.reads ? <> · <span className="whitespace-nowrap">belge {u.reads.belge.used}/{u.reads.belge.limit}</span> · <span className="whitespace-nowrap">fiş {u.reads.fis.used}/{u.reads.fis.limit}</span> · ek {u.reads.extra}</>
+                  : u.ai_quota !== null && !(d?.hosted && u.role === "admin") && <> · {d?.hosted ? "belge okuma" : "yapay zekâ"} {u.ai_used}/{u.ai_quota}</>}
                 {u.plan && u.plan !== "free" && u.role !== "admin" && (
                   <> · <b className="text-amber-700 dark:text-amber-400">{u.plan === "aile" ? "Aile" : "Premium"}</b>
                     {u.plan_until && ` ${dateTR(u.plan_until.slice(0, 10))}'e kadar`}

@@ -1,12 +1,13 @@
 import { cx } from "../format";
 
-export default function Segmented<T extends string>({ value, onChange, options }: {
+export default function Segmented<T extends string>({ value, onChange, options, label }: {
   value: T;
+  label?: string; // ekran okuyucu: seçici neyin
   onChange: (v: T) => void;
   options: { value: T; label: string; tone?: "red" | "green" }[];
 }) {
   return (
-    <div className="flex rounded-lg bg-stone-100 p-1 dark:bg-stone-800" role="radiogroup">
+    <div className="flex rounded-lg bg-stone-100 p-1 dark:bg-stone-800" role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <button key={o.value} type="button" role="radio" aria-checked={value === o.value}
           onClick={() => onChange(o.value)}

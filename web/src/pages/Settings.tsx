@@ -12,6 +12,7 @@ import { useSave } from "../components/hooks";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
 import Users from "../components/Users";
+import PlanTable from "../components/PlanTable";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
@@ -384,6 +385,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       {auth.data?.user && !ownBook && <BookSettings />}
 
       {isAdmin && <Users />}
+
+      {isAdmin && <PlanTable />}
 
       {isAdmin && <DemoStats />}
 
