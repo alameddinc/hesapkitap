@@ -77,7 +77,7 @@ def test_groups_same_set_as_insight_and_grouping(client, tmpdb):
     by = {x["key"]: x for x in g["groups"]}
     market = by["i:c:ORNEKMARKET"]
     assert market["count"] == 3 and market["total"] == 240 and market["kind"] == "isyeri" and market["flow"] == "gider"
-    assert market["label"] == "Ornek Market" and len(market["sample_ids"]) == 3
+    assert market["label"] == "Örnek Market" and len(market["sample_ids"]) == 3
     assert by["k:c:Elif Örnek"]["count"] == 1 and by["k:c:Elif Örnek"]["kind"] == "kisi"
     assert by["k:g:Elif Örnek"]["flow"] == "gelir"
     assert g["groups"][0]["key"] == "i:c:ORNEKMARKET"  # en kalabalık önce

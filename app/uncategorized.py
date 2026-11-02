@@ -28,13 +28,6 @@ UNDO_LABEL = "Kategori: "
 AI_MAX_KEYS = 40
 
 
-def _title(name: str) -> str:
-    """'ORNEK MARKET' → 'Ornek Market' (Türkçe i/ı doğru); karışık yazılmış ad olduğu gibi kalır."""
-    if not name or not name.isupper():
-        return name
-    return " ".join(w[:1] + w[1:].replace("I", "ı").replace("İ", "i").lower() for w in name.split())
-
-
 def _tag(kind: str) -> str:
     return "g" if kind == finance.INCOME else "c"
 
@@ -44,9 +37,12 @@ def _key(r: dict) -> tuple[str, str]:
     t = _tag(r["kind"])
     if r["source"] == "manual" and r.get("counterparty"):
         return f"k:{t}:{r['counterparty']}", r["counterparty"]
-    name = r["merchant"] if r["source"] == "card" else merchant_name(r.get("description") or "")
-    name = name or (r.get("description") or "").strip() or "?"
-    return f"i:{t}:{fold_key(name)}", name
+    desc = (r.get("description") or "").strip()
+    if r["source"] == "card":  # ekstrede görünen işyeri adı (İşlemler'deki gibi)
+        name = r["merchant"] or desc
+        return f"i:{t}:{fold_key(name)}", name
+    # elle/döküm kaydı: anahtar işyeri kökü, görünen ad kullanıcının yazdığı (Türkçe harfler korunur; not kısmı yok)
+    return f"i:{t}:{fold_key(merchant_name(desc) or desc)}", desc.split(" · ")[0].strip() or desc or "?"
 
 
 def _rows(month: str | None) -> list[dict]:
@@ -119,10 +115,13 @@ def groups(month: str | None = None) -> list[dict]:
     rows = _rows(month)
     by: dict[str, list[dict]] = defaultdict(list)
     labels: dict[str, str] = {}
+    manual_label: dict[str, bool] = {}  # elle yazılmış ad (Türkçe harfli) kartın ASCII adından önce gelir
     for r in rows:
         k, name = _key(r)
         by[k].append(r)
-        labels.setdefault(k, name)
+        if k not in labels or (r["source"] == "manual" and not manual_label.get(k)):
+            labels[k] = name
+            manual_label[k] = r["source"] == "manual"
     if not by:
         return []
     hist = _history()
@@ -132,7 +131,7 @@ def groups(month: str | None = None) -> list[dict]:
     out = []
     for k, rs in by.items():
         out.append({
-            "key": k, "label": _title(labels[k]), "kind": "kisi" if k.startswith("k:") else "isyeri",
+            "key": k, "label": labels[k], "kind": "kisi" if k.startswith("k:") else "isyeri",
             "flow": "gelir" if k.split(":")[1] == "g" else "gider",
             "count": len(rs), "total": finance._round(sum(r["amount"] for r in rs)),
             "sample_ids": [r["uid"] for r in rs[:5]],

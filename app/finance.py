@@ -1609,7 +1609,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     unc = [r for r in live if r["category"] == "Kategorisiz"]
     if unc:
         out.append({"level": "bilgi", "title": f"{len(unc)} işlem kategorisiz",
-                    "detail": "İşlemler sayfasında kategori ata; aynı işyeri için kural otomatik oluşur.",
+                    "detail": "Dokun: aynı işyerindekilere tek seferde kategori ver; bundan sonrası için kural oluşur.",
                     "filter": {"category": "Kategorisiz"}, "key": f"kategorisiz:{month}:{_fp(*sorted(r['uid'] for r in unc))}"})
 
     # 11) Ekstre bekleyen kredi kartı girişleri (eski olanlar eşleşmemiş demektir)
