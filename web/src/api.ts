@@ -398,15 +398,58 @@ export interface Meta {
   plan?: PlanInfo; // paket (barındırılan sürüm); kendi sunucunda "self": her şey açık
 }
 
+export type Tier = "free" | "premium" | "aile";
+/** Okuma sayacı türü: "belge" (ekstre, hesap dökümü, fatura, posta belgesi, yapay zekâ kategori önerisi) ve "fis". */
+export type ReadKind = "belge" | "fis";
+export interface ReadCounter { used: number; limit: number; left: number }
+/** Bu ayki okuma hakları (kişi başı); extra: ek okuma paketi bakiyesi (belge ve fişte ortak). */
+export interface ReadStatus { belge: ReadCounter; fis: ReadCounter; extra: number }
+/** Sayfa / özellik tablosunun bir satırı (sunucu app/plans.py CATALOG). tier: açık olduğu en düşük paket. */
+export interface PlanTableRow {
+  key: string;
+  label: string;
+  kind: "sayfa" | "ozellik";
+  default: Tier;
+  tier: Tier;
+  editable: boolean;
+  desc: string;
+}
+export interface ReadPack { id: string; reads: number }
+
 export interface PlanInfo {
-  plan: "self" | "free" | "premium" | "aile";
+  plan: "self" | Tier;
   label: string;
   hosted: boolean;
   until: string | null;
   features: Record<string, boolean>;
   feature_labels: Record<string, string>;
-  ai_docs: number | null; // hazır sürüm: ayda belge okuma hakkı (50 / 1000); null: kendi sunucusu (kota /api/me/ai)
+  ai_docs: number | null; // geriye uyum: belge sayacının aylık hakkı; null: kendi sunucusu (kota /api/me/ai)
   member: boolean;
+  limits?: {
+    history_months: number | null; plan_months: number | null; budgets: number | null; family_seats: number | null;
+    storage_bytes?: number | null; storage_used?: number;
+  };
+  // yalnız hazır sürüm (hosted):
+  tiers?: Record<string, Tier>;
+  table?: PlanTableRow[];
+  reads_by_plan?: Record<Tier, Record<ReadKind, number>>;
+  packs?: ReadPack[];
+  family_seats?: number;
+  trial?: boolean;
+  trial_days_left?: number | null;
+  reads?: ReadStatus | null; // yönetici / oturumsuz: null (sınırsız)
+  upgrade_yearly?: boolean;
+}
+
+/** GET/PUT /api/admin/plan-table */
+export interface AdminPlanTable {
+  rows: PlanTableRow[];
+  tiers: Tier[];
+  labels: Record<Tier, string>;
+  upgrade_yearly: boolean;
+  hosted: boolean;
+  reads: Record<Tier, Record<ReadKind, number>>;
+  packs: ReadPack[];
 }
 
 export interface Rule {
@@ -445,7 +488,8 @@ export interface UploadResult {
   cycle_day?: number;
   dekont?: boolean; // tek işlem dekontu: hesaba eklendi, bakiye değişmedi
   card_excel?: { statements: number; transactions: number; range: [string, string] | null; cut_day: number }; // kart işlem Excel'i
-  manual?: boolean; quota_full?: boolean; limit?: number; upgrade?: boolean; // hazır sürüm: belge okuma hakkı doldu (okunmadı)
+  manual?: boolean; quota_full?: boolean; limit?: number; upgrade?: boolean; // hazır sürüm: okuma hakkı doldu (okunmadı)
+  reason?: "quota"; kind?: ReadKind; extra_left?: number; // hak doldu: hangi sayaç (belge / fiş), ek paket bakiyesi
   /** S6 (sunucu 48d6cc2): ekstre denklemi tuttu mu; dogrulanamadi ise verification_text nedeni söyler */
   verified?: boolean; verification?: Verification; verification_text?: string | null; equation_diff?: number | null;
 }
