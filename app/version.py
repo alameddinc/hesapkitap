@@ -43,6 +43,7 @@ CAPABILITIES = (
     "insights_hidden",        # GET /api/insights/hidden: gizlenen Özet uyarıları (Geri getir: POST /api/insights/restore)
     "web_only_settings",      # GET /api/settings/web-only: mobilde olmayan, web Ayarlar'da kurulan ayarlar + web adresi
     "social_nonce",           # POST /api/auth/social/nonce; /api/auth/{google,apple} gövdesinde nonce (D1)
+    "apple_revoke",           # /api/auth/apple gövdesinde authorization_code: hesap silinince Apple belgesi iptal edilir
 )
 
 

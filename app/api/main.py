@@ -728,6 +728,9 @@ class SocialIn(BaseModel):
     consent: list[str] | None = None  # yeni hesap açılacaksa hazır sürümde gerekli
     invite: str | None = None         # davet bağlantısıyla gelen: yeni hesap ortak deftere üye olur
     nonce: str | None = Field(None, max_length=128)  # POST /api/auth/social/nonce'tan alınan (app/social.py)
+    # yalnız Apple: uygulamanın aldığı authorizationCode (tek kullanımlık, 5 dk). Sunucu refresh_token'a çevirip şifreli
+    # saklar; hesap silinince Apple'da iptal eder (app/apple.py, yetenek apple_revoke). Yoksa giriş aynen sürer.
+    authorization_code: str | None = Field(None, max_length=2048)
 
 
 @app.post("/api/auth/social/nonce")
@@ -821,6 +824,10 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
     if not social.consume_nonce(body.nonce):  # aynı nonce'lu belgeyle aynı anda ikinci giriş
         raise HTTPException(401, "Giriş belgesinin süresi doldu ya da zaten kullanıldı; yeniden dene")
     system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
+    if who.get("via") == "apple":  # 409'da (onay) değil, oturum açılırken: kod tek kullanımlık, yeniden denemede lazım
+        from app import apple
+
+        apple.link(u["id"], who.get("sub"), who.get("aud"), body.authorization_code)
     _start_session(request, response, system.user(u["id"]))
     return {"ok": True, "created": created}
 

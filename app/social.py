@@ -182,4 +182,5 @@ def verify_apple(id_token: str, keys_for=None, nonce: str | None = None) -> dict
     if not c.get("email") or c.get("email_verified") not in (True, "true"):
         raise SocialError("Apple hesabının e-postası alınamadı; Ayarlar'dan e-posta paylaşımına izin ver")
     check_nonce(c, nonce)
-    return {"email": c["email"].strip().lower(), "name": ""}
+    # sub: Apple kimliği (bildirimlerde kullanıcıyı bulmak için özeti saklanır, app/apple.py); aud: token iptali client_id'si
+    return {"email": c["email"].strip().lower(), "name": "", "sub": c.get("sub"), "aud": c.get("aud"), "via": "apple"}
