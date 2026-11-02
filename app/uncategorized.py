@@ -295,9 +295,7 @@ def ai_status() -> dict:
     if plans.hosted():
         from app import doc_reads
 
-        s = doc_reads._subject()
-        quota = system.ai_quota(s) if s else None
-        return {"available": True, "left": None if quota is None else max(0, quota - system.ai_used_pool(s))}
+        return {"available": True, "left": doc_reads.left(doc_reads._subject(), doc_reads.BELGE)}  # belge sayacı + ek
     s = receipt._shared_key_user()
     if not s:
         return {"available": True, "left": None}

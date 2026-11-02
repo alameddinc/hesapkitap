@@ -1101,7 +1101,15 @@ def _user_row(u: dict) -> dict:
             "must_change_password": bool(u["must_change_password"]),
             "ai_used": system.ai_used(u["id"]), "ai_quota": system.ai_quota(u), "ai_quota_custom": u["ai_quota"],
             "plan": u.get("plan") or "free", "plan_until": u.get("plan_until"), "plan_source": u.get("plan_source"),
-            "deleted_at": u.get("deleted_at"), "delete_after": u.get("delete_after")}
+            "deleted_at": u.get("deleted_at"), "delete_after": u.get("delete_after"),
+            **({"reads": _admin_reads(u)} if plans.hosted() else {})}
+
+
+def _admin_reads(u: dict) -> dict | None:
+    """Yönetici listesi: bu ayki belge / fiş kullanımı ve ek paket bakiyesi (finans verisi değil)."""
+    from app import doc_reads
+
+    return doc_reads.status(u)
 
 
 class AdminUserIn(BaseModel):
@@ -1127,6 +1135,38 @@ def admin_users(request: Request):
     _require_admin()
     return {"users": [_user_row(u) for u in system.users()], "invites": [_invite_out(i, request) for i in system.invites()],
             "default_quota": system.ai_quota({"role": "user"}), "hosted": plans.hosted()}
+
+
+class PlanTableIn(BaseModel):
+    tiers: dict[str, Literal["free", "premium", "aile"]] = {}
+    reset: bool = False                 # True: bütün satırlar varsayılana (koddaki tablo)
+    upgrade_yearly: bool | None = None  # hak dolunca aylık abonelere yıllığa geçişi öner
+
+
+def _plan_table_out() -> dict:
+    return {"rows": plans.table(), "tiers": list(plans.TIERS), "labels": {k: plans.LABELS[k] for k in plans.TIERS},
+            "upgrade_yearly": plans.upgrade_yearly_enabled(), "hosted": plans.hosted(),
+            "reads": plans.READS, "packs": [{"id": k, "reads": n} for k, n in plans.PACKS.items()]}
+
+
+@app.get("/api/admin/plan-table")
+def admin_plan_table():
+    """Sayfa / özellik tablosu: her satır hangi paketten itibaren açık (hazır sürüm; kendi sunucusunda uygulanmaz)."""
+    _require_admin()
+    return _plan_table_out()
+
+
+@app.put("/api/admin/plan-table")
+def admin_put_plan_table(body: PlanTableIn):
+    """Yönetici paneli: satırların paketini değiştir (system.db; deploy gerekmez, ~10 sn içinde her işçide geçerli)."""
+    _require_admin()
+    try:
+        plans.set_tiers(dict(body.tiers), reset=body.reset)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if body.upgrade_yearly is not None:
+        plans.set_upgrade_yearly(body.upgrade_yearly)
+    return _plan_table_out()
 
 
 @app.post("/api/admin/users")
@@ -1240,8 +1280,17 @@ def my_ai():
     if not u or u["role"] == "admin":
         return {"used": None, "quota": None, "own_key": False, "unit": unit}
     own = bool(config.own_ai_key())
+    shared = bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+    if plans.hosted():
+        # iki sayaç (kişi başı): belge ve fiş; extra: ek okuma paketi bakiyesi (ikisinde ortak). used/quota: belge
+        # sayacı (eski istemciler tek sayı gösterir)
+        from app import doc_reads
+
+        st = doc_reads.status(u)
+        return {"used": st["belge"]["used"], "quota": st["belge"]["limit"], "own_key": own, "unit": unit,
+                "shared_available": shared, "belge": st["belge"], "fis": st["fis"], "extra": st["extra"]}
     return {"used": system.ai_used_pool(u), "quota": None if own else system.ai_quota(u), "own_key": own, "unit": unit,
-            "shared_available": bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))}
+            "shared_available": shared}
 
 
 class DeleteMeIn(BaseModel):
@@ -1505,6 +1554,10 @@ def _plan_info() -> dict:
     info = plans.info(u)
     if plans.hosted():
         info["limits"] = {**info["limits"], "storage_bytes": plans.storage_limit(u), "storage_used": db.storage_used()}
+        from app import doc_reads
+
+        info["reads"] = doc_reads.status(u)  # bu ayki belge / fiş kullanımı ve ek paket (yönetici, oturumsuz: None)
+        info["upgrade_yearly"] = plans.upgrade_yearly(u)
     return info
 
 
@@ -4491,14 +4544,14 @@ def parse_receipt(file: UploadFile = File(...)):
     data, mime, photo = _prepare_photo(data, mime)
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
-        doc_reads.check(original)  # hazır sürüm: belge okuma hakkı doluysa okunmaz
+        doc_reads.check(original, doc_reads.FIS)  # hazır sürüm: fiş okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fotoğraf okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     try:
         out = receipt.parse_receipt(data, mime, cats)
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    doc_reads.charge(original)
+    doc_reads.charge(original, doc_reads.FIS)
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
     _auto_reread(out, data, mime)
     out["receipt_file"] = _store_receipt(photo)
@@ -4971,14 +5024,15 @@ def _read_document(data: bytes, mime: str, more: list | None = None) -> dict:
     more = [_prepare_photo(d, m)[:2] for d, m in (more or [])] or None
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
-        doc_reads.check(key)  # hazır sürüm: belge okuma hakkı doluysa okunmaz
+        # tür okumadan belli değil: fotoğraf fiş sayılır (PDF belge); sayım okunan gerçek türe gider
+        doc_reads.check(key, doc_reads.guess_kind(original_mime))  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     try:
         doc = receipt.parse_document(data, mime, cats, sorted({r["category"] for r in db.list_item_rules()}), more=more)
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    doc_reads.charge(key)
+    doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")))
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
         from app.categorize import UNCATEGORIZED, categorize

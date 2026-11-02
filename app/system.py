@@ -47,6 +47,31 @@ CREATE TABLE IF NOT EXISTS doc_reads (    -- hazır sürüm: sayılmış belgele
     month TEXT NOT NULL,
     PRIMARY KEY (book_id, hash)
 );
+CREATE TABLE IF NOT EXISTS read_usage (   -- hazır sürüm: aylık haktan düşen okuma, tür başı (belge | fis); app/doc_reads.py
+    user_id INTEGER NOT NULL,
+    month TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, month, kind)
+);
+CREATE TABLE IF NOT EXISTS read_split (   -- eski tek sayaçtan iki sayaca göç bir kez yapıldı (kullanıcı, ay)
+    user_id INTEGER NOT NULL,
+    month TEXT NOT NULL,
+    PRIMARY KEY (user_id, month)
+);
+CREATE TABLE IF NOT EXISTS read_credits ( -- ek okuma paketi bakiyesi (belge + fiş ortak); ay dönümünde silinmez
+    user_id INTEGER PRIMARY KEY,
+    balance INTEGER NOT NULL DEFAULT 0,
+    used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS read_packs (   -- mağazadan alınan ek paketler; txn = mağaza işlem kimliği (idempotent)
+    txn TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    product TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    at TEXT DEFAULT CURRENT_TIMESTAMP,
+    refunded INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS sys_settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -123,10 +148,15 @@ def _migrate(c) -> None:
     # yumuşak silme (app/deletion.py): istek zamanı, kalıcı silinme zamanı, ortak defter sahibiyle birlikte silinen üye
     # abonelik: mağaza yenilemesi açık mı (CANCELLATION → 0), hangi mağaza (APP_STORE / PLAY_STORE)
     have = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+    # deneme süresi (RevenueCat period_type TRIAL) ve mağaza ürünü (premium_monthly...): hak doldu yanıtı için
     for col, typ in (("deleted_at", "TEXT"), ("delete_after", "TEXT"), ("deleted_with", "INTEGER"),
-                     ("plan_renews", "INTEGER"), ("plan_store", "TEXT")):
+                     ("plan_renews", "INTEGER"), ("plan_store", "TEXT"), ("plan_trial", "INTEGER"),
+                     ("plan_product", "TEXT")):
         if col not in have:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+    # sayılmış belgenin türü (belge | fis); eski kayıtlarda NULL
+    if "kind" not in {r[1] for r in c.execute("PRAGMA table_info(doc_reads)")}:
+        c.execute("ALTER TABLE doc_reads ADD COLUMN kind TEXT")
 
 
 def init() -> None:
@@ -237,7 +267,7 @@ def members(owner_id: int) -> list[dict]:
 def update_user(uid: int, **fields) -> None:
     allowed = {"username", "password_hash", "disabled", "last_login", "must_change_password", "ai_quota", "role",
                "plan", "plan_until", "plan_source", "book_role", "deleted_at", "delete_after", "deleted_with",
-               "plan_renews", "plan_store"}
+               "plan_renews", "plan_store", "plan_trial", "plan_product"}
     data = {k: v for k, v in fields.items() if k in allowed}
     if not data:
         return
@@ -255,6 +285,8 @@ def delete_user(uid: int) -> None:
     with connect() as c:
         if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
+            for t in ("read_usage", "read_split", "read_credits"):
+                c.execute(f"DELETE FROM {t} WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
@@ -483,8 +515,8 @@ def ai_add(uid: int) -> None:
 
 
 def ai_quota(u: dict) -> int | None:
-    """None: sınırsız (yönetici). Hazır sürümde paketin aylık belge okuma hakkı (plans.DOC_READS; kişiye özel ai_quota
-    önce gelir); kendi sunucusunda aylık yapay zekâ çağrısı kotası (kişiye özel ya da varsayılan)."""
+    """None: sınırsız (yönetici). Hazır sürümde paketin aylık BELGE okuma hakkı (plans.READS; fiş sayacı için
+    plans.read_limit; kişiye özel ai_quota önce gelir); kendi sunucusunda aylık yapay zekâ çağrısı kotası (kişiye özel ya da varsayılan)."""
     if u["role"] == "admin":
         return None
     from app import plans

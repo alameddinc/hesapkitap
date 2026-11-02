@@ -242,12 +242,14 @@ def test_ai_suggest_quota_hosted(hosted, gemini, tmpdb):
     c.post("/api/entries", json={"entry_date": f"{_month()}-05", "description": "Örneksoft", "amount": 9,
                                  "kind": "gider", "category": "Kategorisiz", "payment": "nakit"})
     g = c.get("/api/uncategorized/groups").json()
-    assert g["ai"]["available"] is True and g["ai"]["left"] == 50
+    assert g["ai"]["available"] is True and g["ai"]["left"] == 10  # ücretsiz: ayda 10 belge (öneri belge sayacından)
     r = c.post("/api/uncategorized/ai-suggest", json={"keys": [x["key"] for x in g["groups"]]})
     assert r.status_code == 200 and _used(u["id"]) == 1  # 1 çağrı = 1 hak
-    _set_used(u["id"], 50)
+    from tests.test_doc_reads import _set_reads
+
+    _set_reads(u["id"], belge=10)
     r = c.post("/api/uncategorized/ai-suggest", json={"keys": [x["key"] for x in g["groups"]]})
-    assert r.status_code == 402 and r.json()["quota_full"] is True
+    assert r.status_code == 402 and r.json()["quota_full"] is True and r.json()["kind"] == "belge"
     assert "hakkın doldu" in r.json()["detail"] and len(gemini) == 1
 
 

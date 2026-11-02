@@ -71,11 +71,12 @@ def process(name: str, data: bytes, mime: str) -> dict:
     from app import doc_reads
 
     try:
-        doc_reads.check(data)  # hazır sürüm: belge okuma hakkı doluysa okunmaz
+        # tür okumadan belli değil: fotoğraf fiş, PDF belge sayılır; sayım okunan gerçek türe gider
+        doc_reads.check(data, doc_reads.BELGE if is_pdf else doc_reads.FIS)  # hazır sürüm: hak doluysa okunmaz
         doc = receipt.parse_document(read, read_mime, cats, sorted({r["category"] for r in db.list_item_rules()}))
     except receipt.ReceiptError as e:
         return {"status": "hata", "message": str(e)}
-    doc_reads.charge(data)
+    doc_reads.charge(data, doc_reads.kind_of_doc(doc.get("type")))
     if doc["type"] == "bill" and photo:
         doc["file_name"] = db.save_bill_file(photo, ".jpg")
     elif doc["type"] == "bill" and (is_pdf or mime in BILL_TYPES):

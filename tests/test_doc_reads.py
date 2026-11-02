@@ -29,6 +29,22 @@ def _set_used(uid: int, n: int) -> None:
         c.execute("INSERT OR REPLACE INTO ai_usage (user_id, month, count) VALUES (?, ?, ?)", (uid, MONTH, n))
 
 
+def _set_reads(uid: int, belge: int | None = None, fis: int | None = None) -> None:
+    """Bu ayın tür sayaçlarını doğrudan yaz (göç bu ay için yapılmış sayılır)."""
+    from app import system
+
+    with system.connect() as c:
+        c.execute("INSERT OR IGNORE INTO read_split (user_id, month) VALUES (?, ?)", (uid, MONTH))
+        for kind, n in (("belge", belge), ("fis", fis)):
+            if n is not None:
+                c.execute("INSERT OR REPLACE INTO read_usage (user_id, month, kind, count) VALUES (?, ?, ?, ?)",
+                          (uid, MONTH, kind, n))
+
+
+def _reads(c) -> dict:
+    return c.get("/api/me/ai").json()
+
+
 def _jpeg() -> bytes:
     from PIL import Image
 
@@ -108,32 +124,44 @@ def test_statement_ai_fallback_counts_one_despite_many_ai_calls(hosted, gemini, 
     assert len(gemini) == 2 and _used(u["id"]) == 1  # çift sayım yok
 
 
-def test_free_51st_document_refused_before_reading(hosted, gemini):
+def test_free_11th_document_refused_before_reading(hosted, gemini):
     c, u = _user(hosted)
-    _set_used(u["id"], 50)
+    _set_used(u["id"], 10)  # eski tek sayaç: göçte hepsi belge sayacına (bu ay saklanan fiş fotoğrafı yok)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
-    assert r["status"] == "error" and r["manual"] is True and r["limit"] == 50 and r["upgrade"] is True
-    assert r["message"].startswith("Bu ayki 50 belge okuma hakkın doldu. Ay başında yenilenir.")
-    assert "Premium'da ayda 1000." in r["message"]
+    assert r["status"] == "error" and r["manual"] is True and r["limit"] == 10 and r["upgrade"] is True
+    assert r["message"].startswith("Bu ayki 10 belge okuma hakkın doldu. Ay başında yenilenir.")
+    assert "Premium'da ayda 200 belge." in r["message"]
+    assert (r["reason"], r["kind"], r["trial"], r["upgrade_yearly"]) == ("quota", "belge", False, False)
+    assert [p["id"] for p in r["packs"]] == ["okuma_100", "okuma_300"]
     assert not c.get("/api/statements").json()  # okunmadı
+    # fiş sayacı ayrı: belge dolu ama fiş okunur
+    r = c.post("/api/receipts/parse", files={"file": ("fis.jpg", b"fis-1", "image/jpeg")})
+    assert r.status_code == 200 and len(gemini) == 1
+    assert (_reads(c)["belge"]["used"], _reads(c)["fis"]["used"]) == (10, 1)
+    _set_reads(u["id"], fis=30)
+    gemini.clear()
     # fiş: okunmaz (Gemini'ye gidilmez), fotoğraf saklanır ve elle girilen gidere bağlanabilir
     r = c.post("/api/receipts/parse", files={"file": ("fis.jpg", _jpeg(), "image/jpeg")})
     body = r.json()
     assert r.status_code == 502 and body["manual"] is True and body["quota_full"] is True and gemini == []
+    assert body["kind"] == "fis" and body["limit"] == 30 and "Bu ayki 30 fiş okuma hakkın doldu" in body["detail"]
+    assert "Premium'da ayda 600 fiş." in body["detail"]
     assert body["receipt_file"] and body["receipt_file"].endswith(".jpg")
     e = c.post("/api/entries", json={"entry_date": "2026-10-20", "description": "Migros", "amount": 125.5,
                                      "kind": "gider", "category": "Market & Gıda", "payment": "nakit",
                                      "receipt_file": body["receipt_file"]})
-    assert e.status_code == 200
+    assert e.status_code == 200  # hak dolunca kilit yok: elle ekleme açık
     # hesap dökümü, belge, fatura: aynı biçim
     assert c.post("/api/documents/parse", files={"file": ("f.jpg", b"x", "image/jpeg")}).json()["manual"] is True
     p = c.post("/api/bank-import/preview", files={"file": ("d.csv", b"Tarih;Tutar\n01.10.2026;-10", "text/csv")})
-    assert p.status_code == 422 and p.json()["manual"] is True
+    assert p.status_code == 422 and p.json()["manual"] is True and p.json()["kind"] == "belge"
     b = c.post("/api/bills/parse", files={"file": ("f.pdf", b"%PDF-1", "application/pdf")}).json()
     assert b["manual"] is True and "belge okuma hakkın doldu" in b["error"] and b["file_name"]
-    assert _used(u["id"]) == 50 and gemini == []
-    ai = c.get("/api/me/ai").json()
-    assert (ai["used"], ai["quota"], ai["unit"]) == (50, 50, "docs")
+    assert _used(u["id"]) == 11 and gemini == []  # ai_usage: toplam okunan
+    ai = _reads(c)
+    assert (ai["used"], ai["quota"], ai["unit"]) == (10, 10, "docs")
+    assert ai["belge"] == {"used": 10, "limit": 10, "left": 0} and ai["fis"] == {"used": 30, "limit": 30, "left": 0}
+    assert ai["extra"] == 0
 
 
 def test_premium_refusal_has_no_upgrade_hint(hosted):
@@ -141,9 +169,9 @@ def test_premium_refusal_has_no_upgrade_hint(hosted):
 
     c, u = _user(hosted)
     system.update_user(u["id"], plan="premium", plan_until=None)
-    _set_used(u["id"], 1000)
+    _set_used(u["id"], 200)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
-    assert r["limit"] == 1000 and r["upgrade"] is False and "Premium'da" not in r["message"]
+    assert r["limit"] == 200 and r["upgrade"] is False and "Premium'da" not in r["message"]
 
 
 def test_personal_quota_comes_first_and_admin_unlimited(hosted):
@@ -159,9 +187,9 @@ def test_personal_quota_comes_first_and_admin_unlimited(hosted):
     assert _used(admin["id"]) == 5000
 
 
-def test_family_pool_shared_and_members_own_book(tmpdb, monkeypatch):
-    """Aile: ayda 1000, 4 kişi ortak havuz; sahip 600 + üye 400 → 1001. belge sahibin, üyenin ve üyenin kendi
-    defterinde reddedilir."""
+def test_family_counters_are_per_person_and_members_own_book(tmpdb, monkeypatch):
+    """Aile: kişi başı 200 belge / 600 fiş; ortak defterde her üyenin kendi sayacı. Sahibin hakkı dolu olsa da üye
+    okur; üyenin hakkı dolunca ortak defterde de üyenin kendi defterinde de reddedilir."""
     from app import auth, db, doc_reads, system
 
     monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
@@ -171,16 +199,18 @@ def test_family_pool_shared_and_members_own_book(tmpdb, monkeypatch):
     with system.connect() as c:  # davetle katılmış üye
         c.execute("UPDATE users SET member_of = ? WHERE id = ?", (o["id"], m["id"]))
     o, m = system.user(o["id"]), system.user(m["id"])
-    _set_used(o["id"], 600)
-    _set_used(m["id"], 399)
+    _set_reads(o["id"], belge=200, fis=600)
+    _set_reads(m["id"], belge=199)
     with db.use_space(system.user_db_path(m), m):
-        doc_reads.check(b"belge-1000")
-        assert doc_reads.charge(b"belge-1000") and not doc_reads.charge(b"belge-1000")  # aynı içerik bir kez
-    assert system.ai_used_pool(o) == 1000
-    for ctx, path in ((o, system.user_db_path(o)), (m, system.user_db_path(m)),
-                      ({**m, "own_book": True}, system.own_db_path(m))):
-        with db.use_space(path, ctx), pytest.raises(doc_reads.QuotaError, match="Bu ayki 1000 belge okuma hakkın doldu"):
-            doc_reads.check(b"belge-1001")
+        doc_reads.check(b"belge-200")
+        assert doc_reads.charge(b"belge-200") and not doc_reads.charge(b"belge-200")  # aynı içerik bir kez
+        doc_reads.check(b"fis-1", doc_reads.FIS)  # üyenin fiş hakkı ayrı ve boş
+    with db.use_space(system.user_db_path(o), o), pytest.raises(doc_reads.QuotaError, match="Bu ayki 200 belge"):
+        doc_reads.check(b"x")
+    for ctx, path in ((m, system.user_db_path(m)), ({**m, "own_book": True}, system.own_db_path(m))):
+        with db.use_space(path, ctx), pytest.raises(doc_reads.QuotaError, match="Bu ayki 200 belge okuma hakkın doldu"):
+            doc_reads.check(b"belge-201")
+    assert doc_reads.status(m)["belge"]["used"] == 200 and doc_reads.status(o)["fis"]["left"] == 0
 
 
 def test_mail_bill_counts_once_and_full_quota_skips(tmpdb, monkeypatch):
@@ -199,10 +229,10 @@ def test_mail_bill_counts_once_and_full_quota_skips(tmpdb, monkeypatch):
     assert _used(u["id"]) == 1  # mail ile fatura: 1
     assert inbound.handle(raw, to, verify=sig)["status"] == "skip"
     assert _used(u["id"]) == 1  # aynı Message-ID: 0
-    _set_used(u["id"], 1000)
+    _set_reads(u["id"], belge=200)
     r = inbound.handle(_raw("efatura@enerjisa.com.tr", body="Faturanız 300 TL", mid="<f2@x>"), to, verify=sig)
     assert (r["status"], r["detail"]) == ("skip", "Belge okuma hakkı doldu")  # günlükte: skip · belge okuma hakkı doldu
-    assert _used(u["id"]) == 1000
+    assert _used(u["id"]) == 1
 
 
 def test_mail_statement_counts_once(tmpdb, monkeypatch):
