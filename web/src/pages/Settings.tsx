@@ -14,6 +14,7 @@ import { useUI } from "../ui";
 import Users from "../components/Users";
 import PlanTable from "../components/PlanTable";
 import AiCosts from "../components/AiCosts";
+import AppUpdate from "../components/AppUpdate";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
@@ -390,6 +391,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       {isAdmin && <PlanTable />}
 
       {isAdmin && <AiCosts />}
+
+      {isAdmin && <AppUpdate />}
 
       {isAdmin && <DemoStats />}
 

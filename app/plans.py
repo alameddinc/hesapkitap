@@ -306,11 +306,19 @@ def upgrade_yearly(u: dict | None) -> bool:
     return bool(subscription(u)["active"] and prod.endswith("_monthly"))
 
 
+def _source(o: dict) -> str | None:
+    src = o.get("plan_source")
+    return "store" if src == "revenuecat" else "manual" if src == "manual" else None
+
+
 def info(u: dict | None) -> dict:
     p = plan_of(u)
     o = _owner(u) if u else None
     out = {"plan": p, "label": LABELS[p], "hosted": hosted(),
            "until": o.get("plan_until") if o and p in (PREMIUM, FAMILY) else None,
+           # paketin kaynağı: "store" (mağaza aboneliği, kendisi yenilenir) | "manual" (yöneticinin verdiği, süresi
+           # dolunca biter; istemci bitişe az kala haber verir) | None
+           "source": _source(o) if o and p in (PREMIUM, FAMILY) and u.get("role") != "admin" else None,
            "features": {f: allows(u, f) for f in _ROWS}, "feature_labels": FEATURE_LABELS, "limits": limits(u),
            "ai_docs": None if p == SELF else ai_limit(u) if u else DOC_READS[FREE],
            "member": bool(u and u.get("member_of"))}

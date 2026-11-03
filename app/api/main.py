@@ -1169,6 +1169,40 @@ def admin_put_plan_table(body: PlanTableIn):
     return _plan_table_out()
 
 
+class AppUpdateIn(BaseModel):
+    model_config = {"extra": "forbid"}  # bilinmeyen platform 422
+    ios: dict[str, str | None] | None = None      # {latest, min, store_url}; boş değer: alanı ayardan kaldır
+    android: dict[str, str | None] | None = None
+    reset: bool = False                           # True: yönetici ayarını sil (ortam değişkenleri geçerli olur)
+
+
+def _app_update_out() -> dict:
+    from app import app_update
+
+    return {"fields": app_update.raw(), "effective": app_update.config(), "default_store": app_update.DEFAULT_STORE}
+
+
+@app.get("/api/admin/app-update")
+def admin_app_update():
+    """Mobil uygulama sürüm yönlendirmesi: son / en düşük sürüm ve mağaza adresi (değer ve kaynağı: ayar | ortam)."""
+    _require_admin()
+    return _app_update_out()
+
+
+@app.put("/api/admin/app-update")
+def admin_put_app_update(body: AppUpdateIn):
+    """Yönetici paneli: sürüm değerlerini system.db'ye yaz (deploy gerekmez, ~10 sn içinde her işçide geçerli)."""
+    from app import app_update
+
+    _require_admin()
+    try:
+        app_update.set_config({k: v for k, v in (("ios", body.ios), ("android", body.android)) if v is not None},
+                              reset=body.reset)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return _app_update_out()
+
+
 class AiCostSettingsIn(BaseModel):
     prices: dict[str, dict[str, float]] | None = None  # {"model": {"input": $/1M, "output": $/1M}}; {}: varsayılana dön
     usd_try: float | None = None
@@ -1571,7 +1605,7 @@ def _handshake() -> dict:
     from app import version
 
     h = version.handshake(with_version=True)
-    return {"api_version": h["api_version"], "capabilities": h["capabilities"],
+    return {"api_version": h["api_version"], "capabilities": h["capabilities"], "app_update": h["app_update"],
             "server": {"version": h["version"], "flags": h["flags"]}}
 
 

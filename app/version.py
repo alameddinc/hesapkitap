@@ -49,14 +49,15 @@ CAPABILITIES = (
     "uncategorized_bulk",     # POST /api/uncategorized/apply-many (tek undo_id), groups ?sort=total, one_off/one_off_max, ai_max
     "merchant_rename",        # POST /api/merchants/rename {display, key|uid}: görünen işyeri adı (geri al: /api/uncategorized/undo)
     "receipt_text",           # POST /api/documents/parse ocr_text (+ ocr_source vision|mlkit): telefonda çıkarılan metin
+    "app_update",             # el sıkışmasında app_update {ios|android: {latest, min, store_url}}; boş {} = kapalı
 )
 
 
 def handshake(with_version: bool = False) -> dict:
     """{api_version, capabilities, flags[, version]}. flags: sunucuda o an açık olan davranışlar."""
-    from app import email_verify
+    from app import app_update, email_verify
 
-    out = {"api_version": API_VERSION, "capabilities": list(CAPABILITIES),
+    out = {"api_version": API_VERSION, "capabilities": list(CAPABILITIES), "app_update": app_update.config(),
            "flags": {"email_verify_required": email_verify.required(),
                      "hold_unverified": os.environ.get("HESAPKITAP_HOLD_UNVERIFIED", "0").strip() == "1"}}
     if with_version:
