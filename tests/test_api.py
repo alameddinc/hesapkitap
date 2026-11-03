@@ -108,13 +108,22 @@ def test_occurrence_when_salary_after_cycle_day(client, tmpdb):
     tmpdb.set_cycle_start_day(3)
     assert tmpdb.occurrence_date("2026-11", 20) == "2026-10-20"
     assert tmpdb.occurrence_date("2026-11", 1) == "2026-11-01"
+    from datetime import date, timedelta
+
+    from app import finance
+
     rid = client.post("/api/recurring", json={"description": "Maaş", "amount": 1000, "kind": "gelir",
                                               "day_of_month": 20, "start_month": "2026-01"}).json()["id"]
-    rows = client.get("/api/transactions", params={"month": "2026-11"}).json()
-    assert next(r for r in rows if r.get("pending"))["date"] == "2026-10-20"
-    # hafta sonu yüzünden 18 Ekim'de erken yattı → yine Kasım dönemi, tek kez
-    client.post("/api/entries", json={"entry_date": "2026-10-18", "description": "Maaş", "amount": 1000, "kind": "gelir"})
-    s = client.get("/api/summary", params={"month": "2026-11"}).json()
+    # bekleyen kalem yalnız içinde bulunulan / gelecek dönemde: test günden bağımsız olsun diye gelecek dönem
+    month = finance.add_months(finance.current_period(), 1)
+    due = tmpdb.occurrence_date(month, 20)
+    assert due[:7] == finance.add_months(month, -1)  # 20'si ay dönümünden sonra: önceki takvim ayında
+    rows = client.get("/api/transactions", params={"month": month}).json()
+    assert next(r for r in rows if r.get("pending"))["date"] == due
+    # hafta sonu yüzünden 2 gün erken yattı → yine aynı dönem, tek kez
+    early = (date.fromisoformat(due) - timedelta(days=2)).isoformat()
+    client.post("/api/entries", json={"entry_date": early, "description": "Maaş", "amount": 1000, "kind": "gelir"})
+    s = client.get("/api/summary", params={"month": month}).json()
     assert s["totals"]["income"] == 1000 and s["pending"]["count"] == 0
 
 
