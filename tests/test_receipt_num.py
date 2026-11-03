@@ -26,7 +26,7 @@ def test_amount(v, want):
     assert receipt._num(v) == want
 
 
-@pytest.mark.parametrize("v, want", [("1.234", 1.23), ("0.5", 0.5), ("2", 2.0), ("1,5", 1.5)])
+@pytest.mark.parametrize("v, want", [("1.234", 1.234), ("0.5", 0.5), ("2", 2.0), ("1,5", 1.5)])
 def test_qty_dot_is_decimal(v, want):
     """Adet/kg alanında nokta ondalıktır (1.234 kg), binlik değil."""
     assert receipt._num(v, qty=True) == want

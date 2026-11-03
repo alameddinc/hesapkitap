@@ -177,7 +177,7 @@ def _num(v, qty: bool = False) -> float | None:
     """Fiş/fatura sayısı. Tutar (varsayılan) Türk biçimleriyle: "1.234,50", "12,90"; virgül yoksa tek/çok nokta ve
     ardından tam 3 hane binliktir ("1.234" → 1234, "1.234.567"), 2 hane ondalıktır ("2.90" → 2,9). İkisi birden varsa
     sondaki ayraç ondalıktır ("1,234.56"). Tutar yarım yukarı kuruşa yuvarlanır (app/money.py).
-    qty=True (adet/kg): nokta da virgül de ondalıktır ("1.250" kg → 1,25)."""
+    qty=True (adet/kg): nokta da virgül de ondalıktır ("1.250" kg → 1,25), 3 haneye yuvarlanır ("0,915" kg)."""
     import re
 
     from app import money
@@ -185,7 +185,7 @@ def _num(v, qty: bool = False) -> float | None:
     if v is None or v == "" or isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
-        return round(float(v), 2) if qty else money.money(v)
+        return round(float(v), 3) if qty else money.money(v)
     s = re.sub(r"\s|₺|TL", "", str(v))
     neg = s.startswith("-")
     s = s.lstrip("+-")
@@ -204,7 +204,7 @@ def _num(v, qty: bool = False) -> float | None:
     except ValueError:
         return None
     x = -x if neg else x
-    return round(x, 2) if qty else money.money(x)
+    return round(x, 3) if qty else money.money(x)  # adet/kg 3 hane: tartılı ürün 0,915 kg
 
 
 BILL_PROMPT = """Bu bir Türkiye'de kesilmiş fatura (elektrik, doğalgaz, su, internet, telefon, aidat vb.). PDF veya fotoğraf olabilir.
@@ -415,6 +415,41 @@ def fix_qty_lines(items: list[dict]) -> list[dict]:
     return out
 
 
+def _near(a, b) -> bool:
+    return isinstance(a, (int, float)) and isinstance(b, (int, float)) and abs(a - b) <= 0.02
+
+
+def fix_misattached_qty(items: list[dict]) -> list[dict]:
+    """Model miktarı ("2 ADET X 194,95") yanlış ürüne bağladıysa komşusuna taşı.
+
+    Kalemin adet × birimi kendi tutarını değil de hemen altındaki (ya da üstündeki) ürünün tutarını veriyorsa ve o komşunun
+    kendi adet × birimi yoksa ya da tutmuyorsa: adet, birim ve birim fiyat komşuya geçer, kalem tek adet kalır. Örn.
+    "2× EKER YOGURT 124,95 (2 × 194,95)" + "PINAR SUZME 389,90" → "EKER YOGURT 124,95" + "2× PINAR SUZME 389,90"."""
+    out = [dict(it) for it in items]
+
+    def exp(it):
+        up, q = it.get("unit_price"), it.get("qty") or 1
+        return round(q * up, 2) if isinstance(up, (int, float)) and up > 0 else None
+
+    for i, it in enumerate(out):
+        e = exp(it)
+        if e is None or _near(it.get("amount"), e):
+            continue
+        for j in (i + 1, i - 1):
+            if not 0 <= j < len(out):
+                continue
+            nb = out[j]
+            if not _near(nb.get("amount"), e):
+                continue
+            ne = exp(nb)
+            if ne is not None and _near(nb.get("amount"), ne):
+                continue  # komşunun kendi miktarı doğru: dokunma
+            out[j] = {**nb, "qty": it.get("qty"), "unit": it.get("unit") or "adet", "unit_price": it.get("unit_price")}
+            out[i] = {**it, "qty": 1, "unit": "adet", "unit_price": None}
+            break
+    return out
+
+
 def _items(raw: dict) -> list[dict]:
     """Ürün satırları; "2Adt x 230,00" gibi adetler qty olarak gelir."""
     out = []
@@ -432,7 +467,7 @@ def _items(raw: dict) -> list[dict]:
         brand = str(i.get("brand") or "").strip()[:40] or None
         out.append({"name": str(i["name"])[:60], "product": product, "brand": brand, "qty": q, "unit": unit,
                     "amount": _num(i.get("amount")), "split": split, "unit_price": _num(i.get("unit_price"))})
-    return out
+    return fix_misattached_qty(out)
 
 
 def _iso(d) -> str | None:
