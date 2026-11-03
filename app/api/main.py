@@ -4900,6 +4900,9 @@ class BillIn(BaseModel):
     category: str | None = "Faturalar"
     note: str | None = None
     file_name: str | None = None
+    # belge ödeme dekontuysa ya da kullanıcı "ödendi" dediyse: fatura ödenmiş olarak açılır (gider kaydıyla, /pay gibi)
+    paid_at: date | None = None
+    payment: Payment | None = None
 
 
 class BillPatch(BaseModel):
@@ -5386,9 +5389,12 @@ def list_bills():
 
 @app.post("/api/bills")
 def create_bill(body: BillIn):
-    data = body.model_dump()
+    data = body.model_dump(exclude={"paid_at", "payment"})
     data["due_date"] = body.due_date.isoformat()
-    return {"id": db.create_bill(data)}
+    bid = db.create_bill(data)
+    if body.paid_at is None:
+        return {"id": bid}
+    return {"id": bid, "entry_id": db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment)}
 
 
 @app.patch("/api/bills/{bid}")

@@ -165,6 +165,8 @@ def _bill(name: str, data: bytes, mime: str) -> str:
     if not doc_reads.allowed(data):
         return f"⏭ {name}: belge okuma hakkı doldu"
     parsed = receipt.parse_bill(data, mime)
+    if parsed.get("paid") and parsed.get("paid_at") and not parsed.get("due_date"):
+        parsed["due_date"] = parsed["paid_at"]  # ödeme dekontunda son ödeme tarihi yok: ödendiği gün
     if not parsed.get("amount") or not parsed.get("due_date"):
         raise ValueError(f"{name}: tutar ya da son ödeme tarihi okunamadı")
     for b in db.list_bills():
@@ -172,9 +174,11 @@ def _bill(name: str, data: bytes, mime: str) -> str:
                 and money.eq(b["amount"], parsed["amount"]):
             return f"Fatura {parsed['provider']} {money.tl(parsed['amount'])}: zaten vardı"
     file_name = db.save_bill_file(data, ".pdf") if mime == "application/pdf" else None
-    db.create_bill({"provider": parsed["provider"], "amount": parsed["amount"], "due_date": parsed["due_date"],
-                    "category": parsed["category"], "description": parsed.get("description") or None,
-                    "note": "E-postayla geldi", "file_name": file_name})
+    bid = db.create_bill({"provider": parsed["provider"], "amount": parsed["amount"], "due_date": parsed["due_date"],
+                          "category": parsed["category"], "description": parsed.get("description") or None,
+                          "note": "E-postayla geldi", "file_name": file_name})
+    if parsed.get("paid") and parsed.get("paid_at"):  # ödeme dekontu: ödenmiş olarak girer
+        db.pay_bill(bid, parsed["amount"], parsed["paid_at"], parsed.get("payment"))
     doc_reads.charge(data)
     prev = [b for b in db.list_bills() if b["provider"] == parsed["provider"] and b["due_date"] < parsed["due_date"]]
     change = ""
@@ -182,6 +186,8 @@ def _bill(name: str, data: bytes, mime: str) -> str:
         pct = round((parsed["amount"] - prev[0]["amount"]) / prev[0]["amount"] * 100)
         if abs(pct) >= 25:
             change = f" · geçen faturadan %{abs(pct)} {'fazla' if pct > 0 else 'az'}"
+    if parsed.get("paid") and parsed.get("paid_at"):
+        return f"🧾 {parsed['provider']} faturası: {money.tl(parsed['amount'])} · ödendi {parsed['paid_at'][8:]}.{parsed['paid_at'][5:7]}"
     return f"🧾 {parsed['provider']} faturası: {money.tl(parsed['amount'])} · son ödeme {parsed['due_date'][8:]}.{parsed['due_date'][5:7]}{change}"
 
 

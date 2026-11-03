@@ -217,9 +217,12 @@ SADECE şu JSON'u döndür:
   "issue_date": "YYYY-MM-DD veya null",
   "period": "fatura dönemi, ör. 'Ekim 2026' veya null",
   "subscriber_no": "abone/tesisat/hizmet no veya null",
+  "paid": "belge bu faturanın ÖDENDİĞİNİ gösteriyorsa true (banka ödeme dekontu, tahsilat makbuzu, 'ödendi', 'tahsil edildi', 'işlem başarılı', 'fatura ödeme'); ödenecek fatura ise false",
+  "paid_at": "YYYY-MM-DD ödeme/işlem tarihi (sadece paid true ise) veya null",
+  "pay_method": "havale | kredi_karti | nakit | bilinmiyor (dekontta hesaptan/IBAN'dan ödeme veya otomatik ödeme → havale; kartla ödeme → kredi_karti)",
   "confidence": "yüksek | orta | düşük"
 }
-amount = ÖDENECEK TUTAR (KDV dahil toplam). Türk sayı formatında 1.234,56 = 1234.56."""
+amount = ÖDENECEK TUTAR (KDV dahil toplam); dekontta ÖDENEN TUTAR. Türk sayı formatında 1.234,56 = 1234.56."""
 
 BILL_CATEGORY = {"elektrik": "Elektrik", "dogalgaz": "Doğalgaz", "su": "Su", "internet": "İnternet & TV",
                  "telefon": "Telefon", "aidat": "Kira & Aidat"}
@@ -440,7 +443,8 @@ def _iso(d) -> str | None:
 
 
 DOC_PROMPT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapılmış, POS/yazar kasa fişi) ya da
-ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). PDF veya fotoğraf olabilir.
+ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). Bir faturanın banka ödeme
+dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). PDF veya fotoğraf olabilir.
 SADECE şu JSON'u döndür:
 {{
   "doc_type": "fis | fatura",
@@ -454,6 +458,9 @@ SADECE şu JSON'u döndür:
   "bill_type": "elektrik | dogalgaz | su | internet | telefon | aidat | diger | null",
   "period": "fatura dönemi veya null",
   "subscriber_no": "abone/tesisat no veya null",
+  "paid": "sadece fatura: belge faturanın ÖDENDİĞİNİ gösteriyorsa (banka fatura ödeme dekontu, tahsilat makbuzu, 'ödendi', 'tahsil edildi') true, ödenecek fatura ise false",
+  "paid_at": "YYYY-MM-DD faturanın ödendiği gün (sadece paid true ise) veya null",
+  "pay_method": "sadece ödenmiş fatura: havale | kredi_karti | nakit | bilinmiyor",
   "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
   "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
@@ -534,6 +541,7 @@ def parse_document_text(text: str, categories: list[str], split_categories: list
 def _doc_of(raw: dict, categories: list[str]) -> dict:
     """Modelin ham JSON'undan fiş/fatura sonucu (fotoğraf ve metin yolu aynı)."""
     if raw.get("doc_type") == "fatura" or raw.get("due_date"):
+        paid = _bill_paid(raw)
         return {
             "type": "bill",
             "provider": (raw.get("merchant") or "").strip()[:60] or "Fatura",
@@ -542,6 +550,7 @@ def _doc_of(raw: dict, categories: list[str]) -> dict:
             "amount": _num(raw.get("total")),
             "due_date": _iso(raw.get("due_date")),
             "description": " · ".join(x for x in (raw.get("period"), raw.get("subscriber_no") and f"Abone {raw['subscriber_no']}") if x),
+            **paid,
             "confidence": raw.get("confidence") or "orta",
         }
     category = raw.get("category") if raw.get("category") in categories else "Diğer"
@@ -572,9 +581,22 @@ def parse_bill(data: bytes, mime: str) -> dict:
         "due_date": _iso(raw.get("due_date")),
         "issue_date": _iso(raw.get("issue_date")),
         "description": " · ".join(x for x in (raw.get("period"), raw.get("subscriber_no") and f"Abone {raw['subscriber_no']}") if x),
+        **_bill_paid(raw),
         "confidence": raw.get("confidence") or "orta",
         "model": meta["model"],
     }
+
+
+_PAY_METHODS = ("havale", "kredi_karti", "nakit")
+
+
+def _bill_paid(raw: dict) -> dict:
+    """Fatura belgesi ödeme dekontu/makbuzu mu: {paid, paid_at, payment}. Ödenmişse tarih yoksa None kalır (istemci sorar)."""
+    paid = raw.get("paid") is True or str(raw.get("paid")).strip().lower() == "true"
+    if not paid:
+        return {"paid": False, "paid_at": None, "payment": None}
+    method = raw.get("pay_method")
+    return {"paid": True, "paid_at": _iso(raw.get("paid_at")), "payment": method if method in _PAY_METHODS else None}
 
 
 def parse_receipt(image: bytes, mime: str, categories: list[str]) -> dict:
