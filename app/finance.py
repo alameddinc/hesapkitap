@@ -1231,6 +1231,33 @@ TARGET_MODULE = {"planlama": "plan", "taksitler": "plan", "oneriler": "plan", "z
                  "fiyatlar": "fiyatlar", "transferler": "transferler", "istatistik": "istatistik"}
 
 
+def _pay_reason(st: dict) -> dict | None:
+    """Faizin ödeme kaynaklı nedeni (db.interest_charges satırı): önceki ekstre geç mi, eksik mi ödendi, hiç mi ödenmedi.
+    {"kind": "gec" | "eksik" | "odenmedi", "text", "days"?, "due_date", "paid", "debt"}; önceki ekstre yoksa None."""
+    prev, pays = st["prev"], st["payments"]
+    if not (prev and prev["due_date"]):
+        return None
+    debt = prev["total_debt"] or 0
+    paid = round(sum(p["amount"] for p in pays), 2)
+    on_time = round(sum(p["amount"] for p in pays if p["pay_date"] <= prev["due_date"]), 2)
+    due = date.fromisoformat(prev["due_date"])
+    base = {"due_date": prev["due_date"], "paid": paid, "debt": debt}
+    if pays and on_time < debt - 1:
+        first_late = next((p for p in pays if p["pay_date"] > prev["due_date"]), None)
+        if first_late:
+            days = (date.fromisoformat(first_late["pay_date"]) - due).days
+            return {**base, "kind": "gec", "days": days, "pay_date": first_late["pay_date"],
+                    "text": f"önceki ekstrenin son ödemesi {due:%d.%m}, ödeme {date.fromisoformat(first_late['pay_date']):%d.%m}: "
+                            f"{days} gün geç. Bir gün geç ödemek bile dönem borcunun tamamına faiz işletir"}
+        if paid < debt - 1:
+            return {**base, "kind": "eksik",
+                    "text": f"önceki dönem borcundan {_tl(paid)} ödendi, kalan {_tl(debt - paid)} için faiz işledi"}
+    elif not pays:
+        return {**base, "kind": "odenmedi",
+                "text": f"önceki ekstreye ({_tl(debt)}, son ödeme {due:%d.%m}) ödeme görünmüyor"}
+    return None
+
+
 def interest_alarm(month: str) -> list[dict]:
     """Faiz alarmı: bu dönem ödenen faiz / vade farkı ve NEDENİ (geç ödeme, eksik ödeme, taksit vade farkı)."""
     from app import book
@@ -1248,21 +1275,9 @@ def interest_alarm(month: str) -> list[dict]:
         shop = sum(x["amount"] for x, k in keys if "ALISVERIS" in k or "AKDI" in k)
         vade = [(x["description"].split("-", 1)[-1].strip(), x["amount"]) for x, k in keys if "VADEFARK" in k]
         reasons = []
-        prev, pays = st["prev"], st["payments"]
-        if prev and prev["due_date"] and (late or shop):
-            paid = round(sum(p["amount"] for p in pays), 2)
-            on_time = round(sum(p["amount"] for p in pays if p["pay_date"] <= prev["due_date"]), 2)
-            due = date.fromisoformat(prev["due_date"])
-            if pays and on_time < (prev["total_debt"] or 0) - 1:
-                first_late = next((p for p in pays if p["pay_date"] > prev["due_date"]), None)
-                if first_late:
-                    days = (date.fromisoformat(first_late["pay_date"]) - due).days
-                    reasons.append(f"önceki ekstrenin son ödemesi {due:%d.%m}, ödeme {date.fromisoformat(first_late['pay_date']):%d.%m}: "
-                                   f"{days} gün geç. Bir gün geç ödemek bile dönem borcunun tamamına faiz işletir")
-                elif paid < (prev["total_debt"] or 0) - 1:
-                    reasons.append(f"önceki dönem borcundan {_tl(paid)} ödendi, kalan {_tl(prev['total_debt'] - paid)} için faiz işledi")
-            elif not pays:
-                reasons.append(f"önceki ekstreye ({_tl(prev['total_debt'] or 0)}, son ödeme {due:%d.%m}) ödeme görünmüyor")
+        pr = _pay_reason(st) if late or shop else None
+        if pr:
+            reasons.append(pr["text"])
         if vade:
             reasons.append("taksitli işlemlere vade farkı eklendi: " + ", ".join(f"{m} {_tl(a)}" for m, a in vade[:5])
                            + ". Taksit yerine tek çekim seçersen vade farkı ödemezsin")
@@ -1298,6 +1313,170 @@ def interest_history(months: int = 24) -> dict:
         if total > 0 or alarms:
             out.append({"month": m, "total": total, "alarms": alarms})
     return {"months": out, "total": round(sum(x["total"] for x in out), 2), "checked": len(periods)}
+
+
+# faiz / ücret satırının türü (açıklamadan; fold_key: büyük harf, Türkçe karaktersiz, boşluksuz). Sıra önemli: "BSMV - ..."
+# vergidir, "NAKIT AVANS FAIZI" nakit avanstır.
+INTEREST_TYPES = (
+    ("vergi", "Vergi (BSMV / KKDF)", ("BSMV", "KKDF", "VERGI")),
+    ("nakit_avans", "Nakit avans faizi", ("NAKITAVANS", "AVANSFAIZ", "NAKITCEKIM")),
+    ("gecikme", "Gecikme faizi", ("GECIKME",)),
+    ("vade_farki", "Taksit vade farkı", ("VADEFARK",)),
+    ("akdi", "Alışveriş (akdi) faizi", ("ALISVERIS", "AKDI")),
+    ("kar_payi", "Kâr payı", ("KARPAYI",)),
+    ("ucret", "Kart aidatı / ücret", ("AIDAT", "UCRET", "MASRAF", "KOMISYON")),
+)
+INTEREST_LABELS = {k: label for k, label, _ in INTEREST_TYPES} | {"faiz": "Faiz"}
+TAX_KINDS = ("vergi",)
+FEE_KINDS = ("ucret",)
+
+
+def interest_type(desc: str) -> str:
+    k = _fold(desc)
+    return next((key for key, _, words in INTEREST_TYPES if any(w in k for w in words)), "faiz")
+
+
+def _cap(s: str) -> str:
+    return s[:1].upper() + s[1:]
+
+
+def _interest_reason(kind: str, desc: str, pr: dict | None) -> str:
+    """Satırın kısa nedeni: ödeme kaynaklı (geç / eksik / ödenmedi) bilgi varsa o, yoksa türün genel açıklaması."""
+    if kind in ("gecikme", "akdi", "faiz", "kar_payi") and pr:
+        return _cap(pr["text"]) + "."
+    if kind == "gecikme":
+        return "Son ödeme gününden sonra ödendiği için gecikme faizi işledi."
+    if kind in ("akdi", "faiz", "kar_payi"):
+        return "Dönem borcunun tamamı son ödeme gününe kadar ödenmediğinde (asgari ya da eksik ödeme) kalan borca faiz işler."
+    if kind == "vade_farki":
+        m = desc.split("-", 1)[-1].strip() if "-" in desc else ""
+        return f"Taksitli alışverişe eklenen vade farkı{f' ({m})' if m else ''}. Tek çekimde vade farkı olmaz."
+    if kind == "vergi":
+        return "Faize ve vade farkına eklenen vergi (BSMV, KKDF): faiz olmazsa vergi de olmaz."
+    if kind == "nakit_avans":
+        return "Nakit avansta faiz çekildiği gün işlemeye başlar."
+    if kind == "ucret":
+        return "Bankanın kart aidatı ya da hizmet ücreti."
+    return "Ekstrede faiz ya da ücret olarak görünüyor."
+
+
+def interest_report(months: int = 12, today: date | None = None) -> dict:
+    """Faiz ve ücretler sayfası (GET /api/interest): son `months` dönemde (0: tüm geçmiş) kart ekstrelerindeki faiz, vade
+    farkı, faize bağlı vergi ve kart ücretleri; ay ay, kart kart, kalem kalem ve NEDENİ (interest_alarm ile aynı mantık:
+    _pay_reason), veride karşılığı olan önleme önerileri ve hesaba işleyen faiz geliri. Ortak defterde faiz gizliyse
+    (book.hide_fees) boş döner: hidden=True. Gizli kart ve gizli işaretli satır üyeye zaten gelmez (db süzgeçleri)."""
+    from app import book
+
+    today = today or date.today()
+    cur = current_period(today)
+    empty = {"hidden": False, "months": months, "from": None, "to": cur, "total": 0.0, "interest": 0.0, "tax": 0.0,
+             "fee": 0.0, "count": 0, "by_month": [], "by_card": [], "by_type": [], "statements": [], "items": [],
+             "tips": [], "income": {"total": 0.0, "items": []}}
+    if book.hide_fees():
+        return {**empty, "hidden": True}
+    start = add_months(cur, -(months - 1)) if months > 0 else None
+    fees = [t for t in db.card_transactions() if t["txn_type"] == FEE and (not start or t["period"] >= start)]
+    # nedeni için önceki ekstre ve ona yapılan ödemeler (dönem başına bir sorgu)
+    charges = {st["lines"][0]["statement_id"]: st for p in sorted({t["period"] for t in fees}) for st in db.interest_charges(p)}
+    reasons = {sid: _pay_reason(st) for sid, st in charges.items()}
+    stmts = {s["id"]: s for s in db.list_statements()}
+    items = []
+    for t in fees:
+        kind = interest_type(t["description"])
+        sid = t["statement_id"]
+        s = stmts.get(sid) or {}
+        items.append({
+            "uid": f"c{t['id']}", "id": t["id"], "date": t["txn_date"], "month": t["period"], "statement_id": sid,
+            "period_end": t["period_end"], "due_date": s.get("due_date"), "bank": t["bank"], "card_no": t["account"],
+            "last4": t["account"][-4:], "card": f"{t['bank']} …{t['account'][-4:]}", "description": t["description"],
+            "type": kind, "type_label": INTEREST_LABELS[kind], "amount": _round(t["amount"]),
+            "reason": _interest_reason(kind, t["description"], reasons.get(sid)),
+        })
+    start = start or (min(i["month"] for i in items) if items else cur)
+    by_m: dict[str, float] = defaultdict(float)
+    by_t: dict[str, float] = defaultdict(float)
+    by_c: dict[str, dict] = {}
+    by_s: dict[int, dict] = {}
+    for i in items:
+        by_m[i["month"]] += i["amount"]
+        by_t[i["type"]] += i["amount"]
+        c = by_c.setdefault(i["card_no"], {"card_no": i["card_no"], "last4": i["last4"], "bank": i["bank"], "card": i["card"],
+                                           "total": 0.0, "count": 0, "last_date": i["date"]})
+        c["total"] += i["amount"]
+        c["count"] += 1
+        c["last_date"] = max(c["last_date"], i["date"])
+        st = by_s.setdefault(i["statement_id"], {"statement_id": i["statement_id"], "card": i["card"], "card_no": i["card_no"],
+                                                 "period_end": i["period_end"], "due_date": i["due_date"], "month": i["month"],
+                                                 "total": 0.0})
+        st["total"] += i["amount"]
+    for sid, st in by_s.items():
+        pr = reasons.get(sid)
+        st["total"] = _round(st["total"])
+        st["reason"] = _cap(pr["text"]) if pr else None
+        st["reason_kind"] = pr["kind"] if pr else None  # gec | eksik | odenmedi | None
+    total = _round(sum(i["amount"] for i in items))
+    tax = _round(sum(i["amount"] for i in items if i["type"] in TAX_KINDS))
+    fee = _round(sum(i["amount"] for i in items if i["type"] in FEE_KINDS))
+    # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): interest_alarm ile aynı ölçüt
+    inc = [r for r in transactions(None) if r["kind"] == INCOME and not r.get("pending") and r["month"] >= start
+           and any(k in _fold(r["description"]) for k in ("FAIZ", "NEMA"))]
+    return {
+        **empty, "from": start, "total": total, "interest": _round(total - tax - fee), "tax": tax, "fee": fee,
+        "count": len(items),
+        "by_month": [{"month": m, "total": _round(by_m.get(m, 0))} for m in month_range(start, max(cur, start))],
+        "by_card": sorted(({**c, "total": _round(c["total"])} for c in by_c.values()), key=lambda c: -c["total"]),
+        "by_type": sorted(({"type": k, "label": INTEREST_LABELS[k], "total": _round(v)} for k, v in by_t.items()),
+                          key=lambda x: -x["total"]),
+        "statements": sorted(by_s.values(), key=lambda x: x["period_end"], reverse=True),
+        "items": items,
+        "tips": _interest_tips(items, list(by_s.values()), stmts, f"Son {months} ayda" if months > 0 else "Şimdiye dek"),
+        "income": {"total": _round(sum(r["amount"] for r in inc)),
+                   "items": [{"uid": r["uid"], "date": r["date"], "description": r["description"], "amount": _round(r["amount"])}
+                             for r in sorted(inc, key=lambda r: r["date"], reverse=True)]},
+    }
+
+
+def _interest_tips(items: list[dict], stmts: list[dict], all_stmts: dict[int, dict], span: str) -> list[dict]:
+    """Faizi önleme önerileri: yalnız kullanıcının verisinde karşılığı olanlar (ör. vade farkı yoksa "tek çekim" yok).
+    span: cümlenin zaman öbeği ("Son 12 ayda")."""
+    def total(*kinds):
+        return _round(sum(i["amount"] for i in items if i["type"] in kinds))
+
+    out = []
+    late = [s for s in stmts if s.get("reason_kind") in ("gec", "odenmedi")]
+    if total("gecikme") or late:
+        # kartın bilinen sıradaki son ödeme günü (en yeni ekstrenin "sonraki son ödeme"si, yoksa son ödemesi)
+        days = []
+        for card in sorted({s["card_no"] for s in late} | {i["card_no"] for i in items if i["type"] == "gecikme"}):
+            st = max((x for x in all_stmts.values() if x["card_no"] == card), key=lambda x: x["period_end"], default=None)
+            d = st and (st.get("next_due_date") or st.get("due_date"))
+            if d:
+                days.append(f"{st['bank']} …{card[-4:]} {date.fromisoformat(d):%d.%m}")
+        out.append({"key": "otomatik_odeme", "title": "Son ödeme gününü kaçırma",
+                    "detail": ("Sıradaki son ödeme: " + ", ".join(days) + ". " if days else "")
+                              + "Bankada dönem borcunun tamamı için otomatik ödeme talimatı ver; bir gün gecikme bile "
+                                "gecikme faizi ve vergisi doğurur."})
+    shop = total("akdi", "faiz", "kar_payi")
+    if shop or any(s.get("reason_kind") == "eksik" for s in stmts):
+        out.append({"key": "tamamini_ode", "title": "Asgari değil, borcun tamamını öde",
+                    "detail": (f"{span} {_tl(shop)} faiz ödedin. " if shop else "")
+                              + "Asgari ya da eksik ödeme kalan borca faiz işletir; ekstre borcunun tamamını son ödeme "
+                                "gününe kadar öde."})
+    if total("vade_farki"):
+        n = len({i["description"].split("-", 1)[-1].strip() for i in items if i["type"] == "vade_farki"})
+        out.append({"key": "tek_cekim", "title": "Taksit yerine tek çekim",
+                    "detail": f"{span} {n} taksitli alışverişe {_tl(total('vade_farki'))} vade farkı eklendi. Tek çekim ya da "
+                              "vade farksız taksit kampanyası seçersen bu tutarı ve vergisini ödemezsin."})
+    if total("nakit_avans"):
+        out.append({"key": "nakit_avans", "title": "Karttan nakit çekme",
+                    "detail": f"{span} nakit avans için {_tl(total('nakit_avans'))} faiz ödedin. Nakit avansta faiz ilk günden "
+                              "işler; nakit ihtiyacını vadesiz hesaptan karşıla."})
+    if total("ucret"):
+        cards = ", ".join(sorted({i["card"] for i in items if i["type"] == "ucret"}))
+        out.append({"key": "aidat", "title": "Kart aidatı ve ücretler",
+                    "detail": f"{cards}: {_tl(total('ucret'))} ücret. Bankadan aidat iadesi iste ya da aidatsız bir "
+                              "karta geç."})
+    return out
 
 
 def insights(month: str, today: date | None = None) -> list[dict]:

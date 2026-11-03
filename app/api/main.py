@@ -3383,6 +3383,12 @@ def interest_history():
     return finance.interest_history()
 
 
+@app.get("/api/interest")
+def interest_report(months: int = Query(12, ge=0, le=120)):
+    """Faiz ve ücretler sayfası: son N dönem (0: tüm geçmiş). Ortak defterde faiz gizliyse hidden=True ve boş."""
+    return finance.interest_report(months)
+
+
 @app.get("/api/net-worth/at")
 def net_worth_at(month: str):
     """Seçilen geçmiş dönemin son günündeki net durum (yaklaşık)."""

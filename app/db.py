@@ -2922,12 +2922,15 @@ def transfers_overview(month: str | None = None, start: str | None = None, end: 
 
 def interest_charges(period: str) -> list[dict]:
     """Bu dönemin ekstrelerindeki faiz / vade farkı / faize bağlı vergi satırları ve nedeni için önceki ekstre ile
-    ona yapılan ödemeler (geç mi, eksik mi)."""
+    ona yapılan ödemeler (geç mi, eksik mi). Ortak defter üyesine gizli kartın / gizli işaretli satırın faizi gelmez."""
+    from app import book
+
     with connect() as c:
-        rs = rows(c.execute(
-            "SELECT t.description, t.amount, s.id AS statement_id, s.bank, s.card_no, s.period_end FROM transactions t "
+        rs = book.filter_card_txns(rows(c.execute(
+            "SELECT t.id, t.txn_date, t.description, t.amount, t.txn_type, t.hidden, s.id AS statement_id, s.bank, s.card_no, "
+            "s.card_no AS account, s.period_end FROM transactions t "
             "JOIN statements s ON s.id = t.statement_id WHERE t.txn_type = 'faiz_ucret' AND t.is_deleted = 0 "
-            "AND substr(s.period_end, 1, 7) = ?", (period,)))
+            "AND substr(s.period_end, 1, 7) = ?", (period,))))
         out = []
         for st_id in dict.fromkeys(r["statement_id"] for r in rs):
             lines = [r for r in rs if r["statement_id"] == st_id]
