@@ -56,6 +56,7 @@ CAPABILITIES = (
     "receipt_tax",            # fiş okumasında ve kayıtta vat_total, vat_lines [{rate, amount}], tax_no (VKN), tax_office,
                               # legal_name (POST/PATCH /api/entries); GET /api/receipts/export?period=month|year&value
                               # ya da ?from&to, &format=xlsx|csv (Excel: "Fiş listesi" + "KDV özeti")
+    "card_limit",             # cards/summary kart başına limit, limit_source (ekstre|elle), available, used_pct; PUT /api/cards/limit
 )
 
 

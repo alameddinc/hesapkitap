@@ -348,6 +348,12 @@ CREATE TABLE IF NOT EXISTS entry_matches (
     created_by INTEGER,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+-- Kullanıcının elle girdiği kart limiti (ekstreden okunamayan bankalar, limit artışı): ekstredeki limitin önüne geçer
+CREATE TABLE IF NOT EXISTS card_limits (
+    card_no TEXT PRIMARY KEY,        -- ekstrenin ana kart numarası (statements.card_no)
+    credit_limit REAL NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 -- "Bunlar farklı": bir daha sorulmaz, kendiliğinden de birleşmez. other: h:<import_hash> | t:<txn_id>
 CREATE TABLE IF NOT EXISTS match_rejects (
     entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -454,6 +460,7 @@ MIGRATIONS = [
     ("card_payments", "created_at", "TEXT"),      # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
     ("statements", "paid_source", "TEXT"),        # auto (ödemelerden eşleşti) | elle (kullanıcı işaretledi/geri aldı)
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
+    ("statements", "available_limit", "REAL"),    # ekstrede yazan kullanılabilir limit (kesim günü itibarıyla)
     ("bank_documents", "verified", "INTEGER"),    # bakiye zinciri: 1 tuttu, 0 tutmadı, 2 kullanıcı onayladı (app/verification.py)
     # fişin vergi bilgisi (app/vat.py): muhasebeci listesi (GET /api/receipts/export) ve kaydın fiş bölümü
     ("entries", "legal_name", "TEXT"),            # fişteki resmi unvan
@@ -971,12 +978,12 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
         cur = c.execute(
             """INSERT INTO statements (file_hash, filename, bank, card_no, period_end, due_date, total_debt,
                min_payment, credit_limit, previous_balance, period_activity, interest_fees, payments,
-               next_period_end, next_due_date, source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               next_period_end, next_due_date, source, available_limit)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (file_hash(data), filename, stmt.bank, stmt.card_no, stmt.period_end.isoformat(),
              _iso(stmt.due_date), stmt.total_debt, stmt.min_payment, stmt.credit_limit, stmt.previous_balance,
              stmt.period_activity, stmt.interest_fees, stmt.payments,
-             _iso(stmt.next_period_end), _iso(stmt.next_due_date), source),
+             _iso(stmt.next_period_end), _iso(stmt.next_due_date), source, stmt.available_limit),
         )
         sid = cur.lastrowid
         for t in stmt.transactions:
@@ -1034,6 +1041,23 @@ def _apply_link(c, entry: dict, txn: dict, how: str = "otomatik") -> None:
                   (entry["category"], note, txn["id"]))
     else:
         c.execute("UPDATE transactions SET note = ? WHERE id = ?", (note, txn["id"]))
+
+
+def card_limits() -> dict[str, float]:
+    """Elle girilen kart limitleri: kart numarası → limit."""
+    with connect() as c:
+        return {r["card_no"]: r["credit_limit"] for r in c.execute("SELECT card_no, credit_limit FROM card_limits")}
+
+
+def set_card_limit(card_no: str, limit: float | None) -> None:
+    """Kartın limitini elle yaz; None: elle limiti kaldır (ekstredeki limit geçerli olur)."""
+    with connect() as c:
+        if limit is None:
+            c.execute("DELETE FROM card_limits WHERE card_no = ?", (card_no,))
+        else:
+            c.execute("INSERT INTO card_limits (card_no, credit_limit, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                      "ON CONFLICT(card_no) DO UPDATE SET credit_limit = excluded.credit_limit, updated_at = CURRENT_TIMESTAMP",
+                      (card_no, money.money(limit)))
 
 
 def card_aliases() -> dict[str, str]:

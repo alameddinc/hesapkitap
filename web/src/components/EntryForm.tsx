@@ -116,7 +116,16 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     onSaved?.(msg);
     onClose();
   };
-  const save = useSave(async () => {
+  // "Kaydet, yenisini ekle" (yalnız yeni tek seferlik kayıt): kaydedip formu boşaltır; tarih, ödeme şekli, hesap/kart ve
+  // kategori aynı kalır (art arda gider girerken her seferinde baştan başlanmasın), odak tutara gider
+  const canAgain = !editingEntry && !rec && !isRecurring && !fromReceipt;
+  const again = (msg: string) => {
+    onSaved?.(msg);
+    setDescription(""); setAmount(""); setNote(""); setPerson(""); setLocation("");
+    setParts(null); setWholeCat(null); setShares([]); setItems([]); setErr(null);
+    setTimeout(() => document.getElementById("e-amt")?.focus(), 0);
+  };
+  const save = useSave(async (_again?: boolean) => {
     const amt = parseAmount(amount);
     if (!description.trim() || ((!isGross || kind !== "gelir") && (!(amt >= 0) || amount === ""))) throw new Error("Açıklama ve tutar gerekli");
     const g = parseAmount(gross);
@@ -149,7 +158,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
         ...shares.filter((x) => x.person.trim() && parseAmount(x.amount) > 0)
           .map((x) => ({ amount: parseAmount(x.amount), person: x.person.trim(), category: "" })),
       ] : null });
-  }, (r) => done(isRecurring || rec ? "Sabit kalem kaydedildi"
+  }, (r, more) => (more ? again : done)(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
     : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti, bir kez sayılır" : "Kaydedildi"));
@@ -177,8 +186,15 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
         )}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+        {canAgain && !viewer && (
+          <button className="btn-ghost whitespace-nowrap" disabled={save.isPending} aria-label="Kaydet, yenisini ekle"
+            onClick={() => { setErr(null); save.mutate(true, { onError: (e) => setErr(e.message) }); }}>
+            {/* dar ekranda footer'a sığsın */}
+            <span className="sm:hidden">Kaydet + yeni</span><span className="hidden sm:inline">Kaydet, yenisini ekle</span>
+          </button>
+        )}
         <button className="btn-primary" disabled={save.isPending || viewer} title={viewer ? "Sadece görme yetkin var" : undefined}
-          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>
+          onClick={() => { setErr(null); save.mutate(false, { onError: (e) => setErr(e.message) }); }}>
           Kaydet
         </button>
       </>

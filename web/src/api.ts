@@ -396,6 +396,7 @@ export interface Meta {
   module_consent_title?: Record<string, string | null>; // o pencerenin başlığı ("Zekât hesaplamayı açalım mı?")
   ui?: { simple: boolean; layout: string[] | null }; // kişisel görünüm
   plan?: PlanInfo; // paket (barındırılan sürüm); kendi sunucunda "self": her şey açık
+  capabilities?: string[]; // sunucu el sıkışması (S17): yeni uçlar/alanlar; yoksa sunucu eski
 }
 
 export type Tier = "free" | "premium" | "aile";

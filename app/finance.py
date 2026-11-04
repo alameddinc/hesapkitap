@@ -797,6 +797,43 @@ def of_card(r: dict, card_no: str) -> bool:
     return r["source"] == "manual" and r.get("payment") == "kredi_karti" and bool(l4) and r.get("card_last4") == l4
 
 
+def card_limit(card_no: str, statements: list[dict], manual: dict[str, float], unpaid: float, cycle: dict | None) -> dict:
+    """Kart limiti ve kalan kullanılabilir limit.
+
+    limit: elle girilen (card_limits) varsa o ("elle"), yoksa kartın limit yazan en son ekstresi ("ekstre").
+    Kalan = limit − ödenmemiş ekstre borcu (kesimden sonraki ödemeler düşülmüş; net durumdaki kart borcuyla aynı) −
+    açık dönemin bugüne kadarı (Kartlar ekranındaki "Bugüne kadar": devreden taksit + abonelik + girilen harcama).
+    Son ekstrede "kullanılabilir limit" yazıyorsa kesim günü için o esas alınır; sonrası tahmin: + kesimden sonraki
+    ödemeler − açık dönemde yeni eklenen (taksitler bankanın kullanılabilir limitinden zaten düşülmüş) ± elle limit farkı.
+    available eksi olabilir (limit aşıldı); used_pct 0'ın altına inmez."""
+    own = sorted((s for s in statements if s["card_no"] == card_no and s.get("source") != "excel"),
+                 key=lambda s: s["period_end"], reverse=True)
+    st_limit = next((s["credit_limit"] for s in own if s.get("credit_limit")), None)
+    if manual.get(card_no):
+        limit, src = manual[card_no], "elle"
+    elif st_limit:
+        limit, src = st_limit, "ekstre"
+    else:
+        return {"limit": None, "limit_source": None, "statement_limit": None, "available": None,
+                "available_source": None, "available_as_of": None, "used": None, "used_pct": None}
+    cy = cycle or {}
+    so_far = cy.get("so_far") or 0.0
+    last = own[0] if own else None
+    if last and last.get("available_limit") is not None:
+        paid = max(0.0, (last["total_debt"] or 0) - unpaid)  # kesimden sonra son ekstreye yapılan ödemeler
+        new = so_far - (cy.get("installments") or 0.0)
+        shift = limit - last["credit_limit"] if last.get("credit_limit") else 0.0
+        avail = last["available_limit"] + shift + paid - new
+        how = "ekstre" if money.diff_k(paid, 0) <= 1 and money.diff_k(new, 0) <= 1 and money.diff_k(shift, 0) <= 1 else "tahmini"
+        as_of = last["period_end"] if how == "ekstre" else None
+    else:
+        avail, how, as_of = limit - unpaid - so_far, "tahmini", None
+    used = limit - avail
+    return {"limit": _round(limit), "limit_source": src, "statement_limit": _round(st_limit) if st_limit else None,
+            "available": _round(avail), "available_source": how, "available_as_of": as_of, "used": _round(used),
+            "used_pct": round(max(0.0, used) / limit * 100, 1) if limit else None}
+
+
 def cards_summary(today: date | None = None, recent: int = 20) -> dict:
     """Kartlar ekranının açılışı için kart başına özet (tam işlem geçmişini çekmeden): son ekstre (kalan dahil),
     açık dönem (bugüne kadar / kesimde tahmini, kalemleri), kalan taksitler ve abonelikler, son N işlem.
@@ -807,6 +844,7 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
     cyc = open_cycles(today, proj)
     rows = [r for r in transactions(None) if r["kind"] in CARD_ROW_KINDS]
     sts = {s["id"]: s for s in db.list_statements()}
+    manual = db.card_limits()
     cards = []
     for c in nw["credit_cards"]:
         card_no = c["card_no"]
@@ -829,6 +867,8 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
                                   if p.get("latest_period") else 0.0},
             "subscriptions": p.get("subscriptions") or [],
             "recent": mine[:recent], "recent_total": len(mine),
+            # kart limiti ve kalan kullanılabilir limit (yetenek card_limit): limit, limit_source, available, used_pct
+            **card_limit(card_no, list(sts.values()), manual, c["unpaid"], cyc.get(card_no)),
         })
     so_far = sum((c["cycle"] or {}).get("so_far", 0) for c in cards)
     at_cut = sum((c["cycle"] or {}).get("at_cut", 0) for c in cards)

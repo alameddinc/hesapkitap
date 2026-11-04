@@ -77,6 +77,7 @@ def parse_text(text: str) -> Statement:
         total_debt=debt,
         min_payment=money("Asgari Ödeme Tutarı"),
         credit_limit=money("Kart Limiti"),
+        available_limit=money("Kullanılabilir Limit"),
         previous_balance=prev,
         period_activity=activity,
         interest_fees=0.0,  # Kuveyt Türk vade farkını dönem harcamalarına dahil ediyor

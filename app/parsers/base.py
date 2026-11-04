@@ -41,6 +41,7 @@ class Statement:
     payments: float = 0.0
     next_period_end: date | None = None
     next_due_date: date | None = None
+    available_limit: float | None = None  # ekstrede yazan "kullanılabilir limit" (kesim günü itibarıyla)
     transactions: list[Transaction] = field(default_factory=list)
     ai_parsed: bool = False  # bankaya özel parser yerine yapay zekâ ile okundu
 
