@@ -587,7 +587,11 @@ def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
              "total_found_pct": pct([x["found"]["total"] for x in rs]),
              "date_found_pct": pct([x["found"]["date"] for x in rs]),
              "merchant_found_pct": pct([x["found"]["merchant"] for x in rs]),
-             "structure_ok_pct": pct([x["ok"] for x in rs]), "sum_ok_pct": pct([x["sum_ok"] for x in rs]),
+             # kalemsiz / tek satırlık fiş (kart slibi, akaryakıt): kalem yapısı ölçülemez, orana girmez (0 kalem yazan
+             # model cezalandırılmasın, "1 kalem = toplam" yazan ödüllendirilmesin)
+             "structure_ok_pct": pct([x["ok"] for x in rs if x["n_items"] > 1]),
+             "sum_ok_pct": pct([x["sum_ok"] for x in rs if x["n_items"] > 1]),
+             "itemless": sum(1 for x in rs if x["n_items"] <= 1),
              "priceless": sum(x["priceless"] for x in rs), "receipts_with_priceless": sum(1 for x in rs if x["priceless"]),
              "splits": sum(x["splits"] for x in rs), "receipts_with_splits": sum(1 for x in rs if x["splits"]),
              "avg_sec": round(sum(x["sec"] for x in rs) / len(rs), 2), "errors": sum(1 for x in rs if x.get("error")),
