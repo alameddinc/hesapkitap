@@ -121,7 +121,9 @@ def test_unit_price_mismatch_alone_does_not_fall_back(hosted, ai, text_first):  
     ai["replies"]["metin"] = {**_FIS, "items": [{"name": "MUZ", "qty": 2, "unit_price": 4.0, "amount": 5.0},
                                                 {"name": "SU", "amount": 20.0}]}
     r = _parse(c).json()
-    assert len(ai["sent"]) == 1 and r["ocr"]["used"] and r["check"]["items"][0]["mismatch"]
+    # fotoğraf yedeğine düşmez (eski yol); kalemli fişte adet × birim tutmadığı için otomatik yeniden okuma denenir
+    first = [s for s in ai["sent"] if "yeniden oku" not in s["prompt"]]
+    assert len(first) == 1 and r["ocr"]["used"] and not r["ocr"]["fallback"] and r["reread_reasons"] == ["birim"]
 
 
 def test_bill_from_text(hosted, ai, text_first):  # noqa: F811

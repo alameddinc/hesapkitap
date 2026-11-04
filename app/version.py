@@ -60,6 +60,8 @@ CAPABILITIES = (
     "card_limit",             # cards/summary kart başına limit, limit_source (ekstre|elle), available, used_pct; PUT /api/cards/limit
     "subcategories",          # alt kategori: /api/subcategories (CRUD, order), meta.subcategories{,_editable}, işlem/kayıt/kural
                               # subcategory alanı, /api/transactions?category&subcategory, by_category[].children
+    "total_check",            # fiş okumasında total_check "ok"|"kontrol"|null: toplam telefon/PDF metninde geçiyor mu
+                              # (kontrol: istemci tutarı vurgular, "Tutarı fişle karşılaştır"); text_match {date, merchant}
 )
 
 

@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from app import auth, backup, config, db, deletion, donations, errors, finance, idempotency, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, errors, finance, idempotency, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, receipt_verify, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -4948,6 +4948,7 @@ def parse_receipt(file: UploadFile = File(...)):
     elif charged := doc_reads.charge(original, doc_reads.FIS):
         out["charged"] = charged  # {daily, extra}: istemci "ek paketten N okuma kullanıldı" der
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
+    receipt_verify.apply(out, None)  # bu uçta telefon metni yok: total_check null
     if not out.get("unreadable"):
         _auto_reread(out, data, mime)
     out["receipt_file"] = _store_receipt(photo)
@@ -5441,7 +5442,7 @@ def _read_by_text(text: str, source: str, data: bytes, mime: str, cats: list[str
         doc = None
     if doc is not None and doc["type"] == "receipt":
         items = doc.get("items") or []
-        bad = doc.get("total") is None or receipt_check.needs_reread(items, receipt_check.check(items, doc.get("total")))
+        bad = doc.get("total") is None or bool(receipt_check.inconsistent(items, receipt_check.check(items, doc.get("total"))))
     else:
         bad = doc is None
     if not bad:
@@ -5513,8 +5514,13 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     else:
         doc["receipt_file"] = _store_receipt(photo)
         doc["check"] = receipt_check.check(doc.get("items") or [], doc.get("total"))
+        # toplam doğrulama (bedava): telefon metni, PDF'te metin katmanı (yetenek total_check)
+        from app import bill_templates
+
+        text = ocr_text or (bill_templates.text_of(original, original_mime) if not more else None)
+        receipt_verify.apply(doc, text)
         if not doc.get("unreadable"):
-            _auto_reread(doc, data, mime, more)
+            _auto_reread(doc, data, mime, more, text)
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
@@ -5525,22 +5531,21 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
 _AUTO_REREAD_PER_DAY = 10  # kullanıcı başına günlük otomatik yeniden okuma (maliyet sınırı; okuma hakkı düşmez)
 
 
-def _check_score(chk: dict) -> tuple[int, float]:
-    return sum(1 for i in chk["items"] if i["mismatch"]), abs(chk["diff"]) if chk["diff"] is not None else 0.0
-
-
-def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) -> None:
-    """Kademeli okuma: kalemler fişi gerçekten tutmuyorsa (receipt_check.needs_reread: fiyatsız kalem ya da kalem toplamı
-    fiş toplamından ±0,05'ten fazla sapıyor; yalnız adet × birim uyuşmazlığı yetmez, o kalemler check'te işaretli kalır)
-    aynı istekte bir kez daha güçlü modelle oku; daha iyiyse onun kalemlerini kullan. Okuma hakkı düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
-    doc['reread'] = {tried, used, model}."""
+def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None, text: str | None = None) -> None:
+    """Kademeli okuma: kalemler fişi tutmuyorsa (receipt_check.reread_reasons: fiyatsız kalem, kalem toplamı fiş
+    toplamından ±0,05'ten fazla sapıyor; kalemli fişte ayrıca adet × birim tutmayan kalem, iki satıra bölünmüş ürün ya
+    da toplamın telefon/PDF metninde geçmemesi) aynı istekte bir kez daha güçlü modelle oku; yalnız daha iyiyse al
+    (receipt_check.take_reread). Toplam metinde yoksa modele bildirilmez (receipt_check.reread_hint). Okuma hakkı
+    düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
+    doc['reread'] = {tried, used, model}; doc['reread_reasons'] = nedenler."""
     import json as _json
     from datetime import date as _date
 
     from app import system
 
     chk = doc.get("check") or {}
-    if not receipt_check.needs_reread(doc.get("items") or [], chk) or not receipt.enabled():
+    reasons = receipt_check.reread_reasons(doc.get("items") or [], chk, doc.get("total_check"))
+    if not reasons or not receipt.enabled():
         return
     u = db.current_user()
     key = f"receipt_auto_reread:{u['id'] if u else 0}"
@@ -5555,18 +5560,16 @@ def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) ->
     system.put(key, _json.dumps({"day": today, "n": used + 1}))
     model = receipt.reread_model()
     doc["reread"] = {"tried": True, "used": False, "model": model}
+    doc["reread_reasons"] = reasons  # fiyatsiz|toplam|birim|bolunmus|metin (ölçüm ve destek için)
     try:
-        again = receipt.reread_items(data, mime, doc.get("total"), more)
+        again = receipt.reread_items(data, mime, receipt_check.reread_hint(doc), more)
     except Exception:  # noqa: BLE001 - yeniden okuma olmadıysa ilk okuma geçerli
         import logging
 
         logging.getLogger("ekstre.receipt").warning("otomatik yeniden okuma başarısız", exc_info=True)
         return
-    chk2 = receipt_check.check(again["items"], doc.get("total"))
-    (m1, d1), (m2, d2) = _check_score(chk), _check_score(chk2)
-    if again["items"] and ((m2 < m1 and d2 <= d1) or (m2 <= m1 and d2 < d1)):
-        doc["items"], doc["check"] = again["items"], chk2
-        doc["reread"]["used"] = True
+    doc["reread"]["used"] = receipt_check.take_reread(doc, again, text)
+
 
 _REREAD_PER_DAY = 3  # aynı fotoğraf için günde (her elle yeniden okuma ayrıca doc_reads.REREAD_COST hak)
 

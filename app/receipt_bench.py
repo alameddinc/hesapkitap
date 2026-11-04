@@ -13,9 +13,14 @@ Yollar:
        ölçütler. T+ ESKİ uygulama yolu (bugün yalnız HESAPKITAP_RECEIPT_TEXT_FIRST=1): T tutarsızsa (toplam yok, fiyatsız
        kalem, kalem toplamı tutmuyor) fotoğrafla bir kez daha okunur (B'nin ölçülen sonucu ve maliyeti); maliyet T +
        gerekirse B.
-    U  uygulamadaki yol (metin varsa; app/receipt.py `parse_document` ocr_text): B + metin yardımcıları — model KDV/VKN'yi
-       boş bıraktıysa metinden (app/vat.py), B okuyamadıysa metinden kural tabanlı yerel okuma (app/ocr.py `parse_text`).
-       Ek yapay zekâ çağrısı yok; maliyet B. Fatura şablonu kıyasta denenmez (şablonlar sistem veritabanında).
+    U  uygulamadaki yol (metin varsa; app/api/main.py `_read_document` ocr_text): B + metin yardımcıları — model
+       KDV/VKN'yi boş bıraktıysa metinden (app/vat.py), B okuyamadıysa metinden kural tabanlı yerel okuma (app/ocr.py
+       `parse_text`) — + toplam doğrulama (app/receipt_verify.py: toplam metinde geçiyor mu, total_check ok/kontrol) +
+       uygulamadaki yeniden okuma tetiği (app/receipt_check.py `reread_reasons`: fiyatsız kalem, toplam farkı; kalemli
+       fişte ayrıca adet × birim, iki satır belirtisi, toplam metinde yok) ve "yalnız daha iyiyse al" kuralı
+       (`take_reread`). Yeniden okuma yalnız --reread ile denenir; maliyet B + gerekirse B+. Fatura şablonu kıyasta
+       denenmez (şablonlar sistem veritabanında). Özet: kontrol sayısı, kontrol denip toplamı gerçekten yanlış olan
+       (altın varsa), ok denip yanlış olan, yeniden okuma nedenleri.
 
 Metin dosyaları: DIR/<fiş dosyasının adı, uzantısız>.txt (ör. <sha256>.txt). Fotoğrafları macOS'ta metne çevirmek için
 önce `--export-photos DIR` (fotoğraflar DIR'e <ad>.jpg olarak yazılır, kıyas yapılmaz), sonra
@@ -81,33 +86,8 @@ class Case:
 
 # ---------------------------------------------------------------- ölçütler
 
-_SIZE_ONLY = re.compile(r"^[\d.,\s]*(?:(?:G|GR|KG|ML|L|LT|CL|CC|AD|ADT|ADET|X\s*\d+)\.?\s*)*$", re.I)
-_JOINERS = "-/&+,("
-
-
-def continuation_like(name: str) -> bool:
-    """Ürün adının devamı gibi görünen satır: 2'den az harf ("SU" gerçek ürün), yalnız gramaj/adet ("500 GR", "X6"), küçük harfle ya da
-    bağlaçla ("-", "/", "&", "+", ",", "(") başlıyor."""
-    s = (name or "").strip()
-    if not s:
-        return True
-    letters = sum(ch.isalpha() for ch in s)
-    return letters < 2 or bool(_SIZE_ONLY.fullmatch(s)) or s[0].islower() or s[0] in _JOINERS
-
-
-def split_suspects(items: list[dict]) -> int:
-    """İki satıra bölünmüş ürün belirtisi sayısı. Ardışık (önceki, sonraki) her kalem çifti için belirti:
-    (a) ikisinden birinin fiyatı yok (fiyatsız kalem = komşusunun adının parçası), ya da
-    (b) sonrakinin adı devam gibi (`continuation_like`), ya da önceki ad bağlaçla bitiyor ("-", "/", "&", "+", ",").
-    Her sonraki kalem en çok bir kez sayılır. Tek kalemli fişte fiyatsız kalem de bir belirtidir."""
-    n = 0
-    if len(items) == 1 and items[0].get("amount") is None:
-        return 1
-    for prev, cur in zip(items, items[1:]):
-        p, c = (prev.get("name") or "").strip(), (cur.get("name") or "").strip()
-        if prev.get("amount") is None or cur.get("amount") is None or continuation_like(c) or (p and p[-1] in _JOINERS):
-            n += 1
-    return n
+# iki satır belirtisi uygulamanın yeniden okuma tetiğiyle aynı fonksiyon (app/receipt_check.py)
+from app.receipt_check import continuation_like, split_suspects  # noqa: E402,F401 - dışarıya da buradan açık
 
 
 def structure(items: list[dict], total: float | None, discounts: list[float] | None = None) -> dict:
@@ -321,7 +301,45 @@ def text_inconsistent(doc: dict | None) -> bool:
     if doc.get("type") != "receipt":
         return False
     items = doc.get("items") or []
-    return doc.get("total") is None or receipt_check.needs_reread(items, receipt_check.check(items, doc.get("total")))
+    return doc.get("total") is None or bool(receipt_check.inconsistent(items, receipt_check.check(items, doc.get("total"))))
+
+
+def app_path(b_doc: dict | None, case: Case, reread=None) -> tuple[dict | None, dict]:
+    """U: uygulamadaki yolun tamamı — B + metin yardımcıları (with_text_helpers), toplam doğrulama
+    (receipt_verify.apply), yeniden okuma tetiği ve seçimi (receipt_check.reread_reasons / take_reread; app/api/main.py
+    `_auto_reread`). reread(case, total) → (sonuç, usage) ya da None (tetik yine hesaplanır, okunmaz).
+    (son belge, {total_check, reasons, tried, used, usage, sec, error})."""
+    import copy
+
+    from app import receipt_check, receipt_verify
+
+    doc = with_text_helpers(b_doc, case)
+    info: dict = {"total_check": None, "reasons": [], "tried": False, "used": False, "usage": {}, "sec": 0.0, "error": None}
+    if not doc or doc.get("type") != "receipt":
+        return doc, info
+    doc = copy.deepcopy(doc)
+    doc["check"] = receipt_check.check(doc.get("items") or [], doc.get("total"))
+    receipt_verify.apply(doc, case.text)
+    info["total_check"] = doc["total_check"]
+    info["reasons"] = receipt_check.reread_reasons(doc.get("items") or [], doc["check"], doc["total_check"])
+    if info["reasons"] and reread:
+        res, err, sec = _timed(reread, case, receipt_check.reread_hint(doc))
+        again, usage = res if res else (None, {})
+        info.update(tried=True, sec=round(sec, 2), error=err, usage=usage or {})
+        if again:
+            info["used"] = receipt_check.take_reread(doc, again, case.text)
+            info["total_check"] = doc.get("total_check")
+    return doc, info
+
+
+def _memo(fn):
+    seen: dict = {}
+
+    def call(case: Case, total):
+        if total not in seen:
+            seen[total] = fn(case, total)
+        return seen[total]
+    return call
 
 
 def _tokens(usage: dict) -> dict:
@@ -345,6 +363,8 @@ def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PR
     C ve T'nin yapay zekâ ayağı yok. T yalnız case.text varsa."""
     from app import receipt_check
 
+    if reread:  # B+ ve U aynı bildirilen toplamla yeniden okursa model bir kez çağrılır (U'nun süresi/maliyeti yine sayılır)
+        reread = _memo(reread)
     row: dict = {"linked": case.linked}
     res, err, sec = _timed(local, case)
     a_doc, disc = res if res else (None, [])
@@ -380,9 +400,12 @@ def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PR
         row["T+"] = {**plus, "fallback": fb, "error": row["T"]["error"] or (b.get("error") if fb else None),
                      "usd": row["T"]["usd"] + (b.get("usd", 0.0) if fb else 0.0),
                      "sec": round(row["T"]["sec"] + (b.get("sec", 0) if fb else 0), 2)}
-        u_doc = with_text_helpers(b_doc, case)
+        u_doc, ui = app_path(b_doc, case, reread)
         row["U"] = {**evaluate(u_doc, case), "local": b_doc is None and u_doc is not None,
-                    "error": b.get("error") if u_doc is None else None, "usd": b.get("usd", 0.0), "sec": b.get("sec", 0)}
+                    "error": b.get("error") if u_doc is None else None,
+                    "usd": b.get("usd", 0.0) + (cost_usd(ui["usage"], REREAD_PRICE_IN, REREAD_PRICE_OUT) if ui["tried"] else 0.0),
+                    "sec": round(b.get("sec", 0) + ui["sec"], 2), "total_check": ui["total_check"],
+                    "reasons": ui["reasons"], "reread_tried": ui["tried"], "reread_used": ui["used"]}
     c_ev = row["A"] if ok else row.get("B")
     row["C"] = {**(c_ev or evaluate(None, case)), "accepted_local": ok, "reasons": why,
                 "usd": 0.0 if ok else (row.get("B") or {}).get("usd", 0.0),
@@ -426,6 +449,7 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
             s["fallback"] = sum(1 for x in rs if x["fallback"])
         if path == "U":
             s["local"] = sum(1 for x in rs if x["local"])
+            s.update(_u_summary(rs, gold=True))
         if path == "C":
             acc = [x for x in rs if x["accepted_local"]]
             s.update({"accepted_local": len(acc), "sent_to_ai": len(rs) - len(acc),
@@ -435,6 +459,18 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
         out[path] = s
     st = [r["stored"] for r in rows]
     out["stored"] = {"n_items": sum(x["n_items"] for x in st), "priceless": sum(x["priceless"] for x in st)}
+    return out
+
+
+def _u_summary(rs: list[dict], gold: bool = False) -> dict:
+    """U'nun doğrulama/yeniden okuma özeti. gold: altın var (total_ok) — kontrol isabeti ölçülür."""
+    out = {"total_check": _count([str(x.get("total_check")) for x in rs]),
+           "reread_tried": sum(1 for x in rs if x.get("reread_tried")),
+           "reread_used": sum(1 for x in rs if x.get("reread_used")),
+           "reread_reasons": _count([w for x in rs for w in x.get("reasons") or []])}
+    if gold:  # kontrol denip toplamı gerçekten yanlış olan / ok denip yanlış olan (doğrulamanın kaçırdığı)
+        out["kontrol_and_wrong"] = sum(1 for x in rs if x.get("total_check") == "kontrol" and not x["total_ok"])
+        out["ok_but_wrong"] = sum(1 for x in rs if x.get("total_check") == "ok" and not x["total_ok"])
     return out
 
 
@@ -581,7 +617,7 @@ def agreement(a: dict | None, b: dict | None) -> dict:
             "merchant": merchant_ok([a.get("merchant"), a.get("legal_name")], b.get("merchant") or b.get("legal_name"))}
 
 
-def bench_pair(case: Case, ai=ai_read, text_ai=ai_text_read, prices=(PRICE_IN, PRICE_OUT)) -> dict:
+def bench_pair(case: Case, ai=ai_read, text_ai=ai_text_read, prices=(PRICE_IN, PRICE_OUT), reread=None) -> dict:
     """Tek fiş: B (fotoğraf → yapay zekâ), metin varsa T (metin → yapay zekâ), U (uygulamadaki yol: B + metin
     yardımcıları, maliyet B) ve T+ (eski yol: T tutarsızsa B'nin sonucu, maliyet T + B). agree: T ile B aynı
     toplam/tarih/işyerini mi buldu."""
@@ -599,9 +635,12 @@ def bench_pair(case: Case, ai=ai_read, text_ai=ai_text_read, prices=(PRICE_IN, P
     row["T+"] = {**plus, "fallback": fb, "tokens": None, "usd": t["usd"] + (row["B"]["usd"] if fb else 0.0),
                  "sec": round(t["sec"] + (row["B"]["sec"] if fb else 0), 2),
                  "error": t["error"] if not fb else (row["B"]["error"] if b_doc is None else None)}
-    u_doc = with_text_helpers(b_doc, case)
+    u_doc, ui = app_path(b_doc, case, reread)
     row["U"] = {**_side(u_doc, {}, 0, None, prices), "local": b_doc is None and u_doc is not None, "tokens": None,
-                "usd": row["B"]["usd"], "sec": row["B"]["sec"], "error": row["B"]["error"] if u_doc is None else None}
+                "usd": row["B"]["usd"] + (cost_usd(ui["usage"], REREAD_PRICE_IN, REREAD_PRICE_OUT) if ui["tried"] else 0.0),
+                "sec": round(row["B"]["sec"] + ui["sec"], 2), "error": row["B"]["error"] if u_doc is None else None,
+                "total_check": ui["total_check"], "reasons": ui["reasons"], "reread_tried": ui["tried"],
+                "reread_used": ui["used"]}
     row["agree"] = agreement(t_doc, b_doc)
     return row
 
@@ -640,6 +679,7 @@ def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
             s["fallback"] = sum(1 for x in rs if x["fallback"])
         else:
             s["local"] = sum(1 for x in rs if x["local"])
+            s.update(_u_summary(rs))
         out[path] = s
     ag = [r["agree"] for r in rows if "agree" in r]
     if ag:
@@ -661,7 +701,7 @@ def render_pair(rows: list[dict], summary: dict) -> str:
                 f"{tk.get('input') or 0:>5} {tk.get('output') or 0:>5} {x['usd']:.5f}" + (f" !{x['error']}" if x.get("error") else ""))
 
     lines = ["fiş  | B foto: T D İ kalem fyz bölün Σ yapı sn girdi çıktı $ | T metin: (aynı) | aynı T D İ | "
-             "T+ yedek | U: KDV VKN"]
+             "T+ yedek | U: KDV VKN toplam-metin B+"]
     for i, r in enumerate(rows, 1):
         line = f"#{i:<3} | {side(r['B'])}"
         if "T" in r:
@@ -669,7 +709,9 @@ def render_pair(rows: list[dict], summary: dict) -> str:
             u = r["U"]["found"]
             line += (f" | {side(r['T'])} | {_b(ag['total'])} {_b(ag['date'])} {_b(ag['merchant'])}"
                      + (" | →foto" if r["T+"]["fallback"] else " | -")
-                     + f" | {_b(u['vat'])} {_b(u['tax_no'])}" + (" yerel" if r["U"]["local"] else ""))
+                     + f" | {_b(u['vat'])} {_b(u['tax_no'])}" + (" yerel" if r["U"]["local"] else "")
+                     + f" {r['U'].get('total_check') or '-'}" + (" →B+" if r["U"].get("reread_tried") else "")
+                     + (" alındı" if r["U"].get("reread_used") else ""))
         else:
             line += " | metin yok"
         lines.append(line)
@@ -679,7 +721,7 @@ def render_pair(rows: list[dict], summary: dict) -> str:
 
 
 def run_dir(photo_dir: str, text_dir: str | None, limit: int | None, model: str | None, prices, usd_try: float,
-            as_json: bool) -> int:
+            as_json: bool, reread: bool = False) -> int:
     """--photo-dir: fotoğraf ve metin yolunu klasördeki fişlerde kıyasla. Anahtar ortamdan (GEMINI_API_KEY); defter ve
     sistem veritabanı açılmaz."""
     from app import receipt
@@ -691,7 +733,7 @@ def run_dir(photo_dir: str, text_dir: str | None, limit: int | None, model: str 
     os.environ["GEMINI_MODEL"] = model or os.environ.get("GEMINI_MODEL") or receipt.DEFAULT_MODEL
     rows = []
     for case in iter_dir_cases(photo_dir, text_dir, limit):
-        rows.append(bench_pair(case, prices=prices))
+        rows.append(bench_pair(case, prices=prices, reread=ai_reread if reread else None))
         case.image, case.text = b"", None
         print(f"… {len(rows)} fiş", file=sys.stderr)
     if not rows:
@@ -740,7 +782,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, help="kullanıcı başı en çok fiş")
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-ai", action="store_true", help="yalnız yerel okuma (B ve C'nin yapay zekâ ayağı yok)")
-    p.add_argument("--reread", action="store_true", help="B kalemleri tutmazsa uygulamadaki gibi güçlü modelle yeniden oku")
+    p.add_argument("--reread", action="store_true",
+                   help="uygulamadaki tetik tutarsa güçlü modelle yeniden oku (B+; U yolunda da, --photo-dir dahil)")
     p.add_argument("--text-dir", help="telefonda/macOS'ta çıkarılmış metinler: <fiş dosyası adı uzantısız>.txt (T, T+, U yolları)")
     p.add_argument("--export-photos", metavar="DIR",
                    help="kıyas yapma; fotoğrafları DIR'e <ad> olarak yaz (scripts/vision_ocr.swift girdisi; repo dışı)")
@@ -751,7 +794,8 @@ def main(argv: list[str] | None = None) -> int:
     from app import receipt
 
     if a.photo_dir:
-        return run_dir(a.photo_dir, a.text_dir, a.limit, a.model, (a.price_in, a.price_out), a.usd_try, a.json)
+        return run_dir(a.photo_dir, a.text_dir, a.limit, a.model, (a.price_in, a.price_out), a.usd_try, a.json,
+                       reread=a.reread)
     if not a.user_id:
         p.error("--user-id ya da --photo-dir gerekli")
     if a.export_photos:
