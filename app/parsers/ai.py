@@ -19,6 +19,7 @@ PROMPT = """Bu bir Türkiye'de kesilmiş KREDİ KARTI HESAP ÖZETİ (ekstre). T�
   "total_debt": 0.00,
   "min_payment": 0.00,
   "credit_limit": 0.00,
+  "available_limit": 0.00,
   "previous_balance": 0.00,
   "payments": 0.00,
   "period_activity": 0.00,
@@ -33,6 +34,7 @@ PROMPT = """Bu bir Türkiye'de kesilmiş KREDİ KARTI HESAP ÖZETİ (ekstre). T�
 Kurallar:
 - amount: BU EKSTREYE YANSIYAN tutar, pozitif. Taksitli işlemde toplam değil bu ayki taksit tutarı.
 - type: kart borcu ödemesi = odeme; iade/iptal = iade; faiz, gecikme faizi, kâr payı, vade farkı, BSMV, KKDF, kart aidatı/ücret = faiz_ucret.
+- available_limit: ekstrede "Kullanılabilir limit" yazıyorsa o tutar, yazmıyorsa null.
 - "Önceki dönem bakiyesi/devreden bakiye" satırını işlem olarak YAZMA.
 - period_activity: ekstrenin özetindeki dönem içi harcama/işlem toplamı (ödemeler hariç, faiz ve ücretler DAHİL).
 - Dövizli işlemde orig_amount/orig_currency (USD, EUR) doldur, amount TL karşılığı.
@@ -69,6 +71,7 @@ def parse_pdf_with_ai(data: bytes, mime: str = "application/pdf") -> Statement:
         total_debt=num(raw.get("total_debt")) or 0.0,
         min_payment=num(raw.get("min_payment")),
         credit_limit=num(raw.get("credit_limit")),
+        available_limit=num(raw.get("available_limit")),
         previous_balance=num(raw.get("previous_balance")) or 0.0,
         period_activity=num(raw.get("period_activity")) or 0.0,
         interest_fees=0.0,  # faizler period_activity içinde istendi

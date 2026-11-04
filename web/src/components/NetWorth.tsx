@@ -12,6 +12,7 @@ import { isLimited, useBook, useMeta, useSave } from "./hooks";
 import AccountMerge from "./AccountMerge";
 import Wallets from "./Wallets";
 import CycleLine from "./CardCycle";
+import CardLimit, { useCardLimits } from "./CardLimit";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
@@ -19,7 +20,7 @@ interface NW {
   accounts: (Account & { reserved: number })[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
-  credit_cards: { title: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
+  credit_cards: { title: string; card_no: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
     unpaid: number; next_estimate: number | null; next_due: string | null; cycle: CardCycle | null }[];
   stale: string[];
   /** sunucu toplamları (istemci toplamaz); card_overdue: ödenmemiş eski ekstreler, kalanı son ekstrede (toplamda yok) */
@@ -145,6 +146,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
   const [kind, setKind] = useState<"banka" | "nakit" | "diger">("banka");
   const [merging, setMerging] = useState<Account | null>(null); // "Başka hesapla birleştir"
   const canMerge = !isLimited(useBook().data); // sahip ya da tam yetkili üye
+  const limits = useCardLimits(!compact); // kart limiti / kalan limit (yetenek card_limit; eski sunucuda boş)
   const add = useSave(() => json("POST", "/api/accounts", { name, kind, balance: parseAmount(bal) }),
     () => { ui.toast("Hesap eklendi"); setAdding(false); setBal(""); });
   const addKnown = useSave((a: { name: string; balance: number }) => json("POST", "/api/accounts", { name: a.name, kind: "banka", balance: a.balance }),
@@ -273,6 +275,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                         {c.next_estimate != null && !c.cycle && ` · sonraki ~${tl(c.next_estimate)}${c.next_due ? ` (son ödeme ${dateTR(c.next_due)})` : ""}`}
                       </span>
                       {c.cycle && <CycleLine c={c.cycle} />}
+                      <CardLimit info={limits.data?.get(c.card_no)} />
                     </span>
                     <span className={cx("shrink-0 tabular-nums", c.unpaid > 0 ? "text-red-600" : "text-stone-500")}>
                       {c.unpaid > 0 ? `−${tl(c.unpaid)}` : "borç yok"}

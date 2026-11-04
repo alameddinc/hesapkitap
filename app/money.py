@@ -98,7 +98,8 @@ def within(a, b, k: int = 1) -> bool:
 # kg fiyatı), jars/jar_moves.amount (birimli kumbarada gram), debts/debt_payments (asset TRY değilse miktar: ayrı sorgu).
 TL_COLUMNS = {
     "statements": ("total_debt", "min_payment", "credit_limit", "previous_balance", "period_activity",
-                   "interest_fees", "payments", "paid_amount"),
+                   "interest_fees", "payments", "paid_amount", "available_limit"),
+    "card_limits": ("credit_limit",),
     "transactions": ("amount", "installment_left_amount"),
     "entries": ("amount",),
     "bills": ("amount", "paid_amount"),

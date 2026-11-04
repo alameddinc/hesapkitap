@@ -1772,6 +1772,26 @@ def cards_summary(recent: int = Query(20, ge=0, le=200)):
     return FastJSON(finance.cards_summary(recent=recent))
 
 
+class CardLimitIn(BaseModel):
+    card_no: str = Field(..., min_length=1, max_length=40)  # ekstrenin kart numarası (cards/summary card_no)
+    limit: float | None = Field(None, ge=0, le=100_000_000)  # None ya da 0: elle limiti kaldır (ekstredeki geçerli)
+
+
+@app.put("/api/cards/limit")
+def put_card_limit(body: CardLimitIn):
+    """Kartın limitini elle gir/düzelt (ekstreden okunamayan bankalar, limit artışı). Yanıt: o kartın limit alanları
+    (limit, limit_source "ekstre"|"elle", available, used_pct …; cards/summary ile aynı). Ortak defterde gizli kart
+    görünmediği için bulunamaz; yazma yetkisi defter kurallarında (app/book.py: sahip ve tam yetkili)."""
+    if not any(s["card_no"] == body.card_no for s in db.list_statements()):
+        raise HTTPException(404, "Kart bulunamadı")
+    db.set_card_limit(body.card_no, body.limit or None)
+    card = next((c for c in finance.cards_summary(recent=0)["cards"] if c["card_no"] == body.card_no), None)
+    if card is None:
+        raise HTTPException(404, "Kart bulunamadı")
+    return {k: card[k] for k in ("card_no", "limit", "limit_source", "statement_limit", "available", "available_source",
+                                 "available_as_of", "used", "used_pct")}
+
+
 @app.get("/api/transactions")
 def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
                  totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),

@@ -36,7 +36,9 @@ LABELS = {
     "due": r"son odeme tarihi",
     "total": r"donem borcu|toplam borc|ekstre borcu|hesap ozeti borcu|guncel donem borcu|odenecek toplam",
     "min": r"asgari odeme",
-    "limit": r"kart limiti|kredi limiti|toplam limit",
+    # "Kullanılabilir kart limiti" toplam limit sayılmasın (kendi etiketi: available)
+    "limit": r"(?<!kullanilabilir )(?<!kalan )(?:kart limiti|kredi limiti|toplam limit)",
+    "available": r"kullanilabilir (?:kart |kredi )?limit|kalan (?:kart |kredi )?limit",
     "prev": r"onceki donem (?:borcu|bakiye)|onceki ekstre borcu|gecen donem(?:den)? (?:devreden )?borc|devreden borc",
     "next_cut": r"sonraki hesap kesim|sonraki kesim",
     "next_due": r"sonraki son odeme",
@@ -166,6 +168,7 @@ def apply(text: str, spec: dict, bank: str = "") -> tuple[Statement, bool] | Non
         ok = False
     st = Statement(bank=bank or spec.get("bank") or "Kredi kartı", card_no=card, period_end=h["period_end"],
                    due_date=h["due"], total_debt=h["total"], min_payment=h["min"], credit_limit=h["limit"],
+                   available_limit=h["available"],
                    previous_balance=prev or 0.0, period_activity=round(charges - fees, 2), interest_fees=fees,
                    payments=paid, next_period_end=h["next_cut"], next_due_date=h["next_due"], transactions=txns)
     return st, ok

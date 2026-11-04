@@ -53,6 +53,7 @@ CAPABILITIES = (
     "interest_page",          # GET /api/interest: faiz ve ücretler sayfası (kart/ay/kalem, neden, önleme önerileri)
     "daily_reads",            # günlük tek okuma sayacı: plan.reads / me/ai reads {period:"day", limit, used, left, resets_at,
                               # monthly_cap, extra_left}; hak doldu gövdesinde daily_*, needed; yanıtlarda charged {daily, extra}
+    "card_limit",             # cards/summary kart başına limit, limit_source (ekstre|elle), available, used_pct; PUT /api/cards/limit
 )
 
 
