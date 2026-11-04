@@ -22,8 +22,12 @@ export default function BackupTools() {
   const [pass, setPass] = useState("");
   const encrypted = !!file?.name.endsWith(".enc");
   // fiş listesi (muhasebeci için): hazır dönem ya da tarih aralığı
-  const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
   const [pick, setPick] = useState<ReceiptPick>("this_month");
+  // bugünün tarihi yalnız ilk açılışta (render içinde saf olmayan Date çağrısı yok)
+  const [today] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [range, setRange] = useState({ from: `${today.slice(0, 7)}-01`, to: today });
   const rangeBad = pick === "range" && (!range.from || !range.to || range.to < range.from);
   const restore = useSave(() => {
