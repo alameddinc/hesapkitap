@@ -4907,6 +4907,19 @@ def test_rule(text: str, pattern: str | None = None):
 
 # ---------------------------------------------------------------- receipt
 
+def _unreadable(doc: dict) -> bool:
+    """Fiş okunamadı: toplam yok ya da 0 ve tutarlı hiçbir kalem yok (bulanık, uzaktan, kadraj dışı fotoğraf). Ölçüm
+    04.11.2026: okunamayan fotoğrafta model uydurmuyor, toplamı 0/boş döndürüyor. Hak düşmez; istemci yeniden çektirir."""
+    if doc.get("type") not in (None, "receipt"):
+        return False
+    t = doc.get("total")
+    return not (isinstance(t, (int, float)) and t > 0) and not any(
+        isinstance(i.get("amount"), (int, float)) and i["amount"] > 0 for i in doc.get("items") or [])
+
+
+UNREADABLE_MSG = "Fotoğraf net değil, fişi yakından ve düz çek."
+
+
 @app.post("/api/receipts/parse")
 @_heavy
 def parse_receipt(file: UploadFile = File(...)):
@@ -4930,10 +4943,13 @@ def parse_receipt(file: UploadFile = File(...)):
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    if charged := doc_reads.charge(original, doc_reads.FIS):
+    if _unreadable(out):  # okunamadı: hak düşmez, yeniden okuma denenmez; istemci yeniden çektirir
+        out.update(unreadable=True, message=UNREADABLE_MSG)
+    elif charged := doc_reads.charge(original, doc_reads.FIS):
         out["charged"] = charged  # {daily, extra}: istemci "ek paketten N okuma kullanıldı" der
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
-    _auto_reread(out, data, mime)
+    if not out.get("unreadable"):
+        _auto_reread(out, data, mime)
     out["receipt_file"] = _store_receipt(photo)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
@@ -5476,7 +5492,9 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    if charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type"))):
+    if _unreadable(doc):  # okunamadı: hak düşmez (bkz. _unreadable)
+        doc.update(unreadable=True, message=UNREADABLE_MSG)
+    elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type"))):
         doc["charged"] = charged  # {daily, extra}
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
@@ -5495,7 +5513,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     else:
         doc["receipt_file"] = _store_receipt(photo)
         doc["check"] = receipt_check.check(doc.get("items") or [], doc.get("total"))
-        _auto_reread(doc, data, mime, more)
+        if not doc.get("unreadable"):
+            _auto_reread(doc, data, mime, more)
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
