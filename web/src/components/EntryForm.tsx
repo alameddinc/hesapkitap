@@ -7,6 +7,7 @@ import { api, type Payment, type Recurring, type Row } from "../api";
 import { dateTR, fold, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
+import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
 import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
@@ -51,6 +52,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
   const [amount, setAmount] = useState(String(rec?.amount ?? row?.original_amount ?? row?.amount ?? draft?.amount ?? ""));
   const [date, setDate] = useState(row?.date?.slice(0, 10) ?? draft?.entry_date ?? today());
   const [category, setCategory] = useState(rec?.category ?? row?.category ?? draft?.category ?? "");
+  // alt kategori (yalnız elle kayıtta; sabit kalemde yok). Ana kategori değişince boşalır.
+  const [sub, setSub] = useState(row?.subcategory ?? "");
+  const subs = useSubcategories();
+  const pickCategory = (c: string) => { if (c !== category) setSub(""); setCategory(c); };
   // not alanı yalnız kullanıcının notu: ham banka satırı (raw) ayrı gösterilir, sunucu onu korur (90ed954)
   const [note, setNote] = useState(rec?.note ?? (row ? userNote(row) : draft?.note) ?? "");
   const [isRecurring, setRecurring] = useState(!!rec || !!draft?.recurring);
@@ -137,9 +142,10 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
     if (rec) return api.patchRecurring(rec.id, { ...common, day_of_month: Number(day), end_month: endMonth || null });
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
-    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, entry_date: date,
+    const sc = subs.on ? { subcategory: sub || null } : {}; // eski sunucuya alan gönderilmez
+    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, ...sc, entry_date: date,
       ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
-    return api.createEntry({ ...common, ...pay, ...who, entry_date: date, legal_name: draft?.legal_name ?? null,
+    return api.createEntry({ ...common, ...pay, ...who, ...sc, entry_date: date, legal_name: draft?.legal_name ?? null,
       receipt_file: kind === "gider" ? draft?.receipt_file ?? null : null,
       items: kind === "gider" && fromReceipt ? toServer(items) : null,
       branch: draft?.branch ?? null,
@@ -225,8 +231,9 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
         </div>
         <div>
           <label className="label" htmlFor="e-cat">Kategori</label>
-          <CategoryPicker id="e-cat" value={category} onChange={setCategory} options={cats} placeholder="Seç veya yaz" />
+          <CategoryPicker id="e-cat" value={category} onChange={pickCategory} options={cats} placeholder="Seç veya yaz" />
         </div>
+        {!isRecurring && !rec && <SubcategoryPicker id="e-sub" category={category} value={sub} onChange={setSub} />}
         {!isRecurring && !rec && (
           <div>
             <label className="label" htmlFor="e-person">Kişi (opsiyonel)</label>

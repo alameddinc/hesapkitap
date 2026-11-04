@@ -1,6 +1,6 @@
 import { Check, CreditCard, EyeOff, Repeat } from "lucide-react";
 import type { Row } from "../api";
-import { cx, dateTR, KIND_LABEL, tl } from "../format";
+import { catLabel, cx, dateTR, KIND_LABEL, tl } from "../format";
 import { useUI } from "../ui";
 import { useAccounts } from "./AccountSelect";
 import { usePeople } from "./hooks";
@@ -87,7 +87,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-stone-500">
                 {addedBy(r) && <AddedBy name={people.isMe(r.created_by) ? null : addedBy(r)!.name} initial={addedBy(r)!.name} />}
                 <span>{dateTR(r.date)}</span>
-                <span>· {r.category}</span>
+                <span className="min-w-0 break-words">· {catLabel(r)}</span>
                 {r.installment && <span>· {r.installment} taksit</span>}
                 {r.fx && <span>· {r.fx}</span>}
                 {r.card && <span className="hidden sm:inline">· {r.card}</span>}

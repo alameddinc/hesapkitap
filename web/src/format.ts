@@ -130,6 +130,10 @@ export function cx(...c: (string | false | null | undefined)[]) {
 }
 
 /** Arama için katla: büyük/küçük, Türkçe aksan ve ı/i farkını yok say ("SCRIBD" ~ "scribd", "İSPARK" ~ "ispark"). */
+/** Satırdaki kategori: "Market & Gıda › Temizlik" (alt kategori yoksa yalnız ana kategori). */
+export const catLabel = (r: { category: string; subcategory?: string | null }) =>
+  r.subcategory ? `${r.category} › ${r.subcategory}` : r.category;
+
 export const fold = (s: string) =>
   s.toLocaleLowerCase("tr").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ı/g, "i");
 

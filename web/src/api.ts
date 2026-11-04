@@ -3,6 +3,9 @@ import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./co
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
 
+export interface Subcategory { id: number; category: string; name: string; position: number; count: number }
+export interface SubcategoryList { subcategories: Record<string, string[]>; items: Subcategory[]; can_edit: boolean }
+
 export interface Row {
   uid: string;
   source: "card" | "manual" | "recurring" | "debt" | "estimate"; // estimate: ekstresi olmayan kart ödemesi
@@ -14,6 +17,8 @@ export interface Row {
   amount: number;
   kind: Kind;
   category: string;
+  /** alt kategori (sunucu yeteneği "subcategories"; ana kategoriye bağlı, boş olabilir) */
+  subcategory?: string | null;
   card: string | null;
   account: string | null;
   bank: string | null;
@@ -383,6 +388,10 @@ export interface Meta {
   today: string;
   categories: string[];
   income_categories: string[];
+  /** alt kategoriler {ana: [alt…]}; eski sunucuda alan yok → alt kategori arayüzü gizli */
+  subcategories?: Record<string, string[]>;
+  /** bu kişi alt kategori ekleyip değiştirebilir mi (defter sahibi, tam yetkili üye) */
+  subcategories_editable?: boolean;
   receipt_enabled: boolean;
   receipt_engine?: "gemini" | "yerel" | null; // yerel: anahtarsız Tesseract okuma
   current_month: string;
@@ -465,6 +474,8 @@ export interface Rule {
   id: number;
   pattern: string;
   category: string;
+  /** kural eşleşince atanan alt kategori (sunucu "subcategories"; isteğe bağlı) */
+  subcategory?: string | null;
   priority: number;
 }
 
@@ -544,6 +555,13 @@ export const api = {
     return Array.isArray(r) ? { rows: r, next: null } as TxnPage : r;
   },
   plan: (months: number) => req<Plan>("GET", `/api/plan${q({ months })}`),
+
+  subcategories: () => req<SubcategoryList>("GET", "/api/subcategories"),
+  addSubcategory: (category: string, name: string) =>
+    req<Subcategory & { created: boolean }>("POST", "/api/subcategories", { category, name }),
+  renameSubcategory: (id: number, name: string) => req<{ ok: true; updated: number }>("PATCH", `/api/subcategories/${id}`, { name }),
+  deleteSubcategory: (id: number) => req<{ ok: true; cleared: number }>("DELETE", `/api/subcategories/${id}`),
+  orderSubcategories: (category: string, ids: number[]) => req<SubcategoryList>("PUT", "/api/subcategories/order", { category, ids }),
 
   patchCard: (id: number, body: Record<string, unknown>) =>
     req<{ ok: true; rule: string | null }>("PATCH", `/api/card-transactions/${id}`, body),

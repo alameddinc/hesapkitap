@@ -54,7 +54,7 @@ export default function Transactions() {
   const scoped = useMemo(() => (sfOn ? txns.rows.filter((r) => matchTxnFilter(r, sf, meta?.current_month)) : txns.rows),
     [txns.rows, sf, sfOn, meta?.current_month]);
   const [real, estimates] = useMemo(() => splitEstimates(scoped), [scoped]);
-  const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.note ?? ""}`).includes(needle);
+  const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.subcategory ?? ""} ${r.note ?? ""}`).includes(needle);
   const active = TABS.find((x) => x.key === tab)!;
   const rows = real.filter((r) => active.test(r) && match(r));
   const uncat = real.filter(TABS.find((x) => x.key === "uncat")!.test).length;

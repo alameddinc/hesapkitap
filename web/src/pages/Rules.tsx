@@ -5,6 +5,8 @@ import { useState } from "react";
 import { api, errStatus, type MatchRule, type Rule } from "../api";
 import CategoryPicker from "../components/CategoryPicker";
 import ItemRules from "../components/ItemRules";
+import Subcategories from "../components/Subcategories";
+import SubcategoryPicker, { useSubcategories } from "../components/SubcategoryPicker";
 import { useMeta, useSave } from "../components/hooks";
 import { useUI } from "../ui";
 
@@ -12,14 +14,21 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
   const ui = useUI();
   const [pattern, setPattern] = useState(r.pattern);
   const [category, setCategory] = useState(r.category);
-  const dirty = pattern !== r.pattern || category !== r.category;
-  const save = useSave(() => api.patchRule(r.id, { pattern, category }), () => ui.toast("Kural kaydedildi, işlemler güncellendi"));
+  const [sub, setSub] = useState(r.subcategory ?? "");
+  const subs = useSubcategories();
+  const dirty = pattern !== r.pattern || category !== r.category || sub !== (r.subcategory ?? "");
+  const save = useSave(() => api.patchRule(r.id, { pattern, category, ...(subs.on ? { subcategory: sub || null } : {}) }),
+    () => ui.toast("Kural kaydedildi, işlemler güncellendi"));
   const del = useSave(() => api.deleteRule(r.id), () => ui.toast("Kural silindi"));
   return (
     <li className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center">
       <input className="input font-mono text-base sm:flex-1 sm:text-xs" value={pattern} onChange={(e) => setPattern(e.target.value)} aria-label="Pattern" />
       <div className="flex gap-2 sm:w-72">
-        <div className="flex-1"><CategoryPicker value={category} onChange={setCategory} options={cats} /></div>
+        <div className="flex-1"><CategoryPicker value={category} onChange={(c) => { if (c !== category) setSub(""); setCategory(c); }} options={cats} />
+          {(sub || (subs.map[category] ?? []).length > 0) && (
+            <div className="mt-1"><SubcategoryPicker category={category} value={sub} onChange={setSub} /></div>
+          )}
+        </div>
         {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}
         <button className="btn-danger p-2" aria-label="Sil" disabled={del.isPending} onClick={() => void ask("Kural silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
@@ -89,6 +98,8 @@ export default function Rules() {
   const rules = useQuery({ queryKey: ["rules"], queryFn: api.rules });
   const [np, setNp] = useState("");
   const [nc, setNc] = useState("");
+  const [ns, setNs] = useState("");
+  const subs = useSubcategories();
   const [sample, setSample] = useState("");
   const test = useQuery({
     queryKey: ["rule-test", np, sample],
@@ -96,9 +107,10 @@ export default function Rules() {
     enabled: !!np && !!sample,
     retry: false,
   });
-  const add = useSave(() => api.createRule({ pattern: np, category: nc, priority: 10 }), () => {
+  const add = useSave(() => api.createRule({ pattern: np, category: nc, priority: 10, ...(subs.on && ns ? { subcategory: ns } : {}) }), () => {
     setNp("");
     setNc("");
+    setNs("");
     ui.toast("Kural eklendi, işlemler güncellendi");
   });
 
@@ -112,6 +124,8 @@ export default function Rules() {
         </p>
       </div>
 
+      <Subcategories />
+
       <ItemRules />
 
       <LearnedMatches />
@@ -120,10 +134,11 @@ export default function Rules() {
         <h2 className="font-semibold">Yeni kural</h2>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input className="input font-mono text-base sm:flex-1 sm:text-xs" placeholder="ör. NETFLIX|DISNEY" value={np} onChange={(e) => setNp(e.target.value)} />
-          <div className="sm:w-56"><CategoryPicker value={nc} onChange={setNc} options={meta.data?.categories ?? []} placeholder="Kategori" /></div>
+          <div className="sm:w-56"><CategoryPicker value={nc} onChange={(c) => { if (c !== nc) setNs(""); setNc(c); }} options={meta.data?.categories ?? []} placeholder="Kategori" /></div>
           <button className="btn-primary justify-center" disabled={!np || !nc}
             onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e.message) })}><Plus size={16} /> Ekle</button>
         </div>
+        <SubcategoryPicker id="r-sub" category={nc} value={ns} onChange={setNs} />
         <input className="input" placeholder="Test için örnek açıklama yaz: IYZICO/SPOTIFY.COM/ISTANBUL" value={sample} onChange={(e) => setSample(e.target.value)} />
         {test.data && (
           <p className="text-xs">

@@ -3,13 +3,16 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { cx, fold } from "../format";
 
 
-/** Kategori seçici: dokununca tüm liste açılır, yazdıkça filtreler, listede yoksa yeni kategori eklenir. */
-export default function CategoryPicker({ id, value, onChange, options, placeholder = "Kategori seç" }: {
+/** Kategori seçici: dokununca tüm liste açılır, yazdıkça filtreler, listede yoksa yeni kategori eklenir.
+ *  noun: listedeki "Yeni …" ve boş liste metni (alt kategoride "alt kategori"); allowCreate false: yalnız listeden. */
+export default function CategoryPicker({ id, value, onChange, options, placeholder = "Kategori seç", noun = "kategori", allowCreate = true }: {
   id?: string;
   value: string;
   onChange: (v: string) => void;
   options: string[];
   placeholder?: string;
+  noun?: string;
+  allowCreate?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -30,7 +33,7 @@ export default function CategoryPicker({ id, value, onChange, options, placehold
     const list = options.filter((o) => o !== "Kategorisiz");
     return q ? list.filter((o) => fold(o).includes(q)) : list;
   }, [options, query]);
-  const canCreate = query.trim() && !options.some((o) => fold(o) === fold(query.trim()));
+  const canCreate = allowCreate && query.trim() && !options.some((o) => fold(o) === fold(query.trim()));
   const items = [...filtered, ...(canCreate ? [`__new__${query.trim()}`] : [])];
 
   const pick = (v: string) => {
@@ -79,11 +82,12 @@ export default function CategoryPicker({ id, value, onChange, options, placehold
                 className={cx("flex cursor-pointer items-center gap-2 px-3 py-2 text-sm",
                   i === active && "bg-stone-100 dark:bg-stone-800", isNew && "text-blue-600 dark:text-blue-400")}>
                 {isNew ? <Plus size={14} /> : <Check size={14} className={label === value ? "opacity-100" : "opacity-0"} />}
-                {isNew ? <>Yeni kategori: <b>{label}</b></> : label}
+                {isNew ? <>Yeni {noun}: <b>{label}</b></> : label}
               </li>
             );
           })}
-          {!items.length && <li className="px-3 py-2 text-sm text-stone-500">Kategori yok — yazarak ekle</li>}
+          {!items.length && <li className="px-3 py-2 text-sm text-stone-500">
+            {noun[0].toLocaleUpperCase("tr") + noun.slice(1)} yok{allowCreate ? " — yazarak ekle" : ""}</li>}
         </ul>
       )}
     </div>
