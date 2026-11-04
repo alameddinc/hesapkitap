@@ -4,7 +4,8 @@ Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | fis_metin | fi
 girdi / çıktı / düşünme token'ı. fis_metin: telefonda çıkarılan metinden okunan fiş; fis_foto: o metin tutarsız çıkınca
 fotoğrafla yapılan yedek okuma. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın
 özetini görür: tür başına çağrı ve okuma sayısı, ortalama token, tahmini maliyet (model fiyat tablosu ve dolar kuru
-ayarlanabilir) ve en yoğun 10 kullanıcı (maskeli). Kayıtlar 13 ay tutulur.
+ayarlanabilir) ve en yoğun 10 kullanıcı (maskeli). users_month: kullanıcı başı aylık liste (çağrı, okuma, tahmini ₺,
+paket, ai_alert_try eşiği, yönetici kısıtlaması — app/ai_restrictions.py). Kayıtlar 13 ay tutulur.
 """
 import json
 from datetime import date, datetime, timezone
@@ -13,10 +14,14 @@ KINDS = ("fis", "fis_metin", "fis_foto", "belge", "dokum", "kategori")
 KIND_LABELS = {"fis": "Fiş", "fis_metin": "Fiş (telefonda okunan metinden)",
                "fis_foto": "Fiş (metin yetmedi, fotoğrafla yeniden)", "belge": "Belge (ekstre, fatura, posta)",
                "dokum": "Hesap dökümü", "kategori": "Kategori önerisi"}
-# 1 milyon token başına ABD doları. Düşünme (thinking) token'ı çıktı fiyatıyla ücretlenir.
-DEFAULT_PRICES = {"gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50}}
-DEFAULT_USD_TRY = 42.0
+# 1 milyon token başına ABD doları (Google faturasından ölçüldü, 1–2.11.2026). Düşünme (thinking) token'ı çıktı
+# fiyatıyla ücretlenir. lite: ilk okuma (receipt.DEFAULT_MODEL); flash: yeniden okuma (receipt.REREAD_MODEL).
+LITE, FLASH = "gemini-3.1-flash-lite", "gemini-3.5-flash"
+DEFAULT_PRICES = {LITE: {"input": 0.25, "output": 1.50}, FLASH: {"input": 0.75, "output": 3.75}}
+DEFAULT_USD_TRY = 50.0  # faturadan çıkan etkin kur ~49,7
 PRICES_KEY, FX_KEY = "ai_prices", "ai_usd_try"
+# kullanıcı başı aylık tahmini ₺ eşiği: yönetici listesinde kırmızı satır, "eşiği geçen N hesap" uyarısı
+ALERT_KEY, DEFAULT_ALERT_TRY = "ai_alert_try", 100.0
 KEEP_MONTHS = 13
 
 
@@ -47,7 +52,18 @@ def prices() -> dict:
         p = json.loads(system.get(PRICES_KEY) or "null")
     except ValueError:
         p = None
-    return p if isinstance(p, dict) and p else DEFAULT_PRICES
+    # yönetici kaydı varsayılanın üstüne: eski kayıtta (yalnız lite) sonradan eklenen model fiyatsız kalmasın
+    return {**DEFAULT_PRICES, **p} if isinstance(p, dict) and p else DEFAULT_PRICES
+
+
+def alert_try() -> float:
+    """Yönetici ayarı ai_alert_try: kullanıcı başı aylık tahmini ₺ eşiği (varsayılan 100)."""
+    from app import system
+
+    try:
+        return float(system.get(ALERT_KEY) or DEFAULT_ALERT_TRY)
+    except ValueError:
+        return DEFAULT_ALERT_TRY
 
 
 def usd_try() -> float:
@@ -59,7 +75,7 @@ def usd_try() -> float:
         return DEFAULT_USD_TRY
 
 
-def set_settings(new_prices: dict | None = None, fx: float | None = None) -> None:
+def set_settings(new_prices: dict | None = None, fx: float | None = None, alert: float | None = None) -> None:
     from app import system
 
     if new_prices is not None:
@@ -79,13 +95,23 @@ def set_settings(new_prices: dict | None = None, fx: float | None = None) -> Non
         if not 0 < fx < 10000:
             raise ValueError("Kur 0'dan büyük olmalı")
         system.put(FX_KEY, str(fx))
+    if alert is not None:
+        if not 0 < alert < 1_000_000:
+            raise ValueError("Eşik 0'dan büyük olmalı")
+        system.put(ALERT_KEY, str(alert))
 
 
 def _price(model: str, table: dict) -> dict:
     if model in table:
         return table[model]
-    # bilinmeyen model: tablodaki ilk (varsayılan) fiyat — tahmini maliyet boş kalmasın
-    return next(iter(table.values()))
+    # bilinmeyen model (ör. GEMINI_MODEL ile seçilmiş başka sürüm): en yakın aile — adında "flash-lite" → lite,
+    # "flash" → flash; hiç eşleşmezse flash fiyatı (düşük tahmin etmesin)
+    lite = "flash-lite" in (model or "").lower()
+    for name, p in table.items():
+        n = name.lower()
+        if ("flash-lite" in n) if lite else ("flash" in n and "flash-lite" not in n):
+            return p
+    return table.get(FLASH) or DEFAULT_PRICES[FLASH]
 
 
 def _cost(model: str, inp: int, out: int, th: int, table: dict) -> float:
@@ -149,4 +175,68 @@ def summary(month: str | None = None) -> dict:
             "top_users": [{"user": mask(system.user(uid) if uid is not None else None, uid), "calls": v["calls"],
                            "cost_usd": round(v["cost_usd"], 4), "cost_try": round(v["cost_usd"] * fx, 2)}
                           for uid, v in top],
-            "prices": table, "usd_try": fx, "default_prices": DEFAULT_PRICES}
+            "prices": table, "usd_try": fx, "default_prices": DEFAULT_PRICES,
+            "alert_try": (alert := alert_try()),
+            "over_alert": sum(1 for uid, v in users.items() if uid is not None and v["cost_usd"] * fx > alert),
+            "months": months()}
+
+
+def months() -> list[str]:
+    """Kaydı olan aylar (yeniden eskiye): yönetici ay seçicisi."""
+    from app import system
+
+    with system.connect() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT month FROM ai_calls ORDER BY month DESC")]
+
+
+def _reads_by_user(c, month: str) -> dict[int, int] | None:
+    """Ayın okunan belge sayısı, kullanıcı başı (hazır sürüm sayacı ai_usage: aylık + ek paketten düşenler). Sayaç
+    yapısı değişirse ya da kendi sunucusundaysa (orada ai_usage yapay zekâ çağrısıdır) None: liste okumasız gösterilir."""
+    import sqlite3
+
+    from app import plans
+
+    if not plans.hosted():
+        return None
+    try:
+        return {r[0]: int(r[1] or 0) for r in c.execute(
+            "SELECT user_id, SUM(count) FROM ai_usage WHERE month = ? GROUP BY user_id", (month,))}
+    except sqlite3.Error:
+        return None
+
+
+def users_month(month: str | None = None) -> dict:
+    """Yönetici: ayın kullanıcı başı maliyeti, en pahalı üstte. Her satır: çağrı, okuma, tahmini $ / ₺, paket,
+    eşiği geçti mi (ai_alert_try), yönetici kısıtlaması. E-posta maskeli (user) ve tam (username: yönetici panelinin
+    kullanıcı listesindeki gibi; arayüz satıra dokununca gösterir)."""
+    from app import ai_restrictions, plans, system
+
+    month = month or date.today().strftime("%Y-%m")
+    table, fx, alert = prices(), usd_try(), alert_try()
+    with system.connect() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT user_id, model, COUNT(*) n, SUM(input) i, SUM(output) o, SUM(thoughts) t FROM ai_calls "
+            "WHERE month = ? GROUP BY user_id, model", (month,))]
+        reads = _reads_by_user(c, month)
+    agg: dict = {}
+    for r in rows:
+        a = agg.setdefault(r["user_id"], {"calls": 0, "cost_usd": 0.0})
+        a["calls"] += r["n"]
+        a["cost_usd"] += _cost(r["model"], r["i"] or 0, r["o"] or 0, r["t"] or 0, table)
+    restr = ai_restrictions.all_rows()
+    # okuması olup yapay zekâ çağrısı olmayan (yerel okuma) ve kısıtlı kullanıcılar da listede (kaldırılabilsin)
+    for uid in [k for k, v in (reads or {}).items() if v] + list(restr):
+        agg.setdefault(uid, {"calls": 0, "cost_usd": 0.0})
+    out = []
+    for uid, a in agg.items():
+        u = system.user(uid) if uid is not None else None
+        cost_try = round(a["cost_usd"] * fx, 2)
+        out.append({"user_id": uid, "user": mask(u, uid), "username": (u or {}).get("username"),
+                    "plan": plans.plan_of(u) if u else None, "calls": a["calls"],
+                    "reads": None if reads is None or uid is None else reads.get(uid, 0),
+                    "cost_usd": round(a["cost_usd"], 4), "cost_try": cost_try,
+                    "over": uid is not None and a["cost_usd"] * fx > alert,
+                    "restriction": restr.get(uid) if uid is not None else None})
+    out.sort(key=lambda x: (-x["cost_usd"], -x["calls"], x["user_id"] or 0))
+    return {"month": month, "users": out, "alert_try": alert, "over_alert": sum(1 for x in out if x["over"]),
+            "usd_try": fx, "months": months()}
