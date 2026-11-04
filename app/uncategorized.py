@@ -422,7 +422,7 @@ def ai_status() -> dict:
     if plans.hosted():
         from app import doc_reads
 
-        return {"available": True, "left": doc_reads.left(doc_reads._subject(), doc_reads.BELGE)}  # belge sayacı + ek
+        return {"available": True, "left": doc_reads.left(doc_reads._subject(), doc_reads.BELGE)}  # bugünkü hak + ek paket
     s = receipt._shared_key_user()
     if not s:
         return {"available": True, "left": None}

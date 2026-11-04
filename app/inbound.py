@@ -159,7 +159,7 @@ def classify_sender(msg: Message, raw: bytes, people: list[str], verify=_dkim_do
 
 def _bill(name: str, data: bytes, mime: str) -> str:
     """Fatura belgesini (PDF ya da mail metni) oku, Ödemeler'e ekle; aynı fatura ikinci kez eklenmez.
-    Hazır sürümde yeni fatura 1 belge okuma hakkı; hak doluysa okunmaz."""
+    Hazır sürümde yeni fatura okuma hakkı düşer (PDF her 10 sayfa 1); hak doluysa okunmaz."""
     from app import doc_reads, receipt
 
     if not doc_reads.allowed(data):
@@ -286,7 +286,7 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
                  "detail": f"Tanınan bir banka/kurum değil ya da imza doğrulanamadı ({dom or 'bilinmiyor'})"}
             db.log_mail(r)
             return r
-        if not doc_reads.allowed():  # hazır sürüm: bu ayın belge okuma hakkı bitti; hiçbir şey okunmaz
+        if not doc_reads.allowed():  # hazır sürüm: bugünkü okuma hakkı (ve ek paket) bitti; hiçbir şey okunmaz
             r = {**entry, "kind": "-", "status": "skip", "detail": "Belge okuma hakkı doldu"}
             db.log_mail(r)
             return r

@@ -8,7 +8,7 @@ import { useUI } from "../ui";
 import AccountSelect, { useAccounts } from "./AccountSelect";
 import { usePeople, useSave } from "./hooks";
 import Modal from "./Modal";
-import { isQuotaFull, renewDate, useDocQuota } from "./DocQuota";
+import { fullTexts, isQuotaFull, renewDate, useDocQuota } from "./DocQuota";
 import { KIND_LABEL } from "./Plan";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
@@ -144,8 +144,11 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   const [reading, setReading] = useState(false);
   const quota = useDocQuota();
   // bu form zaten elle giriş: hak doluysa yalnız kısa uyarı (iç içe pencere açılmaz)
-  const quotaMsg = (kind: "belge" | "fis" = "fis") =>
-    ui.toast(`Bu ayki ${KIND_LABEL[kind]} okuma hakkın doldu; ay başında yenilenir (${renewDate()}). Tutarı elle yaz. Ek okuma paketi telefondaki uygulamadan alınır.`);
+  const quotaMsg = (kind: "belge" | "fis" = "fis") => {
+    const t = fullTexts({ kind }, quota.reads);
+    ui.toast(quota.reads?.period === "day" ? `${t.title}. ${t.when} Tutarı elle yaz. Ek okuma paketi telefondaki uygulamadan alınır.`
+      : `Bu ayki ${KIND_LABEL[kind]} okuma hakkın doldu; ay başında yenilenir (${renewDate()}). Tutarı elle yaz. Ek okuma paketi telefondaki uygulamadan alınır.`);
+  };
   // kuyumcu fişi: gerçek ödenen tutar ve tarih (yerel OCR ya da yapay zekâ)
   const readReceipt = async (f: File | undefined) => {
     if (!f) return;

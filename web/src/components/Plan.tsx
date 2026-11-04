@@ -116,8 +116,25 @@ export function RouteLock({ route, children }: { route: Route; children: ReactNo
   return <PlanGate feature={key} preview>{children}</PlanGate>;
 }
 
-/** Bu ayki sayaç: "Belge 3/10 · Fiş 12/30 · Ek 0". */
+/** Günlük tek sayaç mı (sunucu "daily_reads") */
+export const isDaily = (r: ReadStatus | null | undefined): r is ReadStatus & { limit: number; used: number; left: number } =>
+  r?.period === "day" && typeof r.limit === "number";
+
+/** Sayaç: günlükte "Bugün 2/30 · Bu ay 12/40 · Ek 0"; eski sunucuda "Belge 3/10 · Fiş 12/30 · Ek 0". */
 export function ReadCounts({ reads, className }: { reads: ReadStatus; className?: string }) {
+  if (isDaily(reads)) {
+    const out = reads.left <= 0 && reads.extra <= 0;
+    return (
+      <span className={cx("inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5", className)}>
+        <span className={cx("whitespace-nowrap", out && "font-medium text-amber-800 dark:text-amber-300")}>
+          Bugün <b className="tabular-nums">{reads.used}/{reads.limit}</b></span>
+        {reads.monthly_cap != null && <><span aria-hidden="true" className="text-stone-400">·</span>
+          <span className="whitespace-nowrap">Bu ay <b className="tabular-nums">{reads.monthly_used ?? 0}/{reads.monthly_cap}</b></span></>}
+        <span aria-hidden="true" className="text-stone-400">·</span>
+        <span className="whitespace-nowrap">Ek paket <b className="tabular-nums">{reads.extra}</b></span>
+      </span>
+    );
+  }
   const item = (k: ReadKind) => {
     const c = reads[k];
     const out = c.left <= 0 && reads.extra <= 0;
@@ -141,7 +158,7 @@ export function PackNote({ p, className }: { p: PlanInfo | undefined; className?
   const packs = p?.packs?.map((x) => `+${x.reads}`).join(" / ");
   return (
     <p className={cx("text-xs text-stone-500", className)}>
-      Ek okuma paketi{packs ? ` (${packs})` : ""} telefondaki uygulamadan alınır; belge ve fişte ortak, bitene kadar geçerli.
+      Ek okuma paketi{packs ? ` (${packs})` : ""} telefondaki uygulamadan alınır; günlük hak bitince düşer, bitene kadar geçerli.
     </p>
   );
 }
@@ -156,8 +173,16 @@ const no = <Minus size={16} className="mx-auto text-stone-300 dark:text-stone-60
  *  (yönetici bir sayfayı Premium'a alırsa kendi satırına çıkar). */
 export function compareRows(p: PlanInfo): CompareRow[] {
   const rows: CompareRow[] = [];
-  const reads = p.reads_by_plan;
-  if (reads) {
+  const reads = p.reads_by_plan, daily = p.daily_reads_by_plan;
+  if (daily) {
+    const n = (t: Tier) => (
+      <span className="tabular-nums">{daily[t].day}<span className="block text-[10px] text-stone-500">
+        {daily[t].month ? `günde · ayda en çok ${daily[t].month}` : t === "aile" ? "günde, kişi başı" : "günde"}</span></span>
+    );
+    rows.push({ key: "r-okuma", label: "Okuma hakkı",
+      desc: "Fiş, fatura, ekstre, hesap dökümü, posta belgesi, kategori önerisi tek haktan; PDF her 10 sayfa 1, yeniden okuma 2",
+      cells: [n("free"), n("premium"), n("aile")] });
+  } else if (reads) {
     const n = (t: Tier, k: ReadKind) => (
       <span className="tabular-nums">{reads[t][k]}{t === "aile" && <span className="block text-[10px] text-stone-500">kişi başı</span>}</span>
     );
@@ -167,7 +192,8 @@ export function compareRows(p: PlanInfo): CompareRow[] {
   }
   if (p.packs?.length) {
     rows.push({ key: "r-pack", label: `Ek okuma paketi (${p.packs.map((x) => `+${x.reads}`).join(" / ")})`,
-      desc: "Telefondaki uygulamadan; belge ve fişte ortak, bitene kadar geçerli", cells: [yes, yes, yes] });
+      desc: daily ? "Telefondaki uygulamadan; günlük hak bitince düşer, bitene kadar geçerli"
+        : "Telefondaki uygulamadan; belge ve fişte ortak, bitene kadar geçerli", cells: [yes, yes, yes] });
   }
   const table: PlanTableRow[] = p.table ?? [];
   const byTier = (t: Tier): [Cell, Cell, Cell] => TIERS.map((c) => (RANK[c] >= RANK[t] ? yes : no)) as [Cell, Cell, Cell];
@@ -193,6 +219,7 @@ export default function PlanSettings() {
   if (!p?.hosted) return null;
   const rows = compareRows(p);
   const prem = p.reads_by_plan?.premium;
+  const premDaily = p.daily_reads_by_plan?.premium;
   return (
     <section id="paket" className="card scroll-mt-4 space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -204,7 +231,7 @@ export default function PlanSettings() {
       {p.member && <p className="text-sm text-stone-500">Ortak defterdesin: defter sahibinin paketini kullanırsın; okuma hakkın kendine ait.</p>}
       {p.reads && (
         <div className="rounded-lg bg-stone-50 p-2.5 text-sm dark:bg-stone-800/60">
-          <span className="mr-1.5 text-stone-500">Bu ay:</span><ReadCounts reads={p.reads} />
+          <span className="mr-1.5 text-stone-500">{isDaily(p.reads) ? "Okuma:" : "Bu ay:"}</span><ReadCounts reads={p.reads} />
         </div>
       )}
       <div className="-mx-1 overflow-x-auto px-1">
@@ -237,8 +264,8 @@ export default function PlanSettings() {
         </table>
       </div>
       {p.plan !== "aile" && <div className="space-y-1">
-        {p.plan === "free" && prem && <p className="text-sm"><Crown size={14} className="mr-1 inline text-amber-500" aria-hidden="true" />
-          <b>Premium:</b> ayda {prem.belge} belge ve {prem.fis} fiş okuma, geçmiş dönemler, fiyat takibi.</p>}
+        {p.plan === "free" && (premDaily || prem) && <p className="text-sm"><Crown size={14} className="mr-1 inline text-amber-500" aria-hidden="true" />
+          <b>Premium:</b> {premDaily ? `günde ${premDaily.day} okuma` : `ayda ${prem!.belge} belge ve ${prem!.fis} fiş okuma`}, geçmiş dönemler, fiyat takibi.</p>}
         {p.plan === "premium" && <p className="text-sm"><Crown size={14} className="mr-1 inline text-amber-500" aria-hidden="true" />
           <b>Aile:</b> {p.family_seats ?? 4} kişiye kadar herkes Premium'un tamamı, ortak defter ve ortak kumbara.</p>}
         <Upgrade />

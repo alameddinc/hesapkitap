@@ -54,6 +54,12 @@ CREATE TABLE IF NOT EXISTS read_usage (   -- hazır sürüm: aylık haktan düş
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, month, kind)
 );
+CREATE TABLE IF NOT EXISTS read_daily (   -- hazır sürüm: günlük okuma hakkından düşen (tek sayaç, Türkiye günü); app/doc_reads.py
+    user_id INTEGER NOT NULL,
+    day TEXT NOT NULL,                  -- YYYY-MM-DD (Europe/Istanbul)
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+);
 CREATE TABLE IF NOT EXISTS read_split (   -- eski tek sayaçtan iki sayaca göç bir kez yapıldı (kullanıcı, ay)
     user_id INTEGER NOT NULL,
     month TEXT NOT NULL,
@@ -297,7 +303,7 @@ def delete_user(uid: int) -> None:
     with connect() as c:
         if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
-            for t in ("read_usage", "read_split", "read_credits"):
+            for t in ("read_usage", "read_daily", "read_split", "read_credits"):
                 c.execute(f"DELETE FROM {t} WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
@@ -527,8 +533,8 @@ def ai_add(uid: int) -> None:
 
 
 def ai_quota(u: dict) -> int | None:
-    """None: sınırsız (yönetici). Hazır sürümde paketin aylık BELGE okuma hakkı (plans.READS; fiş sayacı için
-    plans.read_limit; kişiye özel ai_quota önce gelir); kendi sunucusunda aylık yapay zekâ çağrısı kotası (kişiye özel ya da varsayılan)."""
+    """None: sınırsız (yönetici). Hazır sürümde paketin GÜNLÜK okuma hakkı (plans.DAILY_READS, plans.read_limit;
+    kişiye özel ai_quota önce gelir); kendi sunucusunda aylık yapay zekâ çağrısı kotası (kişiye özel ya da varsayılan)."""
     if u["role"] == "admin":
         return None
     from app import plans

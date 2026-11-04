@@ -402,8 +402,16 @@ export type Tier = "free" | "premium" | "aile";
 /** Okuma sayacı türü: "belge" (ekstre, hesap dökümü, fatura, posta belgesi, yapay zekâ kategori önerisi) ve "fis". */
 export type ReadKind = "belge" | "fis";
 export interface ReadCounter { used: number; limit: number; left: number }
-/** Bu ayki okuma hakları (kişi başı); extra: ek okuma paketi bakiyesi (belge ve fişte ortak). */
-export interface ReadStatus { belge: ReadCounter; fis: ReadCounter; extra: number }
+/** Okuma hakları (kişi başı); extra: ek okuma paketi bakiyesi. Günlük tek sayaç (sunucu "daily_reads"): period "day",
+ *  limit/used/left bugünkü, monthly_cap ücretsizde aylık tavan; belge ve fiş (eski iki sayaç) ikisi de aynı sayaç. */
+export interface ReadStatus {
+  belge: ReadCounter; fis: ReadCounter; extra: number;
+  period?: "day"; limit?: number; used?: number; left?: number; resets_at?: string;
+  monthly_cap?: number | null; monthly_used?: number | null; monthly_resets_at?: string | null;
+  limited_by?: "day" | "month"; extra_left?: number; reread_cost?: number; pages_per_read?: number;
+}
+/** Paket başı günlük hak: {day, month (ücretsizde aylık tavan), text: "Günde 30 okuma (fiş, fatura, ekstre)"} */
+export interface DailyReads { day: number; month: number | null; text: string }
 /** Sayfa / özellik tablosunun bir satırı (sunucu app/plans.py CATALOG). tier: açık olduğu en düşük paket. */
 export interface PlanTableRow {
   key: string;
@@ -433,6 +441,7 @@ export interface PlanInfo {
   tiers?: Record<string, Tier>;
   table?: PlanTableRow[];
   reads_by_plan?: Record<Tier, Record<ReadKind, number>>;
+  daily_reads_by_plan?: Record<Tier, DailyReads>;
   packs?: ReadPack[];
   family_seats?: number;
   trial?: boolean;
