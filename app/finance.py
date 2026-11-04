@@ -152,7 +152,7 @@ def _card_row(t: dict, states: dict | None = None, aliases: dict | None = None) 
         "date": t["txn_date"], "month": t["period"],
         "description": t["description"],
         "merchant": _display_merchant(t["description"], aliases),
-        "amount": t["amount"], "kind": t["txn_type"], "category": t["category"],
+        "amount": t["amount"], "kind": t["txn_type"], "category": t["category"], "subcategory": t.get("subcategory"),
         "card": card_label(t), "account": t["account"], "bank": t["bank"], "hidden": bool(t.get("hidden")),
         "installment": inst,
         "fx": f"{t['orig_amount']:g} {t['orig_currency']}" if t["orig_currency"] else None,
@@ -171,12 +171,14 @@ def _raw(e: dict) -> str | None:
 def _entry_row(e: dict) -> dict:
     if e.get("debt_id"):  # borç verildi/alındı/ödendi: gelir-gider değil, sadece eldeki para
         return {**_entry_row({**e, "debt_id": None}), "kind": DEBT, "flow": 1 if e["kind"] == INCOME else -1,
-                "category": "Borç / Alacak", "debt_id": e["debt_id"]}
+                "category": "Borç / Alacak", "subcategory": None, "debt_id": e["debt_id"]}
     return {
         "uid": f"m{e['id']}", "source": "manual", "id": e["id"],
         "date": e["entry_date"], "month": e["month"],
         "description": e["description"], "merchant": e["description"],
         "amount": e["amount"], "kind": e["kind"], "category": e["category"] or "Diğer",
+        # alt kategori (ana kategoriye bağlı; boş olabilir): istemci "Market › Temizlik" gösterir
+        "subcategory": e.get("subcategory") if e["category"] else None,
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": e["note"], "recurring_id": e["recurring_id"], "skipped": bool(e["skipped"]), "deleted": False,
         # banka açıklaması (ham metin) ve kullanıcının kendi notu: app/rawnote.py (eşleşmiş elle kayıtta dökümün metni)
@@ -359,6 +361,12 @@ def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
         while m < cur:
             out += [r for r in pending_recurring(m, recs, by_m.get(m, [])) if r.get("estimated") or r.get("salary_estimate")]
             m = add_months(m, 1)
+    # güvenlik ağı: alt kategori yalnız kendi ana kategorisinin listesindeyse gösterilir (kategori başka yoldan
+    # değiştiyse — kişiye kategori, eşleşmeyi geri alma — eski alt kategori yeni ana kategoriye taşınmaz)
+    valid = {(c, n) for c, names in db.subcategories_map().items() for n in names}
+    for r in out:
+        if r.get("subcategory") and (r["category"], r["subcategory"]) not in valid:
+            r["subcategory"] = None
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
 
 
@@ -383,6 +391,7 @@ def _apply_splits(rows: list[dict]) -> list[dict]:
                     "original_amount": r["amount"]})
         for p in parts:
             child = {**r, "uid": f"{r['uid']}s{p['id']}", "amount": _round(p["amount"] * scale), "category": p["category"],
+                     "subcategory": None,  # alt kalem kendi kategorisinde; ana satırın alt kategorisi ona geçmez
                      "description": f"{r['description']} · {p['description'] or p['category']}",
                      "split_of": r["uid"], "split_origin": p["origin"]}
             if p.get("debt_id"):  # ortak harcamada başkasının payı: gider değil, ona alacak (para senden çıktı)
@@ -449,6 +458,29 @@ def _group(rows: list[dict], key: str) -> list[dict]:
     return sorted(out, key=lambda x: -x["amount"])
 
 
+def _group_categories(rows: list[dict]) -> list[dict]:
+    """Kategori dağılımı (_group ile aynı) + alt kategori kırılımı: ana kategoride alt kategorili satır varsa
+    children [{name, amount, count}] (en büyükten); alt kategorisi olmayan kalan {name: null} ile en sonda.
+    Alt kategorisi hiç olmayan ana kategoride children anahtarı yoktur (eski yanıtla aynı)."""
+    out = _group(rows, "category")
+    subs: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r.get("subcategory"):
+            subs[r["category"]].append(r)
+    for g in out:
+        if not subs.get(g["name"]):
+            continue
+        mine = [r for r in rows if r["category"] == g["name"]]
+        kids = _group([r for r in mine if r.get("subcategory")], "subcategory")
+        rest = [r for r in mine if not r.get("subcategory")]
+        left = sum(r["amount"] for r in rest)
+        if rest and money.gt(left, 0):
+            kids.append({"name": None, "amount": _round(left), "count": len(rest)})
+        if kids:
+            g["children"] = kids
+    return out
+
+
 def reference_month(today: date | None = None) -> str:
     """Kıyas/öneri için 'son tam ay': en son yüklenen ekstrenin ayı (yoksa geçen ay)."""
     periods = [st["period"] for st in db.list_statements()]
@@ -504,7 +536,7 @@ def summary(month: str, today: date | None = None) -> dict:
     from app import book
 
     totals["fees_hidden"] = book.hide_fees()  # ortak defterde faiz gizli: istemci faiz kutusunu göstermesin
-    by_category = _group(expenses, "category")
+    by_category = _group_categories(expenses)
     return {
         "month": month,
         "totals": totals,
@@ -602,7 +634,7 @@ def category_spend(month: str) -> list[dict]:
     """Dönemin kategori bazında gideri: summary(month)["by_category"] ile aynı süzgeç ve aynı toplam, ama özetin
     geri kalanı (tüm geçmiş, trend, içgörüler) hesaplanmadan. Bütçe ekranı ve öneriler bunu kullanır."""
     live = [r for r in transactions(month) if not r.get("pending") and not r.get("skipped") and not r.get("linked")]
-    return _group([r for r in live if _spends(r)], "category")
+    return _group_categories([r for r in live if _spends(r)])
 
 
 def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
@@ -2106,7 +2138,7 @@ def year_summary(year: int) -> dict:
     # ortalama / en yüksek / en düşük: gerçek verisi olan tamamlanmış dönemler
     done = [m for m in per if m["month"] < cur and m["month"] in real_months]
     expenses = [r for r in rows if _spends(r)]
-    cats = _group(expenses, "category")
+    cats = _group_categories(expenses)
     total_exp = sum(c["amount"] for c in cats) or 1
     prev = _totals(of(year - 1)) if of(year - 1) else None
     from app import donations

@@ -47,7 +47,7 @@ MEMBER_WRITES = [
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",
                  "/api/bank-import", "/api/onboarding", "/api/mail", "/api/match-rules")
 MEMBER_OPEN = ("/api/settings/password", "/api/settings/tokens", "/api/book/me")
-ENTRY_MEMBER_FIELDS = {"category", "note", "description", "counterparty", "location"}  # başkasının kaydında
+ENTRY_MEMBER_FIELDS = {"category", "subcategory", "note", "description", "counterparty", "location"}  # başkasının kaydında
 EMPTY = {"hidden_cards": [], "hidden_accounts": [], "hide_fees": False, "hidden_pages": []}
 ROLES = ("viewer", "editor", "full")
 ROLE_LABELS = {"viewer": "Sadece görür", "editor": "Görür ve ekler", "full": "Tam yetki"}

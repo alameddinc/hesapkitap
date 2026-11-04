@@ -45,6 +45,9 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
     db.set_budget("Kafe & Restoran", 2500)
     db.set_budget("Market & Gıda", 4000)
     db.set_budget("Yemek Siparişi", 1000)
+    for cat, names in (("Market & Gıda", ("Manav", "Temizlik")), ("Sağlık", ("Diş", "İlaç"))):
+        for n in names:  # alt kategori listesi (kayıtlara atanmaz: ekranlar eskisi gibi açılır)
+            db.add_subcategory(cat, n)
     db.create_goal({"kind": "category", "name": "AI & Yazılım Abonelik", "baseline": 4794.67, "target": 1500,
                     "start_month": "2026-11", "note": "kullanmadıklarımı kapat"})
     db.set_subscription_state("SCRIBD", "iptal", date(2026, 10, 15).isoformat())
