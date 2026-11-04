@@ -27,6 +27,7 @@ import PlanSettings from "../components/Plan";
 import MailAddress from "../components/MailAddress";
 import DeleteAccount from "../components/DeleteAccount";
 import DemoStats from "../components/DemoStats";
+import ReceiptTemplates from "../components/ReceiptTemplates";
 import Features from "../components/Features";
 import { DocQuotaNote, useDocQuota } from "../components/DocQuota";
 import { useBook, useDemo, useUiPrefs } from "../components/hooks";
@@ -391,6 +392,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       {isAdmin && <PlanTable />}
 
       {isAdmin && <AiCosts />}
+
+      {isAdmin && <ReceiptTemplates />}
 
       {isAdmin && <AppUpdate />}
 

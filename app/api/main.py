@@ -1234,6 +1234,16 @@ def admin_put_ai_costs(body: AiCostSettingsIn):
     return ai_costs.summary()
 
 
+@app.get("/api/admin/receipt-templates")
+def admin_receipt_templates():
+    """Zincir / akaryakıt fişi şablonları (sunucu geneli): şablon başına isabet, hata, son kullanım, devre dışı durumu.
+    Kişisel veri yok: ad yalnız bilinen zincirse, değilse imzanın kısa özeti (app/receipt_templates.py)."""
+    from app import receipt_templates
+
+    _require_admin()
+    return receipt_templates.overview()
+
+
 @app.get("/api/admin/ai-costs/users")
 def admin_ai_cost_users(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
     """Kullanıcı başı aylık yapay zekâ maliyeti (en pahalı üstte): çağrı, okuma, tahmini ₺, paket, eşik, kısıtlama."""

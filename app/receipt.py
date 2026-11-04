@@ -534,11 +534,13 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
     """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract).
     ocr_text: fotoğrafla birlikte gelen telefon metni (yardımcı): yapay zekâya gitmez; önce kurumun fatura şablonu bu
     metinle denenir, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yerel okuma Tesseract yerine bu metinle yapılır."""
-    from app import bill_templates, ocr
+    from app import bill_templates, ocr, receipt_templates
 
     text = (ocr_text or "").replace("\r\n", "\n").strip()[:MAX_OCR_CHARS] or None
     if text and (hit := bill_templates.read(text)):
         return bill_templates.as_doc(hit)  # telefon metni kurumun fatura şablonunu tutuyor: yapay zekâsız
+    if text and (hit := receipt_templates.read(text, categories)):
+        return hit  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
     if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
         return bill_templates.as_doc(hit)  # kurumun fatura şablonu: yapay zekâsız (app/bill_templates.py)
     if not enabled():
@@ -583,6 +585,10 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
         bill_templates.learn(learn_from, raw)
     if doc["type"] == "receipt" and (own or ocr_text):  # e-arşiv PDF'i / telefon metni: KDV/VKN kural yedeği
         vat.fill(doc, own or ocr_text)
+    if doc["type"] == "receipt" and ocr_text:  # fişin düzeni öğrenilir: aynı işyerinin sonraki fişi yapay zekâsız
+        from app import receipt_templates
+
+        receipt_templates.learn(ocr_text, doc)
     return doc
 
 
