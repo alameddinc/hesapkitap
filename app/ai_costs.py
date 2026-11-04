@@ -1,7 +1,7 @@
 """Yapay zekâ maliyet ölçümü: her Gemini çağrısının token sayıları (system.db → ai_calls).
 
 Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | fis_metin | fis_foto | belge | dokum | kategori), model,
-girdi / çıktı / düşünme token'ı. fis: fotoğraftan okunan fiş (telefon metni gelse de varsayılan budur; metin yalnız
+girdi / çıktı / düşünme / önbellekli girdi token'ı. fis: fotoğraftan okunan fiş (telefon metni gelse de varsayılan budur; metin yalnız
 yardımcı); fis_metin: telefonda çıkarılan metinden okunan fiş ve fis_foto: o metin tutarsız çıkınca fotoğrafla yapılan
 yedek okuma — ikisi yalnız eski yol açıkken (HESAPKITAP_RECEIPT_TEXT_FIRST=1, app/receipt.py text_first) yazılır. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın
 özetini görür: tür başına çağrı ve okuma sayısı, ortalama token, tahmini maliyet (model fiyat tablosu ve dolar kuru
@@ -19,6 +19,10 @@ KIND_LABELS = {"fis": "Fiş", "fis_metin": "Fiş (telefonda okunan metinden)",
 # fiyatıyla ücretlenir. lite: ilk okuma (receipt.DEFAULT_MODEL); flash: yeniden okuma (receipt.REREAD_MODEL).
 LITE, FLASH = "gemini-3.1-flash-lite", "gemini-3.5-flash"
 DEFAULT_PRICES = {LITE: {"input": 0.25, "output": 1.50}, FLASH: {"input": 0.75, "output": 3.75}}
+# Önbellekten okunan girdi token'ı (usageMetadata.cachedContentTokenCount; promptTokenCount'un içinde) girdi fiyatının
+# bu oranıyla sayılır — Google fiyat sayfası 04.11.2026: lite $0,025 / $0,25, flash $0,075 / $0,75 (%10). Yönetici bir
+# modele ayrıca "cached" fiyatı kaydederse o kullanılır.
+CACHED_RATIO = 0.10
 DEFAULT_USD_TRY = 50.0  # faturadan çıkan etkin kur ~49,7
 PRICES_KEY, FX_KEY = "ai_prices", "ai_usd_try"
 # kullanıcı başı aylık tahmini ₺ eşiği: yönetici listesinde kırmızı satır, "eşiği geçen N hesap" uyarısı
@@ -31,11 +35,12 @@ def record(uid: int | None, kind: str, model: str, usage: dict) -> None:
 
     now = datetime.now(timezone.utc)
     with system.connect() as c:
-        c.execute("INSERT INTO ai_calls (at, month, user_id, kind, model, input, output, thoughts) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO ai_calls (at, month, user_id, kind, model, input, output, thoughts, cached) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (now.isoformat(timespec="seconds"), date.today().strftime("%Y-%m"), uid,
                    kind if kind in KINDS else "belge", (model or "")[:60], int(usage.get("promptTokenCount") or 0),
-                   int(usage.get("candidatesTokenCount") or 0), int(usage.get("thoughtsTokenCount") or 0)))
+                   int(usage.get("candidatesTokenCount") or 0), int(usage.get("thoughtsTokenCount") or 0),
+                   int(usage.get("cachedContentTokenCount") or 0)))
 
 
 def prune(months: int = KEEP_MONTHS) -> int:
@@ -86,11 +91,12 @@ def set_settings(new_prices: dict | None = None, fx: float | None = None, alert:
                 raise ValueError(f"{model}: girdi ve çıktı fiyatı gerekli")
             try:
                 i, o = float(v["input"]), float(v["output"])
+                ca = float(v["cached"]) if v.get("cached") is not None else None  # isteğe bağlı: önbellekli girdi
             except (KeyError, TypeError, ValueError) as e:
                 raise ValueError(f"{model}: girdi ve çıktı fiyatı sayı olmalı") from e
-            if not (0 <= i <= 1000 and 0 <= o <= 1000) or not str(model).strip():
+            if not (0 <= i <= 1000 and 0 <= o <= 1000 and (ca is None or 0 <= ca <= 1000)) or not str(model).strip():
                 raise ValueError(f"{model}: fiyat 0–1000 dolar aralığında olmalı")
-            clean[str(model).strip()[:60]] = {"input": i, "output": o}
+            clean[str(model).strip()[:60]] = {"input": i, "output": o, **({"cached": ca} if ca is not None else {})}
         system.put(PRICES_KEY, json.dumps(clean) if clean else None)
     if fx is not None:
         if not 0 < fx < 10000:
@@ -115,9 +121,14 @@ def _price(model: str, table: dict) -> dict:
     return table.get(FLASH) or DEFAULT_PRICES[FLASH]
 
 
-def _cost(model: str, inp: int, out: int, th: int, table: dict) -> float:
+def _cost(model: str, inp: int, out: int, th: int, table: dict, cached: int = 0) -> float:
+    """cached: girdinin önbellekten okunan kısmı (inp'in içinde), indirimli fiyatla (p["cached"], yoksa girdi ×
+    CACHED_RATIO)."""
     p = _price(model, table)
-    return (inp * p["input"] + (out + th) * p["output"]) / 1_000_000
+    cached = max(0, min(cached or 0, inp))
+    pc = p.get("cached")
+    pc = p["input"] * CACHED_RATIO if pc is None else pc
+    return ((inp - cached) * p["input"] + cached * pc + (out + th) * p["output"]) / 1_000_000
 
 
 def mask(u: dict | None, uid: int | None) -> str:
@@ -142,8 +153,8 @@ def summary(month: str | None = None) -> dict:
     table, fx = prices(), usd_try()
     with system.connect() as c:
         rows = [dict(r) for r in c.execute(
-            "SELECT kind, model, user_id, COUNT(*) n, SUM(input) i, SUM(output) o, SUM(thoughts) t FROM ai_calls "
-            "WHERE month = ? GROUP BY kind, model, user_id", (month,))]
+            "SELECT kind, model, user_id, COUNT(*) n, SUM(input) i, SUM(output) o, SUM(thoughts) t, SUM(cached) ca "
+            "FROM ai_calls WHERE month = ? GROUP BY kind, model, user_id", (month,))]
         reads = {r["kind"]: r["n"] for r in c.execute(
             "SELECT kind, SUM(count) n FROM read_usage WHERE month = ? GROUP BY kind", (month,))}
     by_kind: dict[str, dict] = {k: {"kind": k, "label": KIND_LABELS[k], "calls": 0, "input": 0, "output": 0,
@@ -152,7 +163,7 @@ def summary(month: str | None = None) -> dict:
     for r in rows:
         k = by_kind.setdefault(r["kind"], {"kind": r["kind"], "label": r["kind"], "calls": 0, "input": 0, "output": 0,
                                            "thoughts": 0, "cost_usd": 0.0})
-        cost = _cost(r["model"], r["i"] or 0, r["o"] or 0, r["t"] or 0, table)
+        cost = _cost(r["model"], r["i"] or 0, r["o"] or 0, r["t"] or 0, table, r["ca"] or 0)
         k["calls"] += r["n"]
         k["input"] += r["i"] or 0
         k["output"] += r["o"] or 0
@@ -216,14 +227,14 @@ def users_month(month: str | None = None) -> dict:
     table, fx, alert = prices(), usd_try(), alert_try()
     with system.connect() as c:
         rows = [dict(r) for r in c.execute(
-            "SELECT user_id, model, COUNT(*) n, SUM(input) i, SUM(output) o, SUM(thoughts) t FROM ai_calls "
-            "WHERE month = ? GROUP BY user_id, model", (month,))]
+            "SELECT user_id, model, COUNT(*) n, SUM(input) i, SUM(output) o, SUM(thoughts) t, SUM(cached) ca "
+            "FROM ai_calls WHERE month = ? GROUP BY user_id, model", (month,))]
         reads = _reads_by_user(c, month)
     agg: dict = {}
     for r in rows:
         a = agg.setdefault(r["user_id"], {"calls": 0, "cost_usd": 0.0})
         a["calls"] += r["n"]
-        a["cost_usd"] += _cost(r["model"], r["i"] or 0, r["o"] or 0, r["t"] or 0, table)
+        a["cost_usd"] += _cost(r["model"], r["i"] or 0, r["o"] or 0, r["t"] or 0, table, r["ca"] or 0)
     restr = ai_restrictions.all_rows()
     # okuması olup yapay zekâ çağrısı olmayan (yerel okuma) ve kısıtlı kullanıcılar da listede (kaldırılabilsin)
     for uid in [k for k, v in (reads or {}).items() if v] + list(restr):

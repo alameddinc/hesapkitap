@@ -6,7 +6,8 @@
 
 Yollar:
     A  yerel: app/ocr.py `parse` (yapay zekâsız; belge sunucudan çıkmaz)
-    B  yapay zekâ: app/receipt.py `_parse_document_ai` (bugünkü istem ve GEMINI_MODEL)
+    B  yapay zekâ: app/receipt.py `_parse_document_ai` (bugünkü istem ve GEMINI_MODEL; istem ayarları ortamdan:
+       HESAPKITAP_RECEIPT_COMPACT=0 eski uzun çıktı, HESAPKITAP_RECEIPT_MEDIA_RES=medium|low görüntü çözünürlüğü)
     C  karma: önce A; `accept_local` koşullarının hepsi tutarsa A'nın sonucu, tutmazsa B'nin (B ayrıca çağrılmaz, B'nin
        ölçülen sonucu ve maliyeti kullanılır)
     T  metin (--text-dir): telefonda çıkarılmış metin yapay zekâya (app/receipt.py `parse_document_text`), B ile aynı
@@ -54,7 +55,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.ai_costs import DEFAULT_PRICES as _PRICES, DEFAULT_USD_TRY as USD_TRY, FLASH as _FLASH, LITE as _LITE
+from app.ai_costs import CACHED_RATIO as _CACHED_RATIO, DEFAULT_PRICES as _PRICES, DEFAULT_USD_TRY as USD_TRY, \
+    FLASH as _FLASH, LITE as _LITE
 
 TOL = 0.05  # kalem toplamı / fiş toplamı / altın tutar farkı (TL)
 # $ / 1M token, düşünme çıktı fiyatıyla; fiyat ve kur yönetici panelindeki varsayılanlarla aynı (app/ai_costs.py)
@@ -178,8 +180,12 @@ def accept_local(doc: dict | None, discounts: list[float] | None = None) -> tupl
 
 
 def cost_usd(usage: dict | None, price_in: float = PRICE_IN, price_out: float = PRICE_OUT) -> float:
+    """Önbellekli girdi (cachedContentTokenCount, promptTokenCount'un içinde) girdi fiyatı × CACHED_RATIO ile
+    (app/ai_costs.py ile aynı hesap)."""
     u = usage or {}
-    return ((u.get("promptTokenCount") or 0) * price_in
+    inp = u.get("promptTokenCount") or 0
+    cached = max(0, min(u.get("cachedContentTokenCount") or 0, inp))
+    return ((inp - cached) * price_in + cached * price_in * _CACHED_RATIO
             + ((u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)) * price_out) / 1e6
 
 
@@ -344,7 +350,7 @@ def _memo(fn):
 
 def _tokens(usage: dict) -> dict:
     return {"input": usage.get("promptTokenCount"), "output": usage.get("candidatesTokenCount"),
-            "thoughts": usage.get("thoughtsTokenCount")}
+            "thoughts": usage.get("thoughtsTokenCount"), "cached": usage.get("cachedContentTokenCount")}
 
 
 # ---------------------------------------------------------------- kıyas

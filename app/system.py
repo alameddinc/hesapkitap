@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS ai_calls (     -- yapay zekâ maliyet ölçümü (app
     model TEXT,
     input INTEGER NOT NULL DEFAULT 0,
     output INTEGER NOT NULL DEFAULT 0,
-    thoughts INTEGER NOT NULL DEFAULT 0
+    thoughts INTEGER NOT NULL DEFAULT 0,
+    cached INTEGER NOT NULL DEFAULT 0   -- önbellekten okunan girdi token'ı (input'un içinde, indirimli fiyat)
 );
 CREATE INDEX IF NOT EXISTS ai_calls_month ON ai_calls(month);
 CREATE TABLE IF NOT EXISTS ai_restrictions (  -- yöneticinin kötüye kullanım kısıtlaması (app/ai_restrictions.py)
@@ -197,6 +198,9 @@ def _migrate(c) -> None:
     # sayılmış belgenin türü (belge | fis); eski kayıtlarda NULL
     if "kind" not in {r[1] for r in c.execute("PRAGMA table_info(doc_reads)")}:
         c.execute("ALTER TABLE doc_reads ADD COLUMN kind TEXT")
+    # yapay zekâ maliyet kaydı: önbellekli girdi token'ı (app/ai_costs.py)
+    if "cached" not in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}:
+        c.execute("ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
 
 
 def init() -> None:
