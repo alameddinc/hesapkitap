@@ -204,6 +204,7 @@ TABLES = [
     T("idempotency", pk=None, mode="target", child=True),
     T("import_batches", pk=None, mode="clear", child=True),
     T("template_submissions", mode="source", child=True),
+    T("bill_templates", mode="source", child=True),  # fatura şablonları: yeniden öğrenilir, kaynaktaki kalır
 ]
 BY_NAME = {t.name: t for t in TABLES}
 CREATED_BY = {"entries", "jar_moves", "entry_matches", "match_rejects"}

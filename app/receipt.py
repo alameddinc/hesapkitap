@@ -516,8 +516,10 @@ Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin deği
 def parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
                    more: list[tuple[bytes, str]] | None = None) -> dict:
     """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract)."""
-    from app import ocr
+    from app import bill_templates, ocr
 
+    if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
+        return bill_templates.as_doc(hit)  # kurumun fatura şablonu: yapay zekâsız (app/bill_templates.py)
     if not enabled():
         return _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more)
     try:
@@ -547,7 +549,12 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
     raw, _ = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
                           max_output_tokens=8000, more=more, kind=kind)
-    return _doc_of(raw, categories)
+    doc = _doc_of(raw, categories)
+    if doc["type"] == "bill" and not more:
+        from app import bill_templates
+
+        bill_templates.learn(bill_templates.text_of(data, mime), raw)
+    return doc
 
 
 MAX_OCR_CHARS = 20000  # telefonda çıkarılan metin üst sınırı (4 parçalı uzun fiş rahat sığar)
@@ -566,11 +573,18 @@ def parse_document_text(text: str, categories: list[str], split_categories: list
     text = (text or "").replace("\r\n", "\n").strip()[:MAX_OCR_CHARS]
     if not text:
         raise ReceiptError("Metin boş")
+    from app import bill_templates
+
+    if hit := bill_templates.read(text):
+        return bill_templates.as_doc(hit)
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
     prompt = (TEXT_INTRO + DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule)
               + "\nMETİN (satır sonları fişteki gibi):\n<<<\n" + text + "\n>>>\n")
     raw, _ = _gemini_json(prompt, None, "text/plain", max_output_tokens=8000, kind="otomatik_metin")
-    return _doc_of(raw, categories)
+    doc = _doc_of(raw, categories)
+    if doc["type"] == "bill":
+        bill_templates.learn(text, raw)
+    return doc
 
 
 def _doc_of(raw: dict, categories: list[str]) -> dict:
@@ -587,6 +601,7 @@ def _doc_of(raw: dict, categories: list[str]) -> dict:
             "description": " · ".join(x for x in (raw.get("period"), raw.get("subscriber_no") and f"Abone {raw['subscriber_no']}") if x),
             **paid,
             "confidence": raw.get("confidence") or "orta",
+            "source": "yapay_zeka",
         }
     category = raw.get("category") if raw.get("category") in categories else "Diğer"
     return {
@@ -604,11 +619,20 @@ def _doc_of(raw: dict, categories: list[str]) -> dict:
         "address": (raw.get("address") or "").strip()[:160] or None,
         "branch": (raw.get("branch") or "").strip()[:60] or None,
         "confidence": raw.get("confidence") or "orta",
+        "source": "yapay_zeka",
     }
 
 
 def parse_bill(data: bytes, mime: str) -> dict:
+    """Fatura: önce kurumun şablonu (PDF metni / e-posta metni, yapay zekâsız), tutmazsa yapay zekâ — okuması şablon
+    öğretir (app/bill_templates.py). source: "sablon" | "yapay_zeka"."""
+    from app import bill_templates
+
+    text = bill_templates.text_of(data, mime)
+    if hit := bill_templates.read(text):
+        return bill_templates.as_bill(hit)
     raw, meta = _gemini_json(BILL_PROMPT, data, mime, max_output_tokens=8000, kind="belge")
+    bill_templates.learn(text, raw)
     return {
         "provider": (raw.get("provider") or "").strip()[:60] or "Fatura",
         "category": BILL_CATEGORY.get(raw.get("type"), "Faturalar"),
@@ -619,6 +643,7 @@ def parse_bill(data: bytes, mime: str) -> dict:
         **_bill_paid(raw),
         "confidence": raw.get("confidence") or "orta",
         "model": meta["model"],
+        "source": "yapay_zeka",
     }
 
 

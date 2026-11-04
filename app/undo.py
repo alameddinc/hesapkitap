@@ -17,7 +17,7 @@ from app import db
 KEEP = 30  # saklanan son yükleme sayısı
 # ayarlar (ör. kayıtlı banka biçimi, şifre) geri alınmaz; dosya dizini depodaki gerçek durumu yansıtır (dosyayı
 # geri almak onu silmez; bağı kopan dosyayı gece temizliği siler: db.gc_files)
-SKIP = {"import_batches", "settings", "stored_files"}
+SKIP = {"import_batches", "settings", "stored_files", "bill_templates"}  # fatura şablonu da ayar gibi
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS import_batches (
     id TEXT PRIMARY KEY,
