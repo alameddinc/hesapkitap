@@ -173,6 +173,10 @@ def test_vat_and_tax_no_filled_from_text(hosted, ai):  # noqa: F811
     r = _parse(c, text=TAX_TEXT).json()  # model KDV/VKN'yi boş bıraktı (GOOD'da yok)
     assert ai["sent"][0]["photo"] and r["tax_no"] == VKN and r["vat_total"] == 2.5 and r["tax_office"]
     ai["replies"]["foto"] = {**GOOD, "tax_no": "4605721929"}  # modelin okuduğu korunur
+    from app import system
+
+    with system.connect() as cx:  # ilk okuma fiş şablonu öğretti; bu adım yapay zekâ yolunu sınıyor
+        cx.execute("DELETE FROM receipt_templates")
     assert _parse(c, text=TAX_TEXT).json()["tax_no"] == "4605721929"
 
 

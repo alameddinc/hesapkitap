@@ -245,6 +245,10 @@ def is_safe(spec: dict) -> bool:
         from app.card_reader import is_safe as card_safe
 
         return card_safe(spec)
+    if isinstance(spec, dict) and spec.get("kind") == "receipt":  # fiş şablonu: yalnız zincir şablonu paylaşılır
+        from app.receipt_templates import shareable
+
+        return shareable(spec)
     try:
         if set(spec) - {"v", "kind", "bank", "keywords", "date", "amount_idx", "balance_idx", "scope"}:
             return False
@@ -366,12 +370,13 @@ def set_sharing(on: bool) -> None:
 
 def submit_local(spec: dict) -> bool:
     """Merkez (bu sunucu hub ise): gelen şablonu onay kuyruğuna al."""
-    if not is_safe(spec) or not spec.get("bank"):
+    name = spec.get("bank") or spec.get("brand") if isinstance(spec, dict) else None  # fiş şablonunda zincir adı
+    if not is_safe(spec) or not name:
         return False
     with system.connect() as c:
         c.executescript(SUB_SCHEMA)
         c.execute("INSERT INTO template_submissions (bank, spec) VALUES (?, ?) "
-                  "ON CONFLICT(spec) DO UPDATE SET count = count + 1", (spec["bank"], _key(spec)))
+                  "ON CONFLICT(spec) DO UPDATE SET count = count + 1", (name, _key(spec)))
     return True
 
 
@@ -430,7 +435,11 @@ def sync_community(force: bool = False) -> int:
                 continue
             data = httpx.get(f["download_url"], timeout=6).json()
             for spec in data if isinstance(data, list) else [data]:
-                if isinstance(spec, dict) and save(spec, "community"):
+                if isinstance(spec, dict) and spec.get("kind") == "receipt":  # zincir fişi şablonu: kendi tablosu
+                    from app import receipt_templates
+
+                    added += receipt_templates.save(spec, "community")
+                elif isinstance(spec, dict) and save(spec, "community"):
                     added += 1
     except Exception:  # noqa: BLE001
         pass
