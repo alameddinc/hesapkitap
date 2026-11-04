@@ -60,7 +60,7 @@ def test_usage_recorded_without_content(fake):
     assert (rows[0]["input"], rows[0]["output"], rows[0]["thoughts"], rows[0]["model"]) == (
         1200, 300, 100, "gemini-3.1-flash-lite")
     cols = set(rows[0])
-    assert cols == {"id", "at", "month", "user_id", "kind", "model", "input", "output", "thoughts"}  # metin yok
+    assert cols == {"id", "at", "month", "user_id", "kind", "model", "input", "output", "thoughts", "cached"}  # metin yok
     assert "Örnek" not in json.dumps(rows, ensure_ascii=False)
 
 

@@ -270,10 +270,10 @@ AUTO_KINDS = {"otomatik": "fis", "otomatik_metin": "fis_metin", "otomatik_foto":
 
 def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: int | None = None,
                  more: list[tuple[bytes, str]] | None = None, model: str | None = None,
-                 kind: str = "belge") -> tuple[dict, dict]:
+                 kind: str = "belge", media_resolution: str | None = None) -> tuple[dict, dict]:
     """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf). kind: maliyet ölçümünde tür
     (fis | fis_metin | fis_foto | belge | dokum | kategori; AUTO_KINDS'takiler yanıttaki belge türünden — fatura → belge,
-    diğeri → fiş türü)."""
+    diğeri → fiş türü). media_resolution: generationConfig.mediaResolution (ör. MEDIA_RESOLUTION_MEDIUM); None → modelin varsayılanı."""
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
@@ -293,7 +293,8 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
             *({"inline_data": {"mime_type": m, "data": base64.b64encode(d).decode()}} for d, m in docs),
         ]}],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0,
-                             **({"maxOutputTokens": max_output_tokens} if max_output_tokens else {})},
+                             **({"maxOutputTokens": max_output_tokens} if max_output_tokens else {}),
+                             **({"mediaResolution": media_resolution} if media_resolution else {})},
     }
     try:
         r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=180,
@@ -318,7 +319,7 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
         kind = "belge" if out.get("doc_type") == "fatura" or out.get("due_date") else AUTO_KINDS[kind]
     _record_cost(kind, model, usage)
     return out, {"model": model, "input": usage.get("promptTokenCount"), "output": usage.get("candidatesTokenCount"),
-                 "thoughts": usage.get("thoughtsTokenCount")}
+                 "thoughts": usage.get("thoughtsTokenCount"), "cached": usage.get("cachedContentTokenCount")}
 
 
 def _record_cost(kind: str, model: str, usage: dict) -> None:
@@ -456,7 +457,8 @@ def fix_misattached_qty(items: list[dict]) -> list[dict]:
 def _items(raw: dict) -> list[dict]:
     """Ürün satırları; "2Adt x 230,00" gibi adetler qty olarak gelir."""
     out = []
-    raw = {**raw, "items": fix_qty_lines([i for i in (raw.get("items") or [])[:40] if isinstance(i, dict) and i.get("name")])}
+    items = [_long_item(i) for i in (raw.get("items") or [])[:40]] if isinstance(raw.get("items"), list) else []
+    raw = {**raw, "items": fix_qty_lines([i for i in items if isinstance(i, dict) and i.get("name")])}
     for i in (raw.get("items") or [])[:40]:
         if not isinstance(i, dict) or not i.get("name"):
             continue
@@ -520,6 +522,123 @@ SPLIT_RULE = """items[].split: ürün şu kategorilerden birine AÇIKÇA giriyor
 Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin değilsen null.
 """
 
+# ---------------------------------------------------------------- sıkı çıktı (maliyet diyeti, 04.11.2026)
+# Fotoğraf okumasının maliyetinin yarısı çıktıydı (~485 token): girintili JSON, her alanın "null"u, her kalemde uzun
+# anahtarlar ve varsayılanlar (qty 1, unit adet, unit_price null, split null). Sıkı istem aynı alanları ve kuralları ister
+# ama tek satır, null'suz JSON ve kısa kalem anahtarları (n/p/b/q/u/up/a/s; _long_item uzun adlara çevirir) ister.
+# Okunamayan (bulanık, fiş olmayan) fotoğrafta tutar uydurmasın diye bir kural eklendi. Ölçüm (40 gerçek fiş,
+# app/receipt_bench.py; ayrıntı rapor): çıktı 485 → 294 token, ₺0,0755 → ₺0,0624/fiş; toplam 39/39, kalem 7 → 8/12,
+# KDV 25/25, VKN 20/20 (değişmedi). Kurallar kısaltılınca (girdi −420 token) bulanık fişlerde toplam 39 → 36–38/39'a
+# düştü; görüntü çözünürlüğü MEDIUM'da (−524 token) 34/39: ikisi de varsayılan değil.
+# HESAPKITAP_RECEIPT_COMPACT=0: eski istem (DOC_PROMPT, uzun anahtarlar, girintili JSON).
+DOC_PROMPT_COMPACT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapılmış, POS/yazar kasa fişi) ya da
+ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). Bir faturanın banka ödeme
+dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). PDF veya fotoğraf olabilir.
+SADECE şu JSON'u TEK SATIR, girintisiz döndür (null olan alanı ve kalemde q 1, u "adet", up null değerini YAZMA):
+{{
+  "doc_type": "fis | fatura",
+  "merchant": "MARKA / tabela / kurum adı, kısa (ör. Espressolab, Enerjisa)",
+  "legal_name": "belgedeki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
+  "address": "fişte yazan işyeri adresi (mahalle/cadde, ilçe/il) kısa, veya null",
+  "branch": "şube / semt adı, kısa (ör. Fıstıkağacı, Kadıköy Moda); fiş başlığında ya da adreste geçen; yoksa null",
+  "date": "YYYY-MM-DD fiş tarihi / fatura düzenleme tarihi veya null",
+  "total": 0.00,
+  "due_date": "YYYY-MM-DD SON ÖDEME TARİHİ (sadece fatura) veya null",
+  "bill_type": "elektrik | dogalgaz | su | internet | telefon | aidat | diger | null",
+  "period": "fatura dönemi veya null",
+  "subscriber_no": "abone/tesisat no veya null",
+  "paid": "sadece fatura: belge faturanın ÖDENDİĞİNİ gösteriyorsa (banka fatura ödeme dekontu, tahsilat makbuzu, 'ödendi', 'tahsil edildi') true, ödenecek fatura ise false",
+  "paid_at": "YYYY-MM-DD faturanın ödendiği gün (sadece paid true ise) veya null",
+  "pay_method": "sadece ödenmiş fatura: havale | kredi_karti | nakit | bilinmiyor",
+  "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
+  "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
+  "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
+  "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
+  "category": "fiş ise şu listeden en uygunu: {categories}",
+  "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV tutarı veya null",
+  "vat_lines": [{{"rate": 1, "amount": 0.00}}],
+  "tax_no": "sadece fiş: satıcının 10 haneli vergi no (V.NO, VKN, V.D. … NO); 11 haneli TCKN ise null",
+  "tax_office": "sadece fiş: vergi dairesi adı (ör. Kadıköy) veya null",
+  "items": [{{"n": "fişteki satır yazısı (name)", "p": "standart ürün adı (product)", "b": "marka (brand) veya null", "q": 1, "u": "adet", "up": null, "a": 0.00}}],
+  "confidence": "yüksek | orta | düşük"
+}}
+{split_rule}total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56.
+Belge okunamıyorsa (bulanık, fiş/fatura değil) tutar UYDURMA: total null, confidence "düşük".
+vat_lines: fişin oran oran KDV dökümü ("%1 *18,25", "KDV %20 3,33"); rate 1 | 10 | 20, her oran bir kez; döküm yoksa [].
+items (kısa anahtarlar: n=name, p=product, b=brand, q=qty, u=unit, up=unit_price, a=amount; sadece fiş, en fazla 40 satır, fişteki sırayla):
+- name: satırın fişteki yazısı. product: aynı ürünü farklı marketlerde eşleştirmek için STANDART ad: marka + ürün + gramaj/hacim,
+  Türkçe karakterli, kısaltmalar açık (ör. "ULKER GOFRET CIK 36GR" → "Ülker Çikolatalı Gofret 36 g"; "SUT 1L PINAR" → "Pınar Süt 1 L").
+- brand: ürünün markası (ör. Ülker, Pınar, Marlboro); kafe/restoranın kendi ürünüyse (latte, tost) işletmenin markası
+  (ör. Kahve Dünyası); bilinmiyorsa null.
+- "2Adt x 230,00 Latte" → qty=2, unit="adet", unit_price=230, amount=460 (satır toplamı). unit_price yalnız fişte birim
+  fiyat yazıyorsa (miktar satırı), yoksa null.
+- Tartılı ürün "0,750 KG x 89,90" → qty=0.75, unit="kg", amount=67.43; litre ise unit="lt".
+- Türk yazar kasa fişinde MİKTAR SATIRI ("2 ad X 2,50", "2 AD X 40.00", "0,750 KG X 89,90") ÜRÜN SATIRINDAN ÖNCE, kendi
+  satırında gelir ve ALTINDAKİ ürüne aittir; o ürünün satırında sağda toplam yazar ("*5,00" = 2 × 2,50). Miktar satırını
+  AYRI ÜRÜN olarak YAZMA ve adını ürün adına katma; qty ve unit'i altındaki ürüne ver. Her ürünün amount'u KENDİ satırının
+  sağındaki tutardır (bir alttaki ya da üstteki ürünün tutarı değil). Örnek:
+    2 ad X 2,50
+    POSET ORTA BOY        *5,00
+    MADEN SUYU 6X200      *60,00
+  → [{{"n": "POSET ORTA BOY", "q": 2, "a": 5.00}}, {{"n": "MADEN SUYU 6X200", "q": 1, "a": 60.00}}]
+- Bir ürünün hemen altındaki İNDİRİM/KAMPANYA satırı o ürünün amount'undan düşülür. Hangi ürüne ait olduğu belli olmayan genel
+  indirimi ("İNDİRİMLER", "Satış İndirimi", "TOPLAM İNDİRİM", "İskonto", kupon/puan kullanımı) fişin sonunda TEK kalem olarak
+  yaz: name fişteki adı (ör. "Satış İndirimi"), amount EKSİ (ör. -73.00), qty 1. "TOPLAM İNDİRİM" ile aynı indirimi iki kez yazma.
+  Böylece kalemlerin toplamı GENEL TOPLAM'ı tutar (ör. ara toplam 730,00 − indirim 73,00 = toplam 657,00).
+- Fiyatı okunamayan ürünü amount null ile yine yaz.
+- Birden fazla görüntü varsa hepsi AYNI fişin sırayla parçalarıdır: üst üste binen (iki fotoğrafta da görünen) satırları BİR kez
+  yaz; total son parçadaki GENEL TOPLAM'dır.
+"""
+
+SPLIT_RULE_COMPACT = """items[].s (split): ürün şu kategorilerden birine AÇIKÇA giriyorsa o kategorinin adı, değilse yazma: {cats}.
+Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin değilsen yazma.
+"""
+
+# kısa kalem anahtarı → uzun (_long_item); eski uzun anahtarlı yanıt da okunur
+ITEM_KEYS = {"n": "name", "p": "product", "b": "brand", "q": "qty", "u": "unit", "up": "unit_price", "a": "amount",
+             "s": "split"}
+
+
+def _flag(name: str, default: bool = True) -> bool:
+    v = (os.environ.get(name) or "").strip().lower()
+    return default if not v else v not in ("0", "false", "no", "off", "hayir")
+
+
+def compact_output() -> bool:
+    """HESAPKITAP_RECEIPT_COMPACT (varsayılan açık): sıkı çıktı istemi (DOC_PROMPT_COMPACT); 0 → eski DOC_PROMPT."""
+    return _flag("HESAPKITAP_RECEIPT_COMPACT")
+
+
+MEDIA_RES = {"low": "MEDIA_RESOLUTION_LOW", "medium": "MEDIA_RESOLUTION_MEDIUM", "high": "MEDIA_RESOLUTION_HIGH"}
+
+
+def media_resolution() -> str | None:
+    """HESAPKITAP_RECEIPT_MEDIA_RES: fiş fotoğrafının modeldeki çözünürlüğü (low | medium | high). Boş/bilinmeyen →
+    alan gönderilmez (modelin varsayılanı: gemini-3.1-flash-lite'ta HIGH, görüntü başı ~1.064 token; MEDIUM 540, LOW 266).
+    Varsayılan kapalı: MEDIUM'da 40 fişte toplam 39 → 34/39'a düştü. Gemini 3'te görüntü token'ı çözünürlük ayarına
+    bağlıdır, piksel boyutuna değil (1600 → 512 px yine 1.064 token): istemci tarafı küçültme token kazandırmaz."""
+    return MEDIA_RES.get((os.environ.get("HESAPKITAP_RECEIPT_MEDIA_RES") or "").strip().lower())
+
+
+def doc_prompt(categories: list[str], split_categories: list[str] | None = None) -> str:
+    """Fiş/fatura istemi (fotoğraf/PDF yolu): sıkı çıktı açıksa DOC_PROMPT_COMPACT, değilse DOC_PROMPT."""
+    cats = ", ".join(split_categories or [])
+    if compact_output():
+        return DOC_PROMPT_COMPACT.format(categories=", ".join(categories),
+                                         split_rule=SPLIT_RULE_COMPACT.format(cats=cats) if split_categories else "")
+    return DOC_PROMPT.format(categories=", ".join(categories),
+                             split_rule=SPLIT_RULE.format(cats=cats) if split_categories else "")
+
+
+def _long_item(i: dict) -> dict:
+    """Kısa anahtarlı kalemi uzun adlara çevir ({"n": "SUT", "a": 25} → {"name": "SUT", "amount": 25}). Aynı alanın
+    uzun adı da varsa uzun ad kazanır (eski yanıtlar, yeniden okuma, metin yolu uzun anahtarla gelir)."""
+    if not isinstance(i, dict):
+        return i
+    out = {ITEM_KEYS.get(k, k): v for k, v in i.items() if k not in ITEM_KEYS.values()}
+    out.update({k: v for k, v in i.items() if k in ITEM_KEYS.values()})
+    return out
+
 
 def text_first() -> bool:
     """HESAPKITAP_RECEIPT_TEXT_FIRST=1: eski davranış — fotoğrafla birlikte gelen telefon metni yapay zekâya fotoğraf
@@ -573,9 +692,9 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
     KDV/VKN boşsa bundan doldurulur."""
     from app import bill_templates
 
-    split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
-    raw, _ = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
-                          max_output_tokens=8000, more=more, kind=kind)
+    images_only = all((m or "").startswith("image/") for m in [mime, *(m for _, m in (more or []))])
+    raw, _ = _gemini_json(doc_prompt(categories, split_categories), data, mime, max_output_tokens=8000, more=more,
+                          kind=kind, media_resolution=media_resolution() if images_only else None)
     doc = _doc_of(raw, categories)
     # şablon metni: PDF metin katmanı; fotoğrafta (metin katmanı yok) telefon metni — metin yolu da ondan öğreniyordu
     own = bill_templates.text_of(data, mime)
