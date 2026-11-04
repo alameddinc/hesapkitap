@@ -319,4 +319,8 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             r = {**entry, "kind": "-", "status": "error", "detail": str(e)[:300]}
         db.log_mail(r)
         db.trim_mail_log(LOG_KEEP)
+        if r["status"] == "ok" and r["kind"] in ("pdf", "fatura"):
+            from app import push
+
+            push.after_document("posta", r["detail"])  # telefona "belge işlendi" (kapalıysa hiçbir şey yapmaz)
         return r

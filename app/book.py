@@ -58,7 +58,9 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("DELETE", r"/api/settings/tokens/\d+"), ("POST", r"/api/me/delete"), ("POST", r"/api/digest/dismiss"),
                    ("POST", r"/api/reminders/[^/]+/(snooze|dismiss)"),  # hatırlatma durumu kişiye özel
                    ("POST", r"/api/insights/(dismiss|restore)"),  # uyarı gizleme de kişiye özel
-                   ("DELETE", r"/api/me/sessions/[\w-]+"), ("POST", r"/api/me/sessions/revoke-all")]  # kendi oturumları
+                   ("DELETE", r"/api/me/sessions/[\w-]+"), ("POST", r"/api/me/sessions/revoke-all"),  # kendi oturumları
+                   ("POST", r"/api/push/(devices|test)"), ("DELETE", r"/api/push/devices"),  # kendi telefonu
+                   ("PUT", r"/api/push/prefs")]
 
 
 def member() -> dict | None:

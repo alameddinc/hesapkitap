@@ -217,6 +217,10 @@ def request_delete(u: dict, now: datetime | None = None, reason: str = "self") -
     _record(u, reason, now, after, purged=False)
     for m in members:
         _record(m, "owner", now, after, purged=False)
+    from app import push
+
+    for x in [u, *members]:  # kapanan hesaba bildirim gitmesin (cihazlar ve kuyruk; geri alınırsa uygulama yeniden kaydeder)
+        push.forget_devices(x["id"])
     if u.get("plan_source") == "revenuecat":  # mağazadan almış: Google Play ise yenilemeyi hemen durdurmayı dene
         rc_stop_android_renewal(u["id"])
     if not days:
@@ -259,7 +263,7 @@ def purge(u: dict, now: datetime | None = None) -> None:
     rc_delete_customer(u["id"])
     _apple_revoke(u["id"])
     system.delete_user(u["id"])
-    for k in ("consent", "pw_unset"):  # KVKK: onay kaydı (IP içerir) da gider
+    for k in ("consent", "pw_unset", "push:daily", "push:test"):  # KVKK: onay kaydı (IP içerir) da gider
         system.put(f"{k}:{u['id']}", None)
     _record(u, "self", now, None, purged=True)
     log.info("hesap kalıcı olarak silindi: %s", u["id"])

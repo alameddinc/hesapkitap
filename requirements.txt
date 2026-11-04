@@ -5,6 +5,8 @@ starlette==1.10.0
 uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 httpx==0.28.1
+# telefona bildirim: APNs yalnız HTTP/2 konuşur (httpx[http2] ekstrası; app/push.py)
+h2==4.4.1
 # gelen postada (Cloudflare Email Worker) DKIM imzasını sunucu doğrular
 dkimpy==1.1.8
 pdfplumber==0.11.10

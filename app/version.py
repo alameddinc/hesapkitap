@@ -62,6 +62,8 @@ CAPABILITIES = (
                               # subcategory alanı, /api/transactions?category&subcategory, by_category[].children
     "total_check",            # fiş okumasında total_check "ok"|"kontrol"|null: toplam telefon/PDF metninde geçiyor mu
                               # (kontrol: istemci tutarı vurgular, "Tutarı fişle karşılaştır"); text_match {date, merchant}
+    "push",                   # telefona bildirim: POST/DELETE /api/push/devices, GET/PUT /api/push/prefs (enabled: sunucuda
+                              # yapılandırılmış mı), POST /api/push/test; yük data {route, kind, id}
 )
 
 

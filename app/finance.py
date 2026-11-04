@@ -585,6 +585,8 @@ def subscriptions() -> list[dict]:
         st = states.get(m)
         after = [t for t in ts if st and t["txn_date"] > st["changed_at"]]
         monthly = _round(sum(t["amount"] for t in ts if t["period"] == last_period))
+        before = [t["period"] for t in ts if t["period"] < last_period]  # bir önceki görüldüğü dönem (zam bildirimi)
+        prev_monthly = _round(sum(t["amount"] for t in ts if t["period"] == max(before))) if before else None
         new_amount = st["new_amount"] if st and st["status"] == "dusuruldu" else None
         # paket düşürüldükten sonraki dönemlerde yeni tutarın %15 fazlasından çok çekildiyse: düşürme tutmamış
         over = 0.0
@@ -595,7 +597,7 @@ def subscriptions() -> list[dict]:
             over = _round(sum(v - new_amount for v in per.values() if v > new_amount * 1.15))
         out.append({
             "merchant": m, "category": ts[0]["category"],
-            "monthly": monthly, "new_amount": new_amount,
+            "monthly": monthly, "new_amount": new_amount, "prev_monthly": prev_monthly, "last_period": last_period,
             "saving": _round(monthly if st and st["status"] == "iptal" else max(0.0, monthly - new_amount) if new_amount is not None else 0),
             "overcharged": over,
             "last_seen": max(t["txn_date"] for t in ts), "months": len({t["period"] for t in ts}),

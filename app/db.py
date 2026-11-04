@@ -1008,6 +1008,9 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
             c.execute(f"INSERT INTO transactions ({cols}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
     if source != "excel":  # Excel ekstresinin "dosyası" yok (anahtar baytları); asıl Excel saklanmaz
         _store_quietly("uploads", f"{file_hash(data)}.pdf", data, "application/pdf")  # sınır/depo hatası: kayıt var, dosya yok
+    from app import push
+
+    push.after_statement()  # telefona faiz / abonelik bildirimi (arka planda; push kapalıysa hiçbir şey yapmaz)
     return sid
 
 

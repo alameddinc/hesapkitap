@@ -142,6 +142,34 @@ CREATE TABLE IF NOT EXISTS deleted_accounts (  -- silinen hesabın anonim kaydı
     notes TEXT                           -- JSON liste: silme sonrası mağaza olayları, iptal denemeleri
 );
 CREATE INDEX IF NOT EXISTS deleted_accounts_email ON deleted_accounts(email_hash);
+CREATE TABLE IF NOT EXISTS push_devices (   -- telefona bildirim (app/push.py): cihaz belgesi (FCM / APNs)
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,              -- ios | android
+    env TEXT,                            -- iOS: production | sandbox
+    app_version TEXT,
+    created TEXT,
+    last_seen TEXT
+);
+CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id);
+CREATE TABLE IF NOT EXISTS push_prefs (     -- kişinin bildirim tercihleri (JSON: types, quiet, digest)
+    user_id INTEGER PRIMARY KEY,
+    json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_sent (      -- tekrar yok: (kullanıcı, bildirim kimliği) bir kez; 60 gün sonra düşer
+    user_id INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    at TEXT NOT NULL,                    -- YYYY-MM-DD (Türkiye günü)
+    PRIMARY KEY (user_id, id)
+);
+CREATE TABLE IF NOT EXISTS push_queue (     -- gönderilecekler (sessiz saat bitince / arka planda)
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    payload TEXT NOT NULL,               -- JSON {title, body, route, kind, id}
+    not_before REAL NOT NULL,            -- unix zamanı
+    created TEXT,
+    tries INTEGER NOT NULL DEFAULT 0
+);
 """
 
 DEFAULT_AI_QUOTA = 100
@@ -330,7 +358,7 @@ def delete_user(uid: int) -> None:
         if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
             for t in ("read_usage", "read_daily", "read_split", "read_credits", "ai_restrictions", "ai_restriction_log",
-                      "ai_restriction_days"):
+                      "ai_restriction_days", "push_devices", "push_prefs", "push_sent", "push_queue"):
                 c.execute(f"DELETE FROM {t} WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın

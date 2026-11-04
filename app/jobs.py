@@ -271,6 +271,13 @@ async def scheduler() -> None:
             await asyncio.to_thread(integrity.report_admin, now)
         except Exception:  # noqa: BLE001
             log.exception("integrity report failed")
+        try:  # telefona bildirim (app/push.py): günlük hatırlatmalar 09:00'dan sonra, kuyruk her dakika
+            from app import push
+
+            if push.enabled():
+                await asyncio.to_thread(push.tick, now)
+        except Exception:  # noqa: BLE001
+            log.exception("push failed")
         for path, user in spaces():
             with db.use_space(path, user):  # her kullanıcının işi kendi veritabanında (to_thread bağlamı taşır)
                 for name, fn in due_jobs(now):

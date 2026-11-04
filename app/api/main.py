@@ -3157,6 +3157,95 @@ def reminders_dismiss(rid: str):
     return reminders.dismiss(_reminder_id(rid))
 
 
+# ---------------------------------------------------------------- telefona bildirim (app/push.py)
+
+class PushDeviceIn(BaseModel):
+    token: str = Field(min_length=16, max_length=4096)
+    platform: Literal["ios", "android"]
+    env: Literal["production", "sandbox"] | None = None
+    app_version: str | None = Field(default=None, max_length=40)
+
+
+class PushTokenIn(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+
+
+class PushQuietIn(BaseModel):
+    model_config = {"populate_by_name": True}
+    from_: str | None = Field(default=None, alias="from", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    to: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class PushPrefsIn(BaseModel):
+    types: dict[str, bool] | None = None
+    quiet: PushQuietIn | None = None
+    digest: bool | None = None
+
+
+def _push_uid() -> int:
+    u = db.current_user()
+    if not u or not u.get("id"):
+        raise HTTPException(409, "Bildirim için giriş (kullanıcı hesabı) gerekli")
+    return u["id"]
+
+
+@app.post("/api/push/devices")
+def push_device_add(body: PushDeviceIn):
+    """Cihaz belgesi (FCM / APNs). Aynı belge başka kullanıcıdaysa bu hesaba taşınır (telefonda hesap değişti)."""
+    from app import push
+
+    if not push.valid_token(body.token):
+        raise HTTPException(422, "Geçersiz cihaz belgesi")
+    push.register(_push_uid(), body.token, body.platform, body.env, body.app_version)
+    return {"ok": True}
+
+
+@app.delete("/api/push/devices")
+def push_device_delete(body: PushTokenIn):
+    """Çıkışta: bu telefona bildirim gitmesin."""
+    from app import push
+
+    push.unregister(_push_uid(), body.token)
+    return {"ok": True}
+
+
+@app.get("/api/push/prefs")
+def push_prefs_get():
+    """{enabled (sunucuda push yapılandırılmış mı), types, labels, quiet {from, to}, digest, devices}."""
+    from app import push
+
+    return push.prefs_out(_push_uid())
+
+
+@app.put("/api/push/prefs")
+def push_prefs_put(body: PushPrefsIn):
+    """Kısmi güncelleme: yalnız gelen alanlar."""
+    from app import push
+
+    uid = _push_uid()
+    data = body.model_dump(exclude_unset=True, by_alias=True)
+    try:
+        push.set_prefs(uid, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return push.prefs_out(uid)
+
+
+@app.post("/api/push/test")
+def push_test():
+    """Kullanıcının cihazlarına "Bildirimler açık" (dakikada bir)."""
+    from app import push
+
+    uid = _push_uid()
+    if not push.enabled():
+        raise HTTPException(409, "Bildirimler bu sunucuda kapalı")
+    if not push.devices(uid):
+        raise HTTPException(409, "Kayıtlı telefon yok; uygulamada bildirim iznini aç")
+    if not push.test_allowed(uid):
+        raise HTTPException(429, "Bir dakika sonra yeniden dene", headers={"Retry-After": str(push.TEST_EVERY)})
+    return {"ok": True, **push.send_test(uid)}
+
+
 JarUnit = Literal["TRY", "ALTIN_24", "ALTIN_22", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS", "USD", "EUR", "GBP"]
 
 
@@ -5259,6 +5348,10 @@ async def share(request: Request, file: list[UploadFile] = File(...)):
         out.append(res["message"])
         if res.get("storage_warning"):
             out.append(res["storage_warning"])
+        if res.get("status") in ("ok", "bekliyor"):
+            from app import push
+
+            push.after_document("paylas", res["message"])  # telefona "belge işlendi" (kapalıysa hiçbir şey yapmaz)
     if "text/plain" in request.headers.get("accept", "") or "json" not in request.headers.get("accept", ""):
         return PlainTextResponse("\n".join(out) or "Dosya yok")
     return {"messages": out}
