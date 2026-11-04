@@ -1535,6 +1535,11 @@ def revoke_all_sessions(request: Request, response: Response, body: RevokeAllIn 
     if not u:
         raise HTTPException(401, errors.GENERIC[401])
     n = sessions.revoke_all(u["id"])
+    from app import push
+
+    # bildirim kayıtları da düşer: çıkış yaptırılan telefonlara hatırlatma gitmesin. Bu cihaz yeni oturumla açık
+    # kalıyorsa mobil uygulama oturum değişince kendini yeniden kaydeder.
+    push.forget_devices(u["id"])
     if (body or RevokeAllIn()).keep_current:
         _start_session(request, response, system.user(u["id"]))
     else:

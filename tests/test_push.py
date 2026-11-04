@@ -553,3 +553,14 @@ def test_account_deletion_removes_push_data(client, keys):
     with system.connect() as c:
         for t in ("push_devices", "push_prefs", "push_sent", "push_queue"):
             assert c.execute(f"SELECT COUNT(*) FROM {t} WHERE user_id = ?", (u["id"],)).fetchone()[0] == 0, t
+
+
+def test_revoke_all_sessions_forgets_push_devices(owner, nokeys):  # noqa: F811
+    """"Bütün cihazlardan çıkış": çıkış yaptırılan telefonlara hatırlatma gitmesin; bu cihaz yeniden kaydolur."""
+    from app import push, system
+
+    admin = system.user_by_name("admin")
+    assert owner.post("/api/push/devices", json={"token": FCM_TOKEN, "platform": "android"}).json() == {"ok": True}
+    assert len(push.devices(admin["id"])) == 1
+    assert owner.post("/api/me/sessions/revoke-all", json={"keep_current": True}).status_code == 200
+    assert push.devices(admin["id"]) == []
