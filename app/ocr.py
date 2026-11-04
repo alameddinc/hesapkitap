@@ -177,5 +177,13 @@ def parse(data: bytes, mime: str, categories: list[str], more: list[tuple[bytes,
     return {"type": "receipt", "merchant": _merchant(lines), "date": _date(text), "total": _total(lines),
             "payment": payment, "payment_card": next((k.title() for k in _MEAL if k in u), None) if payment == "yemek_karti" else None,
             "installments": n if 2 <= n <= 36 else 1, "card_last4": card.group(1) if card else None, "category": "Diğer" if "Diğer" in categories else categories[0],
-            "items": _items(lines), "legal_name": None, "address": None, "branch": None, "confidence": "düşük",
-            "engine": "yerel"}
+            "items": _items(lines), "legal_name": None, "address": None, "branch": None,
+            **_tax(text, _total(lines)), "confidence": "düşük", "engine": "yerel"}
+
+
+def _tax(text: str, total: float | None) -> dict:
+    """KDV toplamı, KDV dökümü, VKN, vergi dairesi: fiş metninden kural ile (app/vat.py)."""
+    from app import vat
+
+    doc = vat.fill({"type": "receipt", "total": total}, text)
+    return {k: doc[k] for k in ("vat_total", "vat_lines", "tax_no", "tax_office")}

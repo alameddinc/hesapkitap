@@ -53,6 +53,9 @@ CAPABILITIES = (
     "interest_page",          # GET /api/interest: faiz ve ücretler sayfası (kart/ay/kalem, neden, önleme önerileri)
     "daily_reads",            # günlük tek okuma sayacı: plan.reads / me/ai reads {period:"day", limit, used, left, resets_at,
                               # monthly_cap, extra_left}; hak doldu gövdesinde daily_*, needed; yanıtlarda charged {daily, extra}
+    "receipt_tax",            # fiş okumasında ve kayıtta vat_total, vat_lines [{rate, amount}], tax_no (VKN), tax_office,
+                              # legal_name (POST/PATCH /api/entries); GET /api/receipts/export?period=month|year&value
+                              # ya da ?from&to, &format=xlsx|csv (Excel: "Fiş listesi" + "KDV özeti")
 )
 
 

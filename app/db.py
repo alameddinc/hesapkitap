@@ -455,6 +455,12 @@ MIGRATIONS = [
     ("statements", "paid_source", "TEXT"),        # auto (ödemelerden eşleşti) | elle (kullanıcı işaretledi/geri aldı)
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
     ("bank_documents", "verified", "INTEGER"),    # bakiye zinciri: 1 tuttu, 0 tutmadı, 2 kullanıcı onayladı (app/verification.py)
+    # fişin vergi bilgisi (app/vat.py): muhasebeci listesi (GET /api/receipts/export) ve kaydın fiş bölümü
+    ("entries", "legal_name", "TEXT"),            # fişteki resmi unvan
+    ("entries", "tax_no", "TEXT"),                # satıcının VKN'si (10 hane, kontrol hanesi tutan; TCKN saklanmaz)
+    ("entries", "tax_office", "TEXT"),            # vergi dairesi
+    ("entries", "vat_total", "REAL"),             # fişteki toplam KDV
+    ("entries", "vat_lines", "TEXT"),             # KDV dökümü JSON: [{"rate": 1, "amount": 18.25}]
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -1199,7 +1205,8 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
-                "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider", "not_virman")
+                "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider", "not_virman",
+                "legal_name", "tax_no", "tax_office", "vat_total", "vat_lines")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:

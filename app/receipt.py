@@ -8,7 +8,7 @@ from datetime import date
 
 import httpx
 
-from app import config
+from app import config, vat
 
 log = logging.getLogger("hesapkitap.receipt")
 
@@ -504,10 +504,15 @@ SADECE şu JSON'u döndür:
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
+  "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV tutarı veya null",
+  "vat_lines": [{{"rate": 1, "amount": 0.00}}],
+  "tax_no": "sadece fiş: satıcının 10 haneli vergi no (V.NO, VKN, V.D. … NO); 11 haneli TCKN ise null",
+  "tax_office": "sadece fiş: vergi dairesi adı (ör. Kadıköy) veya null",
   "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "unit_price": null, "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
 }}
 {split_rule}total = ödenen/ödenecek GENEL TOPLAM (KDV dahil). Türk sayı formatında 1.234,56 = 1234.56.
+vat_lines: fişin oran oran KDV dökümü ("%1 *18,25", "KDV %20 3,33"); rate 1 | 10 | 20, her oran bir kez; döküm yoksa [].
 """ + ITEM_RULES
 
 
@@ -557,6 +562,10 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
         from app import bill_templates
 
         bill_templates.learn(bill_templates.text_of(data, mime), raw)
+    if mime == "application/pdf" and doc["type"] == "receipt":  # e-arşiv fiş PDF'i: metninden KDV/VKN yedeği
+        from app import bill_templates
+
+        vat.fill(doc, bill_templates.text_of(data, mime))
     return doc
 
 
@@ -587,7 +596,7 @@ def parse_document_text(text: str, categories: list[str], split_categories: list
     doc = _doc_of(raw, categories)
     if doc["type"] == "bill":
         bill_templates.learn(text, raw)
-    return doc
+    return vat.fill(doc, text)  # model KDV/VKN'yi boş bıraktıysa metindeki TOPKDV / V.NO satırından
 
 
 def _doc_of(raw: dict, categories: list[str]) -> dict:
@@ -621,6 +630,7 @@ def _doc_of(raw: dict, categories: list[str]) -> dict:
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,
         "address": (raw.get("address") or "").strip()[:160] or None,
         "branch": (raw.get("branch") or "").strip()[:60] or None,
+        **vat.of_raw(raw, _num(raw.get("total"))),  # KDV, KDV dökümü, VKN, vergi dairesi (app/vat.py)
         "confidence": raw.get("confidence") or "orta",
         "source": "yapay_zeka",
     }

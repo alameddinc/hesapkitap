@@ -1895,11 +1895,16 @@ class EntryIn(BaseModel):
     items: list[dict] | None = None  # fiş satırları: fiyat takibi için saklanır
     location: str | None = None  # fişteki işyeri adresi (opsiyonel)
     branch: str | None = None  # fişteki şube/semt (fiyat geçmişinde)
-    legal_name: str | None = None  # fişteki resmi unvan; saklanmaz, eşleştirme öğrenmek için
+    legal_name: str | None = None  # fişteki resmi unvan: saklanır (muhasebeci listesi) ve eşleştirme öğrenilir
     account_id: int | None = None  # banka/nakit hesabı
     installments: int = Field(1, ge=1, le=36)  # kredi kartı taksit sayısı
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # hangi kredi kartı (fişte yazıyorsa okunur)
     receipt_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.jpg$")  # okuma yanıtındaki fiş fotoğrafı
+    # fişin vergi bilgisi (okuma yanıtındaki alanlar; app/vat.py)
+    tax_no: str | None = Field(None, max_length=20)  # satıcının VKN'si: 10 hane, kontrol hanesi tutmalı
+    tax_office: str | None = Field(None, max_length=80)
+    vat_total: Money | None = Field(None, ge=0)
+    vat_lines: list[dict] | None = Field(None, max_length=10)  # [{rate: 1|10|20, amount}]
 
 
 class EntryPatch(BaseModel):
@@ -1918,12 +1923,44 @@ class EntryPatch(BaseModel):
     installments: int | None = Field(None, ge=1, le=36)
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")
     hidden: bool | None = None  # ortak defterde üyeye gösterme (sadece sahip)
+    legal_name: str | None = Field(None, max_length=160)  # fişin vergi bilgisi; "" ya da null → sil
+    tax_no: str | None = Field(None, max_length=20)
+    tax_office: str | None = Field(None, max_length=80)
+    vat_total: Money | None = Field(None, ge=0)
+    vat_lines: list[dict] | None = Field(None, max_length=10)
+
+
+def _tax_fields(data: dict) -> None:
+    """Fişin vergi alanları (yerinde): boş → None, VKN 10 hane ve kontrol hanesi tutmalı (11 haneli TCKN saklanmaz),
+    KDV dökümü JSON metni olarak; dökümü verilip toplamı verilmediyse toplam dökümden."""
+    import json as _json
+
+    from app import vat
+
+    if "legal_name" in data:
+        data["legal_name"] = (data["legal_name"] or "").strip()[:120] or None
+    if "tax_no" in data:
+        raw = re.sub(r"[\s.\-/]", "", data["tax_no"] or "")
+        if raw and not vat.vkn(raw):
+            raise HTTPException(422, "Vergi numarası 10 haneli olmalı (11 haneli T.C. kimlik numarası saklanmaz); "
+                                     "fişteki numarayı kontrol et.")
+        data["tax_no"] = raw or None
+    if "tax_office" in data:
+        data["tax_office"] = vat.tax_office(data["tax_office"])
+    if "vat_lines" in data:
+        lines = vat.lines_of(data["vat_lines"] or [])
+        data["vat_lines"] = _json.dumps(lines) if lines else None
+        if lines and data.get("vat_total") is None:
+            data["vat_total"] = round(sum(x["amount"] for x in lines), 2)
+    if "vat_total" in data and not data["vat_total"]:
+        data["vat_total"] = None
 
 
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba kayıt yazamaz
-    data = body.model_dump(exclude={"legal_name", "splits", "items", "branch"})
+    data = body.model_dump(exclude={"splits", "items", "branch"})
+    _tax_fields(data)
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
     if body.legal_name and body.kind == "gider":
@@ -1986,6 +2023,7 @@ def patch_entry(entry_id: int, body: EntryPatch):
             data = {k: v for k, v in data.items() if k in book.ENTRY_MEMBER_FIELDS}
     if "hidden" in data:
         data["hidden"] = int(bool(data["hidden"]))
+    _tax_fields(data)
     if "entry_date" in data:
         data["entry_date"] = data["entry_date"].isoformat()
     if "skipped" in data:
@@ -5750,6 +5788,34 @@ def export_xlsx():
 
     return Response(export.workbook(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="hesapkitap-{date.today():%Y%m%d}.xlsx"'})
+
+
+@app.get("/api/receipts/export")
+def export_receipts(from_: date | None = Query(None, alias="from"), to: date | None = None,
+                    period: Literal["month", "year"] | None = None, value: str | None = Query(None, max_length=7),
+                    format: Literal["xlsx", "csv"] = "xlsx"):
+    """Muhasebeci için fiş listesi (tarih, işyeri, unvan, VKN, vergi dairesi, toplam, KDV %1/%10/%20, KDV toplamı, ödeme,
+    kategori). Dönem: period=month&value=2026-11 | period=year&value=2026 ya da from/to. Excel'de ikinci sayfa
+    "KDV özeti" (ay ay; yıllıkta 12 ay + yıl toplamı); CSV yalnız liste (app/export.py)."""
+    from app import export
+
+    label = "Toplam"
+    if period:
+        try:
+            from_, to = export.period_range(period, value or "")
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        label = "Yıl toplamı" if period == "year" else "Ay toplamı"
+    if from_ and to and to < from_:
+        raise HTTPException(422, "Bitiş tarihi başlangıçtan önce olamaz")
+    span = (value.replace("-", "") if period and value else
+            "-".join(x for x in (from_ and f"{from_:%Y%m%d}", to and f"{to:%Y%m%d}") if x) or f"{date.today():%Y%m%d}")
+    if format == "csv":
+        return Response(export.receipts_csv(from_, to), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="hesapkitap-fisler-{span}.csv"'})
+    return Response(export.receipts_xlsx(from_, to, label),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="hesapkitap-fisler-{span}.xlsx"'})
 
 
 @app.post("/api/settings/backup/restore")

@@ -168,6 +168,14 @@ def _raw(e: dict) -> str | None:
     return rawnote.raw_of(e.get("note"))
 
 
+def _vat_lines(v) -> list[dict]:
+    if not v:
+        return []
+    from app import vat
+
+    return vat.lines_of(v)
+
+
 def _entry_row(e: dict) -> dict:
     if e.get("debt_id"):  # borç verildi/alındı/ödendi: gelir-gider değil, sadece eldeki para
         return {**_entry_row({**e, "debt_id": None}), "kind": DEBT, "flow": 1 if e["kind"] == INCOME else -1,
@@ -186,6 +194,9 @@ def _entry_row(e: dict) -> dict:
         "card_last4": e.get("card_last4"), "hidden": bool(e.get("hidden")), "created_by": e.get("created_by"),
         # fiş fotoğrafı (GET /api/entries/{id}/receipt) ve hesap dökümü (GET /api/bank-import/documents/{id}/file)
         "receipt_file": e.get("receipt_file"), "bank_doc_id": e.get("bank_doc_id"),
+        # fişin vergi bilgisi (app/vat.py): unvan, VKN, vergi dairesi, KDV toplamı ve oran oran dökümü
+        "legal_name": e.get("legal_name"), "tax_no": e.get("tax_no"), "tax_office": e.get("tax_office"),
+        "vat_total": e.get("vat_total"), "vat_lines": _vat_lines(e.get("vat_lines")),
         # eşitleme (app/sync.py): dökümdeki/ekstredeki karşılığı — "Dökümle eşleşti · Garanti · 28 Eki", geri alınabilir
         "match": e.get("match"),
         # kredi kartıyla ödendi ve ekstredeki karşılığı bulundu → kart satırı sayılır, bu satır sayılmaz
