@@ -20,11 +20,21 @@ def test_total_found_in_turkish_formats(text):
     assert receipt_verify.verify({"total": 1795.70}, text)["total_check"] == "ok"
 
 
-@pytest.mark.parametrize("text", ["TOPLAM 1.795,07", "TOPLAM 11.795,70", "TOPLAM 1.795,701", "TOPLAM 1795",
-                                  "TOPLAM 179,57", "", "OKUNAMADI"])
-def test_total_not_found(text):
-    got = receipt_verify.verify({"total": 1795.70}, text)["total_check"]
-    assert got == (None if not text else "kontrol")
+@pytest.mark.parametrize("text", ["TOPLAM 1.795,07", "TOPLAM 11.795,70", "TOPLAM 179,57", "TUTAR\n*1.759,70"])
+def test_total_contradicted_by_labeled_amount(text):
+    # metindeki TOPLAM/TUTAR satırında başka bir tutar var: gerçek çelişki → kullanıcı uyarılır
+    assert receipt_verify.verify({"total": 1795.70}, text)["total_check"] == "kontrol"
+
+
+@pytest.mark.parametrize("text", ["TOPLAM 1.795,701", "TOPLAM 1795", "", "OKUNAMADI", "TUTAR 0211", "ARA TOPLAM 1.700,00",
+                                  "TOPKDV 18,25"])
+def test_total_unknown_when_ocr_cannot_read_it(text):
+    # OCR toplamı okuyamamış (bozuk rakam, etiket yok, yalnız ara toplam/KDV): karar yok — yanlış alarm verilmez
+    assert receipt_verify.verify({"total": 1795.70}, text)["total_check"] is None
+
+
+def test_total_found_with_ocr_spaces():
+    assert receipt_verify.verify({"total": 1161.78}, "1. 161, 78 TL")["total_check"] == "ok"
 
 
 def test_total_check_null_without_text_or_total():

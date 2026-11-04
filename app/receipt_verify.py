@@ -31,7 +31,7 @@ def amount_pattern(total: float) -> re.Pattern:
     while digits:
         groups.insert(0, digits[-3:])
         digits = digits[:-3]
-    body = r"[.\s']?".join(groups)
+    body = r"[.\s']{0,2}".join(groups)  # OCR "1. 161, 78": ayırıcıdan sonra boşluk
     return re.compile(rf"(?<![\d.,]){body}\s?[,.]\s?{frac:02d}(?!\d)")
 
 
@@ -71,11 +71,52 @@ def merchant_in_text(names: list[str | None], text: str | None) -> bool | None:
     return any(f" {w} " in hay or w in hay.replace(" ", "") for w in words)
 
 
+_TOTAL_LABEL = re.compile(r"(?<![A-ZÇĞİÖŞÜ])(?:GENEL\s*)?TOPLAM(?!\s*KDV)|(?<![A-ZÇĞİÖŞÜ])TUTAR(?!\s*KAR)", re.I)
+_NOT_TOTAL = re.compile(r"ARA\s*TOPLAM|TOP\s*KDV|TOPLAM\s*KDV|KDV\s*TUTAR|[İI]ND[İI]R[İI]M", re.I)
+_AMOUNT = re.compile(r"(?<![\d.,])\d{1,3}(?:[.\s']{0,2}\d{3})*\s?[,.]\s?\d{2}(?!\d)")
+
+
+def _num(s: str) -> float | None:
+    s = re.sub(r"\s", "", s)
+    m = re.fullmatch(r"([\d.']+)[,.](\d{2})", s)
+    if not m:
+        return None
+    return float(re.sub(r"[.']", "", m.group(1)) + "." + m.group(2))
+
+
+def labeled_totals(text: str | None) -> list[float]:
+    """"TOPLAM"/"TUTAR" etiketli satırdaki (ya da hemen altındaki) tutarlar; ara toplam, KDV, indirim satırları hariç."""
+    lines = _clean(text).splitlines()
+    out = []
+    for i, ln in enumerate(lines):
+        if not _TOTAL_LABEL.search(ln) or _NOT_TOTAL.search(ln):
+            continue
+        for cand in (ln, lines[i + 1] if i + 1 < len(lines) else ""):
+            vals = [v for v in (_num(m.group(0)) for m in _AMOUNT.finditer(cand)) if v]
+            if vals:
+                out.extend(vals)
+                break
+    return out
+
+
 def verify(doc: dict, text: str | None) -> dict:
-    """Fiş sonucunu metinle karşılaştır. Metin yoksa hepsi None."""
+    """Fiş sonucunu metinle karşılaştır. Metin yoksa hepsi None.
+
+    total_check: "ok" toplam metinde geçiyor; "kontrol" yalnız GERÇEK çelişkide — metinde TOPLAM/TUTAR etiketli bir tutar
+    var ve hiçbiri okunan toplam değil; aksi halde None (OCR toplamı okuyamamış: uyarı ve yeniden okuma yok). Ölçüm
+    04.11.2026 (40 fiş): "metinde yok = kontrol" kuralı fişlerin %24'ünde yanlış alarm verdi, toplamların hepsi doğruydu;
+    sebep bozuk OCR ("TUTAR 0211", "1. 161, 78")."""
     has_text = bool((text or "").strip())
     t = total_in_text(doc.get("total"), text) if has_text else None
-    return {"total_check": None if t is None else ("ok" if t else "kontrol"),
+    check = None
+    if t:
+        check = "ok"
+    elif t is False:
+        lab = labeled_totals(text)
+        tot = doc.get("total")
+        if lab and not any(money.eq(v, tot) for v in lab):
+            check = "kontrol"
+    return {"total_check": check,
             "date_in_text": date_in_text(doc.get("date"), text) if has_text else None,
             "merchant_in_text": merchant_in_text([doc.get("merchant"), doc.get("legal_name")], text) if has_text else None}
 
