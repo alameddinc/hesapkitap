@@ -44,6 +44,7 @@ class Statement:
     available_limit: float | None = None  # ekstrede yazan "kullanılabilir limit" (kesim günü itibarıyla)
     transactions: list[Transaction] = field(default_factory=list)
     ai_parsed: bool = False  # bankaya özel parser yerine yapay zekâ ile okundu
+    source: str = "parser"  # nasıl okundu: parser (bankaya özel) | sablon (app/card_reader.py) | yapay_zeka
 
     def fees(self) -> float:
         """Ekstredeki faiz ve ücret: özet satırı okunduysa o, okunmadıysa faiz/ücret işlemlerinin toplamı."""

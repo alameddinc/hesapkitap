@@ -111,18 +111,23 @@ SUPPORTED = "VakıfBank, Kuveyt Türk; diğerleri ekstre denklemi tutarsa genel 
 
 
 def parse_text(text: str) -> Statement | None:
-    """Yapay zekâsız okuma: bankaya özel okuyucu, yoksa genel okuyucu (ekstre denklemi tutmalı). Okunamazsa None."""
+    """Yapay zekâsız okuma: bankaya özel okuyucu (source "parser"), yoksa kayıtlı/öğrenilen kart şablonu (source
+    "sablon"; ekstre denklemi ve tarihler tutmalı). Okunamazsa None."""
     for detect, parse in DETECTORS:
         if detect(text):
-            return parse(text)
+            st = parse(text)
+            if st is not None:
+                st.source = "parser"
+            return st
     from app import card_reader
 
     return card_reader.read(text)
 
 
 def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | None = None) -> Statement:
-    """Önce bankaya özel parser (kesin, ücretsiz); tanınmazsa ve GEMINI_API_KEY varsa yapay zekâ ile okuma.
-    Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired."""
+    """Sıra: bankaya özel parser → kayıtlı kart şablonu (ikisi de ücretsiz, yapay zekâsız) → GEMINI_API_KEY varsa yapay
+    zekâ. Yapay zekâ okuması doğrulanırsa aynı bankanın sonraki ekstreleri için şablon öğretir (card_reader.learn_from_ai;
+    şifreli PDF'te şifre çözülmüş metinden). Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired."""
     try:
         text, used_pw = _text_with_passwords(data, passwords or [])
     except PasswordRequired:
@@ -147,7 +152,10 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
             st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")
         except receipt.ReceiptError as e:
             raise ValueError(f"Banka tanınamadı ve yapay zekâ ile okunamadı: {e}") from e
-        st.ai_parsed = True
+        st.ai_parsed, st.source = True, "yapay_zeka"
+        from app import card_reader
+
+        card_reader.learn_from_ai(text, st)  # hata okumayı bozmaz
         return st
     raise ValueError(f"Banka tanınamadı. Desteklenen: {SUPPORTED}. "
                      "Diğer bankalar için GEMINI_API_KEY tanımlarsan yapay zekâ ile okunur.")
