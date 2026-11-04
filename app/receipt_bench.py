@@ -10,8 +10,12 @@ Yollar:
     C  karma: önce A; `accept_local` koşullarının hepsi tutarsa A'nın sonucu, tutmazsa B'nin (B ayrıca çağrılmaz, B'nin
        ölçülen sonucu ve maliyeti kullanılır)
     T  metin (--text-dir): telefonda çıkarılmış metin yapay zekâya (app/receipt.py `parse_document_text`), B ile aynı
-       ölçütler. T+ uygulamadaki yol: T tutarsızsa (toplam yok, fiyatsız kalem, kalem toplamı tutmuyor) fotoğrafla bir
-       kez daha okunur (B'nin ölçülen sonucu ve maliyeti kullanılır); maliyet T + gerekirse B.
+       ölçütler. T+ ESKİ uygulama yolu (bugün yalnız HESAPKITAP_RECEIPT_TEXT_FIRST=1): T tutarsızsa (toplam yok, fiyatsız
+       kalem, kalem toplamı tutmuyor) fotoğrafla bir kez daha okunur (B'nin ölçülen sonucu ve maliyeti); maliyet T +
+       gerekirse B.
+    U  uygulamadaki yol (metin varsa; app/receipt.py `parse_document` ocr_text): B + metin yardımcıları — model KDV/VKN'yi
+       boş bıraktıysa metinden (app/vat.py), B okuyamadıysa metinden kural tabanlı yerel okuma (app/ocr.py `parse_text`).
+       Ek yapay zekâ çağrısı yok; maliyet B. Fatura şablonu kıyasta denenmez (şablonlar sistem veritabanında).
 
 Metin dosyaları: DIR/<fiş dosyasının adı, uzantısız>.txt (ör. <sha256>.txt). Fotoğrafları macOS'ta metne çevirmek için
 önce `--export-photos DIR` (fotoğraflar DIR'e <ad>.jpg olarak yazılır, kıyas yapılmaz), sonra
@@ -20,9 +24,9 @@ DIŞINDA bir klasör olmalı; kişisel veri.
 
 Klasör kıyası (--photo-dir): defter yerine bir klasördeki fiş fotoğrafları (macOS'ta önce
 `swift scripts/vision_ocr.swift DIR`: her fotoğrafın yanına <ad>.txt). Altın yoktur; her fişte B (fotoğraf → Gemini
-görsel) ve T (metin → Gemini metin) okunur, T+ uygulamadaki yoldur. Ölçütler: fiş sayıldı mı, toplam/tarih/işyeri
-bulundu mu ve T ile B aynısını mı buldu, fiyatsız kalem, kalem toplamı = fiş toplamı, iki satır belirtisi, token ve
-maliyet. Anahtar GEMINI_API_KEY ortam değişkeninden; defter/sistem veritabanı açılmaz.
+görsel) ve T (metin → Gemini metin) okunur; U uygulamadaki yol, T+ eski yol. Ölçütler: fiş sayıldı mı,
+toplam/tarih/işyeri/KDV/VKN bulundu mu ve T ile B aynısını mı buldu, fiyatsız kalem, kalem toplamı = fiş toplamı, iki
+satır belirtisi, token ve maliyet. Anahtar GEMINI_API_KEY ortam değişkeninden; defter/sistem veritabanı açılmaz.
 
 Gerçek cevap (altın): kayıtlı fişin kaydı — tutar (entries.amount), tarih (entry_date, ±1 gün), işyeri (description,
 normalize benzerlik). Kayıtlı fiş kalemleri (receipt_items) eski yapay zekâ çıktısı olduğundan altın SAYILMAZ; kalemler
@@ -292,8 +296,24 @@ def ai_text_read(case: Case) -> tuple[dict, dict]:
     return doc, (seen[-1] if seen else {})
 
 
+def with_text_helpers(b_doc: dict | None, case: Case) -> dict | None:
+    """U: uygulamadaki yol (app/receipt.py `parse_document` ocr_text) — B'nin sonucu + telefon metni: KDV/VKN boşsa
+    metinden; B okuyamadıysa metinden kural tabanlı yerel okuma. B'nin sonucu değiştirilmez (kopya)."""
+    import copy
+
+    from app import ocr, vat
+
+    if b_doc is None:
+        try:
+            return ocr.parse_text(case.text or "", case.categories or ["Diğer"])
+        except ValueError:
+            return None
+    return vat.fill(copy.deepcopy(b_doc), case.text)
+
+
 def text_inconsistent(doc: dict | None) -> bool:
-    """Uygulamadaki metin → fotoğraf yedeğinin tetiği (app/api/main.py `_read_by_text`)."""
+    """Eski uygulama yolunun (HESAPKITAP_RECEIPT_TEXT_FIRST=1) metin → fotoğraf yedeği tetiği (app/api/main.py
+    `_read_by_text`)."""
     from app import receipt_check
 
     if not doc:
@@ -360,6 +380,9 @@ def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PR
         row["T+"] = {**plus, "fallback": fb, "error": row["T"]["error"] or (b.get("error") if fb else None),
                      "usd": row["T"]["usd"] + (b.get("usd", 0.0) if fb else 0.0),
                      "sec": round(row["T"]["sec"] + (b.get("sec", 0) if fb else 0), 2)}
+        u_doc = with_text_helpers(b_doc, case)
+        row["U"] = {**evaluate(u_doc, case), "local": b_doc is None and u_doc is not None,
+                    "error": b.get("error") if u_doc is None else None, "usd": b.get("usd", 0.0), "sec": b.get("sec", 0)}
     c_ev = row["A"] if ok else row.get("B")
     row["C"] = {**(c_ev or evaluate(None, case)), "accepted_local": ok, "reasons": why,
                 "usd": 0.0 if ok else (row.get("B") or {}).get("usd", 0.0),
@@ -381,7 +404,7 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
         return round(100 * sum(1 for x in xs if x) / len(xs), 1) if xs else None
 
     out: dict = {"n": n, "linked": sum(r["linked"] for r in rows), "usd_try": usd_try}
-    for path in ("A", "B", "B+", "C", "T", "T+"):
+    for path in ("A", "B", "B+", "C", "T", "T+", "U"):
         rs = [r[path] for r in rows if path in r]
         if not rs:
             continue
@@ -391,7 +414,7 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
              "splits": sum(x["splits"] for x in rs), "receipts_with_splits": sum(1 for x in rs if x["splits"]),
              "avg_sec": round(sum(x["sec"] for x in rs) / len(rs), 2),
              "errors": sum(1 for x in rs if x.get("error"))}
-        if path in ("B", "C", "T", "T+"):
+        if path in ("B", "C", "T", "T+", "U"):
             usd = sum(x.get("usd") or 0 for x in rs)
             s.update({"usd_total": round(usd, 6), "usd_per_receipt": round(usd / len(rs), 6),
                       "try_per_receipt": round(usd / len(rs) * usd_try, 4)})
@@ -401,6 +424,8 @@ def summarize(rows: list[dict], usd_try: float = USD_TRY) -> dict:
                 s[f"avg_{k}"] = round(sum(vals) / len(vals))
         if path == "T+":
             s["fallback"] = sum(1 for x in rs if x["fallback"])
+        if path == "U":
+            s["local"] = sum(1 for x in rs if x["local"])
         if path == "C":
             acc = [x for x in rs if x["accepted_local"]]
             s.update({"accepted_local": len(acc), "sent_to_ai": len(rs) - len(acc),
@@ -541,7 +566,8 @@ def _side(doc: dict | None, usage: dict | None, sec: float, err: str | None, pri
     total = doc.get("total") if rec else None
     return {"receipt": rec, **structure((doc.get("items") or []) if rec else [], total),
             "found": {"total": total is not None, "date": rec and bool(doc.get("date")),
-                      "merchant": rec and bool(doc.get("merchant")) and doc.get("merchant") != "Fiş"},
+                      "merchant": rec and bool(doc.get("merchant")) and doc.get("merchant") != "Fiş",
+                      "vat": rec and doc.get("vat_total") is not None, "tax_no": rec and bool(doc.get("tax_no"))},
             "sec": round(sec, 2), "error": err, "tokens": _tokens(usage or {}), "usd": cost_usd(usage, *prices)}
 
 
@@ -556,8 +582,9 @@ def agreement(a: dict | None, b: dict | None) -> dict:
 
 
 def bench_pair(case: Case, ai=ai_read, text_ai=ai_text_read, prices=(PRICE_IN, PRICE_OUT)) -> dict:
-    """Tek fiş: B (fotoğraf → yapay zekâ), metin varsa T (metin → yapay zekâ) ve T+ (uygulamadaki yol: T tutarsızsa B'nin
-    sonucu, maliyet T + B). agree: T ile B aynı toplam/tarih/işyerini mi buldu."""
+    """Tek fiş: B (fotoğraf → yapay zekâ), metin varsa T (metin → yapay zekâ), U (uygulamadaki yol: B + metin
+    yardımcıları, maliyet B) ve T+ (eski yol: T tutarsızsa B'nin sonucu, maliyet T + B). agree: T ile B aynı
+    toplam/tarih/işyerini mi buldu."""
     res, err, sec = _timed(ai, case)
     b_doc, b_usage = res if res else (None, {})
     row: dict = {"has_text": bool(case.text), "B": _side(b_doc, b_usage, sec, err, prices)}
@@ -572,6 +599,9 @@ def bench_pair(case: Case, ai=ai_read, text_ai=ai_text_read, prices=(PRICE_IN, P
     row["T+"] = {**plus, "fallback": fb, "tokens": None, "usd": t["usd"] + (row["B"]["usd"] if fb else 0.0),
                  "sec": round(t["sec"] + (row["B"]["sec"] if fb else 0), 2),
                  "error": t["error"] if not fb else (row["B"]["error"] if b_doc is None else None)}
+    u_doc = with_text_helpers(b_doc, case)
+    row["U"] = {**_side(u_doc, {}, 0, None, prices), "local": b_doc is None and u_doc is not None, "tokens": None,
+                "usd": row["B"]["usd"], "sec": row["B"]["sec"], "error": row["B"]["error"] if u_doc is None else None}
     row["agree"] = agreement(t_doc, b_doc)
     return row
 
@@ -582,7 +612,7 @@ def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
         return round(100 * sum(1 for x in xs if x) / len(xs), 1) if xs else None
 
     out: dict = {"n": len(rows), "with_text": sum(r["has_text"] for r in rows), "usd_try": usd_try}
-    for path in ("B", "T", "T+"):
+    for path in ("B", "T", "T+", "U"):
         rs = [r[path] for r in rows if path in r]
         if not rs:
             continue
@@ -591,6 +621,8 @@ def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
              "total_found_pct": pct([x["found"]["total"] for x in rs]),
              "date_found_pct": pct([x["found"]["date"] for x in rs]),
              "merchant_found_pct": pct([x["found"]["merchant"] for x in rs]),
+             "vat_found_pct": pct([x["found"]["vat"] for x in rs]),
+             "tax_no_found_pct": pct([x["found"]["tax_no"] for x in rs]),
              # kalemsiz / tek satırlık fiş (kart slibi, akaryakıt): kalem yapısı ölçülemez, orana girmez (0 kalem yazan
              # model cezalandırılmasın, "1 kalem = toplam" yazan ödüllendirilmesin)
              "structure_ok_pct": pct([x["ok"] for x in rs if x["n_items"] > 1]),
@@ -601,11 +633,13 @@ def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
              "avg_sec": round(sum(x["sec"] for x in rs) / len(rs), 2), "errors": sum(1 for x in rs if x.get("error")),
              "usd_total": round(usd, 6), "usd_per_receipt": round(usd / len(rs), 6),
              "try_per_receipt": round(usd / len(rs) * usd_try, 4)}
-        if path != "T+":
+        if path in ("B", "T"):
             for k in ("input", "output", "thoughts"):
                 s[f"avg_{k}"] = round(sum(x["tokens"][k] or 0 for x in rs) / len(rs))
-        else:
+        elif path == "T+":
             s["fallback"] = sum(1 for x in rs if x["fallback"])
+        else:
+            s["local"] = sum(1 for x in rs if x["local"])
         out[path] = s
     ag = [r["agree"] for r in rows if "agree" in r]
     if ag:
@@ -614,6 +648,8 @@ def summarize_pair(rows: list[dict], usd_try: float = USD_TRY) -> dict:
                          "merchant_same_pct": pct([x["merchant"] for x in ag])}
     if "B" in out and "T+" in out and out["B"]["usd_per_receipt"]:
         out["T+_cost_vs_B_pct"] = round(100 * out["T+"]["usd_per_receipt"] / out["B"]["usd_per_receipt"], 1)
+    if "U" in out and "T+" in out and out["T+"]["usd_per_receipt"]:  # yeni yolun eski yola göre maliyeti
+        out["U_cost_vs_T+_pct"] = round(100 * out["U"]["usd_per_receipt"] / out["T+"]["usd_per_receipt"], 1)
     return out
 
 
@@ -624,13 +660,16 @@ def render_pair(rows: list[dict], summary: dict) -> str:
                 f"{x['priceless']:>3} {x['splits']:>3} {_b(x['sum_ok'])} {_b(x['ok'])} {x['sec']:>5} "
                 f"{tk.get('input') or 0:>5} {tk.get('output') or 0:>5} {x['usd']:.5f}" + (f" !{x['error']}" if x.get("error") else ""))
 
-    lines = ["fiş  | B foto: T D İ kalem fyz bölün Σ yapı sn girdi çıktı $ | T metin: (aynı) | aynı T D İ | yedek"]
+    lines = ["fiş  | B foto: T D İ kalem fyz bölün Σ yapı sn girdi çıktı $ | T metin: (aynı) | aynı T D İ | "
+             "T+ yedek | U: KDV VKN"]
     for i, r in enumerate(rows, 1):
         line = f"#{i:<3} | {side(r['B'])}"
         if "T" in r:
             ag = r["agree"]
+            u = r["U"]["found"]
             line += (f" | {side(r['T'])} | {_b(ag['total'])} {_b(ag['date'])} {_b(ag['merchant'])}"
-                     + (" | →foto" if r["T+"]["fallback"] else ""))
+                     + (" | →foto" if r["T+"]["fallback"] else " | -")
+                     + f" | {_b(u['vat'])} {_b(u['tax_no'])}" + (" yerel" if r["U"]["local"] else ""))
         else:
             line += " | metin yok"
         lines.append(line)
@@ -702,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-ai", action="store_true", help="yalnız yerel okuma (B ve C'nin yapay zekâ ayağı yok)")
     p.add_argument("--reread", action="store_true", help="B kalemleri tutmazsa uygulamadaki gibi güçlü modelle yeniden oku")
-    p.add_argument("--text-dir", help="telefonda/macOS'ta çıkarılmış metinler: <fiş dosyası adı uzantısız>.txt (T, T+ yolları)")
+    p.add_argument("--text-dir", help="telefonda/macOS'ta çıkarılmış metinler: <fiş dosyası adı uzantısız>.txt (T, T+, U yolları)")
     p.add_argument("--export-photos", metavar="DIR",
                    help="kıyas yapma; fotoğrafları DIR'e <ad> olarak yaz (scripts/vision_ocr.swift girdisi; repo dışı)")
     p.add_argument("--price-in", type=float, default=PRICE_IN)

@@ -1,8 +1,9 @@
 """Yapay zekâ maliyet ölçümü: her Gemini çağrısının token sayıları (system.db → ai_calls).
 
 Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | fis_metin | fis_foto | belge | dokum | kategori), model,
-girdi / çıktı / düşünme token'ı. fis_metin: telefonda çıkarılan metinden okunan fiş; fis_foto: o metin tutarsız çıkınca
-fotoğrafla yapılan yedek okuma. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın
+girdi / çıktı / düşünme token'ı. fis: fotoğraftan okunan fiş (telefon metni gelse de varsayılan budur; metin yalnız
+yardımcı); fis_metin: telefonda çıkarılan metinden okunan fiş ve fis_foto: o metin tutarsız çıkınca fotoğrafla yapılan
+yedek okuma — ikisi yalnız eski yol açıkken (HESAPKITAP_RECEIPT_TEXT_FIRST=1, app/receipt.py text_first) yazılır. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın
 özetini görür: tür başına çağrı ve okuma sayısı, ortalama token, tahmini maliyet (model fiyat tablosu ve dolar kuru
 ayarlanabilir) ve en yoğun 10 kullanıcı (maskeli). users_month: kullanıcı başı aylık liste (çağrı, okuma, tahmini ₺,
 paket, ai_alert_try eşiği, yönetici kısıtlaması — app/ai_restrictions.py). Kayıtlar 13 ay tutulur.

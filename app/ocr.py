@@ -158,8 +158,13 @@ def _items(lines: list[str]) -> list[dict]:
 
 def parse(data: bytes, mime: str, categories: list[str], more: list[tuple[bytes, str]] | None = None) -> dict:
     """receipt.parse_document ile aynı biçimde sonuç (type receipt/bill). more: uzun fişin devam fotoğrafları."""
-    text = "\n".join(text_of(d, m) for d, m in [(data, mime), *(more or [])])
-    lines = [x for x in (ln.strip() for ln in text.splitlines()) if x]
+    return parse_text("\n".join(text_of(d, m) for d, m in [(data, mime), *(more or [])]), categories)
+
+
+def parse_text(text: str, categories: list[str]) -> dict:
+    """Hazır metinden (Tesseract çıktısı ya da telefonda çıkarılmış metin) kural tabanlı okuma; biçim parse ile aynı."""
+    # "--- PARÇA n ---": telefonun uzun fişin sırayla çekilmiş fotoğraflarını ayırdığı satır
+    lines = [x for x in (ln.strip() for ln in text.splitlines()) if x and not re.match(r"^-+\s*PAR[ÇC]A\b", x, re.I)]
     if not lines:
         raise ValueError("Belgede okunabilir yazı bulunamadı")
     u = _up(text)

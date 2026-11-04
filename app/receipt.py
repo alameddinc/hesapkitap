@@ -521,28 +521,43 @@ Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin deği
 """
 
 
+def text_first() -> bool:
+    """HESAPKITAP_RECEIPT_TEXT_FIRST=1: eski davranış — fotoğrafla birlikte gelen telefon metni yapay zekâya fotoğraf
+    yerine gider (fis_metin; tutarsızsa fotoğrafla yedek, fis_foto). Varsayılan (0): yapay zekâ fotoğrafı okur, metin
+    yalnız yardımcıdır (fatura şablonu, KDV/VKN yedeği, yerel okuma). Ölçüm (04.11.2026, 17 fiş, app/receipt_bench.py):
+    fotoğraf ₺0,06/fiş ve kalem yapısı %71 tutarlı; metin ₺0,11/fiş, %60 — metin daha uzun çıktı üretiyor."""
+    return os.environ.get("HESAPKITAP_RECEIPT_TEXT_FIRST", "0").strip() == "1"
+
+
 def parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
-                   more: list[tuple[bytes, str]] | None = None) -> dict:
-    """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract)."""
+                   more: list[tuple[bytes, str]] | None = None, ocr_text: str | None = None) -> dict:
+    """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract).
+    ocr_text: fotoğrafla birlikte gelen telefon metni (yardımcı): yapay zekâya gitmez; önce kurumun fatura şablonu bu
+    metinle denenir, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yerel okuma Tesseract yerine bu metinle yapılır."""
     from app import bill_templates, ocr
 
+    text = (ocr_text or "").replace("\r\n", "\n").strip()[:MAX_OCR_CHARS] or None
+    if text and (hit := bill_templates.read(text)):
+        return bill_templates.as_doc(hit)  # telefon metni kurumun fatura şablonunu tutuyor: yapay zekâsız
     if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
         return bill_templates.as_doc(hit)  # kurumun fatura şablonu: yapay zekâsız (app/bill_templates.py)
     if not enabled():
-        return _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more)
+        return _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more, text)
     try:
-        return _parse_document_ai(data, mime, categories, split_categories, more)
+        return _parse_document_ai(data, mime, categories, split_categories, more, ocr_text=text)
     except ReceiptError as e:
-        if not (ocr.available() or mime == "application/pdf"):
+        if not (text or ocr.available() or mime == "application/pdf"):
             raise
-        return _local(data, mime, categories, str(e), more)
+        return _local(data, mime, categories, str(e), more, text)
 
 
-def _local(data: bytes, mime: str, categories: list[str], reason: str, more: list[tuple[bytes, str]] | None = None) -> dict:
+def _local(data: bytes, mime: str, categories: list[str], reason: str, more: list[tuple[bytes, str]] | None = None,
+           text: str | None = None) -> dict:
+    """Yerel (kural tabanlı) okuma: telefon metni varsa o metinden, yoksa Tesseract / PDF metin katmanı."""
     from app import ocr
 
     try:
-        doc = ocr.parse(data, mime, categories, more)
+        doc = ocr.parse_text(text, categories) if text else ocr.parse(data, mime, categories, more)
     except ValueError as e:
         raise ReceiptError(f"{reason}. {e}") from e
     doc["note"] = reason
@@ -550,22 +565,24 @@ def _local(data: bytes, mime: str, categories: list[str], reason: str, more: lis
 
 
 def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
-                       more: list[tuple[bytes, str]] | None = None, kind: str = "otomatik") -> dict:
+                       more: list[tuple[bytes, str]] | None = None, kind: str = "otomatik",
+                       ocr_text: str | None = None) -> dict:
     """Tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri; model her fiş satırını bunlardan
     birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için). kind: maliyet türü (metin yolunun fotoğraf
-    yedeği "otomatik_foto")."""
+    yedeği "otomatik_foto"). ocr_text: telefon metni (yapay zekâya gitmez): faturada şablon bundan öğrenilir, fişte
+    KDV/VKN boşsa bundan doldurulur."""
+    from app import bill_templates
+
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
     raw, _ = _gemini_json(DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule), data, mime,
                           max_output_tokens=8000, more=more, kind=kind)
     doc = _doc_of(raw, categories)
-    if doc["type"] == "bill" and not more:
-        from app import bill_templates
-
-        bill_templates.learn(bill_templates.text_of(data, mime), raw)
-    if mime == "application/pdf" and doc["type"] == "receipt":  # e-arşiv fiş PDF'i: metninden KDV/VKN yedeği
-        from app import bill_templates
-
-        vat.fill(doc, bill_templates.text_of(data, mime))
+    # şablon metni: PDF metin katmanı; fotoğrafta (metin katmanı yok) telefon metni — metin yolu da ondan öğreniyordu
+    own = bill_templates.text_of(data, mime)
+    if doc["type"] == "bill" and (learn_from := (own if not more else None) or ocr_text):
+        bill_templates.learn(learn_from, raw)
+    if doc["type"] == "receipt" and (own or ocr_text):  # e-arşiv PDF'i / telefon metni: KDV/VKN kural yedeği
+        vat.fill(doc, own or ocr_text)
     return doc
 
 

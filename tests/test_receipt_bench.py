@@ -183,6 +183,7 @@ def test_text_path_and_fallback(monkeypatch, tmp_path):
     row = rb.bench_case(_case(text=FIS), ai=ai, text_ai=good)
     assert row["T"]["total_ok"] and row["T"]["ok"] and not row["T+"]["fallback"]
     assert row["T+"]["usd"] == row["T"]["usd"] < row["B"]["usd"]
+    assert row["U"]["usd"] == row["B"]["usd"] and row["U"]["total_ok"] and not row["U"]["local"]  # U: B + metin
     # metinden fiyatsız kalem: fotoğrafla bir kez daha (B'nin sonucu ve maliyeti eklenir)
     bad = lambda case: ({**b_doc, "items": [_it("SUT 1L", 41.20), _it("EKMEK", None)]}, t_usage)  # noqa: E731
     fb = rb.bench_case(_case(text=FIS), ai=ai, text_ai=bad)
@@ -191,6 +192,7 @@ def test_text_path_and_fallback(monkeypatch, tmp_path):
     assert "T" not in rb.bench_case(_case(), ai=ai, text_ai=good)  # metin yoksa T yok
     s = rb.summarize([row, fb])
     assert s["T"]["n"] == 2 and s["T+"]["fallback"] == 1 and s["T"]["avg_input"] == 400 and s["T+"]["sum_ok_pct"] == 100
+    assert s["U"]["n"] == 2 and s["U"]["local"] == 0 and s["U"]["usd_per_receipt"] == s["B"]["usd_per_receipt"]
     out = rb.render([row, fb], s)
     assert "→foto" in out and "BAKKAL" not in out and "SUT" not in out
     # metin dosyası eşlemesi: <fiş dosyası adı uzantısız>.txt
@@ -240,6 +242,11 @@ def test_dir_mode_photo_vs_text(monkeypatch, tmp_path, capsys):
     row = rb.bench_pair(cases[0], ai=lambda c: (b_doc, usage), text_ai=lambda c: (b_doc, t_usage))
     assert row["agree"] == {"total": True, "date": True, "merchant": True} and not row["T+"]["fallback"]
     assert row["T+"]["usd"] == row["T"]["usd"] < row["B"]["usd"]
+    # U (uygulamadaki yol): B'nin sonucu, KDV metinden (TOPKDV); maliyet B
+    assert row["U"]["found"]["vat"] and not row["B"]["found"]["vat"] and row["U"]["usd"] == row["B"]["usd"]
+    assert b_doc.get("vat_total") is None  # B'nin sonucu değişmez
+    none_b = rb.bench_pair(cases[0], ai=lambda c: (None, {}), text_ai=lambda c: (b_doc, t_usage))
+    assert none_b["U"]["local"] and none_b["U"]["found"]["total"] and not none_b["B"]["receipt"]
     bad = rb.bench_pair(cases[0], ai=lambda c: (b_doc, usage), text_ai=lambda c: (two_line, t_usage))
     assert bad["T"]["priceless"] == 1 and bad["T"]["splits"] >= 1 and bad["T+"]["fallback"]
     assert bad["T+"]["priceless"] == 0 and bad["agree"]["total"] and not bad["agree"]["date"]
@@ -251,6 +258,8 @@ def test_dir_mode_photo_vs_text(monkeypatch, tmp_path, capsys):
     assert s["n"] == 3 and s["with_text"] == 2 and s["B"]["n"] == 3 and s["T"]["n"] == 2
     assert s["T"]["receipts_with_priceless"] == 1 and s["T+"]["fallback"] == 1 and s["T"]["avg_input"] == 500
     assert s["T_vs_B"] == {"n": 2, "total_same_pct": 100.0, "date_same_pct": 50.0, "merchant_same_pct": 100.0}
+    assert s["U"]["n"] == 2 and s["U"]["vat_found_pct"] == 100.0 and s["B"]["vat_found_pct"] == 0.0
+    assert s["U_cost_vs_T+_pct"] < 100
     out = rb.render_pair([row, bad, only_b], s)
     assert "→foto" in out and "metin yok" in out
     for secret in ("ornek", "Örnek", "BAKKAL", "SUT", "GOFRET", "53.7"):

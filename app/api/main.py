@@ -5383,8 +5383,11 @@ def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Fo
                    ocr_source: str | None = Form(None)):
     """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
     Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4).
-    ocr_text (yetenek receipt_text): telefonda çıkarılmış metin (ocr_source "vision" | "mlkit"); verilirse yapay zekâya
-    fotoğraf yerine bu metin gider, fotoğraf yine saklanır. Metinden çıkan fiş tutarsızsa bir kez fotoğrafla okunur."""
+    ocr_text (yetenek receipt_text): telefonda çıkarılmış metin (ocr_source "vision" | "mlkit"). Yapay zekâ yine
+    FOTOĞRAFI okur (daha ucuz ve daha tutarlı, app/receipt_bench.py ölçümü); metin yardımcıdır: fatura şablonu metinle
+    yerelde okunur, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yapay zekâ yoksa yerel okuma bu metinle yapılır
+    (_read_with_text). HESAPKITAP_RECEIPT_TEXT_FIRST=1: eski yol — metin fotoğraf yerine gider, tutarsızsa fotoğrafla
+    bir kez daha okunur (_read_by_text)."""
     files = file[:4]
     data = _file_bytes(files[0])
     for f in files:
@@ -5400,11 +5403,22 @@ def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Fo
                           ocr_source=ocr_source if ocr_source in ("vision", "mlkit") else "diger")
 
 
+def _read_with_text(text: str, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
+                    more: list | None) -> dict:
+    """Varsayılan yol (fotoğraf + telefon metni): yapay zekâ fotoğrafı okur (maliyet türü fis), metin yalnız yardımcı
+    (receipt.parse_document ocr_text). doc['ocr'] = {source, used, fallback, helper}: used — sonuç metinden çıktı (fatura
+    şablonu ya da yerel okuma); yapay zekâya metin gitmez."""
+    doc = receipt.parse_document(data, mime, cats, split, more=more, ocr_text=text)
+    from_text = doc.get("engine") == "yerel" or doc.get("source") == "sablon"
+    doc["ocr"] = {"source": source, "used": from_text, "fallback": False, "helper": True}
+    return doc
+
+
 def _read_by_text(text: str, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
                   more: list | None) -> dict:
-    """Metin yolu: telefonda çıkarılmış metin yapay zekâya gider. Metin okunamazsa ya da çıkan fiş tutarsızsa (toplam
-    yok, fiyatsız kalem, kalem toplamı fişi tutmuyor) fotoğrafla bir kez daha okunur; fotoğraf okuması da olmazsa
-    metnin sonucu kalır. doc['ocr'] = {source, used, fallback}."""
+    """Eski metin yolu (HESAPKITAP_RECEIPT_TEXT_FIRST=1, ölçüm için): telefonda çıkarılmış metin yapay zekâya gider.
+    Metin okunamazsa ya da çıkan fiş tutarsızsa (toplam yok, fiyatsız kalem, kalem toplamı fişi tutmuyor) fotoğrafla
+    bir kez daha okunur; fotoğraf okuması da olmazsa metnin sonucu kalır. doc['ocr'] = {source, used, fallback}."""
     try:
         doc = receipt.parse_document_text(text, cats, split)
     except receipt.ReceiptError:
@@ -5452,8 +5466,10 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     split = sorted({r["category"] for r in db.list_item_rules()})
     try:
-        if ocr_text and receipt.enabled():
+        if ocr_text and receipt.enabled() and receipt.text_first():
             doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
+        elif ocr_text:  # fotoğraf okunur, metin yardımcı (fatura şablonu, KDV/VKN yedeği, yerel okuma)
+            doc = _read_with_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
         else:
             doc = receipt.parse_document(data, mime, cats, split, more=more)
     except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı, yerel okuma da olmadı)
