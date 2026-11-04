@@ -4274,7 +4274,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             db.remember_pdf_password(password)
         res.update(bank=stmt.bank, card_no=stmt.card_no, period_end=stmt.period_end.isoformat(),
                    total_debt=stmt.total_debt, txn_count=len(stmt.transactions),
-                   reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed)
+                   reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source)
         if db.statement_exists(data, stmt):
             results.append({**res, "status": "duplicate"})
             continue

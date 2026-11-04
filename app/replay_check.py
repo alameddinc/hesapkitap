@@ -33,9 +33,11 @@ def _isolated(no_ai: bool):
     """Yan etkisiz okuma: topluluk şablonu kaydı/paylaşımı/sayacı yok, yapay zekâ isteğe bağlı kapalı."""
     from app import receipt, templates
 
-    saved = {k: getattr(templates, k) for k in ("save", "_used", "share_async", "sync_community")}
+    saved = {k: getattr(templates, k) for k in ("save", "_used", "_failed", "_revive", "share_async", "sync_community")}
     templates.save = lambda spec, source="learned": False
     templates._used = lambda tid: None
+    templates._failed = lambda tids: None
+    templates._revive = lambda spec: False
     templates.share_async = lambda spec: None
     templates.sync_community = lambda force=False: 0
     enabled = receipt.enabled
@@ -140,7 +142,7 @@ def _import_card(doc: dict, passwords: list[str], allow_ai: bool) -> dict:
         return {"status": "duplicate"}
     db.save_statement(doc["data"], doc["name"], st)
     return {"status": "saved", "bank": st.bank, "card": st.card_no, "period_end": st.period_end.isoformat(),
-            "linked": db.auto_link(), "marked_paid": db.auto_mark_paid(), "ai": st.ai_parsed}
+            "linked": db.auto_link(), "marked_paid": db.auto_mark_paid(), "ai": st.ai_parsed, "source": st.source}
 
 
 def _copy_card(doc: dict, live_copy: str) -> dict:

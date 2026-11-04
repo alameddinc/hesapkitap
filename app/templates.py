@@ -34,13 +34,20 @@ CREATE TABLE IF NOT EXISTS bank_templates (
     uses INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     shared_at TEXT,                         -- topluluğa gönderildi
+    fails INTEGER NOT NULL DEFAULT 0,       -- art arda doğrulanamayan okuma (kart şablonu; app/card_reader.py)
+    disabled INTEGER NOT NULL DEFAULT 0,    -- MAX_FAILS'e ulaştı: uygulanmaz (yapay zekâ aynı kuralı öğretirse açılır)
     UNIQUE (bank, spec)
 );
 """
+MAX_FAILS = 2
 
 
 def _init(c) -> None:
     c.executescript(SCHEMA)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(bank_templates)")}
+    for col in ("fails", "disabled"):  # eski tablo: sütun sonradan eklendi
+        if col not in cols:
+            c.execute(f"ALTER TABLE bank_templates ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
 
 
 def _low(s: str) -> str:
@@ -276,14 +283,33 @@ def save(spec: dict, source: str = "learned") -> bool:
 
 def _used(tid: int) -> None:
     with system.connect() as c:
-        c.execute("UPDATE bank_templates SET uses = uses + 1 WHERE id = ?", (tid,))
+        _init(c)
+        c.execute("UPDATE bank_templates SET uses = uses + 1, fails = 0 WHERE id = ?", (tid,))
+
+
+def _failed(tids: list[int]) -> None:
+    """Eşleşen şablon(lar) belgeyi doğrulanabilir okuyamadı: hata sayısı artar, art arda MAX_FAILS → devre dışı."""
+    if not tids:
+        return
+    with system.connect() as c:
+        _init(c)
+        c.executemany("UPDATE bank_templates SET fails = fails + 1, disabled = (fails + 1 >= ?) WHERE id = ?",
+                      [(MAX_FAILS, t) for t in tids])
+
+
+def _revive(spec: dict) -> bool:
+    """Yapay zekâ okuması kayıtlı (devre dışı kalmış olabilir) bir kuralı yeniden doğruladı: hata sıfırlanır."""
+    with system.connect() as c:
+        _init(c)
+        return c.execute("UPDATE bank_templates SET fails = 0, disabled = 0 WHERE spec = ? AND (fails > 0 OR disabled)",
+                         (_key(spec),)).rowcount > 0
 
 
 def read(text: str) -> dict | None:
     """Kayıtlı şablonlardan biri bu belgeyi zinciri tutturarak okuyorsa sonucu; yoksa yeni kural öğrenmeyi dene."""
     sync_community()
     for t in all_templates():
-        if t["spec"].get("kind", "account") != "account" or not matches(text, t["spec"]):
+        if t["spec"].get("kind", "account") != "account" or t.get("disabled") or not matches(text, t["spec"]):
             continue
         res = apply(text, t["spec"])
         if res and res["verified"]:
