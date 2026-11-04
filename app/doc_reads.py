@@ -208,6 +208,8 @@ def check(key: bytes | str | None = None, kind: str = BELGE) -> None:
     u = _subject()
     if not u:
         return
+    from app import ai_restrictions
+    ai_restrictions.check(u, kind)  # yönetici kısıtlaması: günlük üst sınır (app/ai_restrictions.py)
     quota = plans.read_limit(u, kind)
     if used(u, kind) >= quota and credits(u["id"]) <= 0:
         raise _refusal(u, quota, kind)
@@ -227,7 +229,7 @@ def charge(key: bytes | str, kind: str = BELGE) -> bool:
     u = _subject()
     if not u:
         return False
-    from app import plans, system
+    from app import ai_restrictions, plans, system
 
     month = _month()
     quota = plans.read_limit(u, kind)
@@ -236,6 +238,7 @@ def charge(key: bytes | str, kind: str = BELGE) -> bool:
         if not c.execute("INSERT OR IGNORE INTO doc_reads (book_id, hash, month, kind) VALUES (?, ?, ?, ?)",
                          (_book(u), _key(key), month, kind)).rowcount:
             return False
+        ai_restrictions.count(c, u["id"])  # günlük okuma (yönetici kısıtlamasının üst sınırı)
         c.execute("INSERT INTO ai_usage (user_id, month, count) VALUES (?, ?, 1) "
                   "ON CONFLICT(user_id, month) DO UPDATE SET count = count + 1", (u["id"], month))
         r = c.execute("SELECT count FROM read_usage WHERE user_id = ? AND month = ? AND kind = ?",

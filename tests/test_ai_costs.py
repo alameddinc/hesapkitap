@@ -123,7 +123,8 @@ def test_admin_summary_masks_users_and_prices(hosted, fake):
     fis = next(k for k in s["kinds"] if k["kind"] == "fis")
     assert (fis["calls"], fis["avg_input"], fis["avg_output"], fis["avg_thoughts"]) == (3, 1200, 300, 100)
     # 3 × (1200 × 0,25 + 400 × 1,50) / 1M = 0,0027 $
-    assert fis["cost_usd"] == pytest.approx(0.0027) and fis["cost_try"] == pytest.approx(round(0.0027 * 42.0, 2))
+    assert fis["cost_usd"] == pytest.approx(0.0027)
+    assert fis["cost_try"] == pytest.approx(round(0.0027 * ai_costs.DEFAULT_USD_TRY, 2))
     top = s["top_users"][0]
     assert top["calls"] == 4 and top["user"] == f"#{u['id']} · ay***@o***.com" and "ayse" not in json.dumps(s)
     # fiyat ve kur değiştirilebilir

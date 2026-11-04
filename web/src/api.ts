@@ -646,4 +646,16 @@ export interface AiCosts {
   top_users: { user: string; calls: number; cost_usd: number; cost_try: number }[];
   prices: Record<string, { input: number; output: number }>; usd_try: number;
   default_prices: Record<string, { input: number; output: number }>;
+  /** kullanıcı başı aylık ₺ eşiği (ai_alert_try) ve bu ay eşiği geçen hesap sayısı */
+  alert_try: number; over_alert: number; months: string[];
 }
+
+/** Yönetici kısıtlaması: no_ai (yapay zekâ kapalı, yerel okuma açık) | cap (günde en çok daily_cap belge). */
+export interface AiRestriction { user_id: number; mode: "no_ai" | "cap"; daily_cap: number | null; note: string | null; at: string; by: number | null }
+
+/** GET /api/admin/ai-costs/users: kullanıcı başı aylık maliyet, en pahalı üstte. */
+export interface AiCostUser {
+  user_id: number | null; user: string; username: string | null; plan: string | null; calls: number; reads: number | null;
+  cost_usd: number; cost_try: number; over: boolean; restriction: AiRestriction | null;
+}
+export interface AiCostUsers { month: string; users: AiCostUser[]; alert_try: number; over_alert: number; usd_try: number; months: string[] }

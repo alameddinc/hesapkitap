@@ -277,8 +277,11 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
+    from app import ai_restrictions
+
+    ai_restrictions.check_ai()  # yönetici kısıtlaması (no_ai / günlük sınır dolu): yapay zekâya gidilmez
     _check_quota()
-    docs = ([(data, mime)] if data is not None else []) + list(more or [])
+    docs =([(data, mime)] if data is not None else []) + list(more or [])
     if sum(len(d) for d, _ in docs) > MAX_BYTES:
         raise ReceiptError("Dosya çok büyük (en fazla 15 MB)")
     _check_ai_pages(docs)

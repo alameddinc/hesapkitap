@@ -45,9 +45,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.ai_costs import DEFAULT_PRICES as _PRICES, DEFAULT_USD_TRY as USD_TRY, FLASH as _FLASH, LITE as _LITE
+
 TOL = 0.05  # kalem toplamı / fiş toplamı / altın tutar farkı (TL)
-PRICE_IN, PRICE_OUT = 0.25, 1.50  # $ / 1M token (gemini-3.1-flash-lite; düşünme çıktı fiyatıyla)
-USD_TRY = 50.0
+# $ / 1M token, düşünme çıktı fiyatıyla; fiyat ve kur yönetici panelindeki varsayılanlarla aynı (app/ai_costs.py)
+PRICE_IN, PRICE_OUT = _PRICES[_LITE]["input"], _PRICES[_LITE]["output"]  # ilk okuma (gemini-3.1-flash-lite)
+REREAD_PRICE_IN, REREAD_PRICE_OUT = _PRICES[_FLASH]["input"], _PRICES[_FLASH]["output"]  # B+ (gemini-3.5-flash)
 
 # /api/documents/parse'taki gider kategorileri (app/api/main.py EXPENSE_CATEGORIES). O modül içe aktarılınca veritabanı
 # göçleri çalışır; kıyas salt okunur kalsın diye liste burada.
@@ -343,7 +346,8 @@ def bench_case(case: Case, local=local_read, ai=ai_read, reread=None, prices=(PR
             row["B+"] = {**evaluate(merged, case), "sec": round(sec, 2), "error": err, "tried": True,
                          "tokens": {"input": r_usage.get("promptTokenCount"),
                                     "output": r_usage.get("candidatesTokenCount"),
-                                    "thoughts": r_usage.get("thoughtsTokenCount")}}
+                                    "thoughts": r_usage.get("thoughtsTokenCount")},
+                         "usd": cost_usd(r_usage, REREAD_PRICE_IN, REREAD_PRICE_OUT)}
     if ai and text_ai and case.text:
         res, err, sec = _timed(text_ai, case)
         t_doc, t_usage = res if res else (None, {})

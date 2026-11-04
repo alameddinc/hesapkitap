@@ -84,6 +84,28 @@ CREATE TABLE IF NOT EXISTS ai_calls (     -- yapay zekâ maliyet ölçümü (app
     thoughts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ai_calls_month ON ai_calls(month);
+CREATE TABLE IF NOT EXISTS ai_restrictions (  -- yöneticinin kötüye kullanım kısıtlaması (app/ai_restrictions.py)
+    user_id INTEGER PRIMARY KEY,
+    mode TEXT NOT NULL CHECK (mode IN ('no_ai', 'cap')),  -- no_ai: yapay zekâ kapalı (yerel okuma açık); cap: günlük üst sınır
+    daily_cap INTEGER,                  -- günde en çok okunan belge (no_ai'de isteğe bağlı)
+    note TEXT,                          -- yöneticinin notu (kullanıcıya gösterilmez)
+    at TEXT NOT NULL,
+    by INTEGER                          -- kısıtlayan yönetici
+);
+CREATE TABLE IF NOT EXISTS ai_restriction_log (  -- kısıtlama işlem kaydı: koyma / değiştirme / kaldırma
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    action TEXT NOT NULL,               -- set | remove
+    mode TEXT, daily_cap INTEGER, note TEXT,
+    by INTEGER
+);
+CREATE TABLE IF NOT EXISTS ai_restriction_days (  -- günlük okunan belge (kısıtlamanın günlük üst sınırı için); 7 gün tutulur
+    user_id INTEGER NOT NULL,
+    day TEXT NOT NULL,                  -- YYYY-MM-DD
+    n INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+);
 CREATE TABLE IF NOT EXISTS sys_settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -297,7 +319,8 @@ def delete_user(uid: int) -> None:
     with connect() as c:
         if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
-            for t in ("read_usage", "read_split", "read_credits"):
+            for t in ("read_usage", "read_split", "read_credits", "ai_restrictions", "ai_restriction_log",
+                      "ai_restriction_days"):
                 c.execute(f"DELETE FROM {t} WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın

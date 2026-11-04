@@ -1206,6 +1206,7 @@ def admin_put_app_update(body: AppUpdateIn):
 class AiCostSettingsIn(BaseModel):
     prices: dict[str, dict[str, float]] | None = None  # {"model": {"input": $/1M, "output": $/1M}}; {}: varsayılana dön
     usd_try: float | None = None
+    alert_try: float | None = None  # kullanıcı başı aylık ₺ eşiği (ai_alert_try)
 
 
 @app.get("/api/admin/ai-costs")
@@ -1224,10 +1225,72 @@ def admin_put_ai_costs(body: AiCostSettingsIn):
 
     _require_admin()
     try:
-        ai_costs.set_settings(body.prices, body.usd_try)
+        ai_costs.set_settings(body.prices, body.usd_try, body.alert_try)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     return ai_costs.summary()
+
+
+@app.get("/api/admin/ai-costs/users")
+def admin_ai_cost_users(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Kullanıcı başı aylık yapay zekâ maliyeti (en pahalı üstte): çağrı, okuma, tahmini ₺, paket, eşik, kısıtlama."""
+    from app import ai_costs
+
+    _require_admin()
+    return ai_costs.users_month(month)
+
+
+class AiRestrictionIn(BaseModel):
+    mode: Literal["no_ai", "cap"]
+    daily_cap: int | None = Field(None, ge=0, le=1000)
+    note: str | None = Field(None, max_length=300)
+
+
+def _restricted_user(uid: int) -> dict:
+    u = system.user(uid)
+    if not u or u["role"] == "admin":
+        raise HTTPException(404, "Kullanıcı yok")
+    return u
+
+
+def _restriction_out(uid: int) -> dict:
+    from app import ai_restrictions
+
+    return {"user_id": uid, "restriction": ai_restrictions.get(uid), "today_reads": ai_restrictions.today_reads(uid),
+            "history": ai_restrictions.history(uid)}
+
+
+@app.get("/api/admin/ai-restrictions/{uid}")
+def admin_ai_restriction(uid: int):
+    _require_admin()
+    _restricted_user(uid)
+    return _restriction_out(uid)
+
+
+@app.put("/api/admin/ai-restrictions/{uid}")
+def admin_put_ai_restriction(uid: int, body: AiRestrictionIn):
+    """Kötüye kullanım: no_ai (yapay zekâ okuması kapalı, yerel okuma açık) ya da cap (günde en çok daily_cap belge;
+    paketin hakkından düşükse o bağlar). İşlem ai_restriction_log'a yazılır."""
+    from app import ai_restrictions
+
+    _require_admin()
+    _restricted_user(uid)
+    try:
+        ai_restrictions.put(uid, body.mode, body.daily_cap, body.note, by=(db.current_user() or {}).get("id"))
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return _restriction_out(uid)
+
+
+@app.delete("/api/admin/ai-restrictions/{uid}")
+def admin_delete_ai_restriction(uid: int):
+    from app import ai_restrictions
+
+    _require_admin()
+    _restricted_user(uid)
+    if not ai_restrictions.remove(uid, by=(db.current_user() or {}).get("id")):
+        raise HTTPException(404, "Bu hesapta kısıtlama yok")
+    return _restriction_out(uid)
 
 
 @app.post("/api/admin/users")
@@ -4671,6 +4734,8 @@ def parse_receipt(file: UploadFile = File(...)):
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     try:
         out = receipt.parse_receipt(data, mime, cats)
+    except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı): fotoğraf saklanır, elle girilir
+        raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
     doc_reads.charge(original, doc_reads.FIS)
@@ -5198,6 +5263,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
             doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
         else:
             doc = receipt.parse_document(data, mime, cats, split, more=more)
+    except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı, yerel okuma da olmadı)
+        raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
     doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")))
