@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Row } from "../api";
 import MultiSelect from "../components/MultiSelect";
 import Segmented from "../components/Segmented";
-import { cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
+import { catLabel, cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { isEstimate } from "../components/Estimates";
 
@@ -125,9 +125,10 @@ export default function Table() {
         ...pivot.rows.map((r) => [r.name, ...pivot.months.map((m) => r.cells.get(m) ?? 0), r.total]),
         ["Toplam", ...pivot.colTotals, pivot.grand]]);
     } else {
-      downloadCsv("islemler.csv", [["Tarih", "Ekstre ayı", "Açıklama", "İşyeri", "Kategori", "Kart", "Tür", "Taksit", "Döviz", "Tutar", "Not"],
+      // "Alt kategori" sonda: eski sütunların yeri değişmesin
+      downloadCsv("islemler.csv", [["Tarih", "Ekstre ayı", "Açıklama", "İşyeri", "Kategori", "Kart", "Tür", "Taksit", "Döviz", "Tutar", "Not", "Alt kategori"],
         ...listRows.map((r) => [dateTR(r.date), r.month, r.description, r.merchant, r.category, r.card ?? "Elle", KIND_LABEL[r.kind] ?? r.kind,
-          r.installment ?? "", r.fx ?? "", r.amount, r.note ?? ""])]);
+          r.installment ?? "", r.fx ?? "", r.amount, r.note ?? "", r.subcategory ?? ""])]);
     }
   };
 
@@ -265,7 +266,7 @@ export default function Table() {
                         <div className="text-xs break-words text-stone-500">{[r.installment && `${r.installment} taksit`, r.fx, r.note].filter(Boolean).join(" · ")}</div>
                       )}
                     </td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{r.category}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{catLabel(r)}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap text-stone-500">{r.card ?? "Elle"}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap text-stone-500">{KIND_LABEL[r.kind] ?? r.kind}</td>
                     <td className={cx("px-2 py-1.5 text-right whitespace-nowrap tabular-nums", (r.kind === "gelir" || r.amount < 0) && "text-green-700 dark:text-green-400")}>

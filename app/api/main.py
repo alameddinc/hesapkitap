@@ -1546,6 +1546,113 @@ def _by_usage(cats: set[str]) -> list[str]:
     return sorted(cats, key=lambda c: (-usage.get(c, 0), c))
 
 
+# ---------------------------------------------------------------- alt kategoriler
+
+def _can_edit_subcategories() -> bool:
+    """Alt kategori listesini değiştirebilir mi: defter sahibi (tek kullanıcılı kurulum dahil) ve tam yetkili üye.
+    Görür + ekler (editor) üye listedekileri seçer, yenisini açamaz; sadece görür (viewer) hiçbir şey yazamaz."""
+    from app import book
+
+    return not book.member() or book.role() == "full"
+
+
+def _subcategory(category: str | None, sub: str | None) -> str | None:
+    """Kayda/kurala yazılacak alt kategori: ana kategori yoksa ya da alt kategori boşsa None. Listede yoksa yetkili
+    kişi için listeye eklenir (formdaki "+ Alt kategori" ayrı istek atmadan da çalışsın), yetkisizde 422.
+    Dönen ad listedeki yazılıştır ("temizlik" → "Temizlik")."""
+    sub = db.clean_sub_name(sub)
+    if not sub or not category or category == "Kategorisiz":
+        return None
+    if len(sub) > 40:
+        raise HTTPException(422, "Alt kategori adı en çok 40 karakter olabilir")
+    if (hit := db.find_subcategory(category, sub)):
+        return hit["name"]
+    if not _can_edit_subcategories():
+        raise HTTPException(422, f"“{category}” altında “{sub}” alt kategorisi yok; defter sahibi ekleyebilir")
+    return db.add_subcategory(category, sub)[0]["name"]
+
+
+def _patch_subcategory(data: dict, current: dict | None) -> None:
+    """PATCH gövdesi: alt kategori verildiyse (yeni ya da mevcut) ana kategoriye göre doğrulanır. Yalnız ana kategori
+    değiştiyse (eski istemci alt kategori göndermez) eski alt kategori yeni ana kategoriye ait olmadığı için silinir."""
+    if current is None:
+        return
+    cat = data["category"] if "category" in data else current.get("category")
+    if "subcategory" in data:
+        data["subcategory"] = _subcategory(cat, data["subcategory"])
+    elif "category" in data and data["category"] != current.get("category") and current.get("subcategory"):
+        data["subcategory"] = None
+
+
+class SubcategoryIn(BaseModel):
+    category: str = Field(min_length=1, max_length=60)
+    name: str = Field(min_length=1, max_length=40)
+
+
+class SubcategoryPatch(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class SubcategoryOrderIn(BaseModel):
+    category: str = Field(min_length=1, max_length=60)
+    ids: list[int] = Field(max_length=500)
+
+
+def _subcategories_out() -> dict:
+    items = db.list_subcategories()
+    return {"subcategories": db.subcategories_map(), "items": items, "can_edit": _can_edit_subcategories()}
+
+
+@app.get("/api/subcategories")
+def subcategories_list():
+    """Alt kategoriler: {subcategories: {ana: [alt…]}, items: [{id, category, name, position, count}], can_edit}."""
+    return _subcategories_out()
+
+
+@app.post("/api/subcategories")
+def subcategories_add(body: SubcategoryIn):
+    """Ana kategorinin altına alt kategori. Aynı ad (büyük/küçük harf farkı gözetmeden) varsa yenisi açılmaz:
+    var olan döner (created: false). Ana kategoriyle aynı ad da serbest."""
+    name, cat = db.clean_sub_name(body.name), db.clean_sub_name(body.category)
+    if not name or not cat:
+        raise HTTPException(422, "Alt kategori adı boş olamaz")
+    if cat == "Kategorisiz":
+        raise HTTPException(422, "Kategorisiz altına alt kategori eklenmez")
+    item, created = db.add_subcategory(cat, name)
+    return {**item, "created": created}
+
+
+@app.patch("/api/subcategories/{sid}")
+def subcategories_rename(sid: int, body: SubcategoryPatch):
+    """Yeniden adlandır: bu alt kategorideki işlemler, kayıtlar ve kurallar da yeni adı alır (updated: satır sayısı)."""
+    name = db.clean_sub_name(body.name)
+    if not name:
+        raise HTTPException(422, "Alt kategori adı boş olamaz")
+    try:
+        n = db.rename_subcategory(sid, name)
+    except KeyError as e:
+        raise HTTPException(404, "Alt kategori bulunamadı") from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"ok": True, "updated": n, **(db.get_subcategory(sid) or {})}
+
+
+@app.delete("/api/subcategories/{sid}")
+def subcategories_delete(sid: int):
+    """Sil: işlemlerden, kayıtlardan ve kurallardan kaldırılır, ana kategorileri değişmez (cleared: satır sayısı)."""
+    try:
+        return {"ok": True, "cleared": db.delete_subcategory(sid)}
+    except KeyError as e:
+        raise HTTPException(404, "Alt kategori bulunamadı") from e
+
+
+@app.put("/api/subcategories/order")
+def subcategories_order(body: SubcategoryOrderIn):
+    """Ana kategorinin alt kategorilerini sırala (ids: istenen sıra; eksik kalanlar sona)."""
+    db.reorder_subcategories(body.category, body.ids)
+    return _subcategories_out()
+
+
 @app.post("/api/billing/revenuecat")
 async def revenuecat_webhook(request: Request):
     """App Store / Google Play aboneliği (RevenueCat webhook). Yetki: RevenueCat panelinde girilen Authorization değeri."""
@@ -1649,6 +1756,8 @@ def meta():
         "today": date.today().isoformat(),
         "categories": _by_usage(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme"}),
         "income_categories": INCOME_CATEGORIES,
+        # alt kategoriler {ana: [alt, …]} (defterin; yetenek "subcategories") ve bu kişi listeyi değiştirebilir mi
+        "subcategories": db.subcategories_map(), "subcategories_editable": _can_edit_subcategories(),
         "card_kinds": [PURCHASE, REFUND, FEE, PAYMENT],
         "receipt_enabled": receipt.enabled() or ocr.available(),
         "receipt_engine": "gemini" if receipt.enabled() else "yerel" if ocr.available() else None,
@@ -1795,12 +1904,14 @@ def put_card_limit(body: CardLimitIn):
 @app.get("/api/transactions")
 def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
                  totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),
-                 before: str | None = Query(None, max_length=80), card: str | None = Query(None, max_length=40)):
+                 before: str | None = Query(None, max_length=80), card: str | None = Query(None, max_length=40),
+                 category: str | None = Query(None, max_length=60), subcategory: str | None = Query(None, max_length=40)):
     """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
     include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz.
     Her satırda counts_as_spend / counts_as_income: gider/gelir toplamına girer mi (sunucu kuralı, finance.counts);
     süzgeç toplamı = bayrağı true olan satırların amount toplamı (iade eksi). totals=1: {"rows": [...], "totals": {...}}
-    (Özet ile aynı _totals + count)."""
+    (Özet ile aynı _totals + count). category / subcategory: yalnız o ana kategori / alt kategori (yetenek
+    "subcategories"; subcategory tek başına verilirse her ana kategorideki bu ad)."""
     _history_gate(month)
     rows = finance.transactions(month, include_deleted, include_estimates)
     u = db.current_user()
@@ -1808,6 +1919,10 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
         rows = [r for r in rows if plans.history_ok(u, r["month"])]
     if card:  # tek kartın satırları (ekstre ana kart numarası; elle kayıtta son 4 hane): Kartlar ekranı geçmişi
         rows = [r for r in rows if finance.of_card(r, card)]
+    if category:
+        rows = [r for r in rows if r["category"] == category]
+    if subcategory:
+        rows = [r for r in rows if r.get("subcategory") == subcategory]
     for r in rows:  # her satırda: raw (banka açıklaması, yoksa null), note_user (kullanıcının kendi notu)
         r.setdefault("raw", None)
         r.setdefault("note_user", r.get("note"))
@@ -1865,6 +1980,8 @@ def simulate(body: SimulateIn):
 
 class CardTxnPatch(BaseModel):
     category: str | None = None
+    subcategory: str | None = Field(None, max_length=60)  # alt kategori ("" / null: kaldır); ana kategori değişip bu
+    # alan gönderilmezse eski alt kategori silinir (eski istemci)
     txn_type: CardKind | None = None
     note: str | None = None
     description: str | None = None
@@ -1881,19 +1998,19 @@ def patch_card_txn(txn_id: int, body: CardTxnPatch):
     if book.member():  # üye: görebildiği işlemde sadece kategori ve not
         if not book.can_see_txn(txn_id):
             raise HTTPException(404, "İşlem bulunamadı")
-        fields = {k: v for k, v in fields.items() if k in ("category", "note")}
+        fields = {k: v for k, v in fields.items() if k in ("category", "subcategory", "note")}
         body.create_rule = False
     for k in ("is_deleted", "hidden"):
         if k in fields:
             fields[k] = int(fields[k])
+    txn = next((t for t in db.card_transactions(True) if t["id"] == txn_id), None)
+    _patch_subcategory(fields, txn)
     db.update_card_transaction(txn_id, fields)
     rule = None
-    if body.create_rule and body.category:
-        txn = next((t for t in db.card_transactions(True) if t["id"] == txn_id), None)
-        if txn:
-            rule = suggest_pattern(txn["description"])
-            db.add_rule(rule, body.category)
-            db.recategorize_all()
+    if body.create_rule and body.category and txn:
+        rule = suggest_pattern(txn["description"])
+        db.add_rule(rule, body.category, subcategory=fields.get("subcategory"))
+        db.recategorize_all()
     return {"ok": True, "rule": rule}
 
 
@@ -1905,6 +2022,7 @@ class EntryIn(BaseModel):
     amount: Money = Field(ge=0)
     kind: Kind
     category: str | None = None
+    subcategory: str | None = Field(None, max_length=60)  # ana kategorinin altındaki alt kategori (isteğe bağlı)
     note: str | None = None
     recurring_id: int | None = None
     skipped: bool = False
@@ -1933,6 +2051,7 @@ class EntryPatch(BaseModel):
     amount: Money | None = Field(default=None, ge=0)
     kind: Kind | None = None
     category: str | None = None
+    subcategory: str | None = Field(None, max_length=60)  # "" / null: kaldır; gönderilmez ve ana kategori değişirse silinir
     note: str | None = None
     skipped: bool | None = None
     payment: Payment | None = None
@@ -1983,6 +2102,7 @@ def create_entry(body: EntryIn):
     _tax_fields(data)
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
+    data["subcategory"] = _subcategory(body.category, body.subcategory)
     if body.legal_name and body.kind == "gider":
         db.learn_from_receipt(body.legal_name, body.description, body.category)
     if data.get("counterparty"):
@@ -2041,6 +2161,10 @@ def patch_entry(entry_id: int, body: EntryPatch):
         data.pop("hidden", None)
         if owner != m["id"]:
             data = {k: v for k, v in data.items() if k in book.ENTRY_MEMBER_FIELDS}
+    if "category" in data or "subcategory" in data:
+        with db.connect() as c:
+            cur = c.execute("SELECT category, subcategory FROM entries WHERE id = ?", (entry_id,)).fetchone()
+        _patch_subcategory(data, dict(cur) if cur else None)
     if "hidden" in data:
         data["hidden"] = int(bool(data["hidden"]))
     _tax_fields(data)
@@ -4705,12 +4829,14 @@ def uncategorized_ai_suggest(body: UncAiIn):
 class RuleIn(BaseModel):
     pattern: str = Field(min_length=1)
     category: str = Field(min_length=1)
+    subcategory: str | None = Field(None, max_length=60)  # eşleşen işleme alt kategori de (isteğe bağlı)
     priority: int = 10
 
 
 class RulePatch(BaseModel):
     pattern: str | None = None
     category: str | None = None
+    subcategory: str | None = Field(None, max_length=60)
     priority: int | None = None
 
 
@@ -4735,14 +4861,16 @@ def list_rules():
 @app.post("/api/rules")
 def create_rule(body: RuleIn):
     _check_regex(body.pattern)
-    rid = db.add_rule(body.pattern, body.category, body.priority)
+    rid = db.add_rule(body.pattern, body.category, body.priority, _subcategory(body.category, body.subcategory))
     return {"id": rid, "recategorized": db.recategorize_all()}
 
 
 @app.patch("/api/rules/{rule_id}")
 def patch_rule(rule_id: int, body: RulePatch):
     _check_regex(body.pattern)
-    db.update_rule(rule_id, body.model_dump(exclude_unset=True))
+    data = body.model_dump(exclude_unset=True)
+    _patch_subcategory(data, db.get_rule(rule_id))
+    db.update_rule(rule_id, data)
     return {"ok": True, "recategorized": db.recategorize_all()}
 
 

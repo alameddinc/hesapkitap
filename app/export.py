@@ -40,11 +40,12 @@ def workbook() -> bytes:
             if not r.get("pending") and not r.get("deleted") and not r.get("linked") and r.get("source") != "estimate"]
     rows.sort(key=lambda r: r["date"])
     out_kinds = {"harcama", "faiz_ucret", "gider"}
+    # "Alt kategori" sonda: önceki sütunların yeri değişmesin (kullanıcının tablosu/formülleri sütun sırasına bağlı)
     _sheet(wb, "İşlemler", ["Tarih", "Dönem", "Açıklama", "Tür", "Kategori", "Tutar (₺)", "Kart", "Hesap", "Kişi", "Taksit", "Not",
-                            *TAX_HEAD],
+                            *TAX_HEAD, "Alt kategori"],
            [[r["date"][:10], r["month"], r["description"], KIND.get(r["kind"], r["kind"]), r["category"],
              round(-abs(r["amount"]) if r["kind"] in out_kinds else r["amount"], 2), r.get("card"), r.get("account") or r.get("bank"),
-             r.get("counterparty"), r.get("installment"), r.get("note"), *_tax_cells(r)] for r in rows])
+             r.get("counterparty"), r.get("installment"), r.get("note"), *_tax_cells(r), r.get("subcategory")] for r in rows])
     _sheet(wb, "Sabit kalemler", ["Açıklama", "Tür", "Kategori", "Tutar (₺)", "Gün", "Başlangıç", "Bitiş"],
            [[r["description"], r["kind"], r["category"], r["amount"], r["day_of_month"], r["start_month"], r["end_month"]]
             for r in db.list_recurring()])

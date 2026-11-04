@@ -135,6 +135,7 @@ TABLES = [
     T("budgets", pk=None, keys=(("category",),), edit=("monthly_limit",), child=True),
     T("card_limits", pk=None, keys=(("card_no",),), edit=("credit_limit",), child=True),
     T("rules", keys=(("pattern", "category"),), child=True),
+    T("subcategories", keys=(("category", "name"),), when="created_at", child=True),
     T("item_rules", keys=(("keywords", "category"),), when="created_at", child=True),
     T("subscription_state", pk=None, keys=(("merchant",),), when="changed_at", child=True),
     T("mail_log", pk=None, keys=(("message_id",),), when="processed_at", child=True),

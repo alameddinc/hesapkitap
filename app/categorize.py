@@ -50,23 +50,29 @@ CATEGORIES = sorted({c for _, c in DEFAULT_RULES} | {"Banka Faiz & Ücret", "Di�
 
 
 def categorize(description: str, txn_type: str, rules: list[tuple[str, str]]) -> str:
+    return categorize_sub(description, txn_type, rules)[0]
+
+
+def categorize_sub(description: str, txn_type: str, rules: list[tuple]) -> tuple[str, str | None]:
+    """(ana kategori, alt kategori). Kural (desen, kategori[, alt kategori]) üçlüsüyse eşleşen kuralın alt kategorisi
+    de döner; ikili kurallarda ve eşleşme yoksa alt kategori None. Ana kategori categorize() ile birebir aynı."""
     if txn_type == FEE:
-        return "Banka Faiz & Ücret"
+        return "Banka Faiz & Ücret", None
     if txn_type == PAYMENT:
-        return "Ödeme"
+        return "Ödeme", None
     norm = normalize(description)
     # Ödeme aracısı önekli satır ('PAYCO/ORNEK KITAP'): kurallar önce asıl işyerine bakar (aracı adına yazılmış bir
     # kural asıl işyerinin kategorisini ezmesin); hiçbiri tutmazsa tam metne (eski kurallar ve 'IYZICO' gibi
     # aracı kuralları aynen çalışır)
     asil = strip_gateway(norm)
     for text in (asil, norm) if asil != norm else (norm,):
-        for pattern, category in rules:
+        for rule in rules:
             try:
-                if re.search(pattern, text):
-                    return category
+                if re.search(rule[0], text):
+                    return rule[1], (rule[2] if len(rule) > 2 else None) or None
             except re.error:
                 continue
-    return UNCATEGORIZED
+    return UNCATEGORIZED, None
 
 
 def suggest_pattern(description: str) -> str:

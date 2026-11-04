@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import date, timedelta
 
 from app import money
-from app.categorize import DEFAULT_RULES, RULES_VERSION, categorize
+from app.categorize import DEFAULT_RULES, RULES_VERSION, categorize, categorize_sub
 from app.parsers.base import Statement
 
 DB_PATH = os.environ.get("EKSTRE_DB", os.path.join(os.path.dirname(__file__), "..", "data", "ekstre.db"))
@@ -264,6 +264,17 @@ CREATE TABLE IF NOT EXISTS counterparties (
     track_debt INTEGER NOT NULL DEFAULT 0,
     note TEXT
 );
+-- Alt kategoriler (kullanıcı tanımlı, defter başına): ana kategoriye bağlı ad listesi. İşlem/kayıt/kural `category`
+-- sütununda ana kategori kalır (bütçe, istatistik, eski istemci bozulmaz); alt kategori ayrı `subcategory` sütununda.
+-- Aynı ad farklı ana kategorilerin altında (ana kategoriyle aynı adla da) olabilir.
+CREATE TABLE IF NOT EXISTS subcategories (
+    id INTEGER PRIMARY KEY,
+    category TEXT NOT NULL,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (category, name)
+);
 -- Kategori bazında aylık harcama limiti
 CREATE TABLE IF NOT EXISTS budgets (
     category TEXT PRIMARY KEY,
@@ -468,6 +479,9 @@ MIGRATIONS = [
     ("entries", "tax_office", "TEXT"),            # vergi dairesi
     ("entries", "vat_total", "REAL"),             # fişteki toplam KDV
     ("entries", "vat_lines", "TEXT"),             # KDV dökümü JSON: [{"rate": 1, "amount": 18.25}]
+    ("transactions", "subcategory", "TEXT"),      # alt kategori (subcategories; ana kategori category'de kalır)
+    ("entries", "subcategory", "TEXT"),
+    ("rules", "subcategory", "TEXT"),             # kural eşleşince atanan alt kategori (isteğe bağlı)
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -882,10 +896,7 @@ def _sync_default_rules(c) -> None:
                   [(p, cat, 1000 + i) for i, (p, cat) in enumerate(DEFAULT_RULES)])
     c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('rules_version', ?)", (str(RULES_VERSION),))
     if current:  # ilk kurulum değilse mevcut işlemleri yeni kurallarla tazele (elle verilenler hariç)
-        rules = load_rules(c)
-        rs = c.execute("SELECT id, description, txn_type FROM transactions WHERE category_manual = 0").fetchall()
-        c.executemany("UPDATE transactions SET category = ? WHERE id = ?",
-                      [(categorize(r["description"], r["txn_type"], rules), r["id"]) for r in rs])
+        _apply_rules(c)
 
 
 def _backfill_statements(c) -> None:
@@ -970,7 +981,7 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
     """source='excel': kart işlem dökümünden üretilmiş ekstre (borç alanı kurgu: borç ve ödendi eşleşmesine girmez).
     PDF ekstresi kaydedilince aynı kartın aynı dönemindeki (±5 gün) Excel ekstresi silinir: harcamalar bir kez sayılır."""
     with connect() as c:
-        rules = load_rules(c)
+        rules = load_rules_sub(c)
         if source != "excel":
             for old in same_period(c, stmt.card_no, stmt.period_end.isoformat()):
                 if old.get("source") == "excel":
@@ -989,7 +1000,9 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
         for t in stmt.transactions:
             row = asdict(t)
             row["txn_date"] = t.txn_date.isoformat()
-            row["category"] = categorize(t.description, t.txn_type, rules)
+            row["category"], sub = categorize_sub(t.description, t.txn_type, rules)
+            if sub:
+                row["subcategory"] = sub
             row["statement_id"] = sid
             cols = ", ".join(row)
             c.execute(f"INSERT INTO transactions ({cols}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
@@ -1029,7 +1042,7 @@ def _free_card_txns(c) -> list[dict]:
 def _apply_link(c, entry: dict, txn: dict, how: str = "otomatik") -> None:
     from app import sync
 
-    old = c.execute("SELECT category, category_manual, note FROM transactions WHERE id = ?", (txn["id"],)).fetchone()
+    old = c.execute("SELECT category, subcategory, category_manual, note FROM transactions WHERE id = ?", (txn["id"],)).fetchone()
     c.execute("UPDATE entries SET linked_txn_id = ? WHERE id = ?", (txn["id"], entry["id"]))
     # geri alınabilsin (app/sync.py unmatch): ekstre satırının eski kategori/notu saklanır
     sync._record(c, entry["id"], "ekstre", how, txn_id=txn["id"], bank_date=txn["txn_date"], bank_desc_=txn["description"],
@@ -1037,8 +1050,8 @@ def _apply_link(c, entry: dict, txn: dict, how: str = "otomatik") -> None:
     # Kullanıcının verdiği bilgi ekstre satırına taşınır
     note = " · ".join(x for x in (txn["note"], entry["description"], entry["note"]) if x)
     if entry["category"] and not txn["category_manual"]:
-        c.execute("UPDATE transactions SET category = ?, category_manual = 1, note = ? WHERE id = ?",
-                  (entry["category"], note, txn["id"]))
+        c.execute("UPDATE transactions SET category = ?, subcategory = ?, category_manual = 1, note = ? WHERE id = ?",
+                  (entry["category"], entry.get("subcategory"), note, txn["id"]))
     else:
         c.execute("UPDATE transactions SET note = ? WHERE id = ?", (note, txn["id"]))
 
@@ -1127,8 +1140,8 @@ def link_entry(entry_id: int, txn_id: int | None) -> None:
             cur = c.execute("SELECT linked_txn_id FROM entries WHERE id = ?", (entry_id,)).fetchone()
             if m and m["other"] and cur and cur[0] == m["txn_id"]:  # ekstre satırı eski kategorisine/notuna döner
                 o = _json.loads(m["other"])
-                c.execute("UPDATE transactions SET category = ?, category_manual = ?, note = ? WHERE id = ?",
-                          (o.get("category"), o.get("category_manual") or 0, o.get("note"), m["txn_id"]))
+                c.execute("UPDATE transactions SET category = ?, subcategory = ?, category_manual = ?, note = ? WHERE id = ?",
+                          (o.get("category"), o.get("subcategory"), o.get("category_manual") or 0, o.get("note"), m["txn_id"]))
             c.execute("DELETE FROM entry_matches WHERE entry_id = ? AND source = 'ekstre'", (entry_id,))
             c.execute("UPDATE entries SET linked_txn_id = NULL WHERE id = ?", (entry_id,))
             return
@@ -1211,14 +1224,14 @@ def card_transactions(include_deleted: bool = False) -> list[dict]:
     return [dict(r) for r in _cached("card_txns", load, include_deleted, viewer)]
 
 
-CARD_EDITABLE = {"category", "txn_type", "note", "is_deleted", "description", "hidden"}
+CARD_EDITABLE = {"category", "subcategory", "txn_type", "note", "is_deleted", "description", "hidden"}
 
 
 def update_card_transaction(txn_id: int, fields: dict) -> None:
     fields = {k: v for k, v in fields.items() if k in CARD_EDITABLE}
     if not fields:
         return
-    if "category" in fields:
+    if "category" in fields or "subcategory" in fields:  # elle verilen alt kategori de kurallarla ezilmesin
         fields["category_manual"] = 1
     sets = ", ".join(f"{k} = ?" for k in fields)
     with connect() as c:
@@ -1227,7 +1240,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 
 # ---------------------------------------------------------------- manual entries
 
-ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "note", "recurring_id", "skipped",
+ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "subcategory", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
                 "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider", "not_virman",
                 "legal_name", "tax_no", "tax_office", "vat_total", "vat_lines")
@@ -1522,19 +1535,31 @@ def load_rules(conn) -> list[tuple[str, str]]:
     return [(r["pattern"], r["category"]) for r in conn.execute("SELECT pattern, category FROM rules ORDER BY priority, id")]
 
 
+def load_rules_sub(conn) -> list[tuple[str, str, str | None]]:
+    """load_rules ile aynı sıra; üçüncü öğe kuralın alt kategorisi (yoksa None)."""
+    return [(r["pattern"], r["category"], r["subcategory"])
+            for r in conn.execute("SELECT pattern, category, subcategory FROM rules ORDER BY priority, id")]
+
+
 def list_rules() -> list[dict]:
     with connect() as c:
-        return rows(c.execute("SELECT id, pattern, category, priority FROM rules ORDER BY priority, id"))
+        return rows(c.execute("SELECT id, pattern, category, subcategory, priority FROM rules ORDER BY priority, id"))
 
 
-def add_rule(pattern: str, category: str, priority: int = 10) -> int:
+def add_rule(pattern: str, category: str, priority: int = 10, subcategory: str | None = None) -> int:
     with connect() as c:
-        return c.execute("INSERT INTO rules (pattern, category, priority) VALUES (?, ?, ?)",
-                         (pattern, category, priority)).lastrowid
+        return c.execute("INSERT INTO rules (pattern, category, priority, subcategory) VALUES (?, ?, ?, ?)",
+                         (pattern, category, priority, subcategory or None)).lastrowid
+
+
+def get_rule(rule_id: int) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT id, pattern, category, subcategory, priority FROM rules WHERE id = ?", (rule_id,)).fetchone()
+    return dict(r) if r else None
 
 
 def update_rule(rule_id: int, data: dict) -> None:
-    data = {k: v for k, v in data.items() if k in ("pattern", "category", "priority")}
+    data = {k: v for k, v in data.items() if k in ("pattern", "category", "subcategory", "priority")}
     if data:
         with connect() as c:
             c.execute(f"UPDATE rules SET {', '.join(f'{k} = ?' for k in data)} WHERE id = ?", (*data.values(), rule_id))
@@ -1545,14 +1570,120 @@ def delete_rule(rule_id: int) -> None:
         c.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
 
 
+def _apply_rules(c) -> int:
+    """Elle atanmamış kart işlemleri: ana kategori ve (kuralda varsa) alt kategori güncel kurallardan."""
+    rules = load_rules_sub(c)
+    rs = c.execute("SELECT id, description, txn_type FROM transactions WHERE category_manual = 0").fetchall()
+    c.executemany("UPDATE transactions SET category = ?, subcategory = ? WHERE id = ?",
+                  [(*categorize_sub(r["description"], r["txn_type"], rules), r["id"]) for r in rs])
+    return len(rs)
+
+
 def recategorize_all() -> int:
     """Elle atanmamış tüm işlemleri güncel kurallarla yeniden kategorize et."""
     with connect() as c:
-        rules = load_rules(c)
-        rs = c.execute("SELECT id, description, txn_type FROM transactions WHERE category_manual = 0").fetchall()
-        c.executemany("UPDATE transactions SET category = ? WHERE id = ?",
-                      [(categorize(r["description"], r["txn_type"], rules), r["id"]) for r in rs])
-        return len(rs)
+        return _apply_rules(c)
+
+
+# ---------------------------------------------------------------- alt kategoriler
+
+SUBCATEGORY_TABLES = ("transactions", "entries", "rules")  # subcategory sütunu olan tablolar (yeniden adlandır / sil)
+
+
+def clean_sub_name(name: str | None) -> str | None:
+    """Boşlukları sadeleştir; boş → None."""
+    n = re.sub(r"\s+", " ", name or "").strip()
+    return n or None
+
+
+def list_subcategories() -> list[dict]:
+    """[{id, category, name, position, count}] (kullanıcının sırasıyla). count: bu alt kategorideki işlem + kayıt."""
+    def load():
+        with connect() as c:
+            items = rows(c.execute("SELECT id, category, name, position FROM subcategories ORDER BY category, position, id"))
+            used: dict[tuple, int] = {}
+            for sql in ("SELECT category, subcategory, COUNT(*) FROM transactions WHERE subcategory IS NOT NULL "
+                        "AND is_deleted = 0 GROUP BY category, subcategory",
+                        "SELECT category, subcategory, COUNT(*) FROM entries WHERE subcategory IS NOT NULL "
+                        "GROUP BY category, subcategory"):
+                for r in c.execute(sql):
+                    used[(r[0], r[1])] = used.get((r[0], r[1]), 0) + r[2]
+        for i in items:
+            i["count"] = used.get((i["category"], i["name"]), 0)
+        return items
+    return [dict(r) for r in _cached("subcategories", load)]
+
+
+def subcategories_map() -> dict[str, list[str]]:
+    """{ana kategori: [alt1, alt2, …]} (kullanıcının sırasıyla)."""
+    out: dict[str, list[str]] = {}
+    for r in list_subcategories():
+        out.setdefault(r["category"], []).append(r["name"])
+    return out
+
+
+def get_subcategory(sid: int) -> dict | None:
+    return next((r for r in list_subcategories() if r["id"] == sid), None)
+
+
+def find_subcategory(category: str | None, name: str | None) -> dict | None:
+    """Ana kategorinin altında bu ad (büyük/küçük harf ve Türkçe karakter farkı gözetmeden) var mı?"""
+    from app.categorize import fold_key
+
+    if not category or not name:
+        return None
+    k = fold_key(name)
+    return next((r for r in list_subcategories() if r["category"] == category and fold_key(r["name"]) == k), None)
+
+
+def add_subcategory(category: str, name: str) -> tuple[dict, bool]:
+    """(alt kategori, yeni mi). Aynı ana kategori altında aynı ad varsa yenisi açılmaz, var olan döner."""
+    if (hit := find_subcategory(category, name)):
+        return hit, False
+    with connect() as c:
+        pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM subcategories WHERE category = ?", (category,)).fetchone()[0]
+        sid = c.execute("INSERT INTO subcategories (category, name, position) VALUES (?, ?, ?)", (category, name, pos)).lastrowid
+    return get_subcategory(sid) or {"id": sid, "category": category, "name": name, "position": pos, "count": 0}, True
+
+
+def rename_subcategory(sid: int, name: str) -> int:
+    """Adı değiştir; işlemlere, kayıtlara ve kurallara yansır. Dönen: güncellenen satır sayısı. Aynı ana kategoride
+    bu ad başka bir alt kategorideyse ValueError, alt kategori yoksa KeyError."""
+    cur = get_subcategory(sid)
+    if not cur:
+        raise KeyError(sid)
+    other = find_subcategory(cur["category"], name)
+    if other and other["id"] != sid:
+        raise ValueError(f"“{cur['category']}” altında “{other['name']}” zaten var")
+    n = 0
+    with connect() as c:
+        c.execute("UPDATE subcategories SET name = ? WHERE id = ?", (name, sid))
+        for t in SUBCATEGORY_TABLES:
+            n += c.execute(f"UPDATE {t} SET subcategory = ? WHERE category = ? AND subcategory = ?",
+                           (name, cur["category"], cur["name"])).rowcount
+    return n
+
+
+def delete_subcategory(sid: int) -> int:
+    """Sil; işlemlerden, kayıtlardan ve kurallardan kaldırılır (ana kategori kalır). Dönen: temizlenen satır sayısı."""
+    cur = get_subcategory(sid)
+    if not cur:
+        raise KeyError(sid)
+    n = 0
+    with connect() as c:
+        c.execute("DELETE FROM subcategories WHERE id = ?", (sid,))
+        for t in SUBCATEGORY_TABLES:
+            n += c.execute(f"UPDATE {t} SET subcategory = NULL WHERE category = ? AND subcategory = ?",
+                           (cur["category"], cur["name"])).rowcount
+    return n
+
+
+def reorder_subcategories(category: str, ids: list[int]) -> None:
+    """Ana kategorinin alt kategorilerini bu sırayla diz (listede olmayanlar sona, eski sıralarıyla)."""
+    have = [r["id"] for r in list_subcategories() if r["category"] == category]
+    order = [i for i in ids if i in have] + [i for i in have if i not in ids]
+    with connect() as c:
+        c.executemany("UPDATE subcategories SET position = ? WHERE id = ?", [(p, i) for p, i in enumerate(order)])
 
 
 def known_categories() -> list[str]:
@@ -2537,7 +2668,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
 
     acc_id = sync.account_for_import(account or None, iban, account_id, new_account)
     with connect() as c:
-        rules = load_rules(c)
+        rules = load_rules_sub(c)
         seen = {r[0] for r in c.execute("SELECT import_hash FROM entries WHERE import_hash IS NOT NULL "
                                         "UNION SELECT import_hash FROM own_transfers WHERE import_hash IS NOT NULL "
                                         "UNION SELECT import_hash FROM card_payments WHERE import_hash IS NOT NULL")}
@@ -2674,7 +2805,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             seen.add(r["hash"])
             continue
         norm = normalize(desc)
-        category = None
+        category = sub = None
         rec = None
         if kind == "gelir":
             rec = next((x for x in recurring if x["kind"] == "gelir"
@@ -2705,7 +2836,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                         continue
             category = category or ("Maaş" if is_salary_text(desc) else "Diğer Gelir")
         else:
-            category = categorize(desc, "harcama", rules)
+            category, sub = categorize_sub(desc, "harcama", rules)
             if category == "Kategorisiz":
                 category = None
         from app.bank_import import describe, transfer_note
@@ -2719,7 +2850,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             who, payment = _known_counterparty(who), "havale"
             cp = get_counterparty(who)
             if cp and cp["category"]:
-                category = cp["category"]  # kişiye verilmiş kategori
+                category, sub = cp["category"], None  # kişiye verilmiş kategori
             if desc == r["description"]:  # 'Elif Demir · not' (bilinen kişi adının yazılışıyla)
                 note = transfer_note(r["description"], owners, who)
                 desc = who + (f" · {note}" if note else "")
@@ -2731,7 +2862,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         row = {"entry_date": r["date"], "description": desc, "amount": amount, "kind": kind,
                "category": category or "Kategorisiz", "payment": payment if kind == "gider" else None,
                "note": note_text, "bill_provider": bill_provider,
-               "import_hash": r["hash"], "counterparty": who, "account_id": acc_id}
+               "import_hash": r["hash"], "counterparty": who, "account_id": acc_id, "subcategory": sub if category else None}
         # sabit kalem dökümden önce elle onaylandıysa (kira birkaç gün geç, fatura plandan farklı tutarda gelir):
         # o kayıt bu satır olur; yeni kayıt komşu döneme bağlanıp iki kez sayılmaz
         with connect() as c:
@@ -2839,7 +2970,8 @@ def set_counterparty(name: str, category: str | None = None, track_debt: bool | 
         c.execute("INSERT OR REPLACE INTO counterparties (name, category, track_debt, note) VALUES (?, ?, ?, ?)",
                   (name, cat, td, note if note is not None else cur["note"]))
         if category:
-            return c.execute("UPDATE entries SET category = ? WHERE counterparty = ?", (category, name)).rowcount
+            return c.execute("UPDATE entries SET category = ?, subcategory = CASE WHEN category = ? THEN subcategory END "
+                             "WHERE counterparty = ?", (category, category, name)).rowcount
     return 0
 
 

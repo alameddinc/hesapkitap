@@ -57,6 +57,8 @@ CAPABILITIES = (
                               # legal_name (POST/PATCH /api/entries); GET /api/receipts/export?period=month|year&value
                               # ya da ?from&to, &format=xlsx|csv (Excel: "Fiş listesi" + "KDV özeti")
     "card_limit",             # cards/summary kart başına limit, limit_source (ekstre|elle), available, used_pct; PUT /api/cards/limit
+    "subcategories",          # alt kategori: /api/subcategories (CRUD, order), meta.subcategories{,_editable}, işlem/kayıt/kural
+                              # subcategory alanı, /api/transactions?category&subcategory, by_category[].children
 )
 
 

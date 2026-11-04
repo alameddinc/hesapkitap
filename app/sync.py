@@ -358,8 +358,8 @@ def unmatch(entry_id: int) -> dict:
         if e["linked_txn_id"]:  # kart ekstresi
             tid = e["linked_txn_id"]
             if mrow and mrow["source"] == "ekstre" and other:
-                c.execute("UPDATE transactions SET category = ?, category_manual = ?, note = ? WHERE id = ?",
-                          (other.get("category"), other.get("category_manual") or 0, other.get("note"), tid))
+                c.execute("UPDATE transactions SET category = ?, subcategory = ?, category_manual = ?, note = ? WHERE id = ?",
+                          (other.get("category"), other.get("subcategory"), other.get("category_manual") or 0, other.get("note"), tid))
             c.execute("UPDATE entries SET linked_txn_id = NULL, amount = COALESCE(?, amount) WHERE id = ?",
                       (prev.get("amount"), entry_id))
             c.execute("INSERT OR IGNORE INTO match_rejects (entry_id, other, created_by) VALUES (?, ?, ?)",

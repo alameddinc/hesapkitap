@@ -5,6 +5,7 @@ import { api, type Row } from "../api";
 import { BankText, userNote } from "./BankText";
 import { cx, dateTR, KIND_LABEL, tl } from "../format";
 import CategoryPicker from "./CategoryPicker";
+import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
 import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
@@ -18,6 +19,9 @@ import { useUI } from "../ui";
 export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClose: () => void; onSaved?: (m: string) => void }) {
   const meta = useMeta();
   const [category, setCategory] = useState(row.category);
+  const [sub, setSub] = useState(row.subcategory ?? "");
+  const subs = useSubcategories();
+  const pickCategory = (c: string) => { if (c !== category) setSub(""); setCategory(c); };
   const [kind, setKind] = useState(row.kind);
   const [description, setDescription] = useState(row.description);
   const [note, setNote] = useState(userNote(row) ?? "");
@@ -64,6 +68,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   const submit = () => {
     const body: Record<string, unknown> = {};
     if (categoryChanged) Object.assign(body, { category, create_rule: makeRule });
+    if (subs.on && (categoryChanged || sub !== (row.subcategory ?? ""))) body.subcategory = sub || null;
     if (kind !== row.kind) body.txn_type = kind;
     if (description !== row.description) body.description = description;
     if (note !== (userNote(row) ?? "")) body.note = note;
@@ -134,7 +139,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
         </div>
         <div>
           <label className="label" htmlFor="c-cat">Kategori</label>
-          <CategoryPicker id="c-cat" value={category} onChange={setCategory} options={meta.data?.categories ?? []} />
+          <CategoryPicker id="c-cat" value={category} onChange={pickCategory} options={meta.data?.categories ?? []} />
           {categoryChanged && (
             <label className="mt-2 flex items-center gap-2 text-sm">
               <input type="checkbox" checked={makeRule} onChange={(e) => setMakeRule(e.target.checked)} />
@@ -142,6 +147,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
             </label>
           )}
         </div>
+        <SubcategoryPicker id="c-sub" category={category} value={sub} onChange={setSub} />
         {hasMembers && !member && (
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />

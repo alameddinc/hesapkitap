@@ -175,7 +175,8 @@ def _add_rule(c, rows: list[dict], category: str) -> str | None:
         return None
     cur = c.execute("SELECT id FROM rules WHERE pattern = ?", (pattern,)).fetchone()
     if cur:
-        c.execute("UPDATE rules SET category = ? WHERE id = ?", (category, cur["id"]))
+        c.execute("UPDATE rules SET category = ?, subcategory = CASE WHEN category = ? THEN subcategory END WHERE id = ?",
+                  (category, category, cur["id"]))
     else:
         c.execute("INSERT INTO rules (pattern, category, priority) VALUES (?, ?, 10)", (pattern, category))
     return pattern
