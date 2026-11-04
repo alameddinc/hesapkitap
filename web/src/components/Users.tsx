@@ -26,6 +26,7 @@ const inviteLink = (code: string) => `${window.location.origin}/#/kayit?kod=${co
 export default function Users() {
   const ui = useUI();
   const rbp = useMeta().data?.plan?.reads_by_plan; // okuma hakları (sunucudan; sabit yazılmaz)
+  const drp = useMeta().data?.plan?.daily_reads_by_plan; // günlük tek sayaç (yeni sunucu)
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => call<AdminData>("/api/admin/users", "GET") });
   const onErr = { onError: (e: Error) => ui.error(e.message) };
   const [note, setNote] = useState("");
@@ -54,7 +55,8 @@ export default function Users() {
       <h2 className="flex items-center gap-2 font-semibold"><UsersIcon size={18} /> Kullanıcılar</h2>
       <p className="text-xs text-stone-500">
         Her kullanıcının verisi ayrı dosyada; buradan sadece hesapları yönetirsin, kimsenin harcamasını göremezsin.
-        {d?.hosted ? (rbp ? ` Okuma hakkı pakete göre (ayda, kişi başı): Ücretsiz ${rbp.free.belge} belge / ${rbp.free.fis} fiş, Premium ve Aile ${rbp.premium.belge} / ${rbp.premium.fis}; ek okuma paketi telefondaki uygulamadan.`
+        {d?.hosted ? drp ? ` Okuma hakkı pakete göre (kişi başı, tek sayaç): Ücretsiz ${drp.free.text.toLowerCase()}, Premium ve Aile ${drp.premium.text.toLowerCase()}; PDF her 10 sayfa 1, yeniden okuma 2; ek okuma paketi telefondaki uygulamadan.`
+          : (rbp ? ` Okuma hakkı pakete göre (ayda, kişi başı): Ücretsiz ${rbp.free.belge} belge / ${rbp.free.fis} fiş, Premium ve Aile ${rbp.premium.belge} / ${rbp.premium.fis}; ek okuma paketi telefondaki uygulamadan.`
             : " Okuma hakkı pakete göre: belge ve fiş ayrı sayaç.")
           : `Fiş okuma senin Gemini anahtarınla, kişi başı aylık ${d?.default_quota ?? 100} okuma; kendi anahtarını giren sınırsız.`}
       </p>
@@ -97,7 +99,9 @@ export default function Users() {
               </span>
               <span className="text-xs text-stone-500">
                 {u.last_login ? `son giriş ${tsDateTR(u.last_login)}` : "hiç girmedi"}
-                {u.reads ? <> · <span className="whitespace-nowrap">belge {u.reads.belge.used}/{u.reads.belge.limit}</span> · <span className="whitespace-nowrap">fiş {u.reads.fis.used}/{u.reads.fis.limit}</span> · ek {u.reads.extra}</>
+                {u.reads?.period === "day" ? <> · <span className="whitespace-nowrap">bugün {u.reads.used}/{u.reads.limit}</span>
+                  {u.reads.monthly_cap != null && <> · <span className="whitespace-nowrap">ay {u.reads.monthly_used ?? 0}/{u.reads.monthly_cap}</span></>} · ek {u.reads.extra}</>
+                  : u.reads ? <> · <span className="whitespace-nowrap">belge {u.reads.belge.used}/{u.reads.belge.limit}</span> · <span className="whitespace-nowrap">fiş {u.reads.fis.used}/{u.reads.fis.limit}</span> · ek {u.reads.extra}</>
                   : u.ai_quota !== null && !(d?.hosted && u.role === "admin") && <> · {d?.hosted ? "belge okuma" : "yapay zekâ"} {u.ai_used}/{u.ai_quota}</>}
                 {u.plan && u.plan !== "free" && u.role !== "admin" && (
                   <> · <b className="text-amber-700 dark:text-amber-400">{u.plan === "aile" ? "Aile" : "Premium"}</b>

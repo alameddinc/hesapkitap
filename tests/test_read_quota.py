@@ -1,4 +1,4 @@
-"""Okuma hakları v2 (hazır sürüm): iki sayaç (belge / fiş), ek okuma paketi (mağaza tüketilebilir ürün, idempotent),
+"""Okuma hakları (hazır sürüm): günlük tek sayaç (eski belge / fiş alanları geriye uyum), ek okuma paketi (mağaza tüketilebilir ürün, idempotent),
 deneme bilgisi, yapılandırılmış "hak doldu" gövdesi, eski tek sayaçtan göç, sayfa tablosu ve yönetici değişikliği.
 Kendi sunucusunda hiçbiri uygulanmaz."""
 import sqlite3
@@ -42,13 +42,14 @@ def test_limits_by_plan_and_meta_reads(hosted):
 
     c, u = _user(hosted)
     p = c.get("/api/meta").json()["plan"]
-    assert p["reads"]["belge"] == {"used": 0, "limit": 10, "left": 0 + 10} and p["reads"]["fis"]["limit"] == 30
-    assert p["reads_by_plan"] == {"free": {"belge": 10, "fis": 30}, "premium": {"belge": 200, "fis": 300},
-                                  "aile": {"belge": 200, "fis": 300}}
+    assert p["reads"]["belge"] == {"used": 0, "limit": 3, "left": 3} and p["reads"]["fis"]["limit"] == 3
+    # geriye uyum: eski {belge, fis} biçimi, ikisi de günlük hak
+    assert p["reads_by_plan"] == {"free": {"belge": 3, "fis": 3}, "premium": {"belge": 30, "fis": 30},
+                                  "aile": {"belge": 30, "fis": 30}}
     assert [x["id"] for x in p["packs"]] == ["okuma_100", "okuma_300"] and p["family_seats"] == 4
     assert p["limits_by_plan"]["free"] == {"history_months": 1, "plan_months": 1, "budgets": 2}
     assert p["limits_by_plan"]["premium"] == {"history_months": None, "plan_months": None, "budgets": None}
-    for plan, (b, f) in (("premium", (200, 300)), ("aile", (200, 300))):
+    for plan, (b, f) in (("premium", (30, 30)), ("aile", (30, 30))):
         system.update_user(u["id"], plan=plan, plan_until=None)
         assert (plans.read_limit(system.user(u["id"]), "belge"), plans.read_limit(system.user(u["id"]), "fis")) == (b, f)
 
@@ -61,8 +62,8 @@ def test_trial_has_normal_limits_and_is_reported(hosted):
                 "product_id": "premium_monthly", "period_type": "TRIAL", "expiration_at_ms": exp}).status_code == 200
     p = c.get("/api/meta").json()["plan"]
     assert p["plan"] == "premium" and p["trial"] is True and p["trial_days_left"] in (6, 7)
-    assert p["reads"]["belge"]["limit"] == 200 and p["reads"]["fis"]["limit"] == 300
-    _set_reads(u["id"], belge=200)
+    assert p["reads"]["limit"] == 30 and p["reads"]["monthly_cap"] is None
+    _set_reads(u["id"], day=30)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
     assert r["quota_full"] and r["trial"] is True and r["trial_days_left"] in (6, 7) and r["upgrade"] is False
     # deneme bitti, ücretli dönem (RENEWAL, period_type NORMAL): deneme bilgisi düşer
@@ -78,7 +79,7 @@ def test_upgrade_yearly_default_off_and_admin_switch(hosted):
     _rc({"type": "INITIAL_PURCHASE", "app_user_id": str(u["id"]), "entitlement_ids": ["premium"],
          "product_id": "premium_monthly:monthly", "period_type": "NORMAL", "expiration_at_ms": 4102444800000})
     assert system.user(u["id"])["plan_product"] == "premium_monthly"
-    _set_reads(u["id"], belge=200)
+    _set_reads(u["id"], day=30)
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["upgrade_yearly"] is False  # varsayılan kapalı
     assert hosted.put("/api/admin/plan-table", json={"upgrade_yearly": True}).json()["upgrade_yearly"] is True
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["upgrade_yearly"] is True
@@ -112,43 +113,49 @@ def test_pack_purchase_is_idempotent_and_leaves_subscription(hosted):
     assert _ai(c)["extra"] == 400
 
 
-def test_pack_used_after_monthly_for_both_kinds(hosted, gemini):
+def test_pack_used_after_daily_for_every_kind(hosted, gemini):
     c, u = _user(hosted)
     _pack(u["id"])
-    _set_reads(u["id"], belge=10, fis=30)
+    _set_reads(u["id"], day=3)
     from app import system
 
     with system.connect() as cn:  # bakiyeyi 2'ye indir
         cn.execute("UPDATE read_credits SET balance = 2 WHERE user_id = ?", (u["id"],))
-    assert c.post("/api/statements/upload", files=_stmt()).json()[0]["status"] == "saved"  # belge: ekten
+    r = c.post("/api/statements/upload", files=_stmt()).json()[0]
+    assert r["status"] == "saved" and r["charged"] == {"daily": 0, "extra": 1}  # ekstre: ekten
     assert c.post("/api/receipts/parse", files={"file": ("f.jpg", b"fis-x", "image/jpeg")}).status_code == 200  # fiş: ekten
     ai = _ai(c)
-    assert ai["extra"] == 0 and ai["belge"]["used"] == 10 and ai["fis"]["used"] == 30  # aylık sayaç sınırda kaldı
+    assert ai["extra"] == 0 and ai["reads"]["used"] == 3  # günlük sayaç sınırda kaldı
     r = c.post("/api/statements/upload", files=_stmt("vakifbank_b.txt")).json()[0]
     assert r["quota_full"] is True and r["extra_left"] == 0
 
 
-def test_monthly_first_then_pack(hosted):
+def test_daily_first_then_pack(hosted):
     c, u = _user(hosted)
     _pack(u["id"])
-    _set_reads(u["id"], belge=9)
+    _set_reads(u["id"], day=2)
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["status"] == "saved"
     ai = _ai(c)
-    assert ai["belge"]["used"] == 10 and ai["extra"] == 100  # aylık hak önce
+    assert ai["reads"]["used"] == 3 and ai["extra"] == 100  # günlük hak önce
     assert c.post("/api/statements/upload", files=_stmt("vakifbank_b.txt")).json()[0]["status"] == "saved"
     assert _ai(c)["extra"] == 99
 
 
-def test_pack_survives_premium_and_month_change(hosted):
+def test_pack_survives_premium_and_day_change(hosted, monkeypatch):
+    from datetime import datetime
+
     from app import doc_reads, system
 
     c, u = _user(hosted)
     _pack(u["id"], "okuma_300", "tx-9")
     _rc({"type": "INITIAL_PURCHASE", "app_user_id": str(u["id"]), "entitlement_ids": ["premium"],
          "product_id": "premium_yearly", "expiration_at_ms": 4102444800000})
-    assert _ai(c)["extra"] == 300 and _ai(c)["belge"]["limit"] == 200  # Premium başlayınca ek hak kalır
-    # gelecek ay: aylık sayaç sıfır, ek hak aynı
-    assert doc_reads.used(system.user(u["id"]), "belge", "2099-01") == 0 and doc_reads.credits(u["id"]) == 300
+    assert _ai(c)["extra"] == 300 and _ai(c)["reads"]["limit"] == 30  # Premium başlayınca ek hak kalır
+    _set_reads(u["id"], day=30)
+    # gelecek gün: günlük sayaç sıfır, ek hak aynı
+    monkeypatch.setattr(doc_reads, "_now", lambda: datetime(2099, 1, 1, 9, tzinfo=doc_reads.TZ))
+    st = doc_reads.status(system.user(u["id"]))
+    assert st["used"] == 0 and st["left"] == 30 and doc_reads.credits(u["id"]) == 300
 
 
 def test_pack_refund(hosted):
@@ -176,23 +183,26 @@ def test_pack_for_unknown_user_ignored(hosted):
 
 # ---------------------------------------------------------------- tür tahmini (documents/parse)
 
-def test_document_photo_counts_by_detected_type(hosted, monkeypatch):
-    from app import receipt
+def test_document_photo_counts_once_whatever_the_type(hosted, monkeypatch):
+    """Sayaç tek: fotoğraf fatura da çıksa fiş de çıksa aynı günlük haktan 1; tür yalnız istatistikte (read_usage)."""
+    from app import receipt, system
 
     c, u = _user(hosted)
     monkeypatch.setenv("GEMINI_API_KEY", "AIzaTEST0000")
     monkeypatch.setattr(receipt, "parse_document", lambda *a, **k: {
         "type": "bill", "provider": "Örnek Elektrik", "amount": 410.0, "due_date": "2026-11-20", "category": "Faturalar"})
     assert c.post("/api/documents/parse", files={"file": ("fatura.jpg", b"fatura-foto", "image/jpeg")}).status_code == 200
-    ai = _ai(c)
-    assert (ai["belge"]["used"], ai["fis"]["used"]) == (1, 0)  # fotoğraf ama fatura: belge sayacı
     monkeypatch.setattr(receipt, "parse_document", lambda *a, **k: {
         "type": "receipt", "merchant": "Market", "total": 10.0, "items": [], "date": "2026-11-01"})
     assert c.post("/api/documents/parse", files={"file": ("fis.jpg", b"fis-foto", "image/jpeg")}).status_code == 200
-    assert _ai(c)["fis"]["used"] == 1
+    ai = _ai(c)
+    assert ai["reads"]["used"] == 2 and ai["belge"]["used"] == ai["fis"]["used"] == 2
+    with system.connect() as cn:
+        kinds = {r[0]: r[1] for r in cn.execute("SELECT kind, count FROM read_usage WHERE user_id = ?", (u["id"],))}
+    assert kinds == {"belge": 1, "fis": 1}
 
 
-# ---------------------------------------------------------------- eski tek sayaçtan göç
+# ---------------------------------------------------------------- eski tek sayaçtan göç (eski aylık sayaç, geçmiş aylar)
 
 def test_split_migration_receipts_to_fis_and_idempotent(hosted):
     from app import db, doc_reads, system
@@ -209,11 +219,11 @@ def test_split_migration_receipts_to_fis_and_idempotent(hosted):
     conn.execute("INSERT INTO stored_files (kind, name, size, created_at) VALUES ('receipts', 'eski.jpg', 1, '2000-01-01')")
     conn.commit()
     conn.close()
-    st = doc_reads.status(system.user(u["id"]))
-    assert (st["belge"]["used"], st["fis"]["used"]) == (11, 4)
+    me = system.user(u["id"])
+    assert (doc_reads.used(me, "belge", MONTH), doc_reads.used(me, "fis", MONTH)) == (11, 4)
     _set_used(u["id"], 40)  # göçten sonra tek sayaç değişse de yeniden bölünmez
-    st = doc_reads.status(system.user(u["id"]))
-    assert (st["belge"]["used"], st["fis"]["used"]) == (11, 4)
+    assert (doc_reads.used(me, "belge", MONTH), doc_reads.used(me, "fis", MONTH)) == (11, 4)
+    assert doc_reads.status(me)["used"] == 0  # günlük sayaç eski aylık sayaçtan bağımsız
 
 
 def test_split_caps_receipts_at_total_and_member_all_belge(hosted):
@@ -221,12 +231,12 @@ def test_split_caps_receipts_at_total_and_member_all_belge(hosted):
 
     c, u = _user(hosted)
     _set_used(u["id"], 0)
-    assert doc_reads.status(system.user(u["id"]))["belge"]["used"] == 0
+    assert doc_reads.used(system.user(u["id"]), "belge", MONTH) == 0
     m = system.create_user("uye@ornek.com", None, member_of=u["id"])
     with system.connect() as cn:
         cn.execute("INSERT OR REPLACE INTO ai_usage (user_id, month, count) VALUES (?, ?, 7)", (m["id"], MONTH))
-    st = doc_reads.status(system.user(m["id"]))
-    assert (st["belge"]["used"], st["fis"]["used"]) == (7, 0)
+    mm = system.user(m["id"])
+    assert (doc_reads.used(mm, "belge", MONTH), doc_reads.used(mm, "fis", MONTH)) == (7, 0)
 
 
 # ---------------------------------------------------------------- sayfa tablosu
@@ -284,9 +294,9 @@ def test_table_drives_history_plan_and_budget_limits(hosted):
 
 def test_admin_users_list_shows_reads(hosted):
     c, u = _user(hosted)
-    _set_reads(u["id"], belge=3, fis=5)
+    _set_reads(u["id"], day=2)
     row = next(x for x in hosted.get("/api/admin/users").json()["users"] if x["id"] == u["id"])
-    assert row["reads"]["belge"]["used"] == 3 and row["reads"]["fis"]["used"] == 5 and row["reads"]["extra"] == 0
+    assert row["reads"]["used"] == 2 and row["reads"]["belge"]["used"] == 2 and row["reads"]["extra"] == 0
 
 
 # ---------------------------------------------------------------- kendi sunucusu

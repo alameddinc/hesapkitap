@@ -1,5 +1,5 @@
 """Fiş kalemleri: denetim (toplam, adet × birim, kayma önerisi), kayıtlı fişin kalemlerini oku/değiştir, saklı
-fotoğrafı yeniden oku (belge hakkı düşmez, günlük sınır, sonuç kaydedilmez)."""
+fotoğrafı yeniden oku (2 okuma hakkı, günlük sınır, sonuç kaydedilmez)."""
 import json
 
 import httpx
@@ -81,27 +81,46 @@ def _dump(d):
     return json.dumps(d, ensure_ascii=False)
 
 
-def test_reread_does_not_charge_and_is_limited(hosted, reread_ai):  # noqa: F811
+def test_reread_charges_two_and_is_limited(hosted, reread_ai):  # noqa: F811
+    from app import system
+
     c, u = _user(hosted)
+    system.update_user(u["id"], plan="premium", plan_until=None)  # günde 30: üç yeniden okumaya yeter
     r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
     assert _used(u["id"]) == 1 and r["receipt_file"] and "check" in r
-    # ilk okuma fişi tutmadı: aynı istekte güçlü modelle bir kez daha okundu, daha iyi olduğu için o kullanıldı
+    # ilk okuma fişi tutmadı: aynı istekte güçlü modelle bir kez daha okundu (otomatik: hak düşmez)
     assert r["reread"] == {"tried": True, "used": True, "model": "gemini-3.5-flash"} and r["check"]["ok"]
+    assert r["charged"] == {"daily": 1, "extra": 0}
     out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 285.0})
     assert out.status_code == 200, out.text
     out = out.json()
     assert out["check"]["ok"] and len(out["items"]) == 5 and out["model"] == "gemini-3.5-flash"
     assert "GENEL TOPLAMI 285.00" in reread_ai[-1][1] and "gemini-3.5-flash:" in reread_ai[-1][0]
-    assert _used(u["id"]) == 1  # yeniden okuma belge hakkı düşürmez
+    assert out["charged"] == {"daily": 2, "extra": 0} and _used(u["id"]) == 3  # elle yeniden okuma 2 hak
     eid = c.post("/api/entries", json={"entry_date": "2026-10-29", "description": "Ornek", "amount": 285.0,
                                        "kind": "gider", "category": "Market & Gıda",
                                        "receipt_file": r["receipt_file"]}).json()["id"]
     assert c.post(f"/api/entries/{eid}/receipt-reread").status_code == 200
     assert c.get(f"/api/entries/{eid}/receipt-items").json()["items"] == []  # sonuç kaydedilmez
     assert c.post(f"/api/entries/{eid}/receipt-reread").status_code == 200
-    assert c.post(f"/api/entries/{eid}/receipt-reread").status_code == 429  # günde 3
-    assert _used(u["id"]) == 1
+    assert c.post(f"/api/entries/{eid}/receipt-reread").status_code == 429  # günde 3 (fotoğraf başı)
+    assert _used(u["id"]) == 7 and c.get("/api/me/ai").json()["reads"]["used"] == 7
     assert c.post("/api/receipts/reread", json={"receipt_file": "0" * 64 + ".jpg"}).status_code == 404
+
+
+def test_reread_refused_when_two_reads_not_left(hosted, reread_ai):  # noqa: F811
+    from tests.test_doc_reads import _set_reads
+
+    c, u = _user(hosted)
+    r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
+    n = len(reread_ai)
+    _set_reads(u["id"], day=2)  # ücretsiz günde 3: 1 kaldı
+    out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 285.0})
+    body = out.json()
+    assert out.status_code == 402 and body["quota_full"] is True and body["needed"] == 2 and body["reread"] is True
+    assert body["detail"].startswith("Yeniden okuma 2 hak ister, bugün 1 hakkın kaldı. Yarın yenilenir.")
+    assert body["receipt_file"] == r["receipt_file"] and len(reread_ai) == n  # modele gidilmedi
+    assert c.get("/api/me/ai").json()["reads"]["used"] == 2
 
 
 def _ai(monkeypatch, first, second=None, fail=False):

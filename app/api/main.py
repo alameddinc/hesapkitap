@@ -1106,7 +1106,7 @@ def _user_row(u: dict) -> dict:
 
 
 def _admin_reads(u: dict) -> dict | None:
-    """Yönetici listesi: bu ayki belge / fiş kullanımı ve ek paket bakiyesi (finans verisi değil)."""
+    """Yönetici listesi: bugünkü okuma (ücretsizde bu ayki toplam) ve ek paket bakiyesi (finans verisi değil)."""
     from app import doc_reads
 
     return doc_reads.status(u)
@@ -1146,7 +1146,10 @@ class PlanTableIn(BaseModel):
 def _plan_table_out() -> dict:
     return {"rows": plans.table(), "tiers": list(plans.TIERS), "labels": {k: plans.LABELS[k] for k in plans.TIERS},
             "upgrade_yearly": plans.upgrade_yearly_enabled(), "hosted": plans.hosted(),
-            "reads": plans.READS, "packs": [{"id": k, "reads": n} for k, n in plans.PACKS.items()]}
+            "reads": plans.READS, "packs": [{"id": k, "reads": n} for k, n in plans.PACKS.items()],
+            # günlük tek sayaç: {paket: {day, month, text}} ("Günde 30 okuma (fiş, fatura, ekstre)")
+            "daily_reads": {p: {"day": plans.DAILY_READS[p], "month": plans.MONTHLY_CAP.get(p), "text": plans.reads_text(p)}
+                            for p in plans.TIERS}}
 
 
 @app.get("/api/admin/plan-table")
@@ -1397,7 +1400,7 @@ def admin_delete_invite(code: str):
 
 @app.get("/api/me/ai")
 def my_ai():
-    """Okuma kotası. unit "docs": hazır sürüm, aylık belge okuma hakkı (app/doc_reads.py; ailede ortak havuz).
+    """Okuma kotası. unit "docs": hazır sürüm, günlük tek okuma hakkı (app/doc_reads.py; kişi başı).
     unit "ai": kendi sunucusu, ortak anahtarla aylık yapay zekâ çağrısı kotası; kendi anahtarı varsa sınırsız."""
     unit = "docs" if plans.hosted() else "ai"
     u = db.current_user()
@@ -1406,13 +1409,13 @@ def my_ai():
     own = bool(config.own_ai_key())
     shared = bool(system.get("cfg:GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY"))
     if plans.hosted():
-        # iki sayaç (kişi başı): belge ve fiş; extra: ek okuma paketi bakiyesi (ikisinde ortak). used/quota: belge
-        # sayacı (eski istemciler tek sayı gösterir)
+        # reads: günlük tek sayaç (doc_reads.status; "daily_reads"). Geriye uyum: used/quota (tek sayı), belge ve fiş
+        # (eski iki sayaç; ikisi de aynı günlük sayacı yansıtır), extra: ek okuma paketi bakiyesi
         from app import doc_reads
 
         st = doc_reads.status(u)
-        return {"used": st["belge"]["used"], "quota": st["belge"]["limit"], "own_key": own, "unit": unit,
-                "shared_available": shared, "belge": st["belge"], "fis": st["fis"], "extra": st["extra"]}
+        return {"used": st["used"], "quota": st["limit"], "own_key": own, "unit": unit, "shared_available": shared,
+                "belge": st["belge"], "fis": st["fis"], "extra": st["extra"], "reads": st}
     return {"used": system.ai_used_pool(u), "quota": None if own else system.ai_quota(u), "own_key": own, "unit": unit,
             "shared_available": shared}
 
@@ -1680,7 +1683,7 @@ def _plan_info() -> dict:
         info["limits"] = {**info["limits"], "storage_bytes": plans.storage_limit(u), "storage_used": db.storage_used()}
         from app import doc_reads
 
-        info["reads"] = doc_reads.status(u)  # bu ayki belge / fiş kullanımı ve ek paket (yönetici, oturumsuz: None)
+        info["reads"] = doc_reads.status(u)  # bugünkü okuma (tek günlük sayaç) ve ek paket (yönetici, oturumsuz: None)
         info["upgrade_yearly"] = plans.upgrade_yearly(u)
     return info
 
@@ -2340,7 +2343,8 @@ def _doc_check(file: UploadFile, status: int = 422) -> bytes:
 
 
 def _charge_if_new(key: bytes, counts: dict) -> None:
-    """Hesap dökümü: yeni hareket getirdiyse 1 belge okuma hakkı (hepsi "zaten vardı" ise düşmez; aynı dosya bir kez)."""
+    """Hesap dökümü: yeni hareket getirdiyse okuma hakkı (PDF her 10 sayfa 1; hepsi "zaten vardı" ise düşmez; aynı dosya
+    bir kez)."""
     from app import doc_reads
 
     if any(v for k, v in counts.items() if k in ("gelir", "gider", "kart_odemesi", "virman")):
@@ -4093,7 +4097,9 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             results.append({**res, "status": "duplicate"})
             continue
         db.save_statement(data, f.filename or "ekstre.pdf", stmt)
-        doc_reads.charge(data)  # yerel ayrıştırıcı ya da yapay zekâ yedek okuması: belge başına 1
+        # yerel ayrıştırıcı ya da yapay zekâ yedek okuması: belge başına (her 10 sayfa) 1
+        if charged := doc_reads.charge(data):
+            res["charged"] = charged
         from app import verification
 
         chk = verification.statement_check(stmt)  # tutmadıysa Yapılacaklar'da 'ekstre_kontrol' (S6)
@@ -4729,7 +4735,7 @@ def parse_receipt(file: UploadFile = File(...)):
     data, mime, photo = _prepare_photo(data, mime)
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
-        doc_reads.check(original, doc_reads.FIS)  # hazır sürüm: fiş okuma hakkı doluysa okunmaz
+        doc_reads.check(original, doc_reads.FIS)  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fotoğraf okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     try:
@@ -4738,7 +4744,8 @@ def parse_receipt(file: UploadFile = File(...)):
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    doc_reads.charge(original, doc_reads.FIS)
+    if charged := doc_reads.charge(original, doc_reads.FIS):
+        out["charged"] = charged  # {daily, extra}: istemci "ek paketten N okuma kullanıldı" der
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
     _auto_reread(out, data, mime)
     out["receipt_file"] = _store_receipt(photo)
@@ -5007,8 +5014,8 @@ def parse_bill(file: UploadFile = File(...)):
         parsed = receipt.parse_bill(read, read_mime) if receipt.enabled() else {}
     except receipt.ReceiptError as e:
         parsed = {"error": errors.user_text(e, 502), **(e.fields() if isinstance(e, doc_reads.QuotaError) else {})}
-    if parsed and "error" not in parsed:
-        doc_reads.charge(data)
+    if parsed and "error" not in parsed and (charged := doc_reads.charge(data)):
+        parsed["charged"] = charged
     warn = db.take_storage_warning()
     return {**parsed, "file_name": name, **({"storage_warning": warn} if warn else {})}
 
@@ -5267,7 +5274,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")))
+    if charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type"))):
+        doc["charged"] = charged  # {daily, extra}
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
         from app.categorize import UNCATEGORIZED, categorize
@@ -5293,7 +5301,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
 
 # ---------------------------------------------------------------- kayıtlı fişin kalemleri ve yeniden okuma
 
-_AUTO_REREAD_PER_DAY = 30  # kullanıcı başına günlük otomatik yeniden okuma (maliyet sınırı; belge hakkı düşmez)
+_AUTO_REREAD_PER_DAY = 10  # kullanıcı başına günlük otomatik yeniden okuma (maliyet sınırı; okuma hakkı düşmez)
 
 
 def _check_score(chk: dict) -> tuple[int, float]:
@@ -5303,7 +5311,7 @@ def _check_score(chk: dict) -> tuple[int, float]:
 def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) -> None:
     """Kademeli okuma: kalemler fişi gerçekten tutmuyorsa (receipt_check.needs_reread: fiyatsız kalem ya da kalem toplamı
     fiş toplamından ±0,05'ten fazla sapıyor; yalnız adet × birim uyuşmazlığı yetmez, o kalemler check'te işaretli kalır)
-    aynı istekte bir kez daha güçlü modelle oku; daha iyiyse onun kalemlerini kullan. Belge hakkı düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
+    aynı istekte bir kez daha güçlü modelle oku; daha iyiyse onun kalemlerini kullan. Okuma hakkı düşmez; kullanıcı başı günlük _AUTO_REREAD_PER_DAY; model hatasında ilk sonuç.
     doc['reread'] = {tried, used, model}."""
     import json as _json
     from datetime import date as _date
@@ -5339,7 +5347,7 @@ def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None) ->
         doc["items"], doc["check"] = again["items"], chk2
         doc["reread"]["used"] = True
 
-_REREAD_PER_DAY = 3  # aynı fotoğraf için günde (yeniden okuma belge hakkı düşürmez; yapay zekâ maliyeti sınırlı kalsın)
+_REREAD_PER_DAY = 3  # aynı fotoğraf için günde (her elle yeniden okuma ayrıca doc_reads.REREAD_COST hak)
 
 
 def _entry_for_receipt(entry_id: int) -> dict:
@@ -5386,12 +5394,13 @@ def put_receipt_items(entry_id: int, body: ReceiptItemsIn):
 
 
 def _reread_photo(name: str | None, total: float | None) -> dict:
-    """Saklı fotoğrafı daha güçlü modelle yeniden oku. Belge okuma hakkı DÜŞMEZ (aynı belge ilk okumada sayıldı);
-    kötüye kullanım için fotoğraf başına günde _REREAD_PER_DAY. Sonuç kaydedilmez."""
+    """Saklı fotoğrafı daha güçlü modelle yeniden oku: hazır sürümde doc_reads.REREAD_COST (2) okuma hakkı (önce
+    günlük, kalanı ek paket; yetmezse okumadan 402 "hak doldu"), yanıtta charged {daily, extra}. Ayrıca fotoğraf başına
+    günde _REREAD_PER_DAY. Sonuç kaydedilmez."""
     import json as _json
     from datetime import date as _date
 
-    from app import storage
+    from app import doc_reads, storage
 
     if not name or not storage.valid_name("receipts", name) or not db.file_indexed("receipts", name):
         raise HTTPException(404, "Fiş fotoğrafı yok")
@@ -5407,6 +5416,10 @@ def _reread_photo(name: str | None, total: float | None) -> dict:
     if used >= _REREAD_PER_DAY:
         raise HTTPException(429, f"Bu fiş bugün {_REREAD_PER_DAY} kez yeniden okundu; yarın tekrar dene ya da kalemleri elle düzelt")
     try:
+        doc_reads.check_reread()
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(402, e, receipt_file=name) from e
+    try:
         data = db.read_file("receipts", name)
     except storage.StorageError as e:
         raise HTTPException(503, "Fotoğraf şu an alınamadı") from e
@@ -5417,6 +5430,8 @@ def _reread_photo(name: str | None, total: float | None) -> dict:
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
     db.set_setting(key, _json.dumps({"day": today, "n": used + 1}))
+    if charged := doc_reads.charge_reread():
+        out["charged"] = charged
     out["check"] = receipt_check.check(out["items"], total if total is not None else out.get("total"))
     out["receipt_file"] = name
     return out
