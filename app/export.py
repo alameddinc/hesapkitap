@@ -88,6 +88,8 @@ def receipts(frm: date | None, to: date | None) -> list[dict]:
     for e in db.list_entries():
         if e["kind"] != "gider" or e.get("debt_id"):
             continue
+        if e.get("counterparty") and not (e.get("tax_no") or e.get("vat_total") or e.get("legal_name") or e["id"] in itemized):
+            continue  # kişiye havale (dekont fotoğrafı receipt_file'da saklansa da) fiş değil
         if not (e.get("receipt_file") or e.get("tax_no") or e.get("vat_total") or e.get("legal_name") or e["id"] in itemized):
             continue
         d = e["entry_date"][:10]

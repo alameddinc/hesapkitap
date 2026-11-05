@@ -350,7 +350,7 @@ async def require_login(request: Request, call_next):
 # bu önekli uçlarda başarılı yazmadan sonra o defterde doğruluk denetimi yeniden çalışır (app/integrity.after_write)
 _INTEGRITY_WRITES = ("/api/entries", "/api/own-transfers", "/api/debts", "/api/debt-payments", "/api/statements",
                      "/api/bank-import", "/api/imports", "/api/accounts", "/api/card-transactions", "/api/splits",
-                     "/api/inbox", "/api/bills", "/share-target", "/api/share")
+                     "/api/inbox", "/api/bills", "/share-target", "/api/share", "/api/dekont")
 CSRF_ORIGINS = {o.rstrip("/") for o in APP_ORIGINS} | {
     o.strip().rstrip("/") for o in os.environ.get("HESAPKITAP_CSRF_ORIGINS", "").split(",") if o.strip()}
 _UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
@@ -2217,7 +2217,9 @@ def entry_receipt(entry_id: int):
         r = c.execute("SELECT id, entry_date, receipt_file FROM entries WHERE id = ?", (entry_id,)).fetchone()
     if not r or not r["receipt_file"] or (book.member() and not book.can_see_entry(entry_id)):
         raise HTTPException(404, "Fotoğraf yok")
-    return _stored_file("receipts", r["receipt_file"], f"fis-{r['entry_date']}-{entry_id}.jpg", inline=True)
+    pdf = r["receipt_file"].endswith(".pdf")  # havale dekontu PDF olarak saklanmış olabilir (app/dekont_parse.py)
+    return _stored_file("receipts", r["receipt_file"], f"{'dekont' if pdf else 'fis'}-{r['entry_date']}-{entry_id}",
+                        inline=True)
 
 
 @app.get("/api/entries/{entry_id}/candidates")
@@ -5305,14 +5307,19 @@ BILL_TYPES = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".pn
 
 @app.post("/api/bills/parse")
 @_heavy
-def parse_bill(file: UploadFile = File(...)):
-    """Fatura PDF/fotoğrafını sakla ve oku; kullanıcı onaylayınca /api/bills ile kaydedilir."""
+def parse_bill(file: UploadFile = File(...), transfer_check: bool = Form(False)):
+    """Fatura PDF/fotoğrafını sakla ve oku; kullanıcı onaylayınca /api/bills ile kaydedilir.
+    Yanlış seçim koruması (yetenek dekont_parse): transfer_check=1 (yeni istemci) ve PDF metni havale/EFT dekontuysa
+    fatura okunmaz (yapay zekâ yok, hak düşmez) → {looks_like_transfer: true}. Okunan faturada da looks_like_transfer
+    (model doc_kind "transfer" dedi ya da metin dekont; ek çağrı yok). "Yine de fatura olarak ekle": transfer_check'siz."""
     data = _file_bytes(file)
     mime = file.content_type or ""
     if mime not in BILL_TYPES:
         raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
-    from app import doc_reads
+    from app import dekont_parse, doc_reads
 
+    if mime == "application/pdf" and transfer_check and dekont_parse.is_transfer(_pdf_text(data)):
+        return {"looks_like_transfer": True, "source": "metin", "provider": None, "amount": None, "file_name": None}
     read, read_mime, photo = _prepare_photo(data, mime)
     name = db.save_bill_file(photo, ".jpg") if photo else db.save_bill_file(data, BILL_TYPES[mime])
     try:
@@ -5325,6 +5332,148 @@ def parse_bill(file: UploadFile = File(...)):
         parsed["charged"] = charged
     warn = db.take_storage_warning()
     return {**parsed, "file_name": name, **({"storage_warning": warn} if warn else {})}
+
+
+# ---------------------------------------------------------------- havale / EFT dekontu (app/dekont_parse.py)
+
+def _pdf_text(data: bytes) -> str | None:
+    """PDF metin katmanı (bilinen PDF şifreleriyle de denenir); yoksa None. Yapay zekâ yok, hak düşmez."""
+    for pw in [None, *db.pdf_passwords()]:
+        if t := _try_text(data, pw):
+            return t
+    return None
+
+
+@app.post("/api/documents/classify")
+@_heavy
+def classify_document(file: UploadFile = File(...)):
+    """Paylaş seçim sayfası için öneri (yetenek dekont_parse): yalnız PDF metni, yapay zekâsız, hak düşmez, dosya
+    saklanmaz. {suggest: "dekont" | "ekstre" | null}. Fotoğrafta (metin yok) null."""
+    from app import dekont_parse
+
+    data = _file_bytes(file)
+    limits.check_size(data, file.filename)
+    if (file.content_type or "") != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
+        return {"suggest": None}
+    return {"suggest": dekont_parse.classify_text(_pdf_text(data))}
+
+
+def _store_dekont_pdf(data: bytes) -> str | None:
+    """PDF dekontu fiş fotoğraflarının yanında sakla (receipts/<sha256>.pdf); kayda receipt_file olarak bağlanır."""
+    name = f"{db.file_hash(data)}.pdf"
+    try:
+        return name if db.store_file("receipts", name, data, "application/pdf") else None
+    except Exception:  # noqa: BLE001 - depo geçici olarak yoksa okuma yine sonuç versin
+        import logging
+
+        logging.getLogger("ekstre.storage").exception("dekont dosyası saklanamadı")
+        return None
+
+
+DEKONT_UNREADABLE = "Dekont okunamadı. Fotoğrafı yakından ve düz çek ya da bilgileri elle gir."
+
+
+@app.post("/api/dekont/parse")
+@_heavy
+def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)):
+    """Havale/EFT/FAST dekontu (fotoğraf ya da PDF) → Transfer formu taslağı (kaydetmez). PDF metni varsa önce kural
+    okuması (yapay zekâsız), değilse/yetmezse yapay zekâ (kısa istem). Okunan yeni belge 1 hak; okunamadıysa düşmez.
+    Yanıt: {type: "dekont", direction: giden|gelen|null, amount, date, counterparty, counterparty_known, iban_last4,
+    bank, description, transfer_type, ref, account_hint, own_transfer, parties {sender, receiver: {name, iban_last4,
+    bank, is_me}}, duplicate? {entry_id, message}, debt_match? {id, person, direction, remaining, amount, full},
+    dekont_file, source: metin|yapay_zeka, unreadable?, message?, charged?}. IBAN tam dönmez (son 4 hane)."""
+    from app import dekont, dekont_parse, doc_reads
+
+    data = _file_bytes(file)
+    mime = file.content_type or ""
+    if mime not in BILL_TYPES:
+        raise HTTPException(422, "Sadece PDF veya fotoğraf yüklenebilir")
+    limits.check_size(data, file.filename)
+    text_hint = (ocr_text or "").strip()
+    if len(text_hint) > receipt.MAX_OCR_CHARS:
+        raise HTTPException(422, "Belgeden çıkarılan metin çok uzun")
+    read, read_mime, photo = _prepare_photo(data, mime)
+    dfile = _store_receipt(photo) if photo else _store_dekont_pdf(data) if mime == "application/pdf" else None
+    try:
+        doc_reads.check(data)  # hazır sürüm: hak doluysa okunmaz; dosya saklıdır, elle girilen transfere bağlanır
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(502, e, dekont_file=dfile) from e
+    text = _pdf_text(data) if mime == "application/pdf" else None
+    fields, source = None, None
+    if text and (dekont_parse.is_transfer(text) or dekont.is_dekont(text)):
+        try:
+            fields, source = dekont_parse.fields_from_text(text), "metin"
+        except ValueError:
+            fields = None
+        if fields and not (fields["sender_name"] or fields["receiver_name"]) and receipt.enabled():
+            fields = None  # kişiler okunamadı: yapay zekâ dener
+    if fields is None:
+        if not receipt.enabled():
+            fields, source = {}, None
+        else:
+            try:
+                fields = dekont_parse.fields_from_ai(read, read_mime, text_hint or (text or "")[:6000] or None)
+                source = "yapay_zeka"
+            except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı)
+                raise QuotaFull(502, e, dekont_file=dfile) from e
+            except receipt.ReceiptError as e:
+                raise HTTPException(502, errors.user_text(e, 502)) from e
+    out = dekont_parse.resolve(fields)
+    out.update(source=source, dekont_file=dfile)
+    if fields.get("not_transfer"):
+        out["not_transfer"] = True  # model: bu bir transfer dekontu değil (istemci uyarır)
+    if not (isinstance(out.get("amount"), (int, float)) and out["amount"] > 0 and out.get("date")):
+        out.update(unreadable=True, message=DEKONT_UNREADABLE)  # hak düşmez (_unreadable deseni)
+    elif charged := doc_reads.charge(data):
+        out["charged"] = charged
+    if warn := db.take_storage_warning():
+        out["storage_warning"] = warn
+    return out
+
+
+class DekontIn(BaseModel):
+    date: date
+    amount: Money = Field(gt=0)
+    direction: Literal["giden", "gelen"]
+    counterparty: str = Field(min_length=1, max_length=80)
+    account_id: int | None = None
+    description: str | None = Field(None, max_length=200)  # havale mesajı / açıklama: kayıt açıklamasında korunur
+    note: str | None = Field(None, max_length=500)
+    ref: str | None = Field(None, max_length=40)
+    transfer_type: Literal["havale", "eft", "fast"] | None = None
+    bank: str | None = Field(None, max_length=60)
+    dekont_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.(?:jpg|pdf)$")  # okuma yanıtındaki dosya
+    debt_id: int | None = None   # "Bu, X'in borç ödemesi mi?" → Evet: kayıt bu borcun ödemesi olur
+    debt_link: bool = True       # Hayır: açık borçla kendiliğinden eşleştirme de yapılmaz
+    force: bool = False          # aynı gün/tutar/kişide ikinci, ayrı bir işlem (istemci sorduktan sonra)
+
+
+@app.post("/api/dekont/save")
+def save_dekont(body: DekontIn):
+    """Dekonttan transfer: tek işlem (bakiye çapası değişmez), import_hash 'dekont:…' — o ayın hesap dökümü gelince aynı
+    satırla birleşir. Aynı dekont kayıtlıysa 409 {detail: "Bu dekont zaten eklenmiş", entry_id}."""
+    from app import book, dekont_parse, sync
+
+    _visible_or_404("account", body.account_id)
+    data = body.model_dump()
+    data["date"] = body.date.isoformat()
+    if data["dekont_file"] and not db.file_indexed("receipts", data["dekont_file"]):
+        data["dekont_file"] = None  # bu defterde saklanmış bir dosya değil: bağlanmaz
+    if (m := book.member()) and book.role(m) != "full":
+        data["debt_id"] = None  # borç defteri sahibin (ve tam yetkilinin); üye kaydında kendiliğinden eşleşme sürer
+    if u := db.current_user():
+        data["created_by"] = u["id"]
+    try:
+        out = dekont_parse.save(data)
+    except dekont_parse.Duplicate as e:
+        return JSONResponse({"detail": str(e), "entry_id": e.entry_id, "duplicate": True}, status_code=409)
+    except db.OverpayError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    db.auto_link()
+    sync.reconcile()
+    return out
 
 
 # ---------------------------------------------------------------- telefondan Paylaş
@@ -5734,8 +5883,8 @@ def _reread_photo(name: str | None, total: float | None) -> dict:
 
     from app import doc_reads, storage
 
-    if not name or not storage.valid_name("receipts", name) or not db.file_indexed("receipts", name):
-        raise HTTPException(404, "Fiş fotoğrafı yok")
+    if not name or not name.endswith(".jpg") or not storage.valid_name("receipts", name) or not db.file_indexed("receipts", name):
+        raise HTTPException(404, "Fiş fotoğrafı yok")  # PDF dekont yeniden okunmaz
     if not receipt.enabled():
         raise HTTPException(422, "Yeniden okuma yapay zekâ ister (Ayarlar → Anahtarlar)")
     key = f"receipt_reread:{name}"
