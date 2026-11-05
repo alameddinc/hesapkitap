@@ -249,9 +249,11 @@ def test_plan_table_defaults_and_meta(hosted):
     t = {r["key"]: r for r in p["table"]}
     assert t["zekat"]["tier"] == "free" and t["zekat"]["editable"] is False
     assert t["ortak_defter"]["tier"] == "aile" and t["fiyatlar"]["tier"] == "premium"
-    assert {k for k, v in p["tiers"].items() if v == "free"} >= {"planlama", "tablo", "faturalar", "transferler",
-                                                                  "odemeler", "tasarruf", "zekat"}
-    assert p["features"]["tablo"] is True and p["features"]["istatistik"] is False
+    assert {k for k, v in p["tiers"].items() if v == "free"} >= {"planlama", "faturalar", "transferler", "odemeler",
+                                                                  "zekat", "kurallar"}
+    # 05.11.2026 karar: Tasarruf ve Tablo Premium (Planlama, sabit kalem önerileri, kategori kuralları ücretsiz kalır)
+    assert p["tiers"]["tasarruf"] == "premium" and p["tiers"]["tablo"] == "premium"
+    assert p["features"]["tablo"] is False and p["features"]["istatistik"] is False
     assert set(plans.FEATURES) == set(p["tiers"])  # eski FEATURES: aynı anahtarlar, varsayılan tablo
 
 

@@ -39,9 +39,9 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("planlama", "Planlama", "sayfa", FREE, True, "Ücretsizde 1 ay (uzun planlama ayrı satır)"),
     ("odemeler", "Ödemeler", "sayfa", FREE, True, "Yaklaşan kart, fatura ve sabit ödemeler"),
     ("faturalar", "Faturalar", "sayfa", FREE, True, "Fatura takibi ve son ödeme tarihleri"),
-    ("tasarruf", "Tasarruf", "sayfa", FREE, True, "Nereden kısabileceğin"),
+    ("tasarruf", "Tasarruf", "sayfa", PREMIUM, True, "Nereden kısabileceğin"),
     ("oneriler", "Sabit kalem önerileri", "sayfa", FREE, True, "Her ay tekrarlayan ödemeleri bulur"),
-    ("tablo", "Tablo", "sayfa", FREE, True, "Aylar ve kategoriler yan yana"),
+    ("tablo", "Tablo", "sayfa", PREMIUM, True, "Aylar ve kategoriler yan yana"),
     ("kurallar", "Kategori kuralları", "sayfa", FREE, True, "İşyerine göre kendiliğinden kategori"),
     ("zekat", "Zekât ve Sadaka", "sayfa", FREE, False, "Her pakette ücretsiz (değiştirilemez)"),
 ]
