@@ -33,6 +33,8 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("posta", "Deftere özel posta adresi", "sayfa", PREMIUM, True, "Ekstre, döküm, fatura postayla kendiliğinden"),
     ("ortak_defter", "Ortak defter, üye yetkileri, ortak kumbara", "sayfa", FAMILY, True,
      "4 kişiye kadar; her üye Premium'un tamamını kullanır"),
+    ("aile_rapor", "Kim ne harcadı", "sayfa", FAMILY, True,
+     "Ortak defterde kişi başı harcama ve ortak bütçede kim ne kadar harcadı"),
     ("hesaplar", "Hesaplar ve kumbara", "sayfa", FREE, True, "Banka hesapları, nakit, net varlık"),
     ("borclar", "Borç / Alacak", "sayfa", FREE, True, "Kime ne borcun var, kimden alacağın var"),
     ("transferler", "Transferler", "sayfa", FREE, True, "Havale, FAST ve kendi hesapların arası"),
@@ -147,6 +149,7 @@ LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi su
 FEATURE_LABELS = {k: r[0] for k, r in _ROWS.items()}
 # (yöntem, API yolu öneki) → özellik (paket yoksa 402). Yöntem None: hepsi.
 GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/book/invites", "ortak_defter"),
+         (None, "/api/book/member-spend", "aile_rapor"),
          (None, "/api/plan/simulate", "alsam_mi"), (None, "/api/year-summary", "istatistik"),
          (None, "/api/interest-history", "istatistik"), ("POST", "/api/jars", "kumbara")]
 

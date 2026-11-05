@@ -665,6 +665,75 @@ def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
     return sorted(out, key=lambda b: -b["pct"])
 
 
+# ---------------------------------------------------------------- ortak defter: kim ne harcadı (Aile)
+
+SHARED = "ortak"  # ekleyeni belli olmayan gider (kart ekstresi, banka dökümü): tek "Ortak" dilimi
+
+
+def card_creators() -> dict[int, int]:
+    """Kart işlemi id → o işlemle eşleşen elle kaydı ekleyen kullanıcı. Kartı kimin kullandığı bilinmez; elle girilip
+    ekstreyle eşleşen harcamada ekleyen bellidir (kart satırı sayılır, elle kayıt sayılmaz)."""
+    with db.connect() as c:
+        return {t: u for t, u in c.execute(
+            "SELECT linked_txn_id, created_by FROM entries WHERE linked_txn_id IS NOT NULL AND created_by IS NOT NULL")}
+
+
+def spender(r: dict, ids: set[int], creators: dict[int, int] | None = None) -> str:
+    """Satırın harcayanı: "u<id>" (defterdeki kişi) ya da SHARED. ids: defterdeki kişilerin id'leri (defterden ayrılan
+    kişinin kaydı Ortak'a düşer)."""
+    if r.get("source") == "manual":
+        uid = r.get("created_by")
+    elif r.get("source") == "card":
+        uid = (creators or {}).get(r["id"])
+    else:
+        uid = None
+    return f"u{uid}" if uid in ids else SHARED
+
+
+def in_spend(r: dict) -> bool:
+    """category_spend ile aynı küme: bütçe kırılımı ve kişi başı rapor toplamı Özet'in kategori toplamıyla aynı çıkar."""
+    return not r.get("pending") and not r.get("skipped") and not r.get("linked") and _spends(r)
+
+
+def _spend_rows(month: str) -> list[dict]:
+    return [r for r in transactions(month) if in_spend(r)]
+
+
+def member_spend(month: str, people: list[dict]) -> dict:
+    """Dönemin gideri kişi başına (people: book.people()), kategori kırılımıyla. Veri okuma fonksiyonları üye
+    isteğinde süzüldüğü için üyenin göremediği kart/kayıt/faiz hiçbir toplama girmez."""
+    ids = {p["id"] for p in people}
+    creators = card_creators()
+    by: dict[str, list[dict]] = defaultdict(list)
+    for r in _spend_rows(month):
+        by[spender(r, ids, creators)].append(r)
+    total = sum(r["amount"] for rs in by.values() for r in rs)
+    names = {f"u{p['id']}": p for p in people}
+    out = []
+    for key, rs in by.items():
+        amt = sum(r["amount"] for r in rs)
+        p = names.get(key)
+        out.append({"key": key, "user_id": p["id"] if p else None, "name": p["name"] if p else "Ortak",
+                    "owner": bool(p and p.get("owner")), "amount": _round(amt), "count": len(rs),
+                    "pct": round(amt / total * 100, 1) if money.gt(total, 0) else 0.0,
+                    "categories": _group(rs, "category")})
+    out.sort(key=lambda x: (x["key"] == SHARED, -x["amount"]))
+    return {"month": month, "total": _round(total), "people": out}
+
+
+def budget_split(month: str, people: list[dict]) -> dict[str, list[dict]]:
+    """Bütçe kategorisi → [{key, user_id, name, amount}] (en büyükten): ortak bütçede kim ne kadar harcadı."""
+    ids = {p["id"] for p in people}
+    names = {f"u{p['id']}": p["name"] for p in people}
+    creators = card_creators()
+    agg: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for r in _spend_rows(month):
+        agg[r["category"]][spender(r, ids, creators)] += r["amount"]
+    return {cat: sorted(({"key": k, "user_id": None if k == SHARED else int(k[1:]), "name": names.get(k, "Ortak"),
+                          "amount": _round(v)} for k, v in d.items() if money.gt(v, 0)), key=lambda x: -x["amount"])
+            for cat, d in agg.items()}
+
+
 # ---------------------------------------------------------------- planning
 
 def _latest_statement_per_account() -> dict[str, dict]:

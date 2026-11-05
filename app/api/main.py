@@ -1920,15 +1920,21 @@ def put_card_limit(body: CardLimitIn):
 def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
                  totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),
                  before: str | None = Query(None, max_length=80), card: str | None = Query(None, max_length=40),
-                 category: str | None = Query(None, max_length=60), subcategory: str | None = Query(None, max_length=40)):
+                 category: str | None = Query(None, max_length=60), subcategory: str | None = Query(None, max_length=40),
+                 who: str | None = Query(None, pattern=r"^(u\d+|ortak)$")):
     """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
     include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz.
     Her satırda counts_as_spend / counts_as_income: gider/gelir toplamına girer mi (sunucu kuralı, finance.counts);
     süzgeç toplamı = bayrağı true olan satırların amount toplamı (iade eksi). totals=1: {"rows": [...], "totals": {...}}
     (Özet ile aynı _totals + count). category / subcategory: yalnız o ana kategori / alt kategori (yetenek
-    "subcategories"; subcategory tek başına verilirse her ana kategorideki bu ad)."""
+    "subcategories"; subcategory tek başına verilirse her ana kategorideki bu ad). who=u<id>|ortak: ortak defterde o
+    kişinin harcamaları ("Kim ne harcadı" raporunun satırları; yalnız gider satırları, aynı harcayan kuralı)."""
     _history_gate(month)
     rows = finance.transactions(month, include_deleted, include_estimates)
+    if who:
+        ids = {p["id"] for p in _shared_people()}
+        creators = finance.card_creators()
+        rows = [r for r in rows if finance.in_spend(r) and finance.spender(r, ids, creators) == who]
     u = db.current_user()
     if month is None and not plans.allows(u, "gecmis"):  # tüm aylar istendi: ücretsizde görünür pencereyle sınırlı
         rows = [r for r in rows if plans.history_ok(u, r["month"])]
@@ -4544,6 +4550,32 @@ def book_me():
     return book.info()
 
 
+def _shared_people() -> list[dict]:
+    from app import book
+
+    return book.shared_people()
+
+
+@app.get("/api/book/member-spend")
+def book_member_spend(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Kim ne harcadı (Aile, plans "aile_rapor"): ortak defterde dönemin gideri kişi başına, kategori kırılımıyla.
+    Harcayan: elle kaydı ekleyen; kart işleminde eşleştiği elle kaydı ekleyen, o da yoksa "Ortak" (key "ortak").
+    Üyenin göremediği kart/kayıt/faiz rapora girmez (veri okuma süzgeçleri); üyenin "Benim" defteri hiç girmez
+    (o defterde 404). shared: false → tek kişilik defter (people boş). İşlemler süzgeci: /api/transactions?who=<key>."""
+    u = db.current_user()
+    if u and u.get("own_book"):
+        raise HTTPException(404, "Kişi başı harcama yalnız ortak defterde")
+    _history_gate(month)
+    m = month or finance.current_period()
+    ppl = _shared_people()
+    if not ppl:
+        return {"month": m, "shared": False, "total": 0.0, "people": [], "me": u["id"] if u else None}
+    out = finance.member_spend(m, ppl)
+    for p in out["people"]:
+        p["me"] = bool(u and p["user_id"] == u["id"])
+    return {**out, "shared": True, "me": u["id"] if u else None}
+
+
 @app.get("/api/book")
 def book_overview(request: Request):
     from app import book
@@ -5219,6 +5251,11 @@ def list_budgets(month: str | None = None):
     # öneri için son ekstre ayının kategori harcaması
     last = {g["name"]: g["amount"] for g in finance.category_spend(finance.reference_month())}  # tam özet gerekmez
     status = finance.budgets(m)
+    # ortak bütçe (Aile): her bütçede kim ne kadar harcadı — yalnız ortak defterde ve paket izin veriyorsa
+    if status and (ppl := _shared_people()) and plans.allows(db.current_user(), "aile_rapor"):
+        split = finance.budget_split(m, ppl)
+        for b in status:
+            b["by_person"] = split.get(b["category"], [])
     return {"limits": db.list_budgets(), "status": status, "last_month": last, "totals": finance.budgets_totals(status)}
 
 

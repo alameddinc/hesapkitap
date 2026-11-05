@@ -22,7 +22,7 @@ from app import db
 
 PAGES = {  # sayfa → üyeye kapanan API önekleri
     "plan": ("/api/plan", "/api/recurring"),
-    "istatistik": ("/api/compare", "/api/year-summary", "/api/interest-history"),
+    "istatistik": ("/api/compare", "/api/year-summary", "/api/interest-history", "/api/book/member-spend"),
     "ekstreler": ("/api/statements",),
     "hesaplar": ("/api/accounts", "/api/jars", "/api/wallets", "/api/net-worth"),
     "transferler": ("/api/transfers", "/api/dekont"),
@@ -47,7 +47,7 @@ MEMBER_WRITES = [
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",
                  "/api/bank-import", "/api/onboarding", "/api/mail", "/api/match-rules")
-MEMBER_OPEN = ("/api/settings/password", "/api/settings/tokens", "/api/book/me")
+MEMBER_OPEN = ("/api/settings/password", "/api/settings/tokens", "/api/book/me", "/api/book/member-spend")
 ENTRY_MEMBER_FIELDS = {"category", "subcategory", "note", "description", "counterparty", "location"}  # başkasının kaydında
 EMPTY = {"hidden_cards": [], "hidden_accounts": [], "hide_fees": False, "hidden_pages": []}
 ROLES = ("viewer", "editor", "full")
@@ -306,6 +306,16 @@ def people() -> list[dict]:
     out += system.members(owner_id)
     return [{"id": p["id"], "name": p["username"].split("@")[0], "owner": p["id"] == owner_id,
              "role": None if p["id"] == owner_id else role(p)} for p in out]
+
+
+def shared_people() -> list[dict]:
+    """Ortak defterdeki kişiler (sahip + üyeler, en az iki kişi); tek kişilik defterde ya da üyenin "Benim" defterinde
+    boş liste: kişi başı kırılım (Kim ne harcadı, ortak bütçe) yalnız ortak defterde."""
+    u = db.current_user()
+    if not u or u.get("own_book"):
+        return []
+    ppl = people()
+    return ppl if len(ppl) > 1 else []
 
 
 def info() -> dict:

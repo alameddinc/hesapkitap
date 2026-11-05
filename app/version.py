@@ -67,6 +67,8 @@ CAPABILITIES = (
     "dekont_parse",           # havale/EFT dekontu: POST /api/dekont/parse (foto/PDF → transfer taslağı, yön/kişi/hesap/
                               # çift kayıt/borç önerisi), POST /api/dekont/save (409 zaten eklenmiş), POST /api/documents/classify
                               # (PDF metni: dekont|ekstre önerisi, hak düşmez); /api/bills/parse transfer_check → looks_like_transfer
+    "member_spend",           # Aile "Kim ne harcadı": GET /api/book/member-spend?month (402 plan_required aile_rapor),
+                              # /api/transactions?who=u<id>|ortak, /api/budgets status[].by_person (ortak defterde)
 )
 
 

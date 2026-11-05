@@ -653,15 +653,27 @@ def _fatura(today: date) -> list[dict]:
 def _butce(today: date) -> list[dict]:
     from app import finance, money
 
+    from app import book, plans
+
     month = finance.current_period(today)
     out = []
-    for b in finance.budgets(month):
+    status = finance.budgets(month)
+    # ortak bütçe (Aile): bildirim defterdeki herkese kendi tercihine göre gider (run_daily her kişiyi ortak defterde
+    # dolaşır); metinde kim ne kadar harcadı da yazar
+    u = db.current_user()
+    ppl = book.shared_people() if status and plans.allows(u, "aile_rapor") else []
+    split = finance.budget_split(month, ppl) if ppl else {}
+    for b in status:
         for th in (100, 80):
             if b["pct"] >= th:
                 slug = finance._slug(b["category"])  # Özet uyarısının anahtarıyla aynı
                 title = f"{b['category']} bütçesi aşıldı" if th == 100 else f"{b['category']} bütçesinin %{b['pct']:.0f} kadarı harcandı"
-                out.append(item("butce", f"butce:{month}:{slug}:{th}", title,
-                                f"{money.tl(b['spent'], trim=True)} / {money.tl(b['limit'], trim=True)}", R_BUTCELER))
+                body = f"{money.tl(b['spent'], trim=True)} / {money.tl(b['limit'], trim=True)}"
+                who = [f"{'Sen' if u and p['user_id'] == u['id'] else p['name']} {money.tl(p['amount'], trim=True)}"
+                       for p in split.get(b["category"], [])]
+                if len(who) > 1 or (who and split[b["category"]][0]["user_id"] != (u or {}).get("id")):
+                    body += " · " + ", ".join(who[:3])
+                out.append(item("butce", f"butce:{month}:{slug}:{th}", title, body, R_BUTCELER))
                 break
     return out
 
