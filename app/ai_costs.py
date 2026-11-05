@@ -26,7 +26,7 @@ CACHED_RATIO = 0.10
 DEFAULT_USD_TRY = 50.0  # faturadan çıkan etkin kur ~49,7
 PRICES_KEY, FX_KEY = "ai_prices", "ai_usd_try"
 # kullanıcı başı aylık tahmini ₺ eşiği: yönetici listesinde kırmızı satır, "eşiği geçen N hesap" uyarısı
-ALERT_KEY, DEFAULT_ALERT_TRY = "ai_alert_try", 100.0
+ALERT_KEY, DEFAULT_ALERT_TRY = "ai_alert_try", 50.0  # Premium net ~₺35–57/ay: zarar başlamadan görünsün
 KEEP_MONTHS = 13
 
 
@@ -63,7 +63,7 @@ def prices() -> dict:
 
 
 def alert_try() -> float:
-    """Yönetici ayarı ai_alert_try: kullanıcı başı aylık tahmini ₺ eşiği (varsayılan 100)."""
+    """Yönetici ayarı ai_alert_try: kullanıcı başı aylık tahmini ₺ eşiği (varsayılan 50)."""
     from app import system
 
     try:

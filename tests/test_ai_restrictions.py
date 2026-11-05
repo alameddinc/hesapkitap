@@ -76,7 +76,7 @@ def test_user_list_sorted_threshold_and_403(hosted):
     assert top["user"] == f"#{u2['id']} · me***@o***.com" and top["username"] == "mehmet@ornek.com"
     assert top["plan"] == "free" and top["calls"] == 1 and top["restriction"] is None
     assert rows[1]["over"] is False and rows[1]["calls"] == 3 and rows[2]["over"] is False
-    assert (r["alert_try"], r["over_alert"]) == (100.0, 1)
+    assert (r["alert_try"], r["over_alert"]) == (50.0, 1)
     assert hosted.get("/api/admin/ai-costs").json()["over_alert"] == 1
     # eşik yönetici ayarı
     assert hosted.put("/api/admin/ai-costs", json={"alert_try": 200}).json()["alert_try"] == 200
