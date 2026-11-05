@@ -174,12 +174,149 @@ def open_signup() -> bool:
 
 
 def _owner(u: dict) -> dict:
-    """Ortak defter üyesi: paket sahibinkidir."""
-    if u.get("member_of"):
+    """Paketi kimden: ortak defter üyesinde sahibinki — üyenin kendi aktif aboneliği yoksa (varsa kendisininki)."""
+    if u.get("member_of") and not own_plan(u):
         o = system.user(u["member_of"])
         if o:
             return o
     return u
+
+
+def own_plan(u: dict | None) -> str | None:
+    """Kullanıcının KENDİ aktif ücretli paketi (premium / aile; mağaza ya da elle). Ortak defter üyesinde koltuk düşmez."""
+    if not u or u.get("plan") not in (PREMIUM, FAMILY) or not _active(u):
+        return None
+    return u["plan"]
+
+
+# ---------------------------------------------------------------- Aile koltukları
+# Sahip + FAMILY_SEATS - 1 koltuk: kendi aboneliği OLMAYAN üyeler koltuk kullanır. Kendi Premium/Aile aboneliği aktif
+# olan üye koltuk kullanmaz (kendi paketiyle Premium). Toplam üye (koltuklu + koltuksuz, sahip hariç) en çok MAX_MEMBERS.
+# Koltuk sırası: koltuğa ihtiyaç duyduğu an (katılma ya da kendi aboneliğinin bittiği an: sys_settings "seat_queue:<id>"
+# EXPIRATION webhook'unda yazılır, yoksa plan_until); sahip "Koltuk ver" ile sırayı değiştirir ("seat_prio:<id>").
+# Koltuklar doluyken aboneliği biten üye atılmaz: ortak defteri (yetkisiyle) görmeye devam eder; SEAT_GRACE_DAYS gün
+# Premium sürer, sonra ücretsiz paket sınırlarına düşer (kendi defterinde de). Biri ayrılınca sıradaki (en eski)
+# kendiliğinden koltuğa geçer — her istekte hesaplanır, saklanan bir koltuk ataması yoktur.
+MAX_MEMBERS = 8
+SEAT_GRACE_DAYS = 7
+
+
+def _ts(v: str | None) -> str:
+    """Karşılaştırılabilir UTC zaman: "YYYY-MM-DD HH:MM:SS" (ISO ve SQLite biçimi aynı sıraya girer)."""
+    if not v:
+        return ""
+    try:
+        d = datetime.fromisoformat(v)
+        if d.tzinfo:
+            d = d.astimezone(timezone.utc)
+        return d.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return v.replace("T", " ")[:19]
+
+
+def _now_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def lapsed_at(m: dict) -> str:
+    """Üyenin kendi aboneliğinin bittiği an ("" = hiç olmadı): webhook kaydı ya da geçmiş plan_until."""
+    until = _ts(m.get("plan_until")) if m.get("plan") in (PREMIUM, FAMILY) and m.get("plan_until") else ""
+    return max(_ts(system.get(f"seat_queue:{m['id']}")), until)
+
+
+def _joined(owner_id: int) -> dict:
+    with system.connect() as c:
+        return {r[0]: _ts(r[1]) for r in c.execute(
+            "SELECT used_by, MAX(used_at) FROM invites WHERE member_of = ? AND used_by IS NOT NULL GROUP BY used_by",
+            (owner_id,))}
+
+
+def _rank(m: dict, joined: dict) -> tuple[str, int]:
+    """Koltuk sırası: (koltuğa ihtiyaç duyduğu an, eşitlikte id). "Koltuk ver" bunu "seat_prio" ile ezer ("an#id")."""
+    prio = system.get(f"seat_prio:{m['id']}")
+    if prio:
+        ts, _, tie = prio.partition("#")
+        return ts, int(tie) if tie.isdigit() else m["id"]
+    return max(joined.get(m["id"]) or _ts(m.get("created_at")), lapsed_at(m)), m["id"]
+
+
+def _seat_order(owner_id: int) -> list[dict]:
+    """Koltuğa ihtiyacı olan üyeler, sıraya göre (ilk FAMILY_SEATS - 1 koltukta)."""
+    ms = [m for m in system.members(owner_id) if not m.get("deleted_at") and not own_plan(m)]
+    if len(ms) <= FAMILY_SEATS - 1:
+        return ms
+    joined = _joined(owner_id)
+    return sorted(ms, key=lambda m: _rank(m, joined))
+
+
+def seat_holders(owner_id: int) -> set[int]:
+    """Koltuk kullanan üyeler (kendi aboneliği yok ve sırası FAMILY_SEATS - 1 içinde)."""
+    return {m["id"] for m in _seat_order(owner_id)[:FAMILY_SEATS - 1]}
+
+
+def grace_until(u: dict) -> datetime | None:
+    """Koltuksuz üyenin ek süresinin sonu (kendi aboneliği bittikten SEAT_GRACE_DAYS gün sonra)."""
+    from datetime import timedelta
+
+    at = lapsed_at(u)
+    if not at:
+        return None
+    return datetime.fromisoformat(at).replace(tzinfo=timezone.utc) + timedelta(days=SEAT_GRACE_DAYS)
+
+
+def seat_state(u: dict | None, now: datetime | None = None) -> str | None:
+    """Ortak defter üyesinin koltuğu: "own" (kendi aboneliği, koltuk düşmez) | "seat" | "grace" (koltuk yok, ek süre)
+    | "none" (koltuk yok, ücretsiz sınırlar); üye değilse None."""
+    if not u or not u.get("member_of"):
+        return None
+    if own_plan(u):
+        return "own"
+    if u["id"] in seat_holders(u["member_of"]):
+        return "seat"
+    g = grace_until(u)
+    return "grace" if g and g > (now or datetime.now(timezone.utc)) else "none"
+
+
+def seat_info(u: dict) -> dict | None:
+    """Arayüz: {state, grace_until?} — üye için (book/me ve sahibin üye listesi)."""
+    st = seat_state(u)
+    if st is None:
+        return None
+    g = grace_until(u) if st in ("grace", "none") else None
+    return {"state": st, **({"grace_until": g.isoformat(timespec="seconds")} if g else {})}
+
+
+def seats(owner_id: int) -> dict:
+    """Sahip görünümü: {total, used, members, max_members, waiting} (waiting: koltuk bekleyen üye sayısı)."""
+    ms = [m for m in system.members(owner_id) if not m.get("deleted_at")]
+    need = [m for m in ms if not own_plan(m)]
+    used = min(len(need), FAMILY_SEATS - 1)
+    return {"total": FAMILY_SEATS - 1, "used": used, "members": len(ms), "max_members": MAX_MEMBERS,
+            "waiting": len(need) - used}
+
+
+def give_seat(owner_id: int, to_id: int, from_id: int) -> None:
+    """Sahip koltuğu el değiştirir: from (koltuklu) sıranın sonuna, to (bekleyen) from'un yerine. ValueError: uygun değil."""
+    ms = [m for m in system.members(owner_id) if not m.get("deleted_at") and not own_plan(m)]
+    joined = _joined(owner_id)
+    order = sorted(ms, key=lambda m: _rank(m, joined))
+    holders = {m["id"] for m in order[:FAMILY_SEATS - 1]}
+    if from_id not in holders:
+        raise ValueError("Bu üyenin koltuğu yok")
+    if to_id in holders or to_id not in {m["id"] for m in order}:
+        raise ValueError("Bu üye koltuk beklemiyor")
+    src = next(m for m in order if m["id"] == from_id)
+    ts, tie = _rank(src, joined)
+    system.put(f"seat_prio:{to_id}", f"{ts}#{tie}")  # tam olarak onun yerine
+    last = max(_rank(m, joined)[0] for m in order)
+    # sıranın sonuna: şu an (ya da sıradaki en geç an); aynı saniyedekilerden de sonra
+    system.put(f"seat_prio:{from_id}", f"{max(_now_ts(), last)}#{10 ** 9 + from_id}")
+
+
+def clear_seat(uid: int) -> None:
+    """Üye defterden ayrıldı: koltuk sırası kayıtları düşer."""
+    system.put(f"seat_prio:{uid}", None)
+    system.put(f"seat_queue:{uid}", None)
 
 
 def _active(u: dict, now: datetime | None = None) -> bool:
@@ -204,11 +341,19 @@ def plan_of(u: dict | None) -> str:
         return FAMILY
     o = _owner(u)
     p = o.get("plan") or FREE
-    return p if p in (PREMIUM, FAMILY) and _active(o) else FREE
+    p = p if p in (PREMIUM, FAMILY) and _active(o) else FREE
+    if p != FREE and o is not u and u["id"] not in seat_holders(o["id"]):
+        # Aile koltukları dolu: ortak defteri görür; kendi aboneliği bittikten sonra SEAT_GRACE_DAYS gün Premium sürer
+        g = grace_until(u)
+        return p if g and g > datetime.now(timezone.utc) else FREE
+    return p
 
 
 def allows(u: dict | None, feature: str) -> bool:
-    p = plan_of(u)
+    return _allows_p(plan_of(u), feature)
+
+
+def _allows_p(p: str, feature: str) -> bool:
     if p == SELF:
         return True
     t = tier(feature)
@@ -247,12 +392,23 @@ FAMILY_SEATS = 4  # aile paketi: sahibi + 3 üye (4 kişiye kadar Premium)
 
 
 def seats_left(owner_id: int) -> int | None:
-    """Ortak defterde kalan yer (bekleyen davetler de yer tutar). None = sınırsız (kendi sunucusu)."""
+    """Ortak defterde davet edilebilecek kalan yer: MAX_MEMBERS üye (koltuklu + koltuksuz), bekleyen davetler de yer
+    tutar. Koltuk (kendi aboneliği olmayan üye için) katılma anında denetlenir (free_seat). None = sınırsız (kendi
+    sunucusu)."""
     if not hosted():
         return None
     pending = [i for i in system.invites() if i.get("member_of") == owner_id and not i.get("used_at")
                and (not i.get("expires_at") or i["expires_at"] >= date.today().isoformat())]
-    return max(0, FAMILY_SEATS - 1 - len(system.members(owner_id)) - len(pending))
+    ms = [m for m in system.members(owner_id) if not m.get("deleted_at")]
+    return max(0, MAX_MEMBERS - len(ms) - len(pending))
+
+
+def free_seat(owner_id: int) -> bool:
+    """Kendi aboneliği olmayan biri katılırsa koltuk var mı? (kendi sunucusunda her zaman)"""
+    if not hosted():
+        return True
+    ms = [m for m in system.members(owner_id) if not m.get("deleted_at") and not own_plan(m)]
+    return len(ms) < FAMILY_SEATS - 1
 
 
 def limits(u: dict | None) -> dict:
@@ -341,7 +497,7 @@ def info(u: dict | None) -> dict:
            # paketin kaynağı: "store" (mağaza aboneliği, kendisi yenilenir) | "manual" (yöneticinin verdiği, süresi
            # dolunca biter; istemci bitişe az kala haber verir) | None
            "source": _source(o) if o and p in (PREMIUM, FAMILY) and u.get("role") != "admin" else None,
-           "features": {f: allows(u, f) for f in _ROWS}, "feature_labels": FEATURE_LABELS, "limits": limits(u),
+           "features": {f: _allows_p(p, f) for f in _ROWS}, "feature_labels": FEATURE_LABELS, "limits": limits(u),
            "ai_docs": None if p == SELF else ai_limit(u) if u else DOC_READS[FREE],
            "member": bool(u and u.get("member_of"))}
     if hosted():
@@ -414,7 +570,12 @@ def apply_revenuecat(event: dict) -> dict:
     if kind in END_EVENTS:
         if u.get("plan_source") == "manual" and _active(u):  # yöneticinin verdiği (test) paketi mağaza bitişi silmesin
             return {"user": u["id"], "ignored": "manual"}
+        was = own_plan(u)
         system.update_user(u["id"], plan=FREE, plan_until=None, plan_source="revenuecat", plan_renews=None, plan_trial=0)
+        if was and u.get("member_of"):  # ortak defter üyesi: koltuk sırasına şimdi girer (ek süre de buradan sayılır)
+            system.put(f"seat_queue:{u['id']}", _now_ts())
+            system.put(f"seat_prio:{u['id']}", None)
+            _seat_notice(system.user(u["id"]))
         return {"user": u["id"], "plan": FREE}
     if kind in ACTIVE_EVENTS and plan:
         # deneme bilgisi ve ürün: PRODUCT_CHANGE yalnız bilgi amaçlıdır (yeni ürün yenilemede RENEWAL/INITIAL_PURCHASE ile
@@ -428,6 +589,68 @@ def apply_revenuecat(event: dict) -> dict:
         system.update_user(u["id"], plan_renews=0, plan_store=store, **({"plan_until": until} if until else {}))
         return {"user": u["id"], "until": until, "will_renew": False}
     return {"ignored": kind}
+
+
+def seat_notice_items(u: dict) -> list[tuple[int, dict]]:
+    """Kendi aboneliği bitip koltuksuz kalan üye için (kişi, bildirim) çiftleri: üyeye ve sahibe. Kimlik bitiş anına
+    bağlı: aynı olay bir kez bildirilir (push.claim)."""
+    if not hosted() or seat_state(u) not in ("grace", "none"):
+        return []
+    from app import push
+
+    owner = system.user(u["member_of"]) or {}
+    pid = f"koltuk:{u['id']}:{lapsed_at(u).replace(' ', 'T')}"
+    g = grace_until(u)
+    extra = f" Premium {g.strftime('%d.%m.%Y')} tarihine kadar açık." if g and g > datetime.now(timezone.utc) else ""
+    name = (u.get("username") or "").split("@")[0]
+    out = [(u["id"], push.item("aile", pid, "Aile koltukları dolu",
+                               "Premium'un bitti, Aile koltukları dolu." + extra + " Premium'u yenileyebilir ya da aile "
+                               "yöneticisinden koltuk isteyebilirsin.", push.R_ORTAK))]
+    if owner:
+        out.append((owner["id"], push.item("aile", pid, "Aile koltukları dolu",
+                                           f"{name}: Premium'u bitti, koltuklar dolu." + extra +
+                                           " Üye listesinden koltuk verebilirsin.", push.R_ORTAK)))
+    return out
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+
+
+def notify_seat_changes(owner_id: int, before: set[int]) -> None:
+    """Koltuk değişince (ayrılma, çıkarma, koltuk ver) kazanana ve kaybedene bildirim; hata akışı hiç bozmaz."""
+    if not hosted():
+        return
+    try:
+        from app import push
+
+        after = seat_holders(owner_id)
+        for uid in after - before:
+            push.notify(uid, [push.item("aile", f"koltuk-geldi:{uid}:{_stamp()}", "Aile koltuğuna geçtin",
+                                        "Premium özellikleri yeniden açık.", push.R_ORTAK)])
+        for uid in before - after:
+            m = system.user(uid)
+            if m and m.get("member_of") == owner_id and not own_plan(m):
+                push.notify(uid, [push.item("aile", f"koltuk-alindi:{uid}:{_stamp()}", "Aile koltuğun başka üyeye verildi",
+                                            "Ortak defteri görmeye devam edersin; Premium özellikleri kapandı.",
+                                            push.R_ORTAK)])
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("ekstre").exception("koltuk bildirimi")
+
+
+def _seat_notice(u: dict | None) -> None:
+    """Olay anında (webhook) bildirim; hata akışı hiç bozmaz."""
+    try:
+        from app import push
+
+        for uid, it in seat_notice_items(u or {}):
+            push.notify(uid, [it])
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("ekstre").exception("koltuk bildirimi")
 
 
 def _apply_pack(u: dict, kind: str | None, product: str, event: dict) -> dict:

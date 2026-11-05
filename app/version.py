@@ -69,6 +69,10 @@ CAPABILITIES = (
                               # (PDF metni: dekont|ekstre önerisi, hak düşmez); /api/bills/parse transfer_check → looks_like_transfer
     "member_spend",           # Aile "Kim ne harcadı": GET /api/book/member-spend?month (402 plan_required aile_rapor),
                               # /api/transactions?who=u<id>|ortak, /api/budgets status[].by_person (ortak defterde)
+    "book_join",              # var olan hesapla ortak deftere katılma: GET/POST /api/book/join/{kod} (önizleme, katıl;
+                              # own_subscription), POST /api/book/leave (üye ayrılır, Benim defteri kalır); Aile koltuğu:
+                              # book/me seat {state: own|seat|grace|none, grace_until?}, /api/book members[].seat, joined,
+                              # seats {total, used, members, max_members, waiting}, POST /api/book/members/{id}/seat
 )
 
 

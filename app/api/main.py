@@ -707,6 +707,12 @@ def _invite_out(inv: dict, request: Request) -> dict:
     return out
 
 
+def _book_seat_or_409(inv: dict) -> None:
+    """Davetle YENİ hesap: kendi aboneliği yok, Aile koltuğu gerekir (kendi Premium'u olan var olan hesapla katılır)."""
+    if inv.get("member_of") and not plans.free_seat(inv["member_of"]):
+        raise HTTPException(409, "Aile koltukları dolu; davet edenden yer açmasını iste")
+
+
 @app.get("/api/auth/invite/{code}")
 def invite_check(code: str, request: Request):
     """Davet bağlantısı açılınca (kayıttan önce): geçerli mi, hangi deftere, hangi yetkiyle. Geçersizse Türkçe neden.
@@ -724,7 +730,8 @@ def invite_check(code: str, request: Request):
     if inv.get("member_of"):
         owner = system.user(inv["member_of"]) or {}
         out.update(book=(owner.get("username") or "").split("@")[0], role=inv.get("book_role") or "editor",
-                   role_label=book.ROLE_LABELS.get(inv.get("book_role") or "editor"))
+                   role_label=book.ROLE_LABELS.get(inv.get("book_role") or "editor"),
+                   **({"seats_full": not plans.free_seat(inv["member_of"])} if plans.hosted() else {}))
     return out
 
 
@@ -831,6 +838,7 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
     if not u and inv:
         if not _consent_ok(body.consent):
             raise HTTPException(409, "consent_required")
+        _book_seat_or_409(inv)
         u = auth.create_user(who["email"], secrets.token_urlsafe(32), member_of=inv.get("member_of"),
                              book_role=inv.get("book_role"))
         if not system.use_invite(inv["code"], u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
@@ -965,6 +973,7 @@ def register(body: RegisterIn, request: Request, response: Response):
         auth.record_fail(ip)
         raise HTTPException(403, "Davet kodu geçersiz, kullanılmış ya da süresi dolmuş")
     inv = system.invite(body.code) or {}
+    _book_seat_or_409(inv)
     try:  # ortak defter davetiyse: kayıt olan, daveti oluşturanın defterine üye olur
         u = auth.create_user(body.username, body.password, member_of=inv.get("member_of"), book_role=inv.get("book_role"))
     except ValueError as e:
@@ -4547,7 +4556,11 @@ def _book_owner() -> dict:
 def book_me():
     from app import book
 
-    return book.info()
+    out = book.info()
+    u = db.current_user()
+    if plans.hosted() and u and u.get("member_of"):  # Aile koltuğu (uygulama içi uyarı: grace / none)
+        out["seat"] = plans.seat_info(system.user(u["id"]) or u)
+    return out
 
 
 def _shared_people() -> list[dict]:
@@ -4585,12 +4598,16 @@ def book_overview(request: Request):
     for s in db.list_statements():
         cards.setdefault(s["card_no"], {"card_no": s["card_no"], "bank": s["bank"]})
     return {"members": [{"id": m["id"], "username": m["username"], "last_login": m["last_login"], "disabled": bool(m["disabled"]),
-                         "role": book.role(m), "own_rules": book.has_own_rules(m["id"]), "rules": book.rules(m["id"])}
+                         "role": book.role(m), "own_rules": book.has_own_rules(m["id"]), "rules": book.rules(m["id"]),
+                         # hazır sürüm: Aile koltuğu {state: own|seat|grace|none, grace_until?}; kendi hesabıyla katılan
+                         # (çıkarılınca hesabı silinmez, yalnız ayrılır)
+                         **({"seat": plans.seat_info(m)} if plans.hosted() else {}), "joined": bool(m.get("db_file"))}
                         for m in system.members(u["id"])],
             "invites": [_invite_out(i, request) for i in system.invites() if i.get("member_of") == u["id"] and not i["used_at"]],
             "rules": book.rules(), "cards": list(cards.values()),
             "accounts": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in db.list_accounts()],
-            "pages": book.PAGE_LABELS, "roles": book.ROLE_LABELS}
+            "pages": book.PAGE_LABELS, "roles": book.ROLE_LABELS,
+            **({"seats": plans.seats(u["id"])} if plans.hosted() else {})}
 
 
 def _my_member(uid: int) -> dict:
@@ -4637,7 +4654,8 @@ def book_patch_member(uid: int, body: BookMemberPatch):
 def book_invite(body: InviteIn, request: Request):
     u = _book_owner()
     if plans.seats_left(u["id"]) == 0:
-        raise HTTPException(409, f"Aile paketi {plans.FAMILY_SEATS} kişilik; yer açmak için bir üyeyi ya da bekleyen daveti kaldır")
+        raise HTTPException(409, f"Ortak defter en çok {plans.MAX_MEMBERS} üyelik; yer açmak için bir üyeyi ya da bekleyen "
+                                 "daveti kaldır")
     return _invite_out(system.create_invite(body.note, body.days, member_of=u["id"], book_role=body.book_role), request)
 
 
@@ -4662,16 +4680,95 @@ def book_delete_invite(code: str):
 
 @app.delete("/api/book/members/{uid}")
 def book_remove_member(uid: int):
-    """Üyeyi çıkar: hesabı silinir (eklediği kayıtlar defterde kalır). Üyenin kendi ("Benim") defteri sahipsiz kalmasın
-    diye users/_silinen altına taşınır; 30 gün sonra kendiliğinden silinir."""
+    """Üyeyi çıkar (eklediği kayıtlar defterde kalır). Davetle yeni açılmış üyenin hesabı silinir; kendi ("Benim")
+    defteri sahipsiz kalmasın diye users/_silinen altına taşınır, 30 gün sonra kendiliğinden silinir. Var olan hesabıyla
+    katılmış üye (app/book_join.py) silinmez: yalnız defterden ayrılır, kendi defteri ve hesabı kalır."""
+    from app import book_join
+
     u = _book_owner()
     m = system.user(uid)
     if not m or m.get("member_of") != u["id"]:
         raise HTTPException(404, "Üye yok")
+    if book_join.joined_with_account(m):
+        book_join.detach(m)
+        return {"ok": True, "detached": True}
+    before = plans.seat_holders(u["id"])
     deletion.admin_deleted(m, reason="member_removed")  # anonim silme kaydı (D12), yönetici silmesiyle aynı
     system.delete_user(uid)
     system.archive_user_data(m)
+    plans.clear_seat(uid)
+    plans.notify_seat_changes(u["id"], before - {uid})  # boşalan koltuğa sıradaki geçer
     return {"ok": True}
+
+
+class SeatGiveIn(BaseModel):
+    from_member: int  # koltuğu alınacak (koltuklu) üye
+
+
+@app.post("/api/book/members/{uid}/seat")
+def book_give_seat(uid: int, body: SeatGiveIn):
+    """Sahip "Koltuk ver": koltuk bekleyen üyeye (uid) koltuklu bir üyenin koltuğu verilir; koltuğu alınan sıranın
+    sonuna geçer (kendi aboneliği yoksa ücretsiz sınırlara düşer, ona bildirim gider)."""
+    u = _book_owner()
+    _my_member(uid)
+    _my_member(body.from_member)
+    before = plans.seat_holders(u["id"])
+    try:
+        plans.give_seat(u["id"], uid, body.from_member)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    plans.notify_seat_changes(u["id"], before)
+    return {"ok": True, "seats": plans.seats(u["id"])}
+
+
+def _join_user() -> dict:
+    u = db.current_user()
+    if not u or u.get("demo") or not u.get("id"):
+        raise HTTPException(409, "Ortak deftere katılmak için hesabınla giriş yap")
+    return system.user(u["id"]) or u  # oturumdaki kopya değil, güncel satır (member_of, plan)
+
+
+@app.get("/api/book/join/{code}")
+def book_join_preview(code: str, request: Request):
+    """Hesabı açık kullanıcı davet bağlantısını açtı: kim davet ediyor, hangi yetkiyle, katılabilir mi (değilse neden).
+    {valid, can_join, reason?, message?, owner?, owner_email?, role?, role_label?, expires_at?, own_subscription?}"""
+    from app import book_join
+
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    out = book_join.preview(code, _join_user())
+    if out.get("reason") == "unknown":
+        auth.record_fail(ip)  # kod tahmini yavaşlasın
+    return out
+
+
+@app.post("/api/book/join/{code}")
+def book_join_accept(code: str, request: Request):
+    """Daveti kabul et: sahibin defterine üye ol (davetteki yetkiyle; sahibin gizleme kuralları geçer). Kendi verin
+    "Benim" defterinde kalır. {ok, owner, role, role_label, own_subscription}"""
+    from app import book_join
+
+    ip = client_ip(request)
+    if auth.rate_limited(ip):
+        raise HTTPException(429, "Çok fazla hatalı deneme. 15 dakika sonra tekrar dene.")
+    try:
+        return book_join.accept(code, _join_user())
+    except book_join.JoinError as e:
+        if e.reason == "unknown":
+            auth.record_fail(ip)
+        raise HTTPException(e.status, e.message) from e
+
+
+@app.post("/api/book/leave")
+def book_leave():
+    """Üye ortak defterden kendi isteğiyle ayrılır: ortak defteri artık göremez; "Benim" defteri hesabının defteri olur."""
+    from app import book_join
+
+    try:
+        return book_join.leave(_join_user())
+    except book_join.JoinError as e:
+        raise HTTPException(e.status, e.message) from e
 
 
 @app.post("/api/book/members/{uid}/reset-password")

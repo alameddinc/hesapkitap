@@ -5,6 +5,7 @@ Akış
   (session_version artar; auth.token_user silinmek üzere bekleyeni hiç kabul etmez), erişim anahtarları çalışmaz
   (system.token_owner), gelen posta adresi mail kabul etmez (inbound.resolve), gece işleri o defterde çalışmaz.
   Ortak defter sahibi silerse üyeleri de aynı akışa girer (deleted_with = sahip); üye silerse yalnız kendisi.
+  Var olan hesabıyla katılmış üye (app/book_join.py) silinmez: yalnız defterden ayrılır, kendi defteri kalır.
 - Bekleme süresinde giriş (şifre / Google / Apple / şifre sıfırlama): 409 account_pending_deletion + kısa ömürlü geri
   alma belgesi → POST /api/me/restore → hesap (ve sahiple birlikte silinen üyeler) aynen geri gelir.
 - Süre dolunca (app/jobs.py, her dakikalık turda): veri klasörü + nesne deposu önekleri (R2), ai_usage, doc_reads,
@@ -214,6 +215,11 @@ def request_delete(u: dict, now: datetime | None = None, reason: str = "self") -
     days = grace_days()
     after = _iso(now + timedelta(days=days)) if days else None
     members = [] if u.get("member_of") else [m for m in system.members(u["id"]) if not pending(m)]
+    from app import book_join
+
+    for m in [m for m in members if book_join.joined_with_account(m)]:  # kendi hesabıyla katılan: yalnız ayrılır
+        book_join.detach(m)
+        members.remove(m)
     _record(u, reason, now, after, purged=False)
     for m in members:
         _record(m, "owner", now, after, purged=False)
