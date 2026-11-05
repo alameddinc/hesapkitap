@@ -25,7 +25,7 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "istatistik": ("/api/compare", "/api/year-summary", "/api/interest-history"),
     "ekstreler": ("/api/statements",),
     "hesaplar": ("/api/accounts", "/api/jars", "/api/wallets", "/api/net-worth"),
-    "transferler": ("/api/transfers",),
+    "transferler": ("/api/transfers", "/api/dekont"),
     "borclar": ("/api/debts", "/api/debt-payments"),
     "zekat": ("/api/zakat", "/api/donations", "/api/holdings"),
     "tasarruf": ("/api/savings", "/api/goals", "/api/subscriptions", "/api/targets"),
@@ -39,6 +39,7 @@ MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
     ("POST", r"/api/entries/\d+/(match|unmatch)"),  # eşitleme: "Bu ikisi aynı mı?" ve eşleşmeyi geri al (görebildiği kayıtta)
     ("POST", r"/api/receipts/parse"), ("POST", r"/api/bills/parse"), ("POST", r"/api/splits/propose"),
+    ("POST", r"/api/dekont/(parse|save)"), ("POST", r"/api/documents/classify"),  # havale dekontu → Transferler
     ("PUT", r"/api/entries/\d+/receipt-items"), ("POST", r"/api/entries/\d+/receipt-reread"), ("POST", r"/api/receipts/reread"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir

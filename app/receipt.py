@@ -220,6 +220,7 @@ SADECE şu JSON'u döndür:
   "paid": "belge bu faturanın ÖDENDİĞİNİ gösteriyorsa true (banka ödeme dekontu, tahsilat makbuzu, 'ödendi', 'tahsil edildi', 'işlem başarılı', 'fatura ödeme'); ödenecek fatura ise false",
   "paid_at": "YYYY-MM-DD ödeme/işlem tarihi (sadece paid true ise) veya null",
   "pay_method": "havale | kredi_karti | nakit | bilinmiyor (dekontta hesaptan/IBAN'dan ödeme veya otomatik ödeme → havale; kartla ödeme → kredi_karti)",
+  "doc_kind": "fatura | transfer (kişiye/hesaba havale-EFT-FAST para transferi dekontu: GÖNDEREN, ALICI, IBAN var; kurum/abone yok)",
   "confidence": "yüksek | orta | düşük"
 }
 amount = ÖDENECEK TUTAR (KDV dahil toplam); dekontta ÖDENEN TUTAR. Türk sayı formatında 1.234,56 = 1234.56."""
@@ -783,12 +784,19 @@ def parse_bill(data: bytes, mime: str) -> dict:
     öğretir (app/bill_templates.py). source: "sablon" | "yapay_zeka"."""
     from app import bill_templates
 
+    from app import dekont_parse
+
     text = bill_templates.text_of(data, mime)
     if hit := bill_templates.read(text):
-        return bill_templates.as_bill(hit)
+        return {**bill_templates.as_bill(hit), "looks_like_transfer": False}
     raw, meta = _gemini_json(BILL_PROMPT, data, mime, max_output_tokens=8000, kind="belge")
-    bill_templates.learn(text, raw)
+    # yanlış seçim koruması (ek çağrı yok): model "transfer" dedi ya da PDF metni havale/EFT dekontu; kurum/abone yoksa
+    transfer = (str(raw.get("doc_kind") or "").strip().lower() == "transfer" or dekont_parse.is_transfer(text)) \
+        and not raw.get("subscriber_no")
+    if not transfer:
+        bill_templates.learn(text, raw)
     return {
+        "looks_like_transfer": transfer,
         "provider": (raw.get("provider") or "").strip()[:60] or "Fatura",
         "category": BILL_CATEGORY.get(raw.get("type"), "Faturalar"),
         "amount": _num(raw.get("amount")),

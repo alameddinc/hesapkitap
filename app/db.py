@@ -2695,15 +2695,21 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     for i_row, r in enumerate(rows):
         if i_row in overlap["rows"]:  # başka biçimde (PDF ↔ Excel) zaten yüklenmiş hareket: iki kez sayılmaz
             continue
-        # dekontla önceden eklenmiş aynı işlem: dökümdeki satırla birleşir (iki kez sayılmaz)
+        # dekontla önceden eklenmiş aynı işlem: dökümdeki satırla birleşir (iki kez sayılmaz). Hesabı seçilmeden
+        # kaydedilmiş dekont (Transferler → dekonttan) da birleşir ve bu hesaba bağlanır; kullanıcının notu korunur.
         if acc_id and r["hash"] not in seen and r.get("amount") is not None:
             with connect() as c:
-                dk = c.execute("SELECT id FROM entries WHERE import_hash LIKE 'dekont:%' AND account_id = ? AND entry_date = ? "
-                               "AND ROUND(amount * 100) = ? AND kind = ? LIMIT 1",
+                dk = c.execute("SELECT id, note FROM entries WHERE import_hash LIKE 'dekont:%' AND "
+                               "(account_id = ? OR (account_id IS NULL AND wallet_id IS NULL)) AND entry_date = ? "
+                               "AND ROUND(amount * 100) = ? AND kind = ? ORDER BY account_id IS NULL LIMIT 1",
                                (acc_id, r["date"], money.kurus(abs(r["amount"])), "gelir" if r["amount"] > 0 else "gider")).fetchone()
                 if dk:
-                    c.execute("UPDATE entries SET import_hash = ?, note = ? WHERE id = ?",
-                              (r["hash"], f"Hesap hareketi · {r['description']}\nDekontla eşleşti", dk["id"]))
+                    from app import rawnote
+
+                    mine = rawnote.user_note(dk["note"])
+                    keep = mine if mine and not mine.startswith("Dekont (") else "Dekontla eşleşti"
+                    c.execute("UPDATE entries SET import_hash = ?, note = ?, account_id = COALESCE(account_id, ?) WHERE id = ?",
+                              (r["hash"], f"Hesap hareketi · {r['description']}\n{keep}", acc_id, dk["id"]))
             if dk:
                 seen.add(r["hash"])
                 stats["tekrar"] += 1

@@ -40,7 +40,7 @@ KINDS = ("uploads", "bills", "receipts", "statements-bank")
 NAME_RES = {
     "uploads": re.compile(r"^[0-9a-f]{64}\.pdf$"),
     "bills": re.compile(r"^[0-9a-f]{24,64}\.(?:pdf|jpg|png|webp|heic)$"),
-    "receipts": re.compile(r"^[0-9a-f]{64}\.jpg$"),
+    "receipts": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # fiş fotoğrafı; havale dekontu fotoğraf ya da PDF
     "statements-bank": re.compile(r"^[0-9a-f]{64}\.(?:pdf|xlsx|xls|csv)$"),
 }
 CONTENT_TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
