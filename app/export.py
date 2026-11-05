@@ -98,7 +98,10 @@ def receipts(frm: date | None, to: date | None) -> list[dict]:
         out.append({**e, "vat_lines": vat.lines_of(e.get("vat_lines") or []),
                     "pay_label": _pay(e, names)})
     out.sort(key=lambda e: (e["entry_date"], e["id"]))
-    return out
+    from app import tax_fill
+
+    # eksik unvan / VKN / vergi dairesi aynı işyerinin önceki fişlerinden; aynı VKN'nin yazımı tek biçim (kayıt değişmez)
+    return tax_fill.complete_all(out, learn_from=db.list_entries())
 
 
 def _pay(e: dict, names: dict) -> str:

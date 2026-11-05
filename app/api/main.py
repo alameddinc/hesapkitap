@@ -5765,6 +5765,15 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
             if cat != UNCATEGORIZED:
                 doc["category"] = cat
                 break
+        # vergi bilgisi okunamadıysa aynı işyerinin önceki fişlerinden (app/tax_fill.py; tek VKN'ye çıkıyorsa)
+        from app import tax_fill
+
+        got = tax_fill.Book(db.list_entries()).complete(
+            {"description": doc.get("merchant"), **{k: doc.get(k) for k in tax_fill.FIELDS}})
+        for k in tax_fill.FIELDS:
+            doc[k] = got.get(k)
+        if got.get("tax_filled"):
+            doc["tax_filled"] = got["tax_filled"]
     if doc["type"] == "bill":
         doc["file_name"] = db.save_bill_file(photo, ".jpg") if photo else \
             db.save_bill_file(original, BILL_TYPES.get(original_mime, ".pdf"))
