@@ -419,3 +419,16 @@ def test_capability_listed(client):
     from app import version
 
     assert "book_join" in version.CAPABILITIES
+
+
+def test_member_with_own_family_plan_cannot_start_family(hosted):
+    """Tek aile: kendi Aile paketi olan kişi başka aileye katıldıysa davet üretemez, aile kuramaz (önce ayrılmalı)."""
+    o, _ = _family(hosted)
+    c, u = _account(hosted, "ayse")
+    _rc("INITIAL_PURCHASE", u["id"], ents=("aile",))
+    _join(c, o)
+    for h in ({}, OWN):
+        assert c.post("/api/book/invites", json={}, headers=h).status_code == 403
+        assert c.get("/api/book", headers=h).status_code == 403
+    assert c.post("/api/book/leave").status_code == 200
+    assert c.post("/api/book/invites", json={}).status_code == 200  # ayrılınca kendi ailesini kurabilir
