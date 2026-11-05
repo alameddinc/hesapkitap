@@ -73,6 +73,10 @@ CAPABILITIES = (
                               # own_subscription), POST /api/book/leave (üye ayrılır, Benim defteri kalır); Aile koltuğu:
                               # book/me seat {state: own|seat|grace|none, grace_until?}, /api/book members[].seat, joined,
                               # seats {total, used, members, max_members, waiting}, POST /api/book/members/{id}/seat
+    "spender_assign",         # Aile harcayanı atama (ortak defter; 402 aile_rapor, 404 tek kişilik/Benim, 403 sadece görür):
+                              # PUT /api/spender {source manual|card|recurring, id, who u<id>|ortak|null} → {who, set};
+                              # PUT /api/cards/{card_no}/spender {who u<id>|null} → {card_no, who}; GET /api/cards/spenders;
+                              # transactions ve cards/summary recent satırlarında spender, spender_set; cards[].spender
 )
 
 

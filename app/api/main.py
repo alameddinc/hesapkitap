@@ -1901,8 +1901,17 @@ def insights_restore(body: InsightKeyIn):
 @app.get("/api/cards/summary")
 def cards_summary(recent: int = Query(20, ge=0, le=200)):
     """Kartlar ekranı açılışı: kart başına son ekstre, açık dönem, taksit/abonelik, son N işlem (finance.cards_summary).
-    Kartın tam geçmişi: GET /api/transactions?card=<card_no>&limit=…"""
-    return FastJSON(finance.cards_summary(recent=recent))
+    Kartın tam geçmişi: GET /api/transactions?card=<card_no>&limit=…
+    Ortak defterde her kartta spender: "u<id>" (kartın kişisi, PUT /api/cards/{card_no}/spender) ya da null (Ortak);
+    recent satırlarında spender / spender_set (GET /api/transactions ile aynı)."""
+    out = finance.cards_summary(recent=recent)
+    if ppl := _shared_people():
+        sp = finance.Spenders(ppl)
+        for c in out["cards"]:
+            c["spender"] = sp.card(c["card_no"])
+            for r in c["recent"]:
+                r["spender"], r["spender_set"] = sp.of(r), sp.is_set(r)
+    return FastJSON(out)
 
 
 class CardLimitIn(BaseModel):
@@ -1937,13 +1946,15 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     süzgeç toplamı = bayrağı true olan satırların amount toplamı (iade eksi). totals=1: {"rows": [...], "totals": {...}}
     (Özet ile aynı _totals + count). category / subcategory: yalnız o ana kategori / alt kategori (yetenek
     "subcategories"; subcategory tek başına verilirse her ana kategorideki bu ad). who=u<id>|ortak: ortak defterde o
-    kişinin harcamaları ("Kim ne harcadı" raporunun satırları; yalnız gider satırları, aynı harcayan kuralı)."""
+    kişinin harcamaları ("Kim ne harcadı" raporunun satırları; yalnız gider satırları, aynı harcayan kuralı:
+    kayıtta elle seçilen → ekleyen → kart işleminde eşleşen kaydı ekleyen → kartın kişisi → Ortak; finance.Spenders).
+    Ortak defterde her satırda spender ("u<id>"|"ortak") ve spender_set (kayıtta elle seçilmiş mi; PUT /api/spender)."""
     _history_gate(month)
     rows = finance.transactions(month, include_deleted, include_estimates)
+    ppl = _shared_people()
+    sp = finance.Spenders(ppl) if (who or ppl) else None
     if who:
-        ids = {p["id"] for p in _shared_people()}
-        creators = finance.card_creators()
-        rows = [r for r in rows if finance.in_spend(r) and finance.spender(r, ids, creators) == who]
+        rows = [r for r in rows if finance.in_spend(r) and sp.of(r) == who]
     u = db.current_user()
     if month is None and not plans.allows(u, "gecmis"):  # tüm aylar istendi: ücretsizde görünür pencereyle sınırlı
         rows = [r for r in rows if plans.history_ok(u, r["month"])]
@@ -1957,6 +1968,8 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
         r.setdefault("raw", None)
         r.setdefault("note_user", r.get("note"))
         r["counts_as_spend"], r["counts_as_income"] = finance.counts(r)
+        if ppl:
+            r["spender"], r["spender_set"] = sp.of(r), sp.is_set(r)
     if not (totals or limit or before):
         return FastJSON(rows)  # eski biçim: düz dizi (jsonable_encoder atlanır; içerik bayt bayt aynı)
     out: dict = {}
@@ -4572,7 +4585,9 @@ def _shared_people() -> list[dict]:
 @app.get("/api/book/member-spend")
 def book_member_spend(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
     """Kim ne harcadı (Aile, plans "aile_rapor"): ortak defterde dönemin gideri kişi başına, kategori kırılımıyla.
-    Harcayan: elle kaydı ekleyen; kart işleminde eşleştiği elle kaydı ekleyen, o da yoksa "Ortak" (key "ortak").
+    Harcayan (finance.Spenders): kayıtta elle seçilen (PUT /api/spender; sabit kalemde her ay) → elle kaydı ekleyen →
+    kart işleminde eşleştiği elle kaydı ekleyen → kartın kişisi (PUT /api/cards/{card_no}/spender) → "Ortak" (key
+    "ortak"); defterden ayrılan kişinin payı Ortak'a düşer.
     Üyenin göremediği kart/kayıt/faiz rapora girmez (veri okuma süzgeçleri); üyenin "Benim" defteri hiç girmez
     (o defterde 404). shared: false → tek kişilik defter (people boş). İşlemler süzgeci: /api/transactions?who=<key>."""
     u = db.current_user()
@@ -4587,6 +4602,79 @@ def book_member_spend(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"))
     for p in out["people"]:
         p["me"] = bool(u and p["user_id"] == u["id"])
     return {**out, "shared": True, "me": u["id"] if u else None}
+
+
+# ---------------------------------------------------------------- kim harcadı: kartı kişiye bağla, kayıtta seç
+
+def _spender_book() -> list[dict]:
+    """Harcayan atama uçlarının ortak koşulu: ortak defter (sahip + en az bir üye; üyenin "Benim" defteri değil).
+    Paket kapısı middleware'de (plans "aile_rapor"), yazma yetkisi defter kurallarında (app/book.py MEMBER_WRITES:
+    sahip, tam yetkili ve "görür ve ekler"; sadece görür 403)."""
+    ppl = _shared_people()
+    if not ppl:
+        raise HTTPException(404, "Yalnız ortak defterde")
+    return ppl
+
+
+def _spender_uid(who: str | None, ppl: list[dict]) -> int | None:
+    """"u<id>" → defterdeki kişinin id'si; "ortak" / None → None. Defterde olmayan kişi 400."""
+    if who is None or who == finance.SHARED:
+        return None
+    m = re.fullmatch(r"u(\d+)", who)
+    if not m or int(m.group(1)) not in {p["id"] for p in ppl}:
+        raise HTTPException(400, "Kişi bu defterde değil")
+    return int(m.group(1))
+
+
+class SpenderIn(BaseModel):
+    source: Literal["manual", "card", "recurring"]  # elle kayıt | kart işlemi | sabit kalem (her ayı)
+    id: int = Field(..., ge=1)
+    who: str | None = Field(None, max_length=20)  # "u<id>" | "ortak" (açıkça Ortak) | null (seçimi kaldır: otomatik)
+
+
+@app.put("/api/spender")
+def put_spender(body: SpenderIn):
+    """Kayıtta kim harcadı (Aile, ortak defter): otomatik kuralın önüne geçer (finance.Spenders). who null: elle seçim
+    kalkar, harcayan yine otomatik bulunur. Yanıt: {who: değişiklikten sonraki harcayan ("u<id>"|"ortak"), set: elle
+    seçim var mı}. Kayıt yoksa ya da üyenin göremediği (gizli kart/kayıt) bir kayıtsa 404."""
+    from app import book
+
+    ppl = _spender_book()
+    row = finance.spender_row(body.source, body.id)
+    kind = {"manual": "entry", "card": "txn"}.get(body.source)
+    if row is None or (kind and not book.visible(kind, body.id)):
+        raise HTTPException(404, "Kayıt bulunamadı")
+    if body.who is None:
+        db.clear_spender_override(body.source, body.id)
+    else:
+        db.set_spender_override(body.source, body.id, _spender_uid(body.who, ppl))
+    sp = finance.Spenders(ppl)
+    return {"who": sp.of(row), "set": sp.is_set(row)}
+
+
+class CardSpenderIn(BaseModel):
+    who: str | None = Field(None, max_length=20)  # "u<id>" | null ya da "ortak": kart kimseye bağlı değil (Ortak)
+
+
+@app.get("/api/cards/spenders")
+def card_spenders():
+    """Ortak defterde kartların kişisi: {cards: {card_no: "u<id>"}} (bağlı olmayan kart yok; cards/summary spender ile
+    aynı). Üyeye gizli kart listede yer almaz."""
+    sp = finance.Spenders(_spender_book())
+    seen = {s["card_no"] for s in db.list_statements()}
+    return {"cards": {no: who for no in sorted(seen) if (who := sp.card(no))}}
+
+
+@app.put("/api/cards/{card_no}/spender")
+def put_card_spender(card_no: str, body: CardSpenderIn):
+    """Kartı kişiye bağla (Aile, ortak defter): bu kartın ekstre satırları o kişinin harcaması sayılır (kayıtta elle
+    seçim ve eşleşen elle kaydı ekleyen yine önce gelir). who null / "ortak": bağ kalkar. Yanıt: {card_no, who}.
+    Kart yoksa ya da üyeye gizliyse 404."""
+    ppl = _spender_book()
+    if not any(s["card_no"] == card_no for s in db.list_statements()):  # üyeye gizli kart listede yok
+        raise HTTPException(404, "Kart bulunamadı")
+    db.set_card_spender(card_no, _spender_uid(body.who, ppl))
+    return {"card_no": card_no, "who": finance.Spenders(ppl).card(card_no)}
 
 
 @app.get("/api/book")

@@ -8,6 +8,7 @@ Paket defter sahibinindir; ortak deftere davet edilen üye sahibin paketini kull
 Abonelik mağazadan (App Store / Google Play) RevenueCat üzerinden gelir: plan + bitiş tarihi kullanıcıya yazılır.
 """
 import os
+import re
 from datetime import date, datetime, timezone
 
 from app import system
@@ -149,7 +150,7 @@ LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi su
 FEATURE_LABELS = {k: r[0] for k, r in _ROWS.items()}
 # (yöntem, API yolu öneki) → özellik (paket yoksa 402). Yöntem None: hepsi.
 GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/book/invites", "ortak_defter"),
-         (None, "/api/book/member-spend", "aile_rapor"),
+         (None, "/api/book/member-spend", "aile_rapor"), (None, "/api/spender", "aile_rapor"),
          (None, "/api/plan/simulate", "alsam_mi"), (None, "/api/year-summary", "istatistik"),
          (None, "/api/interest-history", "istatistik"), ("POST", "/api/jars", "kumbara")]
 
@@ -368,7 +369,14 @@ def require(u: dict | None, feature: str) -> None:
         raise PlanRequired(feature)
 
 
+# önekle yakalanamayan (yolun ortasında değişken olan) kilitli uçlar: (yöntem, tam yol deseni, özellik)
+GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_rapor")]  # kartı kişiye bağla
+
+
 def gate_for(path: str, method: str = "GET") -> str | None:
+    for m, rx, f in GATED_RX:
+        if (m is None or m == method) and rx.fullmatch(path):
+            return f
     for m, prefix, f in GATED:
         if (m is None or m == method) and (path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "?")):
             # POST /api/jars/{id}/... (mevcut kumbaraya alım/ayırma) serbest; sadece yeni kumbara açmak kilitli

@@ -365,6 +365,21 @@ CREATE TABLE IF NOT EXISTS card_limits (
     credit_limit REAL NOT NULL,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+-- Ortak defter (Aile, "Kim ne harcadı"): kartı kullanan kişi. Bu kartın ekstre satırları o kişinin harcaması sayılır
+CREATE TABLE IF NOT EXISTS card_spenders (
+    card_no TEXT PRIMARY KEY,        -- ekstrenin ana kart numarası (statements.card_no)
+    user_id INTEGER NOT NULL,        -- defterdeki kişi (defterden ayrılırsa satırlar yine Ortak'a düşer)
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- Kayıtta "kim harcadı" elle seçimi: otomatik kuralın (ekleyen, kart sahibi) önüne geçer. user_id NULL = açıkça Ortak.
+-- source: manual (entries.id) | card (transactions.id) | recurring (recurring.id: sabit kalemin her ayı)
+CREATE TABLE IF NOT EXISTS spender_overrides (
+    source TEXT NOT NULL,
+    ref_id INTEGER NOT NULL,
+    user_id INTEGER,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source, ref_id)
+);
 -- "Bunlar farklı": bir daha sorulmaz, kendiliğinden de birleşmez. other: h:<import_hash> | t:<txn_id>
 CREATE TABLE IF NOT EXISTS match_rejects (
     entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -986,6 +1001,7 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
             for old in same_period(c, stmt.card_no, stmt.period_end.isoformat()):
                 if old.get("source") == "excel":
                     c.execute("DELETE FROM statements WHERE id = ?", (old["id"],))  # işlemleri de (ON DELETE CASCADE)
+                    drop_orphan_spenders(c)
         cur = c.execute(
             """INSERT INTO statements (file_hash, filename, bank, card_no, period_end, due_date, total_debt,
                min_payment, credit_limit, previous_balance, period_activity, interest_fees, payments,
@@ -1074,6 +1090,57 @@ def set_card_limit(card_no: str, limit: float | None) -> None:
             c.execute("INSERT INTO card_limits (card_no, credit_limit, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
                       "ON CONFLICT(card_no) DO UPDATE SET credit_limit = excluded.credit_limit, updated_at = CURRENT_TIMESTAMP",
                       (card_no, money.money(limit)))
+
+
+SPENDER_SOURCES = ("manual", "card", "recurring")
+
+
+def card_spenders() -> dict[str, int]:
+    """Ortak defterde kartı kullanan kişi: kart numarası → kullanıcı id."""
+    with connect() as c:
+        return {r["card_no"]: r["user_id"] for r in c.execute("SELECT card_no, user_id FROM card_spenders")}
+
+
+def set_card_spender(card_no: str, user_id: int | None) -> None:
+    """Kartı kişiye bağla; None: bağı kaldır (kartın satırları yine Ortak)."""
+    with connect() as c:
+        if user_id is None:
+            c.execute("DELETE FROM card_spenders WHERE card_no = ?", (card_no,))
+        else:
+            c.execute("INSERT INTO card_spenders (card_no, user_id, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                      "ON CONFLICT(card_no) DO UPDATE SET user_id = excluded.user_id, updated_at = CURRENT_TIMESTAMP",
+                      (card_no, user_id))
+
+
+def spender_overrides() -> dict[tuple[str, int], int | None]:
+    """Kayıtta elle seçilen harcayan: (source, id) → kullanıcı id; None = açıkça Ortak."""
+    with connect() as c:
+        return {(r["source"], r["ref_id"]): r["user_id"]
+                for r in c.execute("SELECT source, ref_id, user_id FROM spender_overrides")}
+
+
+def set_spender_override(source: str, ref_id: int, user_id: int | None) -> None:
+    """Kaydın harcayanını elle seç (user_id None: Ortak). Kaldırmak için clear_spender_override."""
+    if source not in SPENDER_SOURCES:
+        raise ValueError(source)
+    with connect() as c:
+        c.execute("INSERT INTO spender_overrides (source, ref_id, user_id, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                  "ON CONFLICT(source, ref_id) DO UPDATE SET user_id = excluded.user_id, updated_at = CURRENT_TIMESTAMP",
+                  (source, ref_id, user_id))
+
+
+def clear_spender_override(source: str, ref_id: int) -> None:
+    """Elle seçimi kaldır: harcayan yine otomatik kuralla bulunur."""
+    with connect() as c:
+        c.execute("DELETE FROM spender_overrides WHERE source = ? AND ref_id = ?", (source, ref_id))
+
+
+def drop_orphan_spenders(c) -> None:
+    """Silinen kaydın elle seçilmiş harcayanı da gider: id yeniden kullanılırsa (SQLite en büyük id'yi yeniden verir)
+    yeni kayıt eskisinin harcayanını almasın. Silme yollarında çağrılır (tetikleyici yok: şema D7, app/backup.py)."""
+    c.execute("DELETE FROM spender_overrides WHERE (source = 'manual' AND ref_id NOT IN (SELECT id FROM entries)) "
+              "OR (source = 'card' AND ref_id NOT IN (SELECT id FROM transactions)) "
+              "OR (source = 'recurring' AND ref_id NOT IN (SELECT id FROM recurring))")
 
 
 def card_aliases() -> dict[str, str]:
@@ -1203,6 +1270,7 @@ def delete_statement(statement_id: int) -> None:
     with connect() as c:
         r = c.execute("SELECT file_hash FROM statements WHERE id = ?", (statement_id,)).fetchone()
         c.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
+        drop_orphan_spenders(c)
         still_used = r and c.execute("SELECT 1 FROM statements WHERE file_hash = ?", (r["file_hash"],)).fetchone()
     if r and not still_used and re.fullmatch(r"[0-9a-f]{64}", r["file_hash"] or ""):
         remove_file("uploads", f"{r['file_hash']}.pdf")
@@ -1482,6 +1550,7 @@ def delete_entry(entry_id: int) -> None:
     with connect() as c:
         r = c.execute("SELECT receipt_file FROM entries WHERE id = ?", (entry_id,)).fetchone()
         c.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        drop_orphan_spenders(c)
         name = r[0] if r else None
         used = name and c.execute("SELECT 1 FROM entries WHERE receipt_file = ?", (name,)).fetchone()
     if name and not used:
@@ -1529,6 +1598,7 @@ def update_recurring(rid: int, data: dict) -> None:
 def delete_recurring(rid: int) -> None:
     with connect() as c:
         c.execute("DELETE FROM recurring WHERE id = ?", (rid,))
+        drop_orphan_spenders(c)
 
 
 # ---------------------------------------------------------------- rules

@@ -43,6 +43,7 @@ MEMBER_WRITES = [
     ("PUT", r"/api/entries/\d+/receipt-items"), ("POST", r"/api/entries/\d+/receipt-reread"), ("POST", r"/api/receipts/reread"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir
+    ("PUT", r"/api/spender"), ("PUT", r"/api/cards/[^/]+/spender"),  # kim harcadı: kayıtta ve kartta (görebildiği)
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",

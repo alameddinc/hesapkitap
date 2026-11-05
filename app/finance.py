@@ -667,27 +667,80 @@ def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
 
 # ---------------------------------------------------------------- ortak defter: kim ne harcadı (Aile)
 
-SHARED = "ortak"  # ekleyeni belli olmayan gider (kart ekstresi, banka dökümü): tek "Ortak" dilimi
+SHARED = "ortak"  # harcayanı belli olmayan gider (kart ekstresi, banka dökümü, sabit kalem): tek "Ortak" dilimi
 
 
-def card_creators() -> dict[int, int]:
-    """Kart işlemi id → o işlemle eşleşen elle kaydı ekleyen kullanıcı. Kartı kimin kullandığı bilinmez; elle girilip
-    ekstreyle eşleşen harcamada ekleyen bellidir (kart satırı sayılır, elle kayıt sayılmaz)."""
+class Spenders:
+    """Ortak defterde satırın harcayanı (Kim ne harcadı, ortak bütçe kırılımı, İşlemler ?who=, satırdaki spender):
+    tek kural, istek başına bir kez okunur. Öncelik:
+      1. kayıtta elle seçilen (spender_overrides; kişi ya da açıkça Ortak) — sabit kalemde (recurring) seçim
+         kalemin her ayına geçer: bekleyen satıra da, o kalemden oluşmuş elle kayda da (kaydın kendi seçimi yoksa)
+      2. elle kayıt: ekleyen (created_by)
+      3. kart işlemi: eşleştiği elle kaydın seçimi, o yoksa o kaydı ekleyen
+      4. kart işlemi: kartın kişisi (card_spenders, "kartı kişiye bağla")
+      5. Ortak
+    Bulunan kişi defterde değilse (ayrılan / çıkarılan üye) Ortak. people: book.shared_people() (boşsa hepsi Ortak)."""
+
+    def __init__(self, people: list[dict]):
+        self.ids = {p["id"] for p in people}
+        self.cards = db.card_spenders()
+        self.overrides = db.spender_overrides()
+        self.creators: dict[int, int] = {}  # kart işlemi id → eşleşen elle kaydı ekleyen
+        self.linked: dict[int, int] = {}    # kart işlemi id → eşleşen elle kayıt id
+        with db.connect() as c:
+            for t, eid, u in c.execute("SELECT linked_txn_id, id, created_by FROM entries WHERE linked_txn_id IS NOT NULL"):
+                self.linked[t] = eid
+                if u is not None:
+                    self.creators[t] = u
+
+    def _uid(self, r: dict) -> int | None:
+        ov, src, rid = self.overrides, r.get("source"), r.get("id")
+        if (src, rid) in ov:
+            return ov[(src, rid)]
+        if src == "manual":
+            rec = r.get("recurring_id")
+            if rec and ("recurring", rec) in ov:
+                return ov[("recurring", rec)]
+            return r.get("created_by")
+        if src == "card":
+            eid = self.linked.get(rid)
+            if eid is not None and ("manual", eid) in ov:
+                return ov[("manual", eid)]
+            if rid in self.creators:
+                return self.creators[rid]
+            return self.cards.get(r.get("account"))
+        return None
+
+    def of(self, r: dict) -> str:
+        """Satırın harcayanı: "u<id>" (defterdeki kişi) ya da SHARED."""
+        uid = self._uid(r)
+        return f"u{uid}" if uid in self.ids else SHARED
+
+    def is_set(self, r: dict) -> bool:
+        """Bu satırda (kaydın kendisinde) elle seçim var mı? İstemci "otomatik" / "elle seçildi" gösterir."""
+        return (r.get("source"), r.get("id")) in self.overrides
+
+    def card(self, card_no: str) -> str | None:
+        """Kartın kişisi ("u<id>"); bağlı değilse ya da kişi defterden ayrıldıysa None."""
+        uid = self.cards.get(card_no)
+        return f"u{uid}" if uid in self.ids else None
+
+
+def spender_row(source: str, rid: int) -> dict | None:
+    """Harcayanı bulmak için yeterli satır (source, id, created_by, recurring_id, account); kayıt yoksa None.
+    Görünürlük (ortak defter üyesi) çağıranda denetlenir."""
     with db.connect() as c:
-        return {t: u for t, u in c.execute(
-            "SELECT linked_txn_id, created_by FROM entries WHERE linked_txn_id IS NOT NULL AND created_by IS NOT NULL")}
-
-
-def spender(r: dict, ids: set[int], creators: dict[int, int] | None = None) -> str:
-    """Satırın harcayanı: "u<id>" (defterdeki kişi) ya da SHARED. ids: defterdeki kişilerin id'leri (defterden ayrılan
-    kişinin kaydı Ortak'a düşer)."""
-    if r.get("source") == "manual":
-        uid = r.get("created_by")
-    elif r.get("source") == "card":
-        uid = (creators or {}).get(r["id"])
-    else:
-        uid = None
-    return f"u{uid}" if uid in ids else SHARED
+        if source == "manual":
+            e = c.execute("SELECT id, created_by, recurring_id FROM entries WHERE id = ?", (rid,)).fetchone()
+            return {"source": "manual", **dict(e)} if e else None
+        if source == "card":
+            t = c.execute("SELECT t.id, s.card_no AS account FROM transactions t JOIN statements s ON s.id = t.statement_id "
+                          "WHERE t.id = ?", (rid,)).fetchone()
+            return {"source": "card", **dict(t)} if t else None
+        if source == "recurring":
+            r = c.execute("SELECT id FROM recurring WHERE id = ?", (rid,)).fetchone()
+            return {"source": "recurring", "id": r["id"]} if r else None
+    return None
 
 
 def in_spend(r: dict) -> bool:
@@ -700,13 +753,12 @@ def _spend_rows(month: str) -> list[dict]:
 
 
 def member_spend(month: str, people: list[dict]) -> dict:
-    """Dönemin gideri kişi başına (people: book.people()), kategori kırılımıyla. Veri okuma fonksiyonları üye
-    isteğinde süzüldüğü için üyenin göremediği kart/kayıt/faiz hiçbir toplama girmez."""
-    ids = {p["id"] for p in people}
-    creators = card_creators()
+    """Dönemin gideri kişi başına (people: book.people()), kategori kırılımıyla; harcayan kuralı Spenders. Veri okuma
+    fonksiyonları üye isteğinde süzüldüğü için üyenin göremediği kart/kayıt/faiz hiçbir toplama girmez."""
+    sp = Spenders(people)
     by: dict[str, list[dict]] = defaultdict(list)
     for r in _spend_rows(month):
-        by[spender(r, ids, creators)].append(r)
+        by[sp.of(r)].append(r)
     total = sum(r["amount"] for rs in by.values() for r in rs)
     names = {f"u{p['id']}": p for p in people}
     out = []
@@ -722,13 +774,13 @@ def member_spend(month: str, people: list[dict]) -> dict:
 
 
 def budget_split(month: str, people: list[dict]) -> dict[str, list[dict]]:
-    """Bütçe kategorisi → [{key, user_id, name, amount}] (en büyükten): ortak bütçede kim ne kadar harcadı."""
-    ids = {p["id"] for p in people}
+    """Bütçe kategorisi → [{key, user_id, name, amount}] (en büyükten): ortak bütçede kim ne kadar harcadı
+    (harcayan kuralı Spenders)."""
     names = {f"u{p['id']}": p["name"] for p in people}
-    creators = card_creators()
+    sp = Spenders(people)
     agg: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for r in _spend_rows(month):
-        agg[r["category"]][spender(r, ids, creators)] += r["amount"]
+        agg[r["category"]][sp.of(r)] += r["amount"]
     return {cat: sorted(({"key": k, "user_id": None if k == SHARED else int(k[1:]), "name": names.get(k, "Ortak"),
                           "amount": _round(v)} for k, v in d.items() if money.gt(v, 0)), key=lambda x: -x["amount"])
             for cat, d in agg.items()}
