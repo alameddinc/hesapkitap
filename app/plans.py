@@ -340,8 +340,11 @@ def plan_of(u: dict | None) -> str:
     if u.get("role") == "admin":
         return FAMILY
     o = _owner(u)
-    p = o.get("plan") or FREE
-    p = p if p in (PREMIUM, FAMILY) and _active(o) else FREE
+    if o is not u and o.get("role") == "admin":
+        p = FAMILY  # yöneticinin ortak defteri: yönetici Aile sayılır, üyeleri de (koltuk kuralıyla)
+    else:
+        p = o.get("plan") or FREE
+        p = p if p in (PREMIUM, FAMILY) and _active(o) else FREE
     if p != FREE and o is not u and u["id"] not in seat_holders(o["id"]):
         # Aile koltukları dolu: ortak defteri görür; kendi aboneliği bittikten sonra SEAT_GRACE_DAYS gün Premium sürer
         g = grace_until(u)

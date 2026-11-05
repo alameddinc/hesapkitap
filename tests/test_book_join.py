@@ -432,3 +432,51 @@ def test_member_with_own_family_plan_cannot_start_family(hosted):
         assert c.get("/api/book", headers=h).status_code == 403
     assert c.post("/api/book/leave").status_code == 200
     assert c.post("/api/book/invites", json={}).status_code == 200  # ayrılınca kendi ailesini kurabilir
+
+
+def _plan(c, h=None):
+    return c.get("/api/meta", headers=h or {}).json()["plan"]
+
+
+def _all_open(p):
+    return p["plan"] == "aile" and all(p["features"].values())
+
+
+def test_free_member_gets_family_in_both_books_and_loses_it_on_leave(hosted):
+    """Ücretsiz gelen üye: ortak defterde de "Benim" defterinde de Aile özellikleri açık; ayrılınca kapanır."""
+    o, _ = _family(hosted)
+    c, _ = _account(hosted, "ayse")
+    assert _plan(c)["plan"] == "free"
+    _join(c, o)
+    assert _all_open(_plan(c)) and _all_open(_plan(c, OWN))
+    assert c.get("/api/year-summary").status_code != 402
+    assert c.post("/api/book/leave").status_code == 200
+    p = _plan(c)
+    assert p["plan"] == "free" and not p["features"]["istatistik"]
+
+
+def test_member_of_admin_book_gets_family(hosted):
+    """Yöneticinin ortak defteri: yönetici Aile sayılır, ücretsiz gelen üyesi de (canlı hata 05.11: üye ücretsiz kaldı)."""
+    c, _ = _account(hosted, "ayse")
+    _join(c, hosted)
+    assert _all_open(_plan(c)) and _all_open(_plan(c, OWN))
+
+
+def test_member_falls_back_when_owner_lapses_or_removes(hosted):
+    """Sahibin Aile paketi biterse (ödemezse) ya da sahip üyeyi çıkarırsa: kendi paketi yoksa ücretsize döner."""
+    o, owner = _family(hosted)
+    c, ayse = _account(hosted, "ayse")
+    _join(c, o)
+    assert _all_open(_plan(c))
+    _rc("EXPIRATION", owner["id"], ents=(), exp_ms=946684800000)
+    assert _plan(c)["plan"] == "free" and _plan(c, OWN)["plan"] == "free"
+    _rc("RENEWAL", owner["id"], ents=("aile",))
+    assert _all_open(_plan(c))
+    assert o.delete(f"/api/book/members/{ayse['id']}").status_code == 200
+    assert _plan(c)["plan"] == "free"
+    # kendi Premium'u olan: çıkarılınca Premium kalır
+    p, prem = _account(hosted, "prem")
+    _rc("INITIAL_PURCHASE", prem["id"])
+    _join(p, o)
+    assert o.delete(f"/api/book/members/{prem['id']}").status_code == 200
+    assert _plan(p)["plan"] == "premium"
