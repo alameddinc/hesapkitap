@@ -24,11 +24,11 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
         db.save_statement(f"demo:{name}".encode(), name.replace(".txt", ".pdf"), mod.parse_text(text))
     db.auto_link()
 
-    maas = db.create_recurring({"description": "Maaş", "amount": 85000, "kind": "gelir", "category": "Maaş",
+    maas = db.create_recurring({"description": "Maaş", "amount": 200000, "kind": "gelir", "category": "Maaş",
                                 "day_of_month": 1, "start_month": "2026-01"})
     kira = db.create_recurring({"description": "Kira", "amount": 22000, "kind": "gider", "category": "Kira & Aidat",
                                 "day_of_month": 5, "start_month": "2026-01"})
-    for rid, desc, amt, kind, cat, day in ((maas, "Maaş", 85000, "gelir", "Maaş", 1), (kira, "Kira", 22000, "gider", "Kira & Aidat", 5)):
+    for rid, desc, amt, kind, cat, day in ((maas, "Maaş", 200000, "gelir", "Maaş", 1), (kira, "Kira", 22000, "gider", "Kira & Aidat", 5)):
         db.create_entry({"entry_date": f"2026-10-{day:02d}", "description": desc, "amount": amt, "kind": kind,
                          "category": cat, "recurring_id": rid, "payment": "havale" if kind == "gider" else None})
     db.create_recurring({"description": "Spor salonu", "amount": 1500, "kind": "gider", "category": "Sağlık",
@@ -60,9 +60,9 @@ def _extras() -> None:
     from app import donations, zakat
 
     # geçmiş aylar: grafik ve karşılaştırma dolsun
-    for m, (gelir, market, kafe) in {"2026-05": (85000, 5200, 1900), "2026-06": (85000, 4700, 2600),
-                                     "2026-07": (91000, 6100, 2100), "2026-08": (91000, 5300, 3100),
-                                     "2026-09": (91000, 4900, 2300)}.items():
+    for m, (gelir, market, kafe) in {"2026-05": (185000, 5200, 1900), "2026-06": (185000, 4700, 2600),
+                                     "2026-07": (200000, 6100, 2100), "2026-08": (200000, 5300, 3100),
+                                     "2026-09": (200000, 4900, 2300)}.items():
         db.create_entry({"entry_date": f"{m}-01", "description": "Maaş", "amount": gelir, "kind": "gelir", "category": "Maaş"})
         db.create_entry({"entry_date": f"{m}-05", "description": "Kira", "amount": 22000, "kind": "gider",
                          "category": "Kira & Aidat", "payment": "havale"})
