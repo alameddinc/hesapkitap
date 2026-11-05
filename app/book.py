@@ -47,7 +47,8 @@ MEMBER_WRITES = [
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",
                  "/api/bank-import", "/api/onboarding", "/api/mail", "/api/match-rules")
-MEMBER_OPEN = ("/api/settings/password", "/api/settings/tokens", "/api/book/me")
+MEMBER_OPEN = ("/api/settings/password", "/api/settings/tokens", "/api/book/me",
+               "/api/book/leave", "/api/book/join/")  # ayrıl / davet önizleme: app/book_join.py
 ENTRY_MEMBER_FIELDS = {"category", "subcategory", "note", "description", "counterparty", "location"}  # başkasının kaydında
 EMPTY = {"hidden_cards": [], "hidden_accounts": [], "hide_fees": False, "hidden_pages": []}
 ROLES = ("viewer", "editor", "full")
@@ -61,7 +62,8 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("POST", r"/api/insights/(dismiss|restore)"),  # uyarı gizleme de kişiye özel
                    ("DELETE", r"/api/me/sessions/[\w-]+"), ("POST", r"/api/me/sessions/revoke-all"),  # kendi oturumları
                    ("POST", r"/api/push/(devices|test)"), ("DELETE", r"/api/push/devices"),  # kendi telefonu
-                   ("PUT", r"/api/push/prefs")]
+                   ("PUT", r"/api/push/prefs"),
+                   ("POST", r"/api/book/leave"), ("POST", r"/api/book/join/[\w-]+")]  # üyelik kişinin kendi kararı
 
 
 def member() -> dict | None:

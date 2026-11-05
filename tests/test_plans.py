@@ -103,12 +103,19 @@ def test_family_plan_covers_members(hosted):
     member = next(x for x in system.users() if x["username"] == "esim@ornek.com")
     assert plans.plan_of(member) == "aile"  # üye sahibin paketini kullanır
     assert m.get("/api/prices").status_code == 200
-    # 4 kişiye kadar: sahibi + 3 üye; bekleyen davet de yer tutar
+    # 4 koltuk: sahibi + 3 kendi aboneliği olmayan üye. Davet en çok 8 üyeye kadar açılır (kendi Premium'u olan
+    # koltuk kullanmaz); koltuk katılma anında denetlenir (app/book_join.py, test_book_join.py)
     assert c.get("/api/meta").json()["plan"]["limits"]["family_seats"] == 4
     codes = [c.post("/api/book/invites", json={"note": f"Kişi {i}"}) for i in range(3)]
-    assert [r.status_code for r in codes] == [200, 200, 409] and "4 kişilik" in codes[-1].json()["detail"]
-    assert c.delete(f"/api/book/invites/{codes[0].json()['code']}").status_code == 200
-    assert c.post("/api/book/invites", json={"note": "Yeniden"}).status_code == 200
+    assert [r.status_code for r in codes] == [200, 200, 200]
+    for i, r in enumerate(codes):
+        res = TestClient(app).post("/api/auth/register", json={"consent": CONSENT, "code": r.json()["code"],
+                                                              "username": f"kisi{i}@ornek.com", "password": "kisi-sifre-12345"})
+        assert res.status_code == (200 if i < 2 else 409), res.text  # üçüncü yeni hesap: koltuk kalmadı
+    assert "koltukları dolu" in res.json()["detail"]
+    assert c.delete(f"/api/book/invites/{codes[2].json()['code']}").status_code == 200
+    more = [c.post("/api/book/invites", json={"note": f"Ek {i}"}).status_code for i in range(6)]
+    assert more == [200] * 5 + [409]  # 3 üye + 5 bekleyen = 8
 
 
 def test_open_signup_only_when_enabled(hosted, monkeypatch):

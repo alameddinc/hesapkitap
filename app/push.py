@@ -82,11 +82,12 @@ TYPES = {
     "belge": ("Gelen belge işlendi", True),
     "ortak": ("Ortak defterde yeni kayıt", False),
     "zekat": ("Zekât ve mübarek günler", True),
+    "aile": ("Aile koltukları", True),
 }
 # günlük özette sayılan ad
 NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "döküm", "butce": "bütçe uyarısı",
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
-         "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması"}
+         "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -95,7 +96,7 @@ AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağusto
 # mobil uygulamanın rotaları (hesapkitap-mobile src/App.tsx)
 R_OZET, R_ODEMELER, R_EKSTRELER, R_BUTCELER = "#/ozet", "#/diger/odemeler", "#/diger/ekstreler", "#/diger/butceler"
 R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger/tasarruf", "#/diger/zekat"
-R_GELENLER, R_POSTA = "#/diger/gelenler", "#/diger/posta"
+R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 
 
 def _b64e(b: bytes) -> str:
@@ -720,6 +721,17 @@ def _ortak(u: dict, today: date) -> list[dict]:
                  f"Dünden beri {n} yeni kayıt eklendi", R_ISLEMLER)]
 
 
+def _aile(u: dict) -> list[dict]:
+    """Aile koltukları dolu (üyenin kendi aboneliği webhook'suz bitti: plan_until geçti). Webhook'ta zaten gönderilen
+    aynı kimlikle gelir, ikinci kez gitmez. Üye kendisi için, sahip koltuksuz her üye için."""
+    from app import plans
+
+    if not plans.hosted():
+        return []
+    ppl = [u] if u.get("member_of") else system.members(u["id"])
+    return [it for m in ppl for uid, it in plans.seat_notice_items(m) if uid == u["id"]]
+
+
 def _zekat(today: date) -> list[dict]:
     from app import book, prefs, zakat
 
@@ -742,7 +754,7 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     out: list[dict] = []
     for kind, fn in (("odeme", lambda: _odeme_ekstre_dokum(today, on)), ("fatura", lambda: _fatura(today)),
                      ("butce", lambda: _butce(today)), ("gelir", lambda: _gelir(today)), ("ozet", lambda: _ozet(today)),
-                     ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today))):
+                     ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:

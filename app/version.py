@@ -67,6 +67,10 @@ CAPABILITIES = (
     "dekont_parse",           # havale/EFT dekontu: POST /api/dekont/parse (foto/PDF → transfer taslağı, yön/kişi/hesap/
                               # çift kayıt/borç önerisi), POST /api/dekont/save (409 zaten eklenmiş), POST /api/documents/classify
                               # (PDF metni: dekont|ekstre önerisi, hak düşmez); /api/bills/parse transfer_check → looks_like_transfer
+    "book_join",              # var olan hesapla ortak deftere katılma: GET/POST /api/book/join/{kod} (önizleme, katıl;
+                              # own_subscription), POST /api/book/leave (üye ayrılır, Benim defteri kalır); Aile koltuğu:
+                              # book/me seat {state: own|seat|grace|none, grace_until?}, /api/book members[].seat, joined,
+                              # seats {total, used, members, max_members, waiting}, POST /api/book/members/{id}/seat
 )
 
 

@@ -322,13 +322,28 @@ def user_db_path(u: dict) -> str | None:
         owner = user(u["member_of"])
         if owner and not owner.get("member_of"):
             return user_db_path(owner)
-        return os.path.join(data_root(), str(u["id"]), "ekstre.db")  # sahibi silinmiş: boş, kendine ait defter
+        return own_db_path(u)  # sahibi silinmiş: kendine ait defter
     return os.path.join(data_root(), u["db_file"]) if u.get("db_file") else None
 
 
 def own_db_path(u: dict) -> str:
-    """Ortak defter üyesinin kendine ait (özel) defteri: "Benim" seçiliyken açılır."""
+    """Ortak defter üyesinin kendine ait (özel) defteri: "Benim" seçiliyken açılır. Davetle yeni açılan üyede
+    db_file yoktur (users/<id>/ekstre.db, boş başlar); var olan hesabıyla katılan üyede db_file kalır: kendi verisi
+    "Benim" defteri olur (app/book_join.py)."""
+    if u.get("db_file"):
+        return os.path.join(data_root(), u["db_file"])
     return os.path.join(data_root(), str(u["id"]), "ekstre.db")
+
+
+def set_membership(uid: int, member_of: int | None, book_role: str | None = None) -> None:
+    """Ortak defter üyeliğini değiştir (katıl / ayrıl). Ayrılan üyenin kendi defteri db_file olarak bağlanır: "Benim"
+    defteri tek başına hesabın defteri olur (davetle açılmış hesapta da users/<id>/ekstre.db)."""
+    with connect() as c:
+        if member_of:
+            c.execute("UPDATE users SET member_of = ?, book_role = ? WHERE id = ?", (member_of, book_role or "editor", uid))
+        else:
+            c.execute("UPDATE users SET member_of = NULL, book_role = NULL, "
+                      "db_file = COALESCE(db_file, ?) WHERE id = ?", (os.path.join(str(uid), "ekstre.db"), uid))
 
 
 def members(owner_id: int) -> list[dict]:
