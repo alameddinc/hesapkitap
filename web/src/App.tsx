@@ -34,7 +34,7 @@ import Bills from "./pages/Bills";
 import Uncategorized from "./pages/Uncategorized";
 import Admin from "./pages/Admin";
 import { FeedbackButton } from "./components/Feedback";
-import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
+import { UIContext, type EntryDraft, type Route, type ToastOptions, type UI } from "./ui";
 import Toast, { type ToastState } from "./components/Toast";
 import { isViewer, routeVisible, useBook, useIsAdmin, useUiPrefs } from "./components/hooks";
 import BookSwitch from "./components/BookSwitch";
@@ -189,8 +189,8 @@ function Shell() {
   const [modal, setModal] = useState<ModalState>(null);
   // girişten önce bırakılan kısa bildirim (ör. şifre yenileme sonrası "Şifren yenilendi")
   const [toast, setToastState] = useState<ToastState | null>(() => { const f = readFlash(); return f ? { msg: f, kind: "ok" } : null; });
-  const setToast = useCallback((msg: string, opts?: { undo?: () => Promise<unknown> }) =>
-    setToastState({ msg, kind: "ok", undo: opts?.undo, id: Date.now() }), []);
+  const setToast = useCallback((msg: string, opts?: ToastOptions) =>
+    setToastState({ msg, kind: "ok", undo: opts?.undo, action: opts?.action, id: Date.now() }), []);
   const setError = useCallback((msg: string) => setToastState({ msg, kind: "error", id: Date.now() }), []);
   useEffect(() => { try { sessionStorage.removeItem("hk-flash"); } catch { /* özel mod */ } }, []); // StrictMode'da başlatıcı iki kez çalışır: silme burada
   const recurring = useQuery({ queryKey: ["recurring"], queryFn: api.recurring, enabled: modal?.type === "recurring" });

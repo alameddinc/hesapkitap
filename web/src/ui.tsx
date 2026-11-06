@@ -22,11 +22,14 @@ export interface EntryDraft {
   location?: string | null; // fişteki işyeri adresi
   branch?: string | null; // fişteki şube/semt
   wallet_hint?: string | null; // fişte yazan yemek kartı markası (Multinet…)
+  cached?: boolean; // aynı fiş daha önce okunmuştu: okuma hakkı düşmedi
 }
 
 export interface ToastOptions {
   /** işlemi geri alan istek; başarıyla bitince "Geri alındı" denir */
   undo?: () => Promise<unknown>;
+  /** ek düğme (ör. "Aç": kaydın gittiği deftere geç) */
+  action?: { label: string; run: () => void };
 }
 
 export interface UI {
@@ -40,7 +43,7 @@ export interface UI {
   openBill: (draft?: BillDraft) => void;
   openPay: (p: Payable) => void;
   openRecurringMonth: (r: RecurringMonth) => void;
-  /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo verilirse "Geri al" düğmesi (en az 8 sn). */
+  /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo/action verilirse düğme (en az 8 sn). */
   toast: (msg: string, opts?: ToastOptions) => void;
   /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. */
   error: (msg: string) => void;

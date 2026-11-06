@@ -6,6 +6,8 @@ import { api, type BillDraft } from "../api";
 import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
 import Modal from "./Modal";
+import { BookChoice, SaveSpender, useSaveTarget } from "./SaveTarget";
+import { CACHED_NOTE } from "../lib/saveBook";
 
 const BILL_CATS = ["Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Kira & Aidat", "Faturalar"];
 
@@ -17,6 +19,9 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
   const [category, setCategory] = useState(draft.category ?? "Faturalar");
   const [description, setDescription] = useState(draft.description ?? "");
   const [note, setNote] = useState(draft.note ?? "");
+  // yeni fatura: üye hangi deftere kaydedeceğini seçer (yetenek save_book_choice)
+  const st = useSaveTarget();
+  const isNew = !draft.id;
   const [err, setErr] = useState<string | null>(draft.error ? `Otomatik okunamadı: ${draft.error}. Elle doldur.` : null);
 
   const save = useSave(async () => {
@@ -24,8 +29,8 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
     if (!provider.trim() || !(amt >= 0) || !amount || !due) throw new Error("Kurum, tutar ve son ödeme tarihi gerekli");
     const body = { provider: provider.trim(), amount: amt, due_date: due, category, description: description || null, note: note || null };
     if (draft.id) return api.patchBill(draft.id, body);
-    return api.createBill({ ...body, file_name: draft.file_name ?? null });
-  }, () => { onSaved?.("Fatura kaydedildi"); onClose(); });
+    return api.createBill({ ...body, ...st.extra(), file_name: draft.file_name ?? null }, st.book);
+  }, () => { if (!(isNew && st.book && st.announce())) onSaved?.("Fatura kaydedildi"); onClose(); });
   const del = useSave(() => api.deleteBill(draft.id!), () => { onSaved?.("Fatura silindi"); onClose(); });
 
   const cats = [...BILL_CATS, ...(meta.data?.categories ?? []).filter((c) => !BILL_CATS.includes(c))];
@@ -36,7 +41,7 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
         {draft.id && <button className="btn-danger" disabled={del.isPending} onClick={() => void ask("Fatura silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}><Trash2 size={16} /> Sil</button>}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
-        <button className="btn-primary" disabled={save.isPending}
+        <button className="btn-primary" disabled={save.isPending || (isNew && st.viewer)} title={isNew && st.viewer ? "Sadece görme yetkin var" : undefined}
           onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>Kaydet</button>
       </>
     }>
@@ -47,6 +52,8 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
             {draft.confidence && draft.confidence !== "yüksek" && <span className="text-amber-600">· okuma güveni {draft.confidence}, kontrol et</span>}
           </div>
         )}
+        {draft.cached && isNew && <p className="-mt-1 text-xs text-stone-500" data-testid="okuma-onbellek">{CACHED_NOTE}</p>}
+        {isNew && <BookChoice t={st} />}
         <div>
           <label className="label" htmlFor="b-prov">Kurum</label>
           <input id="b-prov" className="input" value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="ör. Enerjisa, Türk Telekom" />
@@ -73,6 +80,7 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
           <label className="label" htmlFor="b-note">Not</label>
           <input id="b-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="ör. otomatik ödeme talimatı var" />
         </div>
+        {isNew && <SaveSpender t={st} />}
         {err && <p className="text-sm text-red-600">{err}</p>}
       </div>
     </Modal>
