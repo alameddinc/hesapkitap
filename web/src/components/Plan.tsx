@@ -5,6 +5,7 @@ import { cx, dateTR } from "../format";
 import type { Route } from "../ui";
 import { inApp } from "./AppServer";
 import { useMeta } from "./hooks";
+import { familyReadsText } from "../lib/saveBook";
 
 export const usePlan = () => useMeta().data?.plan;
 
@@ -124,6 +125,7 @@ export const isDaily = (r: ReadStatus | null | undefined): r is ReadStatus & { l
 export function ReadCounts({ reads, className }: { reads: ReadStatus; className?: string }) {
   if (isDaily(reads)) {
     const out = reads.left <= 0 && reads.extra <= 0;
+    const family = familyReadsText(reads); // Aile ortak hakkı kişinin kalanından azsa
     return (
       <span className={cx("inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5", className)}>
         <span className={cx("whitespace-nowrap", out && "font-medium text-amber-800 dark:text-amber-300")}>
@@ -132,6 +134,8 @@ export function ReadCounts({ reads, className }: { reads: ReadStatus; className?
           <span className="whitespace-nowrap">Bu ay <b className="tabular-nums">{reads.monthly_used ?? 0}/{reads.monthly_cap}</b></span></>}
         <span aria-hidden="true" className="text-stone-400">·</span>
         <span className="whitespace-nowrap">Ek paket <b className="tabular-nums">{reads.extra}</b></span>
+        {family && <><span aria-hidden="true" className="text-stone-400">·</span>
+          <span className="whitespace-nowrap" data-testid="aile-hak">{family}</span></>}
       </span>
     );
   }

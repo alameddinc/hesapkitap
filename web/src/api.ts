@@ -1,4 +1,5 @@
-import { ApiError, call } from "./lib/apiError";
+import { ApiError, call, send } from "./lib/apiError";
+import { bookHeaders, type BookKey } from "./lib/saveBook";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
@@ -308,6 +309,7 @@ export interface BillDraft {
   file_name?: string | null;
   confidence?: string;
   error?: string;
+  cached?: boolean; // aynı belge daha önce okunmuştu: hak düşmedi
 }
 
 export interface Bill {
@@ -426,6 +428,8 @@ export interface ReadStatus {
   period?: "day"; limit?: number; used?: number; left?: number; resets_at?: string;
   monthly_cap?: number | null; monthly_used?: number | null; monthly_resets_at?: string | null;
   limited_by?: "day" | "month"; extra_left?: number; reread_cost?: number; pages_per_read?: number;
+  /** Aile ortak günlük hak (isteğe bağlı): kişinin kalanından azsa "Aile bugün 12/120 kaldı" */
+  family_left?: number | null; family_limit?: number | null;
 }
 /** Paket başı günlük hak: {day, month (ücretsizde aylık tavan), text: "Günde 30 okuma (fiş, fatura, ekstre)"} */
 export interface DailyReads { day: number; month: number | null; text: string }
@@ -538,6 +542,12 @@ function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   return call<T>(method, url, body);
 }
 
+/** Tek istekte defter seçimi (yetenek save_book_choice): book verilirse X-HK-Book başlığıyla, açık defterden (hk_book
+ *  çerezi) bağımsız o deftere yazar. null/undefined → açık defter. */
+function reqIn<T>(book: BookKey | null | undefined, method: string, url: string, body?: unknown): Promise<T> {
+  return book ? send<T>(url, { method, json: body, headers: bookHeaders(book) }) : call<T>(method, url, body);
+}
+
 const q = (params: Record<string, string | number | boolean | undefined>) =>
   "?" +
   new URLSearchParams(
@@ -574,8 +584,9 @@ export const api = {
   patchCard: (id: number, body: Record<string, unknown>) =>
     req<{ ok: true; rule: string | null }>("PATCH", `/api/card-transactions/${id}`, body),
 
-  createEntry: (body: Record<string, unknown>) =>
-    req<{ id: number; linked: boolean; debt_settled: number | null; splits?: { category: string; amount: number }[] }>("POST", "/api/entries", body),
+  /** book: açık defterden farklı deftere kaydet (X-HK-Book) */
+  createEntry: (body: Record<string, unknown>, book?: BookKey | null) =>
+    reqIn<{ id: number; linked: boolean; debt_settled: number | null; splits?: { category: string; amount: number }[] }>(book, "POST", "/api/entries", body),
   linkCandidates: (id: number) => req<LinkCandidate[]>("GET", `/api/entries/${id}/candidates`),
   linkEntry: (id: number, txnId: number | null) => req("POST", `/api/entries/${id}/link`, { txn_id: txnId }),
   patchEntry: (id: number, body: Record<string, unknown>) => req("PATCH", `/api/entries/${id}`, body),
@@ -614,7 +625,7 @@ export const api = {
     fd.append("file", file, name);
     return req<BillDraft>("POST", "/api/bills/parse", fd);
   },
-  createBill: (body: Record<string, unknown>) => req<{ id: number }>("POST", "/api/bills", body),
+  createBill: (body: Record<string, unknown>, book?: BookKey | null) => reqIn<{ id: number }>(book, "POST", "/api/bills", body),
   patchBill: (id: number, body: Record<string, unknown>) => req("PATCH", `/api/bills/${id}`, body),
   deleteBill: (id: number) => req("DELETE", `/api/bills/${id}`),
   payBill: (id: number, amount: number, paid_at: string, payment: Payment) =>

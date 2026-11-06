@@ -43,6 +43,7 @@ export interface DocResult {
   description?: string;
   file_name?: string;
   confidence: string;
+  cached?: boolean; // aynı belge daha önce okunmuştu: hak düşmedi
 }
 
 /** Okunan fişi forma taslak olarak çevir (AddSheet ve telefondan paylaşılanlar). */
@@ -67,6 +68,7 @@ export function docToDraft(r: DocResult, photo?: Blob | null): EntryDraft {
         reread_used: !!r.reread?.used,
         location: r.address ?? null,
         branch: r.branch ?? null,
+        cached: !!r.cached,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
   };
 }
@@ -156,7 +158,7 @@ export default function AddSheet({ onClose, onPick, onBill }: {
     const r = body as DocResult;
     if (r.type === "bill") {
       onBill({ provider: r.provider, amount: r.amount, due_date: r.due_date, category: r.category,
-        description: r.description, file_name: r.file_name, confidence: r.confidence });
+        description: r.description, file_name: r.file_name, confidence: r.confidence, cached: !!r.cached });
       return;
     }
     onPick(docToDraft(r, photo));

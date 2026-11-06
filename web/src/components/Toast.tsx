@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { cx } from "../format";
 import { useUI } from "../ui";
 
-export interface ToastState { msg: string; kind: "ok" | "error"; undo?: () => Promise<unknown>; id?: number }
+export interface ToastState { msg: string; kind: "ok" | "error"; undo?: () => Promise<unknown>; action?: { label: string; run: () => void }; id?: number }
 
 /** Okuma süresi: kelime başına 0,3 sn, en az 3 sn; geri alınabilir işlemde en az 8 sn (düğmeye yetişilsin). */
 export const toastMs = (msg: string, undo: boolean) =>
@@ -20,7 +20,7 @@ export default function Toast({ t, onClose }: { t: ToastState; onClose: () => vo
   const error = t.kind === "error";
   useEffect(() => {
     if (error || hold || busy) return;
-    const h = setTimeout(onClose, toastMs(t.msg, !!t.undo));
+    const h = setTimeout(onClose, toastMs(t.msg, !!t.undo || !!t.action));
     return () => clearTimeout(h);
   }, [t, error, hold, busy, onClose]);
   const undo = async () => {
@@ -50,7 +50,11 @@ export default function Toast({ t, onClose }: { t: ToastState; onClose: () => vo
           <button className="-my-1 shrink-0 rounded-lg px-2 py-1 font-semibold text-blue-300 hover:bg-white/10 disabled:opacity-60 dark:text-blue-700 dark:hover:bg-black/5"
             disabled={busy} onClick={() => void undo()}>{busy ? "Geri alınıyor…" : "Geri al"}</button>
         )}
-        {(error || t.undo) && (
+        {t.action && (
+          <button className="-my-1 shrink-0 rounded-lg px-2 py-1 font-semibold text-blue-300 hover:bg-white/10 dark:text-blue-700 dark:hover:bg-black/5"
+            onClick={() => { t.action!.run(); onClose(); }}>{t.action.label}</button>
+        )}
+        {(error || t.undo || t.action) && (
           <button className={cx("-my-1 -mr-1 shrink-0 rounded-lg p-1", error ? "hover:bg-red-100 dark:hover:bg-red-900" : "hover:bg-white/10 dark:hover:bg-black/5")}
             aria-label="Bildirimi kapat" onClick={onClose}><X size={16} /></button>
         )}

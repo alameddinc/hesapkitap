@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { tl } from "../format";
+import { bookHeaders, type BookKey } from "../lib/saveBook";
 
 export interface AccountOpt { id: number; name: string; kind: string; current: number | null }
 
-export const useAccounts = () => useQuery({
-  queryKey: ["accounts"],
-  queryFn: () => send<{ accounts: AccountOpt[]; wallets: AccountOpt[] }>("/api/accounts"),
+/** book: açık defterden farklı defterin hesapları (X-HK-Book; kaydı o deftere yazarken) */
+export const useAccounts = (book?: BookKey | null) => useQuery({
+  queryKey: book ? ["accounts", book] : ["accounts"],
+  queryFn: () => send<{ accounts: AccountOpt[]; wallets: AccountOpt[] }>("/api/accounts", { headers: bookHeaders(book) }),
 });
 
 const LAST = "hk-last-account";
@@ -18,12 +20,13 @@ export const rememberAccount = (id: number | null) => {
 };
 
 /** Banka / nakit hesabı seçimi (gelirin girdiği, giderin çıktığı hesap). Boş = belirtilmedi. */
-export default function AccountSelect({ value, onChange, label, id, kinds, noneLabel, disabled }: {
+export default function AccountSelect({ value, onChange, label, id, kinds, noneLabel, disabled, book }: {
   value: number | null; onChange: (v: number | null) => void; label: string; id?: string;
   /** yalnız bu türler (ör. ["banka", "nakit"]) */ kinds?: string[];
   /** boş seçeneğin adı (varsayılan "Belirtme") */ noneLabel?: string; disabled?: boolean;
+  /** hesaplar bu defterden (yoksa açık defter) */ book?: BookKey | null;
 }) {
-  const q = useAccounts();
+  const q = useAccounts(book);
   const accs = (q.data?.accounts ?? []).filter((a) => !kinds || kinds.includes(a.kind));
   return (
     <div>

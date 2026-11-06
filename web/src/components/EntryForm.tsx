@@ -23,6 +23,8 @@ import ReceiptItems, { checkSentence } from "./receipt/ReceiptItems";
 import { BankText, userNote } from "./BankText";
 import SavedReceiptItems from "./receipt/SavedReceiptItems";
 import { checkItems, toServer, type ReceiptItem } from "./receipt/check";
+import { BookChoice, SaveSpender, useSaveTarget } from "./SaveTarget";
+import { bookHeaders, CACHED_NOTE, type BookKey } from "../lib/saveBook";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const splitsOf = (r: unknown) =>
@@ -45,7 +47,12 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
   const editingEntry = row?.source === "manual" ? row : undefined;
   const bookInfo = useBook().data;
   const member = isLimited(bookInfo); // ortak defter üyesi (tam yetkili değil): silemez, gizleyemez
-  const viewer = isViewer(bookInfo); // sadece görür: kaydedemez
+  // yeni tek seferlik kayıt (fiş, elle): üye hangi deftere kaydedeceğini seçer (yetenek save_book_choice)
+  const st = useSaveTarget();
+  const [isRecurring, setRecurring] = useState(!!rec || !!draft?.recurring);
+  const choiceOn = !editingEntry && !rec && !isRecurring;
+  const book: BookKey | null = choiceOn ? st.book : null; // açık defterden farklıysa X-HK-Book
+  const viewer = choiceOn ? st.viewer : isViewer(bookInfo); // sadece görür: kaydedemez (hedef defterde)
   const hasMembers = useHasMembers().data;
   const [hidden, setHidden] = useState(!!row?.hidden);
   const [kind, setKind] = useState<"gelir" | "gider">(rec?.kind ?? (row?.kind as "gelir" | "gider") ?? draft?.kind ?? "gider");
@@ -60,18 +67,19 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
   const pickCategory = (c: string) => { if (c !== category) setSub(""); setCategory(c); };
   // not alanı yalnız kullanıcının notu: ham banka satırı (raw) ayrı gösterilir, sunucu onu korur (90ed954)
   const [note, setNote] = useState(rec?.note ?? (row ? userNote(row) : draft?.note) ?? "");
-  const [isRecurring, setRecurring] = useState(!!rec || !!draft?.recurring);
   const [day, setDay] = useState(() => String(rec?.day_of_month ?? new Date().getDate()));
   const [endMonth, setEndMonth] = useState(rec?.end_month ?? "");
   const [payment, setPayment] = useState<Payment>(row?.payment ?? draft?.payment ?? "nakit");
   const [installments, setInstallments] = useState(row?.installments ?? draft?.installments ?? 1);
   // hangi kredi kartı: fişte yazıyorsa o, yoksa son seçilen (tek kart varsa o)
   const [cardLast4, setCardLast4] = useState<string>(row ? row.card_last4 ?? "" : draft?.card_last4 ?? lastCard());
-  const statements = useQuery({ queryKey: ["statements"], queryFn: api.statements });
+  // hesap, kart ve ön ödemeli kart seçenekleri hedef defterden (başka deftere kaydederken o defterin hesapları)
+  const statements = useQuery({ queryKey: book ? ["statements", book] : ["statements"], queryFn: () => book
+    ? send<Awaited<ReturnType<typeof api.statements>>>("/api/statements", { headers: bookHeaders(book) }) : api.statements() });
   const cards = [...new Map((statements.data ?? []).map((s) => [s.card_no.slice(-4), `${s.bank} ··${s.card_no.slice(-4)}`])).entries()];
   if (cardLast4 && !cards.some(([k]) => k === cardLast4)) cards.push([cardLast4, `··${cardLast4} (fişten)`]);
-  const wallets = useQuery({ queryKey: ["wallets"], queryFn: () => send<
-    { id: number; name: string; card_type: string; current: number }[]>("/api/wallets") });
+  const wallets = useQuery({ queryKey: book ? ["wallets", book] : ["wallets"], queryFn: () => send<
+    { id: number; name: string; card_type: string; current: number }[]>("/api/wallets", { headers: bookHeaders(book) }) });
   const [walletId, setWalletId] = useState<number | null>(row?.wallet_id ?? null);
   const [accountId, setAccountId] = useState<number | null>(rec ? rec.account_id ?? null : row ? row.account_id ?? null : lastAccount());
   useEffect(() => {  // fişte yazan kart (Multinet…) ya da tek yemek kartı
@@ -126,8 +134,8 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
   // "Kaydet, yenisini ekle" (yalnız yeni tek seferlik kayıt): kaydedip formu boşaltır; tarih, ödeme şekli, hesap/kart ve
   // kategori aynı kalır (art arda gider girerken her seferinde baştan başlanmasın), odak tutara gider
   const canAgain = !editingEntry && !rec && !isRecurring && !fromReceipt;
-  const again = (msg: string) => {
-    onSaved?.(msg);
+  const again = (msg: string | null) => {
+    if (msg) onSaved?.(msg);
     setDescription(""); setAmount(""); setNote(""); setPerson(""); setLocation("");
     setParts(null); setWholeCat(null); setShares([]); setItems([]); setErr(null);
     setTimeout(() => document.getElementById("e-amt")?.focus(), 0);
@@ -156,7 +164,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
     const sc = subs.on ? { subcategory: sub || null } : {}; // eski sunucuya alan gönderilmez
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, ...sc, entry_date: date,
       ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
-    return api.createEntry({ ...common, ...pay, ...who, ...sc, entry_date: date, legal_name: draft?.legal_name ?? null,
+    return api.createEntry({ ...common, ...pay, ...who, ...sc, ...(kind === "gider" ? st.extra() : {}), entry_date: date, legal_name: draft?.legal_name ?? null,
       receipt_file: kind === "gider" ? draft?.receipt_file ?? null : null,
       items: kind === "gider" && fromReceipt ? toServer(items) : null,
       branch: draft?.branch ?? null,
@@ -165,11 +173,11 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
           .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })),
         ...shares.filter((x) => x.person.trim() && parseAmount(x.amount) > 0)
           .map((x) => ({ amount: parseAmount(x.amount), person: x.person.trim(), category: "" })),
-      ] : null });
-  }, (r, more) => (more ? again : done)(isRecurring || rec ? "Sabit kalem kaydedildi"
+      ] : null }, book);
+  }, (r, more) => (book && st.announce() ? (more ? again(null) : onClose()) : (more ? again : done)(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
-    : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti, bir kez sayılır" : "Kaydedildi"));
+    : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti, bir kez sayılır" : "Kaydedildi")));
   const link = useSave((txnId: number | null) => api.linkEntry(editingEntry!.id, txnId),
     () => done("Eşleşme güncellendi"));
 
@@ -210,6 +218,8 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
       <div className="space-y-3">
         <Segmented value={kind} onChange={setKind}
           options={[{ value: "gider", label: "Gider", tone: "red" }, { value: "gelir", label: "Gelir", tone: "green" }]} />
+        {draft?.cached && !editingEntry && <p className="-mt-1 text-xs text-stone-500" data-testid="okuma-onbellek">{CACHED_NOTE}</p>}
+        {choiceOn && <BookChoice t={st} onChange={() => { setAccountId(null); setWalletId(null); }} />}
         <div>
           <label className="label" htmlFor="e-desc">Açıklama</label>
           <input id="e-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)}
@@ -319,6 +329,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
             )}
           </div>
         )}
+        {choiceOn && kind === "gider" && <SaveSpender t={st} />}
         {editingEntry?.match && <MatchPanel entryId={editingEntry.id} m={editingEntry.match} onUndone={done} />}
         {showLink && editingEntry?.linked && !editingEntry.match && (
           <div className="flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-300">
@@ -403,7 +414,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
           </div>
         )}
         {(kind === "gelir" || isRecurring || !!rec || payment === "nakit" || payment === "havale") && (
-          <AccountSelect id="e-acc" value={accountId} onChange={setAccountId}
+          <AccountSelect id="e-acc" value={accountId} onChange={setAccountId} book={book}
             label={kind === "gelir" ? "Hangi hesaba girdi?" : "Hangi hesaptan çıktı?"} />
         )}
         <div>
