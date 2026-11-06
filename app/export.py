@@ -15,6 +15,21 @@ KIND = {"harcama": "Kart harcaması", "iade": "İade", "faiz_ucret": "Faiz/ücre
         "gelir": "Gelir", "gider": "Gider", "borc": "Borç hareketi"}
 
 
+# Formül enjeksiyonu (CSV/Excel injection): açıklama, not, kişi adı gibi kullanıcı/banka metni "=", "+", "-", "@", sekme
+# ya da satır başıyla başlıyorsa tablo programı onu formül sayabilir (=HYPERLINK(...), =cmd|...). Yalnız METİN hücreleri:
+# sayılar (tutar, negatif dahil) olduğu gibi kalır.
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def risky(v) -> bool:
+    return isinstance(v, str) and v.startswith(FORMULA_START)
+
+
+def csv_safe(v):
+    """CSV hücresi: formül gibi başlayan metnin başına tek tırnak (Excel metin olarak gösterir)."""
+    return "'" + v if risky(v) else v
+
+
 def _sheet(wb: Workbook, title: str, head: list[str], rows: list[list]) -> None:
     ws = wb.create_sheet(title)
     ws.append(head)
@@ -22,6 +37,10 @@ def _sheet(wb: Workbook, title: str, head: list[str], rows: list[list]) -> None:
         c.font = Font(bold=True)
     for r in rows:
         ws.append(r)
+        for cell in ws[ws.max_row]:
+            if risky(cell.value):  # Excel: formül değil düz metin (openpyxl "=" ile başlayanı formül yazıyordu);
+                cell.data_type = "s"  # tırnak öneki stil bayrağıyla, hücrede görünmez
+                cell.quotePrefix = True
     ws.freeze_panes = "A2"
     for i, h in enumerate(head, 1):
         width = max([len(str(h))] + [len(str(r[i - 1] or "")) for r in rows[:500]])
@@ -191,5 +210,5 @@ def receipts_csv(frm: date | None, to: date | None) -> bytes:
     w = csv.writer(buf, delimiter=";")
     w.writerow(RECEIPT_HEAD)
     for r in (_receipt_row(e) for e in receipts(frm, to)):
-        w.writerow([f"{x:.2f}".replace(".", ",") if isinstance(x, float) else "" if x is None else x for x in r])
+        w.writerow([f"{x:.2f}".replace(".", ",") if isinstance(x, float) else "" if x is None else csv_safe(x) for x in r])
     return ("\ufeff" + buf.getvalue()).encode("utf-8")
