@@ -283,3 +283,52 @@ def test_admin_grants_premium_to_tester(hosted):
     # üye kendine paket veremez
     assert c.patch(f"/api/admin/users/{u['id']}", json={"plan": "aile"}).status_code in (401, 403)
     assert hosted.patch(f"/api/admin/users/{u['id']}", json={"plan": "free"}).json()["plan"] == "free"
+
+
+def _rc_event(event: dict):
+    from app.api.main import app
+
+    return TestClient(app).post("/api/billing/revenuecat", headers={"Authorization": "Bearer rc-gizli"},
+                                json={"event": event})
+
+
+def test_revenuecat_transfer_moves_plan_to_new_account(hosted):
+    """Güvenlik denetimi: TRANSFER yok sayılıyordu; tek abonelik başka hesaplarla "geri yükle" ile sırayla birden çok
+    hesaba Premium açıyordu. Devredenin mağaza paketi biter, alan hesap paketi alır. Kimlikler uydurmadır."""
+    from app import system
+
+    a_c, a = _user(hosted, "ilk")
+    b_c, b = _user(hosted, "ikinci")
+    assert _rc(hosted, "INITIAL_PURCHASE", a["id"], ents=("aile",)).status_code == 200
+    assert a_c.get("/api/meta").json()["plan"]["plan"] == "aile"
+    r = _rc_event({"type": "TRANSFER", "transferred_from": [str(a["id"]), "$RCAnonymousID:ornek0001"],
+                   "transferred_to": [str(b["id"])], "entitlement_ids": ["aile"], "expiration_at_ms": 4102444800000})
+    assert r.status_code == 200
+    assert a_c.get("/api/meta").json()["plan"]["plan"] == "free"
+    assert b_c.get("/api/meta").json()["plan"]["plan"] == "aile"
+    nb = system.user(b["id"])
+    assert nb["plan_source"] == "revenuecat" and nb["plan_until"].startswith("2100-01-01")
+
+
+def test_revenuecat_transfer_without_entitlements_copies_giver_plan(hosted):
+    from app import system
+
+    _, a = _user(hosted, "ilk")
+    b_c, b = _user(hosted, "ikinci")
+    _rc(hosted, "INITIAL_PURCHASE", a["id"], ents=("premium",), exp_ms=4102444800000)
+    _rc_event({"type": "TRANSFER", "transferred_from": [str(a["id"])], "transferred_to": [str(b["id"])]})
+    assert system.user(a["id"])["plan"] == "free"
+    assert b_c.get("/api/meta").json()["plan"]["plan"] == "premium"
+    assert system.user(b["id"])["plan_until"].startswith("2100-01-01")  # devredenin bitişi
+
+
+def test_revenuecat_transfer_keeps_manual_plan(hosted):
+    """Yöneticinin elle verdiği paket mağaza devriyle silinmez."""
+    from app import system
+
+    _, a = _user(hosted, "ilk")
+    _, b = _user(hosted, "ikinci")
+    system.update_user(a["id"], plan="premium", plan_until=None, plan_source="manual")
+    _rc_event({"type": "TRANSFER", "transferred_from": [str(a["id"])], "transferred_to": [str(b["id"])],
+               "entitlement_ids": ["premium"]})
+    assert system.user(a["id"])["plan"] == "premium" and system.user(b["id"])["plan"] == "premium"

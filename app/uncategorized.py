@@ -19,7 +19,7 @@ Grup anahtarı:
 """
 from collections import Counter, defaultdict
 
-from app import db, finance
+from app import db, finance, saferegex
 from app.categorize import UNCATEGORIZED, categorize, fold_key, suggest_pattern
 from app.textnorm import drop_gateway, legal_key, merchant_name, normalize
 
@@ -185,8 +185,6 @@ def _add_rule(c, rows: list[dict], category: str) -> str | None:
 def _spread_rules(learned: list[tuple[str, str]], before: int) -> int:
     """Yeni kurallardan sonra: kartta elle atanmamış işlemler yeniden kategorilenir (tek sefer); elle/döküm
     kayıtlarından desene uyan kategorisizler de o kategoriyi alır. Ek değişen kayıt sayısı."""
-    import re
-
     db.recategorize_all()
     extra = 0
     with db.connect() as c:
@@ -197,11 +195,7 @@ def _spread_rules(learned: list[tuple[str, str]], before: int) -> int:
         for e in entries:
             text = normalize(e["description"] or "")
             for pattern, category in learned:
-                try:
-                    hit = re.search(pattern, text)
-                except re.error:
-                    continue
-                if hit:
+                if saferegex.search(pattern, text):
                     c.execute("UPDATE entries SET category = ? WHERE id = ?", (category, e["id"]))
                     extra += 1
                     break

@@ -562,6 +562,8 @@ def apply_revenuecat(event: dict) -> dict:
     olay silme kaydına not düşer (app/deletion.py): ör. silinmiş hesapta yenileme = kullanıcı mağazada iptal etmemiş."""
     from app import deletion
 
+    if event.get("type") == "TRANSFER":  # satın alım başka hesaba taşındı (mağaza hesabı / geri yükleme)
+        return _apply_transfer(event)
     uid_raw = str(event.get("app_user_id") or "")
     if not uid_raw.isdigit():
         return {"ignored": "app_user_id"}
@@ -581,12 +583,7 @@ def apply_revenuecat(event: dict) -> dict:
     if kind in END_EVENTS:
         if u.get("plan_source") == "manual" and _active(u):  # yöneticinin verdiği (test) paketi mağaza bitişi silmesin
             return {"user": u["id"], "ignored": "manual"}
-        was = own_plan(u)
-        system.update_user(u["id"], plan=FREE, plan_until=None, plan_source="revenuecat", plan_renews=None, plan_trial=0)
-        if was and u.get("member_of"):  # ortak defter üyesi: koltuk sırasına şimdi girer (ek süre de buradan sayılır)
-            system.put(f"seat_queue:{u['id']}", _now_ts())
-            system.put(f"seat_prio:{u['id']}", None)
-            _seat_notice(system.user(u["id"]))
+        _end_store_plan(u)
         return {"user": u["id"], "plan": FREE}
     if kind in ACTIVE_EVENTS and plan:
         # deneme bilgisi ve ürün: PRODUCT_CHANGE yalnız bilgi amaçlıdır (yeni ürün yenilemede RENEWAL/INITIAL_PURCHASE ile
@@ -600,6 +597,54 @@ def apply_revenuecat(event: dict) -> dict:
         system.update_user(u["id"], plan_renews=0, plan_store=store, **({"plan_until": until} if until else {}))
         return {"user": u["id"], "until": until, "will_renew": False}
     return {"ignored": kind}
+
+
+def _end_store_plan(u: dict) -> None:
+    """Mağaza paketi bitti (EXPIRATION) ya da başka hesaba taşındı (TRANSFER): ücretsiz pakete düşer; ortak defter
+    üyesiyse koltuk sırasına şimdi girer (ek süre de buradan sayılır)."""
+    was = own_plan(u)
+    system.update_user(u["id"], plan=FREE, plan_until=None, plan_source="revenuecat", plan_renews=None, plan_trial=0)
+    if was and u.get("member_of"):
+        system.put(f"seat_queue:{u['id']}", _now_ts())
+        system.put(f"seat_prio:{u['id']}", None)
+        _seat_notice(system.user(u["id"]))
+
+
+def _ids(xs) -> list[int]:
+    """RevenueCat kimlik listesi → bizim kullanıcı kimliklerimiz (anonim "$RCAnonymousID:…" atlanır)."""
+    return [int(x) for x in (xs or []) if str(x).isdigit()]
+
+
+def _apply_transfer(event: dict) -> dict:
+    """TRANSFER: aynı mağaza satın alımı başka uygulama kullanıcısına geçti (başka hesapla "Satın alımları geri yükle").
+    transferred_from'daki hesapların MAĞAZA paketi biter (yönetici elle verdiyse dokunulmaz); transferred_to'daki
+    hesaplar paketi alır: olaydaki entitlement/bitiş, yoksa devredenin paketi ve bitişi. Eskiden bu olay yok sayılıyordu:
+    tek abonelik geri yüklemeyle sırayla birden çok hesaba Premium açıyordu (güvenlik denetimi)."""
+    src = [u for i in _ids(event.get("transferred_from")) if (u := system.user(i))]
+    dst = [u for i in _ids(event.get("transferred_to")) if (u := system.user(i))]
+    ents = [ENTITLEMENTS[e] for e in (event.get("entitlement_ids") or []) if e in ENTITLEMENTS]
+    giver = next((u for u in src if u.get("plan_source") == "revenuecat" and own_plan(u)), None)
+    plan = FAMILY if FAMILY in ents else PREMIUM if PREMIUM in ents else giver["plan"] if giver else None
+    exp_ms = event.get("expiration_at_ms")
+    until = datetime.fromtimestamp(exp_ms / 1000, timezone.utc).isoformat(timespec="seconds") if exp_ms \
+        else (giver or {}).get("plan_until")
+    ended = []
+    for u in src:
+        if u.get("plan_source") == "revenuecat":
+            _end_store_plan(u)
+            ended.append(u["id"])
+    got = []
+    if plan:
+        store = event.get("store") or (giver or {}).get("plan_store")
+        renews = (giver or {}).get("plan_renews", 1)
+        for u in dst:
+            if u["id"] in ended:
+                continue
+            system.update_user(u["id"], plan=plan, plan_until=until, plan_source="revenuecat", plan_store=store,
+                               plan_renews=renews, plan_trial=(giver or {}).get("plan_trial") or 0,
+                               **({"plan_product": giver["plan_product"]} if giver and giver.get("plan_product") else {}))
+            got.append(u["id"])
+    return {"transfer": True, "from": ended, "to": got, "plan": plan, "until": until}
 
 
 def seat_notice_items(u: dict) -> list[tuple[int, dict]]:

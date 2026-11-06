@@ -253,6 +253,20 @@ def test_ai_suggest_quota_hosted(hosted, gemini, tmpdb):
     assert "hakkın doldu" in r.json()["detail"] and len(gemini) == 1
 
 
+def test_ai_suggest_same_names_same_day_still_counted(hosted, gemini, tmpdb):
+    """Güvenlik denetimi: anahtar "gün + adlar" olduğundan aynı gün aynı adlarla tekrar sormak tekrar muafiyetine
+    takılıp yapay zekâyı bedavaya çağırıyordu. Yapay zekâ her çağrıldığında 1 hak."""
+    c, u = _user(hosted)
+    c.post("/api/entries", json={"entry_date": f"{_month()}-05", "description": "Örneksoft", "amount": 9,
+                                 "kind": "gider", "category": "Kategorisiz", "payment": "nakit"})
+    keys = [x["key"] for x in c.get("/api/uncategorized/groups").json()["groups"]]
+    for i in range(3):
+        assert c.post("/api/uncategorized/ai-suggest", json={"keys": keys}).status_code == 200
+        assert len(gemini) == i + 1 and _used(u["id"]) == i + 1
+    r = c.post("/api/uncategorized/ai-suggest", json={"keys": keys})  # ücretsiz günde 3: doldu
+    assert r.status_code == 402 and len(gemini) == 3
+
+
 def test_ai_suggest_quota_self_hosted(client, gemini, monkeypatch):
     """Kendi sunucusu, ortak anahtarı kullanan yönetici-olmayan kullanıcı: kota dolunca 402 (Türkçe neden)."""
     from app import receipt

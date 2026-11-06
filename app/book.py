@@ -18,7 +18,7 @@ süzülür; özet, grafik, plan ve tahminler bunlardan hesaplandığı için giz
 import json
 import re
 
-from app import db
+from app import db, saferegex
 
 PAGES = {  # sayfa → üyeye kapanan API önekleri
     "plan": ("/api/plan", "/api/recurring"),
@@ -282,17 +282,12 @@ def filter_rules(rules_: list[dict]) -> list[dict]:
     if not secret:
         return rules_
 
-    def hits(rx, texts):
-        return any(rx.search(t) for t in texts)
+    def hits(pattern, texts):  # kullanıcı deseni: süre sınırlı, güvensizse eşleşmez (app/saferegex.py)
+        return any(saferegex.search(pattern, t) for t in texts)
 
     out = []
     for r in rules_:
-        try:
-            rx = re.compile(r["pattern"])
-        except re.error:
-            out.append(r)
-            continue
-        if hits(rx, secret) and not hits(rx, shown):
+        if hits(r["pattern"], secret) and not hits(r["pattern"], shown):
             continue
         out.append(r)
     return out

@@ -294,6 +294,13 @@ class _read_slot:
 
 
 async def _run(request: Request, call_next, book: str | None, path: str):
+    from app import doc_reads
+
+    with doc_reads.scope():  # okuma hakkı ayırmaları bu isteğe ait; istek bitince sayılmayanlar silinir
+        return await _run_inner(request, call_next, book, path)
+
+
+async def _run_inner(request: Request, call_next, book: str | None, path: str):
     if request.method == "GET" and path.startswith("/api/"):
         async with _read_slot(book):
             return await call_next(request)
@@ -2704,11 +2711,13 @@ def _with_gross_net(data: dict) -> dict:
 
 @app.post("/api/recurring")
 def create_recurring(body: RecurringIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     return {"id": db.create_recurring(_with_gross_net(body.model_dump()))}
 
 
 @app.patch("/api/recurring/{rid}")
 def patch_recurring(rid: int, body: RecurringPatch):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     db.update_recurring(rid, _with_gross_net(body.model_dump(exclude_unset=True)))
     return {"ok": True}
 
@@ -3239,6 +3248,7 @@ class PaymentAccount(BaseModel):
 
 @app.patch("/api/debt-payments/{pid}")
 def set_debt_payment_account(pid: int, body: PaymentAccount):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     if not db.set_debt_payment_account(pid, body.account_id):
         raise HTTPException(404, "Ödeme yok")
     return {"ok": True}
@@ -3628,6 +3638,7 @@ def list_jars():
 
 @app.post("/api/jars")
 def create_jar(body: JarIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude={"initial"})
     data["name"] = data["name"].strip()
     if data["deadline"]:
@@ -3639,6 +3650,7 @@ def create_jar(body: JarIn):
 
 @app.patch("/api/jars/{jid}")
 def patch_jar(jid: int, body: JarPatch):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude_unset=True)
     if "deadline" in data and data["deadline"]:
         data["deadline"] = data["deadline"].isoformat()
@@ -3670,6 +3682,7 @@ def add_jar_move(jid: int, body: JarMoveIn):
 @app.post("/api/jars/{jid}/buy")
 def buy_into_jar(jid: int, body: JarBuy):
     """Altın/döviz kumbarası: aldım → varlık + gider kaydı + kumbara hareketi."""
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     try:
         return {"id": db.buy_into_jar(jid, body.quantity, body.cost, (body.buy_date or date.today()).isoformat(),
                                       body.account_id, body.payment, body.note)}
@@ -3728,6 +3741,7 @@ def donations_summary():
 
 @app.post("/api/donations")
 def donations_add(body: DonationIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     try:
         return {"id": donations.add(body.kind, body.amount, (body.given_date or date.today()).isoformat(), body.recipient,
                                     body.note, body.account_id, body.as_expense)}
@@ -3744,6 +3758,8 @@ def donations_delete(did: int):
 
 @app.post("/api/donations/mark")
 def donations_mark(body: DonationMarkIn):
+    # gövdedeki kayıt: üyeye gizli kayıt işaretlenirse açıklaması ve tutarı bağış listesine kopyalanıyordu
+    _visible_or_404("entry" if body.source == "entry" else "txn", body.id)
     try:
         return donations.mark(body.source, body.id, body.kind, body.person_id,
                               body.year_start.isoformat() if body.year_start else None, body.recipient)
@@ -4357,6 +4373,7 @@ def list_debts():
 
 @app.post("/api/debts")
 def create_debt(body: DebtIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump()
     data["debt_date"] = body.debt_date.isoformat()
     data["due_date"] = body.due_date.isoformat() if body.due_date else None
@@ -4365,6 +4382,7 @@ def create_debt(body: DebtIn):
 
 @app.patch("/api/debts/{did}")
 def patch_debt(did: int, body: DebtPatch):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude_unset=True)
     if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
         with db.connect() as c:
@@ -4388,6 +4406,7 @@ def delete_debt(did: int):
 
 @app.post("/api/debts/{did}/pay")
 def pay_debt(did: int, body: DebtPayIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     if body.entry_id is not None:
         _visible_or_404("entry", body.entry_id)
         with db.connect() as c:
@@ -4665,7 +4684,13 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                    total_debt=stmt.total_debt, txn_count=len(stmt.transactions),
                    reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source,
                    **({"cached": True} if slot.hit else {}))
+        ai_called = stmt.ai_parsed and not slot.hit
+        if ai_called:  # yapay zekâ gerçekten okudu (önbellekte yoktu): tekrar muafiyeti yok, okuma sayılır
+            doc_reads.forget(data)
         if db.statement_exists(data, stmt):
+            # zaten vardı: yerel okumada hak düşmez; yapay zekâ çağrıldıysa düşer (sonuç önbellekte, tekrarı bedava)
+            if ai_called and (charged := doc_reads.charge(data)):
+                res["charged"] = charged
             results.append({**res, "status": "duplicate"})
             continue
         db.save_statement(data, f.filename or "ekstre.pdf", stmt)
@@ -5123,10 +5148,17 @@ def book_leave():
 
 @app.post("/api/book/members/{uid}/reset-password")
 def book_reset_member_password(uid: int):
+    """Davetle defterde açılmış üyenin şifresini sıfırla (geçici şifre bir kez döner). Var olan hesabıyla katılmış üye
+    (kendi "Benim" defteri ve verisi var) 403: sahip geçici şifreyle o hesaba girip kişinin kendi verisini ele
+    geçirebilirdi; üye şifresini kendisi sıfırlar."""
+    from app import book_join
+
     u = _book_owner()
     m = system.user(uid)
     if not m or m.get("member_of") != u["id"]:
         raise HTTPException(404, "Üye yok")
+    if book_join.joined_with_account(m):
+        raise HTTPException(403, "Bu üye kendi hesabıyla katıldı; şifresini kendisi sıfırlar (Şifremi unuttum).")
     temp = auth.temp_password()
     auth.set_password(uid, temp, must_change=True)
     from app import reset
@@ -5380,10 +5412,14 @@ class UncAiIn(BaseModel):
 
 
 @app.post("/api/uncategorized/ai-suggest")
+@_heavy
 def uncategorized_ai_suggest(body: UncAiIn):
     """Önerisi olmayan işyeri grupları için yapay zekâdan kategori (tek çağrı = 1 hak; hazır sürümde belge okuma hakkı,
     kendi sunucusunda ortak anahtarın kotası). Yalnız işyeri ADLARI gönderilir: tutar, tarih, kişi adı gitmez.
-    Gemini anahtarı yoksa 404; hak doluysa 402."""
+    Gemini anahtarı yoksa 404; hak doluysa 402. Yapay zekâ her çağrıldığında 1 hak: eskiden anahtar "gün + adlar"
+    olduğundan aynı gün aynı adlarla tekrar sormak tekrar muafiyetine takılıp bedavaya yapay zekâ çağırıyordu."""
+    import uuid
+
     from app import doc_reads, uncategorized
 
     if not receipt.enabled():
@@ -5391,8 +5427,9 @@ def uncategorized_ai_suggest(body: UncAiIn):
     names = uncategorized.ai_names(body.keys, _unc_month(body.month))
     if not names:
         return {"suggestions": {}, "asked": 0, "ai": uncategorized.ai_status()}
+    key = f"ai-kategori:{uuid.uuid4().hex}"  # her çağrı ayrı okuma (tekrar muafiyeti yok)
     try:
-        doc_reads.check()  # hazır sürüm: hak doluysa sorulmaz
+        doc_reads.check(key)  # hazır sürüm: hak doluysa sorulmaz (geçerse hak bu isteğe ayrılır)
     except doc_reads.QuotaError as e:
         raise QuotaFull(402, e) from e
     try:
@@ -5405,7 +5442,7 @@ def uncategorized_ai_suggest(body: UncAiIn):
         raise HTTPException(429, errors.user_text(e, 429)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    doc_reads.charge(f"ai-kategori:{date.today().isoformat()}:" + "|".join(sorted(names.values())))
+    doc_reads.charge(key)
     return {"suggestions": out, "asked": len(names), "ai": uncategorized.ai_status()}
 
 
@@ -5426,14 +5463,13 @@ class RulePatch(BaseModel):
 
 
 def _check_regex(p: str | None):
-    import re
+    """Kayıt ve denemede desen denetimi: geçersiz, çok uzun ya da felaket geri izlemeye açık (ReDoS) desen 422."""
+    from app import saferegex
 
     if p is None:
         return
-    try:
-        re.compile(p)
-    except re.error as e:
-        raise HTTPException(422, "Kural geçerli bir arama kalıbı (düzenli ifade) değil: parantezler ve köşeli parantezler kapanmalı") from e
+    if why := saferegex.problem(p):
+        raise HTTPException(422, why)
 
 
 @app.get("/api/rules")
@@ -5470,23 +5506,19 @@ def test_rule(text: str, pattern: str | None = None):
     """pattern verilirse yalnız o desen denenir (eski biçim). Verilmezse sunucunun gerçek sırasıyla (öncelik, id) TÜM
     kurallar: ilk eşleşen kural (rule: {id, pattern, category, priority} | null) ve işlemin alacağı kategori — istemci
     kendi regex/normalize kopyasını çalıştırmasın."""
-    import re
-
+    from app import saferegex
     from app.categorize import UNCATEGORIZED
     from app.textnorm import normalize
 
-    n = normalize(text)
+    n = normalize(text[:saferegex.MAX_TEXT])
     if pattern is not None:
         _check_regex(pattern)
-        return {"normalized": n, "match": bool(re.search(pattern, n))}
+        return {"normalized": n, "match": bool(saferegex.search(pattern, n))}
     from app import book
 
     for r in book.filter_rules(db.list_rules()):
-        try:
-            if re.search(r["pattern"], n):
-                return {"normalized": n, "match": True, "rule": r, "category": r["category"]}
-        except re.error:
-            continue
+        if saferegex.search(r["pattern"], n):
+            return {"normalized": n, "match": True, "rule": r, "category": r["category"]}
     return {"normalized": n, "match": False, "rule": None, "category": UNCATEGORIZED}
 
 
@@ -6260,9 +6292,11 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     from app import doc_cache, doc_reads
 
     original, original_mime = data, mime
-    # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti
+    # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti; hak her parçanın
+    # ağırlığının toplamı (uzun PDF bir fotoğrafla birlikte gönderilince 1 hakka inmesin; doc_reads.weight_many)
     key = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in [data, *(d for d, _ in (more or []))])).digest() \
         if more else data
+    need = doc_reads.weight_many([data, *(d for d, _ in more)]) if more else None
     data, mime, photo = _prepare_photo(data, mime)
     # önbellek anahtarı telefon metnini de içerir (sonuç metne göre değişebilir: şablon, KDV/VKN yedeği); metni
     # değiştirip önbelleği atlayan okuma forget ile yeniden sayılır
@@ -6281,7 +6315,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
         # tür okumadan belli değil: fotoğraf fiş sayılır (PDF belge); sayım okunan gerçek türe gider
-        doc_reads.check(key, doc_reads.guess_kind(original_mime))  # hazır sürüm: okuma hakkı doluysa okunmaz
+        doc_reads.check(key, doc_reads.guess_kind(original_mime), need)  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
@@ -6299,7 +6333,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise HTTPException(502, errors.user_text(e, 502)) from e
     if _unreadable(doc):  # okunamadı: günün ilk denemeleri ücretsiz (bkz. _mark_unreadable)
         _mark_unreadable(doc, UNREADABLE_MSG)
-    elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type"))):
+    elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")), need):
         doc["charged"] = charged  # {daily, extra}
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini

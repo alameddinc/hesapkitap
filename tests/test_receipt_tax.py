@@ -240,3 +240,31 @@ def test_receipts_export_period_and_yearly_summary(client, tmpdb):
     assert len(r.content.decode("utf-8-sig").strip().splitlines()) == 3  # CSV: başlık + 2 fiş, özet yok
     assert client.get("/api/receipts/export?period=month&value=2026-13").status_code == 422
     assert client.get("/api/receipts/export?period=year&value=26").status_code == 422
+
+
+EVIL = '=HYPERLINK("http://ornek.invalid/x","tikla")'
+
+
+def test_exports_neutralize_formula_cells(client, tmpdb):
+    """Güvenlik denetimi (CSV/Excel formül enjeksiyonu): "=", "+", "-", "@" ile başlayan metin formül olarak yazılmaz;
+    sayılar (negatif tutar dahil) olduğu gibi kalır."""
+    _entry(client, description=EVIL, legal_name="+ORNEK UNVAN", note="@ornek not", vat_total=10)
+    _entry(client, entry_date="2026-11-02", description="-Ornek Kafe", amount=50, payment="nakit", card_last4=None)
+
+    ws = load_workbook(io.BytesIO(client.get("/api/settings/export.xlsx").content))["İşlemler"]
+    head = [c.value for c in ws[1]]
+    cells = {c.value: c for x in ws.iter_rows(min_row=2) for c in x if isinstance(c.value, str)}
+    assert EVIL in cells and cells[EVIL].data_type == "s" and cells[EVIL].quotePrefix  # düz metin, formül değil
+    assert cells["-Ornek Kafe"].data_type == "s"
+    amounts = [x[head.index("Tutar (₺)")].value for x in ws.iter_rows(min_row=2)]
+    assert sorted(amounts) == [-1945, -50] and all(isinstance(a, (int, float)) for a in amounts)
+
+    ws = load_workbook(io.BytesIO(client.get("/api/receipts/export?from=2026-11-01&to=2026-11-30").content))["Fiş listesi"]
+    vals = {c.value: c for x in ws.iter_rows(min_row=2) for c in x if isinstance(c.value, str)}
+    assert vals[EVIL].data_type == "s" and vals["+ORNEK UNVAN"].data_type == "s"
+
+    text = client.get("/api/receipts/export?from=2026-11-01&to=2026-11-30&format=csv").content.decode("utf-8-sig")
+    lines = list(csv.reader(io.StringIO(text), delimiter=";"))
+    row = next(r for r in lines[1:] if "HYPERLINK" in r[1])
+    assert row[1] == "'" + EVIL and row[2] == "'+ORNEK UNVAN" and row[5] == "1945,00"
+    assert not any(c.startswith(("=", "+", "@")) for r in lines for c in r)

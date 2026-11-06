@@ -517,3 +517,38 @@ def test_urgent_push_skips_quiet_hours(hosted):
     push.enqueue(1, push.item("aile", "x2", "t", "b", push.R_ORTAK), night)
     q = {r["payload"]["id"]: r["not_before"] for r in push.queue(1)}
     assert q["x1"] == night.timestamp() and q["x2"] > night.timestamp()
+
+
+def test_owner_cannot_reset_password_of_member_joined_with_own_account(admin):
+    """Güvenlik denetimi: sahip, kendi hesabıyla katılan üyenin şifresini sıfırlayıp geçici şifreyle o hesaba girer ve
+    üyenin "Benim" defterindeki özel verisini ele geçirirdi. Artık 403; davetle açılmış üyede sıfırlama sürer."""
+    from app.api.main import app
+
+    victim, v = _account(admin, "kurban")
+    assert victim.post("/api/entries", json=_entry("OZEL-KAYIT-ORNEK", 99)).status_code == 200
+    owner, _ = _account(admin, "sahip")
+    inv = owner.post("/api/book/invites", json={"note": "aile", "book_role": "viewer"}).json()
+    assert victim.post(f"/api/book/join/{inv['code']}").status_code == 200
+
+    r = owner.post(f"/api/book/members/{v['id']}/reset-password")
+    assert r.status_code == 403 and "kendi hesabıyla" in r.json()["detail"]
+    assert "temp_password" not in r.json()
+    # üyenin şifresi değişmedi, oturumu düşmedi
+    assert victim.get("/api/transactions", headers=OWN).status_code == 200
+    assert TestClient(app).post("/api/auth/login", json={"username": "kurban@ornek.com",
+                                                         "password": "kurban-sifre-12345"}).status_code == 200
+    book = {m["id"]: m for m in owner.get("/api/book").json()["members"]}
+    assert book[v["id"]]["joined"] is True
+
+
+def test_owner_can_still_reset_password_of_invite_created_member(admin):
+    from app import system
+    from app.api.main import app
+
+    owner, _ = _account(admin, "sahip2")
+    _invite_member(owner, "yeniuye")
+    m = system.user_by_name("yeniuye@ornek.com")
+    r = owner.post(f"/api/book/members/{m['id']}/reset-password")
+    assert r.status_code == 200 and r.json()["temp_password"]
+    assert TestClient(app).post("/api/auth/login", json={"username": "yeniuye@ornek.com",
+                                                         "password": r.json()["temp_password"]}).status_code == 200
