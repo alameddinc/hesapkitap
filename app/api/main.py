@@ -1971,7 +1971,7 @@ def meta():
         "cycle_start_day": db.cycle_start_day(),
         "cycle_mode": db.cycle_mode(),
         "suggested_cycle_day": db.suggested_cycle_day(),
-        "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": prefs.ui(),
+        "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": _ui_out(),
         "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
         "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
         "module_consent_title": {k: prefs.CONSENT_TITLE.get(k) for k in prefs._consent_needed()},
@@ -2021,15 +2021,28 @@ class UiIn(BaseModel):
     layout: list[str] | None = None
     layout_mobile: list[str] | None = None  # mobil uygulamanın Özet düzeni
     reset_layout: bool = False
+    price_share: bool | None = None  # fiyat paylaşımı (kişi başı; /api/me/price-share ile aynı tercih)
 
 
 @app.put("/api/me/ui")
 def put_ui(body: UiIn):
-    """Kişisel görünüm: sade mod, Özet düzeni (herkes kendi)."""
-    data = body.model_dump(exclude_unset=True, exclude={"reset_layout"})
+    """Kişisel görünüm: sade mod, Özet düzeni (herkes kendi). price_share verilirse fiyat paylaşımı tercihi de yazılır
+    (sistem veritabanında kişi başı; yanıtta da döner)."""
+    data = body.model_dump(exclude_unset=True, exclude={"reset_layout", "price_share"})
     if body.reset_layout:
         data["layout"] = None
-    return prefs.set_ui(data)
+    out = prefs.set_ui(data)
+    if body.price_share is not None:
+        u = db.current_user()
+        if not u or not u.get("id"):
+            raise HTTPException(409, "Fiyat paylaşımı için giriş gerekli")
+        out["price_share"] = prefs.set_price_share(u["id"], body.price_share)
+    return out
+
+
+def _ui_out() -> dict:
+    """meta.ui: görünüm tercihleri + price_share (fiyat paylaşımı, kişi başı)."""
+    return {**prefs.ui(), "price_share": prefs.price_share((db.current_user() or {}).get("id"))}
 
 
 def _history_gate(month: str | None) -> None:
@@ -4340,6 +4353,8 @@ def price_groups(q: str | None = None, limit: int = 30):
     for s in srcs:  # kaynak sırası: önce kendi verin (adı da oradan)
         for k, v in s.search(q).items():
             labels.setdefault(k, v)
+    if q in labels:  # istemci grup anahtarını gönderdi ("ekmek", "sut|1l"): yalnız o grup
+        labels = {q: labels[q]}
     own = next((s for s in srcs if isinstance(s, price_sources.OwnSource)), None)
     last = own.last_dates() if own else {}
     mine = sorted((k for k in labels if k in last), key=lambda k: (last[k], k), reverse=True)

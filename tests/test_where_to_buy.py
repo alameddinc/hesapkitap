@@ -36,6 +36,12 @@ def test_where_to_buy(client):
     assert [g["key"] for g in every][-1] == "ayran|200ml"              # kendi aldıkların önce, sonra topluluk
     assert {"ekmek", "sut|1l"} <= {g["key"] for g in every}
     assert len(client.get("/api/prices/groups", params={"limit": 1}).json()) == 1
+    # istemci grup anahtarını gönderir: yalnız o grup
+    _buy(client, "A101", "Kakaolu Süt 1L", 20)
+    assert [g["key"] for g in client.get("/api/prices/groups", params={"q": "sut|1l"}).json()] == ["sut|1l"]
+    assert [g["key"] for g in client.get("/api/prices/groups", params={"q": "ayran|200ml"}).json()] == ["ayran|200ml"]
+    assert [g["key"] for g in client.get("/api/prices/groups", params={"q": "ekmek"}).json()] == ["ekmek"]
+    assert client.get("/api/prices/groups", params={"q": "olmayan|1l"}).json() == []
 
 
 def test_where_to_buy_is_premium():

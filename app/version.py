@@ -92,11 +92,12 @@ CAPABILITIES = (
                               # groups [{rate, items_total, tax, printed, indices, ok}], line_count {printed, read} | null;
                               # kendiliğinden uygulanmaz
     "price_groups",           # markadan bağımsız ürün grubu: /api/prices products[].group {key "sut|1l", label "Süt · 1 L",
-                              # pending? (yapay zekâ bekliyor; geçici grup)} | null
+                              # pending? (yapay zekâ bekliyor; geçici grup)} | null; history[].estimated, history[].uid ("m<kayıt id>")
     "community_prices",       # anonim topluluk fiyatı: GET/PUT /api/me/price-share {on} → {on, text} (meta.price_share);
+                              # meta.ui.price_share ve PUT /api/me/ui {price_share} aynı tercih;
                               # fişte digit_fix evidence "community" + community_price, community_note "başkaları ₺89,00 ödüyor"
     "where_to_buy",           # GET /api/prices/groups?q&limit → [{key, label, best: [{chain, price, brand?, source own|community,
-                              # date?, n?}] ucuzdan, ≤5}] (402 fiyatlar)
+                              # date?, n?}] ucuzdan, ≤5}] (402 fiyatlar); q grup anahtarıysa ("sut|1l", "ekmek") yalnız o
     "shopping_list",          # GET/POST /api/shopping-list, PATCH/DELETE /api/shopping-list/{id}, DELETE ?done=true,
                               # GET /api/shopping-list/plan (402 alisveris_listesi; ortak defterde paylaşılır)
     "price_alerts",           # fiş okuma/kayıtlı fiş check.price_alerts ve POST /api/entries price_alerts [{index, name, paid,

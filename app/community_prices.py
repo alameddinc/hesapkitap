@@ -137,11 +137,14 @@ def median_for(chain: str | None, group_key: str | None, today: date | None = No
 
 
 def groups_like(q: str, today: date | None = None) -> list[str]:
-    """Topluluk verisi olan (eşik geçmiş) grupların anahtarları; q: anahtarda geçen kelime (Türkçe harfsiz)."""
+    """Topluluk verisi olan (eşik geçmiş) grupların anahtarları; q: grup anahtarı ("sut|1l": yalnız o) ya da anahtarda
+    geçen kelime (Türkçe harfsiz)."""
     from app import product_groups
 
-    s = product_groups.slug(q) if q else ""
     keys = sorted({g for _, g in medians(today=today)})
+    if q and "|" in q:
+        return [k for k in keys if k == q]
+    s = product_groups.slug(q) if q else ""
     return [k for k in keys if not s or s in k]
 
 

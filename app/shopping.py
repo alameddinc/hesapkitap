@@ -31,6 +31,7 @@ def _resolve(texts: list[str]) -> list[dict | None]:
 
 def _out(r: dict, group: dict | None, names: dict[int, str]) -> dict:
     return {"id": r["id"], "text": r["text"], "qty": r["qty"], "done": bool(r["done"]), "group": group,
+            "group_key": group["key"] if group else None,
             "added_by": r["added_by"], "added_by_name": names.get(r["added_by"]), "created_at": r["created_at"],
             "done_at": r["done_at"]}
 

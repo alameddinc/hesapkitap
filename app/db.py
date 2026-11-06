@@ -4229,7 +4229,8 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
                 "first_date": priced[0]["purchased_at"] if priced else None, "change_pct": change, "stores": st,
                 "history": [{"date": x["purchased_at"], "price": x["unit_price"] if x["price_known"] else None,
                              "store": names.get(x["store_key"], x["merchant"]), "branch": x["branch"], "qty": x["qty"],
-                             "name": x["name"]} for x in xs]}
+                             "name": x["name"], "estimated": x["price_known"] == 2,
+                             **({"uid": f"m{x['entry_id']}"} if x["entry_id"] else {})} for x in xs]}
 
     by: dict[str, list[dict]] = {}
     for it in items:

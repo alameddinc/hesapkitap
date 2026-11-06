@@ -101,6 +101,16 @@ def test_saved_receipt_contributes_and_endpoint_toggles(owner):  # noqa: F811
     assert len(_rows()) == 1
 
 
+def test_price_share_via_ui_prefs(owner):  # noqa: F811
+    """İstemci sözleşmesi: meta.ui.price_share ve PUT /api/me/ui {price_share} (öbür görünüm tercihleri gibi)."""
+    assert owner.get("/api/meta").json()["ui"]["price_share"] is True
+    r = owner.put("/api/me/ui", json={"price_share": False}).json()
+    assert r["price_share"] is False and "price_share" not in owner.put("/api/me/ui", json={"simple": True}).json()
+    assert owner.get("/api/meta").json()["ui"]["price_share"] is False
+    assert owner.get("/api/me/price-share").json()["on"] is False                # aynı tercih
+    assert owner.put("/api/me/ui", json={"price_share": True}).json()["price_share"] is True
+
+
 def test_account_deletion_keeps_anonymous_rows():
     from app import prefs
 

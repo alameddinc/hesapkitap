@@ -65,9 +65,15 @@ def open_sources(names: list[str] | None = None) -> list[PriceSource]:
 
 
 def _match(q: str, key: str, label: str) -> bool:
+    """Boş sorgu her şey; grup anahtarı ("sut|1l", istemci anahtar gönderir) yalnız o grup; metin ("süt") anahtarda ya
+    da adda geçen."""
     from app import product_groups
 
-    s = product_groups.slug(q or "")
+    if not q:
+        return True
+    if "|" in q:
+        return q == key
+    s = product_groups.slug(q)
     return not s or s in key or s in product_groups.slug(label)
 
 

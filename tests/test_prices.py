@@ -84,8 +84,10 @@ def test_store_branch_brand_breakdown_and_filters(client, tmpdb):
     assert set(stores) == {"Kahve Dünyası", "Kahve Konağı"}            # ilk kelimeye göre karışmaz
     kd = stores["Kahve Dünyası"]
     assert kd["branches"] == ["Fıstıkağacı", "Kadıköy"] and kd["visits"] == 2
-    assert kd["products"][0]["history"][0] == {"date": "2026-11-05", "price": 120, "store": "Kahve Dünyası",
-                                               "branch": "Fıstıkağacı", "qty": 1, "name": "LATTE"}
+    h = kd["products"][0]["history"][0]
+    assert h.items() >= {"date": "2026-11-05", "price": 120, "store": "Kahve Dünyası", "branch": "Fıstıkağacı", "qty": 1,
+                         "name": "LATTE"}.items()
+    assert h["estimated"] is False and h["uid"].startswith("m")        # fişe bağlantı (kaydın uid'i)
     assert {b["brand"] for b in r["brands"]} == {"Kahve Dünyası", "Kahve Konağı"}
     only = client.get("/api/prices", params={"store": "kahve dünyası", "since": "2026-11-10"}).json()["products"]
     assert [p["last_price"] for p in only] == [130] and only[0]["count"] == 1
