@@ -506,9 +506,10 @@ def prune(today: date) -> int:
         return c.execute("DELETE FROM push_sent WHERE at < ?", ((today - timedelta(days=SENT_KEEP_DAYS)).isoformat(),)).rowcount
 
 
-def enqueue(uid: int, p: dict, now: datetime | None = None, prefs: dict | None = None) -> None:
+def enqueue(uid: int, p: dict, now: datetime | None = None, prefs: dict | None = None, urgent: bool = False) -> None:
+    """urgent: kişinin o an beklediği olay (ör. QR'ı gösterirken eşinin katılması): sessiz saate ertelenmez."""
     now = now or _now()
-    q = quiet_until(prefs or get_prefs(uid), now)
+    q = None if urgent else quiet_until(prefs or get_prefs(uid), now)
     with system.connect() as c:
         c.execute("INSERT INTO push_queue (user_id, payload, not_before, created) VALUES (?, ?, ?, ?)",
                   (uid, json.dumps(p, ensure_ascii=False), (q or now).timestamp(), _utc_iso()))
@@ -596,7 +597,7 @@ def combine(items: list[dict], digest: bool, today: date) -> list[dict]:
 
 
 def notify(uid: int, items: list[dict], now: datetime | None = None, daily: bool = False,
-           background: bool = True) -> list[dict]:
+           background: bool = True, urgent: bool = False) -> list[dict]:
     """Tercihe göre süz, daha önce gönderilmişleri at, birleştir, kuyruğa yaz. Dönen: kuyruğa giren bildirimler.
     daily: günlük işin bildirimleri (kişinin özet tercihi geçerli); olay bildiriminde özet yok, yalnız fazlası özet."""
     now = now or _now()
@@ -609,7 +610,7 @@ def notify(uid: int, items: list[dict], now: datetime | None = None, daily: bool
     for x in out:
         if x["kind"] == "gunluk":
             claim(uid, x["id"], now.date())
-        enqueue(uid, x, now, p)
+        enqueue(uid, x, now, p, urgent)
     if out and background:
         flush_soon()
     return out

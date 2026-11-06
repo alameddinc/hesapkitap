@@ -13,6 +13,8 @@ bir üyeyi çıkarırsa ya da kendi hesabını silerse üyenin hesabı silinmez,
 Uçlar /api/book/invites altında değil: o önek paket kapısında (plans.GATED "ortak_defter") ve katılan çoğu zaman
 ücretsiz pakettedir.
 """
+from datetime import datetime, timezone
+
 from app import plans, system
 
 ERR = {  # neden → (HTTP durumu, Türkçe ileti)
@@ -124,6 +126,7 @@ def accept(code: str, u: dict) -> dict:
     for i in system.invites():
         if i.get("member_of") == u["id"] and not i.get("used_at"):
             system.delete_invite(i["code"])
+    announce(owner["id"], u, joined=True)
     return {"ok": True, "owner": (owner.get("username") or "").split("@")[0], "role": rl,
             "role_label": book.ROLE_LABELS.get(rl), "own_subscription": own_subscription(u)}
 
@@ -147,8 +150,38 @@ def detach(m: dict) -> None:
 def leave(u: dict) -> dict:
     if not u.get("member_of"):
         raise JoinError("not_member")
+    owner_id = u["member_of"]
     detach(u)
+    announce(owner_id, u, joined=False)
     return {"ok": True}
+
+
+def announce(owner_id: int, m: dict, joined: bool) -> None:
+    """Sahibe bildirim: üye katıldı (sessiz saate ertelenmez: sahip çoğu zaman QR'ı gösterirken bekler) / ayrıldı.
+    Hata akışı bozmaz. Uygulama açıksa istemci bildirimin id'sindeki "katildi:" ile ekranı tazeler ve kutlar."""
+    try:
+        from app import push
+
+        name = (m.get("username") or "").split("@")[0] or "Biri"
+        rl = book_role_label(m)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        it = (push.item("aile", f"katildi:{m['id']}:{stamp}", f"{name} ortak deftere katıldı",
+                        f"{rl} yetkisiyle. Üyelerde yetkisini ve ondan gizlenenleri değiştirebilirsin." if rl else
+                        "Üyelerde yetkisini ve ondan gizlenenleri değiştirebilirsin.", push.R_ORTAK) if joined else
+              push.item("aile", f"ayrildi:{m['id']}:{stamp}", f"{name} ortak defterden ayrıldı",
+                        "Kendi defteriyle devam ediyor; ortak defteri artık görmüyor.", push.R_ORTAK))
+        push.notify(owner_id, [it], urgent=joined)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("ekstre").exception("ortak defter bildirimi")
+
+
+def book_role_label(m: dict) -> str | None:
+    from app import book, system
+
+    fresh = system.user(m["id"]) or m
+    return book.ROLE_LABELS.get(fresh.get("book_role") or "editor")
 
 
 def joined_with_account(m: dict) -> bool:

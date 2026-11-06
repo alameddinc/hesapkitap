@@ -238,7 +238,7 @@ def test_lapse_with_free_seat_moves_into_seat(hosted, pushes):
     _rc("EXPIRATION", ayse["id"], ents=())
     u = system.user(ayse["id"])
     assert plans.seat_state(u) == "seat" and plans.plan_of(u) == "aile"  # kesintisiz
-    assert pushes == []  # koltuk vardı: uyarı yok
+    assert [i for _, i in pushes if not i["id"].startswith("katildi:")] == []  # koltuk vardı: uyarı yok
 
 
 def test_lapse_when_full_grace_then_free_access_continues(hosted, pushes):
@@ -480,3 +480,40 @@ def test_member_falls_back_when_owner_lapses_or_removes(hosted):
     _join(p, o)
     assert o.delete(f"/api/book/members/{prem['id']}").status_code == 200
     assert _plan(p)["plan"] == "premium"
+
+
+def test_owner_notified_on_join_and_leave(hosted, monkeypatch):
+    """Katılınca sahibe hemen (sessiz saat beklemeden) bildirim; ayrılınca normal bildirim. Davetle yeni hesap da sayılır."""
+    from app import push
+    from app.api.main import app
+
+    sent = []
+    monkeypatch.setattr(push, "notify", lambda uid, items, *a, **k: sent.extend((uid, i, k.get("urgent")) for i in items) or items)
+    o, owner = _family(hosted)
+    c, ayse = _account(hosted, "ayse")
+    _join(c, o)
+    joined = [(i, u) for uid, i, u in sent if uid == owner["id"] and i["id"].startswith("katildi:")]
+    assert len(joined) == 1 and joined[0][1] is True
+    assert joined[0][0]["title"] == "ayse ortak deftere katıldı" and joined[0][0]["route"] == push.R_ORTAK
+    assert "Görür ve ekler" in joined[0][0]["body"]
+    assert c.post("/api/book/leave").status_code == 200
+    left = [(i, u) for uid, i, u in sent if uid == owner["id"] and i["id"].startswith("ayrildi:")]
+    assert len(left) == 1 and not left[0][1] and left[0][0]["title"] == "ayse ortak defterden ayrıldı"
+    # davetle yeni hesap açan üye
+    inv = o.post("/api/book/invites", json={}).json()
+    r = TestClient(app).post("/api/auth/register", json={"consent": CONSENT, "code": inv["code"], "username": "cem@ornek.com",
+                                                         "password": "cem-sifre-12345"})
+    assert r.status_code == 200, r.text
+    assert any(i["title"] == "cem ortak deftere katıldı" for uid, i, _ in sent if uid == owner["id"])
+
+
+def test_urgent_push_skips_quiet_hours(hosted):
+    from datetime import datetime, timezone
+
+    from app import push
+
+    night = datetime(2026, 11, 6, 1, 30, tzinfo=timezone.utc)  # 04:30 Türkiye: sessiz saat
+    push.enqueue(1, push.item("aile", "x1", "t", "b", push.R_ORTAK), night, urgent=True)
+    push.enqueue(1, push.item("aile", "x2", "t", "b", push.R_ORTAK), night)
+    q = {r["payload"]["id"]: r["not_before"] for r in push.queue(1)}
+    assert q["x1"] == night.timestamp() and q["x2"] > night.timestamp()

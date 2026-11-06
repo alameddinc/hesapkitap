@@ -369,7 +369,7 @@ def test_daily_digest_and_member_hidden_card(owner, keys):  # noqa: F811
     done = push.run_daily(_at("2026-11-02T09:30"))
     assert done == {admin["id"]: 1, me["id"]: 1}
     assert push.run_daily(_at("2026-11-02T15:00")) == {}  # günde bir kez
-    [a] = push.queue(admin["id"])
+    [a] = [x for x in push.queue(admin["id"]) if not x["payload"]["id"].startswith("katildi:")]  # üye katıldı bildirimi ayrı
     assert a["payload"]["body"] == "Bugün 2 ödeme" and a["payload"]["route"] == "#/ozet"
     [b] = push.queue(me["id"])  # gizli kartın son ödemesi üyeye gitmez
     assert b["payload"]["kind"] == "odeme" and "9602" in b["payload"]["title"] and "1234" not in json.dumps(b["payload"])

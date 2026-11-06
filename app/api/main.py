@@ -844,6 +844,10 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         if not system.use_invite(inv["code"], u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
             system.delete_user(u["id"])
             raise HTTPException(409, "Davet kodu az önce kullanıldı")
+        if inv.get("member_of"):
+            from app import book_join
+
+            book_join.announce(inv["member_of"], u, joined=True)
         system.put(f"pw_unset:{u['id']}", "1")
         _record_consent(u["id"], request)
         created = True
@@ -981,6 +985,10 @@ def register(body: RegisterIn, request: Request, response: Response):
     if not system.use_invite(body.code, u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
         system.delete_user(u["id"])
         raise HTTPException(409, "Davet kodu az önce kullanıldı")
+    if inv.get("member_of"):
+        from app import book_join
+
+        book_join.announce(inv["member_of"], u, joined=True)
     _record_consent(u["id"], request)
     _start_session(request, response, u)
     return {"ok": True}
