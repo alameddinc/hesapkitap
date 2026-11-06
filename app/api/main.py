@@ -5433,14 +5433,13 @@ class RulePatch(BaseModel):
 
 
 def _check_regex(p: str | None):
-    import re
+    """Kayıt ve denemede desen denetimi: geçersiz, çok uzun ya da felaket geri izlemeye açık (ReDoS) desen 422."""
+    from app import saferegex
 
     if p is None:
         return
-    try:
-        re.compile(p)
-    except re.error as e:
-        raise HTTPException(422, "Kural geçerli bir arama kalıbı (düzenli ifade) değil: parantezler ve köşeli parantezler kapanmalı") from e
+    if why := saferegex.problem(p):
+        raise HTTPException(422, why)
 
 
 @app.get("/api/rules")
@@ -5477,23 +5476,19 @@ def test_rule(text: str, pattern: str | None = None):
     """pattern verilirse yalnız o desen denenir (eski biçim). Verilmezse sunucunun gerçek sırasıyla (öncelik, id) TÜM
     kurallar: ilk eşleşen kural (rule: {id, pattern, category, priority} | null) ve işlemin alacağı kategori — istemci
     kendi regex/normalize kopyasını çalıştırmasın."""
-    import re
-
+    from app import saferegex
     from app.categorize import UNCATEGORIZED
     from app.textnorm import normalize
 
-    n = normalize(text)
+    n = normalize(text[:saferegex.MAX_TEXT])
     if pattern is not None:
         _check_regex(pattern)
-        return {"normalized": n, "match": bool(re.search(pattern, n))}
+        return {"normalized": n, "match": bool(saferegex.search(pattern, n))}
     from app import book
 
     for r in book.filter_rules(db.list_rules()):
-        try:
-            if re.search(r["pattern"], n):
-                return {"normalized": n, "match": True, "rule": r, "category": r["category"]}
-        except re.error:
-            continue
+        if saferegex.search(r["pattern"], n):
+            return {"normalized": n, "match": True, "rule": r, "category": r["category"]}
     return {"normalized": n, "match": False, "rule": None, "category": UNCATEGORIZED}
 
 

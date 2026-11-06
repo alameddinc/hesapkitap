@@ -19,6 +19,9 @@ xlrd==2.0.2
 # pdfminer'ın bağımlılığı. 50.x arm64 Docker Desktop'ta "Illegal instruction" (exit 132) ile çöküyor; 49.x'te
 # kalan tek açık (PYSEC-2026-3552, pkcs7_decrypt) kullanılmıyor, CI'daki pip-audit'te istisna olarak yazılı
 cryptography==49.0.0
+# kullanıcının kategori kuralı deseni (düzenli ifade) süre sınırıyla çalışır: re'de timeout yok ve GIL'i bırakmaz,
+# "(A+)+$" gibi desen bütün süreci kilitliyordu (ReDoS; app/saferegex.py)
+regex==2026.9.29
 pytest==9.1.1
 # python:3.12-slim'de sistem saat dilimi verisi yok; zoneinfo için
 tzdata==2026.5

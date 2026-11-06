@@ -1,6 +1,7 @@
 """Kural tabanlı kategorizasyon. Kural = normalize edilmiş açıklamada aranan regex."""
 import re
 
+from app import saferegex
 from app.parsers.base import FEE, PAYMENT, REFUND
 from app.textnorm import normalize, strip_gateway
 
@@ -67,11 +68,9 @@ def categorize_sub(description: str, txn_type: str, rules: list[tuple]) -> tuple
     asil = strip_gateway(norm)
     for text in (asil, norm) if asil != norm else (norm,):
         for rule in rules:
-            try:
-                if re.search(rule[0], text):
-                    return rule[1], (rule[2] if len(rule) > 2 else None) or None
-            except re.error:
-                continue
+            # kullanıcı deseni: güvensiz/geçersizse atlanır, süre sınırlı (ReDoS; app/saferegex.py)
+            if saferegex.search(rule[0], text):
+                return rule[1], (rule[2] if len(rule) > 2 else None) or None
     return UNCATEGORIZED, None
 
 
