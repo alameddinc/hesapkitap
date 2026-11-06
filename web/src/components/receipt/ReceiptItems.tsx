@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api";
 import { cx, parseAmount, tl } from "../../format";
 import Modal from "../Modal";
-import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, type DigitFix, type ItemCheck, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
+import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, livePriceAlerts, type DigitFix, type ItemCheck, type PriceAlert, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
 
 const label = (k: ReceiptItem) => `${(k.qty ?? 1) > 1 ? `${k.qty}× ` : ""}${k.name}`;
 const num = (v: number | null | undefined) => (v == null ? "" : String(v).replace(".", ","));
@@ -40,6 +40,7 @@ function fixWhy(f: DigitFix): string {
     ev.includes("ocr") && `telefonun okuması da ${tl(f.to)} diyor`,
     ev.includes("qty") && `adet × birim fiyat da ${tl(f.to)} ediyor`,
     ev.includes("history") && f.history_price != null && `geçen sefer ${tl(f.history_price)}`,
+    ev.includes("community") && f.community_price != null && `başkaları ${tl(f.community_price)} ödüyor`,
   ].filter(Boolean);
   return `${digitPairs(f.digits)} karışmış olabilir${extra.length ? `; ${extra.join("; ")}` : ""}`;
 }
@@ -77,7 +78,11 @@ function DigitHints({ live, items, onChange }: { live: LiveDigit; items: Receipt
   );
 }
 
-export default function ReceiptItems({ items, total, onChange, photo, onReread, note, collapsed = 6, serverCheck }: {
+/** "geçen sefer ₺30,00 (+%17)" */
+export const priceAlertText = (a: PriceAlert) =>
+  `geçen sefer ${tl(a.last_paid)} (${a.change_pct > 0 ? "+" : "−"}%${Math.round(Math.abs(a.change_pct)).toLocaleString("tr-TR")})`;
+
+export default function ReceiptItems({ items, total, onChange, photo, onReread, note, collapsed = 6, serverCheck, priceAlerts }: {
   items: ReceiptItem[];
   /** fiş toplamı (önizlemede formdaki tutar, kayıtlıda kaydın tutarı) */
   total: number | null | undefined;
@@ -90,8 +95,11 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
   collapsed?: number;
   /** sunucunun check'i (okuma ya da kayıtlı fiş; yetenek digit_fix): karışan rakam önerileri yalnız ondan gelir */
   serverCheck?: ReceiptCheck | null;
+  /** sunucunun fiyat uyarıları (check.price_alerts): satırın altında sarı "geçen sefer …" */
+  priceAlerts?: PriceAlert[] | null;
 }) {
   const chk = useMemo(() => checkItems(items, total), [items, total]);
+  const rises = useMemo(() => livePriceAlerts(priceAlerts, items), [priceAlerts, items]);
   const live = useMemo(() => liveDigit(serverCheck, items, chk), [serverCheck, items, chk]);
   const [all, setAll] = useState(false);
   const [edit, setEdit] = useState<number | "new" | null>(null);
@@ -153,13 +161,14 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
         {shown.map((k, i) => {
           const c = chk.items[i];
           const sus = !c?.mismatch && live.suspect.has(i);
+          const rise = rises.get(i);
           return (
             <li key={i}>
               <button type="button" onClick={() => setEdit(i)}
                 className={cx("flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-stone-50 dark:hover:bg-stone-800/50",
                   c?.mismatch && "bg-amber-50 shadow-[inset_3px_0_0_var(--color-amber-500)] hover:bg-amber-100/70 dark:bg-amber-950/30 dark:hover:bg-amber-950/50",
                   sus && "shadow-[inset_3px_0_0_var(--color-amber-300)] dark:shadow-[inset_3px_0_0_var(--color-amber-700)]")}
-                aria-label={`${label(k)}, ${k.amount != null ? tl(k.amount) : "tutar yok"}${c?.mismatch ? ", tutmuyor" : sus ? ", fişle karşılaştır" : ""}: düzenle`}>
+                aria-label={`${label(k)}, ${k.amount != null ? tl(k.amount) : "tutar yok"}${c?.mismatch ? ", tutmuyor" : sus ? ", fişle karşılaştır" : ""}${rise ? `, ${priceAlertText(rise)}` : ""}: düzenle`}>
                 <span className="w-5 shrink-0 pt-px text-right text-xs text-stone-400 tabular-nums">{i + 1}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block break-words">{label(k)}</span>
@@ -168,6 +177,7 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
                       <AlertTriangle size={12} aria-hidden /> {k.qty ?? 1} × {tl(k.unit_price ?? 0)} = {tl(c.expected ?? 0)} olmalı</span>
                   )}
                   {sus && <span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-400">Fişle karşılaştır: rakamı karışmış olabilir</span>}
+                  {rise && <span className="mt-0.5 block text-xs text-amber-700 tabular-nums dark:text-amber-400" data-testid="fiyat-uyari">{priceAlertText(rise)}</span>}
                 </span>
                 <span className={cx("shrink-0 tabular-nums", c?.mismatch ? "font-semibold text-amber-800 dark:text-amber-300" : "text-stone-700 dark:text-stone-300")}>
                   {k.amount != null ? tl(k.amount) : "—"}</span>

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { applyDigitFixes, checkItems, digitPairs, liveDigit, type ReceiptCheck, type ReceiptItem } from "./check.ts";
+import { applyDigitFixes, checkItems, digitPairs, liveDigit, livePriceAlerts, type ReceiptCheck, type ReceiptItem } from "./check.ts";
 
 const items: ReceiptItem[] = [
   { name: "SUT 1L", qty: 1, amount: 64.5 },
@@ -69,4 +69,15 @@ test("hepsini düzelt, kalan fark, şüpheli satırlar ve KDV grubu yalnız topl
 test("rakam çiftleri metni", () => {
   assert.equal(digitPairs("6→8"), "6 ile 8");
   assert.equal(digitPairs("6→8, 3→8"), "6 ile 8, 3 ile 8");
+});
+
+test("livePriceAlerts: yalnız adı değişmeyen satırda, küçük oynama yok sayılır", () => {
+  const items = [{ name: "SUTAS SUT 1L", amount: 35 }, { name: "TORKU BAL", amount: 120 }];
+  const alerts = [
+    { index: 0, name: "SUTAS SUT 1L", paid: 35, last_paid: 30, last_date: "2026-10-12", change_pct: 16.7, chain: "BİM" },
+    { index: 1, name: "TORKU KAKAOLU", paid: 120, last_paid: 110, last_date: "2026-10-12", change_pct: 9.1, chain: "BİM" },
+  ];
+  assert.deepEqual([...livePriceAlerts(alerts, items).keys()], [0]);
+  assert.equal(livePriceAlerts([{ ...alerts[0]!, change_pct: 0.2 }], items).size, 0);
+  assert.equal(livePriceAlerts(undefined, items).size, 0);
 });
