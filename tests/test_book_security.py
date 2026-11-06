@@ -171,3 +171,33 @@ def test_full_member_cannot_use_hidden_account_in_body(owner):
     # görünen hesapla çalışır
     nakit = next(a["id"] for a in owner.get("/api/accounts").json()["accounts"] if a["name"] == "Nakit")
     assert full.patch(f"/api/debt-payments/{pid}", json={"account_id": nakit}).status_code == 200
+
+
+# --- gelen kutusu: sahibin bekleyen belgeleri üyelere görünmez ---------------------------------------------------
+
+def test_inbox_members_see_and_close_only_their_own(owner, monkeypatch):
+    from app import receipt
+
+    def fake(data, mime, cats, item_cats, more=None):
+        who = data.decode(errors="ignore").split(":")[-1]
+        return {"type": "receipt", "merchant": f"ORNEK-{who}", "total": 99.5, "date": "2026-10-23", "items": [],
+                "category": "Diğer", "confidence": "yüksek"}
+
+    monkeypatch.setattr(receipt, "parse_document", fake)
+    editor = _member(owner, "esim", "editor")
+    full = _member(owner, "tam", "full")
+    owner.post("/api/share", files={"file": ("a.jpg", b"\xff\xd8fis:SAHIP", "image/jpeg")})
+    editor.post("/api/share", files={"file": ("b.jpg", b"\xff\xd8fis:ESIM", "image/jpeg")})
+
+    def shops(c):
+        return sorted(r["doc"]["merchant"] for r in c.get("/api/inbox").json())
+
+    assert shops(owner) == ["ORNEK-ESIM", "ORNEK-SAHIP"]
+    assert shops(full) == ["ORNEK-ESIM", "ORNEK-SAHIP"]
+    assert shops(editor) == ["ORNEK-ESIM"]  # sahibin bekleyen fişi (mağaza, tutar) görünmez
+    owner_item = next(r["id"] for r in owner.get("/api/inbox").json() if r["doc"]["merchant"] == "ORNEK-SAHIP")
+    assert editor.post(f"/api/inbox/{owner_item}/silindi").status_code == 404  # başkasınınkini kapatamaz
+    assert shops(owner) == ["ORNEK-ESIM", "ORNEK-SAHIP"]
+    mine = editor.get("/api/inbox").json()[0]["id"]
+    assert editor.post(f"/api/inbox/{mine}/kaydedildi").status_code == 200
+    assert shops(owner) == ["ORNEK-SAHIP"]

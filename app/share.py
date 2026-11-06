@@ -3,6 +3,10 @@
 - Kart ekstresi / hesap dökümü PDF'i: hemen içe aktarılır (e-posta ve Telegram ile aynı yol).
 - Fiş fotoğrafı/PDF'i ve fatura: okunur, "gelen kutusu"nda bekler; uygulamada onaylanınca kaydedilir
   (yanlış okuma sessizce gider olmasın).
+
+Ortak defterde gelen kutusu: sahip ve tam yetkili üye hepsini görür ve kapatır; diğer üyeler yalnız kendi
+gönderdiklerini (sent_by). Sahibin e-postayla/paylaşımla gelen belgesi (fatura, fiş: mağaza, tutar, kalemler) başka
+üyeye görünmez, onu kapatamaz.
 """
 import json
 
@@ -15,7 +19,8 @@ CREATE TABLE IF NOT EXISTS shared_inbox (
     filename TEXT,
     kind TEXT NOT NULL,          -- receipt | bill
     doc TEXT NOT NULL,           -- okunan belge (JSON)
-    status TEXT NOT NULL DEFAULT 'bekliyor'   -- bekliyor | kaydedildi | silindi
+    status TEXT NOT NULL DEFAULT 'bekliyor',  -- bekliyor | kaydedildi | silindi
+    sent_by INTEGER              -- gönderen kullanıcı (ortak defter üyesi); NULL: sahip / e-posta / eski kayıt
 );
 """
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
@@ -23,6 +28,24 @@ IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/hei
 
 def _init(c) -> None:
     c.executescript(SCHEMA)
+    if "sent_by" not in {r[1] for r in c.execute("PRAGMA table_info(shared_inbox)")}:
+        c.execute("ALTER TABLE shared_inbox ADD COLUMN sent_by INTEGER")
+
+
+def sender() -> int | None:
+    """Kaydı yazan: ortak defter üyesiyse onun kimliği (sahibin kendi ve e-postayla gelen kayıtları NULL)."""
+    from app import book
+
+    m = book.member()
+    return m["id"] if m else None
+
+
+def _own_only() -> int | None:
+    """Yalnız kendi gönderdiklerini görecek üyenin kimliği; sahip ve tam yetkili üye için None (hepsi)."""
+    from app import book
+
+    m = book.member()
+    return m["id"] if m and book.role(m) != "full" else None
 
 
 def _is_statement(data: bytes) -> bool:
@@ -81,8 +104,8 @@ def process(name: str, data: bytes, mime: str) -> dict:
         return {"status": "hata", "message": f"{name}: {doc.get('message') or 'okunamadı'}"}
     with db.connect() as c:
         _init(c)
-        iid = c.execute("INSERT INTO shared_inbox (filename, kind, doc) VALUES (?, ?, ?)",
-                        (name, doc["type"], json.dumps(doc, ensure_ascii=False))).lastrowid
+        iid = c.execute("INSERT INTO shared_inbox (filename, kind, doc, sent_by) VALUES (?, ?, ?, ?)",
+                        (name, doc["type"], json.dumps(doc, ensure_ascii=False), sender())).lastrowid
     if doc["type"] == "bill":
         what = f"Fatura: {doc.get('provider') or '?'} {doc.get('amount') or ''} TL"
     else:
@@ -94,15 +117,20 @@ def process(name: str, data: bytes, mime: str) -> dict:
 
 
 def inbox() -> list[dict]:
+    mine = _own_only()
     with db.connect() as c:
         _init(c)
-        rows = db.rows(c.execute("SELECT * FROM shared_inbox WHERE status = 'bekliyor' ORDER BY id DESC"))
+        rows = db.rows(c.execute("SELECT * FROM shared_inbox WHERE status = 'bekliyor' "
+                                 + ("AND sent_by = ? " if mine else "") + "ORDER BY id DESC", (mine,) if mine else ()))
     for r in rows:
         r["doc"] = json.loads(r["doc"])
     return rows
 
 
 def close(iid: int, status: str) -> bool:
+    """Kaydı kapat (kaydedildi | silindi). Üye yalnız kendi gönderdiğini kapatır (başkasınınki yok sayılır: False)."""
+    mine = _own_only()
     with db.connect() as c:
         _init(c)
-        return c.execute("UPDATE shared_inbox SET status = ? WHERE id = ?", (status, iid)).rowcount > 0
+        return c.execute("UPDATE shared_inbox SET status = ? WHERE id = ?" + (" AND sent_by = ?" if mine else ""),
+                         (status, iid, mine) if mine else (status, iid)).rowcount > 0

@@ -122,8 +122,8 @@ def hold(kind: str, filename: str, data: bytes, payload: dict, check: dict) -> i
     doc = {"type": kind, "file": _store_pdf(data), "filename": filename, **check, **payload}
     with db.connect() as c:
         share._init(c)
-        return c.execute("INSERT INTO shared_inbox (filename, kind, doc) VALUES (?, ?, ?)",
-                         (filename, kind, json.dumps(doc, ensure_ascii=False))).lastrowid
+        return c.execute("INSERT INTO shared_inbox (filename, kind, doc, sent_by) VALUES (?, ?, ?, ?)",
+                         (filename, kind, json.dumps(doc, ensure_ascii=False), share.sender())).lastrowid
 
 
 class Held(str):
