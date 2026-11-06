@@ -232,6 +232,13 @@ def run_account_purge(now: datetime) -> list[int]:
     from app import apple, deletion
 
     done = deletion.purge_due(now)
+    try:  # davetle açılıp INVITE_TTL içinde e-postası doğrulanmayan hesaplar (app/email_verify.py)
+        from app import email_verify
+
+        if n := email_verify.purge_invite_pending(now.timestamp()):
+            log.info("doğrulanmayan davet hesapları silindi: %d", len(n))
+    except Exception:  # noqa: BLE001
+        log.exception("invite pending purge failed")
     try:  # Apple belgesi iptali başarısız olduysa (ağ, Apple): zamanı gelenler yeniden denenir
         apple.retry_pending(now.timestamp())
     except Exception:  # noqa: BLE001

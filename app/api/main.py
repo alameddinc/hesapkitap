@@ -834,6 +834,11 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         return _pending_deletion(u)
     from app import email_verify
 
+    if u and email_verify.invite_pending(u["id"]):
+        # başkasının davetiyle bu e-postaya açılmış, doğrulanmamış hesap: e-postanın sahibi habersiz o deftere üye
+        # olmasın; bekleyen hesap silinir (davet serbest kalır), aşağıda yeni hesap gibi devam edilir
+        email_verify.drop_invite_pending(u["id"])
+        u = None
     if u and email_verify.unverified(u["id"]):
         # şifreyle açılmış ama doğrulanmamış hesap (belki başkası önceden açtı): Google/Apple e-postanın sahibini
         # kanıtladı. Eski şifre geçersiz, açık oturumlar düşer, hesap doğrulanır; sahibine bilgi gider.
@@ -952,6 +957,7 @@ def reset_password(body: ResetIn, request: Request, response: Response):
     from app import email_verify
 
     email_verify.mark_verified(u["id"])  # sıfırlama kodu da e-postanın sahibini kanıtlar
+    email_verify.finish_invite(u["id"])
     if u.get("deleted_at"):  # kodla kimliğini kanıtladı: geri almayı sor (yeni şifre geçerli)
         return _pending_deletion(system.user(u["id"]))
     _start_session(request, response, system.user(u["id"]))
@@ -986,11 +992,17 @@ def register(body: RegisterIn, request: Request, response: Response):
         _record_consent(u["id"], request)
         _start_session(request, response, u)
         return {"ok": True}
+    from app import email_verify
+
+    if email_verify.required():  # sahte adresle üye açılmasın: süresi dolan bekleyen davet hesapları önce düşer
+        email_verify.purge_invite_pending()
     if not body.code or not system.valid_invite(body.code):
         auth.record_fail(ip)
         raise HTTPException(403, "Davet kodu geçersiz, kullanılmış ya da süresi dolmuş")
     inv = system.invite(body.code) or {}
     _book_seat_or_409(inv)
+    if email_verify.required():  # hazır sürüm: davetle kayıt da e-posta koduyla doğrulanır (açık kayıtla aynı yanıt)
+        return _register_invite_with_code(body, inv, request)
     try:  # ortak defter davetiyse: kayıt olan, daveti oluşturanın defterine üye olur
         u = auth.create_user(body.username, body.password, member_of=inv.get("member_of"), book_role=inv.get("book_role"))
     except ValueError as e:
@@ -1021,6 +1033,9 @@ def _register_with_code(body: RegisterIn, request: Request, ip: str) -> dict:
         raise HTTPException(422, errors.user_text(e, 422)) from e
     pw_hash = auth._hash(body.password)  # her yolda aynı iş: yanıt süresi de bir şey söylemesin
     u = system.user_by_name(name)
+    if u and email_verify.invite_pending(u["id"]):  # başkasının davetiyle açılmış, doğrulanmamış: kendi hesabı açılır
+        email_verify.drop_invite_pending(u["id"])
+        u = None
     if not u:
         try:
             system.check_username(name)
@@ -1041,6 +1056,61 @@ def _register_with_code(body: RegisterIn, request: Request, ip: str) -> dict:
             _record_consent(u["id"], request)
             email_verify.send_code(u)
     except Exception:  # noqa: BLE001 - posta gönderilemese de yanıt aynı (kod yeniden istenebilir)
+        logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
+    return {"ok": True, "verify_required": True, "email": name}
+
+
+def _register_invite_with_code(body: RegisterIn, inv: dict, request: Request) -> dict:
+    """Davetle kayıt, e-posta doğrulamalı (hazır sürüm). Hesap açılır ve davet hemen tüketilir (bağlantı ikinci kez
+    kullanılamaz; ortak defterde Aile koltuğu sayılır), ama oturum POST /api/auth/verify-email ile kod girilince açılır;
+    sahibe "katıldı" bildirimi de o zaman gider (email_verify.finish_invite). Doğrulanmazsa INVITE_TTL sonunda hesap
+    silinir, davet serbest kalır. Yanıt açık kayıtla aynı: {"ok": true, "verify_required": true, "email"}. E-posta
+    kayıtlıysa yanıt yine aynı (adres kayıtlı mı anlaşılmaz), davet tüketilmez, adrese bilgi maili gider."""
+    from app import email_verify
+
+    name = (body.username or "").strip()
+    if "@" not in name:
+        raise HTTPException(422, "E-posta adresini yaz")
+    try:
+        auth._check_strength(body.password)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    pw_hash = auth._hash(body.password)
+    u = system.user_by_name(name)
+    if u and email_verify.invite_pending(u["id"]):  # başka (ya da aynı) davetle açılıp doğrulanmamış: yerine bu kayıt
+        email_verify.drop_invite_pending(u["id"])
+        u = None
+    if not u:
+        try:
+            system.check_username(name)
+        except ValueError as e:
+            raise HTTPException(422, errors.user_text(e, 422)) from e
+    try:
+        if u and email_verify.unverified(u["id"]):
+            # açık kayıtla açılmış, doğrulanmamış hesap: açık kayıttaki gibi yeni şifre ve kod; davet tüketilmez
+            # (hesabı alan sonra davet bağlantısıyla var olan hesabıyla katılabilir: app/book_join.py)
+            system.update_user(u["id"], password_hash=pw_hash)
+            system.bump_session(u["id"])
+            email_verify.send_code(u)
+            return {"ok": True, "verify_required": True, "email": name}
+        if u:
+            email_verify.notify_existing(u)
+            return {"ok": True, "verify_required": True, "email": name}
+    except Exception:  # noqa: BLE001 - posta gönderilemese de yanıt aynı
+        logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
+        return {"ok": True, "verify_required": True, "email": name}
+    try:  # ortak defter davetiyse: kayıt olan, daveti oluşturanın defterine üye olur
+        u = system.create_user(name, pw_hash, member_of=inv.get("member_of"), book_role=inv.get("book_role"))
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    if not system.use_invite(inv["code"], u["id"]):  # aynı anda iki kayıt: ikincisi geri alınır
+        system.delete_user(u["id"])
+        raise HTTPException(409, "Davet kodu az önce kullanıldı")
+    email_verify.mark_invite_pending(u["id"], inv["code"])
+    _record_consent(u["id"], request)
+    try:
+        email_verify.send_code(u)
+    except Exception:  # noqa: BLE001 - kod "yeniden gönder" ya da girişle yeniden istenebilir
         logging.getLogger("hesapkitap.auth").exception("doğrulama postası gönderilemedi")
     return {"ok": True, "verify_required": True, "email": name}
 
@@ -1097,6 +1167,7 @@ def verify_email(body: VerifyEmailIn, request: Request, response: Response):
         raise HTTPException(400, "Kod yanlış ya da süresi dolmuş; yeni kod iste")
     u = system.user(u["id"])
     system.update_user(u["id"], last_login=__import__("time").strftime("%Y-%m-%d %H:%M:%S"))
+    email_verify.finish_invite(u["id"])  # davetle açılmışsa: sahibe "katıldı" şimdi gider
     _start_session(request, response, u)
     return {"ok": True}
 
@@ -4867,6 +4938,10 @@ def book_overview(request: Request):
     from app import book
 
     u = _book_owner()
+    from app import email_verify
+
+    if email_verify.required():
+        email_verify.purge_invite_pending()
     cards = {}
     for s in db.list_statements():
         cards.setdefault(s["card_no"], {"card_no": s["card_no"], "bank": s["bank"]})
@@ -4874,7 +4949,9 @@ def book_overview(request: Request):
                          "role": book.role(m), "own_rules": book.has_own_rules(m["id"]), "rules": book.rules(m["id"]),
                          # hazır sürüm: Aile koltuğu {state: own|seat|grace|none, grace_until?}; kendi hesabıyla katılan
                          # (çıkarılınca hesabı silinmez, yalnız ayrılır)
-                         **({"seat": plans.seat_info(m)} if plans.hosted() else {}), "joined": bool(m.get("db_file"))}
+                         **({"seat": plans.seat_info(m)} if plans.hosted() else {}), "joined": bool(m.get("db_file")),
+                         # davetle açıldı, e-posta kodu henüz girilmedi (girilmezse hesap kendiliğinden silinir)
+                         "email_verified": not email_verify.invite_pending(m["id"])}
                         for m in system.members(u["id"])],
             "invites": [_invite_out(i, request) for i in system.invites() if i.get("member_of") == u["id"] and not i["used_at"]],
             "rules": book.rules(), "cards": list(cards.values()),

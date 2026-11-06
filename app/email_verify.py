@@ -9,8 +9,15 @@ yeni şifre ve yeni kod (kodu kim girerse hesap onun), doğrulanmışsa yanıt y
 HESAPKITAP_EMAIL_VERIFY=0: kod adımı yok (kayıt hemen oturum açar), ama hesap yine "doğrulanmamış" işaretlenir: Google/
 Apple girişi gelince şifre geçersiz, oturumlar düşer; kayıt yanıtı nötr kalır.
 
-Durum sistem veritabanında: "email_unverified:<id>" (yoksa doğrulanmış sayılır: eski hesaplar, davetle açılanlar,
-Google/Apple ile açılanlar). Kod yalnız özetiyle durur; 30 dakika, en çok 5 deneme, dakikada en fazla bir gönderim.
+Davetle kayıt (ortak defter üyesi ya da yönetici daveti) da kod adımı ister (required() açıkken): hesap açılır, davet
+hemen tüketilir (ikinci kez kullanılamaz), Aile koltuğu sayılır; ama oturum ve sahibe "katıldı" bildirimi kod girilince.
+Bekleyen davet hesabı "invite_pending:<id>" = "<davet kodu>|<epoch>" ile işaretli. INVITE_TTL içinde doğrulanmazsa
+hesap silinir ve davet serbest kalır (süresi dolmadıysa aynı bağlantı yeniden çalışır; sahip bekleyen davet olarak görür).
+Aynı e-postayla açık kayıt ya da Google/Apple girişi gelirse bekleyen davet hesabı da silinir: e-postanın sahibi
+kendi hesabını açar, habersiz başkasının defterine üye olmaz.
+
+Durum sistem veritabanında: "email_unverified:<id>" (yoksa doğrulanmış sayılır: eski hesaplar, kod adımı yokken davetle
+açılanlar, Google/Apple ile açılanlar). Kod yalnız özetiyle durur; 30 dakika, en çok 5 deneme, dakikada en fazla bir gönderim.
 """
 import hashlib
 import hmac
@@ -24,6 +31,7 @@ CODE_TTL = 30 * 60
 MAX_TRIES = 5
 RESEND_GAP = 60
 DAILY_CODES = 5
+INVITE_TTL = 7 * 24 * 3600  # davetle açılıp doğrulanmayan hesap bu süreden sonra silinir, davet serbest kalır
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS email_codes (
@@ -136,3 +144,66 @@ def verify(email: str, code: str) -> dict | None:
             return None
     mark_verified(u["id"])
     return u
+
+
+# ---------------------------------------------------------------- davetle açılıp doğrulanmayı bekleyen hesap
+
+def mark_invite_pending(uid: int, code: str, now: float | None = None) -> None:
+    mark_unverified(uid)
+    system.put(f"invite_pending:{uid}", f"{code.strip().upper()}|{int(now or time.time())}")
+
+
+def invite_pending(uid: int | None) -> bool:
+    return bool(uid) and system.get(f"invite_pending:{uid}") is not None and unverified(uid)
+
+
+def finish_invite(uid: int) -> None:
+    """Bekleyen davet hesabı doğrulandı (kod, şifre sıfırlama): işaret kalkar; ortak defterse sahibe "katıldı" gider."""
+    if system.get(f"invite_pending:{uid}") is None:
+        return
+    system.put(f"invite_pending:{uid}", None)
+    u = system.user(uid)
+    if u and u.get("member_of"):
+        from app import book_join
+
+        book_join.announce(u["member_of"], u, joined=True)
+
+
+def drop_invite_pending(uid: int) -> bool:
+    """Doğrulanmamış davet hesabını sil, daveti serbest bırak (kullanılmamış sayılır), boşalan Aile koltuğunu devret.
+    Hesap hiç oturum açmadığı için verisi yok: anonim silme kaydı ve arşiv gerekmez. Silindiyse True."""
+    if not invite_pending(uid):
+        return False
+    u = system.user(uid)
+    system.put(f"invite_pending:{uid}", None)
+    if not u:
+        return False
+    owner = u.get("member_of")
+    before = plans.seat_holders(owner) if owner else set()
+    with system.connect() as c:
+        c.execute("UPDATE invites SET used_by = NULL, used_at = NULL WHERE used_by = ?", (uid,))
+    system.delete_user(uid)
+    mark_verified(uid)  # durum satırı ve kod da gitsin
+    if owner:
+        plans.clear_seat(uid)
+        plans.notify_seat_changes(owner, before - {uid})
+    return True
+
+
+def purge_invite_pending(now: float | None = None) -> list[int]:
+    """INVITE_TTL'i dolan, doğrulanmamış davet hesaplarını sil (zamanlayıcı her turda; sahip üyeleri açınca da)."""
+    now = now or time.time()
+    with system.connect() as c:
+        rows = c.execute("SELECT key, value FROM sys_settings WHERE key LIKE 'invite_pending:%'").fetchall()
+    gone = []
+    for key, value in rows:
+        uid = int(key.split(":", 1)[1])
+        try:
+            since = int((value or "").rsplit("|", 1)[1])
+        except (IndexError, ValueError):
+            since = 0
+        if not unverified(uid):  # başka yoldan doğrulanmış (eski işaret kaldıysa): yalnız işareti temizle
+            system.put(key, None)
+        elif now - since >= INVITE_TTL and drop_invite_pending(uid):
+            gone.append(uid)
+    return gone
