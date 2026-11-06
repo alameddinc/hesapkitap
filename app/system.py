@@ -228,6 +228,17 @@ CREATE TABLE IF NOT EXISTS product_group_queue (  -- kuralın çözemediği adla
     added_at TEXT NOT NULL,
     tries INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS community_prices (  -- anonim topluluk fiyatı (app/community_prices.py): şube/kişi/kayıt yok
+    id INTEGER PRIMARY KEY,
+    chain TEXT NOT NULL,                 -- bilinen zincir (receipt_templates.CHAINS görünen adı)
+    group_key TEXT NOT NULL,             -- ürün grubu (product_groups)
+    name_norm TEXT NOT NULL,             -- yapay zekâ grubu öğrenince satır doğru gruba geçsin diye
+    unit_price REAL NOT NULL,
+    day TEXT NOT NULL,                   -- alım günü
+    contributor TEXT NOT NULL            -- HMAC(günün tuzu, kullanıcı id): günler arası ve kullanıcıya bağlanamaz
+);
+CREATE INDEX IF NOT EXISTS community_prices_group ON community_prices(group_key, chain, day);
+CREATE INDEX IF NOT EXISTS community_prices_name ON community_prices(name_norm);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
@@ -442,6 +453,8 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))
+            # fiyat paylaşımı tercihi; topluluk fiyatı satırları kişiye bağlanamaz, kalır (app/community_prices.py)
+            c.execute("DELETE FROM sys_settings WHERE key = ?", (f"price_share:{uid}",))
             for sql in ("DELETE FROM password_resets WHERE user_id = ?",   # tablolar ilk kullanımda kurulur (reset, inbound)
                         # gelen posta adresi: kod hiç yeniden verilmesin diye satır kalır, hesapla bağı kopar (D12)
                         "UPDATE inbound SET revoked = 1, user_id = 0 WHERE user_id = ?"):

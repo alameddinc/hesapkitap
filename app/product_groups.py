@@ -347,7 +347,7 @@ def _valid(g) -> str | None:
 def classify_pending(max_calls: int = 1) -> int:
     """Kuyruktaki adları toplu sınıflandır (en çok max_calls çağrı, günlük tavan AI_CALLS_PER_DAY). Dönen: önbelleğe
     yazılan ad sayısı. Yapay zekâ kapalıysa (anahtar yok) 0. Bir çağrının hatası kuyruğu bozmaz (deneme sayısı artar)."""
-    from app import receipt, system
+    from app import community_prices, receipt, system
 
     if not receipt.enabled() or not _LOCK.acquire(blocking=False):
         return 0
@@ -385,6 +385,7 @@ def classify_pending(max_calls: int = 1) -> int:
                     grp = _compose(g, size) if g else None
                     _store(c, b["name_norm"], grp, "ai")
                     c.execute("DELETE FROM product_group_queue WHERE name_norm = ?", (b["name_norm"],))
+                    community_prices.relabel(c, b["name_norm"], grp)  # geçici gruptaki topluluk satırları
                     done += 1
     finally:
         _LOCK.release()

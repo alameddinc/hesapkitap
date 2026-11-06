@@ -8,7 +8,7 @@ kalemi işaretler ve önerilen kaydırmayı tek dokunuşla uygulatır (sonra PUT
      "shift_start" (art arda tutmayan kalemlerin başladığı sıra, yoksa null),
      "suggested_shift": null | {"from_index", "direction": "up"|"down", "amounts": [...], "items_total", "diff"},
      "residual" (öneriler uygulanınca kalan fark, TL), "digit_fix": [{"index", "name", "from", "to", "digits": "6→8"[, "unit_price_from", "unit_price_to"][, "evidence":
-                   "ocr"|"qty"]}], "digit_fix_all": null | {"indices": [...], "total_ok"}, "suspect": [sıra, ...]}
+                   "ocr"|"qty"|"history"|"community"|"group"][, "community_price", "community_note"]}], "digit_fix_all": null | {"indices": [...], "total_ok"}, "suspect": [sıra, ...]}
 direction: "down" = from_index'ten itibaren her fiyat bir alt satıra iner (o satıra boşluk: adet × birim ile dolar);
 "up" = her fiyat bir üst satıra çıkar.
 digit_fix / digit_fix_all / suspect: termal fişte karışan rakam (6↔8 …) düzeltilince kalemler fiş toplamını kuruşu kuruşuna
@@ -268,20 +268,36 @@ def _hist_match(unit: float, prices: list[float]) -> float | None:
     return next((p for p in prices if p > 0 and abs(unit - p) <= p * HISTORY_TOL), None)
 
 
-def _score(f: dict, it: dict, history: dict[int, list[float]] | None, group_hit: bool) -> dict:
+COMMUNITY_TOL = 0.05  # topluluk ortancasıyla eşleşme payı (±%5; şubeler arası fark)
+
+
+def _score(f: dict, it: dict, history: dict[int, list[float]] | None, group_hit: bool,
+           community: dict[int, float] | None = None) -> dict:
     """Kanıtları birleştir: ocr 4, qty 4, history +2 (düzeltilmiş birim fiyat önceki fiyatı tutuyor; okunan tutuyorsa −2),
-    group +1 (fark bu kalemin KDV grubunda). Sıra: ocr+history > ocr > history > group > hiçbiri."""
+    community +2 (aynı zincirde başkalarının ödediği ortanca fiyatı ±COMMUNITY_TOL tutuyor; okunan tutuyorsa −2;
+    community_price, community_note "başkaları ₺89,00 ödüyor"), group +1 (fark bu kalemin KDV grubunda).
+    Sıra: ocr+history > ocr > history/community > group > hiçbiri."""
     q = it.get("qty") or 1
     ev = list(f["evidence"])
     score = 4 * len(ev)
+    new, old = f.get("unit_price_to") or money.money(f["to"] / q), f.get("unit_price_from") or money.money(f["from"] / q)
     prices = (history or {}).get(f["index"]) or []
     if prices:
-        new, old = f.get("unit_price_to") or money.money(f["to"] / q), f.get("unit_price_from") or money.money(f["from"] / q)
         if (p := _hist_match(new, prices)) is not None and _hist_match(old, prices) is None:
             ev.append("history")
             f["history_price"] = p
             score += 2
         elif _hist_match(old, prices) is not None and _hist_match(new, prices) is None:
+            score -= 2
+    med = (community or {}).get(f["index"])
+    if med:
+        near = lambda v: abs(v - med) <= med * COMMUNITY_TOL  # noqa: E731
+        if near(new) and not near(old):
+            ev.append("community")
+            f["community_price"] = money.money(med)
+            f["community_note"] = f"başkaları {money.tl(med)} ödüyor"
+            score += 2
+        elif near(old) and not near(new):
             score -= 2
     if group_hit:
         ev.append("group")
@@ -323,12 +339,14 @@ def _public(fixes) -> list[dict]:
 
 
 def digit_check(items: list[dict], receipt_total: float | None, text: str | None = None, *,
-                vat_lines: list[dict] | None = None, history: dict[int, list[float]] | None = None) -> dict:
+                vat_lines: list[dict] | None = None, history: dict[int, list[float]] | None = None,
+                community: dict[int, float] | None = None) -> dict:
     """Kalemler fişi tutmuyorsa karışan rakam (termal baskı 6↔8 …) önerileri; kaç satırın yanlış olduğu varsayılmaz.
     Çıktı: {"digit_fix": [{index, name, from, to, digits, unit_price_from?, unit_price_to?, evidence: [...], score,
     history_price?}], "digit_fix_all": null | {"indices", "total_ok"}, "residual": TL, "suspect": [sıra],
     "groups": [{rate, items_total, tax, printed, indices, ok}], "line_count": null | {"printed", "read"}}.
-    Hiçbiri kendiliğinden uygulanmaz. Kanıtlar (yalnız bu fişin metni ve kullanıcının kendi defterindeki geçmiş):
+    Hiçbiri kendiliğinden uygulanmaz. Kanıtlar (bu fişin metni, kullanıcının kendi defterindeki geçmiş ve aynı zincirde
+    topluluk ortanca fiyatı — community {sıra: ortanca}, app/community_prices.py; en az 3 kişi):
     1. Satır başına tanık, fiş toplamından bağımsız (_witness: telefon metni "ocr", adet × birim "qty"): hepsi öneri olur.
     2. KDV grupları (_vat_groups: oran başına hesaplanan KDV basılanla tutuyor mu): fark tutmayan gruplardaysa arama ve
        şüpheliler o gruplarla sınırlanır ("group").
@@ -349,7 +367,8 @@ def digit_check(items: list[dict], receipt_total: float | None, text: str | None
     groups = _vat_groups(items, {i: _line_rate(it, rows.get(i, [])) for i, it in enumerate(items)}, vat_lines)
     bad_groups = [g for g in groups if not g["ok"]]
     local = {i for g in bad_groups for i in g["indices"]} if bad_groups and len(bad_groups) < len(groups) else None
-    fixes = [_score(f, items[f["index"]], history, local is not None and f["index"] in local) for f, _ in seen.values() if f]
+    fixes = [_score(f, items[f["index"]], history, local is not None and f["index"] in local, community)
+             for f, _ in seen.values() if f]
     rest = need - sum(f["_d"] for f in fixes)
     count = _printed_count(text)
     n_read = sum(1 for _ in _priced(items))
@@ -358,7 +377,7 @@ def digit_check(items: list[dict], receipt_total: float | None, text: str | None
     suspect: list[int] = []
     if rest and not line_count:
         pool = {i for i, (f, agrees) in seen.items() if not f and not agrees and (local is None or i in local)}
-        sols = [tuple(_score(dict(f), items[f["index"]], history, local is not None) for f in sol)
+        sols = [tuple(_score(dict(f), items[f["index"]], history, local is not None, community) for f in sol)
                 for sol in _deepen(items, pool, rest)]
         ranked = sorted(sols, key=lambda sol: -sum(f["score"] for f in sol))
         if ranked and (len(ranked) == 1 or sum(f["score"] for f in ranked[0]) > sum(f["score"] for f in ranked[1])):
@@ -384,11 +403,13 @@ def digit_fixes(items: list[dict], receipt_total: float | None, text: str | None
 
 
 def add_evidence(chk: dict | None, items: list[dict], text: str | None = None, vat_lines: list[dict] | None = None,
-                 history: dict[int, list[float]] | None = None) -> None:
-    """Okuma ya da kayıtlı fiş anında kanıtlarla (telefon/PDF metni, KDV dökümü, fiyat geçmişi) digit_* alanlarını yeniden
-    hesapla (chk yerinde; metin saklanmaz). Fiş tutuyorsa dokunmaz."""
-    if (text or vat_lines or history) and chk and "digit_fix" in chk and chk.get("diff") is not None and abs(chk["diff"]) > TOL:
-        chk.update(digit_check(items, chk.get("receipt_total"), text, vat_lines=vat_lines, history=history))
+                 history: dict[int, list[float]] | None = None, community: dict[int, float] | None = None) -> None:
+    """Okuma ya da kayıtlı fiş anında kanıtlarla (telefon/PDF metni, KDV dökümü, fiyat geçmişi, topluluk fiyatı)
+    digit_* alanlarını yeniden hesapla (chk yerinde; metin saklanmaz). Fiş tutuyorsa dokunmaz."""
+    if (text or vat_lines or history or community) and chk and "digit_fix" in chk and chk.get("diff") is not None \
+            and abs(chk["diff"]) > TOL:
+        chk.update(digit_check(items, chk.get("receipt_total"), text, vat_lines=vat_lines, history=history,
+                               community=community))
 
 
 _SIZE_ONLY = re.compile(r"^[\d.,\s]*(?:(?:G|GR|KG|ML|L|LT|CL|CC|AD|ADT|ADET|X\s*\d+)\.?\s*)*$", re.I)

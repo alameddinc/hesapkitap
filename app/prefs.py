@@ -81,6 +81,29 @@ def enabled(module: str) -> bool:
     return modules().get(module, True)
 
 
+# Fiyat paylaşımı (kişi bazında, sistem veritabanında: kişinin bütün defterlerinde aynı): fişteki ürün fiyatları anonim
+# topluluk fiyatına katılır (app/community_prices.py). Varsayılan AÇIK; kapatılınca yeni fiş katılmaz.
+PRICE_SHARE_TEXT = ("Fişteki ürün fiyatları, adın ve hangi şubeden aldığın olmadan, en az 3 kişiden gelince ortalama "
+                    "fiyat olarak kullanılır; Ayarlar'dan kapatabilirsin.")
+
+
+def price_share(uid: int | None) -> bool:
+    from app import system
+
+    return bool(uid) and system.get(f"price_share:{uid}") != "0"
+
+
+def set_price_share(uid: int, on: bool) -> bool:
+    from app import system
+
+    system.put(f"price_share:{uid}", None if on else "0")
+    return price_share(uid)
+
+
+def price_share_out(uid: int | None) -> dict:
+    return {"on": price_share(uid), "text": PRICE_SHARE_TEXT}
+
+
 def _ui_key() -> str:
     u = db.current_user()
     return f"ui:{u['id']}" if u and u.get("id") else "ui:owner"

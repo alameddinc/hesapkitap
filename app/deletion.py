@@ -12,6 +12,10 @@ Akış
   doc_cache, api_tokens, onay / şifresiz ayarları gider; RevenueCat müşteri kaydı silinir (anahtar varsa).
 - HESAPKITAP_DELETE_GRACE_DAYS (varsayılan 7; 0 = hemen kalıcı sil). Kendi sunucusunda da aynı.
 
+Topluluk fiyatları (system.community_prices, app/community_prices.py) silinmez: satırda kullanıcı id'si yok, katkı
+özeti her gün yenilenen (eskisi silinen) tuzla HMAC olduğundan satır hiçbir hesaba bağlanamaz; anonim istatistik
+olarak kalır. Kişinin fiyat paylaşımı tercihi silinir (system.delete_user).
+
 Silme kaydı (system.deleted_accounts): kullanıcı id'si, tarihler, paket ve mağaza durumu, e-postanın HMAC özeti
 (sunucu gizli anahtarıyla; düz e-posta yok). Fatura / itiraz takibi içindir; RECORD_KEEP_DAYS sonra düşer.
 

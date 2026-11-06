@@ -1976,6 +1976,7 @@ def meta():
         "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
         "module_consent_title": {k: prefs.CONSENT_TITLE.get(k) for k in prefs._consent_needed()},
         "plan": _plan_info(),
+        "price_share": prefs.price_share_out((db.current_user() or {}).get("id")),  # topluluk fiyatı (kişi başı)
         **_handshake(),  # server: api_version, capabilities, flags, version (S17)
     }
 
@@ -2423,6 +2424,8 @@ def create_entry(body: EntryIn):
     if body.items and body.kind == "gider":
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
                               total=body.amount, branch=body.branch)
+        if data.get("receipt_file"):  # yalnız okunmuş fiş (elle girilen değil): anonim topluluk fiyatı (tercih açıksa)
+            _share_prices(body.description, body.legal_name, body.items, data["entry_date"])
     splits = []
     if body.splits and body.kind == "gider":
         try:
@@ -2441,6 +2444,39 @@ def create_entry(body: EntryIn):
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
             "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
             "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits]}
+
+
+def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str) -> None:
+    """Fiş kalemlerini anonim topluluk fiyatına kat (app/community_prices.py). Hata kaydı bozmaz."""
+    from app import community_prices
+
+    try:
+        u = db.current_user()
+        community_prices.contribute((u or {}).get("id"), merchant, legal_name, [i for i in items if isinstance(i, dict)], on)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("hesapkitap.community_prices").warning("topluluk fiyatı yazılamadı", exc_info=True)
+
+
+@app.get("/api/me/price-share")
+def get_price_share():
+    """Fiyat paylaşımı tercihi (kişi başı, varsayılan açık): {on, text (gizlilik açıklaması)}."""
+    u = db.current_user()
+    return prefs.price_share_out((u or {}).get("id"))
+
+
+class PriceShareIn(BaseModel):
+    on: bool
+
+
+@app.put("/api/me/price-share")
+def put_price_share(body: PriceShareIn):
+    u = db.current_user()
+    if not u or not u.get("id"):
+        raise HTTPException(409, "Fiyat paylaşımı için giriş gerekli")
+    prefs.set_price_share(u["id"], body.on)
+    return prefs.price_share_out(u["id"])
 
 
 @app.patch("/api/entries/{entry_id}")
@@ -6455,7 +6491,23 @@ def _digit_evidence(chk: dict | None, items: list[dict], text: str | None = None
     names = [it.get("product") or it.get("name") or "" for it in items]
     prices = db.recent_unit_prices(names, merchant, exclude_entry=exclude_entry)
     history = {i: prices[k] for i, n in enumerate(names) if (k := db.product_key(n)) in prices}
-    receipt_check.add_evidence(chk, items, text, vat_lines or None, history or None)
+    receipt_check.add_evidence(chk, items, text, vat_lines or None, history or None, _community_evidence(items, merchant))
+
+
+def _community_evidence(items: list[dict], merchant: str | None) -> dict[int, float] | None:
+    """Karışan rakam kanıtı: bilinen zincirde kalemin ürün grubunun topluluk ortanca birim fiyatı (en az 3 kişi; app/
+    community_prices.py), sıra → ortanca. Zincir değilse ya da veri yoksa None. Yapay zekâ çağrılmaz (yalnız kural ve
+    önbellek)."""
+    from app import community_prices, product_groups
+    from app.receipt_templates import chain_of
+
+    chain = chain_of(merchant)
+    if not chain or not items:
+        return None
+    groups = product_groups.groups_for(items, learn=False)
+    med = community_prices.medians([g["key"] for g in groups if g], chain)
+    out = {i: m["median"] for i, g in enumerate(groups) if g and (m := med.get((chain, g["key"])))}
+    return out or None
 
 
 def _receipt_items_out(entry_id: int, total: float | None, entry: dict | None = None) -> dict:

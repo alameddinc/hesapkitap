@@ -10,6 +10,7 @@ const HOSTED: Item[] = [
   { icon: <Sparkles size={16} />, text: <>Fiş fotoğrafları ve tanınmayan bankaların ekstreleri, sadece okunmak için <b>Google Gemini</b>'ye gönderilir. Tanınan bankaların ekstreleri sunucuda okunur, dışarı çıkmaz.</> },
   { icon: <Download size={16} />, text: <>Tüm verini istediğin an <b>Ayarlar → Yedekler</b>'den tek dosya olarak indirebilir, kendi sunucuna taşıyabilirsin.</> },
   { icon: <ShieldCheck size={16} />, text: <>Şifren düz metin olarak saklanmaz; geri çevrilemeyecek şekilde şifrelenir.</> },
+  { icon: <EyeOff size={16} />, text: <>Fişteki ürün fiyatları, adın ve hangi şubeden aldığın olmadan, <b>en az 3 kişiden</b> gelince ortalama fiyat olarak kullanılır; Ayarlar'dan kapatabilirsin.</> },
 ];
 
 // Kendi sunucusu: veri dışarı çıkmaz; dışarıyla konuşan her şey kullanıcının açtığı bir özelliktir.
@@ -17,6 +18,7 @@ const SELF: Item[] = [
   { icon: <Server size={16} />, text: <>Bütün verin <b>bu sunucuda</b>, tek bir dosyada durur. Bize ya da başka bir yere gönderilmez; üyelik, abonelik, reklam yok.</> },
   { icon: <Sparkles size={16} />, text: <>Dışarıyla sadece senin açtığın özellikler konuşur: fiş okuma (<b>Google Gemini</b>; anahtar yoksa fişler yerelde okunur), Telegram hatırlatmaları ve e-posta.</> },
   { icon: <Code2 size={16} />, text: <>Varsayılan olarak, yeni bir bankanın <b>okuma kuralı</b> (banka adı ve satır düzeni — isim, IBAN, tutar değil) topluluk deposuna gönderilir; Ayarlar → Banka şablonları'ndan kapatabilirsin.</> },
+  { icon: <EyeOff size={16} />, text: <>Fişteki ürün fiyatları, adın ve hangi şubeden aldığın olmadan, <b>en az 3 kişiden</b> gelince (bu sunucunun kullanıcıları) ortalama fiyat olarak kullanılır; Ayarlar'dan kapatabilirsin.</> },
   { icon: <Cloud size={16} />, text: <>Telegram'a giden yedek <b>senin şifrenle kilitlenir</b>; şifre olmadan Telegram dahil kimse açamaz.</> },
   { icon: <Code2 size={16} />, text: <>Kodu açık: ne yaptığını herkes <a className="underline" href="https://github.com/alameddinc/hesapkitap" target="_blank" rel="noreferrer">GitHub'da</a> inceleyebilir.</> },
 ];

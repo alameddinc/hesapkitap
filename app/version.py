@@ -93,6 +93,8 @@ CAPABILITIES = (
                               # kendiliğinden uygulanmaz
     "price_groups",           # markadan bağımsız ürün grubu: /api/prices products[].group {key "sut|1l", label "Süt · 1 L",
                               # pending? (yapay zekâ bekliyor; geçici grup)} | null
+    "community_prices",       # anonim topluluk fiyatı: GET/PUT /api/me/price-share {on} → {on, text} (meta.price_share);
+                              # fişte digit_fix evidence "community" + community_price, community_note "başkaları ₺89,00 ödüyor"
 )
 
 

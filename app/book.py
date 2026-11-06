@@ -64,7 +64,7 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("POST", r"/api/insights/(dismiss|restore)"),  # uyarı gizleme de kişiye özel
                    ("DELETE", r"/api/me/sessions/[\w-]+"), ("POST", r"/api/me/sessions/revoke-all"),  # kendi oturumları
                    ("POST", r"/api/push/(devices|test)"), ("DELETE", r"/api/push/devices"),  # kendi telefonu
-                   ("PUT", r"/api/push/prefs"),
+                   ("PUT", r"/api/push/prefs"), ("PUT", r"/api/me/price-share"),  # fiyat paylaşımı kişinin kararı
                    ("POST", r"/api/book/leave"), ("POST", r"/api/book/join/[\w-]+"),  # üyelik kişinin kendi kararı
                    ("POST", r"/api/feedback")]  # "Sorun bildir": yöneticiye gider, deftere yazmaz
 

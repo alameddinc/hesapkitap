@@ -223,6 +223,9 @@ def run_global(now: datetime) -> list[str] | None:
     from app import doc_cache
 
     doc_cache.prune(now.timestamp())  # 30 günü dolan okuma sonuçları (app/doc_cache.py)
+    from app import community_prices
+
+    community_prices.prune()  # KEEP_DAYS'ten eski anonim topluluk fiyatları
     try:  # gün içinde kuyrukta kalan ürün adları: toplu yapay zekâ (günlük tavanla; app/product_groups.py)
         from app import product_groups
 
