@@ -2421,7 +2421,9 @@ def create_entry(body: EntryIn):
     if data.get("receipt_file") and not _adopt_file("receipts", data["receipt_file"]):
         data["receipt_file"] = None  # bu defterde (ya da üyenin öbür defterinde) saklanmış bir fotoğraf değil: bağlanmaz
     eid = db.create_entry(data)
+    alerts = {"check": {}, "items": [i for i in body.items or [] if isinstance(i, dict)], "merchant": body.description}
     if body.items and body.kind == "gider":
+        _add_price_alerts(alerts, eid, data["entry_date"])  # kalemler yazılmadan: önceki alımlarla
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
                               total=body.amount, branch=body.branch)
         if data.get("receipt_file"):  # yalnız okunmuş fiş (elle girilen değil): anonim topluluk fiyatı (tercih açıksa)
@@ -2443,7 +2445,8 @@ def create_entry(body: EntryIn):
     match = sync.match_info().get(eid)
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
             "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
-            "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits]}
+            "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits],
+            "price_alerts": alerts["check"].get("price_alerts", [])}  # yetenek price_alerts
 
 
 def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str) -> None:
@@ -5706,9 +5709,28 @@ def parse_receipt(file: UploadFile = File(...)):
     out["receipt_file"] = _store_receipt(photo)
     if not out.get("unreadable"):
         doc_cache.put(original, doc_cache.FIS, out, out["receipt_file"])
+    _add_price_alerts(out)  # önbelleğe girmez: geçmiş her okumada güncel
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
     return out
+
+
+def _add_price_alerts(doc: dict, exclude_entry: int | None = None, on: str | None = None) -> None:
+    """check.price_alerts: kendi son fiyatına göre zam (app/price_alerts.py; fiyat takibi paketinde). on: kayıtlı fişin
+    günü (o günden önceki alımlarla karşılaştırılır; okumada bugün). Hata okumayı bozmaz."""
+    from app import price_alerts
+
+    if not isinstance(doc.get("check"), dict):
+        return
+    try:
+        day = date.fromisoformat(str(on)[:10]) if on else None
+        doc["check"]["price_alerts"] = price_alerts.receipt_alerts(doc.get("items") or [], doc.get("merchant"),
+                                                                   exclude_entry, day)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("hesapkitap.price_alerts").warning("fiyat uyarısı hesaplanamadı", exc_info=True)
+        doc["check"]["price_alerts"] = []
 
 
 def _mark_unreadable(doc: dict, msg: str) -> None:
@@ -5728,6 +5750,7 @@ def _cached_receipt(hit: dict, photo: bytes | None) -> dict:
     out = doc_cache.hit(hit)
     if "receipt_file" in out or photo:
         out["receipt_file"] = _store_receipt(photo)
+    _add_price_alerts(out)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
     return out
@@ -6504,6 +6527,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         _digit_evidence(doc.get("check"), doc.get("items") or [], text, doc.get("vat_lines"), doc.get("merchant"))
     if not doc.get("unreadable"):
         doc_cache.put(ckey, doc_cache.BELGE, doc, doc.get("receipt_file"))
+    if doc["type"] != "bill":
+        _add_price_alerts(doc)  # önbelleğe girmez: geçmiş her okumada güncel
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
@@ -6613,9 +6638,11 @@ def _receipt_items_out(entry_id: int, total: float | None, entry: dict | None = 
     # saklanan unit_price tutar / adet'ten türetilmiştir: adet × birim denetimi burada anlamsız, yalnız toplam denetlenir
     bare = [{**i, "unit_price": None} for i in items]
     chk = receipt_check.check(bare, total)
+    out = {"entry_id": entry_id, "items": items, "check": chk}
     if entry:
         _digit_evidence(chk, bare, vat_lines=entry.get("vat_lines"), merchant=entry.get("description"), exclude_entry=entry_id)
-    return {"entry_id": entry_id, "items": items, "check": chk}
+        _add_price_alerts({**out, "merchant": entry.get("description")}, entry_id, entry.get("entry_date"))
+    return out
 
 
 @app.get("/api/entries/{entry_id}/receipt-items")

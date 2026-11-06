@@ -4042,6 +4042,43 @@ def recent_unit_prices(names: list[str], merchant: str | None = None, days: int 
     return out
 
 
+def shop_key(merchant: str | None, legal_name: str | None = None) -> str:
+    """Aynı yer mi karşılaştırması: bilinen zincirse zincir ("MIGROS TICARET" = "Migros Jet"), değilse işyeri adı."""
+    from app.receipt_templates import chain_of
+
+    return _store_key(chain_of(merchant, legal_name) or merchant)
+
+
+def last_unit_prices(names: list[str], merchant: str | None, days: int = 60, exclude_entry: int | None = None,
+                     today: date | None = None) -> dict[str, dict]:
+    """Fiyat artışı uyarısı için: aynı zincirde/işyerinde (shop_key) `today`'den (alım günü; varsayılan bugün) önceki
+    `days` günde ürünün son birim fiyatı, product_key → {price, date}. Fiyatı okunmuş satırlar; ortak defter üyesinde
+    yalnız görebildiği kayıtlar; exclude_entry (düzenlenen fişin kendisi) hariç."""
+    from app import book
+
+    keys = sorted({k for k in (product_key(n) for n in names if n) if k})
+    if not keys or not merchant:
+        return {}
+    upto = today or date.today()
+    since = (upto - timedelta(days=days)).isoformat()
+    with connect() as c:
+        got = rows(c.execute(
+            f"SELECT entry_id, merchant, product_key, unit_price, purchased_at FROM receipt_items WHERE product_key IN "
+            f"({','.join('?' * len(keys))}) AND purchased_at >= ? AND purchased_at <= ? AND price_known = 1 "
+            f"AND unit_price > 0 AND (entry_id IS NULL OR entry_id != ?) ORDER BY purchased_at DESC, id DESC",
+            (*keys, since, upto.isoformat(), exclude_entry or -1)))
+        if book.active() and got:
+            seen = {e["id"] for e in book.filter_entries(rows(c.execute(
+                "SELECT id, hidden, account_id, payment, card_last4 FROM entries")))}
+            got = [r for r in got if r["entry_id"] in seen]
+    shop = shop_key(merchant)
+    out: dict[str, dict] = {}
+    for r in got:
+        if r["product_key"] not in out and shop_key(r["merchant"]) == shop:
+            out[r["product_key"]] = {"price": r["unit_price"], "date": r["purchased_at"]}
+    return out
+
+
 # Fiyat listesine girmeyen kayıt kategorileri (alışveriş değil: fatura, kira, banka, bağış, ulaşım bileti …); fişte
 # birden çok satır olsa da. normalize() biçiminde, kelime parçası olarak aranır.
 _NON_SHOPPING = re.compile(r"KIRA|AIDAT|ELEKTRIK|^SU$|DOGALGAZ|INTERNET|TELEFON|SIGORTA|VERGI|HARC|BANKA|NAKIT CEKIM|"

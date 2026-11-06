@@ -84,13 +84,14 @@ TYPES = {
     "zekat": ("Zekât ve mübarek günler", True),
     "aile": ("Aile koltukları", True),
     "geri_bildirim": ("Kullanıcı geri bildirimi", True),  # yalnız yöneticiye (app/feedback.py)
+    "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
 }
 ADMIN_TYPES = {"geri_bildirim"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
 NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "döküm", "butce": "bütçe uyarısı",
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
-         "geri_bildirim": "geri bildirim"}
+         "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -100,6 +101,7 @@ AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağusto
 R_OZET, R_ODEMELER, R_EKSTRELER, R_BUTCELER = "#/ozet", "#/diger/odemeler", "#/diger/ekstreler", "#/diger/butceler"
 R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger/tasarruf", "#/diger/zekat"
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
+R_FIYATLAR = "#/diger/fiyatlar"
 
 
 def _b64e(b: bytes) -> str:
@@ -767,13 +769,29 @@ def _zekat(today: date) -> list[dict]:
     return out
 
 
+def _fiyat(today: date) -> list[dict]:
+    """Sık aldığın ürünlerde (90 günde aynı zincirde 2+ alım) topluluk ortancası son ödediğinden %10+ yüksek: tek özet
+    bildirim (app/price_alerts.py). Fiyat takibi paketinde ve sayfa açıkken. Kimlik artışların özeti: aynı artışlar
+    ertesi gün yeniden gitmez; günlük iş günde bir çalıştığı için en çok bir bildirim."""
+    from app import price_alerts
+
+    if not price_alerts.allowed():
+        return []
+    rises = price_alerts.community_rises(today)
+    if not rises:
+        return []
+    sig = hashlib.sha256(json.dumps([(r["chain"], r["group"], r["median"]) for r in rises]).encode()).hexdigest()[:12]
+    return [item("fiyat", f"fiyat:{sig}", "Fiyat artışı", price_alerts.digest(rises), R_FIYATLAR)]
+
+
 def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     """Bugünün zamanlı bildirimleri (açık türler), kullanıcının defterinde ve görebildiği kadarıyla. Bağlam: use_space."""
     on = (prefs or get_prefs(u["id"]))["types"]
     out: list[dict] = []
     for kind, fn in (("odeme", lambda: _odeme_ekstre_dokum(today, on)), ("fatura", lambda: _fatura(today)),
                      ("butce", lambda: _butce(today)), ("gelir", lambda: _gelir(today)), ("ozet", lambda: _ozet(today)),
-                     ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u))):
+                     ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
+                     ("fiyat", lambda: _fiyat(today))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:

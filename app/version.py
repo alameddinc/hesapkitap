@@ -99,7 +99,8 @@ CAPABILITIES = (
                               # date?, n?}] ucuzdan, ≤5}] (402 fiyatlar)
     "shopping_list",          # GET/POST /api/shopping-list, PATCH/DELETE /api/shopping-list/{id}, DELETE ?done=true,
                               # GET /api/shopping-list/plan (402 alisveris_listesi; ortak defterde paylaşılır)
-
+    "price_alerts",           # fiş okuma/kayıtlı fiş check.price_alerts ve POST /api/entries price_alerts [{index, name, paid,
+                              # last_paid, last_date, change_pct, chain, note "geçen sefer ₺30"}]; push türü "fiyat"
 )
 
 
