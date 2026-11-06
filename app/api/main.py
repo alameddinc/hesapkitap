@@ -6262,9 +6262,11 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     from app import doc_cache, doc_reads
 
     original, original_mime = data, mime
-    # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti
+    # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti; hak her parçanın
+    # ağırlığının toplamı (uzun PDF bir fotoğrafla birlikte gönderilince 1 hakka inmesin; doc_reads.weight_many)
     key = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in [data, *(d for d, _ in (more or []))])).digest() \
         if more else data
+    need = doc_reads.weight_many([data, *(d for d, _ in more)]) if more else None
     data, mime, photo = _prepare_photo(data, mime)
     # önbellek anahtarı telefon metnini de içerir (sonuç metne göre değişebilir: şablon, KDV/VKN yedeği); metni
     # değiştirip önbelleği atlayan okuma forget ile yeniden sayılır
@@ -6283,7 +6285,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
         # tür okumadan belli değil: fotoğraf fiş sayılır (PDF belge); sayım okunan gerçek türe gider
-        doc_reads.check(key, doc_reads.guess_kind(original_mime))  # hazır sürüm: okuma hakkı doluysa okunmaz
+        doc_reads.check(key, doc_reads.guess_kind(original_mime), need)  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
@@ -6301,7 +6303,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise HTTPException(502, errors.user_text(e, 502)) from e
     if _unreadable(doc):  # okunamadı: günün ilk denemeleri ücretsiz (bkz. _mark_unreadable)
         _mark_unreadable(doc, UNREADABLE_MSG)
-    elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type"))):
+    elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")), need):
         doc["charged"] = charged  # {daily, extra}
     if doc["type"] == "receipt":
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini

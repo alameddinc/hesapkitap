@@ -138,8 +138,10 @@ _PAGES: dict[str, int | None] = {}  # sha256 → sayfa sayısı (check ve charge
 
 
 def pages(key: bytes | str | None) -> int | None:
-    """PDF'in sayfa sayısı (receipt._pdf_pages); PDF değilse ya da açılamıyorsa (şifreli) None."""
-    if not isinstance(key, (bytes, bytearray)) or b"%PDF-" not in bytes(key[:1024]):
+    """PDF'in sayfa sayısı (receipt._pdf_pages); PDF değilse ya da açılamıyorsa (şifreli) None. "%PDF-" başlığı
+    dosyanın neresinde olursa olsun açmayı dener: PDF okuyucu (ve yapay zekâ) başlığın önündeki çöpü atlıyor, yalnız
+    ilk 1024 bayta bakılırsa önüne boşluk eklenmiş 30 sayfalık PDF 1 hak sayılıyordu (güvenlik denetimi)."""
+    if not isinstance(key, (bytes, bytearray)) or b"%PDF-" not in key:
         return None
     h = _key(bytes(key))
     if h not in _PAGES:
@@ -155,6 +157,13 @@ def weight(key: bytes | str | None) -> int:
     """Bu belge kaç hak: PDF ceil(sayfa / 10) (1–10 sayfa 1); diğer her şey 1."""
     n = pages(key)
     return max(1, math.ceil(n / PAGES_PER_READ)) if n else 1
+
+
+def weight_many(files: list[bytes]) -> int:
+    """Birden çok dosyalı tek belge (çok sayfalı fiş: fotoğraflar ve/veya PDF'ler): her PDF kendi sayfasıyla
+    (ceil(sayfa / 10)), fotoğraflar 0, toplam en az 1. Anahtar parçaların özeti olduğundan weight(key) hep 1 dönüyordu:
+    30 sayfalık PDF'in yanına bir fotoğraf eklemek 3 hakkı 1'e indiriyordu (güvenlik denetimi)."""
+    return max(1, sum(math.ceil(n / PAGES_PER_READ) for f in files if (n := pages(f))))
 
 
 # ---------------------------------------------------------------- eski tek sayaçtan göç
