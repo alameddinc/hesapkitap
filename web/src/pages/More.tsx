@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { useState } from "react";
-import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags, Zap } from "lucide-react";
+import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
 import { inSharedBook, routeVisible, useBook, useIsAdmin, useMeta } from "../components/hooks";
@@ -50,6 +50,7 @@ export default function More() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
   const admin = useIsAdmin();
+  const meta = useMeta();
   const [feedback, setFeedback] = useState(false);
   return (
     <div className="space-y-4">
@@ -65,6 +66,9 @@ export default function More() {
         <ZakatItem />
         <Item icon={<ArrowLeftRight size={18} />} label="Transferler: kime ne gitti" onClick={() => ui.go("transferler")} route="transferler" />
         <Item icon={<TagIcon size={18} />} label="Fiyatlar: fişlerden ürün fiyat takibi" onClick={() => ui.go("fiyatlar")} route="fiyatlar" />
+        {meta.data?.capabilities?.includes("shopping_list") && (
+          <Item icon={<ShoppingCart size={18} />} label="Alışveriş listesi: en ucuz nerede" onClick={() => ui.go("alisveris")} route="alisveris" />
+        )}
         <Item icon={<FileText size={18} />} label="Ekstreler" onClick={() => ui.go("ekstreler")} route="ekstreler" />
         <Item icon={<Tags size={18} />} label="Kategori kuralları" onClick={() => ui.go("kurallar")} route="kurallar" />
         <Item icon={<Settings2 size={18} />} label="Ayarlar: Telegram, yedekler" onClick={() => ui.go("ayarlar")} route="ayarlar" />

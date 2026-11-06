@@ -1,0 +1,85 @@
+// Fiyat ayrıntısı ve alışveriş listesinin saf hesapları (grafik ölçeği, özet cümlesi, ek, tek yerden toplam).
+// Mobil karşılığı: hesapkitap-mobile src/screens/FiyatTakibi.tsx / lib/endpoints/alisveris.ts.
+
+export interface PricePoint { date: string; price: number; store: string; estimated: boolean; i: number }
+
+/** Fiyatı bilinen alımlar, tarihe göre (aynı günde fiş sırası korunur). */
+export function pricedPoints(history: { date: string; price: number | null; store: string; estimated?: boolean }[]): PricePoint[] {
+  return history
+    .map((h, i) => ({ h, i }))
+    .filter(({ h }) => h.price != null)
+    .sort((a, b) => a.h.date.localeCompare(b.h.date) || a.i - b.i)
+    .map(({ h, i }) => ({ date: h.date.slice(0, 10), price: h.price as number, store: h.store, estimated: !!h.estimated, i }));
+}
+
+/** Yuvarlak eksen adımları: en küçük ve en büyük fiyatı içine alan 1/2/2,5/5 × 10ⁿ adımlı 3–5 çizgi. */
+export function niceTicks(min: number, max: number, target = 4): { lo: number; hi: number; step: number; ticks: number[] } {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { lo: 0, hi: 1, step: 1, ticks: [0, 1] };
+  if (max < min) [min, max] = [max, min];
+  let span = max - min;
+  if (span < 1e-9) span = Math.max(Math.abs(max) * 0.1, 1); // tek fiyat: çevresinde küçük bir aralık
+  const raw = span / Math.max(1, target - 1);
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= raw - 1e-9) ?? 10 * p;
+  let lo = Math.floor(min / step + 1e-9) * step;
+  let hi = Math.ceil(max / step - 1e-9) * step;
+  if (hi - lo < 1e-9) { lo -= step; hi += step; }
+  if (lo < 0 && min >= 0) lo = 0;
+  const ticks: number[] = [];
+  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 100) / 100);
+  return { lo, hi: ticks[ticks.length - 1]!, step, ticks };
+}
+
+/** İki tarih arasındaki gün (b − a), yerel takvim günü. */
+export function daysBetween(a: string, b: string): number {
+  const d = (s: string) => { const [y, m, dd] = s.slice(0, 10).split("-").map(Number); return Date.UTC(y!, m! - 1, dd!); };
+  return Math.round((d(b) - d(a)) / 864e5);
+}
+
+const MON = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+/** "bugün", "dün", "12 Eki" (yıl farklıysa "12 Eki 2025") */
+export function dayWord(iso: string, today: string): string {
+  const n = daysBetween(iso, today);
+  if (n === 0) return "bugün";
+  if (n === 1) return "dün";
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return `${d} ${MON[m! - 1]}${String(y) !== today.slice(0, 4) ? ` ${y}` : ""}`;
+}
+export const monthShort = (ym: string) => MON[Number(ym.slice(5, 7)) - 1] ?? ym;
+
+/** Değişim yüzdesi, tam sayıya yuvarlanmış (−6,5 → −7). */
+export const changePct = (from: number, to: number) => (from ? Math.round(((to - from) / from) * 100) : 0);
+/** "+%17" / "−%7" / "%0" */
+export const pctWord = (p: number) => `${p > 0 ? "+" : p < 0 ? "−" : ""}%${Math.abs(p)}`;
+
+const UNLU = "aeıioöuüâîû";
+const SERT = "fstkçşhp";
+/** Rakamla biten adın okunuşu (son kısmı yeter): A101 → "bir", 5M → "beş" */
+function sayiOkunusu(n: number): string {
+  if (n === 0) return "sıfır";
+  if (n % 1000 === 0) return "bin";
+  if (n % 100 === 0) return "yüz";
+  const u = n % 10;
+  if (u) return ["", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"][u]!;
+  return ["", "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan"][(n % 100) / 10]!;
+}
+/** Ayrılma eki: File'den, BİM'den, A101'den, Şok'tan, Migros'tan, Marmara'dan (son ünlü ve sert ünsüz). */
+export function ayrilma(ad: string): string {
+  const s = ad.trim();
+  const dig = /(\d+)$/.exec(s);
+  const h = dig ? sayiOkunusu(Number(dig[1])) : s.toLocaleLowerCase("tr").replace(/[^a-zçğıöşüâîû]/g, "");
+  const son = [...h].reverse().find((c) => UNLU.includes(c));
+  const ince = !son || "eiöüî".includes(son);
+  const sert = !!h && SERT.includes(h[h.length - 1]!);
+  return `${s}'${sert ? "t" : "d"}${ince ? "e" : "a"}n`;
+}
+
+// ---------------------------------------------------------------- alışveriş listesi
+
+export interface PlanChain { chain: string; total: number; covered: number; missing: number }
+/** Hepsini tek yerden: en çok ürünü bulunan, eşitse toplamı en düşük market. */
+export function bestChain(chains: PlanChain[] | null | undefined): PlanChain | null {
+  const list = (chains ?? []).filter((c) => c.covered > 0);
+  if (!list.length) return null;
+  return [...list].sort((a, b) => b.covered - a.covered || a.total - b.total)[0]!;
+}

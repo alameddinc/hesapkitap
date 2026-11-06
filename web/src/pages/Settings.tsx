@@ -187,6 +187,23 @@ function PrivacyForm() {
   );
 }
 
+/** Fiyatlarımı adsız katkı olarak paylaş (kişiye özel; sunucu meta.ui.price_share verirse görünür, eski sunucuda yok). */
+function PriceShareForm() {
+  const ui = useUI();
+  const { ui: prefs, save } = useUiPrefs();
+  if (typeof prefs.price_share !== "boolean") return null;
+  return (
+    <section className="card p-4">
+      <label className="flex cursor-pointer items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-0.5" checked={prefs.price_share} disabled={save.isPending}
+          onChange={(e) => save.mutate({ price_share: e.target.checked }, { onError: (er) => ui.error(er.message) })} />
+        <span className="font-semibold">Fiyatlarımı adsız katkı olarak paylaş
+          <span className="block text-xs font-normal text-stone-500">Ürün fiyatları adın ve şuben olmadan, en az 3 kişiden gelince ortalama olarak kullanılır.</span></span>
+      </label>
+    </section>
+  );
+}
+
 function PasswordForm() {
   const ui = useUI();
   const [cur, setCur] = useState("");
@@ -293,6 +310,7 @@ function MemberSettings({ owner, role, roleLabel }: { owner: string; role?: stri
         <MyBookNote />
       </section>
       <ViewPrefs />
+      <PriceShareForm />
       <ShareSetup />
       <PasswordForm />
       <Sessions />
@@ -494,6 +512,7 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
         <DataPrivacy mode={isAdmin ? "self" : "hosted"} />
       </section>
       <PrivacyForm />
+      <PriceShareForm />
       <CycleForm />
       <PdfPasswords />
       {auth.data?.password_source === "app" && <PasswordForm />}

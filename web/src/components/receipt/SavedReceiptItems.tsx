@@ -44,7 +44,7 @@ export default function SavedReceiptItems({ entryId, total, receiptFile, readOnl
   return (
     <div className="space-y-2">
       <ReceiptItems items={cur} total={total} onChange={readOnly ? () => undefined : setItems} photo={photo}
-        serverCheck={digitOn && !readOnly ? q.data?.check : null}
+        serverCheck={digitOn && !readOnly ? q.data?.check : null} priceAlerts={q.data?.check?.price_alerts}
         onReread={receiptFile && !readOnly ? () => api.rereadEntryReceipt(entryId) : undefined}
         note={!cur.length ? "Bu kayıtta kalem yok; fişten yeniden okuyabilir ya da elle ekleyebilirsin." : null} />
       {dirty && (

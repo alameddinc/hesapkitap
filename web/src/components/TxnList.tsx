@@ -37,7 +37,7 @@ function PendingActions({ r }: { r: Row }) {
 }
 
 /** Kim ekledi: baş harf rozeti, üstüne gelince "Ayşe ekledi". */
-function AddedBy({ name, initial }: { name: string | null; initial: string }) {
+export function AddedBy({ name, initial }: { name: string | null; initial: string }) {
   const label = name ? `${name} ekledi` : "Sen ekledin";
   return (
     <span title={label} aria-label={label}

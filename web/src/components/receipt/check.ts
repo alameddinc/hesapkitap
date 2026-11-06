@@ -14,13 +14,24 @@ export interface ReceiptCheck {
   /** yetenek digit_fix (sunucu app/receipt_check.py digit_check): yalnız sunucunun check'inde; istemci hesaplamaz */
   digit_fix?: DigitFix[]; digit_fix_all?: { indices: number[]; total_ok: boolean } | null; residual?: number;
   suspect?: number[]; groups?: VatGroup[]; line_count?: { printed: number; read: number } | null;
+  /** fiyat artışı (sunucu fiyat takibi): bu satırın birim fiyatı geçen seferkinden farklı. Alan yoksa sunucu eski. */
+  price_alerts?: PriceAlert[];
+}
+/** Bu kalem geçen sefer başka fiyattı: "geçen sefer ₺30,00 (+%17)". Yalnız o satır değişmediyse (ad aynı) gösterilir. */
+export interface PriceAlert { index: number; name: string; paid: number; last_paid: number; last_date: string; change_pct: number; chain?: string | null }
+/** Hâlâ geçerli fiyat uyarıları: satır sırası → uyarı (kullanıcı satırı değiştirdiyse/sildiyse düşer). */
+export function livePriceAlerts(alerts: PriceAlert[] | null | undefined, items: ReceiptItem[]): Map<number, PriceAlert> {
+  const out = new Map<number, PriceAlert>();
+  for (const a of alerts ?? []) if (items[a.index]?.name === a.name && Math.abs(a.change_pct) >= 0.5) out.set(a.index, a);
+  return out;
 }
 /** Karışan rakam önerisi: bu kalemin tutarı `from` yerine `to` olabilir (termal baskıda 6↔8 …). Kendiliğinden uygulanmaz. */
 export interface DigitFix {
   index: number; name: string; from: number; to: number; digits: string;
   unit_price_from?: number; unit_price_to?: number;
-  /** ocr: telefonun okuması da `to` diyor · qty: adet × birim fiyat `to` ediyor · history: geçen sefer bu fiyat · group: fark bu KDV grubunda */
-  evidence?: ("ocr" | "qty" | "history" | "group")[]; score?: number; history_price?: number;
+  /** ocr: telefonun okuması da `to` diyor · qty: adet × birim fiyat `to` ediyor · history: geçen sefer bu fiyat · group: fark bu KDV grubunda
+   *  · community: başkaları bu ürüne community_price ödüyor */
+  evidence?: ("ocr" | "qty" | "history" | "group" | "community")[]; score?: number; history_price?: number; community_price?: number;
 }
 export interface VatGroup { rate: number; items_total: number; tax: number; printed: number | null; indices: number[]; ok: boolean }
 /** POST /api/receipts/reread ve /api/entries/{id}/receipt-reread yanıtı (hiçbir şey kaydedilmez). */

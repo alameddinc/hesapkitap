@@ -43,7 +43,7 @@ export const useLock = (key: string | undefined) => {
  *  ve yıl özeti içeride kilitli), zekât hiç kilitlenmez. */
 export const ROUTE_FEATURE: Partial<Record<Route, string>> = {
   plan: "planlama", hesaplar: "hesaplar", borclar: "borclar", transferler: "transferler", faturalar: "faturalar",
-  tasarruf: "tasarruf", tablo: "tablo", kurallar: "kurallar", fiyatlar: "fiyatlar",
+  tasarruf: "tasarruf", tablo: "tablo", kurallar: "kurallar", fiyatlar: "fiyatlar", alisveris: "alisveris_listesi",
 };
 
 export function Upgrade({ need }: { need?: string }) {
@@ -109,11 +109,11 @@ export function PlanGate({ feature, title, children, preview, compact }: {
   );
 }
 
-/** Menüden açılan sayfa paketinde kapalıysa: açıklama + bulanık önizleme (sayfa satırları sunucuda açık). Fiyatlar
- *  kendi PlanGate'ini kullanır (sunucu da kilitler, önizleme yok). */
+/** Menüden açılan sayfa paketinde kapalıysa: açıklama + bulanık önizleme (sayfa satırları sunucuda açık). Fiyatlar ve
+ *  Alışveriş listesi kendi PlanGate'ini kullanır (sunucu da kilitler, önizleme yok). */
 export function RouteLock({ route, children }: { route: Route; children: ReactNode }) {
   const key = ROUTE_FEATURE[route];
-  if (!key || key === "fiyatlar") return <>{children}</>;
+  if (!key || key === "fiyatlar" || key === "alisveris_listesi") return <>{children}</>;
   return <PlanGate feature={key} preview>{children}</PlanGate>;
 }
 
