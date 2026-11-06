@@ -38,7 +38,8 @@ PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ek
 MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
     ("POST", r"/api/entries/\d+/(match|unmatch)"),  # eşitleme: "Bu ikisi aynı mı?" ve eşleşmeyi geri al (görebildiği kayıtta)
-    ("POST", r"/api/receipts/parse"), ("POST", r"/api/bills/parse"), ("POST", r"/api/splits/propose"),
+    ("POST", r"/api/receipts/parse"), ("POST", r"/api/bills/parse"), ("POST", r"/api/documents/parse"),  # fiş / fatura okut
+    ("POST", r"/api/splits/propose"),
     ("POST", r"/api/dekont/(parse|save)"), ("POST", r"/api/documents/classify"),  # havale dekontu → Transferler
     ("PUT", r"/api/entries/\d+/receipt-items"), ("POST", r"/api/entries/\d+/receipt-reread"), ("POST", r"/api/receipts/reread"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
