@@ -3998,6 +3998,39 @@ def _store_key(name: str | None) -> str:
     return _re.sub(r"[^A-Z0-9]", "", normalize(name or "")) or "?"
 
 
+def recent_unit_prices(names: list[str], merchant: str | None = None, days: int = 90,
+                       exclude_entry: int | None = None) -> dict[str, list[float]]:
+    """Fiş denetimi için ürünlerin son `days` gündeki birim fiyatları (yalnız bu defter; ortak defter üyesi yalnız
+    görebildiği kayıtlarınkini görür), product_key → en yeniden eskiye. Aynı mağazada alınmışsa yalnız oradakiler, yoksa
+    hepsi. Fiyatı okunmuş (price_known 1) satırlar; exclude_entry (düzenlenen fişin kendisi) hariç."""
+    from datetime import date as _date, timedelta
+
+    from app import book
+
+    keys = sorted({k for k in (product_key(n) for n in names if n) if k})
+    if not keys:
+        return {}
+    since = (_date.today() - timedelta(days=days)).isoformat()
+    with connect() as c:
+        got = rows(c.execute(
+            f"SELECT entry_id, merchant, product_key, unit_price FROM receipt_items WHERE product_key IN "
+            f"({','.join('?' * len(keys))}) AND purchased_at >= ? AND price_known = 1 AND unit_price > 0 "
+            f"AND (entry_id IS NULL OR entry_id != ?) ORDER BY purchased_at DESC, id DESC",
+            (*keys, since, exclude_entry or -1)))
+        if book.active() and got:
+            seen = {e["id"] for e in book.filter_entries(rows(c.execute(
+                "SELECT id, hidden, account_id, payment, card_last4 FROM entries")))}
+            got = [r for r in got if r["entry_id"] in seen]
+    store = _store_key(merchant) if merchant else None
+    out: dict[str, list[float]] = {}
+    for k in keys:
+        mine = [r for r in got if r["product_key"] == k]
+        same = [r for r in mine if store and _store_key(r["merchant"]) == store]
+        if prices := [r["unit_price"] for r in same or mine]:
+            out[k] = prices
+    return out
+
+
 def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
     """Fişlerden: ürünler (tek alınanlar dahil, mağaza mağaza son fiyat, en ucuz işaretli, ilk→son değişim),
     mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka."""

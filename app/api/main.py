@@ -5571,6 +5571,7 @@ def parse_receipt(file: UploadFile = File(...)):
     receipt_verify.apply(out, None)  # bu uçta telefon metni yok: total_check null
     if not out.get("unreadable"):
         _auto_reread(out, data, mime)
+        _digit_evidence(out.get("check"), out.get("items") or [], None, out.get("vat_lines"), out.get("merchant"))
     out["receipt_file"] = _store_receipt(photo)
     if not out.get("unreadable"):
         doc_cache.put(original, doc_cache.FIS, out, out["receipt_file"])
@@ -6368,6 +6369,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         receipt_verify.apply(doc, text)
         if not doc.get("unreadable"):
             _auto_reread(doc, data, mime, more, text)
+        # digit_fix: metin kalemin yanında düzeltilmiş tutarı gösteriyor mu, KDV grupları, fiyat geçmişi
+        _digit_evidence(doc.get("check"), doc.get("items") or [], text, doc.get("vat_lines"), doc.get("merchant"))
     if not doc.get("unreadable"):
         doc_cache.put(ckey, doc_cache.BELGE, doc, doc.get("receipt_file"))
     if warn := db.take_storage_warning():
@@ -6433,21 +6436,46 @@ def _entry_for_receipt(entry_id: int) -> dict:
     return dict(r)
 
 
-def _receipt_items_out(entry_id: int, total: float | None) -> dict:
+def _digit_evidence(chk: dict | None, items: list[dict], text: str | None = None, vat_lines=None,
+                    merchant: str | None = None, exclude_entry: int | None = None) -> None:
+    """Fiş tutmuyorsa check'in karışan rakam önerilerini kanıtlarla yeniden hesapla (receipt_check.add_evidence):
+    okuma anındaki telefon/PDF metni (saklanmaz), fişin KDV dökümü ve bu defterdeki son 90 günün birim fiyatları
+    (db.recent_unit_prices; aynı mağaza önce)."""
+    if not chk or chk.get("ok") or chk.get("diff") is None or abs(chk["diff"]) <= receipt_check.TOL:
+        return
+    if isinstance(vat_lines, str):
+        import json as _json
+
+        from app import finance
+
+        try:
+            vat_lines = finance._vat_lines(_json.loads(vat_lines))
+        except ValueError:
+            vat_lines = None
+    names = [it.get("product") or it.get("name") or "" for it in items]
+    prices = db.recent_unit_prices(names, merchant, exclude_entry=exclude_entry)
+    history = {i: prices[k] for i, n in enumerate(names) if (k := db.product_key(n)) in prices}
+    receipt_check.add_evidence(chk, items, text, vat_lines or None, history or None)
+
+
+def _receipt_items_out(entry_id: int, total: float | None, entry: dict | None = None) -> dict:
     with db.connect() as c:
         items = [dict(x) for x in c.execute(
             "SELECT id, name, product, brand, qty, unit, amount, unit_price, price_known FROM receipt_items "
             "WHERE entry_id = ? ORDER BY id", (entry_id,))]
     # saklanan unit_price tutar / adet'ten türetilmiştir: adet × birim denetimi burada anlamsız, yalnız toplam denetlenir
-    return {"entry_id": entry_id, "items": items,
-            "check": receipt_check.check([{**i, "unit_price": None} for i in items], total)}
+    bare = [{**i, "unit_price": None} for i in items]
+    chk = receipt_check.check(bare, total)
+    if entry:
+        _digit_evidence(chk, bare, vat_lines=entry.get("vat_lines"), merchant=entry.get("description"), exclude_entry=entry_id)
+    return {"entry_id": entry_id, "items": items, "check": chk}
 
 
 @app.get("/api/entries/{entry_id}/receipt-items")
 def get_receipt_items(entry_id: int):
     """Kayıtlı fişin kalemleri ve denetimi (toplam tutuyor mu)."""
     e = _entry_for_receipt(entry_id)
-    return _receipt_items_out(entry_id, e["amount"])
+    return _receipt_items_out(entry_id, e["amount"], e)
 
 
 class ReceiptItemsIn(BaseModel):
@@ -6463,7 +6491,7 @@ def put_receipt_items(entry_id: int, body: ReceiptItemsIn):
         raise HTTPException(422, "En fazla 60 kalem")
     n = db.save_receipt_items(entry_id, [i for i in body.items if isinstance(i, dict)], e["description"],
                               e["entry_date"], total=e["amount"])
-    return {"saved": n, **_receipt_items_out(entry_id, e["amount"])}
+    return {"saved": n, **_receipt_items_out(entry_id, e["amount"], e)}
 
 
 def _reread_photo(name: str | None, total: float | None) -> dict:

@@ -86,6 +86,11 @@ CAPABILITIES = (
                               # defterindeyse kopyalanır (hak yeniden düşmez)
     "read_cache",             # aynı belge aynı defterde 30 gün yeniden okunmaz: okuma yanıtında cached: true (charged
                               # yok); okunamayan fotoğraf günde 5'ten sonra 1 hak; me/ai reads family_limit/family_left
+    "digit_fix",              # fiş denetiminde karışan rakam (termal baskı 6↔8 …): check.digit_fix [{index, name, from, to,
+                              # digits "6→8", unit_price_from?, unit_price_to?, evidence [ocr|qty|history|group], score,
+                              # history_price?}], digit_fix_all {indices, total_ok} | null, residual (TL), suspect [sıra],
+                              # groups [{rate, items_total, tax, printed, indices, ok}], line_count {printed, read} | null;
+                              # kendiliğinden uygulanmaz
 )
 
 
