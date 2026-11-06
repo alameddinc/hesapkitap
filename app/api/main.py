@@ -5123,10 +5123,17 @@ def book_leave():
 
 @app.post("/api/book/members/{uid}/reset-password")
 def book_reset_member_password(uid: int):
+    """Davetle defterde açılmış üyenin şifresini sıfırla (geçici şifre bir kez döner). Var olan hesabıyla katılmış üye
+    (kendi "Benim" defteri ve verisi var) 403: sahip geçici şifreyle o hesaba girip kişinin kendi verisini ele
+    geçirebilirdi; üye şifresini kendisi sıfırlar."""
+    from app import book_join
+
     u = _book_owner()
     m = system.user(uid)
     if not m or m.get("member_of") != u["id"]:
         raise HTTPException(404, "Üye yok")
+    if book_join.joined_with_account(m):
+        raise HTTPException(403, "Bu üye kendi hesabıyla katıldı; şifresini kendisi sıfırlar (Şifremi unuttum).")
     temp = auth.temp_password()
     auth.set_password(uid, temp, must_change=True)
     from app import reset

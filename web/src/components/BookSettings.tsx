@@ -10,7 +10,8 @@ import { needLabel, usePlan } from "./Plan";
 import InviteCard, { type Invite } from "./InviteCard";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
-interface Member { id: number; username: string; last_login: string | null; disabled: boolean; role: BookRole; own_rules: boolean; rules: Rules }
+interface Member { id: number; username: string; last_login: string | null; disabled: boolean; role: BookRole; own_rules: boolean; rules: Rules;
+  joined?: boolean /* var olan hesabıyla katıldı: şifresini sahip sıfırlayamaz */ }
 interface Book {
   members: Member[];
   invites: Invite[];
@@ -107,9 +108,9 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
           onChange={(e) => setRole.mutate(e.target.value as BookRole, onErr)}>
           {ROLES.map((r) => <option key={r.value} value={r.value}>{d.roles?.[r.value] ?? r.label}</option>)}
         </select>
-        <button className="btn-ghost px-2 py-1 text-xs" title="Şifre sıfırla" aria-label={`${m.username} için şifre sıfırla`} disabled={reset.isPending}
+        {!m.joined && <button className="btn-ghost px-2 py-1 text-xs" title="Şifre sıfırla" aria-label={`${m.username} için şifre sıfırla`} disabled={reset.isPending}
           onClick={() => void ask(`${m.username} için şifre sıfırlansın mı?\n\nŞu anki şifresi çalışmaz; ekranda bir kez gösterilecek geçici şifreyi ona iletmen gerekir.`,
-            { confirm: "Şifreyi sıfırla", danger: true, irreversible: false }).then((ok) => { if (ok) reset.mutate(undefined, onErr); })}><KeyRound size={14} /></button>
+            { confirm: "Şifreyi sıfırla", danger: true, irreversible: false }).then((ok) => { if (ok) reset.mutate(undefined, onErr); })}><KeyRound size={14} /></button>}
         <button className="btn-danger px-2 py-1 text-xs" title="Çıkar" aria-label={`${m.username} üyesini çıkar`} disabled={remove.isPending}
           onClick={() => void ask(`${m.username} ortak defterden çıkarılsın mı? Eklediği kayıtlar defterde kalır.`).then((ok) => { if (ok) remove.mutate(undefined, onErr); })}>
           <Trash2 size={14} /></button>
