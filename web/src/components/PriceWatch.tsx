@@ -4,12 +4,15 @@ import { ChevronDown, Search } from "lucide-react";
 import { useState } from "react";
 import { cx, dateTR, fold, maskText, pctSigned, tl } from "../format";
 import Segmented from "./Segmented";
+import PriceDetail, { type PriceGroupRef, type PriceHistory } from "./PriceDetail";
 
 interface StorePrice { store: string; branch: string | null; price: number; date: string; estimated: boolean; cheapest?: boolean }
 interface Product {
   key: string; product: string; brand: string | null; unit: "adet" | "kg" | "lt"; count: number; last_date: string;
   last_price: number | null; last_estimated: boolean; first_price: number | null; change_pct: number | null; stores: StorePrice[];
-  history: { date: string; price: number | null; store: string; branch: string | null; qty: number; name: string }[];
+  history: PriceHistory[];
+  /** yetenek price_groups: markası fark etmeyen ürün grubu (Süt · 1 L) */
+  group?: PriceGroupRef | null;
 }
 interface Data {
   products: Product[];
@@ -32,7 +35,7 @@ function ProductRow({ p, showStores = true }: { p: Product; showStores?: boolean
   const [open, setOpen] = useState(false);
   return (
     <li>
-      <button className="flex w-full items-start gap-3 px-4 py-2.5 text-left" onClick={() => setOpen(!open)}>
+      <button className="flex w-full items-start gap-3 px-4 py-2.5 text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
         <div className="min-w-0 flex-1">
           <div className="font-medium">{p.product}{p.brand && !fold(p.product).includes(fold(p.brand)) && <span className="text-xs font-normal text-stone-500"> · {p.brand}</span>}</div>
           {showStores && (
@@ -54,19 +57,7 @@ function ProductRow({ p, showStores = true }: { p: Product; showStores?: boolean
         </div>
         <ChevronDown size={14} className={cx("mt-1 shrink-0 text-stone-400 transition-transform", open && "rotate-180")} />
       </button>
-      {open && (
-        <ul className="space-y-0.5 px-4 pb-3 text-xs text-stone-500">
-          {p.history.map((h, i) => (
-            <li key={i} className="flex justify-between gap-2">
-              <span className="min-w-0">
-                {dateTR(h.date)} · {maskText(h.store)}{h.branch && ` (${h.branch})`} · <i>{h.name}</i>
-                {h.qty !== 1 && ` · ${h.qty.toLocaleString("tr-TR")}${p.unit === "adet" ? " adet" : ` ${p.unit}`}`}
-              </span>
-              <span className="shrink-0 tabular-nums">{h.price != null ? `${tl(h.price)}${per(p.unit)}` : "—"}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {open && <PriceDetail p={p} />}
     </li>
   );
 }
