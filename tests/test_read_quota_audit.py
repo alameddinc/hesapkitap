@@ -61,3 +61,124 @@ def test_pdf_header_after_1024_bytes_still_counts_pages(hosted, gemini):  # noqa
     r = c.post("/api/documents/parse", files=[("file", ("fatura.pdf", padded, "application/pdf"))])
     assert r.status_code == 502 and r.json().get("needed") == 3
     assert gemini == [] and _daily(u["id"]) == 2
+
+
+# ---------------------------------------------------------------- yapay zekâ çağrıldıysa hak düşer
+
+def test_share_uses_cache_and_counts_like_the_app(hosted, gemini):  # noqa: F811
+    """Paylaş ucu: aynı içerik önbellekten (yapay zekâ yok, hak yok); eskiden her paylaşım yapay zekâya gidiyordu."""
+    c, u = _user(hosted)
+    img = _jpeg()
+    assert c.post("/api/documents/parse", files=[("file", ("f.jpg", img, "image/jpeg"))]).status_code == 200
+    assert _daily(u["id"]) == 1 and len(gemini) == 1
+    for _ in range(3):
+        r = c.post("/api/share", files=[("file", ("f.jpg", img, "image/jpeg"))], headers={"accept": "application/json"})
+        assert r.status_code == 200, r.text
+    assert len(gemini) == 1 and _daily(u["id"]) == 1
+    assert len(c.get("/api/inbox").json()) == 3  # yine de gelen kutusuna düşer
+
+
+def test_share_new_content_counts_and_cache_expiry_recounts(hosted, gemini):  # noqa: F811
+    from app import system
+
+    c, u = _user(hosted)
+    r = c.post("/api/share", files=[("file", ("g.jpg", b"paylas-1", "image/jpeg"))], headers={"accept": "application/json"})
+    assert r.status_code == 200 and len(gemini) == 1 and _daily(u["id"]) == 1
+    with system.connect() as s:  # önbellek süresi doldu
+        s.execute("DELETE FROM doc_cache")
+    c.post("/api/share", files=[("file", ("g.jpg", b"paylas-1", "image/jpeg"))], headers={"accept": "application/json"})
+    assert len(gemini) == 2 and _daily(u["id"]) == 2  # yapay zekâ yeniden çağrıldı: yeniden sayıldı
+
+
+def test_share_quota_full_is_refused_before_ai(hosted, gemini):  # noqa: F811
+    c, u = _user(hosted)
+    _set_reads(u["id"], day=3)
+    r = c.post("/api/share", files=[("file", ("h.jpg", b"paylas-2", "image/jpeg"))], headers={"accept": "application/json"})
+    assert r.status_code == 200 and gemini == [] and c.get("/api/inbox").json() == []
+
+
+def test_duplicate_statement_reread_by_ai_is_counted(hosted, monkeypatch):
+    """Zaten var olan ekstre, önbellek süresi dolmuşken yeniden yüklendi: yapay zekâ çağrıldıysa hak düşer."""
+    from app import parsers, system
+    from app.parsers import ai
+    from tests.conftest import fixture_bytes
+
+    st = parsers.parse_text(parsers.extract_text(fixture_bytes("kuveytturk.txt")))
+    monkeypatch.setattr(parsers, "parse_text", lambda text: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaTEST0000")
+    calls = []
+    monkeypatch.setattr(ai, "parse_pdf_with_ai", lambda data, mime="application/pdf": calls.append(1) or st)
+    c, u = _user(hosted)
+    files = [("files", ("k.pdf", fixture_bytes("kuveytturk.txt"), "application/pdf"))]
+    assert c.post("/api/statements/upload", files=files).json()[0]["status"] == "saved" and _daily(u["id"]) == 1
+    r = c.post("/api/statements/upload", files=files).json()[0]  # önbellekten: bedava
+    assert r["status"] == "duplicate" and r.get("cached") and calls == [1] and _daily(u["id"]) == 1
+    with system.connect() as s:
+        s.execute("DELETE FROM doc_cache")
+    r = c.post("/api/statements/upload", files=files).json()[0]
+    assert r["status"] == "duplicate" and calls == [1, 1]
+    assert _daily(u["id"]) == 2 and r["charged"] == {"daily": 1, "extra": 0}
+
+
+# ---------------------------------------------------------------- kontrol ile sayım arası yarış
+
+def test_concurrent_request_sees_reserved_read(hosted):
+    """Kalan 1 hak: ilk isteğin kontrolü hakkı ayırır, eşzamanlı ikinci istek (ayrı scope) reddedilir; ilk istek
+    bitince (sayılmadan) ayırma silinir."""
+    import pytest
+
+    from app import db, doc_reads, system
+
+    _, u = _user(hosted)
+    _set_reads(u["id"], day=2)
+    u = system.user(u["id"])
+    with db.use_space(system.user_db_path(u), u):
+        with doc_reads.scope():
+            doc_reads.check(b"istek-a")
+            doc_reads.check(b"istek-a")  # aynı istekte aynı belgeye ikinci kontrol (ör. iç işleyici) kendini saymaz
+            with doc_reads.scope(), pytest.raises(doc_reads.QuotaError):
+                doc_reads.check(b"istek-b")
+        with doc_reads.scope():  # ilk istek sayılmadan bitti (hata / zaten vardı): hak geri açık
+            doc_reads.check(b"istek-b")
+            assert doc_reads.charge(b"istek-b") == {"daily": 1, "extra": 0}
+        with system.connect() as c:
+            assert c.execute("SELECT COUNT(*) FROM read_reserve").fetchone()[0] == 0
+
+
+def test_parallel_uploads_with_one_read_left_only_one_is_read(hosted, monkeypatch):
+    """Uçtan uca yarış: kalan 1 hakla aynı anda iki fotoğraf. Eskiden ikisi de kontrolden geçip yapay zekâya gidiyordu."""
+    import json
+    import threading
+    import time
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from app import receipt
+    from app.api.main import app
+
+    c, u = _user(hosted)
+    _set_reads(u["id"], day=2)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaTEST0000")
+    calls = []
+    doc = {"doc_type": "fis", "merchant": "Ornek", "date": "2026-10-20", "total": 10.5, "items": []}
+
+    def slow_post(url, json_=None, timeout=None, headers=None, **kw):
+        calls.append(url)
+        time.sleep(0.4)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": json.dumps(doc)}]}}]})
+
+    monkeypatch.setattr(receipt.httpx, "post", slow_post)
+    out = []
+
+    def go(i):
+        tc = TestClient(app, cookies=c.cookies)
+        r = tc.post("/api/documents/parse", files=[("file", (f"y{i}.jpg", f"yaris-{i}".encode(), "image/jpeg"))])
+        out.append(r.status_code)
+
+    ts = [threading.Thread(target=go, args=(i,)) for i in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert sorted(out) == [200, 502] and len(calls) == 1 and _daily(u["id"]) == 3

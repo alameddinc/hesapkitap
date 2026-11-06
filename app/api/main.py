@@ -294,6 +294,13 @@ class _read_slot:
 
 
 async def _run(request: Request, call_next, book: str | None, path: str):
+    from app import doc_reads
+
+    with doc_reads.scope():  # okuma hakkı ayırmaları bu isteğe ait; istek bitince sayılmayanlar silinir
+        return await _run_inner(request, call_next, book, path)
+
+
+async def _run_inner(request: Request, call_next, book: str | None, path: str):
     if request.method == "GET" and path.startswith("/api/"):
         async with _read_slot(book):
             return await call_next(request)
@@ -4665,7 +4672,13 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                    total_debt=stmt.total_debt, txn_count=len(stmt.transactions),
                    reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source,
                    **({"cached": True} if slot.hit else {}))
+        ai_called = stmt.ai_parsed and not slot.hit
+        if ai_called:  # yapay zekâ gerçekten okudu (önbellekte yoktu): tekrar muafiyeti yok, okuma sayılır
+            doc_reads.forget(data)
         if db.statement_exists(data, stmt):
+            # zaten vardı: yerel okumada hak düşmez; yapay zekâ çağrıldıysa düşer (sonuç önbellekte, tekrarı bedava)
+            if ai_called and (charged := doc_reads.charge(data)):
+                res["charged"] = charged
             results.append({**res, "status": "duplicate"})
             continue
         db.save_statement(data, f.filename or "ekstre.pdf", stmt)
@@ -5387,10 +5400,14 @@ class UncAiIn(BaseModel):
 
 
 @app.post("/api/uncategorized/ai-suggest")
+@_heavy
 def uncategorized_ai_suggest(body: UncAiIn):
     """Önerisi olmayan işyeri grupları için yapay zekâdan kategori (tek çağrı = 1 hak; hazır sürümde belge okuma hakkı,
     kendi sunucusunda ortak anahtarın kotası). Yalnız işyeri ADLARI gönderilir: tutar, tarih, kişi adı gitmez.
-    Gemini anahtarı yoksa 404; hak doluysa 402."""
+    Gemini anahtarı yoksa 404; hak doluysa 402. Yapay zekâ her çağrıldığında 1 hak: eskiden anahtar "gün + adlar"
+    olduğundan aynı gün aynı adlarla tekrar sormak tekrar muafiyetine takılıp bedavaya yapay zekâ çağırıyordu."""
+    import uuid
+
     from app import doc_reads, uncategorized
 
     if not receipt.enabled():
@@ -5398,8 +5415,9 @@ def uncategorized_ai_suggest(body: UncAiIn):
     names = uncategorized.ai_names(body.keys, _unc_month(body.month))
     if not names:
         return {"suggestions": {}, "asked": 0, "ai": uncategorized.ai_status()}
+    key = f"ai-kategori:{uuid.uuid4().hex}"  # her çağrı ayrı okuma (tekrar muafiyeti yok)
     try:
-        doc_reads.check()  # hazır sürüm: hak doluysa sorulmaz
+        doc_reads.check(key)  # hazır sürüm: hak doluysa sorulmaz (geçerse hak bu isteğe ayrılır)
     except doc_reads.QuotaError as e:
         raise QuotaFull(402, e) from e
     try:
@@ -5412,7 +5430,7 @@ def uncategorized_ai_suggest(body: UncAiIn):
         raise HTTPException(429, errors.user_text(e, 429)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    doc_reads.charge(f"ai-kategori:{date.today().isoformat()}:" + "|".join(sorted(names.values())))
+    doc_reads.charge(key)
     return {"suggestions": out, "asked": len(names), "ai": uncategorized.ai_status()}
 
 

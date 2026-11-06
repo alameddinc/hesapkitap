@@ -10,6 +10,11 @@ yarısı (_day). Ücretsizde ayrıca aylık tavan (plans.MONTHLY_CAP: günde 3 V
 - Elle yeniden okuma (receipt-reread) REREAD_COST (2) hak; otomatik kademeli okuma hak düşürmez.
 - Kontrol işten ÖNCE: check(key, kind, needed) gereken hak (verilmezse anahtarın ağırlığı) kalan günlük hak + ek paket
   bakiyesinden fazlaysa QuotaError (receipt.ReceiptError) atar; belge okunmaz (kısmi okuma yok).
+- Ayırma (yarış): istek içinde (scope(); ara katman her /api/ isteğini sarar) check geçince hak ayrılır
+  (system.read_reserve, BEGIN IMMEDIATE ile kontrol + ayırma tek işlemde). Eşzamanlı başka istekler ayrılanı kullanılmış
+  sayar: kalan 1 hakla aynı anda gönderilen iki belgeden yalnız biri okunur. charge ayırmayı sayıma çevirir; sayım
+  olmazsa (hata, "zaten vardı", önbellek, ücretsiz okunamayan) istek bitince ayırma silinir. İade gerekmez: hak hiç
+  düşmemiştir. İstek dışında (gece işleri, testlerde doğrudan çağrı) ayırma yapılmaz.
 - Sayım işten SONRA ve yalnız yeni belge okunduysa: charge(key, kind). Hata çıkan, "zaten vardı" sonucu veren okumada
   charge çağrılmaz. charge idempotenttir: aynı içerik (key = dosya baytları ya da "mail:<Message-ID>") aynı defterde
   ikinci kez sayılmaz (system.doc_reads kaydı); dış uç ve iç işleyici (mailbox.handle_pdf) aynı belgeyi sayabilir.
@@ -40,6 +45,9 @@ import hashlib
 import math
 import os
 import sqlite3
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -394,9 +402,55 @@ def _refusal(u: dict, st: dict, needed: int, kind: str, reread: bool = False, n_
     return QuotaError(message(u, st, needed, reread, n_pages), limit, _upgrade(u), kind, extra)
 
 
+# ---------------------------------------------------------------- ayırma (kontrol ile sayım arası yarış)
+
+RESERVE_TTL = 600  # saniye: bundan eski ayırma (çöken süreçten kalmış) yok sayılır
+_scope: ContextVar["list[tuple[int, str | None]] | None"] = ContextVar("doc_reads_scope", default=None)
+
+
+@contextmanager
+def scope():
+    """Bir isteğin ayırmaları (ara katman her /api/ isteğini sarar). Çıkışta sayılmamış ayırmalar silinir."""
+    mine: list[tuple[int, str | None]] = []
+    token = _scope.set(mine)
+    try:
+        yield mine
+    finally:
+        _scope.reset(token)
+        if mine:
+            from app import system
+
+            try:
+                with system.connect() as c:
+                    c.executemany("DELETE FROM read_reserve WHERE id = ?", [(i,) for i, _ in mine])
+            except sqlite3.Error:  # silinemezse RESERVE_TTL sonunda yok sayılır
+                pass
+
+
+def _reserved(c, col: str, val: int, mine: list) -> int:
+    """Başka isteklerin (bu isteğinkiler hariç) bu kişi/aile için ayırdığı, henüz sayılmamış hak."""
+    ids = [i for i, _ in mine]
+    q = f"SELECT COALESCE(SUM(n), 0) FROM read_reserve WHERE {col} = ? AND created_at > ?"
+    if ids:
+        q += f" AND id NOT IN ({','.join('?' * len(ids))})"
+    return int(c.execute(q, (val, time.time() - RESERVE_TTL, *ids)).fetchone()[0])
+
+
+def _consume(c, h: str | None) -> None:
+    """charge: bu isteğin bu anahtar için ayırması sayıma dönüşür (silinir)."""
+    mine = _scope.get()
+    if not mine:
+        return
+    hit = next((x for x in mine if x[1] == h), None)
+    if hit:
+        mine.remove(hit)
+        c.execute("DELETE FROM read_reserve WHERE id = ?", (hit[0],))
+
+
 def check(key: bytes | str | None = None, kind: str = BELGE, needed: int | None = None, reread: bool = False) -> None:
     """Gereken hak (needed; verilmezse anahtarın ağırlığı, weight) bugünkü kalan + ek paket bakiyesinden fazlaysa
     QuotaError: hiçbir belge okunmaz (bilinen bankanın yerel ekstresi, daha önce okunmuş dosya dahil; kısmi okuma yok).
+    Başka eşzamanlı isteklerin ayırdığı hak kullanılmış sayılır; istek içindeyse geçen kontrol hakkı ayırır (scope).
     Tekrar muafiyeti sayımdadır (charge)."""
     from app import system
 
@@ -406,10 +460,24 @@ def check(key: bytes | str | None = None, kind: str = BELGE, needed: int | None 
     from app import ai_restrictions
     ai_restrictions.check(u, kind)  # yönetici kısıtlaması: günlük üst sınır (app/ai_restrictions.py)
     n = needed if needed is not None else weight(key)
+    mine = _scope.get()
+    h = None if key is None else _key(key)
     with system.connect() as c:
+        c.execute("BEGIN IMMEDIATE")  # kontrol + ayırma tek yazma işleminde: iki istek aynı anda geçemez
+        c.execute("DELETE FROM read_reserve WHERE created_at <= ?", (time.time() - RESERVE_TTL,))
         st = _state(c, u)
-    if st["left"] + st["extra"] < n:
-        raise _refusal(u, st, n, kind, reread, None if needed is not None else pages(key))
+        avail = st["left"] + st["extra"] - _reserved(c, "user_id", u["id"], mine or [])
+        if st["family"]:  # aile tavanı: diğer üyelerin süren okumaları da (ek paket tavana girmez)
+            avail = min(avail, max(0, st["family"]["left"] - _reserved(c, "family", st["family"]["book"], mine or []))
+                        + st["extra"])
+        if avail < n:
+            c.rollback()
+            st = {**st, "left": max(0, min(st["left"], avail))}
+            raise _refusal(u, st, n, kind, reread, None if needed is not None else pages(key))
+        if mine is not None and not any(x[1] == h for x in mine):
+            rid = c.execute("INSERT INTO read_reserve (user_id, family, hash, n, created_at) VALUES (?, ?, ?, ?, ?)",
+                            (u["id"], st["family"]["book"] if st["family"] else None, h, n, time.time())).lastrowid
+            mine.append((rid, h))
 
 
 def allowed(key: bytes | str | None = None, kind: str = BELGE) -> bool:
@@ -452,6 +520,8 @@ def charge(key: bytes | str, kind: str = BELGE, needed: int | None = None) -> di
 
     n = needed if needed is not None else weight(key)
     with system.connect() as c:  # kayıt + sayaç tek işlemde: yarışta iki istek aynı belgeyi iki kez sayamaz
+        c.execute("BEGIN IMMEDIATE")
+        _consume(c, _key(key))  # kontrolde ayrılan hak sayıma dönüşür
         if not c.execute("INSERT OR IGNORE INTO doc_reads (book_id, hash, month, kind) VALUES (?, ?, ?, ?)",
                          (_book(u), _key(key), _month(), kind)).rowcount:
             return False
@@ -476,6 +546,7 @@ def charge_reread() -> dict | None:
 
     with system.connect() as c:
         c.execute("BEGIN IMMEDIATE")
+        _consume(c, None)  # check_reread'in ayırması
         ai_restrictions.count(c, u["id"])  # yeniden okuma da yönetici kısıtlamasının günlük sınırına sayılır
         return _spend(c, u, REREAD_COST)
 

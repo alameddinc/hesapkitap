@@ -63,26 +63,22 @@ def process(name: str, data: bytes, mime: str) -> dict:
             return {"status": "hata", "message": str(e)}
     if not is_pdf and mime not in IMAGE_TYPES:
         return {"status": "hata", "message": f"{name}: sadece PDF ya da fotoğraf paylaşılabilir"}
-    from app.api.main import BILL_TYPES, CATEGORIES, EXPENSE_CATEGORIES, _prepare_photo, _store_receipt
+    from fastapi import HTTPException
 
-    cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
-    # fotoğraf: küçült + EXIF/konum sil; okuma ve saklama bu hazırlanmış görüntüyle (app/images.py)
-    read, read_mime, photo = (data, "application/pdf", None) if is_pdf else _prepare_photo(data, mime)
-    from app import doc_reads
+    from app.api.main import _read_document
 
+    # uygulamadaki okumayla aynı yol (app/api/main._read_document): fotoğraf küçültülür ve EXIF'ten arındırılır, aynı
+    # içerik önbellekten döner (yapay zekâ yok, hak düşmez), önbellekte yoksa yeniden sayılır (forget), okunamayan
+    # fotoğrafta günün ücretsiz denemeleri; fiş fotoğrafı / fatura dosyası saklanır. Eskiden burada önbelleğe bakılmıyor
+    # ve tekrar kaydı düşürülmüyordu: aynı fotoğraf her paylaşımda yapay zekâya gidip hak düşmüyordu (güvenlik denetimi)
     try:
-        # tür okumadan belli değil: fotoğraf fiş, PDF belge sayılır; sayım okunan gerçek türe gider
-        doc_reads.check(data, doc_reads.BELGE if is_pdf else doc_reads.FIS)  # hazır sürüm: hak doluysa okunmaz
-        doc = receipt.parse_document(read, read_mime, cats, sorted({r["category"] for r in db.list_item_rules()}))
+        doc = _read_document(data, "application/pdf" if is_pdf else mime)
+    except HTTPException as e:  # hak doldu (QuotaFull) ya da okunamadı
+        return {"status": "hata", "message": str(e.detail)}
     except receipt.ReceiptError as e:
         return {"status": "hata", "message": str(e)}
-    doc_reads.charge(data, doc_reads.kind_of_doc(doc.get("type")))
-    if doc["type"] == "bill" and photo:
-        doc["file_name"] = db.save_bill_file(photo, ".jpg")
-    elif doc["type"] == "bill" and (is_pdf or mime in BILL_TYPES):
-        doc["file_name"] = db.save_bill_file(data, BILL_TYPES.get("application/pdf" if is_pdf else mime, ".pdf"))
-    elif doc["type"] == "receipt":
-        doc["receipt_file"] = _store_receipt(photo)
+    if doc.get("unreadable"):
+        return {"status": "hata", "message": f"{name}: {doc.get('message') or 'okunamadı'}"}
     with db.connect() as c:
         _init(c)
         iid = c.execute("INSERT INTO shared_inbox (filename, kind, doc) VALUES (?, ?, ?)",

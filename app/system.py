@@ -72,6 +72,14 @@ CREATE TABLE IF NOT EXISTS read_book_daily (  -- hazır sürüm: ortak defterin 
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (book_id, day)
 );
+CREATE TABLE IF NOT EXISTS read_reserve (  -- hazır sürüm: kontrolden geçmiş, sayımı bekleyen okuma (doc_reads.check);
+    id INTEGER PRIMARY KEY,             -- eşzamanlı istekler aynı kalan hakkı iki kez kullanamasın. İstek bitince silinir
+    user_id INTEGER NOT NULL,
+    family INTEGER,                     -- aile tavanının defteri (doc_reads._family) ya da NULL
+    hash TEXT,                          -- doc_reads._key(anahtar) ya da NULL (anahtarsız kontrol)
+    n INTEGER NOT NULL,
+    created_at REAL NOT NULL            -- unix zamanı; RESERVE_TTL'den eskisi (çöken süreç) yok sayılır
+);
 CREATE TABLE IF NOT EXISTS doc_cache (    -- hazır sürüm: okunmuş belgenin sonucu (app/doc_cache.py); 30 gün
     book_id INTEGER NOT NULL,           -- doc_reads._book: önbellek defter başı
     hash TEXT NOT NULL,                 -- sha256(dosya baytları); dosyanın kendisi saklanmaz
