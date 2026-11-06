@@ -3,7 +3,7 @@ import { ApiError, bodyOf, failureText, send } from "../lib/apiError";
 import { useCallback, useContext, useRef } from "react";
 import { UIContext } from "../ui";
 import { newKey, withAction } from "../lib/idem";
-import { api, type Row } from "../api";
+import { api, type Meta, type Row } from "../api";
 import { addMonths, periodOf } from "../format";
 
 export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta });
@@ -145,9 +145,14 @@ export function useUiPrefs() {
   const qc = useQueryClient();
   const ui = meta.data?.ui ?? { simple: false, layout: null };
   const save = useMutation({
-    mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean }) =>
+    mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean; price_share?: boolean }) =>
       send("/api/me/ui", { method: "PUT", json: body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["meta"] }),
+    // anahtar gibi ayarlar (price_share) hemen değişsin; hata olursa sunucudaki hale döner
+    onMutate: (body) => {
+      if (body.price_share === undefined) return;
+      qc.setQueryData<Meta>(["meta"], (m) => (m?.ui ? { ...m, ui: { ...m.ui, price_share: body.price_share } } : m));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["meta"] }),
   });
   return { ui, save };
 }
