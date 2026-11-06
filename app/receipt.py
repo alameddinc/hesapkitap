@@ -334,9 +334,11 @@ def _record_cost(kind: str, model: str, usage: dict) -> None:
         log.warning("yapay zekâ maliyet kaydı yazılamadı", exc_info=True)
 
 
-def gemini_text_json(prompt: str, max_output_tokens: int | None = 4096) -> tuple[dict, dict]:
-    """Belgesiz, yalnız metin istemi (ör. işyeri adlarına kategori önerisi). Kota/günlük sınır _gemini_json'daki gibi."""
-    return _gemini_json(prompt, None, "text/plain", max_output_tokens=max_output_tokens, kind="kategori")
+def gemini_text_json(prompt: str, max_output_tokens: int | None = 4096, kind: str = "kategori",
+                     model: str | None = None) -> tuple[dict, dict]:
+    """Belgesiz, yalnız metin istemi (ör. işyeri adlarına kategori önerisi, ürün adlarına grup: kind "grup"). Kota/günlük
+    sınır _gemini_json'daki gibi. model: None → yapılandırılan / varsayılan model."""
+    return _gemini_json(prompt, None, "text/plain", max_output_tokens=max_output_tokens, kind=kind, model=model)
 
 
 def card_last4(v) -> str | None:

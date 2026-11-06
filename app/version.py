@@ -91,6 +91,8 @@ CAPABILITIES = (
                               # history_price?}], digit_fix_all {indices, total_ok} | null, residual (TL), suspect [sıra],
                               # groups [{rate, items_total, tax, printed, indices, ok}], line_count {printed, read} | null;
                               # kendiliğinden uygulanmaz
+    "price_groups",           # markadan bağımsız ürün grubu: /api/prices products[].group {key "sut|1l", label "Süt · 1 L",
+                              # pending? (yapay zekâ bekliyor; geçici grup)} | null
 )
 
 

@@ -223,6 +223,13 @@ def run_global(now: datetime) -> list[str] | None:
     from app import doc_cache
 
     doc_cache.prune(now.timestamp())  # 30 günü dolan okuma sonuçları (app/doc_cache.py)
+    try:  # gün içinde kuyrukta kalan ürün adları: toplu yapay zekâ (günlük tavanla; app/product_groups.py)
+        from app import product_groups
+
+        if n := product_groups.classify_pending(max_calls=product_groups.AI_CALLS_PER_DAY):
+            log.info("ürün grubu öğrenildi: %d ad", n)
+    except Exception:  # noqa: BLE001 - gece bakımını engellemesin
+        log.exception("ürün grubu sınıflandırma başarısız")
     return system.purge_archived(now=now.timestamp())
 
 

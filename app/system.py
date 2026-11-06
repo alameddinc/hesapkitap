@@ -212,6 +212,22 @@ CREATE TABLE IF NOT EXISTS feedback (       -- uygulama içi "Sorun bildir" (app
     client_key TEXT,                     -- bağlantının tuzlu kısa özeti (yalnız saatlik sınır; adres saklanmaz)
     demo INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS product_groups (  -- ürün adı → markadan bağımsız grup (app/product_groups.py); sonsuza dek
+    name_norm TEXT PRIMARY KEY,          -- name_norm(ad): 'SUTAS GUNLUK SUT 1 L'
+    group_key TEXT NOT NULL,             -- 'sut|1l'; '' = ürün değil (yapay zekâ: poşet, hizmet)
+    label TEXT NOT NULL,                 -- 'Süt · 1 L'
+    size_value REAL,
+    size_unit TEXT,                      -- l | ml | kg | g | ad
+    source TEXT NOT NULL CHECK (source IN ('rule', 'ai')),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS product_groups_key ON product_groups(group_key);
+CREATE TABLE IF NOT EXISTS product_group_queue (  -- kuralın çözemediği adlar: toplu yapay zekâ bekliyor (yalnız ad)
+    name_norm TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    tries INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """

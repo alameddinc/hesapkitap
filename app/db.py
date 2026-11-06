@@ -4121,6 +4121,20 @@ def priced_items(visible_only: bool = True) -> list[dict]:
     return out
 
 
+def attach_groups(items: list[dict], learn: bool = True) -> None:
+    """Her fiş satırına group ({key, label[, pending]} | None; app/product_groups.py), aynı yazılış bir kez çözülür.
+    Kuralın çözemediği ad kuyruğa girer; yapay zekâ açıksa arka planda tek toplu çağrı (product_groups.kick)."""
+    from app import product_groups
+
+    sig = lambda it: (it.get("name"), it.get("product"), it.get("brand"), it.get("unit"))  # noqa: E731
+    uniq = list({sig(it): it for it in items}.values())
+    got = dict(zip((sig(u) for u in uniq), product_groups.groups_for(uniq, learn=learn))) if uniq else {}
+    for it in items:
+        it["group"] = got.get(sig(it))
+    if learn and any(g and g.get("pending") for g in got.values()):
+        product_groups.kick()
+
+
 def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
     """Fişlerden: ürünler (tek alınanlar dahil, mağaza mağaza son fiyat, en ucuz işaretli, ilk→son değişim),
     mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka.
@@ -4142,6 +4156,7 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
     items = [it for it in items if (not since or it["purchased_at"] >= since)
              and (not store or it["store_key"] == _store_key(store))
              and (not brand or _store_key(it["brand"]) == _store_key(brand))]
+    attach_groups(items)
 
     def summarize(xs: list[dict]) -> dict:
         priced = [x for x in xs if x["price_known"]]
@@ -4158,6 +4173,7 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
             change = round((priced[-1]["unit_price"] - priced[0]["unit_price"]) / priced[0]["unit_price"] * 100, 1)
         return {"key": last["product_key"], "product": next((x["product"] for x in reversed(xs) if x["product"]), last["name"]),
                 "brand": next((x["brand"] for x in reversed(xs) if x["brand"]), None),
+                "group": next((x["group"] for x in reversed(xs) if x.get("group")), None),
                 "unit": last["unit"], "count": len(xs), "last_date": last["purchased_at"],
                 "last_price": priced[-1]["unit_price"] if priced else None,
                 "last_estimated": bool(priced) and priced[-1]["price_known"] == 2,

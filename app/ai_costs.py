@@ -1,6 +1,6 @@
 """Yapay zekâ maliyet ölçümü: her Gemini çağrısının token sayıları (system.db → ai_calls).
 
-Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | fis_metin | fis_foto | belge | dokum | kategori), model,
+Kaydedilen: zaman, kullanıcı kimliği (yoksa NULL), tür (fis | fis_metin | fis_foto | belge | dokum | kategori | grup), model,
 girdi / çıktı / düşünme / önbellekli girdi token'ı. fis: fotoğraftan okunan fiş (telefon metni gelse de varsayılan budur; metin yalnız
 yardımcı); fis_metin: telefonda çıkarılan metinden okunan fiş ve fis_foto: o metin tutarsız çıkınca fotoğrafla yapılan
 yedek okuma — ikisi yalnız eski yol açıkken (HESAPKITAP_RECEIPT_TEXT_FIRST=1, app/receipt.py text_first) yazılır. Belgenin içeriği, istem ya da yanıt metni KAYDEDİLMEZ. Yönetici paneli bu ayın
@@ -11,10 +11,11 @@ paket, ai_alert_try eşiği, yönetici kısıtlaması — app/ai_restrictions.py
 import json
 from datetime import date, datetime, timezone
 
-KINDS = ("fis", "fis_metin", "fis_foto", "belge", "dokum", "kategori")
+KINDS = ("fis", "fis_metin", "fis_foto", "belge", "dokum", "kategori", "grup")
 KIND_LABELS = {"fis": "Fiş", "fis_metin": "Fiş (telefonda okunan metinden)",
                "fis_foto": "Fiş (metin yetmedi, fotoğrafla yeniden)", "belge": "Belge (ekstre, fatura, posta)",
-               "dokum": "Hesap dökümü", "kategori": "Kategori önerisi"}
+               "dokum": "Hesap dökümü", "kategori": "Kategori önerisi",
+               "grup": "Ürün grubu (fiyat karşılaştırması; yalnız ürün adı)"}
 # 1 milyon token başına ABD doları (Google faturasından ölçüldü, 1–2.11.2026). Düşünme (thinking) token'ı çıktı
 # fiyatıyla ücretlenir. lite: ilk okuma (receipt.DEFAULT_MODEL); flash: yeniden okuma (receipt.REREAD_MODEL).
 LITE, FLASH = "gemini-3.1-flash-lite", "gemini-3.5-flash"
