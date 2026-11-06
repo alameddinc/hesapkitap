@@ -47,7 +47,8 @@ export function useSaveTarget(): SaveTarget {
   const choose = canChooseBook(caps, b);
   const open = openBookOf(b);
   const [picked, setTarget] = useState<BookKey | null>(null);
-  const target = choose ? picked ?? open : open;
+  // sadece görür üye ortak deftere yazamaz: varsayılan "Benim" (mobil ile aynı)
+  const target = choose ? picked ?? (b?.member && b.role === "viewer" ? "kendi" : open) : open;
   const book = bookOverride(target, open);
   const viewer = targetViewer(target, b);
   const people = b?.people ?? [];
