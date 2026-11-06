@@ -4031,19 +4031,102 @@ def recent_unit_prices(names: list[str], merchant: str | None = None, days: int 
     return out
 
 
-def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
-    """Fişlerden: ürünler (tek alınanlar dahil, mağaza mağaza son fiyat, en ucuz işaretli, ilk→son değişim),
-    mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka."""
+# Fiyat listesine girmeyen kayıt kategorileri (alışveriş değil: fatura, kira, banka, bağış, ulaşım bileti …); fişte
+# birden çok satır olsa da. normalize() biçiminde, kelime parçası olarak aranır.
+_NON_SHOPPING = re.compile(r"KIRA|AIDAT|ELEKTRIK|^SU$|DOGALGAZ|INTERNET|TELEFON|SIGORTA|VERGI|HARC|BANKA|NAKIT CEKIM|"
+                           r"BAGIS|SADAKA|EGITIM|SEYAHAT|KONAKLAMA|ABONELIK|YAZILIM|BULUT|REKLAM|MAAS|KREDI")
+# Market benzeri kategori: tek satırlık fişi de fiyat listesine sokar (bilinen zincir dışındaki bakkal, manav …).
+# Kafe de: tek ürünlü kafe fişi ("Latte") gerçek bir üründür; adı işyeri olan satır yine düşer (same_as_merchant).
+_GROCERY = re.compile(r"MARKET|GIDA|TEMIZLIK|KISISEL BAKIM|KOZMETIK|BEBEK|EVCIL|PET SHOP|MANAV|KASAP|FIRIN|SARKUTERI|"
+                      r"KAFE|CAFE")
+_SHOP_NAME = re.compile(r"ECZANE|PHARMACY|MARKET|BAKKAL|MANAV|KASAP|FIRIN")  # kategori ne olursa olsun dükkân (işyeri adı)
+
+
+def _letters(s: str | None) -> str:
+    from app.textnorm import normalize
+
+    return re.sub(r"[^A-Z0-9]", "", normalize(s or ""))
+
+
+def same_as_merchant(name: str | None, *merchants: str | None) -> bool:
+    """Kalem adı işyerinin adı ya da unvanı mı ("Asya Çiçekçilik" kaleminde "ASYA ÇİÇEKÇİLİK LTD. ŞTİ."): bitişik yazılışı
+    eşit / ad unvanın içinde (4+ harf; "MIGROS POŞET" Migros'un adı değil) / %80 benzer, ya da adın bütün kelimeleri (3+ harf) unvanda geçiyor. Kart
+    slibinde ve tek satırlık fişte model kalem adı olarak işyerini yazar; ürün değildir."""
+    from difflib import SequenceMatcher
+
+    from app.textnorm import normalize
+
+    a = _letters(name)
+    if len(a) < 3:
+        return False
+    words = {w for w in re.sub(r"[^A-Z0-9]", " ", normalize(name or "")).split() if len(w) >= 3}
+    for m in merchants:
+        b = _letters(m)
+        if not b:
+            continue
+        if a == b or (len(a) >= 4 and a in b) or SequenceMatcher(None, a, b).ratio() >= 0.8:
+            return True
+        mw = set(re.sub(r"[^A-Z0-9]", " ", normalize(m or "")).split())
+        if words and words <= mw:
+            return True
+    return False
+
+
+def price_eligible(entry: dict | None, n_products: int) -> bool:
+    """Bu kaydın fiş kalemleri fiyat listesine girer mi? Alışveriş dışı kategori (fatura, kira, bağış …) hiç girmez;
+    kalan: fişte en az 2 ürün satırı var YA DA işyeri bilinen bir zincir (app/receipt_templates.py CHAINS) YA DA market
+    benzeri kategori (Market & Gıda, Temizlik, Kişisel Bakım, Bebek, Evcil hayvan, Kafe …) YA DA adı dükkân olan işyeri (Eczane, Bakkal …). Tek satırlık fiş (POS slibi, tutarı
+    kaydın tutarı olan tek kalem: "Asya Çiçekçilik ₺1.000") böylece ürün sayılmaz. Kaydı olmayan (eski) satır girer."""
+    from app.receipt_templates import chain_of
+    from app.textnorm import normalize
+
+    if entry is None:
+        return True
+    cat = normalize(entry.get("category") or "")
+    if cat and _NON_SHOPPING.search(cat):
+        return False
+    shop = normalize(f"{entry.get('description') or ''} {entry.get('legal_name') or ''}")
+    return n_products >= 2 or bool(chain_of(entry.get("description"), entry.get("legal_name"))) or \
+        bool(cat and _GROCERY.search(cat)) or bool(_SHOP_NAME.search(shop))
+
+
+def priced_items(visible_only: bool = True) -> list[dict]:
+    """Fiyat takibine giren fiş satırları (eski→yeni): yalnız ürün satırları (grup satırı İÇECEK, hizmet ve indirim
+    değil), price_eligible kayıtlardan, adı işyerinin adı olmayanlar. Ortak defter üyesinde yalnız görebildiği kayıtların
+    satırları. Her satıra kaydın category ve legal_name'i eklenir."""
     from app import book
 
     with connect() as c:
         items = rows(c.execute("SELECT * FROM receipt_items ORDER BY purchased_at, id"))
-        if book.active():  # ortak defter üyesi: yalnız görebildiği kayıtların fiş kalemleri (gizli fiş sızmasın)
-            seen = {e["id"] for e in book.filter_entries(rows(c.execute(
-                "SELECT id, hidden, account_id, payment, card_last4 FROM entries")))}
-            items = [it for it in items if it["entry_id"] in seen]
+        ents = {e["id"]: e for e in rows(c.execute(
+            "SELECT id, hidden, account_id, payment, card_last4, category, description, legal_name, amount FROM entries"))}
+    if visible_only and book.active():  # ortak defter üyesi: yalnız görebildiği kayıtların fiş kalemleri (gizli fiş sızmasın)
+        seen = {e["id"] for e in book.filter_entries(list(ents.values()))}
+        items = [it for it in items if it["entry_id"] in seen]
     # grup satırı (İÇECEK), hizmet (otopark) ve indirim fiyat karşılaştırmasına girmez
     items = [it for it in items if item_kind(it["name"], it["product"], it["amount"]) == "product"]
+    per_entry: dict = {}
+    for it in items:
+        per_entry[it["entry_id"]] = per_entry.get(it["entry_id"], 0) + 1
+    out = []
+    for it in items:
+        e = ents.get(it["entry_id"])
+        if not price_eligible(e, per_entry[it["entry_id"]]):
+            continue
+        if e and (same_as_merchant(it["name"], e["description"], e["legal_name"], it["merchant"]) or
+                  (it["product"] and same_as_merchant(it["product"], e["description"], e["legal_name"]))):
+            continue
+        it["category"], it["legal_name"] = (e or {}).get("category"), (e or {}).get("legal_name")
+        out.append(it)
+    return out
+
+
+def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
+    """Fişlerden: ürünler (tek alınanlar dahil, mağaza mağaza son fiyat, en ucuz işaretli, ilk→son değişim),
+    mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka.
+    Hangi satırlar girer: priced_items (tek satırlık POS slibi, işyeri adındaki kalem, alışveriş dışı kategori girmez).
+    Her ürünün group'u: markadan bağımsız ürün + boy (app/product_groups.py; "Süt · 1 L")."""
+    items = priced_items()
     names: dict[str, str] = {}
     for it in items:  # gösterim adı: küçük harf içeren (fişteki BÜYÜK HARF yerine) son yazılış
         k, n = _store_key(it["merchant"]), (it["merchant"] or "?").strip()

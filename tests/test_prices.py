@@ -89,3 +89,39 @@ def test_store_branch_brand_breakdown_and_filters(client, tmpdb):
     assert {b["brand"] for b in r["brands"]} == {"Kahve Dünyası", "Kahve Konağı"}
     only = client.get("/api/prices", params={"store": "kahve dünyası", "since": "2026-11-10"}).json()["products"]
     assert [p["last_price"] for p in only] == [130] and only[0]["count"] == 1
+
+
+def test_single_line_slip_and_merchant_name_not_products(client, tmpdb):
+    """Kart slibi / tek satırlık fiş ("Asya Çiçekçilik ₺1.000"), işyeri adındaki kalem ve alışveriş dışı kategori ürün
+    değildir."""
+    def save(desc, cat, items, total, legal=None):
+        client.post("/api/entries", json={"entry_date": "2026-11-01", "description": desc, "amount": total, "kind": "gider",
+                                          "category": cat, "payment": "kredi_karti", "legal_name": legal, "items": items})
+
+    save("Asya Çiçekçilik", "Hediye & Çiçek", [{"name": "ASYA ÇİÇEKÇİLİK", "qty": 1, "amount": 1000}], 1000,
+         legal="ASYA ÇİÇEKÇİLİK TİC. LTD. ŞTİ.")
+    save("Örnek Çiçek", "Hediye & Çiçek", [{"name": "Buket", "qty": 1, "amount": 700}], 700)  # tek satır, zincir değil
+    save("Örnek Butik", "Giyim", [{"name": "Gömlek", "qty": 1, "amount": 900}], 900)
+    save("Örnek Elektrik", "Elektrik", [{"name": "Tüketim", "qty": 1, "amount": 300},
+                                        {"name": "Dağıtım bedeli", "qty": 1, "amount": 100}], 400)  # alışveriş değil
+    save("Örnek Bakkal", "Market & Gıda", [{"name": "Ekmek", "qty": 1, "amount": 15}], 15)       # market: tek satır da girer
+    save("ŞOK", "Diğer", [{"name": "Torku Süt 1L", "qty": 1, "amount": 36}], 36)                 # bilinen zincir
+    save("Örnek Mağaza", "Giyim", [{"name": "Çorap", "qty": 1, "amount": 50},
+                                   {"name": "ÖRNEK MAĞAZA", "qty": 1, "amount": 10}], 60)          # 2 satır; ad = işyeri
+    names = sorted(p["product"] for p in client.get("/api/prices").json()["products"])
+    assert names == ["Ekmek", "Torku Süt 1L", "Çorap"]
+
+
+def test_same_as_merchant():
+    assert db.same_as_merchant("ASYA CICEKCILIK", "Asya Çiçekçilik")
+    assert db.same_as_merchant("Asya Çiçek", None, "ASYA ÇİÇEKÇİLİK TİC. LTD. ŞTİ.")
+    assert not db.same_as_merchant("MIGROS POŞET", "Migros") and not db.same_as_merchant("Süt", "Migros")
+
+
+def test_chain_of():
+    from app.receipt_templates import chain_of
+
+    assert chain_of("ŞOK") == chain_of("Şok Marketler") == "ŞOK"
+    assert chain_of("MIGROS TICARET A.S.") == "Migros" and chain_of("KAHVE DÜNYASI") == "Kahve Dünyası"
+    assert chain_of("Tarım Kredi Kooperatif Market") == "Tarım Kredi"
+    assert chain_of("Örnek Bakkal") is None and chain_of("Metro Turizm") is None and chain_of(None) is None

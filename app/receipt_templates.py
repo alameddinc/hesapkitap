@@ -102,6 +102,23 @@ CHAINS = [
     ("Kahve Dünyası", ["kahve", "dunyasi"], None), ("Simit Sarayı", ["simit", "sarayi"], None),
 ]
 _BRANDS = {b for b, _, _ in CHAINS}
+
+
+def chain_of(*names: str | None) -> str | None:
+    """İşyeri adı (ya da unvanı) bilinen bir zincir mi (CHAINS): görünen adı, değilse None. Eşleşme: adın bitişik yazılışı
+    zincirin adı ("ŞOK" = "Şok", "KAHVE DÜNYASI"), ya da anahtar kelimeler adda kelime olarak geçiyor (tek anahtarlıda o
+    kelime: "MIGROS TICARET"; çok anahtarlıda ilk ikisi: "TARIM KREDI KOOPERATIF"). Fiyat karşılaştırması (app/db.py
+    products, app/community_prices.py) bunu kullanır."""
+    for name in names:
+        if not name:
+            continue
+        words = re.findall(r"[a-z0-9]+", fold(name))
+        compact, ws = "".join(words), set(words)
+        for brand, keys, _ in CHAINS:
+            if compact == "".join(re.findall(r"[a-z0-9]+", fold(brand))) or \
+                    (all(k in ws for k in keys[:2]) if len(keys) > 1 else keys[0] in ws):
+                return brand
+    return None
 _FUEL = re.compile(r"(?<![a-z])(akaryakit|motorin|benzin|kursunsuz|dizel|diesel|lpg|otogaz|epdk|pompa)(?![a-z])")
 FUEL_ITEM = "Akaryakıt"  # POS slibinde (kalem satırı yok) tek kalemin adı
 
