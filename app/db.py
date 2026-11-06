@@ -4001,8 +4001,14 @@ def _store_key(name: str | None) -> str:
 def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
     """Fişlerden: ürünler (tek alınanlar dahil, mağaza mağaza son fiyat, en ucuz işaretli, ilk→son değişim),
     mağazalar (orada alınan ürünler) ve markalar (ürünleri, ortalama değişim). Filtre: tarihten beri / mağaza / marka."""
+    from app import book
+
     with connect() as c:
         items = rows(c.execute("SELECT * FROM receipt_items ORDER BY purchased_at, id"))
+        if book.active():  # ortak defter üyesi: yalnız görebildiği kayıtların fiş kalemleri (gizli fiş sızmasın)
+            seen = {e["id"] for e in book.filter_entries(rows(c.execute(
+                "SELECT id, hidden, account_id, payment, card_last4 FROM entries")))}
+            items = [it for it in items if it["entry_id"] in seen]
     # grup satırı (İÇECEK), hizmet (otopark) ve indirim fiyat karşılaştırmasına girmez
     items = [it for it in items if item_kind(it["name"], it["product"], it["amount"]) == "product"]
     names: dict[str, str] = {}

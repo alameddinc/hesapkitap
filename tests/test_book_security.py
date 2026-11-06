@@ -119,3 +119,55 @@ def test_viewer_cannot_delete_debt_payment(owner):
     viewer = _member(owner, "izleyici", "viewer")
     assert viewer.delete(f"/api/debt-payments/{pid}").status_code == 403
     assert owner.delete(f"/api/debt-payments/{pid}").json()["deleted"] is True
+
+
+# --- güvenlik denetimi: gizli kaydın fiş kalemleri ve gövdedeki id ------------------------------------------------
+
+def test_prices_do_not_leak_hidden_receipt_items(owner):
+    r = owner.post("/api/entries", json={
+        "entry_date": "2026-10-05", "description": "ORNEK ECZANE", "amount": 250, "kind": "gider", "category": "Sağlık",
+        "payment": "nakit", "items": [{"name": "GIZLI-URUN-X", "qty": 1, "unit": "adet", "amount": 250}]})
+    eid = r.json()["id"]
+    owner.post("/api/entries", json={
+        "entry_date": "2026-10-06", "description": "ORNEK MARKET", "amount": 40, "kind": "gider",
+        "category": "Market & Gıda", "payment": "nakit", "items": [{"name": "ACIK-URUN-Y", "qty": 1, "unit": "adet", "amount": 40}]})
+    assert owner.patch(f"/api/entries/{eid}", json={"hidden": True}).status_code == 200
+    assert "GIZLI-URUN-X" in owner.get("/api/prices").text  # sahip hepsini görür
+    viewer = _member(owner, "izleyici", "viewer")
+    out = viewer.get("/api/prices").text
+    assert "GIZLI-URUN-X" not in out and "ORNEK ECZANE" not in out
+    assert "ACIK-URUN-Y" in out  # görünen kaydın kalemi duruyor
+
+
+def test_full_member_cannot_mark_hidden_entry_as_donation(owner):
+    h = _hide_all(owner)
+    full = _member(owner, "esim", "full")
+    r = full.post("/api/donations/mark", json={"source": "entry", "id": h["sec"], "kind": "sadaka"})
+    assert r.status_code == 404
+    assert "Sürpriz hediye" not in full.get("/api/donations").text
+    assert full.post("/api/donations/mark", json={"source": "entry", "id": h["pub"], "kind": "sadaka"}).status_code == 200
+
+
+def test_full_member_cannot_use_hidden_account_in_body(owner):
+    h = _hide_all(owner)
+    did = owner.post("/api/debts", json={"person": "Örnek Kişi", "direction": "borc", "amount": 100,
+                                         "debt_date": "2026-09-01"}).json()["id"]
+    pid = owner.post(f"/api/debts/{did}/pay", json={"amount": 40, "paid_at": "2026-10-01"}).json()["payment_id"]
+    jid = owner.post("/api/jars", json={"unit": "CEYREK", "name": "Örnek kumbara"}).json()["id"]
+    full = _member(owner, "esim", "full")
+    halk = h["halk"]
+    assert full.patch(f"/api/debt-payments/{pid}", json={"account_id": halk}).status_code == 404
+    assert full.post(f"/api/jars/{jid}/buy", json={"quantity": 1, "cost": 10, "account_id": halk}).status_code == 404
+    assert full.post("/api/jars", json={"name": "Gizli", "account_id": halk}).status_code == 404
+    assert full.patch(f"/api/jars/{jid}", json={"account_id": halk}).status_code == 404
+    assert full.post("/api/debts", json={"person": "Örnek", "direction": "borc", "amount": 5, "debt_date": "2026-09-01",
+                                         "account_id": halk}).status_code == 404
+    assert full.patch(f"/api/debts/{did}", json={"account_id": halk}).status_code == 404
+    assert full.post(f"/api/debts/{did}/pay", json={"amount": 1, "paid_at": "2026-10-02", "account_id": halk}).status_code == 404
+    assert full.post("/api/donations", json={"kind": "sadaka", "amount": 5, "account_id": halk}).status_code == 404
+    with_rec = {"description": "Örnek abonelik", "amount": 10, "kind": "gider", "category": "Diğer",
+                "start_month": "2026-10", "account_id": halk}
+    assert full.post("/api/recurring", json=with_rec).status_code == 404
+    # görünen hesapla çalışır
+    nakit = next(a["id"] for a in owner.get("/api/accounts").json()["accounts"] if a["name"] == "Nakit")
+    assert full.patch(f"/api/debt-payments/{pid}", json={"account_id": nakit}).status_code == 200

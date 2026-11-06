@@ -2711,11 +2711,13 @@ def _with_gross_net(data: dict) -> dict:
 
 @app.post("/api/recurring")
 def create_recurring(body: RecurringIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     return {"id": db.create_recurring(_with_gross_net(body.model_dump()))}
 
 
 @app.patch("/api/recurring/{rid}")
 def patch_recurring(rid: int, body: RecurringPatch):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     db.update_recurring(rid, _with_gross_net(body.model_dump(exclude_unset=True)))
     return {"ok": True}
 
@@ -3246,6 +3248,7 @@ class PaymentAccount(BaseModel):
 
 @app.patch("/api/debt-payments/{pid}")
 def set_debt_payment_account(pid: int, body: PaymentAccount):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     if not db.set_debt_payment_account(pid, body.account_id):
         raise HTTPException(404, "Ödeme yok")
     return {"ok": True}
@@ -3635,6 +3638,7 @@ def list_jars():
 
 @app.post("/api/jars")
 def create_jar(body: JarIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude={"initial"})
     data["name"] = data["name"].strip()
     if data["deadline"]:
@@ -3646,6 +3650,7 @@ def create_jar(body: JarIn):
 
 @app.patch("/api/jars/{jid}")
 def patch_jar(jid: int, body: JarPatch):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude_unset=True)
     if "deadline" in data and data["deadline"]:
         data["deadline"] = data["deadline"].isoformat()
@@ -3677,6 +3682,7 @@ def add_jar_move(jid: int, body: JarMoveIn):
 @app.post("/api/jars/{jid}/buy")
 def buy_into_jar(jid: int, body: JarBuy):
     """Altın/döviz kumbarası: aldım → varlık + gider kaydı + kumbara hareketi."""
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     try:
         return {"id": db.buy_into_jar(jid, body.quantity, body.cost, (body.buy_date or date.today()).isoformat(),
                                       body.account_id, body.payment, body.note)}
@@ -3735,6 +3741,7 @@ def donations_summary():
 
 @app.post("/api/donations")
 def donations_add(body: DonationIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     try:
         return {"id": donations.add(body.kind, body.amount, (body.given_date or date.today()).isoformat(), body.recipient,
                                     body.note, body.account_id, body.as_expense)}
@@ -3751,6 +3758,8 @@ def donations_delete(did: int):
 
 @app.post("/api/donations/mark")
 def donations_mark(body: DonationMarkIn):
+    # gövdedeki kayıt: üyeye gizli kayıt işaretlenirse açıklaması ve tutarı bağış listesine kopyalanıyordu
+    _visible_or_404("entry" if body.source == "entry" else "txn", body.id)
     try:
         return donations.mark(body.source, body.id, body.kind, body.person_id,
                               body.year_start.isoformat() if body.year_start else None, body.recipient)
@@ -4364,6 +4373,7 @@ def list_debts():
 
 @app.post("/api/debts")
 def create_debt(body: DebtIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump()
     data["debt_date"] = body.debt_date.isoformat()
     data["due_date"] = body.due_date.isoformat() if body.due_date else None
@@ -4372,6 +4382,7 @@ def create_debt(body: DebtIn):
 
 @app.patch("/api/debts/{did}")
 def patch_debt(did: int, body: DebtPatch):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude_unset=True)
     if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
         with db.connect() as c:
@@ -4395,6 +4406,7 @@ def delete_debt(did: int):
 
 @app.post("/api/debts/{did}/pay")
 def pay_debt(did: int, body: DebtPayIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     if body.entry_id is not None:
         _visible_or_404("entry", body.entry_id)
         with db.connect() as c:
