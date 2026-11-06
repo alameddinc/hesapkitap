@@ -4322,6 +4322,29 @@ def prices(since: date | None = None, store: str | None = None, brand: str | Non
     return db.products(since.isoformat() if since else None, store or None, brand or None)
 
 
+@app.get("/api/prices/groups")
+def price_groups(q: str | None = None, limit: int = 30):
+    """Nereden alınır: ürün grupları (markadan bağımsız; "süt" → Süt · 1 L, Süt · 500 ml …) ve zincir başına en ucuz
+    teklifler. [{key, label, best: [{chain, price, brand?, source "own"|"community", date? (kendi fişin), n? (kaç kişi)}]}]
+    best ucuzdan pahalıya, en çok 5 (app/price_sources.py merge). Kendi verin: bu defterin fişleri (ortak defter üyesinde
+    görebildiğin kayıtlar). Sıra: kendi aldıkların (son alım yeni→eski), sonra yalnız toplulukta olanlar (ada göre)."""
+    from app import price_sources
+
+    q = (q or "").strip()[:60]
+    limit = max(1, min(limit, 50))
+    srcs = price_sources.open_sources()
+    labels: dict[str, str] = {}
+    for s in srcs:  # kaynak sırası: önce kendi verin (adı da oradan)
+        for k, v in s.search(q).items():
+            labels.setdefault(k, v)
+    own = next((s for s in srcs if isinstance(s, price_sources.OwnSource)), None)
+    last = own.last_dates() if own else {}
+    mine = sorted((k for k in labels if k in last), key=lambda k: (last[k], k), reverse=True)
+    keys = (mine + sorted((k for k in labels if k not in last), key=lambda k: labels[k]))[:limit * 2]
+    best = price_sources.best_offers(keys, srcs)
+    return [{"key": k, "label": labels[k], "best": best[k]} for k in keys if best.get(k)][:limit]
+
+
 @app.get("/api/item-rules")
 def list_item_rules():
     return db.list_item_rules()

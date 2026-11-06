@@ -95,6 +95,8 @@ CAPABILITIES = (
                               # pending? (yapay zekâ bekliyor; geçici grup)} | null
     "community_prices",       # anonim topluluk fiyatı: GET/PUT /api/me/price-share {on} → {on, text} (meta.price_share);
                               # fişte digit_fix evidence "community" + community_price, community_note "başkaları ₺89,00 ödüyor"
+    "where_to_buy",           # GET /api/prices/groups?q&limit → [{key, label, best: [{chain, price, brand?, source own|community,
+                              # date?, n?}] ucuzdan, ≤5}] (402 fiyatlar)
 )
 
 
