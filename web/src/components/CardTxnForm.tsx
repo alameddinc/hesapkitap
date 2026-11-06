@@ -10,6 +10,7 @@ import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from ".
 import { DowngradeForm } from "../pages/Savings";
 import Modal from "./Modal";
 import SplitEditor from "./SplitEditor";
+import { TxnSpender } from "./Spender";
 import MarkDonation from "./MarkDonation";
 import { send } from "../lib/apiError";
 import { AdDuzelt } from "../pages/Uncategorized";
@@ -148,6 +149,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           )}
         </div>
         <SubcategoryPicker id="c-sub" category={category} value={sub} onChange={setSub} />
+        <TxnSpender row={row} />
         {hasMembers && !member && (
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />

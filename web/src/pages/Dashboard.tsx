@@ -230,7 +230,7 @@ export default function Dashboard() {
       case "net": return <NetWorth compact month={month} />;
       case "zekat": return <ZakatDue />;
       case "butceler": return (<>
-        <BudgetList items={s.budgets} onEdit={() => setEditBudgets(true)}
+        <BudgetList items={s.budgets} month={month} onEdit={() => setEditBudgets(true)}
           onSelect={(c) => { setInsightFilter(null); setSel({ by: "category", name: c }); }} />
         {editBudgets && <BudgetForm month={month} onClose={() => setEditBudgets(false)} onSaved={ui.toast} />}
       </>);

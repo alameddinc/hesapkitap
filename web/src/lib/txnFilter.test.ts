@@ -13,7 +13,7 @@ test("adres gidiş-dönüş: Türkçe ve & içeren kategori bozulmaz", () => {
   const h = txnFilterHash(f);
   assert.equal(h, "/islemler?kategori=Kira+%26+Aidat&yil=2026&gider=1");
   assert.deepEqual(parseTxnFilter(`#${h}`),
-    { kategori: "Kira & Aidat", isyeri: undefined, kart: undefined, yil: 2026, gider: true, faizsiz: undefined });
+    { kategori: "Kira & Aidat", isyeri: undefined, kart: undefined, yil: 2026, gider: true, faizsiz: undefined, kim: undefined });
 });
 
 test("süzgeçsiz adres düz İşlemler", () => {
@@ -50,6 +50,17 @@ test("faizsiz: işyeri/kart sıralaması faiz ve ücreti saymaz", () => {
   assert.equal(matchTxnFilter(row({ kind: "faiz_ucret" }), { kart: "Örnek Kart", gider: true }), true);
   assert.equal(parseTxnFilter(`#${txnFilterHash(f)}`).faizsiz, true);
   assert.equal(txnFilterLabel(f), "Kart: Örnek Kart · yalnız gider · faiz/ücret hariç");
+});
+
+test("kim: Kim ne harcadı kişisi (satırın spender alanı)", () => {
+  const f = { kim: "u7", gider: true };
+  assert.equal(parseTxnFilter(`#${txnFilterHash(f)}`).kim, "u7");
+  assert.equal(parseTxnFilter("#/islemler?kim=ortak").kim, "ortak");
+  assert.equal(parseTxnFilter("#/islemler?kim=x1").kim, undefined); // tanınmayan anahtar yok sayılır
+  assert.equal(hasTxnFilter({ kim: "ortak" }), true);
+  assert.equal(matchTxnFilter(row({ spender: "u7" }), f), true);
+  assert.equal(matchTxnFilter(row({ spender: "ortak" }), f), false);
+  assert.equal(txnFilterLabel(f, (s) => s, (k) => (k === "u7" ? "Ayşe" : k)), "Kim harcadı: Ayşe · yalnız gider");
 });
 
 test("eski sunucu bayrak vermezse istemci kuralı (kart ödemesi gider değil)", () => {

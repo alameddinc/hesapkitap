@@ -27,6 +27,9 @@ export interface Row {
   card_last4?: string | null; // hangi kredi kartı (son 4 hane)
   hidden?: boolean; // ortak defterde üyeye gizli
   created_by?: number | null; // ekleyen kullanıcı (ortak defter)
+  /** Aile (yetenek spender_assign, ortak defterde): kim harcadı (u<id> | ortak) ve elle mi seçildi */
+  spender?: string;
+  spender_set?: boolean;
   fx: string | null;
   note: string | null;
   /** sunucu 90ed954: ham banka açıklaması (yoksa null) ve kullanıcının kendi notu; note ikisinin birleşik hâli */
@@ -144,6 +147,8 @@ export interface Budget {
   spent: number;
   remaining: number;
   pct: number;
+  /** ortak bütçe (Aile, /api/budgets): kim ne kadar harcadı */
+  by_person?: { key: string; user_id: number | null; name: string; amount: number }[];
 }
 
 export interface Group {

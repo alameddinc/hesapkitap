@@ -138,6 +138,29 @@ export const fold = (s: string) =>
   s.toLocaleLowerCase("tr").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ı/g, "i");
 
 /** Kullanıcının yazdığı tutar: "214.350,75" (Türk) ya da "214350.75" / "214350" → sayı. Geçersizse NaN. */
+/** Belirtme/iyelik eki: 1 → "i", 10 → "u", 14 → "ü", 6 → "sı", 40 → "ı" (sayının okunuşuna göre; mobil planlama/pl ek) */
+export function ek(n: number) {
+  n = Math.abs(Math.round(n));
+  if (n === 0) return "ı";
+  if (n % 100 === 0) return n % 1000 === 0 ? "i" : "ü";
+  const u = n % 10;
+  if (u) return ["", "i", "si", "ü", "ü", "i", "sı", "si", "i", "u"][u]!;
+  return ["", "u", "si", "u", "ı", "si", "ı", "i", "i", "ı"][(n % 100) / 10]!;
+}
+
+const UNLU = "aeıioöuüâîû";
+
+/** Ada yönelme eki: Ayşe'ye, Mehmet'e, Ortak'a, Ali'ye, Burak'a (son ünlüye göre; ünlüyle biterse kaynaştırma y).
+ *  Mobil lib/format.ts yonelme ile aynı. */
+export function yonelme(ad: string): string {
+  const s = ad.trim();
+  const h = s.toLocaleLowerCase("tr").replace(/[^a-zçğıöşüâîû]/g, "");
+  const son = [...h].reverse().find((c) => UNLU.includes(c));
+  const ince = !son || "eiöüî".includes(son);
+  const y = h && UNLU.includes(h[h.length - 1]!) ? "y" : "";
+  return `${s}'${y}${ince ? "e" : "a"}`;
+}
+
 export function parseAmount(v: string): number {
   const t = v.trim().replace(/\s|₺|TL/gi, "");
   if (!t) return NaN;

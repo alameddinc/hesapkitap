@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { useState } from "react";
-import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags, Zap } from "lucide-react";
+import { ArrowLeftRight, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
-import { inSharedBook, routeVisible, useBook, useMeta } from "../components/hooks";
+import { inSharedBook, routeVisible, useBook, useIsAdmin, useMeta } from "../components/hooks";
 import ZakatConsent from "../components/ZakatConsent";
+import FeedbackDialog from "../components/Feedback";
 import { LockBadge, ROUTE_FEATURE, useLock } from "../components/Plan";
 import type { Route } from "../ui";
 
@@ -48,6 +49,8 @@ export default function More() {
   const ui = useUI();
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["auth"], queryFn: () => send<any>("/api/auth/status") });
+  const admin = useIsAdmin();
+  const [feedback, setFeedback] = useState(false);
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Diğer</h1>
@@ -65,6 +68,8 @@ export default function More() {
         <Item icon={<FileText size={18} />} label="Ekstreler" onClick={() => ui.go("ekstreler")} route="ekstreler" />
         <Item icon={<Tags size={18} />} label="Kategori kuralları" onClick={() => ui.go("kurallar")} route="kurallar" />
         <Item icon={<Settings2 size={18} />} label="Ayarlar: Telegram, yedekler" onClick={() => ui.go("ayarlar")} route="ayarlar" />
+        {admin && <Item icon={<ShieldCheck size={18} />} label="Yönetici paneli: kullanıcılar, maliyet, geri bildirim" onClick={() => ui.go("yonetici")} />}
+        <Item icon={<MessageSquareWarning size={18} />} label="Sorun bildir: ekran görüntüsüyle bize yaz" onClick={() => setFeedback(true)} />
         {status.data?.required && (
           <Item icon={<LogOut size={18} />} label="Çıkış yap" onClick={async () => {
             try { sessionStorage.setItem("hk-logged-out", "1"); } catch { /* özel mod */ }
@@ -74,6 +79,7 @@ export default function More() {
           }} />
         )}
       </ul>
+      {feedback && <FeedbackDialog onClose={() => setFeedback(false)} />}
     </div>
   );
 }

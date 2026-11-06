@@ -10,6 +10,7 @@ import TxnList from "../components/TxnList";
 import { EstimateSection, splitEstimates } from "../components/Estimates";
 import { cx, fold, maskText, tl } from "../format";
 import { useMeta } from "../components/hooks";
+import { useSpenders } from "../components/Spender";
 import { hasTxnFilter, matchTxnFilter, parseTxnFilter, txnFilterLabel } from "../lib/txnFilter";
 import { useUI } from "../ui";
 
@@ -42,6 +43,7 @@ export default function Transactions() {
   const meta = useMeta().data;
   const sf = useHashFilter();
   const sfOn = hasTxnFilter(sf);
+  const spenders = useSpenders(); // süzgeç başlığında "Kim harcadı: Ayşe"
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
@@ -79,7 +81,7 @@ export default function Transactions() {
         <div className="card flex items-center gap-2 p-2.5 pl-3" role="status" data-testid="islem-suzgeci">
           <ListFilter size={16} aria-hidden className="shrink-0 text-blue-600 dark:text-blue-400" />
           <span className="min-w-0 flex-1 text-sm break-words"><span className="text-stone-500 dark:text-stone-400">Süzgeç: </span>
-            <b className="font-medium">{txnFilterLabel(sf, maskText)}</b></span>
+            <b className="font-medium">{txnFilterLabel(sf, maskText, spenders.adOf)}</b></span>
           <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-xs" onClick={() => { window.location.hash = "/islemler"; }}>
             <X size={14} aria-hidden /> Süzgeci kaldır</button>
         </div>

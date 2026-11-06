@@ -5,6 +5,7 @@ import { useState } from "react";
 import { inApp, toLauncher } from "../components/AppServer";
 import { isEmail, loginKind } from "../components/hooks";
 import VerifyEmail from "../components/VerifyEmail";
+import { FeedbackButton } from "../components/Feedback";
 import PendingDeletion, { isPendingDeletion, type PendingDeletionInfo } from "../components/PendingDeletion";
 
 export default function Login() {
@@ -56,7 +57,7 @@ export default function Login() {
   if (pending) return <PendingDeletion info={pending} onCancel={() => { setPending(null); setPw(""); }} />;
 
   return (
-    <div className="flex min-h-dvh items-center justify-center px-4">
+    <div className="flex min-h-dvh flex-col items-center justify-center px-4">
       <form onSubmit={submit} className="card w-full max-w-sm p-6">
         <div className="mb-5 flex flex-col items-center gap-2 text-center">
           <img src="/icons/icon-192.png" alt="" className="size-16 rounded-2xl shadow-sm" />
@@ -99,6 +100,8 @@ export default function Login() {
           </button>
         )}
       </form>
+      {/* formun dışında: pencerenin düğmeleri giriş formunu göndermesin */}
+      <FeedbackButton icon={false} label="Sorun mu var? Bize bildir" className="mt-3 text-xs text-stone-500 underline" />
     </div>
   );
 }

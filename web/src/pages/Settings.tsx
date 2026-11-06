@@ -4,17 +4,13 @@ import MailSubject from "../components/MailSubject";
 import { ask } from "../lib/ask";
 import Sessions from "../components/Sessions";
 import { call, errorText, send } from "../lib/apiError";
-import { Bell, CalendarClock, Check, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send } from "lucide-react";
+import { Bell, CalendarClock, Check, ChevronRight, Copy, DatabaseBackup, Download, KeyRound, Lock, Mail, RefreshCw, Send, ShieldCheck } from "lucide-react";
 import { useMeta } from "../components/hooks";
 import { periodRange } from "../components/MonthPicker";
 import { useState } from "react";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
-import Users from "../components/Users";
-import PlanTable from "../components/PlanTable";
-import AiCosts from "../components/AiCosts";
-import AppUpdate from "../components/AppUpdate";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
@@ -26,8 +22,6 @@ import AppServer from "../components/AppServer";
 import PlanSettings from "../components/Plan";
 import MailAddress from "../components/MailAddress";
 import DeleteAccount from "../components/DeleteAccount";
-import DemoStats from "../components/DemoStats";
-import ReceiptTemplates from "../components/ReceiptTemplates";
 import Features from "../components/Features";
 import { DocQuotaNote, useDocQuota } from "../components/DocQuota";
 import { useBook, useDemo, useUiPrefs } from "../components/hooks";
@@ -317,6 +311,18 @@ function MyBookNote() {
   );
 }
 
+/** Yönetici bölümleri ayrı sayfada (#/yonetici): Ayarlar'dan oraya geçiş. */
+function AdminLink() {
+  return (
+    <a href="#/yonetici" className="card flex items-center gap-3 p-4 hover:bg-stone-50 dark:hover:bg-stone-800/50">
+      <ShieldCheck size={18} aria-hidden />
+      <span className="min-w-0 flex-1"><span className="block font-semibold">Yönetici paneli</span>
+        <span className="block text-xs text-stone-500">Kullanıcılar, geri bildirim, yapay zekâ maliyeti, paket tablosu, fiş şablonları, mobil sürüm, demo</span></span>
+      <ChevronRight size={16} className="text-stone-400" aria-hidden />
+    </a>
+  );
+}
+
 /** Sahip ya da üyenin kendi defteri (ownBook: ortak defter ayarı yok, geçiş var). */
 function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
   const ui = useUI();
@@ -387,17 +393,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
 
       {auth.data?.user && !ownBook && <BookSettings />}
 
-      {isAdmin && <Users />}
-
-      {isAdmin && <PlanTable />}
-
-      {isAdmin && <AiCosts />}
-
-      {isAdmin && <ReceiptTemplates />}
-
-      {isAdmin && <AppUpdate />}
-
-      {isAdmin && <DemoStats />}
+      {/* kullanıcılar, paket tablosu, yapay zekâ maliyeti, fiş şablonları, mobil sürüm, demo, geri bildirim: Yönetici paneli */}
+      {isAdmin && <AdminLink />}
 
       <AppServer />
 

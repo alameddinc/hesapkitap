@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { send as apiSend } from "../lib/apiError";
 import { CheckCircle2 } from "lucide-react";
 import { useState } from "react";
+import FeedbackDialog from "./Feedback";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 
@@ -11,6 +12,7 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
   const [platform, setPlatform] = useState("ikisi");
   const [note, setNote] = useState("");
   const [tester, setTester] = useState(() => new URLSearchParams(window.location.search).has("test"));
+  const [writeUs, setWriteUs] = useState(false);
   const send = useMutation({
     mutationFn: async () => {
       return apiSend<{ new: boolean }>("/api/demo/waitlist", { method: "POST", json: { email, platform, note, tester } });
@@ -60,8 +62,9 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
         <p className="text-xs text-stone-500">
           E-postanı yalnızca bu sürüm açıldığında sana haber vermek için kullanırız; kimseyle paylaşmayız. Teste katılırsan
           e-postan yalnızca test daveti için Google Play'in test listesine eklenir. Listeden çıkmak
-          için <a className="underline" href="https://github.com/alameddinc/hesapkitap/issues/new/choose" target="_blank" rel="noreferrer">bize yaz</a>.
+          için <button type="button" className="underline" onClick={() => setWriteUs(true)}>bize yaz</button>.
         </p>
+        {writeUs && <FeedbackDialog title="Bize yaz" onClose={() => setWriteUs(false)} />}
       </div>
     </Modal>
   );

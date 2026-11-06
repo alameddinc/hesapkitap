@@ -7,6 +7,7 @@ import { api, type Insight } from "../api";
 import BarList from "../components/BarList";
 import { openTxns } from "../lib/txnFilter";
 import Compare from "../components/Compare";
+import { KimHarcadi } from "../components/KimHarcadi";
 import MonthPicker from "../components/MonthPicker";
 import YearSummary from "../components/YearSummary";
 import { monthLabel, tl, tlCompact } from "../format";
@@ -147,6 +148,7 @@ export default function Stats() {
       </button>
 
       <Compare month={month} />
+      <KimHarcadi month={month} />
 
       {s && s.trend.length > 0 && (
         <Section title="Aylara göre gelir ve gider">

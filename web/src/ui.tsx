@@ -36,7 +36,7 @@ export interface UI {
   openAdd: () => void;
   openEntry: (row?: Row, draft?: EntryDraft) => void;
   openCardTxn: (row: Row) => void;
-  openRecurring: (id?: number) => void;
+  openRecurring: (id?: number, row?: Row) => void; // row: listedeki ayın satırı (kim harcadı seçimi)
   openBill: (draft?: BillDraft) => void;
   openPay: (p: Payable) => void;
   openRecurringMonth: (r: RecurringMonth) => void;
@@ -46,7 +46,7 @@ export interface UI {
   error: (msg: string) => void;
 }
 
-export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz";
+export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici";
 
 export const UIContext = createContext<UI | null>(null);
 

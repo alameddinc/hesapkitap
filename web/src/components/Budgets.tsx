@@ -5,6 +5,7 @@ import { api, type Budget } from "../api";
 import { cx, parseAmount, tl } from "../format";
 import { useMeta, useSave } from "./hooks";
 import Modal from "./Modal";
+import { BudgetPeople, useBudgetPeople } from "./KimHarcadi";
 
 function state(b: Budget) {
   if (b.pct >= 100) return { icon: AlertOctagon, bar: "bg-red-600", text: "text-red-600 dark:text-red-400", label: "Aşıldı" };
@@ -12,7 +13,9 @@ function state(b: Budget) {
   return { icon: CheckCircle2, bar: "bg-green-600", text: "text-green-700 dark:text-green-400", label: "İyi" };
 }
 
-export function BudgetList({ items, onSelect, onEdit }: { items: Budget[]; onSelect: (c: string) => void; onEdit: () => void }) {
+/** month verilirse ortak defterde (Aile) her bütçenin altında kim ne kadar harcadı (/api/budgets by_person). */
+export function BudgetList({ items, onSelect, onEdit, month }: { items: Budget[]; onSelect: (c: string) => void; onEdit: () => void; month?: string }) {
+  const people = useBudgetPeople(month);
   return (
     <section className="card p-3 sm:p-4">
       <div className="mb-2 flex items-center justify-between">
@@ -42,6 +45,7 @@ export function BudgetList({ items, onSelect, onEdit }: { items: Budget[]; onSel
                 <div className={cx("mt-0.5 text-xs", b.remaining < 0 ? st.text : "text-stone-500")}>
                   %{b.pct.toFixed(0)} · {b.remaining >= 0 ? `${tl(b.remaining)} kaldı` : `${tl(-b.remaining)} aşıldı`}
                 </div>
+                <BudgetPeople items={b.by_person ?? people.get(b.category)} />
               </button>
             </li>
           );

@@ -13,7 +13,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { dateTR, dayMonthTR, monthLabel, pctSigned, pctTR, tl } from "./format.ts";
+import { dateTR, dayMonthTR, ek, monthLabel, pctSigned, pctTR, tl, yonelme } from "./format.ts";
+
+test("ek: yüzdenin iyelik eki (mobil ile aynı)", () => {
+  assert.deepEqual([1, 6, 10, 14, 40, 62, 100].map((n) => `${n}'${ek(n)}`), ["1'i", "6'sı", "10'u", "14'ü", "40'ı", "62'si", "100'ü"]);
+});
+
+test("yonelme: ada yönelme eki (mobil ile aynı)", () => {
+  assert.equal(yonelme("Ayşe"), "Ayşe'ye");
+  assert.equal(yonelme("Mehmet"), "Mehmet'e");
+  assert.equal(yonelme("Ortak"), "Ortak'a");
+  assert.equal(yonelme("Ali"), "Ali'ye");
+  assert.equal(yonelme("Burak"), "Burak'a");
+});
 
 const visible = (s: string) => s.replace(/⁠/g, "");
 

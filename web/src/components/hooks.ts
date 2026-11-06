@@ -89,6 +89,16 @@ export function useLoginKind(): LoginKind {
   return loginKind(auth.data);
 }
 
+/** Yönetici mi (Yönetici paneli)? Tek kullanıcılı kurulumda (oturum yok) kullanıcı yöneticidir; demoda değil. */
+export function useIsAdmin(): boolean {
+  const auth = useQuery({
+    queryKey: ["auth"], staleTime: 60_000,
+    queryFn: () => send<{ user?: { role: string } | null; demo?: boolean }>("/api/auth/status"),
+  });
+  if (!auth.data || auth.data.demo) return false;
+  return !auth.data.user || auth.data.user.role === "admin";
+}
+
 /** Kayıtlarda "kim ekledi": defterde birden çok kişi varken kişi adları (üyenin kendi defterinde gerekmez). */
 export function usePeople() {
   const b = useBook().data;

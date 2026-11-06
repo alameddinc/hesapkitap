@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, Tags, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, Tags, Zap, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -32,9 +32,11 @@ import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
 import Bills from "./pages/Bills";
 import Uncategorized from "./pages/Uncategorized";
+import Admin from "./pages/Admin";
+import { FeedbackButton } from "./components/Feedback";
 import { UIContext, type EntryDraft, type Route, type UI } from "./ui";
 import Toast, { type ToastState } from "./components/Toast";
-import { isViewer, routeVisible, useBook, useUiPrefs } from "./components/hooks";
+import { isViewer, routeVisible, useBook, useIsAdmin, useUiPrefs } from "./components/hooks";
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 import ConfirmHost from "./components/ConfirmHost";
@@ -60,6 +62,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   faturalar: Bills,
   diger: More,
   kategorisiz: Uncategorized, // menüde yok: İşlemler'den ve Özet uyarısından açılır
+  yonetici: Admin, // yalnız yöneticiye (menüde ve Diğer'de); alt sayfa adreste: #/yonetici/<alt>
 };
 
 const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
@@ -78,12 +81,13 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "ekstreler", label: "Ekstreler", icon: ReceiptText },
   { route: "kurallar", label: "Kurallar", icon: Tags },
   { route: "ayarlar", label: "Ayarlar", icon: Settings2 },
+  { route: "yonetici", label: "Yönetici", icon: ShieldCheck },
 ];
 
 const nav = (r: Route) => NAV.find((n) => n.route === r)!;
 
 const readRoute = (): Route => {
-  const r = window.location.hash.replace(/^#\/?/, "").split("?")[0] as Route;
+  const r = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[0] as Route; // #/yonetici/<alt>
   return r in PAGES ? r : "ozet";
 };
 
@@ -91,7 +95,7 @@ type ModalState =
   | { type: "add" }
   | { type: "entry"; row?: Row; draft?: EntryDraft }
   | { type: "card"; row: Row }
-  | { type: "recurring"; id?: number }
+  | { type: "recurring"; id?: number; row?: Row }
   | { type: "bill"; draft: BillDraft }
   | { type: "pay"; p: Payable }
   | { type: "rmonth"; r: RecurringMonth }
@@ -168,9 +172,11 @@ function Shell() {
   const { ui: prefs } = useUiPrefs();
   // sade görünüm: her şey orantılı büyür (rem), menüde sadece temel sayfalar
   useEffect(() => { document.documentElement.style.fontSize = prefs.simple ? "19px" : ""; }, [prefs.simple]);
-  const SIMPLE = ["ozet", "islemler", "ayarlar", "diger", "kategorisiz"];
+  const SIMPLE = ["ozet", "islemler", "ayarlar", "diger", "kategorisiz", "yonetici"];
   const viewer = isViewer(book.data); // ortak defterde "Sadece görür": ekleme düğmeleri yok
-  const canSee = (r: Route) => (prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
+  const admin = useIsAdmin();
+  const canSee = (r: Route) => (r === "yonetici" ? admin
+    : prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   // açılışta içinde bulunulan dönem (ay dönümü ayarına göre; ör. 19 Ekim → Kasım dönemi)
   const [monthInit, setMonthInit] = useState(false);
@@ -213,7 +219,7 @@ function Shell() {
     openAdd: () => { if (!viewer) setModal({ type: "add" }); },
     openEntry: (row, draft) => setModal({ type: "entry", row, draft }),
     openCardTxn: (row) => setModal({ type: "card", row }),
-    openRecurring: (id) => setModal({ type: "recurring", id }),
+    openRecurring: (id, row) => setModal({ type: "recurring", id, row }),
     openBill: (draft) => setModal({ type: "bill", draft: draft ?? {} }),
     openPay: (p) => setModal({ type: "pay", p }),
     openRecurringMonth: (r) => setModal({ type: "rmonth", r }),
@@ -246,7 +252,10 @@ function Shell() {
               </a>
             ))}
           </nav>
-          <div className="mt-auto"><LogoutButton /></div>
+          <div className="mt-auto space-y-0.5">
+            <FeedbackButton className="btn-ghost w-full text-sm text-stone-600 dark:text-stone-400" />
+            <LogoutButton />
+          </div>
         </aside>
 
         {/* mobil üst çubuk: logo + tutarları göster/gizle */}
@@ -272,7 +281,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 pt-2 pb-1 text-[11px] transition-colors active:opacity-60",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik", "faturalar"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
                     ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>
@@ -296,7 +305,7 @@ function Shell() {
         <EntryForm row={modal.row} draft={modal.draft} onClose={close} onSaved={setToast} />
       )}
       {modal?.type === "card" && <CardTxnForm row={modal.row} onClose={close} onSaved={setToast} />}
-      {modal?.type === "recurring" && rec && <EntryForm recurring={rec} onClose={close} onSaved={setToast} />}
+      {modal?.type === "recurring" && rec && <EntryForm recurring={rec} spenderRow={modal.row} onClose={close} onSaved={setToast} />}
       {modal?.type === "bill" && <BillForm draft={modal.draft} onClose={close} onSaved={setToast} />}
       {modal?.type === "pay" && <PayForm p={modal.p} onClose={close} onSaved={setToast} />}
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}

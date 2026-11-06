@@ -13,6 +13,7 @@ import PayrollPreview from "./PayrollPreview";
 import SalaryChanges from "./SalaryChanges";
 import AmountChanges from "./AmountChanges";
 import SplitEditor from "./SplitEditor";
+import { TxnSpender } from "./Spender";
 import MarkDonation from "./MarkDonation";
 import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
 import Modal from "./Modal";
@@ -31,10 +32,11 @@ const splitsOf = (r: unknown) =>
 const lastCard = () => { try { return localStorage.getItem("hk:lastCard") ?? ""; } catch { return ""; } };
 const rememberCard = (v: string) => { try { localStorage.setItem("hk:lastCard", v); } catch { /* gizli pencere */ } };
 
-export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved }: {
+export default function EntryForm({ row, draft, recurring: rec, spenderRow, onClose, onSaved }: {
   row?: Row;
   draft?: EntryDraft;
   recurring?: Recurring;
+  spenderRow?: Row; // sabit kalem listeden açıldı: o ayın satırı (kim harcadı; seçim kalemin her ayına)
   onClose: () => void;
   onSaved?: (msg: string) => void;
 }) {
@@ -341,6 +343,7 @@ export default function EntryForm({ row, draft, recurring: rec, onClose, onSaved
             </ul>
           </div>
         )}
+        {(editingEntry || (rec && spenderRow)) && <TxnSpender row={(editingEntry ?? spenderRow)!} />}
         {editingEntry && hasMembers && !member && (
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />

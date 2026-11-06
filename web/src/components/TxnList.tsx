@@ -63,7 +63,7 @@ export default function TxnList({ rows, empty = "İşlem yok" }: { rows: Row[]; 
     else if (r.source === "estimate") ui.go("ekstreler");
     else if (r.source === "card") ui.openCardTxn(r);
     else if (r.source === "manual") ui.openEntry(r);
-    else ui.openRecurring(r.recurring_id ?? undefined);
+    else ui.openRecurring(r.recurring_id ?? undefined, r);
   };
 
   return (

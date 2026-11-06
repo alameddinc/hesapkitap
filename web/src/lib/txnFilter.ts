@@ -1,4 +1,4 @@
-// İşlemler süzgeci adres çubuğunda: #/islemler?kategori=…&isyeri=…&kart=…&yil=2026&gider=1
+// İşlemler süzgeci adres çubuğunda: #/islemler?kategori=…&isyeri=…&kart=…&yil=2026&gider=1&kim=u7
 // Yıl özeti, İstatistik ve Özet'teki ">" satırları buraya bağlanır; liste o satırın saydığı işlemleri gösterir.
 // Sunucu /api/transactions yalnız ay (ya da tüm geçmiş) süzer: kategori/işyeri/kart/yıl istemcide uygulanır.
 import type { Row } from "../api";
@@ -14,6 +14,9 @@ export interface TxnFilter {
   gider?: boolean;
   /** faiz/ücret satırları hariç: işyeri ve kart sıralamaları (sunucu _spends(r, CARD_SPEND [+ EXPENSE])) faizi saymaz */
   faizsiz?: boolean;
+  /** Aile "Kim ne harcadı": harcayan (u<id> | ortak). Satırın spender alanı sunucunun kuralından (finance.Spenders):
+   *  Kim ne harcadı raporu ve /api/transactions?who ile aynı küme */
+  kim?: string;
 }
 
 export function parseTxnFilter(hash: string): TxnFilter {
@@ -25,10 +28,11 @@ export function parseTxnFilter(hash: string): TxnFilter {
     yil: Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : undefined,
     gider: p.get("gider") === "1" || undefined,
     faizsiz: p.get("faizsiz") === "1" || undefined,
+    kim: /^(u\d+|ortak)$/.test(p.get("kim") ?? "") ? p.get("kim")! : undefined,
   };
 }
 
-export const hasTxnFilter = (f: TxnFilter) => !!(f.kategori || f.isyeri || f.kart || f.yil || f.gider || f.faizsiz);
+export const hasTxnFilter = (f: TxnFilter) => !!(f.kategori || f.isyeri || f.kart || f.yil || f.gider || f.faizsiz || f.kim);
 
 /** ui.go yerine: süzgeçli İşlemler adresi (hash, başında "#"sız) */
 export function txnFilterHash(f: TxnFilter): string {
@@ -39,6 +43,7 @@ export function txnFilterHash(f: TxnFilter): string {
   if (f.yil) p.set("yil", String(f.yil));
   if (f.gider) p.set("gider", "1");
   if (f.faizsiz) p.set("faizsiz", "1");
+  if (f.kim) p.set("kim", f.kim);
   const qs = p.toString();
   return `/islemler${qs ? `?${qs}` : ""}`;
 }
@@ -52,6 +57,7 @@ export function matchTxnFilter(r: Row, f: TxnFilter, currentMonth?: string): boo
   if (f.yil && f.gider && currentMonth && r.month > currentMonth) return false;
   if (f.gider && !countsAsSpend(r)) return false;
   if (f.faizsiz && r.kind === "faiz_ucret") return false;
+  if (f.kim && r.spender !== f.kim) return false;
   return true;
 }
 
@@ -61,8 +67,8 @@ export function openTxns(f: TxnFilter): void {
   window.scrollTo(0, 0);
 }
 
-/** Süzgeç başlığı: "Kira & Aidat · 2026 yılı · yalnız gider" */
-export function txnFilterLabel(f: TxnFilter, mask: (s: string) => string = (s) => s): string {
-  return [f.kategori, f.isyeri && mask(f.isyeri), f.kart && `Kart: ${f.kart}`, f.yil && `${f.yil} yılı`, f.gider && "yalnız gider", f.faizsiz && "faiz/ücret hariç"]
+/** Süzgeç başlığı: "Kira & Aidat · 2026 yılı · yalnız gider". kimAd: harcayan anahtarı → ad ("Ayşe", "Sen", "Ortak"). */
+export function txnFilterLabel(f: TxnFilter, mask: (s: string) => string = (s) => s, kimAd: (k: string) => string = (k) => k): string {
+  return [f.kim && `Kim harcadı: ${kimAd(f.kim)}`, f.kategori, f.isyeri && mask(f.isyeri), f.kart && `Kart: ${f.kart}`, f.yil && `${f.yil} yılı`, f.gider && "yalnız gider", f.faizsiz && "faiz/ücret hariç"]
     .filter(Boolean).join(" · ");
 }

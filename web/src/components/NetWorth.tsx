@@ -13,6 +13,7 @@ import AccountMerge from "./AccountMerge";
 import Wallets from "./Wallets";
 import CycleLine from "./CardCycle";
 import CardLimit, { useCardLimits } from "./CardLimit";
+import { CardSpender } from "./Spender";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
@@ -276,6 +277,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                       </span>
                       {c.cycle && <CycleLine c={c.cycle} />}
                       <CardLimit info={limits.data?.get(c.card_no)} />
+                      {!compact && <CardSpender cardNo={c.card_no} />}
                     </span>
                     <span className={cx("shrink-0 tabular-nums", c.unpaid > 0 ? "text-red-600" : "text-stone-500")}>
                       {c.unpaid > 0 ? `−${tl(c.unpaid)}` : "borç yok"}
