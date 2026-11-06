@@ -314,17 +314,58 @@ def test_own_premium_member_raises_family_cap(tmpdb, monkeypatch):
         doc_reads.check(b"belge-151")  # 180'lik tavanın 30'u kaldı
 
 
-def test_members_own_book_not_counted_nor_capped(tmpdb, monkeypatch):
+def test_own_subscription_members_own_book_not_counted_nor_capped(tmpdb, monkeypatch):
+    """Kendi Premium aboneliği olan üyenin "Benim" defteri: aile tavanı yok, toplama girmez."""
+    from app import doc_reads
+
+    o, (m1, *_) = _family(tmpdb, monkeypatch, own_premium=1)
+    _set_book(o["id"], 150)  # ortak defter dolu (120 + üyenin kendi 30'u)
+    with _in(m1, own=True):
+        doc_reads.check(b"benim-1")
+        assert doc_reads.charge(b"benim-1") == {"daily": 1, "extra": 0}
+    assert _book_used(o["id"]) == 150 and _book_used(m1["id"]) == 0
+    assert "family_limit" not in doc_reads.status({**m1, "own_book": True})
+    assert doc_reads.status(m1)["family_left"] == 0
+
+
+def test_seated_members_own_book_counted_and_capped(tmpdb, monkeypatch):
+    """Premium'u Aile koltuğundan gelen üyenin "Benim" defteri de aile toplamına girer ve tavan orada da geçerli
+    (güvenlik denetimi: eskiden sayılmıyordu)."""
     from app import doc_reads
 
     o, (m1, *_) = _family(tmpdb, monkeypatch)
-    _set_book(o["id"], 120)  # ortak defter dolu
-    with _in(m1, own=True):  # üyenin "Benim" defteri: aile tavanı yok, toplama girmez
-        doc_reads.check(b"benim-1")
+    me = {**m1, "own_book": True}
+    with _in(m1, own=True):
         assert doc_reads.charge(b"benim-1") == {"daily": 1, "extra": 0}
-    assert _book_used(o["id"]) == 120 and _book_used(m1["id"]) == 0
-    assert "family_limit" not in doc_reads.status({**m1, "own_book": True})
-    assert doc_reads.status(m1)["family_left"] == 0
+    assert _book_used(o["id"]) == 1 and _book_used(m1["id"]) == 0
+    assert doc_reads.status(me)["family_limit"] == 120
+    _set_book(o["id"], 120)
+    with _in(m1, own=True), pytest.raises(doc_reads.QuotaError, match="Ailenin bugünkü toplam"):
+        doc_reads.check(b"benim-2")
+
+
+def test_rotating_existing_accounts_through_seats_capped_at_120(tmpdb, monkeypatch):
+    """Tek Aile aboneliğiyle var olan hesaplar sırayla katılıp koltukta "Benim" defterinde okuyup ayrılınca günlük
+    toplam aile tavanını (120) aşamaz."""
+    from app import auth, doc_reads, system
+
+    o, _ = _family(tmpdb, monkeypatch, members=0)
+    total = 0
+    for i in range(6):  # 6 ayrı hesap, koltuk 3
+        u = auth.create_user(f"hesap{i}@ornek.com", f"hesap{i}-sifre-12345")
+        with system.connect() as c:
+            c.execute("UPDATE users SET member_of = ? WHERE id = ?", (o["id"], u["id"]))
+        u = system.user(u["id"])
+        with _in(u, own=True):
+            for j in range(30):
+                try:
+                    doc_reads.check(f"r{i}-{j}".encode())
+                except doc_reads.QuotaError:
+                    break
+                total += doc_reads.charge(f"r{i}-{j}".encode())["daily"]
+        with system.connect() as c:  # koltuğu bırak, sıradaki gelsin
+            c.execute("UPDATE users SET member_of = NULL WHERE id = ?", (u["id"],))
+    assert total == 120 and _book_used(o["id"]) == 120
 
 
 def test_rotating_invited_member_gets_no_fresh_family_reads(tmpdb, monkeypatch):

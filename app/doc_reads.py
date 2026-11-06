@@ -24,7 +24,8 @@ yarısı (_day). Ücretsizde ayrıca aylık tavan (plans.MONTHLY_CAP: günde 3 V
   ve tazeler.
 - Okunamayan fotoğraf (main._unreadable): kişi başı günde ilk FREE_UNREADABLE_PER_DAY ücretsiz, sonrası 1 hak
   (charge_unreadable; tekrar muafiyeti yok, system.read_unreadable).
-- Aile tavanı: ortak defterin (sahip + üyeler; üyenin "Benim" defteri hariç) günlük haktan düşen toplamı
+- Aile tavanı: ortak defterin (sahip + üyeler; üyenin "Benim" defterindeki okumalar da, Premium'u aileden geliyorsa:
+  koltuk ya da ek süre; kendi aboneliği olan üyenin Benim defteri hariç) günlük haktan düşen toplamı
   family_limit'i (DAILY_READS[aile] × FAMILY_SEATS + kendi Premium/Aile aboneliği olan her üye için o paketin günlük
   hakkı) aşamaz: davetle açılan üyeyi silip yenisini çağırmak yeni hak getirmez (system.read_book_daily, defter başı;
   üye silinince kalır). Ek paket bu tavana girmez (satın alınmış hak). status: family_limit / family_left.
@@ -242,15 +243,28 @@ def _balance(c, uid: int) -> int:
     return int(r[0]) if r else 0
 
 
+def _paid_by_family(u: dict) -> bool:
+    """Üyenin Premium'u ailenin aboneliğinden mi (Aile koltuğu ya da koltuksuz ek süre; kendi aboneliği yok)?"""
+    from app import plans
+
+    return bool(u.get("member_of")) and not plans.own_plan(u) and plans.plan_of(u) != plans.FREE
+
+
 def _family(c, u: dict) -> dict | None:
-    """Ortak defterin günlük tavanı {book, limit, used, left}; ortak defter değilse (üye yok ya da üyenin "Benim"
-    defteri) None. limit = DAILY_READS[aile] × FAMILY_SEATS + kendi aboneliği olan her (silinmemiş) üye için o paketin
-    günlük hakkı; used = bugün bu deftere günlük haktan düşen toplam (read_book_daily)."""
+    """Ailenin günlük tavanı {book, limit, used, left}; aile değilse None. limit = DAILY_READS[aile] × FAMILY_SEATS +
+    kendi aboneliği olan her (silinmemiş) üye için o paketin günlük hakkı; used = bugün bu aileye günlük haktan düşen
+    toplam (read_book_daily, sahibin kimliğiyle). Üyenin "Benim" defteri: Premium'u aileden geliyorsa (koltuk / ek süre)
+    o okumalar da aile toplamına girer ve tavan orada da geçerli; yoksa (kendi aboneliği ya da ücretsiz) None. Eskiden
+    Benim defteri hiç sayılmıyordu: var olan hesaplar sırayla katılıp koltukta okuyup ayrılarak tek abonelikle tavanın
+    üstüne çıkabiliyordu (güvenlik denetimi)."""
     from app import plans
 
     if u.get("own_book"):
-        return None
-    book = _book(u)
+        if not _paid_by_family(u):
+            return None
+        book = u["member_of"]
+    else:
+        book = _book(u)
     ms = [dict(r) for r in c.execute("SELECT * FROM users WHERE member_of = ? AND deleted_at IS NULL", (book,))]
     if not ms:
         return None
