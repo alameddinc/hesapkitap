@@ -97,6 +97,9 @@ CAPABILITIES = (
                               # fişte digit_fix evidence "community" + community_price, community_note "başkaları ₺89,00 ödüyor"
     "where_to_buy",           # GET /api/prices/groups?q&limit → [{key, label, best: [{chain, price, brand?, source own|community,
                               # date?, n?}] ucuzdan, ≤5}] (402 fiyatlar)
+    "shopping_list",          # GET/POST /api/shopping-list, PATCH/DELETE /api/shopping-list/{id}, DELETE ?done=true,
+                              # GET /api/shopping-list/plan (402 alisveris_listesi; ortak defterde paylaşılır)
+
 )
 
 

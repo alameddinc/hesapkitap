@@ -421,6 +421,17 @@ CREATE TABLE IF NOT EXISTS recurring (
     note TEXT,
     gross_amount REAL               -- brüt maaş: net her ay vergi dilimine göre hesaplanır
 );
+-- Alışveriş listesi (app/shopping.py): ortak defterde herkes aynı listeyi görür
+CREATE TABLE IF NOT EXISTS shopping_list (
+    id INTEGER PRIMARY KEY,
+    text TEXT NOT NULL,
+    group_key TEXT,                 -- ürün grubu (app/product_groups.py), çözülemezse NULL
+    qty REAL NOT NULL DEFAULT 1 CHECK (qty > 0),
+    done INTEGER NOT NULL DEFAULT 0,
+    added_by INTEGER,               -- ekleyen kullanıcı (ortak defter)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    done_at TIMESTAMP
+);
 """
 
 # Eski şemaya sonradan eklenen kolonlar: (tablo, kolon, tanım)

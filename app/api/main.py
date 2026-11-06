@@ -4345,6 +4345,78 @@ def price_groups(q: str | None = None, limit: int = 30):
     return [{"key": k, "label": labels[k], "best": best[k]} for k in keys if best.get(k)][:limit]
 
 
+# ---------------------------------------------------------------- alışveriş listesi (app/shopping.py)
+
+class ShoppingIn(BaseModel):
+    text: str = Field(min_length=1, max_length=200)
+    qty: float = Field(default=1, gt=0, le=999)
+
+
+class ShoppingPatch(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=200)
+    qty: float | None = Field(default=None, gt=0, le=999)
+    done: bool | None = None
+
+
+@app.get("/api/shopping-list")
+def shopping_list():
+    """{items: [{id, text, qty, done, group {key, label, pending?} | null, added_by, added_by_name, created_at,
+    done_at}]} — önce işaretlenmemişler."""
+    from app import shopping
+
+    return {"items": shopping.list_items()}
+
+
+@app.post("/api/shopping-list")
+def shopping_add(body: ShoppingIn):
+    from app import shopping
+
+    try:
+        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"))
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+@app.get("/api/shopping-list/plan")
+def shopping_plan():
+    """Satır başına en ucuz zincir ve "hepsini tek yerden" zincir toplamları (app/shopping.py plan)."""
+    from app import shopping
+
+    return shopping.plan()
+
+
+@app.patch("/api/shopping-list/{rid}")
+def shopping_patch(rid: int, body: ShoppingPatch):
+    from app import shopping
+
+    try:
+        got = shopping.update(rid, body.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    if not got:
+        raise HTTPException(404, "Satır yok")
+    return got
+
+
+@app.delete("/api/shopping-list/{rid}")
+def shopping_delete(rid: int):
+    from app import shopping
+
+    if not shopping.delete(rid):
+        raise HTTPException(404, "Satır yok")
+    return {"deleted": True}
+
+
+@app.delete("/api/shopping-list")
+def shopping_clear(done: bool = True):
+    """İşaretlenmiş (alınmış) satırları sil. done=false desteklenmez (listeyi topluca silmek yok)."""
+    from app import shopping
+
+    if not done:
+        raise HTTPException(422, "Yalnız alınmış satırlar topluca silinir")
+    return {"deleted": shopping.clear_done()}
+
+
 @app.get("/api/item-rules")
 def list_item_rules():
     return db.list_item_rules()

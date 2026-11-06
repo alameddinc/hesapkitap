@@ -30,10 +30,11 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "zekat": ("/api/zakat", "/api/donations", "/api/holdings"),
     "tasarruf": ("/api/savings", "/api/goals", "/api/subscriptions", "/api/targets"),
     "fiyatlar": ("/api/prices",),
+    "alisveris": ("/api/shopping-list",),
 }
 PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ekstreler", "hesaplar": "Hesaplar",
                "transferler": "Transferler", "borclar": "Borç / Alacak", "zekat": "Zekât ve Sadaka",
-               "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar"}
+               "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar", "alisveris": "Alışveriş listesi"}
 # üyenin yapabileceği değişiklikler (geri kalan her yazma sahibe ait)
 MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
@@ -45,6 +46,8 @@ MEMBER_WRITES = [
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir
     ("PUT", r"/api/spender"), ("PUT", r"/api/cards/[^/]+/spender"),  # kim harcadı: kayıtta ve kartta (görebildiği)
+    ("POST", r"/api/shopping-list"), ("PATCH", r"/api/shopping-list/\d+"),  # ortak alışveriş listesi
+    ("DELETE", r"/api/shopping-list/\d+"), ("DELETE", r"/api/shopping-list"),
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",

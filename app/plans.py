@@ -30,6 +30,8 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("butce", "Sınırsız bütçe", "ozellik", PREMIUM, True, "Ücretsizde 2 bütçe"),
     ("kumbara", "Yeni kumbara açmak", "ozellik", PREMIUM, True, "Var olan kumbaralar her pakette görünür ve kullanılır"),
     ("fiyatlar", "Fiyat takibi", "sayfa", PREMIUM, True, "Ürün ürün fiyat geçmişi, en ucuz market"),
+    ("alisveris_listesi", "Alışveriş listesi", "sayfa", PREMIUM, True,
+     "Ortak liste, her ürün için en ucuz market ve hepsini tek yerden alırsan toplam"),
     ("alsam_mi", "Alsam mı?", "sayfa", PREMIUM, True, "Taksitli alımın aylara etkisi"),
     ("posta", "Deftere özel posta adresi", "sayfa", PREMIUM, True, "Ekstre, döküm, fatura postayla kendiliğinden"),
     ("ortak_defter", "Ortak defter, üye yetkileri, ortak kumbara", "sayfa", FAMILY, True,
@@ -149,7 +151,8 @@ PACKS = {"okuma_100": 100, "okuma_300": 300}
 LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi sunucun"}
 FEATURE_LABELS = {k: r[0] for k, r in _ROWS.items()}
 # (yöntem, API yolu öneki) → özellik (paket yoksa 402). Yöntem None: hepsi.
-GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/book/invites", "ortak_defter"),
+GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/shopping-list", "alisveris_listesi"),
+         (None, "/api/book/invites", "ortak_defter"),
          (None, "/api/book/member-spend", "aile_rapor"), (None, "/api/spender", "aile_rapor"),
          (None, "/api/plan/simulate", "alsam_mi"), (None, "/api/year-summary", "istatistik"),
          (None, "/api/interest-history", "istatistik"), ("POST", "/api/jars", "kumbara")]
