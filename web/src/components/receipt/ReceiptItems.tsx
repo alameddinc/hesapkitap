@@ -66,7 +66,7 @@ function DigitHints({ live, items, onChange }: { live: LiveDigit; items: Receipt
               <b>{f.name}</b> <span className="tabular-nums whitespace-nowrap">{tl(f.from)} → {tl(f.to)}</span> olabilir ({fixWhy(f)})
             </p>
             <button type="button" className="btn-ghost shrink-0 border border-amber-300 px-2 py-0.5 text-xs dark:border-amber-700"
-              aria-label={`${f.name}: ${tl(f.from)} yerine ${tl(f.to)} yap`} onClick={() => onChange(applyDigitFixes(items, [f]))}>Düzelt</button>
+              aria-label={`${f.name}: ${tl(f.from)} yerine ${tl(f.to)} yap`} onClick={() => onChange(applyDigitFixes(items, [f]))}>Uygula</button>
           </li>
         ))}
       </ul>
