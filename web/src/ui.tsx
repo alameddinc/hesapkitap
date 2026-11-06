@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { BillDraft, Payable, Row } from "./api";
+import type { ReceiptCheck } from "./components/receipt/check";
 import type { RecurringMonth } from "./components/RecurringMonthForm";
 
 export interface EntryDraft {
@@ -23,6 +24,7 @@ export interface EntryDraft {
   branch?: string | null; // fişteki şube/semt
   wallet_hint?: string | null; // fişte yazan yemek kartı markası (Multinet…)
   cached?: boolean; // aynı fiş daha önce okunmuştu: okuma hakkı düşmedi
+  check?: ReceiptCheck | null; // okumanın denetimi (sunucu): karışan rakam önerileri (yetenek digit_fix)
 }
 
 export interface ToastOptions {

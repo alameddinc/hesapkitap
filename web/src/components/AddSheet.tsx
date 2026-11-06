@@ -6,6 +6,7 @@ import { useMeta, useDemo } from "./hooks";
 import Modal from "./Modal";
 import { isQuotaFull, QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "./DocQuota";
 import type { EntryDraft } from "../ui";
+import type { ReceiptCheck } from "./receipt/check";
 
 /** Fotoğrafı yüklemeden önce küçült: mobil fotoğraflar 5-12 MB, 1600px yeterli ve token maliyeti düşer. */
 async function shrink(file: File, max = 1600): Promise<Blob> {
@@ -28,6 +29,7 @@ export interface DocResult {
   category?: string;
   items?: { name: string; product?: string | null; qty?: number; unit?: string; amount: number | null; split?: string | null; unit_price?: number | null }[];
   reread?: { tried: boolean; used: boolean; model?: string };
+  check?: ReceiptCheck; // kalem denetimi; karışan rakam önerileri (yetenek digit_fix)
   address?: string | null;
   branch?: string | null;
   payment_card?: string | null;
@@ -69,6 +71,7 @@ export function docToDraft(r: DocResult, photo?: Blob | null): EntryDraft {
         location: r.address ?? null,
         branch: r.branch ?? null,
         cached: !!r.cached,
+        check: r.check ?? null,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
   };
 }

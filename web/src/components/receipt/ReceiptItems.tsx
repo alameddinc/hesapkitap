@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api";
 import { cx, parseAmount, tl } from "../../format";
 import Modal from "../Modal";
-import { checkItems, mergeWithNext, shiftAmounts, TOL, withAmounts, type ItemCheck, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
+import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, type DigitFix, type ItemCheck, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
 
 const label = (k: ReceiptItem) => `${(k.qty ?? 1) > 1 ? `${k.qty}× ` : ""}${k.name}`;
 const num = (v: number | null | undefined) => (v == null ? "" : String(v).replace(".", ","));
@@ -30,7 +30,54 @@ export function checkSentence(c: ReceiptCheck): string {
   return "Bazı satırlarda adet × birim fiyat tutmuyor";
 }
 
-export default function ReceiptItems({ items, total, onChange, photo, onReread, note, collapsed = 6 }: {
+/** KDV oranının eki: %1'lik, %10'luk, %20'lik */
+const rateLabel = (r: number) => `%${r}'${r === 10 ? "luk" : "lik"}`;
+
+/** Karışan rakam önerisinin parantez içi: hangi rakamlar karışmış, kim de aynısını söylüyor. */
+function fixWhy(f: DigitFix): string {
+  const ev = f.evidence ?? [];
+  const extra = [
+    ev.includes("ocr") && `telefonun okuması da ${tl(f.to)} diyor`,
+    ev.includes("qty") && `adet × birim fiyat da ${tl(f.to)} ediyor`,
+    ev.includes("history") && f.history_price != null && `geçen sefer ${tl(f.history_price)}`,
+  ].filter(Boolean);
+  return `${digitPairs(f.digits)} karışmış olabilir${extra.length ? `; ${extra.join("; ")}` : ""}`;
+}
+
+/** Uyarı kutusunun içinde: önerilen rakam düzeltmeleri (Düzelt / Hepsini düzelt), kalan fark, KDV grubu, ürün sayısı. */
+function DigitHints({ live, items, onChange }: { live: LiveDigit; items: ReceiptItem[]; onChange: (items: ReceiptItem[]) => void }) {
+  if (!live.fixes.length && !live.badRates.length && !live.lineCount) return null;
+  return (
+    <div className="space-y-1.5 pt-0.5" data-testid="rakam-oneri">
+      {live.lineCount && (
+        <p className="text-xs">Fişte {live.lineCount.printed} ürün yazıyor, {live.lineCount.read} okundu: bir satır eksik olabilir.</p>
+      )}
+      {live.badRates.length > 0 && <p className="text-xs">Fark {live.badRates.map(rateLabel).join(", ")} ürünlerde.</p>}
+      {live.all && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="text-xs font-medium">{live.all.length} satır düzeltilince fiş tutuyor</p>
+          <button type="button" className="btn-primary px-2.5 py-1 text-xs" onClick={() => onChange(applyDigitFixes(items, live.all!))}>Hepsini düzelt</button>
+        </div>
+      )}
+      <ul className="space-y-1.5">
+        {live.fixes.map((f) => (
+          <li key={`${f.index}-${f.to}`} className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 text-xs break-words">
+              <b>{f.name}</b> <span className="tabular-nums whitespace-nowrap">{tl(f.from)} → {tl(f.to)}</span> olabilir ({fixWhy(f)})
+            </p>
+            <button type="button" className="btn-ghost shrink-0 border border-amber-300 px-2 py-0.5 text-xs dark:border-amber-700"
+              aria-label={`${f.name}: ${tl(f.from)} yerine ${tl(f.to)} yap`} onClick={() => onChange(applyDigitFixes(items, [f]))}>Düzelt</button>
+          </li>
+        ))}
+      </ul>
+      {live.fixes.length > 0 && Math.abs(live.residual) > TOL && (
+        <p className="text-xs">En az bir yanlış daha var: {tl(Math.abs(live.residual))} açıklanamadı.</p>
+      )}
+    </div>
+  );
+}
+
+export default function ReceiptItems({ items, total, onChange, photo, onReread, note, collapsed = 6, serverCheck }: {
   items: ReceiptItem[];
   /** fiş toplamı (önizlemede formdaki tutar, kayıtlıda kaydın tutarı) */
   total: number | null | undefined;
@@ -41,8 +88,11 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
   onReread?: () => Promise<Reread>;
   note?: string | null;
   collapsed?: number;
+  /** sunucunun check'i (okuma ya da kayıtlı fiş; yetenek digit_fix): karışan rakam önerileri yalnız ondan gelir */
+  serverCheck?: ReceiptCheck | null;
 }) {
   const chk = useMemo(() => checkItems(items, total), [items, total]);
+  const live = useMemo(() => liveDigit(serverCheck, items, chk), [serverCheck, items, chk]);
   const [all, setAll] = useState(false);
   const [edit, setEdit] = useState<number | "new" | null>(null);
   const [preview, setPreview] = useState<{ amounts: (number | null)[]; title: string } | null>(null);
@@ -84,12 +134,13 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
           <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
           <div className="min-w-0 flex-1 space-y-1">
             <p className="font-medium">{checkSentence(chk)}</p>
+            <DigitHints live={live} items={items} onChange={onChange} />
             {chk.suggested_shift && (<>
               <p className="text-xs">Fiyatlar {chk.suggested_shift.from_index + 1}. satırdan itibaren bir satır {chk.suggested_shift.direction === "down" ? "yukarıda" : "aşağıda"} okunmuş olabilir.</p>
               <button type="button" className="btn-primary mt-1 px-2.5 py-1 text-xs"
                 onClick={() => setPreview({ amounts: chk.suggested_shift!.amounts, title: "Önerilen düzeltme" })}>Fiyatları kaydır: önce / sonra</button>
             </>)}
-            {!chk.suggested_shift && (
+            {!chk.suggested_shift && !live.fixes.length && (
               <p className="text-xs">{chk.items.some((c) => c.mismatch)
                 ? "İşaretli satıra tıkla: tutarını düzelt, fiyatları kaydır ya da altındakiyle birleştir."
                 : "Yanlış okunan kalemi düzelt, eksik kalemi ekle ya da fişten yeniden oku."}</p>
@@ -101,12 +152,14 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
       <ul className="divide-y divide-stone-100 border-t border-stone-100 dark:divide-stone-800 dark:border-stone-800">
         {shown.map((k, i) => {
           const c = chk.items[i];
+          const sus = !c?.mismatch && live.suspect.has(i);
           return (
             <li key={i}>
               <button type="button" onClick={() => setEdit(i)}
                 className={cx("flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-stone-50 dark:hover:bg-stone-800/50",
-                  c?.mismatch && "bg-amber-50 shadow-[inset_3px_0_0_var(--color-amber-500)] hover:bg-amber-100/70 dark:bg-amber-950/30 dark:hover:bg-amber-950/50")}
-                aria-label={`${label(k)}, ${k.amount != null ? tl(k.amount) : "tutar yok"}${c?.mismatch ? ", tutmuyor" : ""}: düzenle`}>
+                  c?.mismatch && "bg-amber-50 shadow-[inset_3px_0_0_var(--color-amber-500)] hover:bg-amber-100/70 dark:bg-amber-950/30 dark:hover:bg-amber-950/50",
+                  sus && "shadow-[inset_3px_0_0_var(--color-amber-300)] dark:shadow-[inset_3px_0_0_var(--color-amber-700)]")}
+                aria-label={`${label(k)}, ${k.amount != null ? tl(k.amount) : "tutar yok"}${c?.mismatch ? ", tutmuyor" : sus ? ", fişle karşılaştır" : ""}: düzenle`}>
                 <span className="w-5 shrink-0 pt-px text-right text-xs text-stone-400 tabular-nums">{i + 1}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block break-words">{label(k)}</span>
@@ -114,6 +167,7 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
                     <span className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-amber-800 dark:text-amber-300">
                       <AlertTriangle size={12} aria-hidden /> {k.qty ?? 1} × {tl(k.unit_price ?? 0)} = {tl(c.expected ?? 0)} olmalı</span>
                   )}
+                  {sus && <span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-400">Fişle karşılaştır: rakamı karışmış olabilir</span>}
                 </span>
                 <span className={cx("shrink-0 tabular-nums", c?.mismatch ? "font-semibold text-amber-800 dark:text-amber-300" : "text-stone-700 dark:text-stone-300")}>
                   {k.amount != null ? tl(k.amount) : "—"}</span>

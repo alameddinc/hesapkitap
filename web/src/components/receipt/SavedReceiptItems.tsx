@@ -4,6 +4,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../api";
+import { useMeta } from "../hooks";
 import type { ReceiptItem } from "./check";
 import ReceiptItems from "./ReceiptItems";
 
@@ -11,6 +12,7 @@ export default function SavedReceiptItems({ entryId, total, receiptFile, readOnl
   entryId: number; total: number; receiptFile?: string | null; readOnly?: boolean; onToast?: (m: string) => void;
 }) {
   const qc = useQueryClient();
+  const digitOn = !!useMeta().data?.capabilities?.includes("digit_fix");
   const q = useQuery({ queryKey: ["receipt-items", entryId], queryFn: () => api.receiptItems(entryId), retry: false });
   const [items, setItems] = useState<ReceiptItem[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,6 +44,7 @@ export default function SavedReceiptItems({ entryId, total, receiptFile, readOnl
   return (
     <div className="space-y-2">
       <ReceiptItems items={cur} total={total} onChange={readOnly ? () => undefined : setItems} photo={photo}
+        serverCheck={digitOn && !readOnly ? q.data?.check : null}
         onReread={receiptFile && !readOnly ? () => api.rereadEntryReceipt(entryId) : undefined}
         note={!cur.length ? "Bu kayıtta kalem yok; fişten yeniden okuyabilir ya da elle ekleyebilirsin." : null} />
       {dirty && (

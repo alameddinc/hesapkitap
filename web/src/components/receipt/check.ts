@@ -11,7 +11,18 @@ export interface Shift { from_index: number; direction: "up" | "down"; amounts: 
 export interface ReceiptCheck {
   items_total: number; receipt_total: number | null; diff: number | null; ok: boolean;
   items: ItemCheck[]; shift_start: number | null; suggested_shift: Shift | null;
+  /** yetenek digit_fix (sunucu app/receipt_check.py digit_check): yalnız sunucunun check'inde; istemci hesaplamaz */
+  digit_fix?: DigitFix[]; digit_fix_all?: { indices: number[]; total_ok: boolean } | null; residual?: number;
+  suspect?: number[]; groups?: VatGroup[]; line_count?: { printed: number; read: number } | null;
 }
+/** Karışan rakam önerisi: bu kalemin tutarı `from` yerine `to` olabilir (termal baskıda 6↔8 …). Kendiliğinden uygulanmaz. */
+export interface DigitFix {
+  index: number; name: string; from: number; to: number; digits: string;
+  unit_price_from?: number; unit_price_to?: number;
+  /** ocr: telefonun okuması da `to` diyor · qty: adet × birim fiyat `to` ediyor · history: geçen sefer bu fiyat · group: fark bu KDV grubunda */
+  evidence?: ("ocr" | "qty" | "history" | "group")[]; score?: number; history_price?: number;
+}
+export interface VatGroup { rate: number; items_total: number; tax: number; printed: number | null; indices: number[]; ok: boolean }
 /** POST /api/receipts/reread ve /api/entries/{id}/receipt-reread yanıtı (hiçbir şey kaydedilmez). */
 export interface Reread { items: ReceiptItem[]; total: number | null; model?: string; confidence?: string; check?: ReceiptCheck; receipt_file?: string }
 
@@ -98,3 +109,47 @@ export const toServer = (items: ReceiptItem[]) => items.filter((i) => i.name.tri
   name: i.name.trim(), product: i.product ?? null, brand: i.brand ?? null, qty: i.qty || 1, unit: i.unit || "adet",
   amount: i.amount, unit_price: i.unit_price ?? null, ...(i.split ? { split: i.split } : {}),
 }));
+
+// ---------------------------------------------------------------- karışan rakam (yetenek digit_fix)
+
+/** Sunucunun önerileri şu anki kalemlere hâlâ uyuyor mu. Öneri yalnız o kalem değişmediyse (ad ve tutar aynı) ve fiş
+ *  toplamı aynıysa gösterilir; "Hepsini düzelt" bütün önerileri hâlâ uyuyorsa; kalan fark, şüpheli satırlar, KDV grubu ve
+ *  ürün sayısı ipucu yalnız kalemlerin toplamı sunucunun gördüğüyle aynıysa (kullanıcı başka bir şey düzeltmediyse). */
+export interface LiveDigit {
+  fixes: DigitFix[]; all: DigitFix[] | null; residual: number; suspect: Set<number>; badRates: number[];
+  lineCount: { printed: number; read: number } | null;
+}
+export function liveDigit(server: ReceiptCheck | null | undefined, items: ReceiptItem[], local: ReceiptCheck): LiveDigit {
+  const none: LiveDigit = { fixes: [], all: null, residual: 0, suspect: new Set(), badRates: [], lineCount: null };
+  if (!server || local.ok || server.receipt_total == null || local.receipt_total == null ||
+      r2(server.receipt_total) !== r2(local.receipt_total)) return none;
+  const fresh = (f: DigitFix) => { const it = items[f.index]; return !!it && it.name === f.name && it.amount != null && r2(it.amount) === r2(f.from); };
+  const fixes = (server.digit_fix ?? []).filter(fresh);
+  const allOk = !!server.digit_fix_all?.total_ok && fixes.length >= 2 && fixes.length === (server.digit_fix ?? []).length;
+  const same = r2(server.items_total) === r2(local.items_total);
+  const groups = server.groups ?? [];
+  const bad = groups.filter((g) => !g.ok);
+  return {
+    fixes, all: allOk ? fixes : null,
+    residual: same && fixes.length ? server.residual ?? 0 : 0,
+    suspect: new Set(same ? server.suspect ?? [] : []),
+    badRates: same && bad.length && bad.length < groups.length ? bad.map((g) => g.rate) : [],
+    lineCount: same ? server.line_count ?? null : null,
+  };
+}
+
+/** Öneriyi uygula: tutar `to`; birim fiyat sunucu verdiyse unit_price_to, değilse okunan birim fiyat eski tutarı
+ *  tutuyorduysa (kayıtlı fişte birim tutar ÷ adet'tir) yeni tutar ÷ adet; tutmuyorduysa olduğu gibi (uyarı sürsün). */
+export function applyDigitFixes(items: ReceiptItem[], fixes: DigitFix[]): ReceiptItem[] {
+  const by = new Map(fixes.map((f) => [f.index, f]));
+  return items.map((it, i) => {
+    const f = by.get(i);
+    if (!f) return it;
+    const q = it.qty || 1, up = it.unit_price;
+    const consistent = typeof up === "number" && up > 0 && Math.abs(r2(q * up) - f.from) <= TOL;
+    return { ...it, amount: f.to, unit_price: f.unit_price_to ?? (consistent ? r2(f.to / q) : up ?? null) };
+  });
+}
+
+/** "6→8" → "6 ile 8"; "6→8, 3→8" → "6 ile 8, 3 ile 8" */
+export const digitPairs = (digits: string) => digits.split(",").map((p) => p.trim().replace("→", " ile ")).join(", ");
