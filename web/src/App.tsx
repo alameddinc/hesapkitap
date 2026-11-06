@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, Tags, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, ShoppingCart, Tags, Zap, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -27,6 +27,7 @@ import Transactions from "./pages/Transactions";
 import Transfers from "./pages/Transfers";
 import Borclar from "./pages/Borclar";
 import Prices from "./pages/Prices";
+import Shopping from "./pages/Shopping";
 import Accounts from "./pages/Accounts";
 import Zakat from "./pages/Zakat";
 import Stats from "./pages/Stats";
@@ -56,6 +57,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   transferler: Transfers,
   borclar: Borclar,
   fiyatlar: Prices,
+  alisveris: Shopping, // yalnız sunucu "shopping_list" yeteneğini verirse
   hesaplar: Accounts,
   zekat: Zakat,
   istatistik: Stats,
@@ -78,6 +80,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "borclar", label: "Borç / Alacak", icon: HandCoins },
   { route: "zekat", label: "Zekât ve Sadaka", icon: Moon },
   { route: "fiyatlar", label: "Fiyatlar", icon: Tag },
+  { route: "alisveris", label: "Alışveriş listesi", icon: ShoppingCart },
   { route: "ekstreler", label: "Ekstreler", icon: ReceiptText },
   { route: "kurallar", label: "Kurallar", icon: Tags },
   { route: "ayarlar", label: "Ayarlar", icon: Settings2 },
@@ -176,6 +179,7 @@ function Shell() {
   const viewer = isViewer(book.data); // ortak defterde "Sadece görür": ekleme düğmeleri yok
   const admin = useIsAdmin();
   const canSee = (r: Route) => (r === "yonetici" ? admin
+    : r === "alisveris" && !meta.data?.capabilities?.includes("shopping_list") ? false // eski sunucu: sayfa yok
     : prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   // açılışta içinde bulunulan dönem (ay dönümü ayarına göre; ör. 19 Ekim → Kasım dönemi)
@@ -281,7 +285,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 pt-2 pb-1 text-[11px] transition-colors active:opacity-60",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "alisveris", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
                     ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>
