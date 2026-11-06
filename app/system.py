@@ -170,6 +170,20 @@ CREATE TABLE IF NOT EXISTS push_queue (     -- gönderilecekler (sessiz saat bit
     created TEXT,
     tries INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS feedback (       -- uygulama içi "Sorun bildir" (app/feedback.py); yönetici görür
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER,                     -- oturumsuz (giriş ekranı) ve demoda NULL
+    created_at TEXT NOT NULL,            -- UTC, YYYY-MM-DD HH:MM:SS
+    message TEXT NOT NULL,
+    context TEXT,                        -- JSON {route, app_version, platform, error, code, book}
+    status TEXT NOT NULL DEFAULT 'yeni', -- yeni | okundu | cozuldu
+    admin_note TEXT,
+    shots TEXT NOT NULL DEFAULT '[]',    -- JSON: depodaki ekran görüntüsü adları (main/feedback/<ad>)
+    client_key TEXT,                     -- bağlantının tuzlu kısa özeti (yalnız saatlik sınır; adres saklanmaz)
+    demo INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
+CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
 
 DEFAULT_AI_QUOTA = 100
@@ -370,7 +384,8 @@ def bump_session(uid: int) -> None:
 
 def delete_user(uid: int) -> None:
     with connect() as c:
-        if c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount:
+        gone = bool(c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount)
+        if gone:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
             for t in ("read_usage", "read_daily", "read_split", "read_credits", "ai_restrictions", "ai_restriction_log",
                       "ai_restriction_days", "push_devices", "push_prefs", "push_sent", "push_queue"):
@@ -386,6 +401,15 @@ def delete_user(uid: int) -> None:
                     c.execute(sql, (uid,))
                 except sqlite3.OperationalError:
                     pass
+    if gone:  # geri bildirimleri ve ekran görüntüleri (depo çağrısı bağlantı dışında)
+        from app import feedback
+
+        try:
+            feedback.forget_user(uid)
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger("hesapkitap.feedback").exception("geri bildirimler silinemedi")
 
 
 def user_dirs(u: dict) -> list[str]:

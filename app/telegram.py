@@ -86,6 +86,12 @@ def send_document(filename: str, data: bytes, caption: str = "") -> None:
           files={"document": (filename, data, "application/octet-stream")})
 
 
+def send_photo(filename: str, data: bytes, caption: str = "") -> None:
+    """Resim + HTML açıklama (en fazla 1024 karakter; Bot API sınırı)."""
+    _call("sendPhoto", timeout=60, data={"chat_id": chat_id(), "caption": caption[:1024], "parse_mode": "HTML"},
+          files={"photo": (filename, data, "application/octet-stream")})
+
+
 # ---------------------------------------------------------------- gelen mesajlar: bota PDF ilet → içe aktar
 
 MAX_FILE = 20 * 1024 * 1024  # Bot API indirme sınırı

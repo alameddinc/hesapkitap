@@ -23,7 +23,7 @@ ANCHOR = date(2026, 10, 20)  # app.demo verisinin "bugünü": son ödemeler ön�
 CLOSED = ("/api/statements/upload", "/api/bank-import", "/api/receipts/parse", "/api/bills/parse", "/api/share",
           "/api/documents/parse",
           "/api/settings", "/api/admin", "/api/book", "/api/mail", "/api/templates")
-OPEN = ("/api/book/me",)
+OPEN = ("/api/book/me", "/api/feedback")  # "Sorun bildir" demoda da açık (yöneticiye gider)
 SAMPLES = {
     "vakifbank": {"label": "Örnek VakıfBank ekstresi", "kind": "statement", "file": "vakifbank_b.txt"},
     "genel": {"label": "Örnek Garanti ekstresi (genel okuyucu)", "kind": "statement", "file": "garanti"},

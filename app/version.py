@@ -77,6 +77,9 @@ CAPABILITIES = (
                               # PUT /api/spender {source manual|card|recurring, id, who u<id>|ortak|null} → {who, set};
                               # PUT /api/cards/{card_no}/spender {who u<id>|null} → {card_no, who}; GET /api/cards/spenders;
                               # transactions ve cards/summary recent satırlarında spender, spender_set; cards[].spender
+    "feedback",               # uygulama içi "Sorun bildir": POST /api/feedback multipart message (1–2000), screenshots
+                              # (0–3 jpeg/png/webp, ≤ 5 MB), context (JSON ≤ 4 KB) → {ok, id}; oturumsuz/demo/üye açık,
+                              # saatte 10 (429)
 )
 
 

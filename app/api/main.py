@@ -429,12 +429,15 @@ async def _require_login(request: Request, call_next):
             user = auth.token_user(_bearer(request))
         if not user and path == "/api/share":  # telefondan Paylaş (iOS Kısayollar): kişisel anahtar, sadece bu uçta
             user = system.token_owner(_bearer(request) or "") if _bearer(request) else None
-        if not user:
+        if not user and path == "/api/feedback":  # "Sorun bildir" giriş ekranından da: oturumsuz gider (user_id yok)
+            pass
+        elif not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
-        gate = _access(request, request.method, path, user)
-        if isinstance(gate, JSONResponse):
-            return gate
-        user, db_file = gate
+        else:
+            gate = _access(request, request.method, path, user)
+            if isinstance(gate, JSONResponse):
+                return gate
+            user, db_file = gate
     if user:  # isteğin tamamı bu kullanıcının veritabanında çalışır
         with db.use_space(db_file, user):
             response = await _run(request, call_next, db_file, path)
@@ -1423,6 +1426,87 @@ def admin_delete_invite(code: str):
     if not system.delete_invite(code):
         raise HTTPException(404, "Davet yok ya da kullanılmış")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- "Sorun bildir" (app/feedback.py)
+
+def _upload_bytes(f: UploadFile, cap: int) -> bytes:
+    """En fazla cap + 1 bayt okur: büyük dosya belleğe tamamen alınmadan reddedilir."""
+    f.file.seek(0)
+    return f.file.read(cap + 1)
+
+
+@app.post("/api/feedback")
+def feedback_send(request: Request, message: str = Form(""), context: str | None = Form(None),
+                  screenshots: list[UploadFile] | None = File(None)):
+    """Kullanıcının sorun bildirimi yöneticiye: mesaj, 0–3 ekran görüntüsü, bağlam. Oturumsuz (giriş ekranı), demo ve
+    ortak defter üyesi (her yetki) de gönderir. Saatte 10 (kullanıcı; oturumsuzda bağlantı başı)."""
+    from app import feedback
+
+    u = db.current_user() or {}
+    demo = bool(u.get("demo"))
+    uid = u.get("id") if u.get("id") and not demo else None
+    try:
+        msg = feedback.check_message(message)
+        ctx = feedback.check_context(context)
+        files = [f for f in (screenshots or []) if f.filename or f.size]
+        if len(files) > feedback.MAX_SHOTS:
+            raise feedback.FeedbackError(f"En fazla {feedback.MAX_SHOTS} ekran görüntüsü eklenebilir")
+        shots = feedback.check_shots([_upload_bytes(f, feedback.MAX_SHOT_BYTES) for f in files])
+    except feedback.FeedbackError as e:
+        raise HTTPException(e.status, str(e)) from e
+    key = feedback.client_key(client_ip(request))
+    if feedback.limited(uid, key):
+        raise HTTPException(429, "Bu saat içinde çok fazla bildirim gönderildi; biraz sonra tekrar dene.",
+                            headers={"Retry-After": "600"})
+    ua = (request.headers.get("user-agent") or "")[:300]
+    if ua:
+        ctx["user_agent"] = ua
+    fid = feedback.create(msg, ctx, shots, uid, key, demo=demo)
+    try:
+        feedback.notify_async(fid, msg, uid, demo, shots[0] if shots else None)
+    except Exception:  # noqa: BLE001 - bildirim hatası kaydı bozmaz
+        logging.getLogger("hesapkitap.feedback").exception("geri bildirim bildirimi başlatılamadı")
+    return {"ok": True, "id": fid}
+
+
+class FeedbackPatch(BaseModel):
+    status: Literal["yeni", "okundu", "cozuldu"] | None = None
+    admin_note: str | None = Field(None, max_length=2000)
+
+
+@app.get("/api/admin/feedback")
+def admin_feedback(status: Literal["yeni", "okundu", "cozuldu"] | None = None, limit: int = Query(100, ge=1, le=500)):
+    """Geri bildirimler (yeniden eskiye) ve durum sayıları. Kullanıcı adı tam görünür (yönetici hesabı zaten görür)."""
+    from app import feedback
+
+    _require_admin()
+    return feedback.list_items(status, limit)
+
+
+@app.get("/api/admin/feedback/{fid}/screenshot/{n}")
+def admin_feedback_screenshot(fid: int, n: int):
+    """n: 0'dan başlayan sıra (liste satırındaki screenshots sayısından küçük)."""
+    from app import feedback
+
+    _require_admin()
+    got = feedback.screenshot(fid, n)
+    if not got:
+        raise HTTPException(404, "Görüntü yok")
+    data, ctype = got
+    return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=3600",
+                                                     "Content-Security-Policy": "default-src 'none'"})
+
+
+@app.patch("/api/admin/feedback/{fid}")
+def admin_feedback_patch(fid: int, body: FeedbackPatch):
+    from app import feedback
+
+    _require_admin()
+    out = feedback.update(fid, body.status, body.admin_note)
+    if not out:
+        raise HTTPException(404, "Geri bildirim yok")
+    return out
 
 
 @app.get("/api/me/ai")

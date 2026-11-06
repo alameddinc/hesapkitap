@@ -83,11 +83,14 @@ TYPES = {
     "ortak": ("Ortak defterde yeni kayıt", False),
     "zekat": ("Zekât ve mübarek günler", True),
     "aile": ("Aile koltukları", True),
+    "geri_bildirim": ("Kullanıcı geri bildirimi", True),  # yalnız yöneticiye (app/feedback.py)
 }
+ADMIN_TYPES = {"geri_bildirim"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
 NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "döküm", "butce": "bütçe uyarısı",
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
-         "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi"}
+         "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
+         "geri_bildirim": "geri bildirim"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -470,7 +473,10 @@ def set_prefs(uid: int, data: dict) -> dict:
 
 def prefs_out(uid: int) -> dict:
     p = get_prefs(uid)
-    return {"enabled": enabled(), **p, "labels": {k: v[0] for k, v in TYPES.items()}, "devices": len(devices(uid))}
+    admin = (system.user(uid) or {}).get("role") == "admin"
+    keep = {k for k in TYPES if admin or k not in ADMIN_TYPES}
+    p["types"] = {k: v for k, v in p["types"].items() if k in keep}
+    return {"enabled": enabled(), **p, "labels": {k: v[0] for k, v in TYPES.items() if k in keep}, "devices": len(devices(uid))}
 
 
 def quiet_until(prefs: dict, now: datetime) -> datetime | None:
