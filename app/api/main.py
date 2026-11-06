@@ -219,6 +219,16 @@ async def _demo_request(request: Request, call_next):
     return response
 
 
+def _book_choice(request: Request) -> str:
+    """Üyenin bu istekte açtığı defter: "kendi" ("Benim") ya da "ortak". Açık başlık (X-HK-Book: kendi | ortak) çerezden
+    (hk_book, web'in kalıcı seçimi) önce gelir: istemci tek isteği öbür deftere yazabilir (fiş onayında "Deftere").
+    Başlık yoksa ya da tanınmıyorsa çerez."""
+    h = (request.headers.get("x-hk-book") or "").strip().lower()
+    if h in ("kendi", "ortak"):
+        return h
+    return "kendi" if request.cookies.get("hk_book") == "kendi" else "ortak"
+
+
 def _access(request: Request, method: str, path: str, user: dict) -> "tuple[dict, str | None] | JSONResponse":
     """Oturumu doğrulanmış kullanıcı bu isteği yapabilir mi? Tek yer: /api/ middleware'i ve /api/ dışındaki yazma
     uçları (/share-target) aynı kontrolden geçer: zorunlu şifre değişimi, paket kapısı, ortak defter yetkisi ve
@@ -231,7 +241,7 @@ def _access(request: Request, method: str, path: str, user: dict) -> "tuple[dict
     if feature and not plans.allows(user, feature):  # barındırılan sürüm: paketinde olmayan özellik
         return JSONResponse({"detail": str(plans.PlanRequired(feature)), "plan_required": feature}, status_code=402)
     db_file = system.user_db_path(user)
-    if user.get("member_of") and (request.headers.get("x-hk-book") == "kendi" or request.cookies.get("hk_book") == "kendi"):
+    if user.get("member_of") and _book_choice(request) == "kendi":
         # ortak defter üyesi kendi özel defterinde: kurallar yok, tam yetki; paket yine defter sahibinden
         return {**user, "own_book": True}, system.own_db_path(user)
     if user.get("member_of"):  # ortak defter üyesi: yetkisi ve sahibin kurallarıyla sınırlı
@@ -2177,6 +2187,8 @@ class EntryIn(BaseModel):
     installments: int = Field(1, ge=1, le=36)  # kredi kartı taksit sayısı
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # hangi kredi kartı (fişte yazıyorsa okunur)
     receipt_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.jpg$")  # okuma yanıtındaki fiş fotoğrafı
+    # kim harcadı (ortak defter, yetenek save_book_choice): "u<id>" | "ortak"; otomatikten (ekleyen) farklıysa saklanır
+    spender: str | None = Field(None, max_length=20)
     # fişin vergi bilgisi (okuma yanıtındaki alanlar; app/vat.py)
     tax_no: str | None = Field(None, max_length=20)  # satıcının VKN'si: 10 hane, kontrol hanesi tutmalı
     tax_office: str | None = Field(None, max_length=80)
@@ -2234,10 +2246,83 @@ def _tax_fields(data: dict) -> None:
         data["vat_total"] = None
 
 
+def _save_spender(who: str | None) -> tuple[list[dict], int | None] | None:
+    """Kaydederken seçilen "kim harcadı" (POST /api/entries, /api/bills; yetenek save_book_choice): yalnız ortak
+    defterde ve paket "aile_rapor" açıkken; başka yerde sessizce yok sayılır (None). Defterde olmayan kişi 400
+    (PUT /api/spender gibi). (kişiler, user_id | None=Ortak) döner. Kayıt oluşturulmadan ÖNCE çağrılır."""
+    if who is None:
+        return None
+    u = db.current_user()
+    ppl = _shared_people()
+    if not ppl or (plans.hosted() and not plans.allows(u, "aile_rapor")):
+        return None
+    return ppl, _spender_uid(who, ppl)
+
+
+def _apply_spender(choice: tuple[list[dict], int | None] | None, entry_id: int | None) -> None:
+    """Seçim otomatik harcayandan (kaydı ekleyen) farklıysa elle seçim olarak sakla; aynıysa hiçbir şey yazılmaz."""
+    if not choice or not entry_id:
+        return
+    ppl, uid = choice
+    row = finance.spender_row("manual", entry_id)
+    want = finance.SHARED if uid is None else f"u{uid}"
+    if row and finance.Spenders(ppl).of(row) != want:
+        db.set_spender_override("manual", entry_id, uid)
+
+
+def _adopt_file(kind: str, name: str | None) -> bool:
+    """Dosya bu defterde saklı mı? Değilse ve istek ortak defter üyesinden geliyorsa, AYNI üyenin öbür defterinde
+    (ortak defter ↔ "Benim"; X-HK-Book ile öbür deftere kaydederken) saklı dosya bu deftere kopyalanır. Başka hiçbir
+    defterden alınmaz. Ortak defterden "Benim"e yalnız hiçbir kayda bağlı olmayan (yeni okunmuş) ya da yalnız üyenin
+    kendi kayıtlarına bağlı dosya kopyalanır (sahibin gizli kaydının fotoğrafı sızmasın). Okuma hakkı yeniden düşmez."""
+    from app import storage
+
+    if not storage.valid_name(kind, name):
+        return False
+    if db.file_indexed(kind, name):
+        return True
+    u = db.current_user()
+    base = system.user(u["id"]) if u and u.get("member_of") and u.get("id") else None
+    if not base or base.get("member_of") != u.get("member_of"):
+        return False
+    if u.get("own_book"):  # "Benim" defterine kaydediliyor: dosya ortak defterde okunmuştu
+        src, src_user = system.user_db_path(base), base
+    else:  # ortak deftere kaydediliyor: dosya "Benim" defterinde okunmuştu
+        src, src_user = system.own_db_path(base), {**base, "own_book": True}
+    path = src or db.DB_PATH  # None: ana veritabanı (yöneticinin ortak defteri)
+    if os.path.abspath(path) == os.path.abspath(db.db_path()) or not os.path.exists(path):
+        return False
+    with db.use_space(src, src_user):
+        if not db.file_indexed(kind, name):
+            return False
+        if u.get("own_book"):  # kaynak ortak defter: dosya kimin kaydına bağlı?
+            with db.connect() as c:
+                if kind == "receipts":
+                    owners = {r[0] for r in c.execute("SELECT created_by FROM entries WHERE receipt_file = ?", (name,))}
+                else:
+                    owners = {None} if c.execute("SELECT 1 FROM bills WHERE file_name = ?", (name,)).fetchone() else set()
+            if owners - {base["id"]}:
+                return False
+        try:
+            data = db.read_file(kind, name)
+        except storage.StorageError:
+            return False
+    if not data:
+        return False
+    try:
+        return db.store_file(kind, name, data, storage.content_type(name))
+    except (storage.StorageError, ValueError):
+        return False
+
+
 @app.post("/api/entries")
 def create_entry(body: EntryIn):
+    """Kayıt ekle. Ortak defter (yetenek save_book_choice): spender "u<id>" | "ortak" — kim harcadı, otomatikten
+    (ekleyen) farklıysa elle seçim olarak saklanır; ortak defter değilse yok sayılır, defterde olmayan kişi 400. Üye
+    fişi öbür defterine kaydedebilir (X-HK-Book: kendi | ortak): okumadaki receipt_file öbür defterdeyse kopyalanır."""
     _visible_or_404("account", body.account_id)  # üye gizli hesaba kayıt yazamaz
-    data = body.model_dump(exclude={"splits", "items", "branch"})
+    choice = _save_spender(body.spender)
+    data = body.model_dump(exclude={"splits", "items", "branch", "spender"})
     _tax_fields(data)
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
@@ -2254,8 +2339,8 @@ def create_entry(body: EntryIn):
             data["account_id"] = cash[0]["id"]
     if (u := db.current_user()):
         data["created_by"] = u["id"]  # ortak defterde kimin eklediği
-    if data.get("receipt_file") and not db.file_indexed("receipts", data["receipt_file"]):
-        data["receipt_file"] = None  # bu defterde saklanmış bir fotoğraf değil: bağlanmaz
+    if data.get("receipt_file") and not _adopt_file("receipts", data["receipt_file"]):
+        data["receipt_file"] = None  # bu defterde (ya da üyenin öbür defterinde) saklanmış bir fotoğraf değil: bağlanmaz
     eid = db.create_entry(data)
     if body.items and body.kind == "gider":
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
@@ -2273,6 +2358,7 @@ def create_entry(body: EntryIn):
 
     sync.reconcile()  # döküm önceden yüklendiyse: dökümdeki aynı hareketle kesin eşleşen kayıt birleşir (app/sync.py)
     debt = db.link_debt_movement(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
+    _apply_spender(choice, eid)
     match = sync.match_info().get(eid)
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
             "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
@@ -5638,6 +5724,7 @@ class BillIn(BaseModel):
     # belge ödeme dekontuysa ya da kullanıcı "ödendi" dediyse: fatura ödenmiş olarak açılır (gider kaydıyla, /pay gibi)
     paid_at: date | None = None
     payment: Payment | None = None
+    spender: str | None = Field(None, max_length=20)  # kim harcadı (ortak defter; ödenmiş açılan faturanın gider kaydı)
 
 
 class BillPatch(BaseModel):
@@ -6359,12 +6446,19 @@ def list_bills():
 
 @app.post("/api/bills")
 def create_bill(body: BillIn):
-    data = body.model_dump(exclude={"paid_at", "payment"})
+    """Fatura ekle. Yetenek save_book_choice: üye öbür defterine kaydedebilir (X-HK-Book): okumadaki file_name öbür
+    defterdeyse kopyalanır; spender (POST /api/entries gibi) ödenmiş açılan faturanın gider kaydına uygulanır."""
+    choice = _save_spender(body.spender)
+    data = body.model_dump(exclude={"paid_at", "payment", "spender"})
     data["due_date"] = body.due_date.isoformat()
+    if data.get("file_name") and not db.file_indexed("bills", data["file_name"]):
+        _adopt_file("bills", data["file_name"])  # üyenin öbür defterinde okunmuş fatura (eski davranış: ad aynen kalır)
     bid = db.create_bill(data)
     if body.paid_at is None:
         return {"id": bid}
-    return {"id": bid, "entry_id": db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment)}
+    eid = db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment)
+    _apply_spender(choice, eid)
+    return {"id": bid, "entry_id": eid}
 
 
 @app.patch("/api/bills/{bid}")
