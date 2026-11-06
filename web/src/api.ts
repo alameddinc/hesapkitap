@@ -30,6 +30,8 @@ export interface Row {
   /** Aile (yetenek spender_assign, ortak defterde): kim harcadı (u<id> | ortak) ve elle mi seçildi */
   spender?: string;
   spender_set?: boolean;
+  /** harcayan defterden ayrıldıysa sunucunun verdiği ad: "Ayşe (ayrıldı)" */
+  spender_name?: string;
   fx: string | null;
   note: string | null;
   /** sunucu 90ed954: ham banka açıklaması (yoksa null) ve kullanıcının kendi notu; note ikisinin birleşik hâli */

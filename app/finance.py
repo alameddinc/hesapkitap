@@ -679,10 +679,14 @@ class Spenders:
       3. kart işlemi: eşleştiği elle kaydın seçimi, o yoksa o kaydı ekleyen
       4. kart işlemi: kartın kişisi (card_spenders, "kartı kişiye bağla")
       5. Ortak
-    Bulunan kişi defterde değilse (ayrılan / çıkarılan üye) Ortak. people: book.shared_people() (boşsa hepsi Ortak)."""
+    Bulunan kişi defterde değilse (ayrılan / çıkarılan üye): kaydı onundur, raporda "Ayşe (ayrıldı)" olarak kalır
+    (geçmiş raporlar değişmesin); yalnız kartın kişisi ayrıldıysa kart bağsız sayılır (Ortak). Ayrılan kişiye yeni
+    atama yapılmaz (PUT /api/spender yalnız defterdeki kişiler). people: book.shared_people() (boşsa hepsi Ortak)."""
 
     def __init__(self, people: list[dict]):
         self.ids = {p["id"] for p in people}
+        self.names = {f"u{p['id']}": p["name"] for p in people}
+        self._left: dict[str, str] = {}  # ayrılan kişinin etiketi (istek başına bir kez okunur)
         self.cards = db.card_spenders()
         self.overrides = db.spender_overrides()
         self.creators: dict[int, int] = {}  # kart işlemi id → eşleşen elle kaydı ekleyen
@@ -708,13 +712,32 @@ class Spenders:
                 return ov[("manual", eid)]
             if rid in self.creators:
                 return self.creators[rid]
-            return self.cards.get(r.get("account"))
+            uid = self.cards.get(r.get("account"))
+            return uid if uid in self.ids else None  # kartın kişisi ayrıldı: kart bağsız
         return None
 
     def of(self, r: dict) -> str:
-        """Satırın harcayanı: "u<id>" (defterdeki kişi) ya da SHARED."""
+        """Satırın harcayanı: "u<id>" (defterdeki ya da ayrılmış kişi) ya da SHARED."""
         uid = self._uid(r)
-        return f"u{uid}" if uid in self.ids else SHARED
+        return SHARED if uid is None else f"u{uid}"
+
+    def left(self, key: str) -> bool:
+        """Bu kişi defterden ayrılmış mı (raporda adı "(ayrıldı)" ile)."""
+        return key != SHARED and key not in self.names
+
+    def name(self, key: str) -> str:
+        """Raporda görünen ad: defterdeki kişinin adı, ayrılanın "Ayşe (ayrıldı)", yoksa "Ortak"."""
+        if key == SHARED:
+            return "Ortak"
+        if key in self.names:
+            return self.names[key]
+        if key not in self._left:
+            from app import system
+
+            u = system.user(int(key[1:])) if key[1:].isdigit() else None
+            ad = (u.get("username") or "").split("@")[0] if u else ""
+            self._left[key] = f"{ad} (ayrıldı)" if ad else "Ayrılan üye"
+        return self._left[key]
 
     def is_set(self, r: dict) -> bool:
         """Bu satırda (kaydın kendisinde) elle seçim var mı? İstemci "otomatik" / "elle seçildi" gösterir."""
@@ -765,8 +788,8 @@ def member_spend(month: str, people: list[dict]) -> dict:
     for key, rs in by.items():
         amt = sum(r["amount"] for r in rs)
         p = names.get(key)
-        out.append({"key": key, "user_id": p["id"] if p else None, "name": p["name"] if p else "Ortak",
-                    "owner": bool(p and p.get("owner")), "amount": _round(amt), "count": len(rs),
+        out.append({"key": key, "user_id": None if key == SHARED else int(key[1:]), "name": sp.name(key),
+                    "left": sp.left(key), "owner": bool(p and p.get("owner")), "amount": _round(amt), "count": len(rs),
                     "pct": round(amt / total * 100, 1) if money.gt(total, 0) else 0.0,
                     "categories": _group(rs, "category")})
     out.sort(key=lambda x: (x["key"] == SHARED, -x["amount"]))
@@ -776,13 +799,12 @@ def member_spend(month: str, people: list[dict]) -> dict:
 def budget_split(month: str, people: list[dict]) -> dict[str, list[dict]]:
     """Bütçe kategorisi → [{key, user_id, name, amount}] (en büyükten): ortak bütçede kim ne kadar harcadı
     (harcayan kuralı Spenders)."""
-    names = {f"u{p['id']}": p["name"] for p in people}
     sp = Spenders(people)
     agg: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for r in _spend_rows(month):
         agg[r["category"]][sp.of(r)] += r["amount"]
-    return {cat: sorted(({"key": k, "user_id": None if k == SHARED else int(k[1:]), "name": names.get(k, "Ortak"),
-                          "amount": _round(v)} for k, v in d.items() if money.gt(v, 0)), key=lambda x: -x["amount"])
+    return {cat: sorted(({"key": k, "user_id": None if k == SHARED else int(k[1:]), "name": sp.name(k),
+                          "left": sp.left(k), "amount": _round(v)} for k, v in d.items() if money.gt(v, 0)), key=lambda x: -x["amount"])
             for cat, d in agg.items()}
 
 

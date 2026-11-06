@@ -2003,6 +2003,8 @@ def cards_summary(recent: int = Query(20, ge=0, le=200)):
             c["spender"] = sp.card(c["card_no"])
             for r in c["recent"]:
                 r["spender"], r["spender_set"] = sp.of(r), sp.is_set(r)
+                if sp.left(r["spender"]):
+                    r["spender_name"] = sp.name(r["spender"])  # ayrılan kişi: "Ayşe (ayrıldı)"
     return FastJSON(out)
 
 
@@ -2062,6 +2064,8 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
         r["counts_as_spend"], r["counts_as_income"] = finance.counts(r)
         if ppl:
             r["spender"], r["spender_set"] = sp.of(r), sp.is_set(r)
+            if sp.left(r["spender"]):
+                r["spender_name"] = sp.name(r["spender"])  # ayrılan kişi: "Ayşe (ayrıldı)"
     if not (totals or limit or before):
         return FastJSON(rows)  # eski biçim: düz dizi (jsonable_encoder atlanır; içerik bayt bayt aynı)
     out: dict = {}

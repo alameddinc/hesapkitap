@@ -143,7 +143,8 @@ def test_recurring_override_applies_every_month(owner):  # noqa: F811
     assert ("recurring", rid) not in db.spender_overrides()
 
 
-def test_removed_member_falls_back_to_ortak(owner):  # noqa: F811
+def test_removed_member_keeps_records_card_unbound(owner):  # noqa: F811
+    """Çıkarılan / ayrılan üyenin eklediği kayıtlar onun adıyla kalır ("(ayrıldı)"); bağlı kartı Ortak'a döner."""
     _setup_book(owner)
     _member(owner)
     k = _member(owner, name="kardes")
@@ -152,10 +153,18 @@ def test_removed_member_falls_back_to_ortak(owner):  # noqa: F811
     card, cm = _card_with_rows(owner)
     owner.put(f"/api/cards/{card}/spender", json={"who": f"u{kardes}"})
     assert f"u{kardes}" in _spend(owner, cm) and f"u{kardes}" in _spend(owner, MONTH)
+    card_amt = _spend(owner, cm)[f"u{kardes}"]
     assert owner.delete(f"/api/book/members/{kardes}").status_code == 200
-    assert f"u{kardes}" not in _spend(owner, cm) and f"u{kardes}" not in _spend(owner, MONTH)
+    ms = owner.get("/api/book/member-spend", params={"month": MONTH}).json()["people"]
+    k_row = next(p for p in ms if p["key"] == f"u{kardes}")
+    assert k_row["left"] is True and k_row["name"] == "Ayrılan üye" and k_row["amount"] == 80  # davetle açılan: hesabı silindi
+    if cm != MONTH:
+        assert f"u{kardes}" not in _spend(owner, cm)  # kart bağı düştü: kart satırları Ortak
+    else:
+        assert _spend(owner, cm)[f"u{kardes}"] == 80 and card_amt > 80
     row = next(x for x in _rows(owner, MONTH) if x["uid"] == f"m{eid}")
-    assert row["spender"] == "ortak"
+    assert row["spender"] == f"u{kardes}" and row["spender_name"] == "Ayrılan üye"
+    assert [r["uid"] for r in _rows(owner, MONTH, who=f"u{kardes}")] == [f"m{eid}"]
     assert owner.get("/api/cards/spenders").json() == {"cards": {}}
     assert next(c for c in owner.get("/api/cards/summary").json()["cards"] if c["card_no"] == card)["spender"] is None
     assert owner.put(f"/api/cards/{card}/spender", json={"who": f"u{kardes}"}).status_code == 400
@@ -244,3 +253,26 @@ def test_hosted_requires_family(hosted):  # noqa: F811
 
 def test_capability_listed(owner):  # noqa: F811
     assert "spender_assign" in owner.get("/api/meta").json()["capabilities"]
+
+
+def test_left_member_with_account_keeps_name(owner):  # noqa: F811
+    """Kendi hesabıyla katılıp ayrılan: adı "(ayrıldı)" ile; bütçe kırılımında da."""
+    from app.api.main import app
+    from fastapi.testclient import TestClient
+
+    _setup_book(owner)
+    _member(owner)
+    inv = owner.post("/api/admin/invites", json={}).json()
+    c = TestClient(app)
+    assert c.post("/api/auth/register", json={"consent": ["kosullar", "acik_riza"], "code": inv["code"],
+                                              "username": "deniz@ornek.com", "password": "deniz-sifre-12345"}).status_code == 200
+    code = owner.post("/api/book/invites", json={}).json()["code"]
+    assert c.post(f"/api/book/join/{code}").status_code == 200
+    eid = _entry(c, "Kitap", 120, category="Eğitim")
+    assert c.post("/api/book/leave").status_code == 200
+    ms = owner.get("/api/book/member-spend", params={"month": MONTH}).json()["people"]
+    d = next(p for p in ms if p["key"] == f"u{_uid('deniz@ornek.com')}")
+    assert d["name"] == "deniz (ayrıldı)" and d["left"] is True and d["amount"] == 120
+    row = next(x for x in _rows(owner, MONTH) if x["uid"] == f"m{eid}")
+    assert row["spender_name"] == "deniz (ayrıldı)"
+    assert owner.put("/api/spender", json={"source": "manual", "id": eid, "who": d["key"]}).status_code == 400

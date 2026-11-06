@@ -150,10 +150,12 @@ export function TxnSpender({ row }: { row: Row }) {
   if (!s.on || !src || row.spender === undefined || row.split_of || row.deleted || row.debt_id || !GIDER.has(row.kind)) return null;
   const who = cur?.who ?? row.spender;
   const set = cur?.set ?? !!row.spender_set;
+  // defterden ayrılan kişinin kaydı: sunucu adını verir ("Ayşe (ayrıldı)"); çiplerde yok, yalnız şu anki değer
+  const ayrilan = who !== ORTAK && !s.keys.includes(who) ? row.spender_name ?? "Defterden ayrılan kişi" : null;
   if (!s.edit) {
     return (
       <p className="flex items-center gap-1.5 text-sm text-stone-600 dark:text-stone-400" data-testid="islem-harcayan">
-        <KisiNokta k={who} people={s.people} size={20} />Kim harcadı: {s.adOf(who)}
+        <KisiNokta k={who} people={s.people} size={20} />Kim harcadı: {ayrilan ?? s.adOf(who)}
       </p>
     );
   }
@@ -161,6 +163,7 @@ export function TxnSpender({ row }: { row: Row }) {
   return (
     <section data-testid="islem-harcayan" aria-labelledby={`harcayan-${row.uid}`} className="space-y-1.5">
       <h3 id={`harcayan-${row.uid}`} className="label">Kim harcadı</h3>
+      {ayrilan && <p className="text-xs text-stone-500">Şu an {ayrilan} adına. Değiştirmek için birini seç.</p>}
       <div role="group" aria-label="Kim harcadı" className="flex flex-wrap gap-2">
         {[...s.keys.slice(1), ORTAK].map((key) => (
           <button key={key} type="button" aria-pressed={who === key} disabled={save.isPending}
