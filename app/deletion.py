@@ -9,7 +9,7 @@ Akış
 - Bekleme süresinde giriş (şifre / Google / Apple / şifre sıfırlama): 409 account_pending_deletion + kısa ömürlü geri
   alma belgesi → POST /api/me/restore → hesap (ve sahiple birlikte silinen üyeler) aynen geri gelir.
 - Süre dolunca (app/jobs.py, her dakikalık turda): veri klasörü + nesne deposu önekleri (R2), ai_usage, doc_reads,
-  api_tokens, onay / şifresiz ayarları gider; RevenueCat müşteri kaydı silinir (anahtar varsa).
+  doc_cache, api_tokens, onay / şifresiz ayarları gider; RevenueCat müşteri kaydı silinir (anahtar varsa).
 - HESAPKITAP_DELETE_GRACE_DAYS (varsayılan 7; 0 = hemen kalıcı sil). Kendi sunucusunda da aynı.
 
 Silme kaydı (system.deleted_accounts): kullanıcı id'si, tarihler, paket ve mağaza durumu, e-postanın HMAC özeti

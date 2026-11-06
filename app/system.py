@@ -60,6 +60,28 @@ CREATE TABLE IF NOT EXISTS read_daily (   -- hazır sürüm: günlük okuma hakk
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
 );
+CREATE TABLE IF NOT EXISTS read_unreadable (  -- hazır sürüm: okunamayan fotoğraf denemesi, kişi başı Türkiye günü
+    user_id INTEGER NOT NULL,           -- (ilk doc_reads.FREE_UNREADABLE_PER_DAY ücretsiz, sonrası 1 hak)
+    day TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+);
+CREATE TABLE IF NOT EXISTS read_book_daily (  -- hazır sürüm: ortak defterin günlük haktan düşen toplamı (aile tavanı)
+    book_id INTEGER NOT NULL,           -- defter sahibi (doc_reads._book); üyenin "Benim" defteri sayılmaz
+    day TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (book_id, day)
+);
+CREATE TABLE IF NOT EXISTS doc_cache (    -- hazır sürüm: okunmuş belgenin sonucu (app/doc_cache.py); 30 gün
+    book_id INTEGER NOT NULL,           -- doc_reads._book: önbellek defter başı
+    hash TEXT NOT NULL,                 -- sha256(dosya baytları); dosyanın kendisi saklanmaz
+    kind TEXT NOT NULL,                 -- belge | fis | fatura | dekont | ekstre | dokum
+    created_at INTEGER NOT NULL,        -- unix zamanı
+    file TEXT,                          -- yanıttaki receipt_file (elle yeniden okuma önbelleği tazeler)
+    result TEXT NOT NULL,               -- okuma sonucu (JSON)
+    PRIMARY KEY (book_id, hash, kind)
+);
+CREATE INDEX IF NOT EXISTS doc_cache_age ON doc_cache(created_at);
 CREATE TABLE IF NOT EXISTS read_split (   -- eski tek sayaçtan iki sayaca göç bir kez yapıldı (kullanıcı, ay)
     user_id INTEGER NOT NULL,
     month TEXT NOT NULL,
@@ -387,10 +409,12 @@ def delete_user(uid: int) -> None:
         gone = bool(c.execute("DELETE FROM users WHERE id = ? AND role <> 'admin'", (uid,)).rowcount)
         if gone:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
-            for t in ("read_usage", "read_daily", "read_split", "read_credits", "ai_restrictions", "ai_restriction_log",
-                      "ai_restriction_days", "push_devices", "push_prefs", "push_sent", "push_queue"):
+            for t in ("read_usage", "read_daily", "read_split", "read_credits", "read_unreadable", "ai_restrictions",
+                      "ai_restriction_log", "ai_restriction_days", "push_devices", "push_prefs", "push_sent", "push_queue"):
                 c.execute(f"DELETE FROM {t} WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
+            for t in ("doc_cache", "read_book_daily"):  # defterin okuma önbelleği ve aile günlük toplamı
+                c.execute(f"DELETE FROM {t} WHERE book_id = ?", (uid,))
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))

@@ -97,6 +97,8 @@ def parse_rule_based(text: str) -> dict | None:
 
 
 def parse_account_pdf(data: bytes, passwords: list[str] | None = None, allow_ai: bool = True) -> dict:
+    """Okuma önbelleği (doc_cache.reading ile açılmışsa): yapay zekâ okumasından önce bakılır (PDF açıldıktan,
+    kural/şablon okuması olmadıktan sonra), yapay zekâ sonucu yazılır."""
     text = None
     for pw in [None, *(passwords or [])]:
         try:
@@ -157,15 +159,24 @@ def _parse_account_text(text: str, allow_ai: bool = True) -> dict:
     if not receipt.enabled():
         raise BankPdfError("Bu bankanın PDF dökümü yapay zekâ ile okunur; Ayarlar → Anahtarlar'dan Gemini anahtarı gir "
                            "ya da bankadan Excel/CSV indir.")
+    from app import doc_cache
+
+    cache = doc_cache.current()
+    if cache is not None and (hit := cache.get()) is not None:  # aynı döküm bu defterde yapay zekâyla okunmuştu
+        return hit
     best = None
     for _attempt in range(2):  # model bazen bir satır atlar: bakiye zinciri tutmazsa bir kez daha (maliyet: en çok 2 çağrı)
         res = _parse_text(text)
         if res["verified"]:
-            return res
+            break
         score = (res["closing_ok"], -len(res["chain_bad"]), len(res["rows"]))
         if best is None or score > best[0]:
             best = (score, res)
-    return best[1]
+    else:
+        res = best[1]
+    if cache is not None:
+        cache.put(res)
+    return res
 
 
 def _parse_text(text: str) -> dict:

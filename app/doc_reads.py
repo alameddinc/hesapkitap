@@ -18,6 +18,16 @@ yarısı (_day). Ücretsizde ayrıca aylık tavan (plans.MONTHLY_CAP: günde 3 V
   Çok haklı işlemde (ör. 3 hak, günlükte 1 kaldı) günlükten 1 + paketten 2 aynı işlemde (transaction) düşer; düşülen
   {daily, extra} döner (istemci "ek paketten 2 okuma kullanıldı" der).
 - Hak dolunca hiçbir şey kilitlenmez: yalnız okuma durur, kayıt elle eklenir.
+- Aynı içerik yeniden okunmaz: başarılı okuma sonucu defter başı 30 gün saklanır (app/doc_cache.py); tekrarında
+  yapay zekâ çağrılmaz, hak düşmez (yanıtta "cached": true). Önbellekte yokken (süresi dolmuş) yapay zekâ yeniden
+  okuyacaksa önce forget(key): eski tekrar kaydı düşer, okuma yeniden sayılır. Elle yeniden okuma önbelleği atlar
+  ve tazeler.
+- Okunamayan fotoğraf (main._unreadable): kişi başı günde ilk FREE_UNREADABLE_PER_DAY ücretsiz, sonrası 1 hak
+  (charge_unreadable; tekrar muafiyeti yok, system.read_unreadable).
+- Aile tavanı: ortak defterin (sahip + üyeler; üyenin "Benim" defteri hariç) günlük haktan düşen toplamı
+  family_limit'i (DAILY_READS[aile] × FAMILY_SEATS + kendi Premium/Aile aboneliği olan her üye için o paketin günlük
+  hakkı) aşamaz: davetle açılan üyeyi silip yenisini çağırmak yeni hak getirmez (system.read_book_daily, defter başı;
+  üye silinince kalır). Ek paket bu tavana girmez (satın alınmış hak). status: family_limit / family_left.
 - Sayaçlar: system.read_daily (günlük haktan düşen; aylık tavan bunların ay toplamı), system.ai_usage (bu ay düşen
   toplam hak, ek paket dahil; yönetici listesi, eski istemci), system.read_usage (tür başı okunan belge; artık yalnız
   istatistik, hak hesabına girmez; eski aylık sayaçtan göç _split geçmiş aylar için kalır).
@@ -37,6 +47,8 @@ from app.receipt import ReceiptError
 BELGE, FIS = "belge", "fis"
 TZ = ZoneInfo("Europe/Istanbul")
 REREAD_COST = 2       # elle yeniden okuma
+FREE_UNREADABLE_PER_DAY = 5  # okunamayan fotoğraf: kişi başı günde bu kadarı ücretsiz, sonrası 1 hak
+UNREADABLE_CHARGED_MSG = f"Bugünkü {FREE_UNREADABLE_PER_DAY} ücretsiz denemeden sonra okunamayan fotoğraf da 1 hak düşer."
 PAGES_PER_READ = 10   # PDF: her 10 sayfa 1 hak
 _AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 _DA = {"Ocak": "ta", "Şubat": "ta", "Mart": "ta", "Nisan": "da", "Mayıs": "ta", "Haziran": "da", "Temmuz": "da",
@@ -221,9 +233,29 @@ def _balance(c, uid: int) -> int:
     return int(r[0]) if r else 0
 
 
+def _family(c, u: dict) -> dict | None:
+    """Ortak defterin günlük tavanı {book, limit, used, left}; ortak defter değilse (üye yok ya da üyenin "Benim"
+    defteri) None. limit = DAILY_READS[aile] × FAMILY_SEATS + kendi aboneliği olan her (silinmemiş) üye için o paketin
+    günlük hakkı; used = bugün bu deftere günlük haktan düşen toplam (read_book_daily)."""
+    from app import plans
+
+    if u.get("own_book"):
+        return None
+    book = _book(u)
+    ms = [dict(r) for r in c.execute("SELECT * FROM users WHERE member_of = ? AND deleted_at IS NULL", (book,))]
+    if not ms:
+        return None
+    limit = plans.DAILY_READS[plans.FAMILY] * plans.FAMILY_SEATS
+    limit += sum(plans.DAILY_READS[p] for m in ms if (p := plans.own_plan(m)))
+    r = c.execute("SELECT count FROM read_book_daily WHERE book_id = ? AND day = ?", (book, _day())).fetchone()
+    used = int(r[0]) if r else 0
+    return {"book": book, "limit": limit, "used": used, "left": max(0, limit - used)}
+
+
 def _state(c, u: dict) -> dict:
-    """Günlük hak, ücretsizde aylık tavan ve ek paket: {limit, used, left, cap, month_used, extra, by}. left = bugün
-    günlük haktan kalan (aylık tavan dahil); by: kalanı sınırlayan ("day" | "month")."""
+    """Günlük hak, ücretsizde aylık tavan, aile tavanı ve ek paket: {limit, used, left, cap, month_used, extra, by,
+    family}. left = bugün günlük haktan kalan (aylık tavan ve aile tavanı dahil); by: kalanı sınırlayan ("day" |
+    "month" | "family"; dışarıya "family" yerine "day" gider: ikisi de yarın yenilenir)."""
     from app import plans
 
     limit, cap = plans.read_limit(u), plans.monthly_cap(u)
@@ -235,8 +267,21 @@ def _state(c, u: dict) -> dict:
         if cap - month_used < limit - day_used:
             by = "month"
         left = min(left, max(0, cap - month_used))
+    fam = _family(c, u)
+    if fam and fam["left"] < left:
+        left, by = fam["left"], "family"
     return {"limit": limit, "used": day_used, "left": left, "cap": cap, "month_used": month_used,
-            "extra": _balance(c, u["id"]), "by": by}
+            "extra": _balance(c, u["id"]), "by": by, "family": fam}
+
+
+def _by(st: dict) -> str:
+    """İstemciye giden limited_by: aile tavanı da gün sonunda yenilenir ("day")."""
+    return "day" if st["by"] == "family" else st["by"]
+
+
+def _family_fields(st: dict) -> dict:
+    fam = st.get("family")
+    return {"family_limit": fam["limit"], "family_used": fam["used"], "family_left": fam["left"]} if fam else {}
 
 
 def credits(uid: int) -> int:
@@ -254,7 +299,8 @@ def _resets(st: dict) -> str:
 
 def status(u: dict | None) -> dict | None:
     """Arayüz için tek günlük sayaç: {period: "day", limit, used, left, resets_at, monthly_cap, monthly_used,
-    monthly_resets_at, limited_by, extra_left, reread_cost, pages_per_read} + geriye uyum: belge ve fiş (eski iki
+    monthly_resets_at, limited_by, extra_left, reread_cost, pages_per_read, family_limit?, family_used?, family_left?
+    (yalnız ortak defterde; left bunları zaten içerir)} + geriye uyum: belge ve fiş (eski iki
     aylık sayaç) ikisi de aynı günlük sayacı yansıtır ({used, limit, left}), extra = ek paket. Kendi sunucusu /
     yönetici: None (sınırsız)."""
     from app import plans, system
@@ -267,8 +313,8 @@ def status(u: dict | None) -> dict | None:
     return {"period": "day", "limit": st["limit"], "used": st["used"], "left": st["left"], "resets_at": _resets(st),
             "monthly_cap": st["cap"], "monthly_used": st["month_used"],
             "monthly_resets_at": _next_month().isoformat() if st["cap"] is not None else None,
-            "limited_by": st["by"], "extra_left": st["extra"], "reread_cost": REREAD_COST,
-            "pages_per_read": PAGES_PER_READ, BELGE: old, FIS: dict(old), "extra": st["extra"]}
+            "limited_by": _by(st), "extra_left": st["extra"], "reread_cost": REREAD_COST,
+            "pages_per_read": PAGES_PER_READ, BELGE: old, FIS: dict(old), "extra": st["extra"], **_family_fields(st)}
 
 
 def left(u: dict | None, kind: str = BELGE) -> int | None:
@@ -291,12 +337,14 @@ def message(u: dict, st: dict | None = None, needed: int = 1, reread: bool = Fal
         with system.connect() as c:
             st = _state(c, u)
     left_, by = st["left"], st["by"]
-    when = "Yarın yenilenir." if by == "day" else f"{_on(_next_month())} yenilenir."
-    if reread:
-        msg = f"Yeniden okuma {needed} hak ister, {'bugün' if by == 'day' else 'bu ay'} {left_} hakkın kaldı. {when}"
+    when = "Yarın yenilenir." if by in ("day", "family") else f"{_on(_next_month())} yenilenir."
+    if by == "family" and left_ <= 0:
+        msg = f"Ailenin bugünkü toplam okuma hakkı ({st['family']['limit']}) doldu; yarın yenilenir."
+    elif reread:
+        msg = f"Yeniden okuma {needed} hak ister, {'bu ay' if by == 'month' else 'bugün'} {left_} hakkın kaldı. {when}"
     elif left_ > 0:  # hak var ama bu belgeye yetmiyor (uzun PDF)
         what = f"Bu belge ({n_pages} sayfa)" if n_pages else "Bu belge"
-        msg = f"{what} {needed} okuma hakkı ister, {'bugün' if by == 'day' else 'bu ay'} {left_} hakkın kaldı. {when}"
+        msg = f"{what} {needed} okuma hakkı ister, {'bu ay' if by == 'month' else 'bugün'} {left_} hakkın kaldı. {when}"
     elif by == "month":
         msg = f"Bu ayki {st['cap']} okuma hakkın doldu; {_on(_next_month())} yenilenir."
     else:
@@ -315,9 +363,11 @@ def _refusal(u: dict, st: dict, needed: int, kind: str, reread: bool = False, n_
     extra = {**plans.trial(u), "packs": [{"id": k, "reads": n} for k, n in plans.PACKS.items()],
              "upgrade_yearly": plans.upgrade_yearly(u), "extra_left": st["extra"], "plan": plans.plan_of(u),
              "period": "day", "daily_limit": st["limit"], "daily_used": st["used"], "left": st["left"],
-             "resets_at": _resets(st), "needed": needed, "limited_by": st["by"], "monthly_cap": st["cap"],
-             "monthly_used": st["month_used"], "reread": reread, **({"pages": n_pages} if n_pages else {})}
-    limit = st["cap"] if st["by"] == "month" and st["left"] <= 0 else st["limit"]
+             "resets_at": _resets(st), "needed": needed, "limited_by": _by(st), "monthly_cap": st["cap"],
+             "monthly_used": st["month_used"], "reread": reread, **({"pages": n_pages} if n_pages else {}),
+             **_family_fields(st), **({"family_full": True} if st["by"] == "family" and st["left"] <= 0 else {})}
+    limit = st["cap"] if st["by"] == "month" and st["left"] <= 0 else \
+        st["family"]["limit"] if st["by"] == "family" and st["left"] <= 0 else st["limit"]
     return QuotaError(message(u, st, needed, reread, n_pages), limit, _upgrade(u), kind, extra)
 
 
@@ -360,6 +410,10 @@ def _spend(c, u: dict, n: int) -> dict:
     if daily + over:
         c.execute("INSERT INTO read_daily (user_id, day, count) VALUES (?, ?, ?) "
                   "ON CONFLICT(user_id, day) DO UPDATE SET count = count + excluded.count", (u["id"], _day(), daily + over))
+        if st["family"]:  # ortak defter: ailenin günlük toplamı (aynı işlemde)
+            c.execute("INSERT INTO read_book_daily (book_id, day, count) VALUES (?, ?, ?) "
+                      "ON CONFLICT(book_id, day) DO UPDATE SET count = count + excluded.count",
+                      (st["family"]["book"], _day(), daily + over))
     c.execute("INSERT INTO ai_usage (user_id, month, count) VALUES (?, ?, ?) "
               "ON CONFLICT(user_id, month) DO UPDATE SET count = count + excluded.count", (u["id"], _month(), n))
     return {"daily": daily + over, "extra": extra}
@@ -401,6 +455,38 @@ def charge_reread() -> dict | None:
         c.execute("BEGIN IMMEDIATE")
         ai_restrictions.count(c, u["id"])  # yeniden okuma da yönetici kısıtlamasının günlük sınırına sayılır
         return _spend(c, u, REREAD_COST)
+
+
+def forget(key: bytes | str) -> None:
+    """Bu içeriğin tekrar kaydını (doc_reads) düşür: önbellekte sonucu olmayan (süresi dolmuş ya da önbellekten önce
+    okunmuş) içerik yapay zekâyla yeniden okunacak; başarılı okuma charge ile yeniden sayılır."""
+    u = _subject()
+    if not u:
+        return
+    from app import system
+
+    with system.connect() as c:
+        c.execute("DELETE FROM doc_reads WHERE book_id = ? AND hash = ?", (_book(u), _key(key)))
+
+
+def charge_unreadable() -> dict | None:
+    """Okunamayan fotoğraf (main._unreadable, dekont okunamadı): kişi başı bugünkü ilk FREE_UNREADABLE_PER_DAY deneme
+    ücretsiz (None), sonrası 1 hak (düşülen {daily, extra}). Tekrar muafiyeti yok: aynı bulanık fotoğrafı yeniden
+    göndermek de deneme sayılır (doc_reads kaydı yazılmaz; sonradan okunursa normal sayılır)."""
+    u = _subject()
+    if not u:
+        return None
+    from app import ai_restrictions, system
+
+    with system.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("INSERT INTO read_unreadable (user_id, day, count) VALUES (?, ?, 1) "
+                  "ON CONFLICT(user_id, day) DO UPDATE SET count = count + 1", (u["id"], _day()))
+        n = c.execute("SELECT count FROM read_unreadable WHERE user_id = ? AND day = ?", (u["id"], _day())).fetchone()[0]
+        if n <= FREE_UNREADABLE_PER_DAY:
+            return None
+        ai_restrictions.count(c, u["id"])
+        return _spend(c, u, 1)
 
 
 # ---------------------------------------------------------------- ek okuma paketi (mağaza: tüketilebilir ürün)

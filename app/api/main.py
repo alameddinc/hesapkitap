@@ -2677,15 +2677,16 @@ def _charge_if_new(key: bytes, counts: dict) -> None:
 def _read_bank_pdf(file: UploadFile, password: str | None = None) -> tuple[list[dict], dict]:
     import hashlib
 
-    from app import bank_import, bank_pdf
+    from app import bank_import, bank_pdf, doc_cache
 
     data = _file_bytes(file)
     key = (os.path.abspath(db.db_path()), hashlib.sha256(data).hexdigest())
     with _PDF_CACHE_LOCK:
         res = _PDF_CACHE.get(key)
     if res is None:  # ayrıştırma (yapay zekâ olabilir) kilit dışında: başka defterlerin okuması beklemesin
-        try:
-            res = bank_pdf.parse_account_pdf(data, ([password] if password else []) + db.pdf_passwords())
+        try:  # hazır sürüm: yapay zekâ okuması defter başı 30 gün saklanır (app/doc_cache.py)
+            with doc_cache.reading(data, doc_cache.DOKUM):
+                res = bank_pdf.parse_account_pdf(data, ([password] if password else []) + db.pdf_passwords())
         except (bank_pdf.BankPdfError, receipt.ReceiptError) as e:
             raise HTTPException(422, errors.user_text(e, 422)) from e
         with _PDF_CACHE_LOCK:
@@ -4421,7 +4422,7 @@ def upload_statements(files: list[UploadFile] = File(...), password: str | None 
 
 def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
                        forced: str | None = None) -> list[dict]:
-    from app import doc_reads
+    from app import doc_cache, doc_reads
     from app.parsers import PasswordRequired
 
     results = []
@@ -4493,7 +4494,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             results.append({**res, "status": "account_statement"})
             continue
         try:
-            stmt = parse_statement(data, passwords=tried)
+            with doc_cache.reading(data, doc_cache.EKSTRE) as slot:  # yapay zekâ yedeği: aynı ekstre yeniden okunmaz
+                stmt = parse_statement(data, passwords=tried)
         except PasswordRequired as e:
             results.append({**res, "status": "password_required", "message": errors.user_text(e) if password else "PDF şifreli"})
             continue
@@ -4504,7 +4506,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             db.remember_pdf_password(password)
         res.update(bank=stmt.bank, card_no=stmt.card_no, period_end=stmt.period_end.isoformat(),
                    total_debt=stmt.total_debt, txn_count=len(stmt.transactions),
-                   reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source)
+                   reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source,
+                   **({"cached": True} if slot.hit else {}))
         if db.statement_exists(data, stmt):
             results.append({**res, "status": "duplicate"})
             continue
@@ -5347,23 +5350,26 @@ def parse_receipt(file: UploadFile = File(...)):
     mime = file.content_type or "image/jpeg"
     if not mime.startswith("image/"):
         raise HTTPException(422, "Sadece fotoğraf yüklenebilir")
-    from app import doc_reads
+    from app import doc_cache, doc_reads
 
     original = data
     data, mime, photo = _prepare_photo(data, mime)
+    if (hit := doc_cache.get(original, doc_cache.FIS)) is not None:  # aynı fotoğraf bu defterde okunmuştu
+        return _cached_receipt(hit, photo)
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
         doc_reads.check(original, doc_reads.FIS)  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fotoğraf okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
+    doc_reads.forget(original)  # önbellekte yok: yeniden okunursa yeniden sayılır
     try:
         out = receipt.parse_receipt(data, mime, cats)
     except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı): fotoğraf saklanır, elle girilir
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    if _unreadable(out):  # okunamadı: hak düşmez, yeniden okuma denenmez; istemci yeniden çektirir
-        out.update(unreadable=True, message=UNREADABLE_MSG)
+    if _unreadable(out):  # okunamadı: yeniden okuma denenmez; istemci yeniden çektirir
+        _mark_unreadable(out, UNREADABLE_MSG)
     elif charged := doc_reads.charge(original, doc_reads.FIS):
         out["charged"] = charged  # {daily, extra}: istemci "ek paketten N okuma kullanıldı" der
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
@@ -5371,6 +5377,30 @@ def parse_receipt(file: UploadFile = File(...)):
     if not out.get("unreadable"):
         _auto_reread(out, data, mime)
     out["receipt_file"] = _store_receipt(photo)
+    if not out.get("unreadable"):
+        doc_cache.put(original, doc_cache.FIS, out, out["receipt_file"])
+    if warn := db.take_storage_warning():
+        out["storage_warning"] = warn
+    return out
+
+
+def _mark_unreadable(doc: dict, msg: str) -> None:
+    """Okunamadı: kişi başı günün ilk doc_reads.FREE_UNREADABLE_PER_DAY denemesi ücretsiz, sonrası 1 hak (mesaja
+    eklenir, charged döner)."""
+    from app import doc_reads
+
+    doc.update(unreadable=True, message=msg)
+    if charged := doc_reads.charge_unreadable():
+        doc.update(charged=charged, message=f"{msg} {doc_reads.UNREADABLE_CHARGED_MSG}")
+
+
+def _cached_receipt(hit: dict, photo: bytes | None) -> dict:
+    """Önbellekten fiş: yapay zekâ yok, hak düşmez; fotoğraf bu defterde yeniden saklanır (silinmiş olabilir)."""
+    from app import doc_cache
+
+    out = doc_cache.hit(hit)
+    if "receipt_file" in out or photo:
+        out["receipt_file"] = _store_receipt(photo)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
     return out
@@ -5640,14 +5670,22 @@ def parse_bill(file: UploadFile = File(...), transfer_check: bool = Form(False))
         return {"looks_like_transfer": True, "source": "metin", "provider": None, "amount": None, "file_name": None}
     read, read_mime, photo = _prepare_photo(data, mime)
     name = db.save_bill_file(photo, ".jpg") if photo else db.save_bill_file(data, BILL_TYPES[mime])
+    from app import doc_cache
+
+    if (hit := doc_cache.get(data, doc_cache.FATURA)) is not None:  # aynı fatura bu defterde okunmuştu
+        warn = db.take_storage_warning()
+        return {**doc_cache.hit(hit), "file_name": name, **({"storage_warning": warn} if warn else {})}
     try:
         if receipt.enabled():
             doc_reads.check(data)  # hazır sürüm: hak doluysa dosya saklanır ama okunmaz (elle girilir)
+            doc_reads.forget(data)  # önbellekte yok: yeniden okunursa yeniden sayılır
         parsed = receipt.parse_bill(read, read_mime) if receipt.enabled() else {}
     except receipt.ReceiptError as e:
         parsed = {"error": errors.user_text(e, 502), **(e.fields() if isinstance(e, doc_reads.QuotaError) else {})}
-    if parsed and "error" not in parsed and (charged := doc_reads.charge(data)):
-        parsed["charged"] = charged
+    if parsed and "error" not in parsed:
+        if charged := doc_reads.charge(data):
+            parsed["charged"] = charged
+        doc_cache.put(data, doc_cache.FATURA, {k: v for k, v in parsed.items() if k != "file_name"})
     warn = db.take_storage_warning()
     return {**parsed, "file_name": name, **({"storage_warning": warn} if warn else {})}
 
@@ -5712,13 +5750,17 @@ def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)
         raise HTTPException(422, "Belgeden çıkarılan metin çok uzun")
     read, read_mime, photo = _prepare_photo(data, mime)
     dfile = _store_receipt(photo) if photo else _store_dekont_pdf(data) if mime == "application/pdf" else None
-    try:
-        doc_reads.check(data)  # hazır sürüm: hak doluysa okunmaz; dosya saklıdır, elle girilen transfere bağlanır
-    except doc_reads.QuotaError as e:
-        raise QuotaFull(502, e, dekont_file=dfile) from e
-    text = _pdf_text(data) if mime == "application/pdf" else None
-    fields, source = None, None
-    if text and (dekont_parse.is_transfer(text) or dekont.is_dekont(text)):
+    from app import doc_cache
+
+    hit = doc_cache.get(data, doc_cache.DEKONT)  # yapay zekâyla okunmuş alanlar (kişi/hesap eşleşmesi her seferinde)
+    if hit is None:
+        try:
+            doc_reads.check(data)  # hazır sürüm: hak doluysa okunmaz; dosya saklıdır, elle girilen transfere bağlanır
+        except doc_reads.QuotaError as e:
+            raise QuotaFull(502, e, dekont_file=dfile) from e
+    text = _pdf_text(data) if mime == "application/pdf" and hit is None else None
+    fields, source = (hit["fields"], hit.get("source")) if hit is not None else (None, None)
+    if hit is None and text and (dekont_parse.is_transfer(text) or dekont.is_dekont(text)):
         try:
             fields, source = dekont_parse.fields_from_text(text), "metin"
         except ValueError:
@@ -5730,6 +5772,7 @@ def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)
             fields, source = {}, None
         else:
             try:
+                doc_reads.forget(data)  # yapay zekâ okuyacak, önbellekte yok: yeniden sayılır
                 fields = dekont_parse.fields_from_ai(read, read_mime, text_hint or (text or "")[:6000] or None)
                 source = "yapay_zeka"
             except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı)
@@ -5740,10 +5783,18 @@ def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)
     out.update(source=source, dekont_file=dfile)
     if fields.get("not_transfer"):
         out["not_transfer"] = True  # model: bu bir transfer dekontu değil (istemci uyarır)
+    ai = source == "yapay_zeka"
     if not (isinstance(out.get("amount"), (int, float)) and out["amount"] > 0 and out.get("date")):
-        out.update(unreadable=True, message=DEKONT_UNREADABLE)  # hak düşmez (_unreadable deseni)
+        if ai:  # yapay zekâ okuyamadı: günün ilk denemeleri ücretsiz (_mark_unreadable)
+            _mark_unreadable(out, DEKONT_UNREADABLE)
+        else:  # metin okuması (yapay zekâ yok): hak düşmez
+            out.update(unreadable=True, message=DEKONT_UNREADABLE)
+    elif hit is not None:
+        out["cached"] = True  # önbellekten: hak düşmez
     elif charged := doc_reads.charge(data):
         out["charged"] = charged
+    if ai and hit is None and not out.get("unreadable"):
+        doc_cache.put(data, doc_cache.DEKONT, {"fields": fields, "source": source}, dfile)
     if warn := db.take_storage_warning():
         out["storage_warning"] = warn
     return out
@@ -6042,13 +6093,26 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır."""
     import hashlib
 
-    from app import doc_reads
+    from app import doc_cache, doc_reads
 
     original, original_mime = data, mime
     # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti
     key = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in [data, *(d for d, _ in (more or []))])).digest() \
         if more else data
     data, mime, photo = _prepare_photo(data, mime)
+    # önbellek anahtarı telefon metnini de içerir (sonuç metne göre değişebilir: şablon, KDV/VKN yedeği); metni
+    # değiştirip önbelleği atlayan okuma forget ile yeniden sayılır
+    ckey = hashlib.sha256(hashlib.sha256(key).digest() + f"{ocr_source or ''}\n{ocr_text}".encode()).digest() \
+        if ocr_text else key
+    if (hit := doc_cache.get(ckey, doc_cache.BELGE)) is not None:  # aynı belge bu defterde okunmuştu: yapay zekâ yok
+        if hit.get("type") != "bill":
+            return _cached_receipt(hit, photo)
+        out = doc_cache.hit(hit)
+        out["file_name"] = db.save_bill_file(photo, ".jpg") if photo else \
+            db.save_bill_file(original, BILL_TYPES.get(original_mime, ".pdf"))
+        if warn := db.take_storage_warning():
+            out["storage_warning"] = warn
+        return out
     more = [_prepare_photo(d, m)[:2] for d, m in (more or [])] or None
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
     try:
@@ -6056,6 +6120,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         doc_reads.check(key, doc_reads.guess_kind(original_mime))  # hazır sürüm: okuma hakkı doluysa okunmaz
     except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
+    doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
     split = sorted({r["category"] for r in db.list_item_rules()})
     try:
         if ocr_text and receipt.enabled() and receipt.text_first():
@@ -6068,8 +6133,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
-    if _unreadable(doc):  # okunamadı: hak düşmez (bkz. _unreadable)
-        doc.update(unreadable=True, message=UNREADABLE_MSG)
+    if _unreadable(doc):  # okunamadı: günün ilk denemeleri ücretsiz (bkz. _mark_unreadable)
+        _mark_unreadable(doc, UNREADABLE_MSG)
     elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type"))):
         doc["charged"] = charged  # {daily, extra}
     if doc["type"] == "receipt":
@@ -6105,6 +6170,8 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         receipt_verify.apply(doc, text)
         if not doc.get("unreadable"):
             _auto_reread(doc, data, mime, more, text)
+    if not doc.get("unreadable"):
+        doc_cache.put(ckey, doc_cache.BELGE, doc, doc.get("receipt_file"))
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
@@ -6242,6 +6309,13 @@ def _reread_photo(name: str | None, total: float | None) -> dict:
         out["charged"] = charged
     out["check"] = receipt_check.check(out["items"], total if total is not None else out.get("total"))
     out["receipt_file"] = name
+    from app import doc_cache
+
+    def _fresh(res: dict) -> dict:  # önbellekteki okuma bu fotoğrafın yeni kalemleriyle
+        return {**res, "items": out["items"],
+                "check": receipt_check.check(out["items"], res.get("total") if res.get("total") is not None else total)}
+
+    doc_cache.refresh_file(name, _fresh)
     return out
 
 

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date
 
 
@@ -45,6 +45,30 @@ class Statement:
     transactions: list[Transaction] = field(default_factory=list)
     ai_parsed: bool = False  # bankaya özel parser yerine yapay zekâ ile okundu
     source: str = "parser"  # nasıl okundu: parser (bankaya özel) | sablon (app/card_reader.py) | yapay_zeka
+
+    def to_dict(self) -> dict:
+        """JSON'a uygun sözlük (okuma önbelleği, app/doc_cache.py): tarihler ISO metni."""
+        def iso(v):
+            return v.isoformat() if isinstance(v, date) else v
+
+        d = {k: iso(v) for k, v in asdict(self).items() if k != "transactions"}
+        d["transactions"] = [{k: iso(v) for k, v in asdict(t).items()} for t in self.transactions]
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Statement":
+        """to_dict'in tersi; bilinmeyen alanlar atlanır."""
+        def day(v):
+            return date.fromisoformat(v) if isinstance(v, str) and v else None
+
+        tk = {f.name for f in fields(Transaction)}
+        txns = [Transaction(**{**{k: v for k, v in t.items() if k in tk}, "txn_date": day(t.get("txn_date"))})
+                for t in d.get("transactions") or []]
+        sk = {f.name for f in fields(cls)} - {"transactions"}
+        data = {k: v for k, v in d.items() if k in sk}
+        for k in ("period_end", "due_date", "next_period_end", "next_due_date"):
+            data[k] = day(data.get(k))
+        return cls(**data, transactions=txns)
 
     def fees(self) -> float:
         """Ekstredeki faiz ve ücret: özet satırı okunduysa o, okunmadıysa faiz/ücret işlemlerinin toplamı."""

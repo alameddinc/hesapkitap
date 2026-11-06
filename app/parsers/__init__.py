@@ -127,7 +127,9 @@ def parse_text(text: str) -> Statement | None:
 def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | None = None) -> Statement:
     """Sıra: bankaya özel parser → kayıtlı kart şablonu (ikisi de ücretsiz, yapay zekâsız) → GEMINI_API_KEY varsa yapay
     zekâ. Yapay zekâ okuması doğrulanırsa aynı bankanın sonraki ekstreleri için şablon öğretir (card_reader.learn_from_ai;
-    şifreli PDF'te şifre çözülmüş metinden). Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired."""
+    şifreli PDF'te şifre çözülmüş metinden). Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired.
+    Okuma önbelleği (doc_cache.reading ile açılmışsa): yapay zekâdan önce bakılır (PDF açıldıktan, yerel okuma
+    olmadıktan sonra), yapay zekânın okuduğu yazılır."""
     try:
         text, used_pw = _text_with_passwords(data, passwords or [])
     except PasswordRequired:
@@ -145,8 +147,15 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
     from app import receipt
 
     if allow_ai and receipt.enabled():
+        from app import doc_cache
         from app.parsers.ai import parse_pdf_with_ai
 
+        cache = doc_cache.current()
+        if cache is not None and (hit := cache.get()) is not None:  # aynı ekstre bu defterde yapay zekâyla okunmuştu
+            try:
+                return Statement.from_dict(hit)
+            except (TypeError, ValueError):
+                pass
         try:
             # şifreli PDF'i model okuyamaz: çözülmüş metni gönder
             st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")
@@ -156,6 +165,8 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
         from app import card_reader
 
         card_reader.learn_from_ai(text, st)  # hata okumayı bozmaz
+        if cache is not None:
+            cache.put(st.to_dict())
         return st
     raise ValueError(f"Banka tanınamadı. Desteklenen: {SUPPORTED}. "
                      "Diğer bankalar için GEMINI_API_KEY tanımlarsan yapay zekâ ile okunur.")

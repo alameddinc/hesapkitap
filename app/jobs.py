@@ -220,6 +220,9 @@ def run_global(now: datetime) -> list[str] | None:
     from app import ai_costs
 
     ai_costs.prune()  # 13 aydan eski yapay zekâ maliyet kayıtları
+    from app import doc_cache
+
+    doc_cache.prune(now.timestamp())  # 30 günü dolan okuma sonuçları (app/doc_cache.py)
     return system.purge_archived(now=now.timestamp())
 
 

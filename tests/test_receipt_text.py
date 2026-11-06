@@ -179,6 +179,7 @@ def test_vat_and_tax_no_filled_from_text(hosted, ai):  # noqa: F811
 
     with system.connect() as cx:  # ilk okuma fiş şablonu öğretti; bu adım yapay zekâ yolunu sınıyor
         cx.execute("DELETE FROM receipt_templates")
+        cx.execute("DELETE FROM doc_cache")  # aynı fotoğraf + metin: okuma önbelleği de (app/doc_cache.py)
     assert _parse(c, text=TAX_TEXT).json()["tax_no"] == "4605721929"
 
 

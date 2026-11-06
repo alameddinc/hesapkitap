@@ -80,6 +80,12 @@ CAPABILITIES = (
     "feedback",               # uygulama içi "Sorun bildir": POST /api/feedback multipart message (1–2000), screenshots
                               # (0–3 jpeg/png/webp, ≤ 5 MB), context (JSON ≤ 4 KB) → {ok, id}; oturumsuz/demo/üye açık,
                               # saatte 10 (429)
+    "save_book_choice",       # fiş/fatura onayında defter ve harcayan: POST /api/entries ve /api/bills spender u<id>|ortak
+                              # (ortak defterde; değilse yok sayılır, defterde olmayan kişi 400); X-HK-Book: kendi|ortak
+                              # başlığı hk_book çerezinden önce gelir; okumadaki receipt_file/file_name üyenin öbür
+                              # defterindeyse kopyalanır (hak yeniden düşmez)
+    "read_cache",             # aynı belge aynı defterde 30 gün yeniden okunmaz: okuma yanıtında cached: true (charged
+                              # yok); okunamayan fotoğraf günde 5'ten sonra 1 hak; me/ai reads family_limit/family_left
 )
 
 
