@@ -277,6 +277,8 @@ def test_several_layouts_per_signature(tmpdb, gemini):
     assert _read(market(SECOND, _day(3), dot=True))["source"] == "yapay_zeka"
     rows = _rows()
     assert len(rows) == 2 and [json.loads(r["spec"])["num"] for r in rows] == ["tr", "dot"]
+    # öbür şubenin fişinde tutmaması bozukluk sayılmaz: yeni düzen öğrenilince ilk düzenin hata sayacı sıfır
+    assert [r["fails"] for r in rows] == [0, 0] and not any(r["disabled"] for r in rows)
     # iki düzen de okunur
     assert _read(market(SECOND, _day(2)))["source"] == "sablon"
     assert _read(market(SECOND, _day(2), dot=True))["source"] == "sablon" and gemini["calls"] == 2

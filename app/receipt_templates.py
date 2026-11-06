@@ -742,6 +742,10 @@ def save(spec: dict, source: str = "learned") -> bool:
                       "WHERE sig = ? AND spec = ? AND (fails > 0 OR disabled)", (key, js))
             return False
         new = c.execute("INSERT INTO receipt_templates (sig, spec, source) VALUES (?, ?, ?)", (key, js, source)).lastrowid
+        # yeni düzen öğrenildi: aynı imzadaki öbür düzenlerin bu fişteki hatası bozukluk değil, başka şubenin kasasıydı
+        # (o şubenin fişleri yine onunla okunur); hata sayacı sıfırlanır, devre dışı olanlar dokunulmadan kalır
+        c.execute("UPDATE receipt_templates SET fails = 0 WHERE sig = ? AND id != ? AND fails > 0 AND NOT disabled",
+                  (key, new))
         others = [r["id"] for r in c.execute(
             "SELECT id FROM receipt_templates WHERE sig = ? AND id != ? ORDER BY disabled DESC, uses ASC, id ASC",
             (key, new))]
