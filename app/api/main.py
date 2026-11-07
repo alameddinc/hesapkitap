@@ -4497,6 +4497,7 @@ def price_groups(q: str | None = None, limit: int = 30):
         keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word))  # sıralama kararlı
     keys = keys[:limit * 2]
     best = price_sources.best_offers(keys, srcs)
+    best = {k: [{**o, "chain": price_sources.chain_name(o["chain"])} for o in v] for k, v in best.items()}  # yalnız zincir
     keys = [k for k in keys if best.get(k)]
     if q and "|" not in q and len({k.split("|", 1)[-1] for k in keys}) > 1:
         # boylar farklı (500 ml / 1 L): aynı sıra öbeğinde (boy, ad) litre / kilo fiyatı ucuz olan önce

@@ -36,7 +36,7 @@ def _name(label: str | None) -> str:
 def _in_list() -> tuple[set[str], set[str]]:
     from app import shopping
 
-    items = [i for i in shopping.list_items() if not i["done"]]
+    items = shopping.list_items()  # işaretli satır da listede sayılır
     return {_base(i["group_key"]) for i in items if i["group_key"]}, {i["text"].strip().lower() for i in items}
 
 

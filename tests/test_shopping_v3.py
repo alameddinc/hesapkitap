@@ -105,6 +105,8 @@ def test_suggest_frequent_due(client):
     # listede olan önerilmez
     assert client.get("/api/shopping-list/due").json()["items"] == []
     assert "Süt" not in [x["text"] for x in client.get("/api/shopping-list/frequent").json()["items"]]
+    client.patch(f"/api/shopping-list/{r['items'][0]['id']}", json={"done": True})  # işaretli de listede sayılır
+    assert "Süt" not in [x["text"] for x in client.get("/api/shopping-list/frequent").json()["items"]]
 
 
 # ---------------------------------------------------------------- plan kaydı, tamamla, geçmiş
