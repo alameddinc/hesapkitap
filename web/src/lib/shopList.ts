@@ -2,7 +2,7 @@
 // yazı ve miktar hesapları. Metinden miktar okumak sunucuda (POST /api/shopping-list "2,5 kg elma"); burada yalnız
 // gösterim, düzenleme penceresinin adım düğmeleri, kaydedilen plana göre gruplama, geçmiş alışveriş ve fiş bağlama
 // yazıları. Mobil (hesapkitap-mobile) ile aynı metinler. Tutar biçimi parametre: gizli tutar maskesi çağıranda.
-import { agoWord } from "./priceView.ts";
+import { agoWord, bulunma } from "./priceView.ts";
 
 type Money = (n: number) => string;
 
@@ -72,16 +72,49 @@ export function chainName(chain: string | null | undefined): string {
   return s || raw;
 }
 
-/** Tek dipnot: "Fiyatlar: Market Fiyatı · dün" (resmî teklif varsa; en yeni günün yaşı). İl ve "ulusal" yazılmaz;
- *  yasal kaynak yazısı dipnotun ipucunda (title). */
-export function priceFootnote(offers: { source: string; date?: string | null }[], today: string): string | null {
+/** Sunucu kaynak yazısı vermediyse (eski sunucu) resmî teklifin dipnot adı. Demoda sunucu "Örnek veri: …" verir. */
+export const OFFICIAL_SOURCE = "Market Fiyatı (TÜBİTAK BİLGEM)";
+
+/** Sunucunun kaynak yazısı: Market Fiyatı'nınki ise ("Kaynak: Market Fiyatı (T.C. … / TÜBİTAK BİLGEM)") kısa ad (tam yazı
+ *  ipucunda), başka bir yazıysa (demo: "Örnek veri: …") olduğu gibi — mobil fiyatHesap.resmiKaynak ile aynı kural. */
+export function officialName(attribution?: string | null): { name: string; sample: boolean } {
+  const a = attribution?.trim();
+  return !a || /^Kaynak:\s*Market Fiyatı/.test(a) ? { name: OFFICIAL_SOURCE, sample: false } : { name: a, sample: true };
+}
+
+/** Tek dipnot (resmî teklif varsa; en yeni günün yaşı): sunucunun kaynak yazısı (attribution) olduğu gibi, yoksa
+ *  "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün". İl ve "ulusal" yazılmaz. */
+export function priceFootnote(offers: { source: string; date?: string | null; attribution?: string | null }[], today: string): string | null {
   const r = offers.filter((o) => o.source === "resmi");
   if (!r.length) return null;
   const day = r.map((o) => o.date ?? "").filter(Boolean).sort().pop();
-  return `Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)${day ? ` · ${agoWord(day, today)}` : ""}`;
+  const k = officialName(r.find((o) => o.attribution)?.attribution);
+  if (k.sample) return k.name;
+  return `Fiyatlar: ${k.name}${day ? ` · ${agoWord(day, today)}` : ""}`;
 }
 
 // ---------------------------------------------------------------- satır fiyatı
+
+// ---------------------------------------------------------------- kişinin kendi alımı (sunucu: own_product / own_place)
+
+/** Yazılan ad kişinin fişteki ürününe bağlandı: son alımın fiyatı ve yeri. */
+export interface OwnProduct { name: string; price: number; place: string; date?: string | null }
+/** Kişinin bu ürünü son aldığı kafe / büfe (market eşleşmesi değişmez). */
+export interface OwnPlace { place: string; price: number }
+/** "Senin son alımın: ₺95 · Örnekbüfe" */
+export const ownProductText = (o: OwnProduct, m: (n: number) => string) => `Senin son alımın: ${m(o.price)} · ${chainName(o.place)}`;
+/** "Senin son alımın: Örnek Kafe ₺85" */
+export const ownPlaceText = (o: OwnPlace, m: (n: number) => string) => `Senin son alımın: ${chainName(o.place)} ${m(o.price)}`;
+/** Nereye gideyim satırı: en ucuz zincir planda yok → "Hakmar'da ₺41,50 (planın dışında)" */
+export const cheaperElsewhereText = (c: { chain: string; price: number }, m: (n: number) => string) =>
+  `${bulunma(chainName(c.chain))} ${m(c.price)} (planın dışında)`;
+/** Satırın ek alt yazısı: kafe yeri ya da (en ucuz teklif onun değilse) kendi ürününün son alımı. */
+export function ownExtra(it: { own_product?: OwnProduct | null; own_place?: OwnPlace | null; best?: { product?: string | null } | null },
+  m: (n: number) => string): string | null {
+  if (it.own_place) return ownPlaceText(it.own_place, m);
+  if (it.own_product && !it.best?.product) return ownProductText(it.own_product, m);
+  return null;
+}
 
 export interface LineBest { chain: string; price: number; line_total?: number | null }
 /** Satırın alt yazısı ve sağdaki tutar. Satır tutarı (fiyat × miktar) birim fiyattan farklıysa alt yazı birim fiyatı

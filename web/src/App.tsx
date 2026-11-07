@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, ShoppingCart, Tags, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BadgePercent, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, ShoppingCart, Tags, Zap, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -9,6 +9,7 @@ import RecurringMonthForm, { type RecurringMonth } from "./components/RecurringM
 import { useMeta } from "./components/hooks";
 import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
+import TransferForm, { type DekontResult } from "./components/TransferForm";
 import { cx, setAmountsHidden } from "./format";
 import Dashboard from "./pages/Dashboard";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -34,10 +35,11 @@ import Stats from "./pages/Stats";
 import Bills from "./pages/Bills";
 import Uncategorized from "./pages/Uncategorized";
 import Admin from "./pages/Admin";
+import Interest from "./pages/Interest";
 import { FeedbackButton } from "./components/Feedback";
 import { UIContext, type EntryDraft, type Route, type ToastOptions, type UI } from "./ui";
 import Toast, { type ToastState } from "./components/Toast";
-import { isViewer, routeVisible, useBook, useIsAdmin, useUiPrefs } from "./components/hooks";
+import { inSharedBook, isViewer, routeVisible, useBook, useIsAdmin, useUiPrefs } from "./components/hooks";
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 import ConfirmHost from "./components/ConfirmHost";
@@ -45,6 +47,15 @@ import { ReceiptLinkHost } from "./components/ShopReceiptLink";
 import PageBoundary from "./components/PageBoundary";
 import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
 import { send } from "./lib/apiError";
+import { JoinPreviewModal } from "./components/JoinBook";
+
+/** Hesabı açıkken davet bağlantısı (/davet/<kod> → #/kayit?kod=): kayıt yerine katılma önizlemesi (book_join). */
+const inviteCode = (): string | null => {
+  const h = window.location.hash;
+  if (!h.startsWith("#/kayit")) return null;
+  const k = new URLSearchParams(h.split("?")[1] ?? "").get("kod");
+  return k && /^[A-Za-z0-9-]{4,64}$/.test(k) ? k.toUpperCase() : null;
+};
 
 const PAGES: Record<Route, () => React.ReactElement> = {
   ozet: Dashboard,
@@ -59,6 +70,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   borclar: Borclar,
   fiyatlar: Prices,
   alisveris: Shopping, // yalnız sunucu "shopping_list" yeteneğini verirse
+  faiz: Interest, // yalnız sunucu "interest_page" yeteneğini verirse; ortak defterde faiz gizliyse yok
   hesaplar: Accounts,
   zekat: Zakat,
   istatistik: Stats,
@@ -82,6 +94,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "zekat", label: "Zekât ve Sadaka", icon: Moon },
   { route: "fiyatlar", label: "Fiyatlar", icon: Tag },
   { route: "alisveris", label: "Alışveriş listesi", icon: ShoppingCart },
+  { route: "faiz", label: "Faiz ve ücretler", icon: BadgePercent },
   { route: "ekstreler", label: "Ekstreler", icon: ReceiptText },
   { route: "kurallar", label: "Kurallar", icon: Tags },
   { route: "ayarlar", label: "Ayarlar", icon: Settings2 },
@@ -103,6 +116,7 @@ type ModalState =
   | { type: "bill"; draft: BillDraft }
   | { type: "pay"; p: Payable }
   | { type: "rmonth"; r: RecurringMonth }
+  | { type: "transfer"; dekont?: DekontResult | null }
   | null;
 
 export default function App() {
@@ -171,6 +185,7 @@ function Shell() {
     </button>
   );
   const [route, setRoute] = useState<Route>(readRoute);
+  const [joinCode, setJoinCode] = useState<string | null>(inviteCode);
   const meta = useMeta();
   const book = useBook();
   const { ui: prefs } = useUiPrefs();
@@ -181,6 +196,7 @@ function Shell() {
   const admin = useIsAdmin();
   const canSee = (r: Route) => (r === "yonetici" ? admin
     : r === "alisveris" && !meta.data?.capabilities?.includes("shopping_list") ? false // eski sunucu: sayfa yok
+    : r === "faiz" && (!meta.data?.capabilities?.includes("interest_page") || (inSharedBook(book.data) && !!book.data?.hide_fees)) ? false
     : prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   // açılışta içinde bulunulan dönem (ay dönümü ayarına göre; ör. 19 Ekim → Kasım dönemi)
@@ -208,6 +224,19 @@ function Shell() {
     }
   }, []);
   useEffect(() => {
+    const clean = () => window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/ozet`);
+    if (inviteCode()) clean(); // ilk açılış: kod state'te; adres Özet'e döner
+    const takeInvite = () => {
+      const k = inviteCode();
+      if (!k) return;
+      setJoinCode(k);
+      clean();
+      setRoute("ozet");
+    };
+    window.addEventListener("hashchange", takeInvite);
+    return () => window.removeEventListener("hashchange", takeInvite);
+  }, []);
+  useEffect(() => {
     const on = () => setRoute(readRoute());
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
@@ -228,6 +257,7 @@ function Shell() {
     openBill: (draft) => setModal({ type: "bill", draft: draft ?? {} }),
     openPay: (p) => setModal({ type: "pay", p }),
     openRecurringMonth: (r) => setModal({ type: "rmonth", r }),
+    openTransfer: (dekont) => { if (!viewer) setModal({ type: "transfer", dekont }); },
     toast: setToast,
     error: setError,
   }), [month, viewer, setToast, setError]);
@@ -286,7 +316,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 pt-2 pb-1 text-[11px] transition-colors active:opacity-60",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "alisveris", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "fiyatlar", "alisveris", "faiz", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
                     ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>
@@ -304,7 +334,7 @@ function Shell() {
 
       {modal?.type === "add" && (
         <AddSheet onClose={close} onPick={(draft) => setModal({ type: "entry", draft })}
-          onBill={(draft) => setModal({ type: "bill", draft })} />
+          onBill={(draft) => setModal({ type: "bill", draft })} onTransfer={(dekont) => setModal({ type: "transfer", dekont })} />
       )}
       {modal?.type === "entry" && (
         <EntryForm row={modal.row} draft={modal.draft} onClose={close} onSaved={setToast} />
@@ -314,7 +344,9 @@ function Shell() {
       {modal?.type === "bill" && <BillForm draft={modal.draft} onClose={close} onSaved={setToast} />}
       {modal?.type === "pay" && <PayForm p={modal.p} onClose={close} onSaved={setToast} />}
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
+      {modal?.type === "transfer" && <TransferForm initial={modal.dekont} onClose={close} />}
 
+      {joinCode && <JoinPreviewModal code={joinCode} onClose={() => setJoinCode(null)} />}
       <ConfirmHost />
       <ReceiptLinkHost />
       {toast && <Toast key={toast.id} t={toast} onClose={() => setToastState(null)} />}

@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import {
   amountText, askText, bestParts, boughtText, chainName, convertQty, fmtQty, groupByPlan, linkedText, namesText, parseQty,
-  planSummary, priceFootnote, rowTitle, savingCopy, stepQty, tripChains, tripTotals, validQty,
+  cheaperElsewhereText, ownExtra, ownPlaceText, ownProductText, planSummary, priceFootnote, rowTitle, savingCopy, stepQty, tripChains, tripTotals, validQty,
 } from "./shopList.ts";
 
 const m = (n: number) => `₺${n.toLocaleString("tr-TR", { maximumFractionDigits: 2 })}`;
@@ -66,6 +66,10 @@ test("tek dipnot: il ve ulusal yazılmaz", () => {
   assert.equal(priceFootnote([{ source: "resmi", date: "2026-11-06" }, { source: "resmi", date: "2026-11-05" }], TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün");
   assert.equal(priceFootnote([{ source: "own", date: "2026-11-01" }], TODAY), null);
   assert.equal(priceFootnote([{ source: "resmi" }], TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)");
+  // sunucunun kaynak yazısı varsa o yazılır (demoda uydurma veri notu; TÜBİTAK adı geçmez)
+  const demo = "Örnek veri: demodaki fiyatlar uydurmadır, gerçek market fiyatı değildir";
+  assert.equal(priceFootnote([{ source: "resmi", date: "2026-11-06", attribution: demo }], TODAY), demo);
+  assert.ok(!priceFootnote([{ source: "resmi", attribution: demo }], TODAY)!.includes("TÜBİTAK"));
 });
 
 test("satır fiyatı: birim fiyat × miktar", () => {
@@ -104,4 +108,17 @@ test("fiş bağlama yazıları", () => {
   assert.equal(askText({ entry_id: 7, target: "trip", chain: null, count: 1, names: ["Süt"] }), "Fişteki Süt son alışverişinde var.");
   assert.equal(linkedText({ status: "linked", target: "list", count: 3, chain: "BİM", saving: 31 }, m), "BİM fişi alışveriş listene bağlandı: 3 ürün işaretlendi · ₺31 tasarruf");
   assert.equal(linkedText({ status: "linked", target: "trip", count: 3, chain: "BİM", saving: -4 }, m), "BİM fişi son alışverişine bağlandı");
+});
+
+test("kendi alımın ve planın dışındaki ucuz zincir", () => {
+  const m = (n: number) => `₺${n.toFixed(2).replace(".", ",")}`;
+  const op = { name: "Örneksan Mavi", price: 95, place: "Örnekbüfe · Kadıköy", date: "2026-11-01" };
+  assert.equal(ownProductText(op, m), "Senin son alımın: ₺95,00 · Örnekbüfe");
+  assert.equal(ownPlaceText({ place: "Örnek Kafe", price: 85 }, m), "Senin son alımın: Örnek Kafe ₺85,00");
+  assert.equal(cheaperElsewhereText({ chain: "BİM (Dost)", price: 41.5 }, m), "BİM'de ₺41,50 (planın dışında)");
+  // en ucuz teklif zaten kendi ürünüyse alt yazı yinelenmez; kafe yeri her zaman
+  assert.equal(ownExtra({ own_product: op, best: { product: "Örneksan Mavi" } }, m), null);
+  assert.equal(ownExtra({ own_product: op, best: null }, m), "Senin son alımın: ₺95,00 · Örnekbüfe");
+  assert.equal(ownExtra({ own_place: { place: "Örnek Kafe", price: 85 } }, m), "Senin son alımın: Örnek Kafe ₺85,00");
+  assert.equal(ownExtra({}, m), null);
 });

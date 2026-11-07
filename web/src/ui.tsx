@@ -1,7 +1,9 @@
 import { createContext, useContext } from "react";
 import type { BillDraft, Payable, Row } from "./api";
 import type { ReceiptCheck } from "./components/receipt/check";
+import type { TaxInfo } from "./components/receipt/TaxCard";
 import type { RecurringMonth } from "./components/RecurringMonthForm";
+import type { DekontResult } from "./components/TransferForm";
 
 export interface EntryDraft {
   kind?: "gelir" | "gider";
@@ -25,6 +27,10 @@ export interface EntryDraft {
   wallet_hint?: string | null; // fişte yazan yemek kartı markası (Multinet…)
   cached?: boolean; // aynı fiş daha önce okunmuştu: okuma hakkı düşmedi
   check?: ReceiptCheck | null; // okumanın denetimi (sunucu): karışan rakam önerileri (yetenek digit_fix)
+  /** yetenek receipt_tax: okunan KDV / VKN / vergi dairesi (anahtar varsa sunucu biliyor; kart gösterilir) */
+  tax?: TaxInfo;
+  /** yetenek total_check: "kontrol" → toplam fiş metninde bulunamadı, tutar vurgulanır */
+  total_check?: "ok" | "kontrol" | null;
 }
 
 export interface ToastOptions {
@@ -45,13 +51,15 @@ export interface UI {
   openBill: (draft?: BillDraft) => void;
   openPay: (p: Payable) => void;
   openRecurringMonth: (r: RecurringMonth) => void;
+  /** Transfer ekle (elle ya da okunmuş dekontla; yetenek dekont_parse) */
+  openTransfer: (dekont?: DekontResult | null) => void;
   /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo/action verilirse düğme (en az 8 sn). */
   toast: (msg: string, opts?: ToastOptions) => void;
   /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. */
   error: (msg: string) => void;
 }
 
-export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris";
+export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris" | "faiz";
 
 export const UIContext = createContext<UI | null>(null);
 

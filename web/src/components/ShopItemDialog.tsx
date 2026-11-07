@@ -15,6 +15,8 @@ import { SuggestList, useSuggest, type Suggestion } from "./ShopAutofill";
 export interface EditableItem {
   id: number; text: string; qty: number | null; unit?: string | null; group_key: string | null;
   group?: { key: string; label: string; pending?: boolean } | null;
+  /** yetenek shopping_assumed_size: boysuz satırın kabul edilen boyu (group_key bundan farklıysa boy elle sabitlenmiş) */
+  assumed?: { key: string; label?: string; size_label?: string } | null;
 }
 interface SizeOpt { key: string; label: string; size_label: string; chain: string | null; price: number | null; unit_price_per?: number | null; per_unit?: string | null }
 export interface ItemPatch { text?: string; qty?: number; unit?: Unit; group_key?: string | null }
@@ -43,6 +45,8 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
     queryFn: () => send<SizeOpt[]>(`/api/shopping-list/${it.id}/sizes`),
   });
   const showSizes = !renamed && unit === "adet" && (sizes.data?.length ?? 0) > 0;
+  const sizeBox = !renamed && unit === "adet" && !!sizes.data; // boş listede "başka boyunu bilmiyoruz"
+  const pinned = !!it.group_key && it.group_key !== it.assumed?.key; // boy elle seçilmiş: "Otomatik seç" geri alır
 
   const step = (dir: 1 | -1) => setQtyS(fmtQty(stepQty(qty, unit, dir)));
   const pickUnit = (u: Unit) => { setQtyS(fmtQty(convertQty(okQty ? qty : Number.NaN, unit, u))); setUnit(u); };
@@ -112,9 +116,11 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
           {!okQty && <p className="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">Geçerli bir miktar yaz (ör. 2,5).</p>}
         </div>
 
-        {showSizes && (
+        {sizeBox && (
           <div>
             <span className="label">Boy</span>
+            {!showSizes && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700">Bu ürünün başka boyunu bilmiyoruz.</p>}
+            {showSizes && (
             <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700" data-testid="boy-listesi">
               {sizes.data!.map((o) => (
                 <li key={o.key}>
@@ -127,7 +133,9 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
                   </button>
                 </li>
               ))}
-            </ul>
+            </ul>)}
+            {pinned && <button type="button" className="btn-ghost mt-2 border border-stone-300 text-sm dark:border-stone-700" disabled={busy}
+              onClick={() => onSave({ group_key: null })}>Otomatik seç</button>}
           </div>
         )}
       </div>

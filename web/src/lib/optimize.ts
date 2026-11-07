@@ -2,12 +2,15 @@
 // piyasa bandı (yetenek price_market; GET /api/prices/market, history[].vs_market): saf yazı hesapları.
 // Yazılar mobil (hesapkitap-mobile) ile birebir aynı. Tutar biçimi parametre: gizli tutar maskesi çağıranda.
 import { agoWord, ayrilma, bulunma } from "./priceView.ts";
+import { officialName } from "./shopList.ts";
 
 export interface OptLine {
   id: number; text: string; qty: number; group_label: string | null; price: number; line_total: number;
   /** yetenek shopping_units: "adet" | "kg" | "g" | "L" | "ml" ve "2,5 kg" */
   unit?: string | null; amount_label?: string | null;
   unit_price_per?: number | null; per_unit?: string | null; brand?: string | null; source: string; date?: string | null; region?: string | null;
+  /** kişinin kendi ürününün son alımı (ad) / kafede son alım yeri / satırın en ucuz zinciri planda yok */
+  product?: string | null; own_place?: { place: string; price: number } | null; cheaper_elsewhere?: { chain: string; price: number } | null;
 }
 export interface OptStop { chain: string; total: number; items: OptLine[] }
 export interface OptPlan {
@@ -31,7 +34,7 @@ export const lineTitle = (l: Pick<OptLine, "qty" | "text" | "unit">) =>
 /** "₺59,90/L · dün" (resmî teklif ref gününden — varsayılan bugün; dipnot varken dipnotun günü — eskiyse yaşı). Marka
  *  ve il / şube satırda yazılmaz (sade: yalnız zincir). */
 export function lineSub(l: OptLine, today: string, m: Money, ref: string = today): string {
-  return [l.unit_price_per != null && l.per_unit ? `${m(l.unit_price_per)}/${l.per_unit}` : null,
+  return [l.product ?? null, l.unit_price_per != null && l.per_unit ? `${m(l.unit_price_per)}/${l.per_unit}` : null,
     l.source === "resmi" && l.date && l.date < ref ? agoWord(l.date, today) : null].filter(Boolean).join(" · ");
 }
 
@@ -70,17 +73,16 @@ export function compareRows(r: Optimize, m: Money): string[] {
   return out;
 }
 
-/** Tek dipnot: "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk" (il ve "ulusal" notu yazılmaz; yasal kaynak
- *  yazısı dipnotun ipucunda). */
+/** Tek dipnot: "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk" (il ve "ulusal" notu yazılmaz). Sunucu kaynak
+ *  yazısı verdiyse (sources[0]; demoda "Örnek veri: …") resmî kısım onunla, "Fiyatlar:" öneki olmadan. */
 export function sourceLine(r: Optimize, today: string): string {
   const k = r.source_info?.kinds ?? [];
+  const o = k.includes("resmi") ? officialName(r.sources?.find(Boolean)) : null;
   const parts: string[] = [];
-  if (k.includes("resmi")) {
-    parts.push([`Market Fiyatı (TÜBİTAK BİLGEM)`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
-  }
+  if (o) parts.push(o.sample ? o.name : [o.name, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
   if (k.includes("own")) parts.push("fişlerin");
   if (k.includes("community")) parts.push("topluluk");
-  return parts.length ? `Fiyatlar: ${parts.join(" · ")}` : "";
+  return parts.length ? `${o?.sample ? "" : "Fiyatlar: "}${parts.join(" · ")}` : "";
 }
 
 /** "Fiyatı bilinmeyen: …" / "Bu planda yok: …" (adlar listeden) */
@@ -106,6 +108,7 @@ export function marketCaption(history: { date: string; price: number | null; vs_
   return `Son alımın piyasanın %${pct} üstünde; ${v.day === h.date.slice(0, 10) ? "aynı gün" : "o günlerde"} ${bulunma(v.cheapest_chain)} ${m(v.min)}`;
 }
 
-/** "Piyasa: Market Fiyatı · İstanbul" / "Piyasa: topluluk" */
-export const marketSource = (mk: Pick<Market, "days" | "region">) =>
-  mk.days.some((d) => d.source === "resmi") ? `Piyasa: Market Fiyatı · ${mk.region}` : "Piyasa: topluluk";
+/** "Piyasa: Market Fiyatı · İstanbul" / "Piyasa: topluluk"; sunucu kaynak yazısı verdiyse (demoda "Örnek veri: …") o. */
+export const marketSource = (mk: Pick<Market, "days" | "region"> & { attribution?: string | null }) =>
+  !mk.days.some((d) => d.source === "resmi") ? "Piyasa: topluluk"
+    : officialName(mk.attribution).sample ? `${mk.attribution} · ${mk.region}` : `Piyasa: Market Fiyatı · ${mk.region}`;

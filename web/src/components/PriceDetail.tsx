@@ -65,7 +65,9 @@ export function PriceFootnote({ best, today, className }: { best: GroupBest[]; t
   const t = priceFootnote(best, today);
   const a = attributionOf(best);
   if (!t) return null;
-  return <p className={cx("text-xs text-stone-500 dark:text-stone-400", className)} title={a ?? undefined} data-testid="resmi-kaynak">{t}{a && <span className="sr-only"> ({a})</span>}</p>;
+  const inText = !!a && t.startsWith(a); // sunucunun yazısı dipnotta: ipucunda yinelenmez
+  return <p className={cx("text-xs text-stone-500 dark:text-stone-400", className)} title={inText ? undefined : a ?? undefined} data-testid="resmi-kaynak">
+    {t}{a && !inText && <span className="sr-only"> ({a})</span>}</p>;
 }
 
 /** Tekliflerde resmî kaynak varsa altına yazılacak kaynak satırı. */
@@ -127,8 +129,10 @@ export default function PriceDetail({ p, onChain }: { p: PriceDetailProduct; onC
   };
   const [added, setAdded] = useState(false);
   const addToList = useMutation({
-    mutationFn: () => send("/api/shopping-list", { method: "POST", json: { text: p.product, qty: 1, ...(p.group && !p.group.pending && { group_key: p.group.key }) } }),
-    onSuccess: () => { setAdded(true); ui.toast("Alışveriş listesine eklendi"); void qc.invalidateQueries({ queryKey: ["shopping-list"] }); void qc.invalidateQueries({ queryKey: ["shopping-plan"] }); },
+    // önerinin miktarı (ör. 6 süt) listeye de o kadar gider
+    mutationFn: () => send("/api/shopping-list", { method: "POST", json: { text: p.product,
+      qty: p.advice?.kind === "cheaper_at" && p.advice.qty > 1 ? p.advice.qty : 1, ...(p.group && !p.group.pending && { group_key: p.group.key }) } }),
+    onSuccess: () => { setAdded(true); ui.toast("Alışveriş listesine eklendi", { action: { label: "Listeyi aç", run: () => ui.go("alisveris") } }); void qc.invalidateQueries({ queryKey: ["shopping-list"] }); void qc.invalidateQueries({ queryKey: ["shopping-plan"] }); },
     onError: (e: Error) => ui.error(e.message),
   });
   const adv = p.advice;

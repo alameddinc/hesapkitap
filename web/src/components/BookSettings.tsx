@@ -8,16 +8,32 @@ import { useUI } from "../ui";
 import { type BookRole, useLoginKind, useSave } from "./hooks";
 import { needLabel, usePlan } from "./Plan";
 import InviteCard, { type Invite } from "./InviteCard";
+import { JoinWithCode, seatLabel, seatText } from "./JoinBook";
+import Modal from "./Modal";
+import type { Seat } from "./hooks";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
 interface Member { id: number; username: string; last_login: string | null; disabled: boolean; role: BookRole; own_rules: boolean; rules: Rules;
-  joined?: boolean /* var olan hesabıyla katıldı: şifresini sahip sıfırlayamaz */ }
+  joined?: boolean /* var olan hesabıyla katıldı: şifresini sahip sıfırlayamaz */;
+  seat?: Seat | null /* book_join, hazır sürüm: Aile koltuğu */ }
+interface Seats { total: number; used: number; members: number; max_members: number; waiting: number }
 interface Book {
   members: Member[];
   invites: Invite[];
   rules: Rules; cards: { card_no: string; bank: string }[]; accounts: { id: number; name: string; kind: string }[];
   pages: Record<string, string>; roles?: Record<string, string>;
+  /** book_join, hazır sürüm: "3 koltuktan 2'si dolu"; davet en çok max_members üyeye kadar */
+  seats?: Seats;
 }
+
+/** Türkçe iyelik eki (sayıdan sonra): 1'i 2'si 3'ü … */
+const suffix = (n: number) => {
+  const last = n % 10, tens = n % 100;
+  const map: Record<number, string> = { 0: "'ı", 1: "'i", 2: "'si", 3: "'ü", 4: "'ü", 5: "'i", 6: "'sı", 7: "'si", 8: "'i", 9: "'u" };
+  if (last === 0 && tens !== 0) return ({ 10: "'u", 20: "'si", 30: "'u", 40: "'ı", 50: "'si", 60: "'ı", 70: "'i", 80: "'i", 90: "'ı" } as Record<number, string>)[tens] ?? "'ı";
+  return map[last];
+};
+const short = (u: string) => u.split("@")[0];
 
 const ROLES: { value: BookRole; label: string; sub: string }[] = [
   { value: "viewer", label: "Sadece görür", sub: "Her şeyi görür, bir şey ekleyemez." },
@@ -91,6 +107,18 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
   const reset = useSave(() => call<{ temp_password: string }>(`/api/book/members/${m.id}/reset-password`, "POST"),
     (r) => setShown(r.temp_password));
   const n = hiddenCount(m.rules);
+  // Aile koltuğu: bekleyen üyeye koltuklu birinin koltuğunu ver
+  const [pick, setPick] = useState(false);
+  const seated = d.members.filter((x) => x.id !== m.id && x.seat?.state === "seat");
+  const waiting = m.seat?.state === "grace" || m.seat?.state === "none";
+  const give = useSave((from: number) => call(`/api/book/members/${m.id}/seat`, "POST", { from_member: from }),
+    () => { setPick(false); ui.toast(`${short(m.username)} Aile koltuğuna geçti`); });
+  const giveFrom = (from: Member) => {
+    const f = short(from.username), name = short(m.username);
+    void ask(`Koltuk el değiştirsin mi?\n\n${f} adlı üyenin koltuğu ${name} adlı üyeye geçer. ${f} ücretsiz paket sınırlarına düşer; ortak defteri görmeye devam eder. İkisine de bildirim gider.`,
+      { confirm: "Koltuğu ver", danger: false }).then((ok) => { if (ok) give.mutate(from.id, onErr); });
+  };
+  const sl = seatLabel(m.seat);
   return (
     <li className="py-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -99,6 +127,7 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
             <b className="break-all">{maskText(m.username)}</b>
             <span className="block text-xs text-stone-500">
               {m.last_login ? `son giriş ${tsDateTR(m.last_login)}` : "henüz girmedi"}
+              {sl && <>{" · "}<span className={waiting ? "text-amber-700 dark:text-amber-400" : undefined}>{sl}</span></>}
               {" · "}{m.own_rules ? "kendine özel kural" : "ortak kurallar"}{n ? ` (${n} gizli)` : ""}
             </span>
           </span>
@@ -122,6 +151,33 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
             <button className="btn-ghost px-2 py-1" onClick={() => navigator.clipboard.writeText(shown).then(() => ui.toast("Kopyalandı"), () => {})}>
               <Copy size={14} /></button></div>
         </div>
+      )}
+      {m.seat && (waiting || open) && (
+        <div className={cx("mt-2 space-y-1 rounded-lg p-2 text-xs", waiting ? "bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" : "bg-stone-50 text-stone-600 dark:bg-stone-900 dark:text-stone-300")}>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-0 flex-1">{seatText(m.seat)}</span>
+            {waiting && seated.length > 0 && (
+              <button className="btn-primary px-3 py-1 text-xs" disabled={give.isPending} onClick={() => setPick(true)}>Koltuk ver</button>
+            )}
+          </div>
+          {waiting && <p className="opacity-80">Bir koltuk boşalınca (biri ayrılır ya da çıkarılır) kendiliğinden geçer.</p>}
+        </div>
+      )}
+      {pick && (
+        <Modal title="Kimin koltuğu?" onClose={() => setPick(false)}>
+          <p className="mb-2 text-sm text-stone-500">{short(m.username)} için koltuğunu alacağın üyeyi seç.</p>
+          <ul className="divide-y divide-stone-100 rounded-xl border border-stone-200 text-sm dark:divide-stone-800 dark:border-stone-700">
+            {seated.map((x) => (
+              <li key={x.id}>
+                <button className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" disabled={give.isPending} onClick={() => giveFrom(x)}>
+                  <span className="min-w-0 flex-1"><b className="break-all">{short(x.username)}</b>
+                    <span className="block text-xs text-stone-500">{x.last_login ? `son giriş ${tsDateTR(x.last_login)}` : "henüz girmedi"}</span></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button className="btn-ghost mt-3 w-full justify-center py-2" onClick={() => setPick(false)}>Vazgeç</button>
+        </Modal>
       )}
       {open && (
         <div className="mt-2 space-y-2 rounded-lg bg-stone-50 p-3 dark:bg-stone-900">
@@ -147,7 +203,7 @@ function MemberRow({ m, d }: { m: Member; d: Book }) {
   );
 }
 
-/** Ayarlar → Ortak defter: eşini davet et, yetkisini ve neyi göremeyeceğini seç. */
+/** Ayarlar → Ortak defter: aileni davet et, yetkisini ve neyi göremeyeceğini seç. */
 export default function BookSettings() {
   const ui = useUI();
   const plan = usePlan();
@@ -168,14 +224,31 @@ export default function BookSettings() {
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => ui.toast("Kopyalandı"), () => {});
   const d = q.data;
   if (!d) return null;
+  const joinable = d.members.length === 0; // kendi üyesi olmayan: başkasının defterine katılabilir (book_join)
   const roleLabel = (r?: string | null) => (r ? d.roles?.[r] ?? ROLES.find((x) => x.value === r)?.label : undefined);
   return (
+    <>
     <section className="card space-y-3 p-4">
       <h2 className="flex items-center gap-2 font-semibold"><Users2 size={18} /> Ortak defter</h2>
       <p className="text-sm text-stone-500">
-        Eşini (ya da aileden birini) davet et: kendi {email ? "e-posta adresi" : "kullanıcı adı"} ve şifresiyle girer, <b>bu defteri</b> görür. Ne
+        Aileni davet et: her biri kendi {email ? "e-posta adresi" : "kullanıcı adı"} ve şifresiyle girer, <b>bu defteri</b> görür. Ne
         yapabileceğini yetkisi belirler. Gizlediklerin ona hiç görünmez; toplamlara da girmez. Ayrıca kendine ait özel bir defteri olur.
       </p>
+
+      {d.seats && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-stone-50 p-2 text-sm dark:bg-stone-900">
+          <span className={cx("inline-flex items-center gap-1.5 font-semibold", d.seats.used >= d.seats.total ? "text-amber-700 dark:text-amber-400" : "text-stone-700 dark:text-stone-200")}>
+            <span aria-hidden className="inline-flex gap-0.5">
+              {Array.from({ length: d.seats.total }, (_, i) => (
+                <span key={i} className={cx("size-2 rounded-full", i < d.seats!.used ? (d.seats!.used >= d.seats!.total ? "bg-amber-500" : "bg-blue-600") : "bg-stone-300 dark:bg-stone-700")} />
+              ))}
+            </span>
+            {d.seats.total} koltuktan {d.seats.used}{suffix(d.seats.used)} dolu
+          </span>
+          <span className="text-xs text-stone-500">Aile koltuğu: sen + {d.seats.total} kişi. Kendi Premium'u olan koltuk kullanmaz; en çok {d.seats.max_members} üye.
+            {d.seats.waiting ? ` ${d.seats.waiting} kişi koltuk bekliyor.` : ""}</span>
+        </div>
+      )}
 
       <div className="space-y-2">
         {plan?.features.ortak_defter === false ? (
@@ -183,6 +256,7 @@ export default function BookSettings() {
             Davet etmek <b>{needLabel(plan, "ortak_defter")}</b> paketinde. Ayarlar → Paketin bölümüne bak.</p>
         ) : (
           <div className="space-y-2">
+            <h3 className="font-medium">{d.members.length ? "Birini daha davet et" : "Aileni davet et"}</h3>
             <fieldset className="grid gap-1.5 sm:grid-cols-3">
               <legend className="mb-1 text-xs text-stone-500">Yetki</legend>
               {ROLES.map((r) => (
@@ -194,7 +268,7 @@ export default function BookSettings() {
               ))}
             </fieldset>
             <div className="flex flex-wrap gap-2">
-              <input className="input min-w-0 flex-1" placeholder="Not (ör. Eşim)" value={note} onChange={(e) => setNote(e.target.value)} />
+              <input className="input min-w-0 flex-1" placeholder="Not (ör. Annem)" value={note} onChange={(e) => setNote(e.target.value)} />
               <button className="btn-primary" disabled={invite.isPending} onClick={() => invite.mutate(undefined, onErr)}>Davet oluştur</button>
             </div>
           </div>
@@ -222,5 +296,7 @@ export default function BookSettings() {
         <p className="text-xs text-stone-500">Tek bir işlemi gizlemek için: işleme dokun → <b>Ortak defterde gizle</b>.</p>
       </div>
     </section>
+    {joinable && <JoinWithCode />}
+    </>
   );
 }

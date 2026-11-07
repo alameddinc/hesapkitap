@@ -2,7 +2,7 @@
 // duraklı plan. Sonuç bir kez hesaplanır, alışveriş sırasında işaretlemek (done) planı yeniden hesaplatmaz; işaret
 // listenin önbelleğinden okunur. "Yeniden hesapla" elle. Yazılar mobil (hesapkitap-mobile AlisverisListesi) ile aynı.
 // Liste v3 (yetenek shopping_trips): birincil eylem "Bu planla git" (PUT /api/shopping-list/saved-plan {k}); satırlarda
-// yalnız zincir adı (marka, il, şube yok); altta tek dipnot "Fiyatlar: Market Fiyatı · dün", yasal kaynak ipucunda.
+// yalnız zincir adı (marka, il, şube yok); altta tek dipnot: sunucunun kaynak yazısı (demoda "Örnek veri: …"), yoksa "Fiyatlar: Market Fiyatı · dün".
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, MapPinned, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
@@ -10,7 +10,7 @@ import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
 import type { Headline, UnpricedInfo } from "../lib/priceAdvice";
 import { compareRows, headline, lineSub, lineTitle, namesLine, sourceLine, stopTitle, subline, type Optimize } from "../lib/optimize";
-import { chainName } from "../lib/shopList";
+import { chainName, cheaperElsewhereText, ownPlaceText } from "../lib/shopList";
 import Segmented from "./Segmented";
 
 export const OPTIMIZE = ["shopping-optimize"] as const;
@@ -60,6 +60,8 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
   const done = new Map(items.map((i) => [i.id, i.done]));
   const names = new Map(items.map((i) => [i.id, i.text]));
   const src = r ? sourceLine(r, today) : "";
+  // sunucunun kaynak yazısı dipnotta yazıyorsa ipucunda yinelenmez (yalnız ötekiler)
+  const srcExtra = (r?.sources ?? []).filter((x) => !src.startsWith(x)).join(" ");
   // sunucunun başlığı önerilen plan içindir; başka durak sayısı seçilince istemci başlığı
   const useHead = !!r?.headline && (k == null || k === r.recommended_k);
 
@@ -105,6 +107,8 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
                         <div className="min-w-0 flex-1">
                           <div className={cx("break-words", d && "text-stone-400 line-through")}>{lineTitle(l)}</div>
                           {sub && <div className="text-xs break-words text-stone-500 tabular-nums">{maskText(sub)}</div>}
+                          {l.own_place && <div className="text-xs break-words text-stone-500 tabular-nums">{maskText(ownPlaceText(l.own_place, money))}</div>}
+                          {l.cheaper_elsewhere && <div className="text-xs break-words text-stone-400 tabular-nums dark:text-stone-500" data-testid="plan-disi">{maskText(cheaperElsewhereText(l.cheaper_elsewhere, money))}</div>}
                         </div>
                         <span className={cx("shrink-0 text-sm tabular-nums", d && "text-stone-400")}>{money(l.line_total)}</span>
                       </li>
@@ -159,8 +163,8 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
         )}
         {/* tek dipnot; yasal kaynak yazısı ipucunda (ekran okuyucu için de sr-only) */}
         {r && plan && src && (
-          <p className="ml-auto text-xs text-stone-500 dark:text-stone-400" data-testid="optimum-kaynak" title={r.sources.join(" ") || undefined}>
-            {src}{r.sources.length > 0 && <span className="sr-only"> ({r.sources.join(" ")})</span>}</p>
+          <p className="ml-auto text-xs text-stone-500 dark:text-stone-400" data-testid="optimum-kaynak" title={srcExtra || undefined}>
+            {src}{srcExtra && <span className="sr-only"> ({srcExtra})</span>}</p>
         )}
       </div>
     </section>

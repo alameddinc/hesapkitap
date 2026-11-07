@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { call, send } from "../lib/apiError";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, GitMerge, HandCoins, Pencil, UserRound } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, GitMerge, HandCoins, Pencil, Plus, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import { inSharedBook, isViewer, useBook, useMeta, useOpenEntry, useSave } from "../components/hooks";
@@ -104,6 +104,7 @@ export default function Transfers() {
         <div className="flex flex-wrap items-center gap-2">
           <Segmented value={mode} onChange={setMode} options={[{ value: "ay", label: "Aylık" }, { value: "tumu", label: "Tümü" }]} />
           {mode === "ay" && <MonthPicker value={ui.month} onChange={ui.setMonth} />}
+          {!viewer && <button className="btn-primary" onClick={() => ui.openTransfer()}><Plus size={16} /> Transfer ekle</button>}
         </div>
       </div>
 

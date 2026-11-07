@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api";
 import { cx, parseAmount, tl } from "../../format";
 import NameSuggest from "../NameSuggest";
+import { useDocQuota } from "../DocQuota";
 import Modal from "../Modal";
 import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, livePriceAlerts, liveMarketNotes, marketFootnote, marketHeadline, marketLine, type DigitFix, type MarketNote, type ItemCheck, type PriceAlert, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
 
@@ -141,6 +142,9 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
   const [preview, setPreview] = useState<{ amounts: (number | null)[]; title: string } | null>(null);
   const [zoom, setZoom] = useState(false);
   const [reread, setReread] = useState<{ busy: boolean; r?: Reread; err?: string } | null>(null);
+  // elle yeniden okuma okuma hakkı harcar (günlük sayaçlı sunucuda 2 hak): düğmede yazar
+  const quota = useDocQuota();
+  const cost = quota.reads?.reread_cost ?? null;
   const bad = !chk.ok && items.length > 0;
   const shown = all || bad ? items : items.slice(0, collapsed);
 
@@ -148,6 +152,7 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
     if (!onReread) return;
     setReread({ busy: true });
     try { setReread({ busy: false, r: await onReread() }); } catch (e) { setReread({ busy: false, err: rereadError(e) }); }
+    finally { void quota.refresh(); }
   }
 
   return (
@@ -230,8 +235,10 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 px-3 py-2 dark:border-stone-800">
         <button type="button" className="btn-ghost px-2 text-xs" onClick={() => setEdit("new")}><Plus size={14} aria-hidden /> Kalem ekle</button>
         {onReread && (
-          <button type="button" className="btn-ghost px-2 text-xs" disabled={reread?.busy} onClick={() => void doReread()}>
-            <RefreshCw size={14} className={cx(reread?.busy && "animate-spin")} aria-hidden /> {reread?.busy ? "Yeniden okunuyor…" : "Fişten yeniden oku"}</button>
+          <button type="button" className="btn-ghost px-2 text-xs" disabled={reread?.busy} onClick={() => void doReread()}
+            aria-label={cost && !reread?.busy ? `Fişten yeniden oku, ${cost} okuma hakkı` : undefined}>
+            <RefreshCw size={14} className={cx(reread?.busy && "animate-spin")} aria-hidden /> {reread?.busy ? "Yeniden okunuyor…" : "Fişten yeniden oku"}
+            {cost && !reread?.busy && <span className="font-normal whitespace-nowrap text-stone-500">· {cost} hak</span>}</button>
         )}
       </div>
 
