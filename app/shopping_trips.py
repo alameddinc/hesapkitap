@@ -257,7 +257,11 @@ def complete(carry_over: bool = True, uid: int | None = None) -> dict:
         c.execute("DELETE FROM shopping_plan")
         c.execute("DELETE FROM shopping_trips WHERE id NOT IN (SELECT id FROM shopping_trips ORDER BY id DESC LIMIT ?)",
                   (MAX_TRIPS,))
-    return {**get_trip(tid), "carried": len(kept)}
+    trip = get_trip(tid)
+    from app import push
+
+    push.after_trip_complete(trip)  # ortak defter: diğer kişilere "alışverişi tamamladı"
+    return {**trip, "carried": len(kept)}
 
 
 def _receipt_chains(entry_ids: list[int]) -> list[str]:

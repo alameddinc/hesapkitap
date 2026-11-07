@@ -395,6 +395,9 @@ def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None
         rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, unit, added_by, pinned_key) VALUES (?, ?, ?, ?, ?, ?)",
                         (t, pin or (g["key"] if g else None), q, u, uid, pin)).lastrowid
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
+    from app import push
+
+    push.after_list_add()  # ortak defter: diğer kişilere toplu bildirim (arka planda)
     return _row_out(r)  # tanınmayan ad: arka planda hemen sınıflandırılır (kick_names)
 
 

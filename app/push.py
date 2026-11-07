@@ -22,6 +22,11 @@ Zamanlama
   bildirim, fazlası özet.
 - Olaylar (ekstre okununca faiz / abonelik, posta ya da Paylaş ile gelen belge): ilgili akışa tek satır kanca; hesap
   arka planda (istek yolu yavaşlamaz).
+- Ortak alışveriş listesi ("liste"): biri listeye ürün ekleyince defterin DİĞER kişilerine toplu tek bildirim ("Ayşe
+  listeye 3 ürün ekledi: süt, yumurta, elma"); ekleyen başına en çok LIST_EVERY'de bir (ilk eklemeden LIST_DELAY sonra;
+  arada eklenenler aynı bildirime girer, aralık dolmadıysa bir sonraki pencereye kalır). "Alışverişi tamamla" da
+  diğerlerine gider ("Mehmet alışverişi tamamladı · 7 ürün alındı"). Yapan kişiye hiçbir zaman gitmez; listeyi gizlenen
+  üyeye gitmez.
 - Sessiz saatler (varsayılan 22:00–09:00): kuyruktaki bildirim sessiz saat bitince gider.
 - Tekrar yok: aynı (kullanıcı, id) bir kez (push_sent; 60 gün sonra temizlenir).
 
@@ -86,13 +91,15 @@ TYPES = {
     "geri_bildirim": ("Kullanıcı geri bildirimi", True),  # yalnız yöneticiye (app/feedback.py)
     "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
+    "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
 NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "döküm", "butce": "bütçe uyarısı",
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
-         "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı"}
+         "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
+         "liste": "alışveriş listesi bildirimi"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -102,7 +109,7 @@ AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağusto
 R_OZET, R_ODEMELER, R_EKSTRELER, R_BUTCELER = "#/ozet", "#/diger/odemeler", "#/diger/ekstreler", "#/diger/butceler"
 R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger/tasarruf", "#/diger/zekat"
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
-R_FIYATLAR = "#/diger/fiyatlar"
+R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 
 
@@ -959,6 +966,141 @@ def after_document(source: str, text: str) -> None:
         notify(u["id"], [item("belge", pid, title, body, R_POSTA if source == "posta" else R_GELENLER)])
     except Exception:  # noqa: BLE001
         log.exception("push belge kancası")
+
+
+# ---------------------------------------------------------------- ortak alışveriş listesi
+
+LIST_EVERY = 30 * 60     # ekleyen başına en çok bu kadar saniyede bir bildirim
+LIST_DELAY = 60.0        # ilk eklemeden sonra bekleme: art arda eklenenler tek bildirimde
+LIST_NAMES = 3           # gövdede en çok bu kadar ürün adı
+_list_pending: dict[str, threading.Timer] = {}
+
+
+def _book_ctx() -> tuple[dict, int, str | None] | None:
+    """(yapan kullanıcı, defter sahibi, defter dosyası) — ortak defterde ve push açıksa; "Benim" defteri ya da tek
+    kişilik defter: None."""
+    u = db.current_user()
+    if not u or not u.get("id") or u.get("own_book") or not enabled():
+        return None
+    owner_id = u.get("member_of") or u["id"]
+    if not u.get("member_of") and not system.members(owner_id):
+        return None
+    path = db.db_path()
+    return u, owner_id, (None if os.path.abspath(path) == os.path.abspath(db.DB_PATH) else path)
+
+
+def _list_people(owner_id: int, actor: int) -> list[dict]:
+    """Bildirim gidecek kişiler (bağlam: defterin dosyası): sahip + üyeler, yapan hariç, telefonu olan, listesi
+    gizlenmemiş (üyenin hidden_pages'inde "alisveris" yok)."""
+    from app import book
+
+    owner = system.user(owner_id)
+    out = []
+    for p in ([owner] if owner else []) + system.members(owner_id):
+        if p["id"] == actor or p.get("disabled") or p.get("deleted_at") or not _has_devices(p["id"]):
+            continue
+        if p["id"] != owner_id and "alisveris" in book.rules(p["id"])["hidden_pages"]:
+            continue
+        out.append(p)
+    return out
+
+
+def _who(u: dict) -> str:
+    return (u.get("username") or "").split("@")[0] or "Biri"
+
+
+def list_body(name: str, texts: list[str]) -> str:
+    """"Ayşe listeye 3 ürün ekledi: süt, yumurta, elma" (+ " ve 2 ürün daha")."""
+    n = len(texts)
+    head = ", ".join(t.strip() for t in texts[:LIST_NAMES])
+    more = f" ve {n - LIST_NAMES} ürün daha" if n > LIST_NAMES else ""
+    return f"{name} listeye {n} ürün ekledi: {head}{more}"
+
+
+def _list_last(key: str) -> tuple[float | None, int]:
+    """Ekleyenin son liste bildirimi: (zaman damgası | None, bildirilen son satır kimliği)."""
+    raw = system.get(key) or ""
+    try:
+        at, rid = raw.split("|", 1)
+        return float(at), int(rid)
+    except ValueError:
+        return None, 0
+
+
+def _send_list_adds(u: dict, owner_id: int, path: str | None) -> list[dict]:
+    """Ekleyenin son bildirimden (yoksa pencerenin başından) beri eklediği satırlar → diğer kişilere tek bildirim."""
+    key = f"push:liste:{owner_id}:{u['id']}"
+    now = datetime.now(timezone.utc)
+    _at, last_id = _list_last(key)
+    since = (now - timedelta(seconds=LIST_EVERY)).strftime("%Y-%m-%d %H:%M:%S")
+    with db.use_space(path, u):
+        with db.connect() as c:
+            rows = [dict(r) for r in c.execute("SELECT id, text FROM shopping_list WHERE added_by = ? AND id > ? AND "
+                                               "created_at >= ? ORDER BY id", (u["id"], last_id, since))]
+        people = _list_people(owner_id, u["id"]) if rows else []
+    if not rows:
+        return []
+    system.put(key, f"{now.timestamp():.0f}|{rows[-1]['id']}")
+    it = item("liste", f"liste:{owner_id}:{u['id']}:{rows[-1]['id']}", "Alışveriş listesi",
+              list_body(_who(u), [r["text"] for r in rows]), R_ALISVERIS)
+    out = []
+    for p in people:
+        out += notify(p["id"], [it])
+    return out
+
+
+def after_list_add() -> None:
+    """shopping.add kancası: ortak defterde diğer kişilere toplu bildirim zamanla (yukarıda). Hiçbir zaman hata
+    fırlatmaz; push kapalıysa ya da kimsenin telefonu yoksa zamanlayıcı kurulmaz."""
+    try:
+        ctx = _book_ctx()
+        if not ctx:
+            return
+        u, owner_id, path = ctx
+        with db.use_space(path, u):
+            if not _list_people(owner_id, u["id"]):
+                return
+        key = f"{owner_id}:{u['id']}"
+        last, _rid = _list_last(f"push:liste:{key}")
+        wait = LIST_DELAY if last is None else max(LIST_DELAY, LIST_EVERY - (time.time() - last))
+
+        def go():
+            with _pending_lock:
+                _list_pending.pop(key, None)
+            try:
+                _send_list_adds(u, owner_id, path)
+            except Exception:  # noqa: BLE001 - arka plan
+                log.exception("push liste olayı u%s", u.get("id"))
+
+        with _pending_lock:
+            if key in _list_pending:
+                return  # bu pencerenin bildirimi zaten kurulu: yeni satır ona girer
+            t = _Timer(wait, go)
+            t.daemon = True
+            _list_pending[key] = t
+        t.start()
+    except Exception:  # noqa: BLE001 - kanca eklemeyi engellemesin
+        log.exception("push liste kancası")
+
+
+def after_trip_complete(trip: dict) -> list[dict]:
+    """shopping_trips.complete kancası: "Mehmet alışverişi tamamladı · 7 ürün alındı" diğer kişilere (hemen; sessiz
+    saatte kuyrukta bekler). Hiçbir zaman hata fırlatmaz."""
+    try:
+        ctx = _book_ctx()
+        if not ctx:
+            return []
+        u, owner_id, _path = ctx
+        n = sum(1 for x in trip.get("items") or [] if x.get("done"))
+        it = item("liste", f"liste:trip:{owner_id}:{trip.get('id')}", "Alışveriş tamamlandı",
+                  f"{_who(u)} alışverişi tamamladı · {n} ürün alındı", R_ALISVERIS)
+        out = []
+        for p in _list_people(owner_id, u["id"]):
+            out += notify(p["id"], [it])
+        return out
+    except Exception:  # noqa: BLE001
+        log.exception("push alışveriş tamamlandı kancası")
+        return []
 
 
 # ---------------------------------------------------------------- test bildirimi
