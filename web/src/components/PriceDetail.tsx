@@ -10,7 +10,8 @@ import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
 import { marketCaption, type Market, type VsMarket } from "../lib/optimize";
 import { adviceText, communityParts, type Advice, type MarketRef } from "../lib/priceAdvice";
-import { ayrilma, bulunma, change7Text, changePct, dayWord, daysBetween, monthShort, niceTicks, officialSrc, pctWord, pricedPoints, storeSeries, type PricePoint } from "../lib/priceView";
+import { agoWord, ayrilma, bulunma, change7Text, changePct, dayWord, daysBetween, monthShort, niceTicks, pctWord, pricedPoints, storeSeries, type PricePoint } from "../lib/priceView";
+import { chainName, priceFootnote } from "../lib/shopList";
 import { useUI } from "../ui";
 import { useMeta, useOpenRow } from "./hooks";
 import { RegionPrompt } from "./RegionPicker";
@@ -56,6 +57,17 @@ export function OfferBadges({ b }: { b: GroupBest }) {
   );
 }
 
+/** Tekliflerin en yeni resmî günü (satırda yalnız bundan eski teklifin yaşı yazılır). */
+export const newestOfficial = (best: GroupBest[]) => best.filter((b) => b.source === "resmi").map((b) => b.date ?? "").filter(Boolean).sort().pop() ?? null;
+
+/** Tek dipnot: "Fiyatlar: Market Fiyatı · dün"; yasal kaynak yazısı ipucunda (title) ve ekran okuyucuda. */
+export function PriceFootnote({ best, today, className }: { best: GroupBest[]; today: string; className?: string }) {
+  const t = priceFootnote(best, today);
+  const a = attributionOf(best);
+  if (!t) return null;
+  return <p className={cx("text-xs text-stone-500 dark:text-stone-400", className)} title={a ?? undefined} data-testid="resmi-kaynak">{t}{a && <span className="sr-only"> ({a})</span>}</p>;
+}
+
 /** Tekliflerde resmî kaynak varsa altına yazılacak kaynak satırı. */
 export const attributionOf = (best: GroupBest[]) => {
   const r = best.find((b) => b.source === "resmi");
@@ -66,14 +78,15 @@ const srcWord = (b: GroupBest) => (b.source === "community" ? "topluluk" : b.sou
 const per = (u: string) => (u === "kg" ? "/kg" : u === "lt" ? "/lt" : "");
 const qtyText = (q: number, unit: string) => `${q.toLocaleString("tr-TR", { maximumFractionDigits: 3 })} ${unit === "adet" ? "adet" : unit}`;
 
-/** "BİM ₺34,50 (Torku)" + kaynak: "senin fişin, 3 gün" / "topluluk, 14 gün" / "Market Fiyatı, bugün, İzmir" */
-export function bestLine(b: GroupBest, today: string) {
+/** "BİM ₺34,50 · ₺34,50/L" + kaynak: "senin fişin, 3 gün" / "topluluk, 14 gün"; resmî teklifte kaynak tek dipnotta
+ *  ("Fiyatlar: Market Fiyatı · dün"), satırda yalnız dipnottan eskiyse yaşı. Yalnız zincir adı: marka, il, şube yok. */
+export function bestLine(b: GroupBest, today: string, newest?: string | null) {
   const pu0 = perUnitText(b.unit_price_per, b.per_unit);
-  if (b.source === "resmi") return { main: `${maskText(b.chain)} ${tl(b.price)}${pu0 ? ` · ${pu0}` : ""}${b.brand ? ` (${b.brand})` : ""}`, src: officialSrc(b, today) };
+  if (b.source === "resmi") return { main: `${maskText(chainName(b.chain))} ${tl(b.price)}${pu0 ? ` · ${pu0}` : ""}`, src: b.date && newest && b.date < newest ? agoWord(b.date, today) : "" };
   const age = b.date ? daysBetween(b.date, today) : null;
   const ago = age == null ? "" : age <= 0 ? ", bugün" : `, ${age} gün`;
   const pu = perUnitText(b.unit_price_per, b.per_unit);
-  return { main: `${maskText(b.chain)} ${tl(b.price)}${pu ? ` · ${pu}` : ""}${b.brand ? ` (${b.brand})` : ""}`, src: `${srcWord(b)}${ago}` };
+  return { main: `${maskText(chainName(b.chain))} ${tl(b.price)}${pu ? ` · ${pu}` : ""}`, src: `${srcWord(b)}${ago}` };
 }
 
 export interface PriceDetailProduct {
@@ -167,7 +180,7 @@ export default function PriceDetail({ p, onChain }: { p: PriceDetailProduct; onC
             return (
               <li key={i} className="flex items-center gap-3 px-3 py-2">
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium">{dayWord(h.date, today)} · {maskText(h.store)}{h.branch ? <span className="font-normal text-stone-500"> ({h.branch})</span> : null}</div>
+                  <div className="font-medium">{dayWord(h.date, today)} · {maskText(chainName(h.store))}</div>
                   <div className="text-xs break-words text-stone-500">
                     {h.qty !== 1 && `${qtyText(h.qty, p.unit)} · `}<i>{h.name}</i>{h.estimated ? " · tahmini fiyat" : ""}</div>
                 </div>
@@ -323,6 +336,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
   const sorted = [...(grp?.best ?? [])].sort((a, b) => a.price - b.price).slice(0, 5);
   const best = [...sorted.filter((b) => b.source === "community"), ...sorted.filter((b) => b.source !== "community")];
   const cheapest = sorted[0];
+  const newest = newestOfficial(best);
   return (
     <section className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
@@ -333,7 +347,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
       {best.length > 0 && (
         <ul className="space-y-1 text-sm">
           {best.map((b, i) => {
-            const l = bestLine(b, today);
+            const l = bestLine(b, today, newest);
             const cp = communityParts(b, (n) => maskText(tl(n)));
             return (
               <li key={`${b.chain}-${i}`} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5" data-testid="nereden-satir">
@@ -346,7 +360,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
         </ul>
       )}
       <RegionPrompt show={best.some((b) => b.source === "resmi")} />
-      {attributionOf(best) && <p className="text-[11px] text-stone-500" data-testid="resmi-kaynak">{attributionOf(best)}</p>}
+      <PriceFootnote best={best} today={today} />
     </section>
   );
 }

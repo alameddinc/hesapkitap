@@ -5,9 +5,10 @@ import { useEffect, useRef, useState } from "react";
 import { cx, dateTR, fold, maskText, pctSigned, tl, todayISO } from "../format";
 import { useMeta } from "./hooks";
 import Segmented from "./Segmented";
-import PriceDetail, { attributionOf, OfferBadges, perUnitText, type PriceGroup, type PriceGroupRef, type PriceHistory } from "./PriceDetail";
+import PriceDetail, { newestOfficial, OfferBadges, perUnitText, PriceFootnote, type PriceGroup, type PriceGroupRef, type PriceHistory } from "./PriceDetail";
 import { RegionPrompt } from "./RegionPicker";
-import { bulunma, officialSrc } from "../lib/priceView";
+import { agoWord, bulunma } from "../lib/priceView";
+import { chainName } from "../lib/shopList";
 import type { Advice, MarketRef } from "../lib/priceAdvice";
 
 interface StorePrice {
@@ -259,6 +260,8 @@ function WhereToBuy({ q, onOpen, canOpen }: {
   if (r.isLoading) return <p className="text-xs text-stone-500" aria-busy="true">Nereden alınır aranıyor…</p>;
   if (r.error || !r.data?.length) return null;
   const today = todayISO();
+  const all = r.data.flatMap((g) => g.best);
+  const newest = newestOfficial(all);
   return (
     <section className="space-y-2 pt-1" data-testid="arama-nereden" aria-label="Nereden alınır">
       <h3 className="text-xs font-semibold tracking-wide text-stone-500 uppercase">Nereden alınır</h3>
@@ -271,13 +274,15 @@ function WhereToBuy({ q, onOpen, canOpen }: {
               <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
                 {best.map((b, i) => {
                   const cheap = i === 0 && best.length > 1;
-                  const tail = b.source === "own" ? "senin alımın" : b.source === "resmi" ? officialSrc(b, today) : `topluluk${b.n ? `, ${b.n} kişi` : ""}`;
+                  // resmî kaynak tek dipnotta; satırda yalnız dipnottan eski teklifin yaşı
+                  const tail = b.source === "own" ? "senin alımın" : b.source === "resmi" ? (b.date && newest && b.date < newest ? agoWord(b.date, today) : "")
+                    : `topluluk${b.n ? `, ${b.n} kişi` : ""}`;
                   const pu = perUnitText(b.unit_price_per, b.per_unit);
                   const body = (
                     <>
                       <span className={cx("min-w-0 flex-1 break-words", cheap && "font-semibold text-green-700 dark:text-green-400")}>
-                        {maskText(b.chain)} <span className="tabular-nums">{tl(b.price)}</span>{b.brand ? <span className="font-normal text-stone-600 dark:text-stone-300"> · {b.brand}</span> : ""} <OfferBadges b={b} />
-                        <span className="block text-xs font-normal text-stone-500 tabular-nums">{[pu, tail].filter(Boolean).join(" · ")}</span></span>
+                        {maskText(chainName(b.chain))} <span className="tabular-nums">{tl(b.price)}</span> <OfferBadges b={b} />
+                        {(pu || tail) && <span className="block text-xs font-normal text-stone-500 tabular-nums dark:text-stone-400">{[pu, tail].filter(Boolean).join(" · ")}</span>}</span>
                       {cheap && <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-semibold text-green-800 dark:bg-green-950 dark:text-green-300">en ucuz</span>}
                     </>
                   );
@@ -291,11 +296,11 @@ function WhereToBuy({ q, onOpen, canOpen }: {
                   );
                 })}
               </ul>
-              {attributionOf(best) && <p className="border-t border-stone-100 px-3 py-1.5 text-[11px] text-stone-500 dark:border-stone-800" data-testid="resmi-kaynak">{attributionOf(best)}</p>}
             </div>
           );
         })}
       </div>
+      <PriceFootnote best={all} today={today} />
       <RegionPrompt show={r.data.some((g) => g.best.some((b) => b.source === "resmi"))} />
     </section>
   );
