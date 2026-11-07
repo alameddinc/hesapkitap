@@ -444,7 +444,11 @@ _HINTS = {
 def _unpriced(it: dict) -> dict:
     g = it.get("group")
     reason = "no_group" if not g else "pending" if g.get("pending") else "no_size" if "|" not in g["key"] else "no_price"
-    return {"id": it["id"], "text": it["text"], "reason": reason, "hint": _HINTS[reason]}
+    hint = _HINTS[reason]
+    if reason == "no_size":  # satırın kendi adıyla örnek: "Deterjan" → "deterjan 1 L" ya da "deterjan 500 g"
+        t = it["text"].strip().lower()
+        hint = f"Ürüne boy ekle: \u201c{t} 1 L\u201d ya da \u201c{t} 500 g\u201d."
+    return {"id": it["id"], "text": it["text"], "reason": reason, "hint": hint}
 
 
 def _empty(items: list[dict], priced: list[dict]) -> dict | None:
