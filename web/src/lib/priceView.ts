@@ -63,15 +63,29 @@ function sayiOkunusu(n: number): string {
   if (u) return ["", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"][u]!;
   return ["", "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan"][(n % 100) / 10]!;
 }
-/** Ayrılma eki: File'den, BİM'den, A101'den, Şok'tan, Migros'tan, Marmara'dan (son ünlü ve sert ünsüz). */
-export function ayrilma(ad: string): string {
+/** Ek ünlüsü ve ünsüzü: son ünlü ince mi, son ses sert mi (rakamla biten ad okunuşuna göre). */
+function ekSesi(ad: string): { s: string; ince: boolean; sert: boolean } {
   const s = ad.trim();
   const dig = /(\d+)$/.exec(s);
   const h = dig ? sayiOkunusu(Number(dig[1])) : s.toLocaleLowerCase("tr").replace(/[^a-zçğıöşüâîû]/g, "");
   const son = [...h].reverse().find((c) => UNLU.includes(c));
-  const ince = !son || "eiöüî".includes(son);
-  const sert = !!h && SERT.includes(h[h.length - 1]!);
+  return { s, ince: !son || "eiöüî".includes(son), sert: !!h && SERT.includes(h[h.length - 1]!) };
+}
+/** Ayrılma eki: File'den, BİM'den, A101'den, Şok'tan, Migros'tan, Marmara'dan (son ünlü ve sert ünsüz). */
+export function ayrilma(ad: string): string {
+  const { s, ince, sert } = ekSesi(ad);
   return `${s}'${sert ? "t" : "d"}${ince ? "e" : "a"}n`;
+}
+/** Bulunma eki: BİM'de, A101'de, ŞOK'ta, Migros'ta, CarrefourSA'da. */
+export function bulunma(ad: string): string {
+  const { s, ince, sert } = ekSesi(ad);
+  return `${s}'${sert ? "t" : "d"}${ince ? "e" : "a"}`;
+}
+
+/** Resmî fiyatın yaşı: "bugün", "dün", "3 gün önce". */
+export function agoWord(iso: string, today: string): string {
+  const n = daysBetween(iso, today);
+  return n <= 0 ? "bugün" : n === 1 ? "dün" : `${n} gün önce`;
 }
 
 // ---------------------------------------------------------------- alışveriş listesi
@@ -84,11 +98,12 @@ export function bestChain(chains: PlanChain[] | null | undefined): PlanChain | n
   return [...list].sort((a, b) => b.covered - a.covered || a.total - b.total)[0]!;
 }
 
-/** Resmî teklifin kaynak yazısı: "Market Fiyatı, bugün, İzmir"; BİM / A101 / ŞOK "Market Fiyatı, ulusal"; bölgesiz
+/** Resmî teklifin kaynak yazısı: "Market Fiyatı, bugün, İzmir" ("dün", "3 gün önce"); BİM / A101 / ŞOK "Market
+ *  Fiyatı, ulusal" (eskiyse ", dün"); bölgesiz
  *  (eski dosya içe aktarımı) "Market Fiyatı, bugün". */
 export function officialSrc(b: { date?: string | null; region?: string | null }, today: string): string {
-  if (b.region === "ulusal") return "Market Fiyatı, ulusal";
-  return ["Market Fiyatı", b.date ? dayWord(b.date, today) : null, b.region || null].filter(Boolean).join(", ");
+  if (b.region === "ulusal") return ["Market Fiyatı, ulusal", b.date && b.date < today ? agoWord(b.date, today) : null].filter(Boolean).join(", ");
+  return ["Market Fiyatı", b.date ? agoWord(b.date, today) : null, b.region || null].filter(Boolean).join(", ");
 }
 
 /** Haftalık değişim çipi: |değişim| ≥ %3 ise "7 günde +%8" / "7 günde −%4", değilse null. */

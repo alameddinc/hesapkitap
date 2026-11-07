@@ -145,18 +145,20 @@ export function useUiPrefs() {
   const qc = useQueryClient();
   const ui = meta.data?.ui ?? { simple: false, layout: null };
   const save = useMutation({
-    mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean; price_share?: boolean; region?: string | null }) =>
+    mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean; price_share?: boolean; region?: string | null; stop_cost?: number | null }) =>
       send("/api/me/ui", { method: "PUT", json: body }),
     // anahtar gibi ayarlar (price_share, region) hemen değişsin; hata olursa sunucudaki hale döner
     onMutate: (body) => {
-      const patch = { ...(body.price_share !== undefined && { price_share: body.price_share }), ...(body.region !== undefined && { region: body.region }) };
+      const patch = { ...(body.price_share !== undefined && { price_share: body.price_share }), ...(body.region !== undefined && { region: body.region }),
+        ...(body.stop_cost != null && { stop_cost: body.stop_cost }) };
       if (!Object.keys(patch).length) return;
       qc.setQueryData<Meta>(["meta"], (m) => (m?.ui ? { ...m, ui: { ...m.ui, ...patch } } : m));
     },
     onSettled: (_d, _e, body) => {
       void qc.invalidateQueries({ queryKey: ["meta"] });
       if (body.region !== undefined) // resmî fiyatlar ilden gelir: Nereden alınır ve liste planı yenilensin
-        for (const k of ["price-groups", "price-groups-search", "shopping-plan"]) void qc.invalidateQueries({ queryKey: [k] });
+        for (const k of ["price-groups", "price-groups-search", "shopping-plan", "shopping-optimize"]) void qc.invalidateQueries({ queryKey: [k] });
+      if (body.stop_cost !== undefined) void qc.invalidateQueries({ queryKey: ["shopping-optimize"] });
     },
   });
   return { ui, save };

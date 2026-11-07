@@ -49,7 +49,9 @@ test("bestChain: en çok ürün, eşitse en ucuz", () => {
 
 test("resmî teklif: kaynak yazısı ve haftalık değişim çipi", () => {
   assert.equal(officialSrc({ date: "2026-11-07", region: "İzmir" }, "2026-11-07"), "Market Fiyatı, bugün, İzmir");
-  assert.equal(officialSrc({ date: "2026-11-06", region: "ulusal" }, "2026-11-07"), "Market Fiyatı, ulusal");
+  assert.equal(officialSrc({ date: "2026-11-07", region: "ulusal" }, "2026-11-07"), "Market Fiyatı, ulusal");
+  assert.equal(officialSrc({ date: "2026-11-06", region: "ulusal" }, "2026-11-07"), "Market Fiyatı, ulusal, dün");
+  assert.equal(officialSrc({ date: "2026-11-03", region: "İzmir" }, "2026-11-07"), "Market Fiyatı, 4 gün önce, İzmir");
   assert.equal(officialSrc({ date: "2026-11-06" }, "2026-11-07"), "Market Fiyatı, dün");
   assert.equal(change7Text(8.2), "7 günde +%8");
   assert.equal(change7Text(-4), "7 günde −%4");
