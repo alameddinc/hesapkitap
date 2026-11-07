@@ -6,7 +6,7 @@ import { call } from "../lib/apiError";
 import { openTxns } from "../lib/txnFilter";
 import { ek, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
-import { usePeople } from "./hooks";
+import { useBook, usePeople } from "./hooks";
 import { LockBadge, usePlan, useLock } from "./Plan";
 import { barOf, KisiNokta, ORTAK, useSpenders } from "./Spender";
 
@@ -34,6 +34,7 @@ export function KimHarcadi({ month }: { month: string }) {
   const s = useSpenders();
   const ui = useUI();
   const [detail, setDetail] = useState(false);
+  const book = useBook().data;
   const q = useQuery({ queryKey: ["member-spend", month], enabled: !lock && pp.multi, retry: false,
     queryFn: () => call<MemberSpend>("GET", `/api/book/member-spend?month=${month}`) });
   if (lock) {
@@ -48,7 +49,20 @@ export function KimHarcadi({ month }: { month: string }) {
       </section>
     );
   }
-  if (!pp.multi) return null;
+  if (!pp.multi) {
+    // tek kişi: üyenin kendi defteri ya da Aile paketinde henüz üyesi olmayan defter → neden boş olduğunu söyle
+    const mine = !!book?.member && book.book === "kendi";
+    if (!mine && !plan?.hosted) return null;
+    return (
+      <section className="card space-y-1 p-3 sm:p-4" data-testid="kim-harcadi-bos">
+        <h2 className="font-semibold">{mine ? "Benim defterinde kişi başı rapor yok" : "Defterde henüz başka kimse yok"}</h2>
+        <p className="text-sm text-stone-600 dark:text-stone-400">{mine
+          ? "Bu defter yalnız senin; ortak deftere geçince kim ne harcadı burada görünür."
+          : "Ortak deftere aileni davet edince kim ne harcadı burada görünür."}</p>
+        {!mine && <button className="text-sm font-medium text-blue-700 hover:underline dark:text-blue-400" onClick={() => ui.go("ayarlar")}>Aileni davet et</button>}
+      </section>
+    );
+  }
   const d = q.data;
   const list = d?.people ?? [];
   const max = Math.max(1, ...list.map((p) => p.amount));
