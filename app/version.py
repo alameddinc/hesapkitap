@@ -107,6 +107,8 @@ CAPABILITIES = (
                               # aramada boy ("1l süt") ve adı tam eşleşen önce, boylar farklıysa litre fiyatı ucuz önce
     "price_categories",       # kategori: products[].category, products[].group.category, /api/prices/groups [].category
                               # (sabit liste product_groups.CATEGORIES; "Süt ve Kahvaltılık" …), yoksa null
+    "price_subcategories",    # alt kategori: products[].subcategory, products[].group.subcategory, /api/prices/groups
+                              # [].subcategory ("Süt ve Kahvaltılık" › "Peynir"; app/product_taxonomy.py), yoksa null
     "official_prices",        # /api/prices/groups best[].source "resmi" (varsayılan kapalı; sunucu ayarlıysa) + attribution
                               # "Kaynak: Market Fiyatı (…)" — istemci teklif listesinin altında gösterir
 )

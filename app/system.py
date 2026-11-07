@@ -221,7 +221,8 @@ CREATE TABLE IF NOT EXISTS product_groups (  -- ürün adı → markadan bağım
     size_unit TEXT,                      -- l | ml | kg | g | ad
     source TEXT NOT NULL CHECK (source IN ('rule', 'ai')),
     created_at TEXT NOT NULL,
-    category TEXT                        -- kategori (product_groups.CATEGORIES): 'Süt ve Kahvaltılık'
+    category TEXT,                       -- kategori (product_groups.CATEGORIES): 'Süt ve Kahvaltılık'
+    subcategory TEXT                     -- alt kategori (product_taxonomy.TAXONOMY): 'Peynir'
 );
 CREATE INDEX IF NOT EXISTS product_groups_key ON product_groups(group_key);
 CREATE TABLE IF NOT EXISTS product_group_queue (  -- kuralın çözemediği adlar: toplu yapay zekâ bekliyor (yalnız ad)
@@ -317,8 +318,10 @@ def _migrate(c) -> None:
     # yapay zekâ maliyet kaydı: önbellekli girdi token'ı (app/ai_costs.py)
     if "cached" not in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}:
         c.execute("ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
-    if "category" not in {r[1] for r in c.execute("PRAGMA table_info(product_groups)")}:
-        c.execute("ALTER TABLE product_groups ADD COLUMN category TEXT")
+    have = {r[1] for r in c.execute("PRAGMA table_info(product_groups)")}
+    for col in ("category", "subcategory"):
+        if col not in have:
+            c.execute(f"ALTER TABLE product_groups ADD COLUMN {col} TEXT")
     # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): önbellek ve topluluk fiyatları bir kez
     from app import product_groups
 
