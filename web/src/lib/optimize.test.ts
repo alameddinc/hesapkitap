@@ -54,7 +54,7 @@ test("karşılaştırma satırları", () => {
 });
 
 test("kaynak satırı ve adlar", () => {
-  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı · bugün · İstanbul; BİM/A101/ŞOK ulusal · fişlerin · topluluk");
+  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı · bugün · İstanbul; BİM/A101/ŞOK/Migros ulusal · fişlerin · topluluk");
   assert.equal(sourceLine({ ...R, source_info: { kinds: ["resmi"], resmi_date: "2026-11-06", national: false } }, TODAY), "Fiyatlar: Market Fiyatı · dün · İstanbul");
   assert.equal(sourceLine({ ...R, source_info: { kinds: ["own", "community"], resmi_date: null, national: false } }, TODAY), "Fiyatlar: fişlerin · topluluk");
   assert.equal(namesLine("Fiyatı bilinmeyen", [9, 7], new Map([[9, "Örnek Şey"]])), "Fiyatı bilinmeyen: Örnek Şey");

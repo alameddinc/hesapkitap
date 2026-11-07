@@ -66,13 +66,13 @@ export function compareRows(r: Optimize, m: Money): string[] {
   return out;
 }
 
-/** "Fiyatlar: Market Fiyatı · bugün · İstanbul; BİM/A101/ŞOK ulusal · fişlerin · topluluk" */
+/** "Fiyatlar: Market Fiyatı · bugün · İstanbul; BİM/A101/ŞOK/Migros ulusal · fişlerin · topluluk" */
 export function sourceLine(r: Optimize, today: string): string {
   const k = r.source_info?.kinds ?? [];
   const parts: string[] = [];
   if (k.includes("resmi")) {
     parts.push([`Market Fiyatı`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null, r.region].filter(Boolean).join(" · ")
-      + (r.source_info.national ? "; BİM/A101/ŞOK ulusal" : ""));
+      + (r.source_info.national ? "; BİM/A101/ŞOK/Migros ulusal" : ""));
   }
   if (k.includes("own")) parts.push("fişlerin");
   if (k.includes("community")) parts.push("topluluk");
