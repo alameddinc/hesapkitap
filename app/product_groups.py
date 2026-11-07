@@ -997,6 +997,9 @@ def _rekey(c, r: dict, generic: str, source: str) -> dict | None:
     return new
 
 
+CONSISTENCY_COMMIT = 200  # bu kadar taşımada bir ara kayıt (yazma kilidi uzun tutulmasın)
+
+
 def consistency(c) -> dict:
     """Aynı biçimdeki adlar tek genel ada (gecelik, katalog yenilenince; c: system.connect()).
     1. Yapay zekâ / geçici sonuçlu ad bugün katalog ya da kuralla çözülüyorsa o gruba geçer (kural yapay zekâdan önce).
@@ -1020,6 +1023,8 @@ def consistency(c) -> dict:
                 if (new := _rekey(c, r, g["label"].split(" · ")[0], src or "catalog")):
                     r.update(group_key=new["key"], label=new["label"], source=src or "catalog")
                     rekeyed += 1
+                    if rekeyed % CONSISTENCY_COMMIT == 0:
+                        c.commit()  # kilit kısa: istekler beklemesin (07.11.2026 tek işlemde 4.711 satır → 500)
     by: dict[str, dict[str, list[dict]]] = {}
     for r in rows:
         f = form_of(r["name_norm"])
@@ -1044,6 +1049,8 @@ def consistency(c) -> dict:
                 for r in v:
                     if r["source"] in ("ai", "consistency") and _rekey(c, r, label, "consistency"):
                         rekeyed += 1
+                        if rekeyed % CONSISTENCY_COMMIT == 0:
+                            c.commit()
     found.sort(key=lambda x: (-sum(g["n"] for g in x["groups"]), x["form"]))
     c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES (?, ?)",
               (CONFLICTS_KEY, json.dumps({"at": _now(), "count": len(found), "top": found[:CONFLICTS_TOP]},
