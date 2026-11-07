@@ -2,7 +2,7 @@
 // yazı ve miktar hesapları. Metinden miktar okumak sunucuda (POST /api/shopping-list "2,5 kg elma"); burada yalnız
 // gösterim, düzenleme penceresinin adım düğmeleri, kaydedilen plana göre gruplama, geçmiş alışveriş ve fiş bağlama
 // yazıları. Mobil (hesapkitap-mobile) ile aynı metinler. Tutar biçimi parametre: gizli tutar maskesi çağıranda.
-import { agoWord } from "./priceView.ts";
+import { agoWord, bulunma } from "./priceView.ts";
 
 type Money = (n: number) => string;
 
@@ -86,6 +86,27 @@ export function priceFootnote(offers: { source: string; date?: string | null; at
 }
 
 // ---------------------------------------------------------------- satır fiyatı
+
+// ---------------------------------------------------------------- kişinin kendi alımı (sunucu: own_product / own_place)
+
+/** Yazılan ad kişinin fişteki ürününe bağlandı: son alımın fiyatı ve yeri. */
+export interface OwnProduct { name: string; price: number; place: string; date?: string | null }
+/** Kişinin bu ürünü son aldığı kafe / büfe (market eşleşmesi değişmez). */
+export interface OwnPlace { place: string; price: number }
+/** "Senin son alımın: ₺95 · Örnekbüfe" */
+export const ownProductText = (o: OwnProduct, m: (n: number) => string) => `Senin son alımın: ${m(o.price)} · ${chainName(o.place)}`;
+/** "Senin son alımın: Örnek Kafe ₺85" */
+export const ownPlaceText = (o: OwnPlace, m: (n: number) => string) => `Senin son alımın: ${chainName(o.place)} ${m(o.price)}`;
+/** Nereye gideyim satırı: en ucuz zincir planda yok → "Hakmar'da ₺41,50 (planın dışında)" */
+export const cheaperElsewhereText = (c: { chain: string; price: number }, m: (n: number) => string) =>
+  `${bulunma(chainName(c.chain))} ${m(c.price)} (planın dışında)`;
+/** Satırın ek alt yazısı: kafe yeri ya da (en ucuz teklif onun değilse) kendi ürününün son alımı. */
+export function ownExtra(it: { own_product?: OwnProduct | null; own_place?: OwnPlace | null; best?: { product?: string | null } | null },
+  m: (n: number) => string): string | null {
+  if (it.own_place) return ownPlaceText(it.own_place, m);
+  if (it.own_product && !it.best?.product) return ownProductText(it.own_product, m);
+  return null;
+}
 
 export interface LineBest { chain: string; price: number; line_total?: number | null }
 /** Satırın alt yazısı ve sağdaki tutar. Satır tutarı (fiyat × miktar) birim fiyattan farklıysa alt yazı birim fiyatı

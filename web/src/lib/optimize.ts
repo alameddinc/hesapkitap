@@ -9,6 +9,8 @@ export interface OptLine {
   /** yetenek shopping_units: "adet" | "kg" | "g" | "L" | "ml" ve "2,5 kg" */
   unit?: string | null; amount_label?: string | null;
   unit_price_per?: number | null; per_unit?: string | null; brand?: string | null; source: string; date?: string | null; region?: string | null;
+  /** kişinin kendi ürününün son alımı (ad) / kafede son alım yeri / satırın en ucuz zinciri planda yok */
+  product?: string | null; own_place?: { place: string; price: number } | null; cheaper_elsewhere?: { chain: string; price: number } | null;
 }
 export interface OptStop { chain: string; total: number; items: OptLine[] }
 export interface OptPlan {
@@ -32,7 +34,7 @@ export const lineTitle = (l: Pick<OptLine, "qty" | "text" | "unit">) =>
 /** "₺59,90/L · dün" (resmî teklif ref gününden — varsayılan bugün; dipnot varken dipnotun günü — eskiyse yaşı). Marka
  *  ve il / şube satırda yazılmaz (sade: yalnız zincir). */
 export function lineSub(l: OptLine, today: string, m: Money, ref: string = today): string {
-  return [l.unit_price_per != null && l.per_unit ? `${m(l.unit_price_per)}/${l.per_unit}` : null,
+  return [l.product ?? null, l.unit_price_per != null && l.per_unit ? `${m(l.unit_price_per)}/${l.per_unit}` : null,
     l.source === "resmi" && l.date && l.date < ref ? agoWord(l.date, today) : null].filter(Boolean).join(" · ");
 }
 

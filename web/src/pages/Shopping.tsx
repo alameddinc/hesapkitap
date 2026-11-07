@@ -21,7 +21,7 @@ import type { Optimize } from "../lib/optimize";
 import { cx, maskText, tl, todayISO } from "../format";
 import { ApiError, bodyOf, failureText, send } from "../lib/apiError";
 import { agoWord, ayrilma, bestChain, type PlanChain } from "../lib/priceView";
-import { bestParts, boughtText, chainName, groupByPlan, planSummary, rowTitle, type SavedPlan, type Unit } from "../lib/shopList";
+import { bestParts, boughtText, chainName, groupByPlan, ownExtra, ownProductText, planSummary, rowTitle, type OwnPlace, type OwnProduct, type SavedPlan, type Unit } from "../lib/shopList";
 import { useUI } from "../ui";
 import { isViewer, useBook, useMeta, usePeople } from "../components/hooks";
 import { PlanGate } from "../components/Plan";
@@ -36,7 +36,9 @@ export interface ShopItem {
   id: number; text: string; group_key: string | null; qty: number | null; done: boolean; added_by: number | null; created_at: string;
   group?: { key: string; label: string; pending?: boolean } | null;
   /** yetenek shopping_assumed_size: boysuz satırın varsayılan boyu; satırın en ucuz teklifi */
-  assumed?: Assumed | null; best?: (ShopBest & { line_total?: number | null }) | null;
+  assumed?: Assumed | null; best?: (ShopBest & { line_total?: number | null; product?: string | null; date?: string | null }) | null;
+  /** yazılan ad kişinin fişteki ürününe bağlandı (best.source "own" + product) / kafede son alım yeri */
+  own_product?: OwnProduct | null; own_place?: OwnPlace | null;
   /** yetenek shopping_units / shopping_trips */
   unit?: string | null; amount_label?: string | null; mult?: number | null; unit_mismatch?: boolean;
   planned?: { chain: string; unit_price: number; line_total: number } | null;
@@ -160,11 +162,15 @@ function ShoppingList() {
     onError: (e: Error, _a: A, ctx?: { prev?: ListData }) => { if (ctx?.prev) qc.setQueryData(LIST, ctx.prev); ui.error(e.message); },
     onSettled: refresh,
   });
-  const add = useMutation(optimistic(
+  const add = useMutation({ ...optimistic(
     (a: { text: string; qty?: number; group_key?: string | null; tmp: number; at: string }) =>
       send<ShopItem>(BASE, { method: "POST", json: { text: a.text, ...(a.qty != null && { qty: a.qty }), ...(a.group_key && { group_key: a.group_key }) } }),
     (xs, a) => [...xs, { id: a.tmp, text: a.text, qty: a.qty ?? 1, unit: "adet", group_key: a.group_key ?? null, done: false, added_by: people.meId ?? null, created_at: a.at }],
-  ));
+  ),
+  // tanınmayan ad sunucuda arka planda hemen sınıflanır (geçici grup, pending): ~3 sn sonra bir kez daha bak
+  onSuccess: (it: unknown) => {
+    if ((it as ShopItem | null)?.group?.pending) setTimeout(refresh, 3000);
+  } });
   const patch = useMutation(optimistic(
     (a: { id: number; done?: boolean; qty?: number; unit?: Unit; text?: string; group_key?: string | null }) => { const { id, ...body } = a; return send<ShopItem>(`${BASE}/${id}`, { method: "PATCH", json: body }); },
     (xs, a) => xs.map((it) => (it.id === a.id ? { ...it, ...(a.done !== undefined && { done: a.done }), ...(a.qty !== undefined && { qty: a.qty }),
@@ -364,8 +370,12 @@ function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
     // zincir başlıkta; tek paketse alt yazı yalnız varsayılan boy (boy adda zaten yazılı)
     sub = Math.abs(it.planned.line_total - it.planned.unit_price) >= 0.005 ? `Birim ${money(it.planned.unit_price)}${size ? ` · ${size}` : ""}`
       : it.assumed ? size : null;
+  } else if (it.best && !it.done && it.best.product && it.own_product) {
+    // kişinin kendi ürünü: "Senin son alımın: ₺95 · Örnekbüfe"
+    sub = ownProductText(it.own_product, money); right = money(it.best.line_total ?? it.best.price);
   } else if (it.best && !it.done) { const p = bestParts(it.best, size, money); sub = p.sub; right = p.right; }
-  
+  const extra = !it.done && !hint ? ownExtra(it, money) : null;
+
   const title = rowTitle(it);
   const body = (
     <>
@@ -378,6 +388,7 @@ function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
       ) : sub && !it.done ? (
         <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="satir-en-ucuz">{maskText(sub ?? "")}</span>
       ) : null}
+      {extra && <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="satir-kendi">{maskText(extra)}</span>}
     </>
   );
   return (

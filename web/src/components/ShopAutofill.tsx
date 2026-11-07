@@ -5,12 +5,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { ListPlus, Plus } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import { cx, fold } from "../format";
+import { cx, fold, maskText, tl } from "../format";
 import { send } from "../lib/apiError";
 import { amountText } from "../lib/shopList";
 import Modal from "./Modal";
 
-export interface Suggestion { text: string; group_key: string | null; label: string; source: "recent" | "own" | "group" | string; count?: number | null }
+export interface Suggestion { text: string; group_key: string | null; label: string; source: "recent" | "own" | "product" | "group" | string; count?: number | null;
+  /** source "product": kendi aldığın ürünün adı, son fiyatı ve yeri */
+  last_price?: number | null; place?: string | null }
 export interface Frequent { text: string; group_key: string | null; label: string; count: number; last_date?: string | null }
 export interface Due extends Frequent { qty: number; unit: string; interval_days: number; days_since: number; reason: string }
 
@@ -46,7 +48,7 @@ export function SuggestList({ id, items, active, onPick, className }: {
         <li key={`${s.text}|${s.group_key ?? ""}`} id={`${id}-${i}`} role="option" aria-selected={i === active}
           className={cx("flex cursor-pointer items-center gap-3 px-3 py-2 text-sm", i === active ? "bg-stone-100 dark:bg-stone-800" : "hover:bg-stone-50 dark:hover:bg-stone-800/60")}
           onMouseDown={(e) => { e.preventDefault(); onPick(s); }}>
-          <span className="min-w-0 flex-1 break-words">{s.label || s.text}</span>
+          <span className="min-w-0 flex-1 break-words">{s.source === "product" ? `${s.text}${s.last_price != null ? ` · son ${maskText(tl(s.last_price))}` : ""}` : s.label || s.text}</span>
           {srcText(s) && <span className="shrink-0 text-xs text-stone-500 dark:text-stone-400">{srcText(s)}</span>}
         </li>
       ))}
