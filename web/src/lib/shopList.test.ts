@@ -68,7 +68,7 @@ test("tek dipnot: il ve ulusal yazılmaz", () => {
   assert.equal(priceFootnote([{ source: "resmi" }], TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)");
   // sunucunun kaynak yazısı varsa o yazılır (demoda uydurma veri notu; TÜBİTAK adı geçmez)
   const demo = "Örnek veri: demodaki fiyatlar uydurmadır, gerçek market fiyatı değildir";
-  assert.equal(priceFootnote([{ source: "resmi", date: "2026-11-06", attribution: demo }], TODAY), `${demo} · dün`);
+  assert.equal(priceFootnote([{ source: "resmi", date: "2026-11-06", attribution: demo }], TODAY), demo);
   assert.ok(!priceFootnote([{ source: "resmi", attribution: demo }], TODAY)!.includes("TÜBİTAK"));
 });
 

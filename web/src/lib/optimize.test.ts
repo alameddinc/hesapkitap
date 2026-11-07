@@ -58,14 +58,14 @@ test("karşılaştırma satırları", () => {
 
 test("kaynak satırı ve adlar", () => {
   // sunucunun kaynak yazısı (sources) olduğu gibi; yoksa (eski sunucu) "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)"
-  assert.equal(sourceLine(R, TODAY), "Kaynak: Market Fiyatı · bugün · fişlerin · topluluk");
+  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · bugün · fişlerin · topluluk");
   assert.equal(sourceLine({ ...R, sources: [] }, TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · bugün · fişlerin · topluluk");
   assert.equal(sourceLine({ ...R, sources: [], source_info: { kinds: ["resmi"], resmi_date: "2026-11-06", national: false } }, TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün");
   assert.equal(sourceLine({ ...R, source_info: { kinds: ["own", "community"], resmi_date: null, national: false } }, TODAY), "Fiyatlar: fişlerin · topluluk");
   // sunucunun kaynak yazısı (sources): demoda uydurma veri notu, TÜBİTAK adı geçmez
   const demo = "Örnek veri: demodaki fiyatlar uydurmadır, gerçek market fiyatı değildir";
   const d = sourceLine({ ...R, sources: [demo], source_info: { kinds: ["resmi", "own"], resmi_date: "2026-11-07", national: false } }, TODAY);
-  assert.equal(d, `${demo} · bugün · fişlerin`);
+  assert.equal(d, `${demo} · fişlerin`);
   assert.ok(!d.includes("TÜBİTAK"));
   assert.equal(namesLine("Fiyatı bilinmeyen", [9, 7], new Map([[9, "Örnek Şey"]])), "Fiyatı bilinmeyen: Örnek Şey");
   assert.equal(namesLine("Bu planda yok", [], new Map()), "");

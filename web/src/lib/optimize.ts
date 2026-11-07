@@ -2,7 +2,7 @@
 // piyasa bandı (yetenek price_market; GET /api/prices/market, history[].vs_market): saf yazı hesapları.
 // Yazılar mobil (hesapkitap-mobile) ile birebir aynı. Tutar biçimi parametre: gizli tutar maskesi çağıranda.
 import { agoWord, ayrilma, bulunma } from "./priceView.ts";
-import { OFFICIAL_SOURCE } from "./shopList.ts";
+import { officialName } from "./shopList.ts";
 
 export interface OptLine {
   id: number; text: string; qty: number; group_label: string | null; price: number; line_total: number;
@@ -77,14 +77,12 @@ export function compareRows(r: Optimize, m: Money): string[] {
  *  yazısı verdiyse (sources[0]; demoda "Örnek veri: …") resmî kısım onunla, "Fiyatlar:" öneki olmadan. */
 export function sourceLine(r: Optimize, today: string): string {
   const k = r.source_info?.kinds ?? [];
-  const attr = k.includes("resmi") ? r.sources?.find(Boolean) ?? null : null;
+  const o = k.includes("resmi") ? officialName(r.sources?.find(Boolean)) : null;
   const parts: string[] = [];
-  if (k.includes("resmi")) {
-    parts.push([attr ?? OFFICIAL_SOURCE, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
-  }
+  if (o) parts.push(o.sample ? o.name : [o.name, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
   if (k.includes("own")) parts.push("fişlerin");
   if (k.includes("community")) parts.push("topluluk");
-  return parts.length ? `${attr ? "" : "Fiyatlar: "}${parts.join(" · ")}` : "";
+  return parts.length ? `${o?.sample ? "" : "Fiyatlar: "}${parts.join(" · ")}` : "";
 }
 
 /** "Fiyatı bilinmeyen: …" / "Bu planda yok: …" (adlar listeden) */
@@ -113,4 +111,4 @@ export function marketCaption(history: { date: string; price: number | null; vs_
 /** "Piyasa: Market Fiyatı · İstanbul" / "Piyasa: topluluk"; sunucu kaynak yazısı verdiyse (demoda "Örnek veri: …") o. */
 export const marketSource = (mk: Pick<Market, "days" | "region"> & { attribution?: string | null }) =>
   !mk.days.some((d) => d.source === "resmi") ? "Piyasa: topluluk"
-    : mk.attribution ? `${mk.attribution} · ${mk.region}` : `Piyasa: Market Fiyatı · ${mk.region}`;
+    : officialName(mk.attribution).sample ? `${mk.attribution} · ${mk.region}` : `Piyasa: Market Fiyatı · ${mk.region}`;

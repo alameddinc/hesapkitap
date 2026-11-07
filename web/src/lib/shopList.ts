@@ -75,14 +75,22 @@ export function chainName(chain: string | null | undefined): string {
 /** Sunucu kaynak yazısı vermediyse (eski sunucu) resmî teklifin dipnot adı. Demoda sunucu "Örnek veri: …" verir. */
 export const OFFICIAL_SOURCE = "Market Fiyatı (TÜBİTAK BİLGEM)";
 
+/** Sunucunun kaynak yazısı: Market Fiyatı'nınki ise ("Kaynak: Market Fiyatı (T.C. … / TÜBİTAK BİLGEM)") kısa ad (tam yazı
+ *  ipucunda), başka bir yazıysa (demo: "Örnek veri: …") olduğu gibi — mobil fiyatHesap.resmiKaynak ile aynı kural. */
+export function officialName(attribution?: string | null): { name: string; sample: boolean } {
+  const a = attribution?.trim();
+  return !a || /^Kaynak:\s*Market Fiyatı/.test(a) ? { name: OFFICIAL_SOURCE, sample: false } : { name: a, sample: true };
+}
+
 /** Tek dipnot (resmî teklif varsa; en yeni günün yaşı): sunucunun kaynak yazısı (attribution) olduğu gibi, yoksa
  *  "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün". İl ve "ulusal" yazılmaz. */
 export function priceFootnote(offers: { source: string; date?: string | null; attribution?: string | null }[], today: string): string | null {
   const r = offers.filter((o) => o.source === "resmi");
   if (!r.length) return null;
   const day = r.map((o) => o.date ?? "").filter(Boolean).sort().pop();
-  const attr = r.find((o) => o.attribution)?.attribution;
-  return `${attr ?? `Fiyatlar: ${OFFICIAL_SOURCE}`}${day ? ` · ${agoWord(day, today)}` : ""}`;
+  const k = officialName(r.find((o) => o.attribution)?.attribution);
+  if (k.sample) return k.name;
+  return `Fiyatlar: ${k.name}${day ? ` · ${agoWord(day, today)}` : ""}`;
 }
 
 // ---------------------------------------------------------------- satır fiyatı
