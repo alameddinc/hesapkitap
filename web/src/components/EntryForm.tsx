@@ -25,6 +25,8 @@ import SavedReceiptItems from "./receipt/SavedReceiptItems";
 import { checkItems, toServer, type ReceiptItem } from "./receipt/check";
 import { BookChoice, SaveSpender, useSaveTarget } from "./SaveTarget";
 import { bookHeaders, CACHED_NOTE, type BookKey } from "../lib/saveBook";
+import type { ShoppingLink } from "../lib/shopList";
+import { handleShoppingLink } from "./ShopReceiptLink";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const splitsOf = (r: unknown) =>
@@ -140,6 +142,11 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
     setParts(null); setWholeCat(null); setShares([]); setItems([]); setErr(null);
     setTimeout(() => document.getElementById("e-amt")?.focus(), 0);
   };
+  // yetenek shopping_receipt_link: fiş listeye bağlandıysa bildirimde söylenir, sorulacaksa pencere (ReceiptLinkHost)
+  const shopNote = (r: unknown) => {
+    const t = r && typeof r === "object" && "shopping_link" in r ? handleShoppingLink((r as { shopping_link?: ShoppingLink | null }).shopping_link) : null;
+    return t ? `Kaydedildi · ${t}` : null;
+  };
   const save = useSave(async (_again?: boolean) => {
     const amt = parseAmount(amount);
     if (!description.trim() || ((!isGross || kind !== "gelir") && (!(amt >= 0) || amount === ""))) throw new Error("Açıklama ve tutar gerekli");
@@ -174,10 +181,14 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
         ...shares.filter((x) => x.person.trim() && parseAmount(x.amount) > 0)
           .map((x) => ({ amount: parseAmount(x.amount), person: x.person.trim(), category: "" })),
       ] : null }, book);
-  }, (r, more) => (book && st.announce() ? (more ? again(null) : onClose()) : (more ? again : done)(isRecurring || rec ? "Sabit kalem kaydedildi"
+  }, (r, more) => {
+    const sn = book ? null : shopNote(r); // başka deftere kayıtta sorulmaz (bağlama açık defterde yapılır)
+    return (book && st.announce() ? (more ? again(null) : onClose()) : (more ? again : done)(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
     : r && typeof r === "object" && "debt_settled" in r && r.debt_settled ? `Kaydedildi · ${person} ile borç/alacak kapandı`
-    : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti, bir kez sayılır" : "Kaydedildi")));
+    : r && typeof r === "object" && "linked" in r && r.linked ? "Kaydedildi · ekstredeki işlemle eşleşti, bir kez sayılır"
+    : sn || "Kaydedildi"));
+  });
   const link = useSave((txnId: number | null) => api.linkEntry(editingEntry!.id, txnId),
     () => done("Eşleşme güncellendi"));
 

@@ -7,11 +7,23 @@ MEMBER_WRITES), "sadece görür" üye yalnız okur. Satırın metni ürün grubu
 Plan (plan()): işaretlenmemiş her satırın en ucuz zinciri (app/price_sources.py: kendi fişlerin + topluluk ortancası)
 ve "hepsini tek yerden" için zincir başına toplam: {chain, total, covered, missing, missing_ids} — en çok satırı
 karşılayan önce, eşitse ucuz olan. split_total: her satır kendi en ucuz zincirinden alınırsa toplam.
+
+Miktar (shopping_units): qty + unit (adet | kg | g | L | ml). Satır fiyatı = teklif × mult(): adette adet × paket fiyatı;
+kg / g / L / ml'de miktar grubun boyuna bölünür (g→kg, ml→L; "2,5 kg elma" × kilo fiyatı, "1,5 L süt" × 1 L'lik fiyat).
+Metinden okunur (parse_amount): "2.5 kg elma", "elma 2,5kg", "6x süt", "6 süt". Ağırlık / hacim yazısı ürünün bilinen
+bir paket boyuysa ("süt 1 L", "su 1,5 L") boy olarak kalır, değilse miktardır.
+Plan kaydı, tamamlama, geçmiş alışverişler ve fiş bağlama app/shopping_trips.py'dedir.
 """
 from app import db
 
 MAX_ITEMS = 200
 TEXT_MAX = 80
+UNITS = ("adet", "kg", "g", "L", "ml")
+UNIT_MAX = {"adet": 999, "kg": 999, "L": 999, "g": 99_999, "ml": 99_999}
+# tartılı satılan ürünler: ağırlık yazısı her zaman miktardır ("1 kg domates")
+WEIGHED_CATEGORIES = {"Meyve ve Sebze", "Et, Tavuk ve Balık"}
+_UNIT_WORDS = {"kg": "kg", "kilo": "kg", "kilogram": "kg", "g": "g", "gr": "g", "gram": "g", "l": "L", "lt": "L",
+               "litre": "L", "ml": "ml", "adet": "adet", "ad": "adet", "tane": "adet"}
 
 
 def _people() -> dict[int, str]:
@@ -89,11 +101,39 @@ def _sized(rs: list[dict], groups: list[dict | None]) -> list[tuple[dict | None,
     return out
 
 
+def amount_label(qty: float, unit: str | None) -> str:
+    """"2,5 kg", "6 adet", "500 g", "1,5 L"."""
+    q = f"{float(qty):g}".replace(".", ",")
+    return f"{q} {unit or 'adet'}"
+
+
+def mult(qty: float, unit: str | None, key: str | None) -> float | None:
+    """Teklif fiyatının çarpanı: adette adet (paket fiyatı × adet); kg / g / L / ml'de miktar ÷ grubun boyu (aynı
+    türde: ağırlık ↔ kg, hacim ↔ L). Grubun boyu bilinmiyor ya da tür uyuşmuyorsa None (fiyat hesaplanmaz)."""
+    from app import product_groups
+
+    unit = unit or "adet"
+    if unit == "adet":
+        return float(qty)
+    amount, fam = {"kg": (qty, "kg"), "g": (qty / 1000, "kg"), "L": (qty, "L"), "ml": (qty / 1000, "L")}[unit]
+    pu = product_groups.per_unit(key)
+    if not pu or pu[1] != fam:
+        return None
+    return amount / pu[0]
+
+
 def _out(r: dict, group: dict | None, names: dict[int, str], assumed: dict | None = None) -> dict:
-    return {"id": r["id"], "text": r["text"], "qty": r["qty"], "done": bool(r["done"]), "group": group,
-            "group_key": group["key"] if group else None, "assumed": assumed,
+    unit = r.get("unit") or "adet"
+    key = group["key"] if group else None
+    m = mult(r["qty"], unit, key) if key else None
+    return {"id": r["id"], "text": r["text"], "qty": r["qty"], "unit": unit,
+            "amount_label": amount_label(r["qty"], unit), "done": bool(r["done"]), "group": group,
+            "group_key": key, "assumed": assumed if unit == "adet" else None, "mult": m,
+            "unit_mismatch": bool(key and "|" in key and unit != "adet" and m is None),
             "added_by": r["added_by"], "added_by_name": names.get(r["added_by"]), "created_at": r["created_at"],
-            "done_at": r["done_at"]}
+            "done_at": r["done_at"],
+            "actual": ({"unit_price": r.get("actual_unit"), "line_total": r.get("actual_line"), "entry_id": r["entry_id"]}
+                       if r.get("entry_id") else None)}
 
 
 def list_items(with_best: bool = False) -> list[dict]:
@@ -114,13 +154,16 @@ def list_items(with_best: bool = False) -> list[dict]:
     names = _people()
     out = [_out(r, g, names, a) for r, (g, a) in zip(rs, sized)]
     if with_best:
-        from app import price_sources
+        from app import money, price_sources
 
         best = price_sources.best_offers([i["group"]["key"] for i in out if i["group"] and not i["done"]], limit=1)
         for i in out:
             o = (best.get(i["group"]["key"]) or [None])[0] if i["group"] and not i["done"] else None
             i["best"] = {k: o[k] for k in ("chain", "price", "unit_price_per", "per_unit", "source", "n") if k in o} \
                 if o else None
+            if i["best"]:
+                i["best"]["chain"] = price_sources.chain_name(i["best"]["chain"])
+                i["best"]["line_total"] = money.money(o["price"] * i["mult"]) if i["mult"] is not None else None
     return out
 
 
@@ -160,11 +203,87 @@ def _clean_text(text: str) -> str:
     return t
 
 
-def _clean_qty(qty) -> float:
+def _clean_qty(qty, unit: str = "adet") -> float:
     q = float(qty)
-    if not 0 < q <= 999:
-        raise ValueError("Adet 0 ile 999 arasında olmalı")
+    hi = UNIT_MAX.get(unit, 999)
+    if not 0 < q <= hi:
+        raise ValueError("Adet 0 ile 999 arasında olmalı" if unit == "adet" else f"Miktar 0 ile {hi:,} {unit} arasında olmalı".replace(",", "."))
     return round(q, 3)
+
+
+def _clean_unit(unit) -> str:
+    if unit is None or unit == "":
+        return "adet"
+    if unit not in UNITS:
+        raise ValueError("Birim adet, kg, g, L ya da ml olmalı")
+    return unit
+
+
+_NUM_RX = r"(\d{1,5}(?:[.,]\d{1,3})?)"
+_UNIT_RX = r"(kg|kilogram|kilo|gram|gr|g|litre|lt|l|ml|adet|ad|tane)"
+
+
+def _amount_parts(t: str) -> tuple[str, float, str] | None:
+    """Metindeki miktar: (ad, miktar, birim) ya da None. "2.5 kg elma", "elma 2,5kg", "6 adet yumurta", "süt 6 adet"."""
+    import re
+
+    for rx in (rf"{_NUM_RX}\s*{_UNIT_RX}\.?\s+(\D.*)", rf"(.*\D)\s+{_NUM_RX}\s*{_UNIT_RX}\.?"):
+        m = re.fullmatch(rx, t, re.IGNORECASE)
+        if not m:
+            continue
+        name, num, word = (m[3], m[1], m[2]) if rx.startswith(_NUM_RX) else (m[1], m[2], m[3])
+        name = name.strip(" ,-")
+        if not name:
+            return None
+        return name, float(num.replace(",", ".")), _UNIT_WORDS[word.lower().replace("ı", "i")]
+    return None
+
+
+def _pack_size(name: str, value: float, unit: str) -> bool:
+    """Ağırlık / hacim yazısı paket boyu mu ("süt 1 L") yoksa miktar mı ("2,5 kg elma")? Tartılı ürün (meyve, sebze,
+    et) hep miktar; ürünün bilinen boylarından biriyse (son 14 gün fiyat satırları) boy; ürünün aynı türde bilinen boyu
+    varsa miktar; hiç bilgi yoksa boy (metin olduğu gibi kalır)."""
+    from app import product_groups
+
+    g = _resolve([name])[0]
+    if not g:
+        return False
+    if g.get("category") in WEIGHED_CATEGORIES and unit in ("kg", "g"):
+        return False
+    base = g["key"].split("|", 1)[0]
+    sizes = common_sizes([base]).get(base, [])
+    grams = {"kg": ("g", 1000), "g": ("g", 1), "L": ("ml", 1000), "ml": ("ml", 1)}[unit]
+    key = f"{base}|{product_groups.size_key({'value': value * grams[1], 'base': grams[0], 'pack': 1})[0]}"
+    if key in sizes:
+        return True
+    fam = "kg" if unit in ("kg", "g") else "L"
+    return not any((product_groups.per_unit(k) or (0, ""))[1] == fam for k in sizes)
+
+
+def parse_amount(text: str, qty: float = 1, unit: str | None = None) -> tuple[str, float, str]:
+    """(ad, miktar, birim): miktar ve birim ayrıca verilmemişse (qty 1, unit boş) metinden: "2.5 kg elma" →
+    ("elma", 2.5, "kg"), "6x süt" / "6 süt" → ("süt", 6, "adet"); paket boyu metinde kalır ("süt 1 L")."""
+    import re
+
+    if unit not in (None, "", "adet") or qty != 1:
+        return text, qty, _clean_unit(unit)
+    t, q = _lead_qty(text, qty)
+    if q != 1 or t != text:
+        return t, q, "adet"
+    m = re.fullmatch(r"(\d{1,3})\s+(\D{2}.*)", text)  # "6 süt"
+    if m and 0 < int(m[1]) <= 999 and not _amount_parts(text):
+        return m[2].strip(), float(m[1]), "adet"
+    got = _amount_parts(text)
+    if not got:
+        return text, 1, "adet"
+    name, value, u = got
+    if not 0 < value <= UNIT_MAX[u]:
+        return text, 1, "adet"
+    if u == "adet":
+        return name, value, "adet"
+    if _pack_size(name, value, u):
+        return text, 1, "adet"
+    return name, value, u
 
 
 def _clean_key(key) -> str | None:
@@ -193,17 +312,17 @@ def _row_out(r: dict) -> dict:
     return _out(r, sg, _people(), a)
 
 
-def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None) -> dict:
-    t, q = _clean_text(text), _clean_qty(qty)
-    t, q = _lead_qty(t, q)
+def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None, unit: str | None = None) -> dict:
+    t, q, u = parse_amount(_clean_text(text), float(qty), unit)
+    t, q = _clean_text(t), _clean_qty(q, u)
     pin = _clean_key(group_key)
     with db.connect() as c:
         if c.execute("SELECT COUNT(*) FROM shopping_list").fetchone()[0] >= MAX_ITEMS:
             raise ValueError(f"Listede en fazla {MAX_ITEMS} satır olabilir")
     g = _resolve([t])[0]
     with db.connect() as c:
-        rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, added_by, pinned_key) VALUES (?, ?, ?, ?, ?)",
-                        (t, pin or (g["key"] if g else None), q, uid, pin)).lastrowid
+        rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, unit, added_by, pinned_key) VALUES (?, ?, ?, ?, ?, ?)",
+                        (t, pin or (g["key"] if g else None), q, u, uid, pin)).lastrowid
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
     if g and g.get("pending"):
         from app import product_groups
@@ -213,7 +332,7 @@ def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None
 
 
 def update(rid: int, data: dict) -> dict | None:
-    """text, qty, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş), group_key (boy seçimi; null kaldırır;
+    """text, qty, unit, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş), group_key (boy seçimi; null kaldırır;
     metin değişince seçim de kalkar)."""
     sets: dict = {}
     if data.get("text") is not None:
@@ -225,11 +344,15 @@ def update(rid: int, data: dict) -> dict | None:
         sets["pinned_key"] = _clean_key(data["group_key"])
         if sets["pinned_key"]:
             sets["group_key"] = sets["pinned_key"]
-    if data.get("qty") is not None:
-        sets["qty"] = _clean_qty(data["qty"])
     with db.connect() as c:
-        if not c.execute("SELECT 1 FROM shopping_list WHERE id = ?", (rid,)).fetchone():
-            return None
+        cur = c.execute("SELECT qty, unit FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+    if not cur:
+        return None
+    if data.get("unit") is not None:
+        sets["unit"] = _clean_unit(data["unit"])
+    if data.get("qty") is not None or "unit" in sets:
+        sets["qty"] = _clean_qty(data["qty"] if data.get("qty") is not None else cur["qty"], sets.get("unit") or cur["unit"])
+    with db.connect() as c:
         if sets:
             c.execute(f"UPDATE shopping_list SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), rid))
         if data.get("done") is not None:
@@ -260,12 +383,13 @@ def plan() -> dict:
     best = price_sources.best_offers(keys, limit=50)
     rows, chains = [], {}
     for it in items:
-        offers = best.get(it["group"]["key"], []) if it["group"] else []
-        rows.append({**{k: it[k] for k in ("id", "text", "qty", "group", "assumed")}, "best": offers[0] if offers else None,
-                     "offers": offers[:5]})
+        offers = best.get(it["group"]["key"], []) if it["group"] and it["mult"] is not None else []
+        offers = [{**o, "chain": price_sources.chain_name(o["chain"])} for o in offers]
+        rows.append({**{k: it[k] for k in ("id", "text", "qty", "unit", "group", "assumed")}, "best": offers[0] if offers else None,
+                     "offers": offers[:5], "mult": it["mult"]})
         for o in offers:
             ch = chains.setdefault(o["chain"], {"chain": o["chain"], "total": 0.0, "covered": 0, "ids": set()})
-            ch["total"] += it["qty"] * o["price"]
+            ch["total"] += it["mult"] * o["price"]
             ch["covered"] += 1
             ch["ids"].add(it["id"])
     all_ids = [it["id"] for it in items]
@@ -275,7 +399,7 @@ def plan() -> dict:
                         key=lambda x: (-x["covered"], x["total"], x["chain"]))
     priced = [r for r in rows if r["best"]]
     return {"items": rows, "chains": out_chains,
-            "split_total": money.money(sum(r["qty"] * r["best"]["price"] for r in priced)),
+            "split_total": money.money(sum(r["mult"] * r["best"]["price"] for r in priced)),
             "priced": len(priced), "unpriced_ids": [r["id"] for r in rows if not r["best"]]}
 
 
@@ -297,9 +421,9 @@ def _line(it: dict, o: dict) -> dict:
     """Plan satırı: birim teklif × adet."""
     from app import money
 
-    out = {"id": it["id"], "text": it["text"], "qty": it["qty"],
+    out = {"id": it["id"], "text": it["text"], "qty": it["qty"], "unit": it["unit"], "amount_label": it["amount_label"],
            "group_label": it["group"]["label"] if it["group"] else None,
-           "price": o["price"], "line_total": money.money(it["qty"] * o["price"]),
+           "price": o["price"], "line_total": money.money(it["mult"] * o["price"]),
            "unit_price_per": o.get("unit_price_per"), "per_unit": o.get("per_unit"), "brand": o.get("brand"),
            "source": o["source"], "date": o.get("date"), "assumed": it.get("assumed")}
     if o.get("region"):
@@ -329,9 +453,13 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
     best = price_sources.best_offers([i["group"]["key"] for i in items if i["group"]], limit=50)
     offers: dict[int, dict[str, dict]] = {}  # satır → zincir → teklif
     for it in items:
-        offs = best.get(it["group"]["key"], []) if it["group"] else []
+        offs = best.get(it["group"]["key"], []) if it["group"] and it["mult"] is not None else []
         if offs:
-            offers[it["id"]] = {o["chain"]: o for o in offs}
+            offers[it["id"]] = {}
+            for o in offs:  # görünen zincir adı ("BİM (Dost)" → "BİM"); aynı ada düşen iki teklifin ucuzu
+                ch = price_sources.chain_name(o["chain"])
+                if ch not in offers[it["id"]] or o["price"] < offers[it["id"]][ch]["price"]:
+                    offers[it["id"]][ch] = {**o, "chain": ch}
     priced = [it for it in items if it["id"] in offers]
     unpriced = [it["id"] for it in items if it["id"] not in offers]
 
@@ -339,7 +467,7 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
     for it in priced:
         for ch, o in offers[it["id"]].items():
             c = chains.setdefault(ch, {"chain": ch, "total": 0.0, "covered": 0})
-            c["total"] += it["qty"] * o["price"]
+            c["total"] += it["mult"] * o["price"]
             c["covered"] += 1
     ranked = sorted(chains.values(), key=lambda c: (-c["covered"], c["total"], c["chain"]))
     cand = [c["chain"] for c in ranked[:MAX_CHAINS]]
@@ -438,12 +566,14 @@ _HINTS = {
     "pending": "Ürün tanınıyor; fiyatı birazdan gelir.",
     "no_size": "Ürüne boy ekle: \u201csüt 1 L\u201d.",
     "no_price": "Bu ürünün fiyatı henüz yok; fiş okuttukça fiyatlar gelir.",
+    "unit_mismatch": "Bu ürün bu birimle satılmıyor; miktarı adet olarak seç.",
 }
 
 
 def _unpriced(it: dict) -> dict:
     g = it.get("group")
-    reason = "no_group" if not g else "pending" if g.get("pending") else "no_size" if "|" not in g["key"] else "no_price"
+    reason = "no_group" if not g else "pending" if g.get("pending") else "unit_mismatch" if it.get("unit_mismatch") \
+        else "no_size" if "|" not in g["key"] and (it.get("unit") or "adet") == "adet" else "no_price"
     hint = _HINTS[reason]
     if reason == "no_size":  # satırın kendi adıyla örnek: "Deterjan" → "deterjan 1 L" ya da "deterjan 500 g"
         t = it["text"].strip().lower()

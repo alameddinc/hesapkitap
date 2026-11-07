@@ -36,14 +36,17 @@ test("başlık, alt satır, durak", () => {
   assert.equal(stopTitle({ chain: "BİM", total: 1020, items: Array(8).fill(line(1, "BİM", 1)) }, m), "BİM'den al (8 ürün) · ₺1.020");
 });
 
-test("satır: adet, marka, birim fiyat, yaş", () => {
+test("satır: adet, birim, birim fiyat, yaş (marka yazılmaz)", () => {
   const l = { id: 1, text: "Zeytinyağı 1 L", qty: 2, group_label: null, price: 59.9, line_total: 119.8, unit_price_per: 59.9, per_unit: "L", brand: "Örnekmarka", source: "resmi", date: "2026-11-06" };
   assert.equal(lineTitle(l), "2× Zeytinyağı 1 L");
   assert.equal(lineTitle({ ...l, qty: 1 }), "Zeytinyağı 1 L");
-  assert.equal(lineSub(l, TODAY, m), "Örnekmarka · ₺59,9/L · dün");
-  assert.equal(lineSub({ ...l, date: "2026-11-04" }, TODAY, m), "Örnekmarka · ₺59,9/L · 3 gün önce");
+  assert.equal(lineTitle({ ...l, text: "elma", qty: 2.5, unit: "kg" }), "2,5 kg elma");
+  assert.equal(lineTitle({ ...l, qty: 6, unit: "adet" }), "6× Zeytinyağı 1 L");
+  assert.equal(lineSub(l, TODAY, m), "₺59,9/L · dün");
+  assert.equal(lineSub({ ...l, date: "2026-11-04" }, TODAY, m), "₺59,9/L · 3 gün önce");
   assert.equal(lineSub({ ...l, date: TODAY, brand: null, unit_price_per: null }, TODAY, m), "");
-  assert.equal(lineSub({ ...l, source: "own", date: "2026-10-01" }, TODAY, m), "Örnekmarka · ₺59,9/L");
+  assert.equal(lineSub(l, TODAY, m, "2026-11-06"), "₺59,9/L");  // dipnot zaten "dün" diyor
+  assert.equal(lineSub({ ...l, source: "own", date: "2026-10-01" }, TODAY, m), "₺59,9/L");
 });
 
 test("karşılaştırma satırları", () => {
@@ -54,8 +57,8 @@ test("karşılaştırma satırları", () => {
 });
 
 test("kaynak satırı ve adlar", () => {
-  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı · bugün · İstanbul; BİM/A101/ŞOK/Migros ulusal · fişlerin · topluluk");
-  assert.equal(sourceLine({ ...R, source_info: { kinds: ["resmi"], resmi_date: "2026-11-06", national: false } }, TODAY), "Fiyatlar: Market Fiyatı · dün · İstanbul");
+  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk");
+  assert.equal(sourceLine({ ...R, source_info: { kinds: ["resmi"], resmi_date: "2026-11-06", national: false } }, TODAY), "Fiyatlar: Market Fiyatı · dün");
   assert.equal(sourceLine({ ...R, source_info: { kinds: ["own", "community"], resmi_date: null, national: false } }, TODAY), "Fiyatlar: fişlerin · topluluk");
   assert.equal(namesLine("Fiyatı bilinmeyen", [9, 7], new Map([[9, "Örnek Şey"]])), "Fiyatı bilinmeyen: Örnek Şey");
   assert.equal(namesLine("Bu planda yok", [], new Map()), "");

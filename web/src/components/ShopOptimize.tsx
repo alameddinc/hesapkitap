@@ -1,13 +1,16 @@
 // Alışveriş listesi → "Nereye gideyim?" (yetenek shopping_optimize): GET /api/shopping-list/optimize ile en iyi 1 / 2 / 3
 // duraklı plan. Sonuç bir kez hesaplanır, alışveriş sırasında işaretlemek (done) planı yeniden hesaplatmaz; işaret
 // listenin önbelleğinden okunur. "Yeniden hesapla" elle. Yazılar mobil (hesapkitap-mobile AlisverisListesi) ile aynı.
+// Liste v3 (yetenek shopping_trips): birincil eylem "Bu planla git" (PUT /api/shopping-list/saved-plan {k}); satırlarda
+// yalnız zincir adı (marka, il, şube yok); altta tek dipnot "Fiyatlar: Market Fiyatı · dün", yasal kaynak ipucunda.
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, MapPinned, RefreshCw, X } from "lucide-react";
+import { ChevronDown, ChevronRight, MapPinned, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
 import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
 import type { Headline, UnpricedInfo } from "../lib/priceAdvice";
 import { compareRows, headline, lineSub, lineTitle, namesLine, sourceLine, stopTitle, subline, type Optimize } from "../lib/optimize";
+import { chainName } from "../lib/shopList";
 import Segmented from "./Segmented";
 
 export const OPTIMIZE = ["shopping-optimize"] as const;
@@ -18,13 +21,19 @@ type OptimizeV2 = Optimize & { headline?: Headline | null; unpriced_info?: Unpri
 
 /** data verilirse (yetenek shopping_headline: listenin sabit çubuğu planı zaten aldı) kendi isteğini atmaz; başlık
  *  sunucunun "Önerimiz" cümlesi, durak başına "Buradan al:" listesi, fiyatsız satırlar için ne yapmalı. */
-export default function ShopOptimize({ items, ro, onTick, open: openP, data, onClose, onRefetch, fetching }: {
+export default function ShopOptimize({ items, ro, onTick, open: openP, data, onClose, onRefetch, fetching, onSavePlan, savingPlan, onClearPlan, onFix, initialK }: {
   items: { id: number; text: string; done: boolean }[]; ro: boolean; onTick: (id: number, done: boolean) => void;
   open?: boolean; data?: OptimizeV2 | null; onClose?: () => void; onRefetch?: () => void; fetching?: boolean;
+  /** yetenek shopping_trips: "Bu planla git" (seçili durak sayısı); kayıtlı plan varsa "Planı kaldır" */
+  onSavePlan?: (k: number) => void; savingPlan?: boolean; onClearPlan?: () => void;
+  /** fiyatsız satıra dokununca düzelt penceresi */
+  onFix?: (id: number) => void;
+  /** kayıtlı planın durak sayısı: açılınca o seçili */
+  initialK?: number | null;
 }) {
   const [openS, setOpen] = useState(false);
   const open = openP ?? openS;
-  const [k, setK] = useState<number | null>(null);
+  const [k, setK] = useState<number | null>(initialK ?? null);
   const ext = openP !== undefined;
   const own = useQuery({
     queryKey: OPTIMIZE, enabled: open && !ext, retry: false, staleTime: Infinity, gcTime: 30 * 60_000,
@@ -82,13 +91,13 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
             {plan.stops.map((s) => (
               <details key={s.chain} open className="group rounded-lg border border-stone-200 dark:border-stone-700" data-testid="durak">
                 <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 font-medium [&::-webkit-details-marker]:hidden">
-                  <span className="min-w-0 flex-1 break-words tabular-nums">{r.headline ? <><span className="block text-xs font-normal text-stone-500">Buradan al:</span>{maskText(`${s.chain} · ${s.items.length} ürün · ${money(s.total)}`)}</> : maskText(stopTitle(s, money))}</span>
+                  <span className="min-w-0 flex-1 break-words tabular-nums">{r.headline ? <><span className="block text-xs font-normal text-stone-500">Buradan al:</span>{maskText(`${chainName(s.chain)} · ${s.items.length} ürün · ${money(s.total)}`)}</> : maskText(stopTitle({ ...s, chain: chainName(s.chain) }, money))}</span>
                   <ChevronDown size={16} className="shrink-0 text-stone-500 transition-transform group-open:rotate-180" aria-hidden />
                 </summary>
                 <ul className="divide-y divide-stone-100 border-t border-stone-100 dark:divide-stone-800 dark:border-stone-800">
                   {s.items.map((l) => {
                     const d = !!done.get(l.id);
-                    const sub = lineSub(l, today, money);
+                    const sub = lineSub(l, today, money, r.source_info?.resmi_date ?? today);
                     return (
                       <li key={l.id} className="flex items-center gap-3 px-3 py-2">
                         <input type="checkbox" className="size-5 shrink-0" checked={d} disabled={ro}
@@ -113,27 +122,47 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
               </ul>
             </div>
           )}
+          {onSavePlan && !ro && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button type="button" className="btn-primary flex-[1_1_12rem] justify-center" data-testid="planla-git" disabled={savingPlan || q.isFetching}
+                onClick={() => onSavePlan(plan.k)}>Bu planla git</button>
+              {onClearPlan && <button type="button" className="btn-ghost text-sm" onClick={onClearPlan}>Planı kaldır</button>}
+            </div>
+          )}
           {!!r.unpriced_info?.length && (
             <div className="rounded-lg bg-stone-50 px-3 py-2 dark:bg-stone-800/60" data-testid="fiyatsiz">
               <p className="text-xs font-semibold text-stone-600 dark:text-stone-300">Fiyatını bulamadıklarımız</p>
               <ul className="mt-0.5 space-y-0.5 text-sm">
-                {r.unpriced_info.map((u) => <li key={u.id} className="break-words"><b className="font-medium">{u.text}</b> <span className="text-stone-500">— {u.hint}</span></li>)}
+                {r.unpriced_info.map((u) => (
+                  <li key={u.id} className="break-words">
+                    {onFix && !ro ? (
+                      <button type="button" className="-mx-1 flex w-full items-start gap-1 rounded px-1 py-0.5 text-left hover:bg-stone-100 dark:hover:bg-stone-700/60"
+                        onClick={() => onFix(u.id)} aria-label={`${u.text}: düzelt`}>
+                        <span className="min-w-0 flex-1"><b className="font-medium">{u.text}</b> <span className="text-stone-500 dark:text-stone-400">— {u.hint}</span></span>
+                        <ChevronRight size={16} className="mt-0.5 shrink-0 text-stone-400" aria-hidden />
+                      </button>
+                    ) : <><b className="font-medium">{u.text}</b> <span className="text-stone-500">— {u.hint}</span></>}
+                  </li>
+                ))}
               </ul>
             </div>
           )}
           {[namesLine("Bu planda yok", plan.missing, names), r.unpriced_info ? "" : namesLine("Fiyatı bilinmeyen", r.unpriced, names)].filter(Boolean).map((t) => (
             <p key={t} className="text-sm break-words text-stone-600 dark:text-stone-300">{t}</p>
           ))}
-          <div className="space-y-0.5 border-t border-stone-100 pt-2 dark:border-stone-800">
-            {src && <p className="text-xs text-stone-500" data-testid="optimum-kaynak">{src}</p>}
-            {r.sources.map((a) => <p key={a} className="text-[11px] text-stone-400 dark:text-stone-500">{a}</p>)}
-          </div>
         </>
       )}
-      {!q.isLoading && (
-        <button type="button" className="btn-ghost px-2 py-1 text-sm" disabled={q.isFetching} onClick={() => { setK(null); void q.refetch(); }}>
-          <RefreshCw size={14} className={cx(q.isFetching && "animate-spin")} aria-hidden /> Yeniden hesapla</button>
-      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-stone-100 pt-2 dark:border-stone-800">
+        {!q.isLoading && (
+          <button type="button" className="btn-ghost -ml-2 px-2 py-1 text-sm" disabled={q.isFetching} onClick={() => { setK(null); void q.refetch(); }}>
+            <RefreshCw size={14} className={cx(q.isFetching && "animate-spin")} aria-hidden /> Yeniden hesapla</button>
+        )}
+        {/* tek dipnot; yasal kaynak yazısı ipucunda (ekran okuyucu için de sr-only) */}
+        {r && plan && src && (
+          <p className="ml-auto text-xs text-stone-500 dark:text-stone-400" data-testid="optimum-kaynak" title={r.sources.join(" ") || undefined}>
+            {src}{r.sources.length > 0 && <span className="sr-only"> ({r.sources.join(" ")})</span>}</p>
+        )}
+      </div>
     </section>
   );
 }

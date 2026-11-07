@@ -5,6 +5,8 @@ import { agoWord, ayrilma, bulunma } from "./priceView.ts";
 
 export interface OptLine {
   id: number; text: string; qty: number; group_label: string | null; price: number; line_total: number;
+  /** yetenek shopping_units: "adet" | "kg" | "g" | "L" | "ml" ve "2,5 kg" */
+  unit?: string | null; amount_label?: string | null;
   unit_price_per?: number | null; per_unit?: string | null; brand?: string | null; source: string; date?: string | null; region?: string | null;
 }
 export interface OptStop { chain: string; total: number; items: OptLine[] }
@@ -21,14 +23,16 @@ export interface Optimize {
 
 type Money = (n: number) => string;
 
-/** "2× Zeytinyağı 1 L" (adet 1 ise yalnız ad) */
-export const lineTitle = (l: Pick<OptLine, "qty" | "text">) =>
-  l.qty && l.qty !== 1 ? `${l.qty.toLocaleString("tr-TR", { maximumFractionDigits: 3 })}× ${l.text}` : l.text;
+/** "2× Zeytinyağı 1 L" (adet 1 ise yalnız ad); birimliyse "2,5 kg elma" */
+export const lineTitle = (l: Pick<OptLine, "qty" | "text" | "unit">) =>
+  l.unit && l.unit !== "adet" ? `${(l.qty ?? 1).toLocaleString("tr-TR", { maximumFractionDigits: 3, useGrouping: false })} ${l.unit} ${l.text}`
+    : l.qty && l.qty !== 1 ? `${l.qty.toLocaleString("tr-TR", { maximumFractionDigits: 3 })}× ${l.text}` : l.text;
 
-/** "Marka · ₺59,90/L · dün" (resmî teklif bugünden eskiyse yaşı) */
-export function lineSub(l: OptLine, today: string, m: Money): string {
-  return [l.brand || null, l.unit_price_per != null && l.per_unit ? `${m(l.unit_price_per)}/${l.per_unit}` : null,
-    l.source === "resmi" && l.date && l.date < today ? agoWord(l.date, today) : null].filter(Boolean).join(" · ");
+/** "₺59,90/L · dün" (resmî teklif ref gününden — varsayılan bugün; dipnot varken dipnotun günü — eskiyse yaşı). Marka
+ *  ve il / şube satırda yazılmaz (sade: yalnız zincir). */
+export function lineSub(l: OptLine, today: string, m: Money, ref: string = today): string {
+  return [l.unit_price_per != null && l.per_unit ? `${m(l.unit_price_per)}/${l.per_unit}` : null,
+    l.source === "resmi" && l.date && l.date < ref ? agoWord(l.date, today) : null].filter(Boolean).join(" · ");
 }
 
 /** "En iyi plan: BİM + Migros · ₺1.200" (önerilen) / "3 duraklı plan: …" */
@@ -66,13 +70,13 @@ export function compareRows(r: Optimize, m: Money): string[] {
   return out;
 }
 
-/** "Fiyatlar: Market Fiyatı · bugün · İstanbul; BİM/A101/ŞOK/Migros ulusal · fişlerin · topluluk" */
+/** Tek dipnot: "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk" (il ve "ulusal" notu yazılmaz; yasal kaynak
+ *  yazısı dipnotun ipucunda). */
 export function sourceLine(r: Optimize, today: string): string {
   const k = r.source_info?.kinds ?? [];
   const parts: string[] = [];
   if (k.includes("resmi")) {
-    parts.push([`Market Fiyatı`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null, r.region].filter(Boolean).join(" · ")
-      + (r.source_info.national ? "; BİM/A101/ŞOK/Migros ulusal" : ""));
+    parts.push([`Market Fiyatı`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
   }
   if (k.includes("own")) parts.push("fişlerin");
   if (k.includes("community")) parts.push("topluluk");
