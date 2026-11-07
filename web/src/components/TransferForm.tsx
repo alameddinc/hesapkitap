@@ -15,6 +15,7 @@ import type { Debt } from "./Debts";
 import { isQuotaFull, QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "./DocQuota";
 import { useCap, useOpenEntry, useSave } from "./hooks";
 import Modal from "./Modal";
+import { ReportProblem } from "./Feedback";
 import Segmented from "./Segmented";
 
 export type Yon = "giden" | "gelen";
@@ -212,7 +213,8 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
             </span>
           </div>
         )}
-        {readErr && <Note kind="warn">{readErr}</Note>}
+        {readErr && <Note kind="warn">{readErr}
+          <span className="mt-1 block"><ReportProblem subject="Dekont okunamadı" error={readErr} code="dekont_unreadable" /></span></Note>}
         {dup != null && (
           <div role="alert" data-testid="dekont-zaten" className="flex items-center gap-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
             <AlertTriangle size={16} className="shrink-0" aria-hidden />

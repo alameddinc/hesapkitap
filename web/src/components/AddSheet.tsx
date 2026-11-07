@@ -3,6 +3,7 @@ import { bodyOf, failureText, UNEXPECTED } from "../lib/apiError";
 import type { BillDraft } from "../api";
 import { useRef, useState } from "react";
 import { useCap, useMeta, useDemo } from "./hooks";
+import { ReportProblem } from "./Feedback";
 import { classifyPdf, parseDekont, type DekontResult } from "./TransferForm";
 import { ApiError } from "../lib/apiError";
 import Modal from "./Modal";
@@ -115,7 +116,8 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
   const dekontRef = useRef<HTMLInputElement>(null);
   // dosya fiş/fatura diye seçildi ama PDF metni havale/EFT dekontu (documents/classify, hak düşmez): önce sorulur
   const [redirect, setRedirect] = useState<File | null>(null);
-  const [fullDekont, setFullDekont] = useState(false); // hak doldu uyarısı dekont için: elle transfer
+  const [fullDekont, setFullDekont] = useState(false);
+  const [errKind, setErrKind] = useState<"fis" | "dekont">("fis"); // hata hangi okumadan (Sorun bildir konusu) // hak doldu uyarısı dekont için: elle transfer
   const demo = useDemo().data;
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -145,6 +147,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
       const res = await fetch("/api/documents/parse", { method: "POST", body: fd });
       await handle(res, parts[0]?.blob);
     } catch (e) {
+      setErrKind("fis");
       setErr((e as Error).message);
     } finally {
       setBusy(false);
@@ -204,7 +207,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
       onTransfer(await parseDekont(f));
     } catch (e) {
       if (e instanceof ApiError && isQuotaFull(e.body)) { setFullDekont(true); setFull(e.body); }
-      else setErr((e as Error).message || "Dekont okunamadı");
+      else { setErrKind("dekont"); setErr((e as Error).message || "Dekont okunamadı"); }
     } finally {
       setBusy(false);
       setRedirect(null);
@@ -314,7 +317,12 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
         <button className="w-full pt-1 text-center text-xs text-stone-500 underline" onClick={() => onBill({})}>
           Faturayı dosyasız elle gir
         </button>
-        {err && <p className="pt-1 text-sm text-red-600">{err}</p>}
+        {err && (
+          <div className="space-y-1 pt-1" role="alert">
+            <p className="text-sm text-red-600 dark:text-red-400">{err}</p>
+            <ReportProblem subject={errKind === "dekont" ? "Dekont okunamadı" : "Fiş okunamadı"} error={err} code={errKind === "dekont" ? "dekont_unreadable" : "receipt_unreadable"} />
+          </div>
+        )}
       </div>
     </Modal>
   );

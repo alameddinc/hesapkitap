@@ -13,6 +13,7 @@ import StatementHelp from "../components/StatementHelp";
 import StatementCard from "../components/StatementCard";
 import { QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "../components/DocQuota";
 import { prepare, uploadInBatches } from "../lib/batchUpload";
+import { ReportProblem } from "../components/Feedback";
 
 export default function Statements() {
   const ui = useUI();
@@ -166,7 +167,10 @@ export default function Statements() {
                 : <CheckCircle2 className="text-green-600" size={18} />}
               <div>
                 <div className="font-medium">{r.filename}</div>
-                {r.status === "error" && <div className="text-red-600">{r.message}</div>}
+                {r.status === "error" && <div className="space-y-1">
+                  <div className="text-red-600 dark:text-red-400">{r.message}</div>
+                  <ReportProblem subject="Ekstre okunamadı" error={`${r.filename}: ${r.message ?? ""}`} code="statement_unreadable" />
+                </div>}
                 {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500 dark:text-stone-400">{r.message ?? "Zaten yüklü, atlandı."}</div>}
                 {r.status === "ask" && (() => {

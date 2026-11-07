@@ -2,6 +2,7 @@ import { CheckCircle2, ImagePlus, MessageSquareWarning, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../lib/apiError";
 import Modal from "./Modal";
+import { useMeta } from "./hooks";
 
 // Uygulama içi "Sorun bildir" (sunucu yeteneği "feedback"): mesaj + en çok 3 ekran görüntüsü yöneticiye gider (GitHub'a
 // değil). POST /api/feedback multipart: message, screenshots, context (JSON: route, platform, error, code, book).
@@ -130,6 +131,27 @@ export function FeedbackButton({ className, label = "Sorun bildir", icon = true 
         {icon && <MessageSquareWarning size={16} aria-hidden />}{label}
       </button>
       {open && <FeedbackDialog onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+const ISSUES = "https://github.com/alameddinc/hesapkitap/issues/new";
+
+/** Hata ekranındaki "Sorun bildir" (fiş / ekstre okunamadı): hata metni ve kodu bağlama eklenir (konu: hatanın
+ *  görüldüğü yer, metnin önüne). Sunucu "feedback" bilmiyorsa GitHub'da konu açılır ("Bize bildir"). */
+export function ReportProblem({ subject, error, code, className }: { subject: string; error?: string | null; code: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const on = !!useMeta().data?.capabilities?.includes("feedback");
+  const cls = className ?? "inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline dark:text-blue-400";
+  if (!on) return (
+    <a className={cls} target="_blank" rel="noreferrer"
+      href={`${ISSUES}?title=${encodeURIComponent(subject)}&body=${encodeURIComponent(`Hata: ${error ?? "?"} (${code})\nİstemci: web`)}`}>
+      <MessageSquareWarning size={14} aria-hidden />Bize bildir</a>
+  );
+  return (
+    <>
+      <button type="button" className={cls} onClick={() => setOpen(true)}><MessageSquareWarning size={14} aria-hidden />Sorun bildir</button>
+      {open && <FeedbackDialog onClose={() => setOpen(false)} context={{ error: [subject, error].filter(Boolean).join(": "), code }} />}
     </>
   );
 }
