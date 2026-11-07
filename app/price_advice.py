@@ -91,6 +91,8 @@ def attach(products: list[dict], today: date | None = None) -> None:
         st = [s for s in p.get("stores") or [] if s.get("price") is not None]
         if len(st) >= 2:
             st = sorted(st, key=lambda s: (s["price"], s["store"]))
+            if st[-1]["price"] - st[0]["price"] < MIN_DIFF:  # her yerde aynı fiyat: söylenecek bir şey yok
+                continue
             p["advice"] = {"kind": "store_compare", "cheapest": st[0]["store"],
                            "diff": money.money(st[-1]["price"] - st[0]["price"]),
                            "stores": [{"store": s["store"], "price": s["price"], "date": s.get("date")} for s in st]}
