@@ -54,7 +54,7 @@ export interface UI {
   error: (msg: string) => void;
 }
 
-export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris";
+export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris" | "faiz";
 
 export const UIContext = createContext<UI | null>(null);
 
