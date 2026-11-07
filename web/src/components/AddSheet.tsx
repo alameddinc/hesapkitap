@@ -1,15 +1,17 @@
-import { Camera, FileText, Loader2, Minus, Plus, Repeat } from "lucide-react";
+import { ArrowLeftRight, Camera, FileText, Info, Loader2, Minus, Plus, Repeat } from "lucide-react";
 import { bodyOf, failureText, UNEXPECTED } from "../lib/apiError";
 import type { BillDraft } from "../api";
 import { useRef, useState } from "react";
-import { useMeta, useDemo } from "./hooks";
+import { useCap, useMeta, useDemo } from "./hooks";
+import { classifyPdf, parseDekont, type DekontResult } from "./TransferForm";
+import { ApiError } from "../lib/apiError";
 import Modal from "./Modal";
 import { isQuotaFull, QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "./DocQuota";
 import type { EntryDraft } from "../ui";
 import type { ReceiptCheck } from "./receipt/check";
 
 /** Fotoğrafı yüklemeden önce küçült: mobil fotoğraflar 5-12 MB, 1600px yeterli ve token maliyeti düşer. */
-async function shrink(file: File, max = 1600): Promise<Blob> {
+export async function shrink(file: File, max = 1600): Promise<Blob> {
   const bmp = await createImageBitmap(file);
   const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const canvas = document.createElement("canvas");
@@ -92,12 +94,19 @@ function Opt({ icon, title, sub, onClick, disabled }: {
   );
 }
 
-export default function AddSheet({ onClose, onPick, onBill }: {
+export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
   onClose: () => void;
   onPick: (d: EntryDraft) => void;
   onBill: (d: BillDraft) => void;
+  /** Havale/EFT dekontu okundu (ya da elle transfer): Transfer ekle formu */
+  onTransfer?: (d: DekontResult | null) => void;
 }) {
   const meta = useMeta();
+  const dekontOn = useCap("dekont_parse") && !!onTransfer;
+  const dekontRef = useRef<HTMLInputElement>(null);
+  // dosya fiş/fatura diye seçildi ama PDF metni havale/EFT dekontu (documents/classify, hak düşmez): önce sorulur
+  const [redirect, setRedirect] = useState<File | null>(null);
+  const [fullDekont, setFullDekont] = useState(false); // hak doldu uyarısı dekont için: elle transfer
   const demo = useDemo().data;
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -177,11 +186,34 @@ export default function AddSheet({ onClose, onPick, onBill }: {
     }
   }
 
+  /** Havale/EFT dekontu (foto/PDF) → Transfer ekle formu dolu açılır; okunamadıysa dosya ekli, alanlar boş. */
+  async function readDekont(f: File | undefined) {
+    if (!f || !onTransfer) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      onTransfer(await parseDekont(f));
+    } catch (e) {
+      if (e instanceof ApiError && isQuotaFull(e.body)) { setFullDekont(true); setFull(e.body); }
+      else setErr((e as Error).message || "Dekont okunamadı");
+    } finally {
+      setBusy(false);
+      setRedirect(null);
+      void quota.refresh();
+    }
+  }
+
   /** Galeri/dosya: PDF tek başına; fotoğraflar (en fazla 4) aynı fişin parçaları sayılır. */
   async function onFiles(list: FileList | null) {
     const files = [...(list ?? [])];
     if (!files.length) return;
     const pdf = files.find((f) => f.type === "application/pdf");
+    if (pdf && dekontOn) { // PDF metni dekont gibiyse fatura diye okutmadan sor
+      setBusy(true);
+      const s = await classifyPdf(pdf);
+      setBusy(false);
+      if (s === "dekont") return setRedirect(pdf);
+    }
     if (pdf) return parse([{ blob: pdf, name: pdf.name }]);
     try {
       parse(await Promise.all(files.slice(0, 4).map(async (f, i) => ({ blob: await shrink(f), name: `parca${i + 1}.jpg` }))));
@@ -193,7 +225,23 @@ export default function AddSheet({ onClose, onPick, onBill }: {
 
   if (full) return (
     <QuotaFullModal onClose={onClose} upgrade={full.upgrade} hasPhoto={!!full.receipt_file} info={full}
-      manual={[{ label: "Elle ekle", onClick: () => onPick({ kind: "gider", receipt_file: full.receipt_file ?? null }) }]} />
+      manual={fullDekont && onTransfer ? [{ label: "Elle transfer ekle", onClick: () => onTransfer(null) }]
+        : [{ label: "Elle ekle", onClick: () => onPick({ kind: "gider", receipt_file: full.receipt_file ?? null }) }]} />
+  );
+
+  if (redirect) return (
+    <Modal title="Havale / EFT dekontu mu?" onClose={() => { if (!busy) setRedirect(null); }}>
+      <div data-testid="dekont-yonlendir" className="space-y-3 text-sm">
+        <div role="status" className="flex gap-2 rounded-lg bg-blue-50 p-2.5 text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+          <Info size={16} className="mt-0.5 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">Bu bir havale/EFT dekontu gibi görünüyor. Transfer olarak eklersen kişiye giden ya da kişiden gelen para olarak Transferler'e girer.</span>
+        </div>
+        <button className="btn-primary w-full justify-center py-2" disabled={busy} onClick={() => void readDekont(redirect)}>{busy ? "Okunuyor…" : "Transfer olarak ekle"}</button>
+        <button className="btn-ghost w-full justify-center border border-stone-300 py-2 dark:border-stone-700" disabled={busy}
+          onClick={() => { const f = redirect; setRedirect(null); void parse([{ blob: f, name: f.name }]); }}>Yine de fatura olarak ekle</button>
+        {err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+      </div>
+    </Modal>
   );
 
   return (
@@ -239,6 +287,13 @@ export default function AddSheet({ onClose, onPick, onBill }: {
           onClick={() => pick(fileRef)} disabled={busy || meta.data?.receipt_enabled === false} />
         <input ref={fileRef} type="file" accept="application/pdf,image/*" multiple className="hidden"
           onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+        {dekontOn && <>
+          <Opt icon={<ArrowLeftRight size={20} className="text-teal-600" />} title="Havale / EFT dekontu"
+            sub="Gönderdiğin ya da sana gelen para: Transferler'e eklenir"
+            onClick={() => { if (quota.fullFor("belge")) { setFullDekont(true); setFull({ kind: "belge" }); } else dekontRef.current?.click(); }} disabled={busy} />
+          <input ref={dekontRef} type="file" accept="image/*,application/pdf" className="hidden"
+            onChange={(e) => { void readDekont(e.target.files?.[0]); e.target.value = ""; }} />
+        </>}
         <ReadsLine className="px-1 text-xs text-stone-500" />
         </>}
         <Opt icon={<Minus size={20} className="text-red-600" />} title="Gider" sub="Psikolog, nakit ödeme, havale…"

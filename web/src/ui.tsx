@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import type { BillDraft, Payable, Row } from "./api";
 import type { ReceiptCheck } from "./components/receipt/check";
 import type { RecurringMonth } from "./components/RecurringMonthForm";
+import type { DekontResult } from "./components/TransferForm";
 
 export interface EntryDraft {
   kind?: "gelir" | "gider";
@@ -45,6 +46,8 @@ export interface UI {
   openBill: (draft?: BillDraft) => void;
   openPay: (p: Payable) => void;
   openRecurringMonth: (r: RecurringMonth) => void;
+  /** Transfer ekle (elle ya da okunmuş dekontla; yetenek dekont_parse) */
+  openTransfer: (dekont?: DekontResult | null) => void;
   /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo/action verilirse düğme (en az 8 sn). */
   toast: (msg: string, opts?: ToastOptions) => void;
   /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. */

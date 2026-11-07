@@ -9,6 +9,7 @@ import RecurringMonthForm, { type RecurringMonth } from "./components/RecurringM
 import { useMeta } from "./components/hooks";
 import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
+import TransferForm, { type DekontResult } from "./components/TransferForm";
 import { cx, setAmountsHidden } from "./format";
 import Dashboard from "./pages/Dashboard";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -112,6 +113,7 @@ type ModalState =
   | { type: "bill"; draft: BillDraft }
   | { type: "pay"; p: Payable }
   | { type: "rmonth"; r: RecurringMonth }
+  | { type: "transfer"; dekont?: DekontResult | null }
   | null;
 
 export default function App() {
@@ -251,6 +253,7 @@ function Shell() {
     openBill: (draft) => setModal({ type: "bill", draft: draft ?? {} }),
     openPay: (p) => setModal({ type: "pay", p }),
     openRecurringMonth: (r) => setModal({ type: "rmonth", r }),
+    openTransfer: (dekont) => { if (!viewer) setModal({ type: "transfer", dekont }); },
     toast: setToast,
     error: setError,
   }), [month, viewer, setToast, setError]);
@@ -327,7 +330,7 @@ function Shell() {
 
       {modal?.type === "add" && (
         <AddSheet onClose={close} onPick={(draft) => setModal({ type: "entry", draft })}
-          onBill={(draft) => setModal({ type: "bill", draft })} />
+          onBill={(draft) => setModal({ type: "bill", draft })} onTransfer={(dekont) => setModal({ type: "transfer", dekont })} />
       )}
       {modal?.type === "entry" && (
         <EntryForm row={modal.row} draft={modal.draft} onClose={close} onSaved={setToast} />
@@ -337,6 +340,7 @@ function Shell() {
       {modal?.type === "bill" && <BillForm draft={modal.draft} onClose={close} onSaved={setToast} />}
       {modal?.type === "pay" && <PayForm p={modal.p} onClose={close} onSaved={setToast} />}
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
+      {modal?.type === "transfer" && <TransferForm initial={modal.dekont} onClose={close} />}
 
       {joinCode && <JoinPreviewModal code={joinCode} onClose={() => setJoinCode(null)} />}
       <ConfirmHost />
