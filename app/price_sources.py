@@ -282,9 +282,54 @@ class OfficialSource:
     def search(self, query: str) -> dict[str, str]:
         from app import product_groups
 
-        keys = sorted({r["group_key"] for r in self._rows(None)})
-        labels = product_groups.labels(keys)
+        keys = _official_keys()
+        if query and "|" in query or query in keys:  # istemci grup anahtarı gönderdi: tarama yok
+            return {query: product_groups.labels([query]).get(query, query)} if query in keys else {}
+        labels = _official_labels(keys)
         return {k: labels.get(k, k) for k in keys if _match(query, k, labels.get(k, k))}
+
+
+_OFFICIAL_TTL = 600.0
+_official_cache: dict = {}
+
+
+def _official_stamp() -> str:
+    """Önbellek anahtarı: son içe aktarım anı (yeni gün gelince liste yenilenir)."""
+    from app import system
+
+    with system.connect() as c:
+        r = c.execute("SELECT MAX(imported_at) FROM official_imports").fetchone() if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'official_imports'").fetchone() else None
+        return str((r or [None])[0])
+
+
+def _official_keys() -> set[str]:
+    """Resmî fiyatı olan grup anahtarları (official_prices_group indeksinden; 10 dk ve içe aktarım başına önbellek).
+    07.11.2026: arama her istekte 226 bin satırı okuyordu (~2,6 sn); bu ~ms."""
+    import time as _t
+
+    from app import system
+
+    stamp, now = _official_stamp(), _t.monotonic()
+    hit = _official_cache.get("keys")
+    if hit and hit[0] == stamp and now - hit[1] < _OFFICIAL_TTL:
+        return hit[2]
+    with system.connect() as c:
+        keys = {r[0] for r in c.execute("SELECT DISTINCT group_key FROM official_prices")}
+    _official_cache["keys"] = (stamp, now, keys)
+    _official_cache.pop("labels", None)
+    return keys
+
+
+def _official_labels(keys: set[str]) -> dict[str, str]:
+    from app import product_groups
+
+    hit = _official_cache.get("labels")
+    if hit and hit[0] is keys:
+        return hit[1]
+    labels = product_groups.labels(sorted(keys))
+    _official_cache["labels"] = (keys, labels)
+    return labels
 
 
 def _chain_key(chain: str) -> str:
