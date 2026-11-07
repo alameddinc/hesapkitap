@@ -896,7 +896,11 @@ def form_of(nn: str) -> str:
     → "COLA"; marka listesi katalogdan büyür). Aynı biçim iki ayrı genel ada düşmemeli (consistency)."""
     tokens = _expand(nn.split())
     _, used = parse_size(tokens)
-    return " ".join(_strip(tokens, used, partial=True))
+    keep = {t for k in _OVERRIDES for t in k if t in tokens}  # "FANTA PORTAKAL" ile "PORTAKAL" ayrı biçim
+    full, _ = _brand_marks(tokens, None)
+    return " ".join(t for i, t in enumerate(tokens) if t in keep and i not in used or
+                    (i not in used and i not in full and t not in DESCRIPTORS and not re.fullmatch(r"[\d.,]+", t)
+                     and len(t) > 1))
 
 
 def _rekey(c, r: dict, generic: str, source: str) -> dict | None:
@@ -916,7 +920,9 @@ def consistency(c) -> dict:
     """Aynı biçimdeki adlar tek genel ada (gecelik, katalog yenilenince; c: system.connect()).
     1. Yapay zekâ / geçici sonuçlu ad bugün katalog ya da kuralla çözülüyorsa o gruba geçer (kural yapay zekâdan önce).
     2. Aynı biçim (form_of) birden çok genel ada düşmüşse: biçimin kendisi çözülüyorsa (katalog / kural) o, değilse
-       kaynağı güçlü (kural, katalog > yapay zekâ) ve çok olan kazanır; diğerleri o genel ada (kendi boyuyla) taşınır.
+       kaynağı güçlü (kural, katalog > yapay zekâ) ve çok olan kazanır; yapay zekâ (ve önceki tutarlılık) sonuçlu
+       diğerleri o genel ada (kendi boyuyla) taşınır. Kural / katalog sonucu taşınmaz (ikisi de kanıtlı): çelişki
+       yalnız raporlanır ("PORTAKAL" meyve mi meyve suyu mu — boy ve marka karar verir).
     Çelişen biçimler (en çok CONFLICTS_TOP) sys_settings'e yazılır: yönetici paneli "çelişen gruplar".
     Dönen {rekeyed, conflicts}."""
     import json
@@ -955,7 +961,7 @@ def consistency(c) -> dict:
         for b, v in groups.items():
             if b != base:
                 for r in v:
-                    if _rekey(c, r, label, "consistency"):
+                    if r["source"] in ("ai", "consistency") and _rekey(c, r, label, "consistency"):
                         rekeyed += 1
     found.sort(key=lambda x: (-sum(g["n"] for g in x["groups"]), x["form"]))
     c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES (?, ?)",
