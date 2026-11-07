@@ -258,7 +258,7 @@ function ShoppingList() {
       )}
 
       {ro ? (
-        <p className="rounded-lg bg-stone-100 px-3 py-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-300">Bu defterde sadece görüntüleme yetkin var; listeyi değiştiremezsin.</p>
+        <p className="rounded-lg bg-stone-100 px-3 py-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-300">Bu listeyi yalnız görebilirsin.</p>
       ) : (
         <>
           <AddForm autofill={autofillOn} units={unitsOn} onAdd={addOne} />
@@ -272,7 +272,7 @@ function ShoppingList() {
         <section className="card space-y-1 p-6 text-center">
           <ShoppingCart size={28} className="mx-auto text-stone-400" aria-hidden />
           <h2 className="font-semibold">Liste boş</h2>
-          <p className="text-sm text-stone-500">{ro ? "Defterde henüz alınacak bir şey yok." : unitsOn ? "Yukarıya alacaklarını yaz: “süt”, “2 kg elma”, “6 yumurta”…" : "Yukarıya alacaklarını yaz: “süt”, “yumurta 30'lu”…"}</p>
+          <p className="text-sm text-stone-500">{ro ? "Defterde henüz alınacak bir şey yok." : "Ürün ekle; fişlerinden ve topluluk fiyatlarından bildiğimiz en ucuz marketi yanına koyarız."}</p>
         </section>
       )}
 

@@ -33,7 +33,7 @@ export function useSuggest(text: string, on: boolean) {
   });
 }
 
-const srcText = (s: Suggestion) => (s.source === "own" ? (s.count ? `${s.count} kez aldın` : "fişlerinden") : s.source === "recent" ? "önceden listendeydi" : "");
+const srcText = (s: Suggestion) => (s.source === "own" ? "Sık aldığın" : s.source === "recent" ? "Son alışverişten" : "");
 
 /** Öneri listesi (combobox'ın listbox'ı): fareyle tıklama input'un odağını kaçırmasın diye mousedown'da seçilir. */
 export function SuggestList({ id, items, active, onPick, className }: {

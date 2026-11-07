@@ -78,7 +78,7 @@ export function BookChoice({ t, onChange }: { t: SaveTarget; onChange?: (b: Book
         options={[{ value: "ortak", label: "Ortak" }, { value: "kendi", label: "Benim" }]} />
       <p className="mt-1 text-xs text-stone-500">
         {bookHint(t.target)}
-        {t.viewer && <span className="text-amber-700 dark:text-amber-400"> Ortak defterde yalnız görme yetkin var; Benim'e kaydedebilirsin.</span>}
+        {t.viewer && <span className="text-amber-700 dark:text-amber-400"> Ortak defterde yalnız görme yetkin var; Benim defterine kaydedilir.</span>}
       </p>
     </div>
   );
