@@ -24,6 +24,14 @@ from datetime import date, timedelta
 log = logging.getLogger("hesapkitap.price_import")
 
 ATTRIBUTION = "Kaynak: Market Fiyatı (T.C. Sanayi ve Teknoloji Bakanlığı / TÜBİTAK BİLGEM)"
+DEMO_ATTRIBUTION = "Örnek veri: demodaki fiyatlar uydurmadır, gerçek market fiyatı değildir"
+
+
+def attribution() -> str:
+    """Teklifin / piyasa bandının kaynak yazısı; demoda (uydurma veri, app/demo_prices.py) DEMO_ATTRIBUTION."""
+    from app import demo_mode
+
+    return DEMO_ATTRIBUTION if demo_mode.enabled() else ATTRIBUTION
 CHAIN_MAP = {"carrefour": "CarrefourSA", "carrefoursa": "CarrefourSA", "migros": "Migros", "a101": "A101",
              "sok": "ŞOK", "bim": "BİM", "hakmar": "Hakmar", "tarim_kredi": "Tarım Kredi", "tarimkredi": "Tarım Kredi"}
 KEEP_DAYS = int(os.environ.get("HESAPKITAP_OFFICIAL_KEEP_DAYS") or 35)  # sunucuda kaç gün tutulur

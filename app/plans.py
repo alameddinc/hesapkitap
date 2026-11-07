@@ -342,6 +342,8 @@ def plan_of(u: dict | None) -> str:
         return SELF
     if not u:
         return FREE
+    if u.get("demo"):  # canlı demo (mağaza incelemesi): Premium sayfaları açık; ortak defter demoda zaten kapalı
+        return PREMIUM
     if u.get("role") == "admin":
         return FAMILY
     o = _owner(u)

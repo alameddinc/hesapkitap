@@ -120,7 +120,7 @@ def market(group_key: str, days: int = 90) -> dict:
     got = series([group_key], since, region).get(group_key, {})
     rows = [{"day": d, **got[d]} for d in sorted(got)]
     return {"group": group_key, "region": region, "days": rows,
-            "attribution": price_import.ATTRIBUTION if any(r["source"] == "resmi" for r in rows) else None}
+            "attribution": price_import.attribution() if any(r["source"] == "resmi" for r in rows) else None}
 
 
 def compare(price: float | None, ref: dict | None) -> dict | None:

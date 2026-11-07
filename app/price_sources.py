@@ -74,16 +74,21 @@ def registered() -> list[str]:
 
 
 def enabled_names() -> list[str]:
+    from app import demo_mode
+
     raw = os.environ.get("HESAPKITAP_PRICE_SOURCES") or DEFAULT_SOURCES
     names = [n for n in (x.strip() for x in raw.split(",")) if n in _REGISTRY]
+    if demo_mode.enabled() and "resmi" not in names:  # demo: uydurma piyasa verisi (app/demo_prices.py) hep açık
+        names.append("resmi")
     return [n for n in names if n != "resmi" or official_configured()]  # resmî kaynak: BigQuery ya da adres / dosya da gerekir
 
 
 def official_configured() -> bool:
-    """Resmî kaynağın verisi var mı: BigQuery kimliği (app/bq.py) ya da dosya / adres (app/price_import.py)."""
-    from app import bq, price_import
+    """Resmî kaynağın verisi var mı: BigQuery kimliği (app/bq.py) ya da dosya / adres (app/price_import.py); demoda
+    her zaman (app/demo_prices.py system.db'ye yazar)."""
+    from app import bq, demo_mode, price_import
 
-    return bool(price_import.configured()) or bq.configured()
+    return demo_mode.enabled() or bool(price_import.configured()) or bq.configured()
 
 
 def open_sources(names: list[str] | None = None) -> list[PriceSource]:
@@ -264,7 +269,7 @@ class OfficialSource:
                                 key=lambda x: (x[1], x[0][0]))
             top = min(prods[(t, b)], key=lambda x: x["price"])
             off: Offer = {"chain": ch, "price": round(price, 2), "source": self.name, "date": last,
-                          "attribution": price_import.ATTRIBUTION}
+                          "attribution": price_import.attribution()}
             if b:
                 off["brand"] = b
             if label:
