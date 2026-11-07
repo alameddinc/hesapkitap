@@ -7,7 +7,8 @@ import { useMeta } from "./hooks";
 import Segmented from "./Segmented";
 import PriceDetail, { attributionOf, OfferBadges, perUnitText, type PriceGroup, type PriceGroupRef, type PriceHistory } from "./PriceDetail";
 import { RegionPrompt } from "./RegionPicker";
-import { officialSrc } from "../lib/priceView";
+import { bulunma, officialSrc } from "../lib/priceView";
+import type { Advice, MarketRef } from "../lib/priceAdvice";
 
 interface StorePrice {
   store: string; branch: string | null; price: number; date: string; estimated: boolean; cheapest?: boolean;
@@ -21,6 +22,8 @@ interface Product {
   group?: PriceGroupRef | null;
   /** yetenek price_categories / price_unit */
   category?: string | null; unit_price_per?: number | null; per_unit?: string | null;
+  /** yetenek price_advice */
+  aliases?: string[] | null; market?: boolean | null; market_ref?: MarketRef | null; advice?: Advice | null;
 }
 interface Data {
   products: Product[];
@@ -51,9 +54,11 @@ interface RowProps {
   onGroup?: (g: PriceGroupRef) => void;
   /** "Nereden alınır" satırından gelindi: aç ve görünür kıl */
   focus?: boolean;
+  /** "BİM'de başka ne ucuz?": listeyi o zincirde daha ucuz olan ürünlere süz */
+  onChain?: (chain: string) => void;
 }
 
-function ProductRow({ p, showStores = true, onGroup, focus }: RowProps) {
+function ProductRow({ p, showStores = true, onGroup, focus, onChain }: RowProps) {
   const [open, setOpen] = useState(!!focus); // focus değişince satır yeniden kurulur (anahtar), açık başlar
   const el = useRef<HTMLLIElement>(null);
   useEffect(() => { if (focus) el.current?.scrollIntoView?.({ block: "start", behavior: "smooth" }); }, [focus]);
@@ -88,7 +93,7 @@ function ProductRow({ p, showStores = true, onGroup, focus }: RowProps) {
             onClick={() => onGroup(p.group!)} aria-label={`Yalnız ${p.group.label} grubunu göster`} data-testid="grup-cip">{p.group.label}</button>
         </div>
       )}
-      {open && <PriceDetail p={p} />}
+      {open && <PriceDetail p={p} onChain={onChain} />}
     </li>
   );
 }
@@ -117,6 +122,7 @@ export default function PriceWatch() {
   const [groupF, setGroupF] = useState<PriceGroupRef | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const [cat, setCat] = useState<string | null>(null);
+  const [chainF, setChainF] = useState<string | null>(null);
   const caps = useMeta().data?.capabilities;
   const dterm = useDebounced(term.trim());
   const params = new URLSearchParams();
@@ -136,7 +142,7 @@ export default function PriceWatch() {
   const araKeys = new Set(searching ? (ara.data ?? []).map((g) => g.key) : []);
   const catOf = (p: Product) => p.category ?? p.group?.category ?? null;
   const cats = [...new Set((d?.products ?? []).map(catOf).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b, "tr"));
-  const match = (p: Product) => (!cat || catOf(p) === cat) && (groupF ? p.group?.key === groupF.key
+  const match = (p: Product) => (!cat || catOf(p) === cat) && (!chainF || (p.advice?.kind === "cheaper_at" && p.advice.chain === chainF)) && (groupF ? p.group?.key === groupF.key
     : !term.trim() || (!!p.group && araKeys.has(p.group.key)) || fold(`${p.product} ${p.brand ?? ""} ${p.group?.label ?? ""}`).includes(fold(term.trim())));
   const onGroup = caps?.includes("price_groups") ? (g: PriceGroupRef) => { setGroupF(g); setFocus(null); setView("urun"); } : undefined;
   // "Nereden alınır" satırı: kendi aldığın ürünse (aynı grup, o zincirden) ürünün ayrıntısını aç
@@ -184,6 +190,12 @@ export default function PriceWatch() {
             ))}
           </div>
         )}
+        {chainF && (
+          <div className="flex items-center gap-2 text-xs text-stone-500">
+            <button type="button" className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 font-medium text-green-800 dark:bg-green-950 dark:text-green-200"
+              onClick={() => setChainF(null)} aria-label={`${chainF} süzgecini kaldır`} data-testid="zincir-suzgec">{bulunma(chainF)} daha ucuz olanlar <X size={12} aria-hidden /></button>
+          </div>
+        )}
         {groupF && (
           <div className="flex items-center gap-2 text-xs text-stone-500">
             Grup:
@@ -199,7 +211,8 @@ export default function PriceWatch() {
       </div>
 
       <ul className="divide-y divide-stone-100 border-t border-stone-100 dark:divide-stone-800 dark:border-stone-800">
-        {view === "urun" && prods.map((p) => <ProductRow key={focus === p.key ? `${p.key}:odak` : p.key} p={p} onGroup={onGroup} focus={focus === p.key} />)}
+        {view === "urun" && prods.map((p) => <ProductRow key={focus === p.key ? `${p.key}:odak` : p.key} p={p} onGroup={onGroup} focus={focus === p.key}
+          onChain={caps?.includes("price_advice") ? (ch) => { setChainF(ch); setGroupF(null); setTerm(""); setFocus(null); window.scrollTo?.({ top: 0, behavior: "smooth" }); } : undefined} />)}
         {view === "magaza" && d?.stores.map((st) => {
           const ps = st.products.filter(match);
           if (!ps.length) return null;

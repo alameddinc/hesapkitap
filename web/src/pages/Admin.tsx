@@ -152,7 +152,66 @@ interface OfficialStatus { configured: boolean; last_day: string | null; regions
   inconsistent_groups?: { day: string | null; groups: { group_key: string; median: number; dropped: number }[] };
   /** topluluk fiyatları → BigQuery (yeni sunucu) */
   community_export?: { configured: boolean; last_day: string | null; rows: number; exported_at: string | null;
-    last_run_at: string | null; last_error: string | null; last_error_at: string | null } }
+    last_run_at: string | null; last_error: string | null; last_error_at: string | null };
+  /** ürün gruplama kalitesi ve topluluk ↔ Market Fiyatı uyuşmazlığı (yeni sunucu) */
+  grouping_quality?: GroupingQuality; disagreements?: Disagreement[] }
+export interface GroupingQuality {
+  names: number; grouped: number; grouped_pct: number; pending: number; by_source?: Record<string, number>;
+  conflicts?: { count: number; top: { form: string; groups: { key: string; label: string; n: number }[]; resolved_to: string | null }[] };
+  wide_spread?: { count: number; top: { group_key: string; label: string; min: number; max: number; ratio: number }[] };
+  catalog?: { products: number; brands: number; updated_at: string | null } | null;
+}
+export interface Disagreement { chain: string; group_key: string; label: string; days: number; community: number; official: number; pct: number }
+const SOURCE_TR: Record<string, string> = { rule: "kural", ai: "yapay zekâ", catalog: "katalog", override: "elle eşleme" };
+
+/** Gruplama kalitesi: gruplanan oran, kaynaklar, çelişen gruplar, fiyat aralığı geniş gruplar, tutarsız ürünler. */
+export function GroupingQualityPanel({ g, dis }: { g?: GroupingQuality; dis?: Disagreement[] }) {
+  if (!g && !dis?.length) return null;
+  const pctf = (n: number) => `%${n.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}`;
+  return (
+    <div className="space-y-1.5 border-t border-stone-100 pt-1.5 dark:border-stone-800" data-testid="gruplama-kalitesi">
+      {g && <>
+        <h3 className="text-xs font-semibold text-stone-600 dark:text-stone-300">Ürün gruplama</h3>
+        <p className="text-xs text-stone-500 tabular-nums">{g.grouped.toLocaleString("tr-TR")} / {g.names.toLocaleString("tr-TR")} ad gruplandı ({pctf(g.grouped_pct)}) · {g.pending.toLocaleString("tr-TR")} bekliyor
+          {g.by_source && ` · ${Object.entries(g.by_source).filter(([, n]) => n).map(([k, n]) => `${SOURCE_TR[k] ?? k} ${n.toLocaleString("tr-TR")}`).join(", ")}`}</p>
+        {g.catalog && <p className="text-xs text-stone-500 tabular-nums">Katalog: {g.catalog.products.toLocaleString("tr-TR")} ürün · {g.catalog.brands.toLocaleString("tr-TR")} marka{g.catalog.updated_at ? ` · ${new Date(g.catalog.updated_at).toLocaleDateString("tr-TR")}` : ""}</p>}
+        {!!g.conflicts?.count && (
+          <details className="text-xs" data-testid="celisen-gruplar">
+            <summary className="cursor-pointer text-amber-800 dark:text-amber-300">Çelişen gruplar · {g.conflicts.count}</summary>
+            <ul className="mt-1 space-y-1">
+              {g.conflicts.top.map((c) => (
+                <li key={c.form} className="break-words"><b className="font-medium">{c.form}</b>: {c.groups.map((x) => `${x.label} (${x.n})`).join(" · ")}{c.resolved_to ? ` → ${c.resolved_to}` : ""}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {!!g.wide_spread?.count && (
+          <details className="text-xs" data-testid="genis-aralik">
+            <summary className="cursor-pointer text-stone-600 dark:text-stone-300">Fiyat aralığı 3 katı aşan gruplar · {g.wide_spread.count}</summary>
+            <table className="mt-1 w-full tabular-nums">
+              <thead><tr className="text-left text-stone-500"><th className="font-normal">Grup</th><th className="text-right font-normal">En düşük</th><th className="text-right font-normal">En yüksek</th><th className="text-right font-normal">Kat</th></tr></thead>
+              <tbody>{g.wide_spread.top.map((w) => (
+                <tr key={w.group_key}><td className="pr-2 break-words">{w.label}</td><td className="text-right">{tl(w.min)}</td><td className="text-right">{tl(w.max)}</td><td className="text-right">{w.ratio.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}×</td></tr>
+              ))}</tbody>
+            </table>
+          </details>
+        )}
+      </>}
+      {!!dis?.length && (
+        <details className="text-xs" data-testid="tutarsiz-urunler">
+          <summary className="cursor-pointer text-amber-800 dark:text-amber-300">Tutarsız ürünler (kullanıcılar ↔ Market Fiyatı) · {dis.length}</summary>
+          <table className="mt-1 w-full tabular-nums">
+            <thead><tr className="text-left text-stone-500"><th className="font-normal">Ürün</th><th className="text-right font-normal">Kullanıcılar</th><th className="text-right font-normal">Market F.</th><th className="text-right font-normal">Fark</th></tr></thead>
+            <tbody>{dis.map((d) => (
+              <tr key={`${d.chain}-${d.group_key}`}><td className="pr-2 break-words">{d.chain} · {d.label} <span className="text-stone-500">({d.days} gün)</span></td>
+                <td className="text-right">{tl(d.community)}</td><td className="text-right">{tl(d.official)}</td><td className="text-right">{d.pct > 0 ? "+" : ""}%{Math.round(d.pct)}</td></tr>
+            ))}</tbody>
+          </table>
+        </details>
+      )}
+    </div>
+  );
+}
 
 /** Resmî fiyatlar (BigQuery → sunucu, gecelik): son içe aktarılan gün, iller, satır, son hata. Eski sunucuda (404) yok. */
 function OfficialPrices() {
@@ -195,6 +254,7 @@ function OfficialPrices() {
           </table>
         </details>
       )}
+      <GroupingQualityPanel g={s.grouping_quality} dis={s.disagreements} />
       {s.community_export && (s.community_export.configured || s.community_export.last_day) && (
         <div className="border-t border-stone-100 pt-1.5 dark:border-stone-800" data-testid="topluluk-aktarim">
           <h3 className="text-xs font-semibold text-stone-600 dark:text-stone-300">Topluluk fiyatları → BigQuery</h3>

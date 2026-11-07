@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Co
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api";
 import { cx, parseAmount, tl } from "../../format";
+import NameSuggest from "../NameSuggest";
 import Modal from "../Modal";
 import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, livePriceAlerts, liveMarketNotes, marketFootnote, marketHeadline, marketLine, type DigitFix, type MarketNote, type ItemCheck, type PriceAlert, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
 
@@ -294,7 +295,7 @@ function ItemForm({ k, index, count, check, onClose, onSave, onDelete, onShift, 
         )}
         <div>
           <label className="label" htmlFor="ri-name">Ürün adı</label>
-          <input id="ri-name" className="input" value={name} maxLength={80} autoFocus={index == null} onChange={(e) => setName(e.target.value)} />
+          <NameSuggest id="ri-name" value={name} autoFocus={index == null} onChange={setName} />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>

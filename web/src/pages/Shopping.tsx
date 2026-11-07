@@ -3,19 +3,31 @@
 // Fiyat: GET /api/shopping-list/plan → ürün başına en ucuz market ve "Hepsini tek yerden" özeti. Değişiklikler önce
 // ekranda olur (iyimser), sunucu reddederse geri alınır. Üstte "Nereye gideyim?" (yetenek shopping_optimize,
 // components/ShopOptimize.tsx): en iyi 1 / 2 / 3 duraklı plan. Mobil karşılığı: hesapkitap-mobile src/screens/Alisveris.tsx.
+// Fiyat UX v2 (yetenek shopping_assumed_size / shopping_headline): satırın altında "En ucuz: BİM ₺32,50 · 1 L", boysuz
+// satırda "1 L kabul edildi" (dokun → boy seç), fiyatsız satırda ne yapmalı; altta sabit "Nereye gideyim?" çubuğu planı açar.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ChevronRight, Info, MapPinned, Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import Modal from "../components/Modal";
+import { assumedText, barMain, bestInline, sizeOf, type Assumed, type Headline, type ShopBest, type UnpricedInfo } from "../lib/priceAdvice";
+import type { Optimize } from "../lib/optimize";
 import { cx, maskText, tl, todayISO } from "../format";
 import { ApiError, bodyOf, failureText, send } from "../lib/apiError";
 import { agoWord, bestChain, type PlanChain } from "../lib/priceView";
 import { useUI } from "../ui";
 import { isViewer, useBook, useMeta, usePeople } from "../components/hooks";
 import { PlanGate } from "../components/Plan";
-import ShopOptimize from "../components/ShopOptimize";
+import ShopOptimize, { OPTIMIZE } from "../components/ShopOptimize";
 import { AddedBy } from "../components/TxnList";
 
-export interface ShopItem { id: number; text: string; group_key: string | null; qty: number | null; done: boolean; added_by: number | null; created_at: string }
+export interface ShopItem {
+  id: number; text: string; group_key: string | null; qty: number | null; done: boolean; added_by: number | null; created_at: string;
+  group?: { key: string; label: string; pending?: boolean } | null;
+  /** yetenek shopping_assumed_size: boysuz satırın varsayılan boyu; satırın en ucuz teklifi */
+  assumed?: Assumed | null; best?: ShopBest | null;
+}
+interface SizeOpt { key: string; label: string; size_label: string; chain: string | null; price: number | null; unit_price_per?: number | null; per_unit?: string | null }
+type OptimizeV2 = Optimize & { headline?: Headline | null; unpriced_info?: UnpricedInfo[]; empty?: { title: string; text: string } | null };
 interface Best { chain: string; price: number; brand?: string | null; source: "own" | "community" | "resmi"; date?: string | null }
 interface ShopPlan { items: { id: number; best: Best | null }[]; chains: PlanChain[] }
 
@@ -50,11 +62,23 @@ function ShoppingList() {
   const book = useBook();
   const people = usePeople();
   const ro = isViewer(book.data);
-  const optimizeOn = !!useMeta().data?.capabilities?.includes("shopping_optimize");
+  const caps = useMeta().data?.capabilities;
+  const optimizeOn = !!caps?.includes("shopping_optimize");
+  const sizesOn = !!caps?.includes("shopping_assumed_size");
+  const barOn = optimizeOn && !!caps?.includes("shopping_headline");
   const today = todayISO();
   const list = useQuery({ queryKey: LIST, queryFn: fetchList });
   const plan = useQuery({ queryKey: PLAN, queryFn: () => send<ShopPlan>(`${BASE}/plan`), retry: false, enabled: !!list.data?.length });
   const [text, setText] = useState("");
+  const [sizeFor, setSizeFor] = useState<ShopItem | null>(null);
+  const [planOpen, setPlanOpen] = useState(false);
+  const planRef = useRef<HTMLDivElement>(null);
+  // çubuk: liste değişince (ekle / sil / adet / boy) yeniden hesaplanır; işaretlemek (alındı) planı değiştirmez
+  const sig = (list.data ?? []).filter((i) => i.id > 0).map((i) => `${i.id}:${i.qty ?? 1}:${i.group_key ?? ""}`).join(",");
+  const opt = useQuery({
+    queryKey: [...OPTIMIZE, sig], enabled: barOn && !!list.data?.some((i) => !i.done && i.id > 0), retry: false, staleTime: Infinity, gcTime: 30 * 60_000,
+    queryFn: () => send<OptimizeV2>("/api/shopping-list/optimize"),
+  });
   const [qty, setQty] = useState("1");
 
   // iyimser değişiklik: önceki listeyi sakla, hata olursa ona dön; sonunda iki sorgu da sunucudan tazelenir
@@ -74,8 +98,8 @@ function ShoppingList() {
     (items, a) => [...items, { id: a.tmp, text: a.text, qty: a.qty, group_key: null, done: false, added_by: people.meId ?? null, created_at: a.at }],
   ));
   const patch = useMutation(optimistic(
-    (a: { id: number; done?: boolean; qty?: number }) => { const { id, ...body } = a; return send<ShopItem>(`${BASE}/${id}`, { method: "PATCH", json: body }); },
-    (items, a) => items.map((it) => (it.id === a.id ? { ...it, ...(a.done !== undefined && { done: a.done }), ...(a.qty !== undefined && { qty: a.qty }) } : it)),
+    (a: { id: number; done?: boolean; qty?: number; group_key?: string | null }) => { const { id, ...body } = a; return send<ShopItem>(`${BASE}/${id}`, { method: "PATCH", json: body }); },
+    (items, a) => items.map((it) => (it.id === a.id ? { ...it, ...(a.done !== undefined && { done: a.done }), ...(a.qty !== undefined && { qty: a.qty }), ...(a.group_key !== undefined && { group_key: a.group_key }) } : it)),
   ));
   // "Alınanları temizle": tek tek, sırayla (biri düşerse kalanlar listede kalır, liste sunucudan tazelenir)
   const del = useMutation(optimistic(async (ids: number[]) => { for (const id of ids) await remove(id); },
@@ -95,16 +119,25 @@ function ShoppingList() {
   const items = list.data ?? [];
   const open = items.filter((i) => !i.done), done = items.filter((i) => i.done);
   const bestOf = new Map((plan.data?.items ?? []).map((x) => [x.id, x.best]));
-  const top = bestChain(plan.data?.chains);
+  const top = barOn ? null : bestChain(plan.data?.chains);
+  const r = opt.data;
+  const hints = new Map((r?.unpriced_info ?? []).map((u) => [u.id, u]));
+  const money = (n: number) => maskText(tl(n).replace(/,00(?=\s|$)/, ""));
+  const openPlan = () => { setPlanOpen(true); requestAnimationFrame(() => planRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" })); };
 
   // fiyatlı ürün varsa görünür; alışverişte hepsi işaretlenince de kaybolmasın (sonuç ekranda kalsın)
-  const priced = (plan.data?.items ?? []).some((x) => x.best && open.some((o) => o.id === x.id));
+  const priced = (plan.data?.items ?? []).some((x) => x.best && open.some((o) => o.id === x.id)) || !!r?.priced;
   const [optShown, setOptShown] = useState(false);
   if (priced && !optShown) setOptShown(true);
 
   return (
     <div className="space-y-3">
-      {optimizeOn && optShown && items.length > 0 && <ShopOptimize items={items} ro={ro} onTick={(id, d) => patch.mutate({ id, done: d })} />}
+      {optimizeOn && (barOn ? planOpen : optShown) && items.length > 0 && (
+        <div ref={planRef} className="scroll-mt-16">
+          <ShopOptimize items={items} ro={ro} onTick={(id, d) => patch.mutate({ id, done: d })} open={barOn ? true : undefined} data={barOn ? r : undefined}
+            onClose={barOn ? () => setPlanOpen(false) : undefined} onRefetch={barOn ? () => void opt.refetch() : undefined} fetching={barOn ? opt.isFetching : undefined} />
+        </div>
+      )}
       {top && open.length > 0 && (
         <section className="card flex items-center gap-3 p-4" data-testid="tek-yerden">
           <ShoppingCart size={20} className="shrink-0 text-green-700 dark:text-green-400" aria-hidden />
@@ -153,7 +186,9 @@ function ShoppingList() {
                     <span className={cx("min-w-0 break-words", it.done && "text-stone-400 line-through")}>{it.text}</span>
                     {who && <AddedBy name={people.isMe(it.added_by) ? null : who.name} initial={who.name} />}
                   </div>
-                  {best && !it.done && (
+                  {!it.done && sizesOn && it.best !== undefined ? (
+                    <ItemPrice it={it} hint={hints.get(it.id)} ro={ro} money={money} onSize={() => setSizeFor(it)} />
+                  ) : best && !it.done && (
                     <div className="text-xs text-stone-500 tabular-nums">en ucuz: {maskText(best.chain)} {tl(best.price)}{best.brand ? ` (${best.brand})` : ""}{best.source === "community" ? " · topluluk" : ""}{best.source === "resmi" && best.date && best.date < today ? ` · ${agoWord(best.date, today)}` : ""}</div>
                   )}
                 </div>
@@ -173,10 +208,77 @@ function ShoppingList() {
           })}
         </ul>
       )}
+      {barOn && open.length > 0 && r && !planOpen && (r.headline ? (
+        <div className="sticky bottom-[calc(4.75rem+var(--sab))] z-30 md:bottom-4">
+          <button type="button" onClick={openPlan} data-testid="nereye-cubuk"
+            className="flex w-full items-center gap-3 rounded-2xl bg-green-700 px-4 py-3 text-left text-white shadow-lg shadow-green-900/20 transition active:scale-[0.99] dark:bg-green-600 dark:text-white">
+            <MapPinned size={22} className="shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-green-100">Nereye gideyim?</span>
+              <span className="block font-semibold break-words tabular-nums">{maskText(barMain(r.headline, money))}</span>
+            </span>
+            <ChevronRight size={20} className="shrink-0" aria-hidden />
+          </button>
+        </div>
+      ) : r.empty && (
+        <section className="card flex gap-3 p-4" data-testid="fiyat-yok">
+          <Info size={20} className="mt-0.5 shrink-0 text-stone-400" aria-hidden />
+          <div className="min-w-0"><h2 className="font-semibold">{r.empty.title}</h2><p className="text-sm text-stone-600 dark:text-stone-300">{r.empty.text}</p></div>
+        </section>
+      ))}
+      {sizeFor && <SizePicker it={sizeFor} money={money} onClose={() => setSizeFor(null)}
+        onPick={(key) => { patch.mutate({ id: sizeFor.id, group_key: key }); setSizeFor(null); }} />}
       {!ro && done.length > 0 && (
         <button type="button" className="btn-ghost text-sm" disabled={del.isPending} onClick={() => del.mutate(done.map((d) => d.id))}>
           <Trash2 size={14} aria-hidden /> Alınanları temizle ({done.length})</button>
       )}
     </div>
+  );
+}
+
+/** Satır altı: en ucuz teklif ve varsayılan boy ("1 L kabul edildi" — dokununca boy seçilir) ya da fiyatsızsa ne yapmalı. */
+function ItemPrice({ it, hint, ro, money, onSize }: { it: ShopItem; hint?: UnpricedInfo; ro: boolean; money: (n: number) => string; onSize: () => void }) {
+  const size = it.assumed?.size_label ?? sizeOf(it.group?.label);
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+      {it.best ? (
+        <span className="font-medium text-green-700 tabular-nums dark:text-green-400" data-testid="satir-en-ucuz">{maskText(bestInline(it.best, size, money))}</span>
+      ) : hint ? <span className="text-stone-500" data-testid="satir-ipucu">{hint.hint}</span> : null}
+      {it.assumed && (ro ? <span className="text-stone-500">{assumedText(it.assumed)}</span> : (
+        <button type="button" onClick={onSize} data-testid="boy-sec"
+          className="rounded-full border border-stone-200 px-2 py-0.5 text-stone-600 hover:bg-stone-100 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800"
+          aria-label={`${it.text}: ${assumedText(it.assumed)}, boyu değiştir`}>{assumedText(it.assumed)} · değiştir</button>
+      ))}
+    </div>
+  );
+}
+
+/** Boy seç: GET /api/shopping-list/{id}/sizes; seçilince PATCH group_key ("Varsayılana dön": null). */
+function SizePicker({ it, money, onClose, onPick }: { it: ShopItem; money: (n: number) => string; onClose: () => void; onPick: (key: string | null) => void }) {
+  const q = useQuery({ queryKey: ["shopping-sizes", it.id], retry: false, queryFn: () => send<SizeOpt[]>(`${BASE}/${it.id}/sizes`) });
+  const cur = it.group?.key ?? it.group_key;
+  return (
+    <Modal title={`${it.text}: boy seç`} onClose={onClose}>
+      <div className="space-y-2">
+        <p className="text-sm text-stone-500">Fiyatı bu boya göre karşılaştırırız.</p>
+        {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
+        {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+        {q.data && !q.data.length && <p className="text-sm text-stone-500">Bu ürünün başka boyu yok.</p>}
+        <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700">
+          {q.data?.map((o) => (
+            <li key={o.key}>
+              <button type="button" onClick={() => onPick(o.key)} aria-pressed={o.key === cur}
+                className={cx("flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60", o.key === cur && "bg-green-50/70 dark:bg-green-950/30")}>
+                <span className="min-w-0 flex-1 font-medium">{o.size_label}</span>
+                <span className="shrink-0 text-right text-sm text-stone-600 tabular-nums dark:text-stone-300">
+                  {o.price != null ? <>{o.chain} {money(o.price)}{o.unit_price_per != null && o.per_unit ? <span className="block text-xs text-stone-500">{money(o.unit_price_per)}/{o.per_unit}</span> : null}</> : <span className="text-stone-400">fiyat yok</span>}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        {<button type="button" className="btn-ghost text-sm" onClick={() => onPick(null)}>Varsayılan boya dön</button>}
+      </div>
+    </Modal>
   );
 }

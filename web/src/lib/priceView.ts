@@ -111,3 +111,22 @@ export function change7Text(change?: number | null): string | null {
   if (change == null || !Number.isFinite(change) || Math.abs(change) < 3) return null;
   return `7 günde ${pctWord(Math.round(change))}`;
 }
+
+/** Sayının "-lik" eki: 6'lık, 2'lik, 3'lük, 10'luk (okunuşun son ünlüsüne göre). */
+export function lik(n: number): string {
+  const h = sayiOkunusu(Math.round(Math.abs(n)));
+  const son = [...h].reverse().find((c) => UNLU.includes(c)) ?? "i";
+  const v = "aı".includes(son) ? "ı" : "ei".includes(son) ? "i" : "ou".includes(son) ? "u" : "ü";
+  return `${n.toLocaleString("tr-TR")}'l${v}k`;
+}
+
+/** Grafik serileri: mağaza başına alımlar (ilk alınan mağaza ilk renk; renk sırası sabit, en çok 5 — fazlası 5.). */
+export function storeSeries(pts: PricePoint[]): { store: string; c: number; pts: PricePoint[] }[] {
+  const out: { store: string; c: number; pts: PricePoint[] }[] = [];
+  for (const p of pts) {
+    let s = out.find((x) => x.store === p.store);
+    if (!s) { s = { store: p.store, c: Math.min(out.length, 4), pts: [] }; out.push(s); }
+    s.pts.push(p);
+  }
+  return out;
+}
