@@ -95,6 +95,10 @@ def _extras() -> None:
     donations.add("sadaka", 200, "2026-10-03")
     donations.add("bagis", 500, "2026-09-12", "Kızılay")
     donations.add("fitre", 600, "2026-03-18")
+    # market fişleri (fiyat takibi, öneri, piyasa notu; app/demo_prices.py)
+    from app import demo_mode, demo_prices
+
+    demo_prices.receipts(demo_mode.ANCHOR)
 
 
 if __name__ == "__main__":

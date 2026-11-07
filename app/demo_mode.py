@@ -88,10 +88,18 @@ def shift_text(text: str, days: int) -> str:
     return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if days else text
 
 
+TEMPLATE_VERSION = 2  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
+#                      2: fiş kalemleri, alışveriş listesi, plan ve geçmiş alışveriş (app/demo_prices.py)
+
+
 def template() -> str:
-    """Bugünün şablon veritabanı (yoksa üret; eski günlerinkini sil)."""
+    """Bugünün şablon veritabanı (yoksa üret; eski günlerinkini ve eski sürümlerinkini sil). Demo piyasa fiyatları
+    (system.db, app/demo_prices.py seed_system) günde bir kez yazılır."""
+    from app import demo_prices
+
+    demo_prices.seed_system()
     days = days_since_anchor()
-    path = os.path.join(_base(), f"template-{days}.db")
+    path = os.path.join(_base(), f"template-v{TEMPLATE_VERSION}-{days}.db")
     if os.path.exists(path):
         return path
     os.makedirs(_base(), exist_ok=True)
@@ -112,6 +120,8 @@ def template() -> str:
     finally:
         templates.sync_community = real_sync
     shift_db(tmp, days)
+    with db.use_space(tmp, None):  # kaydırmadan sonra, gerçek bugünle: liste, plan, geçmiş alışveriş
+        demo_prices.shopping()
     os.replace(tmp, path)
     return path
 
