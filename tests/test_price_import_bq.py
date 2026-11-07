@@ -38,13 +38,13 @@ def _row(*vals):
 
 # bölge → BigQuery offers satırları (uydurma)
 OFFERS = {
-    "İzmir": [("migros", "p1", 59.9, 3, 59.9, "Örnekköy Günlük Süt 1 L", "Örnekköy", "1 L", "Süt", True, "2 al 1 öde", 8.0, 12.5),
-              ("migros", "p2", 61.0, 1, 61.0, "Örnekköy Süt", "Örnekköy", "1 L", "Süt", False, None, None, None),
+    "İzmir": [("tarim_kredi", "p1", 59.9, 3, 59.9, "Örnekköy Günlük Süt 1 L", "Örnekköy", "1 L", "Süt", True, "2 al 1 öde", 8.0, 12.5),
+              ("tarim_kredi", "p2", 61.0, 1, 61.0, "Örnekköy Süt", "Örnekköy", "1 L", "Süt", False, None, None, None),
               ("bim", "p3", 35.0, 5, 35.0, "Örnekköy Süt 1 L", "Örnekköy", "1 L", "Süt", False, None, 1.0, None),
               ("ornekbakkal", "p4", 10.0, 1, 10.0, "Örnekköy Süt 1 L", None, "1 L", "Süt", False, None, None, None),
               ("a101", "p5", 40.0, 1, 40.0, "Zzqx Belirsiz Ürün", None, None, "Diğer", False, None, None, None)],
     "İstanbul": [("carrefour", "p6", 64.5, 2, 64.5, "Örnekköy Süt 1 L", "Örnekköy", "1 L", "Süt", False, None, -4.0, None),
-                 ("migros", "p1", 99.0, 2, 99.0, "Örnekköy Günlük Süt 1 L", "Örnekköy", "1 L", "Süt", False, None, None, None)],
+                 ("tarim_kredi", "p1", 99.0, 2, 99.0, "Örnekköy Günlük Süt 1 L", "Örnekköy", "1 L", "Süt", False, None, None, None)],
     "Ankara": [("hakmar", "p7", 30.0, 1, 30.0, "Örnekköy Süt 1 L", "Örnekköy", "1 L", "Süt", False, None, None, None),
                ("sok", "p8", 33.0, 4, 33.0, "Örnekköy Süt 1 L", "Örnekköy", "1 L", "Süt", False, None, None, None)],
 }
@@ -128,7 +128,7 @@ def test_disabled_without_credentials(monkeypatch):
 def test_query_params_pagination_and_token_cache(creds):
     got = bq.query("SELECT 1 FROM x WHERE run_date = @d", {"d": TODAY, "region": "İzmir", "d7": TODAY - timedelta(days=7),
                                                             "d30": TODAY - timedelta(days=30)})
-    assert len(got) == 5 and got[0] == {"market": "migros", "product_id": "p1", "price": 59.9, "depots": 3,
+    assert len(got) == 5 and got[0] == {"market": "tarim_kredi", "product_id": "p1", "price": 59.9, "depots": 3,
                                         "unit_price": 59.9, "title": "Örnekköy Günlük Süt 1 L", "brand": "Örnekköy",
                                         "volume_weight": "1 L", "main_category": "Süt", "discount": True,
                                         "promotion_text": "2 al 1 öde", "change_7d": 8.0, "change_30d": 12.5}
@@ -158,7 +158,7 @@ def test_tick_imports_regions_idempotent_and_waits(creds):
     assert sorted(r[1] for r in out["imported"]) == ["Ankara", "İstanbul", "İzmir"] and out["left"] == 0  # Muş: failed
     iz = _rows("İzmir")
     assert [(r["chain"], r["group_key"], r["price"], r["discount"], r["change_7d"], r["depots"]) for r in iz] == [
-        ("BİM", "sut|1l", 35.0, 0, 1.0, 5), ("Migros", "sut|1l", 59.9, 1, 8.0, 3), ("Migros", "sut|1l", 61.0, 0, None, 1)]
+        ("BİM", "sut|1l", 35.0, 0, 1.0, 5), ("Tarım Kredi", "sut|1l", 59.9, 1, 8.0, 3), ("Tarım Kredi", "sut|1l", 61.0, 0, None, 1)]
     assert iz[1]["promotion"] == "2 al 1 öde" and iz[2]["title"] == "Örnekköy Süt 1 L"   # adda boy yoksa eklenir
     assert iz[0]["day"] == DAY and iz[0]["depot_id"] == ""
     with system.connect() as c:
@@ -205,23 +205,23 @@ def test_source_by_region(creds):
     _seed(creds)
     by = lambda region: {o["chain"]: o for o in price_sources.OfficialSource(region).fetch(["sut|1l"])["sut|1l"]}  # noqa: E731
     iz = by("İzmir")
-    assert iz["Migros"]["price"] == 59.9 and iz["Migros"]["region"] == "İzmir" and iz["Migros"]["discount"] is True
-    assert iz["Migros"]["change_7d"] == 8.0 and iz["Migros"]["promotion"] == "2 al 1 öde"
+    assert iz["Tarım Kredi"]["price"] == 59.9 and iz["Tarım Kredi"]["region"] == "İzmir" and iz["Tarım Kredi"]["discount"] is True
+    assert iz["Tarım Kredi"]["change_7d"] == 8.0 and iz["Tarım Kredi"]["promotion"] == "2 al 1 öde"
     assert iz["BİM"]["region"] == "ulusal" and iz["BİM"]["price"] == 35.0               # ilin satırı
     assert iz["ŞOK"]["region"] == "ulusal" and iz["ŞOK"]["price"] == 33.0                # başka ilden (ulusal)
     assert iz["CarrefourSA"]["region"] == "İstanbul" and iz["CarrefourSA"]["change_7d"] == -4.0  # yedek il
     assert "Hakmar" not in iz                                                           # yalnız Ankara'da
     assert by("Konya")["Hakmar"]["region"] == "Ankara"                                  # Konya → Ankara
     ist = by("İstanbul")
-    assert ist["Migros"]["price"] == 99.0 and "discount" not in ist["Migros"]
-    assert by(None)["Migros"]["region"] == "İstanbul"                                   # seçilmemiş: İstanbul
-    assert by("Muş")["Migros"]["region"] == "İstanbul"                                  # bilinmeyen yedek: İstanbul
+    assert ist["Tarım Kredi"]["price"] == 99.0 and "discount" not in ist["Tarım Kredi"]
+    assert by(None)["Tarım Kredi"]["region"] == "İstanbul"                                   # seçilmemiş: İstanbul
+    assert by("Muş")["Tarım Kredi"]["region"] == "İstanbul"                                  # bilinmeyen yedek: İstanbul
 
 
 def test_region_alias_default_kadikoy(creds):
     with system.connect() as c:
         c.execute("INSERT INTO official_prices (chain, group_key, title, price, day, region) VALUES "
-                  "('Migros', 'sut|1l', 'Örnekköy Süt 1 L', 50.0, ?, 'DEFAULT_KADIKOY')", (DAY,))
+                  "('Tarım Kredi', 'sut|1l', 'Örnekköy Süt 1 L', 50.0, ?, 'DEFAULT_KADIKOY')", (DAY,))
     o = price_sources.OfficialSource("İstanbul").fetch(["sut|1l"])["sut|1l"][0]
     assert o["region"] == "İstanbul" and o["price"] == 50.0
 
@@ -245,7 +245,7 @@ def test_region_pref_api_and_offers(owner, creds, monkeypatch):  # noqa: F811
     monkeypatch.setenv("HESAPKITAP_PRICE_SOURCES", "own,community,resmi")
     got = owner.get("/api/prices/groups", params={"q": "sut|1l"}).json()
     best = {b["chain"]: b for b in got[0]["best"]}
-    assert best["Migros"]["region"] == "İzmir" and best["BİM"]["region"] == "ulusal"
+    assert best["Tarım Kredi"]["region"] == "İzmir" and best["BİM"]["region"] == "ulusal"
     assert [b["price"] for b in got[0]["best"]] == sorted(b["price"] for b in got[0]["best"])  # ucuz önce
     assert owner.put("/api/me/ui", json={"region": None}).json()["region"] is None
     assert owner.get("/api/meta").json()["ui"]["region"] is None

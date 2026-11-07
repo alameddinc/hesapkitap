@@ -166,7 +166,9 @@ class CommunitySource:
         return {k: labels.get(k, k) for k in keys if _match(query, k, labels.get(k, k))}
 
 
-NATIONAL_CHAINS = {"BİM", "A101", "ŞOK"}  # fiyatı ülke genelinde ~aynı: kişinin ilinde yoksa herhangi bir ilin son günü
+# fiyatı ülke genelinde ~aynı: kişinin ilinde yoksa herhangi bir ilin son günü. Ölçüm 07.11.2026 (13 il, Market Fiyatı):
+# aynı ürünün iller arası farkı olan ürün oranı BİM %0, ŞOK %3, A101 %4, Migros %5; CarrefourSA %57 (ort. %29) → il bazlı
+NATIONAL_CHAINS = {"BİM", "A101", "ŞOK", "Migros"}
 
 
 @register

@@ -8,7 +8,7 @@ import { useUI } from "../ui";
 import { useUiPrefs } from "./hooks";
 import Modal from "./Modal";
 
-export const REGION_HINT = "Migros ve CarrefourSA fiyatları ilden ile değişir; BİM, A101, ŞOK her yerde aynı.";
+export const REGION_HINT = "CarrefourSA fiyatları ilden ile değişir; BİM, A101, ŞOK ve Migros her yerde aynı.";
 export const REGION_PROMPT = "Bölgeni seç, sana yakın fiyatları gösterelim";
 
 /** Aranabilir il listesi (81 il) + "Seçimi kaldır". */
