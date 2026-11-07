@@ -45,6 +45,15 @@ import { ReceiptLinkHost } from "./components/ShopReceiptLink";
 import PageBoundary from "./components/PageBoundary";
 import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
 import { send } from "./lib/apiError";
+import { JoinPreviewModal } from "./components/JoinBook";
+
+/** Hesabı açıkken davet bağlantısı (/davet/<kod> → #/kayit?kod=): kayıt yerine katılma önizlemesi (book_join). */
+const inviteCode = (): string | null => {
+  const h = window.location.hash;
+  if (!h.startsWith("#/kayit")) return null;
+  const k = new URLSearchParams(h.split("?")[1] ?? "").get("kod");
+  return k && /^[A-Za-z0-9-]{4,64}$/.test(k) ? k.toUpperCase() : null;
+};
 
 const PAGES: Record<Route, () => React.ReactElement> = {
   ozet: Dashboard,
@@ -171,6 +180,7 @@ function Shell() {
     </button>
   );
   const [route, setRoute] = useState<Route>(readRoute);
+  const [joinCode, setJoinCode] = useState<string | null>(inviteCode);
   const meta = useMeta();
   const book = useBook();
   const { ui: prefs } = useUiPrefs();
@@ -206,6 +216,19 @@ function Shell() {
       setModal({ type: "add" });
       window.history.replaceState(null, "", window.location.hash.replace(/\?ekle=1/, ""));
     }
+  }, []);
+  useEffect(() => {
+    const clean = () => window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/ozet`);
+    if (inviteCode()) clean(); // ilk açılış: kod state'te; adres Özet'e döner
+    const takeInvite = () => {
+      const k = inviteCode();
+      if (!k) return;
+      setJoinCode(k);
+      clean();
+      setRoute("ozet");
+    };
+    window.addEventListener("hashchange", takeInvite);
+    return () => window.removeEventListener("hashchange", takeInvite);
   }, []);
   useEffect(() => {
     const on = () => setRoute(readRoute());
@@ -315,6 +338,7 @@ function Shell() {
       {modal?.type === "pay" && <PayForm p={modal.p} onClose={close} onSaved={setToast} />}
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
 
+      {joinCode && <JoinPreviewModal code={joinCode} onClose={() => setJoinCode(null)} />}
       <ConfirmHost />
       <ReceiptLinkHost />
       {toast && <Toast key={toast.id} t={toast} onClose={() => setToastState(null)} />}

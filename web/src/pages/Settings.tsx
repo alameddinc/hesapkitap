@@ -19,6 +19,8 @@ import BankTemplates from "../components/BankTemplates";
 import UpdateNotice from "../components/UpdateNotice";
 import BackupTools, { restoredMsg, restoreNamed } from "../components/BackupTools";
 import BookSettings from "../components/BookSettings";
+import { LeaveBook, SeatNote } from "../components/JoinBook";
+import type { Seat } from "../components/hooks";
 import BookSwitch from "../components/BookSwitch";
 import AppServer from "../components/AppServer";
 import PlanSettings from "../components/Plan";
@@ -252,8 +254,8 @@ export default function Settings() {
   if (book.isLoading || demo.isLoading) return <></>;
   if (demo.data) return <DemoSettings />;
   const b = book.data;
-  if (b?.member && b.book !== "kendi") return <MemberSettings owner={b.owner ?? ""} role={b.role} roleLabel={b.role_label} />;
-  return <OwnerSettings ownBook={!!b?.member} />;
+  if (b?.member && b.book !== "kendi") return <MemberSettings owner={b.owner ?? ""} role={b.role} roleLabel={b.role_label} seat={b.seat} />;
+  return <OwnerSettings ownBook={!!b?.member} seat={b?.seat} />;
 }
 
 /** Kişisel görünüm: sade mod (büyük yazı), Özet düzenini sıfırla. */
@@ -283,7 +285,7 @@ function DemoSettings() {
         <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Demoda ayarlar kapalı</h2>
         <p className="text-stone-600 dark:text-stone-400">
           Kendi sunucuna kurunca burada: yapay zekâ anahtarı (isteğe bağlı), Telegram bildirimleri, e-postadan otomatik ekstre,
-          yedekler ve geri yükleme, ortak defter (eşinle), telefondan paylaş kısayolu, PDF şifreleri, ay dönümü günü.
+          yedekler ve geri yükleme, ortak defter (ailenle), telefondan paylaş kısayolu, PDF şifreleri, ay dönümü günü.
         </p>
         <a className="btn-primary inline-flex" href="https://github.com/alameddinc/hesapkitap#-hızlı-kurulum" target="_blank" rel="noreferrer">
           Kendi sunucuna kur
@@ -300,7 +302,7 @@ const ROLE_TEXT: Record<string, string> = {
   full: "Ekleyebilir, yükleyebilir, düzenleyip silebilirsin; defter ayarları ve üyeler defter sahibinde.",
 };
 
-function MemberSettings({ owner, role, roleLabel }: { owner: string; role?: string; roleLabel?: string }) {
+function MemberSettings({ owner, role, roleLabel, seat }: { owner: string; role?: string; roleLabel?: string; seat?: Seat | null }) {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Ayarlar</h1>
@@ -310,6 +312,8 @@ function MemberSettings({ owner, role, roleLabel }: { owner: string; role?: stri
           <b>{owner}</b> kullanıcısının defterini görüyorsun{roleLabel ? <> · yetkin: <b>{roleLabel}</b></> : null}. {ROLE_TEXT[role ?? "editor"]}
         </p>
         <MyBookNote />
+        <SeatNote seat={seat} />
+        <div className="border-t border-stone-100 pt-3 dark:border-stone-800"><LeaveBook /></div>
       </section>
       <ViewPrefs />
       <PriceShareForm />
@@ -346,7 +350,7 @@ function AdminLink() {
 }
 
 /** Sahip ya da üyenin kendi defteri (ownBook: ortak defter ayarı yok, geçiş var). */
-function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
+function OwnerSettings({ ownBook, seat }: { ownBook?: boolean; seat?: Seat | null }) {
   const ui = useUI();
   const st = useQuery({ queryKey: ["settings"], queryFn: () => send<SettingsStatus>("/api/settings") });
   const onErr = { onError: (e: Error) => ui.error(e.message) };
@@ -377,6 +381,8 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
           <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Benim defterim</h2>
           <p className="text-stone-600 dark:text-stone-400">Bu defter sadece senin; ortak defterin sahibi göremez. Ortak deftere buradan dönebilirsin.</p>
           <BookSwitch />
+          <SeatNote seat={seat} />
+          <div className="border-t border-stone-100 pt-3 dark:border-stone-800"><LeaveBook /></div>
         </section>
       )}
       {isAdmin && <UpdateNotice />}

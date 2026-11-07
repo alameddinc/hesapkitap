@@ -46,7 +46,13 @@ export interface BookPerson { id: number; name: string; owner: boolean; role: Bo
 export interface BookInfo {
   member: boolean; me?: number | null; owner?: string; role?: BookRole; role_label?: string; book?: "ortak" | "kendi"; can_switch?: boolean;
   people?: BookPerson[]; hidden_pages?: string[]; hide_fees?: boolean;
+  /** book_join, hazır sürüm: üyenin Aile koltuğu */
+  seat?: Seat | null;
 }
+/** Aile koltuğu: own = kendi Premium'u (koltuk kullanmaz) · seat = koltukta · grace = koltuk yok, ek süre · none = koltuk yok */
+export interface Seat { state: "own" | "seat" | "grace" | "none"; grace_until?: string }
+/** Sunucu yeteneği (el sıkışması, S17) var mı; eski sunucuda yok. */
+export const useCap = (name: string) => !!useMeta().data?.capabilities?.includes(name);
 
 export const useBook = () => useQuery({
   queryKey: ["book-me"], staleTime: 60_000,
