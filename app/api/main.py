@@ -436,7 +436,7 @@ async def _require_login(request: Request, call_next):
         return response
     # şablon gönderimi (hub) ve gelen posta (Cloudflare Email Worker, kendi gizli anahtarıyla): oturumsuz
     public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound", "/api/billing/revenuecat",
-                                                       "/api/me/restore")  # geri alma: oturum yok, giriş belgesiyle
+                                                       "/api/me/restore", "/api/regions/demand")  # geri alma: oturum yok, giriş belgesiyle
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required", "code": "setup_required",
@@ -1299,6 +1299,20 @@ def admin_app_regions():
     Fiyat toplayan ekip (BigQuery marketfiyati) hangi illerin çekileceğini buradan alır: servis hesabımız salt okuma
     olduğu için app_regions tablosuna biz yazamıyoruz; onlar bu ucu yönetici anahtarıyla (Bearer) çeker."""
     _require_admin()
+    return prefs.region_counts(3)
+
+
+@app.get("/api/regions/demand")
+def regions_demand(request: Request):
+    """Fiyat toplayan iş (Cloud Run, marketfiyati) için oturumsuz uç: admin_app_regions ile aynı liste. Yetki yalnız
+    HESAPKITAP_APP_REGIONS_KEY (Authorization: Bearer …); anahtar yalnız bu ucu açar, sızarsa başka hiçbir şeye erişilmez.
+    Anahtar ayarlı değilse ya da tutmazsa 404 (uç var mı yok mu belli olmaz)."""
+    import hmac
+
+    key = os.environ.get("HESAPKITAP_APP_REGIONS_KEY", "")
+    got = request.headers.get("authorization", "")
+    if not key or not hmac.compare_digest(got, f"Bearer {key}"):
+        raise HTTPException(404, "Not Found")
     return prefs.region_counts(3)
 
 
