@@ -9,6 +9,7 @@ import { ask } from "../lib/ask";
 import { useUI } from "../ui";
 import { type BookRole, type Seat, useCap, useSave, useSwitchBook } from "./hooks";
 import Modal from "./Modal";
+import { useGoPlan } from "./DocQuota";
 import { possessive } from "./InvitePreview";
 
 export interface JoinPreview {
@@ -182,8 +183,8 @@ export function LeaveBook() {
 }
 
 /** Üyenin Aile koltuğu: kendi Premium'u (bilgi) / koltuk yok (ek süre ya da ücretsiz sınırlar). Koltuktaysa bir şey yazmaz. */
-export function SeatNote({ seat }: { seat?: Seat | null }) {
-  const ui = useUI();
+export function SeatNote({ seat, plans }: { seat?: Seat | null; /** sayfada paket bölümü var: "Paketleri gör" */ plans?: boolean }) {
+  const goPlan = useGoPlan();
   if (!seat || seat.state === "seat") return null;
   if (seat.state === "own") return <Banner kind="info" icon={Star}>Premium'un devam ettiği için Aile koltuğu kullanmıyorsun.</Banner>;
   return (
@@ -191,7 +192,7 @@ export function SeatNote({ seat }: { seat?: Seat | null }) {
       <b>Premium'un bitti, Aile koltukları dolu.</b>{" "}
       {seat.state === "grace" ? `Premium ${trDay(seat.grace_until)} tarihine kadar açık.` : "Premium özellikleri kapandı; ortak defteri görmeye devam edersin."}
       {" "}Premium'u yenileyebilir ya da aile yöneticisinden koltuk isteyebilirsin.
-      <button className="mt-1 block font-semibold text-blue-700 underline-offset-2 hover:underline dark:text-blue-300" onClick={() => ui.go("ayarlar")}>Paketleri gör</button>
+      {plans && <button className="mt-1 block font-semibold text-blue-700 underline-offset-2 hover:underline dark:text-blue-300" onClick={goPlan}>Paketleri gör</button>}
     </Banner>
   );
 }

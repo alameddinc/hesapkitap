@@ -381,7 +381,7 @@ function OwnerSettings({ ownBook, seat }: { ownBook?: boolean; seat?: Seat | nul
           <h2 className="flex items-center gap-2 font-semibold"><Lock size={18} /> Benim defterim</h2>
           <p className="text-stone-600 dark:text-stone-400">Bu defter sadece senin; ortak defterin sahibi göremez. Ortak deftere buradan dönebilirsin.</p>
           <BookSwitch />
-          <SeatNote seat={seat} />
+          <SeatNote seat={seat} plans />
           <div className="border-t border-stone-100 pt-3 dark:border-stone-800"><LeaveBook /></div>
         </section>
       )}
