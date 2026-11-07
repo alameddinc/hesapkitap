@@ -1293,6 +1293,25 @@ def _app_update_out() -> dict:
     return {"fields": app_update.raw(), "effective": app_update.config(), "default_store": app_update.DEFAULT_STORE}
 
 
+@app.get("/api/admin/app-regions")
+def admin_app_regions():
+    """Bölge seçen kullanıcı sayısı il başına: [{region, users}] (yalnız en az 3 kişinin seçtiği iller; kişi bilgisi yok).
+    Fiyat toplayan ekip (BigQuery marketfiyati) hangi illerin çekileceğini buradan alır: servis hesabımız salt okuma
+    olduğu için app_regions tablosuna biz yazamıyoruz; onlar bu ucu yönetici anahtarıyla (Bearer) çeker."""
+    _require_admin()
+    return prefs.region_counts(3)
+
+
+@app.get("/api/admin/official-prices")
+def admin_official_prices():
+    """Resmî fiyat içe aktarımı (BigQuery → official_prices): {configured, last_day, regions, rows, imported_at,
+    last_run_at, last_error, last_error_at} (app/price_import_bq.py status)."""
+    from app import price_import_bq
+
+    _require_admin()
+    return price_import_bq.status()
+
+
 @app.get("/api/admin/app-update")
 def admin_app_update():
     """Mobil uygulama sürüm yönlendirmesi: son / en düşük sürüm ve mağaza adresi (değer ve kaynağı: ayar | ortam)."""
@@ -2022,27 +2041,39 @@ class UiIn(BaseModel):
     layout_mobile: list[str] | None = None  # mobil uygulamanın Özet düzeni
     reset_layout: bool = False
     price_share: bool | None = None  # fiyat paylaşımı (kişi başı; /api/me/price-share ile aynı tercih)
+    region: str | None = Field(None, max_length=40)  # Bölgem: il adı (app/provinces.py); null / "" seçimi kaldırır
 
 
 @app.put("/api/me/ui")
 def put_ui(body: UiIn):
     """Kişisel görünüm: sade mod, Özet düzeni (herkes kendi). price_share verilirse fiyat paylaşımı tercihi de yazılır
-    (sistem veritabanında kişi başı; yanıtta da döner)."""
-    data = body.model_dump(exclude_unset=True, exclude={"reset_layout", "price_share"})
+    (sistem veritabanında kişi başı; yanıtta da döner). region verilirse (gönderildiyse; null / "" kaldırır) Bölgem:
+    81 ilden biri (bilinmeyen 422); resmî fiyatlar o ilden gelir. Yanıtta region döner."""
+    data = body.model_dump(exclude_unset=True, exclude={"reset_layout", "price_share", "region"})
     if body.reset_layout:
         data["layout"] = None
+    u = db.current_user()
+    if "region" in body.model_fields_set:  # önce doğrula: geçersiz il diğer alanları yarım yazmasın
+        from app import provinces
+
+        if body.region and not provinces.valid(body.region):
+            raise HTTPException(422, "Bilinmeyen il")
+        if not u or not u.get("id"):
+            raise HTTPException(409, "Bölge seçimi için giriş gerekli")
     out = prefs.set_ui(data)
     if body.price_share is not None:
-        u = db.current_user()
         if not u or not u.get("id"):
             raise HTTPException(409, "Fiyat paylaşımı için giriş gerekli")
         out["price_share"] = prefs.set_price_share(u["id"], body.price_share)
+    if "region" in body.model_fields_set:
+        out["region"] = prefs.set_region(u["id"], body.region)
     return out
 
 
 def _ui_out() -> dict:
-    """meta.ui: görünüm tercihleri + price_share (fiyat paylaşımı, kişi başı)."""
-    return {**prefs.ui(), "price_share": prefs.price_share((db.current_user() or {}).get("id"))}
+    """meta.ui: görünüm tercihleri + price_share (fiyat paylaşımı, kişi başı) + region (Bölgem: il adı | null)."""
+    uid = (db.current_user() or {}).get("id")
+    return {**prefs.ui(), "price_share": prefs.price_share(uid), "region": prefs.region(uid)}
 
 
 def _history_gate(month: str | None) -> None:
@@ -4346,7 +4377,9 @@ def price_groups(q: str | None = None, limit: int = 30):
     görebildiğin kayıtlar). Sıra: kendi aldıkların (son alım yeni→eski), sonra yalnız toplulukta olanlar (ada göre);
     metinde boy varsa ("1l süt", "süt 1 lt") o boydaki gruplar, sonra adı tam aranan ürün olanlar önce; boylar farklıysa
     aynı öbekte litre / kilo / adet fiyatı (unit_price_per) ucuz olan önce. Grup: category (product_groups.CATEGORIES);
-    teklif: unit_price_per, per_unit ("L" | "kg" | "adet"; boysuz grupta yok)."""
+    teklif: unit_price_per, per_unit ("L" | "kg" | "adet"; boysuz grupta yok). source "resmi" (sunucu açtıysa):
+    attribution, region (kişinin ili ya da yedek il; BİM/A101/ŞOK "ulusal"), discount?, promotion?, change_7d?,
+    change_30d? (yüzde) — il meta.ui.region'dan (seçilmemişse İstanbul)."""
     from app import price_sources
 
     q = (q or "").strip()[:60]

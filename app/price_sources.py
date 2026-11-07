@@ -5,15 +5,17 @@ Arayüz (PriceSource):
     fetch(group_keys) -> {group_key: [Offer, …]}   grupların teklifleri (toplu: istek başına bir sorgu)
     search(query) -> {group_key: label}            kaynağın bildiği, sorguyla eşleşen gruplar ("süt")
 Offer: {chain, price (birim fiyat ₺), source, date? (kendi fişin), n? (kaç kişi), brand?, unit_price_per?, per_unit?}
+resmi teklifte ayrıca: attribution, region ("İzmir" | "ulusal"), discount?, promotion?, change_7d?, change_30d? (yüzde)
 unit_price_per / per_unit: grubun boyundan litre / kilo / adet fiyatı (product_groups.unit_price; "₺59,00/L").
 
 Kayıtlı kaynaklar:
 - "own": kullanıcının kendi defterindeki fişler (db.priced_items; ortak defter üyesinde yalnız görebildiği kayıtlar),
   zincir/mağaza başına son fiyat.
 - "community": anonim topluluk ortancası (app/community_prices.py; son 14 gün, en az 3 kişi).
-- "resmi": resmî kaynak (Market Fiyatı biçimi; app/price_import.py ile official_prices'a aktarılır). VARSAYILAN KAPALI:
-  yalnız HESAPKITAP_PRICE_SOURCES "resmi" içerir VE HESAPKITAP_OFFICIAL_PRICES_URL / _FILE ayarlıysa etkin. Teklifte
-  attribution (kaynak yazısı) gelir; istemci gösterir. Zincir başına: son günün şube ortancası, gruptaki en ucuz ürün.
+- "resmi": resmî kaynak (Market Fiyatı; app/price_import_bq.py BigQuery'den gecelik ya da app/price_import.py dosyadan
+  official_prices'a aktarılır). VARSAYILAN KAPALI: yalnız HESAPKITAP_PRICE_SOURCES "resmi" içerir VE
+  HESAPKITAP_BQ_CREDENTIALS (ya da HESAPKITAP_OFFICIAL_PRICES_URL / _FILE) ayarlıysa etkin. Teklifte attribution (kaynak
+  yazısı) gelir; istemci gösterir. Zincir başına: kişinin ilinin son günü, gruptaki en ucuz ürün (OfficialSource).
 Başka bir resmî kaynak ancak izin alındıktan sonra register() ile eklenir ve HESAPKITAP_PRICE_SOURCES'a adı yazılınca
 etkin olur (varsayılan "own,community"). Hiçbir zincirin sitesi ya da izni olmayan bir servis kazınmaz; bu modül ağ
 çağrısı yapmaz (içe aktarım ayrı komut).
@@ -36,6 +38,11 @@ class Offer(TypedDict, total=False):
     unit_price_per: float
     per_unit: str
     attribution: str
+    region: str
+    discount: bool
+    promotion: str
+    change_7d: float
+    change_30d: float
 
 
 class PriceSource(Protocol):
@@ -62,11 +69,16 @@ def registered() -> list[str]:
 
 
 def enabled_names() -> list[str]:
-    from app import price_import
-
     raw = os.environ.get("HESAPKITAP_PRICE_SOURCES") or DEFAULT_SOURCES
     names = [n for n in (x.strip() for x in raw.split(",")) if n in _REGISTRY]
-    return [n for n in names if n != "resmi" or price_import.configured()]  # resmî kaynak: adres / dosya da gerekir
+    return [n for n in names if n != "resmi" or official_configured()]  # resmî kaynak: BigQuery ya da adres / dosya da gerekir
+
+
+def official_configured() -> bool:
+    """Resmî kaynağın verisi var mı: BigQuery kimliği (app/bq.py) ya da dosya / adres (app/price_import.py)."""
+    from app import bq, price_import
+
+    return bool(price_import.configured()) or bq.configured()
 
 
 def open_sources(names: list[str] | None = None) -> list[PriceSource]:
@@ -154,18 +166,38 @@ class CommunitySource:
         return {k: labels.get(k, k) for k in keys if _match(query, k, labels.get(k, k))}
 
 
+NATIONAL_CHAINS = {"BİM", "A101", "ŞOK"}  # fiyatı ülke genelinde ~aynı: kişinin ilinde yoksa herhangi bir ilin son günü
+
+
 @register
 class OfficialSource:
-    """Resmî kaynak (official_prices; app/price_import.py): zincir başına son günün fiyatı — ürün başına şube ortancası,
-    gruptaki en ucuz ürün (markası ile). Son WINDOW_DAYS gün."""
+    """Resmî kaynak (official_prices; app/price_import.py dosyadan, app/price_import_bq.py BigQuery'den): zincir başına
+    son günün fiyatı — ürün başına şube ortancası, gruptaki en ucuz ürün (markası ile). Son WINDOW_DAYS gün.
+
+    Bölge (kişinin "Bölgem" tercihi, prefs.region; seçilmemişse İstanbul): teklifler o ilin satırlarından. BİM, A101, ŞOK
+    (NATIONAL_CHAINS) her zaman region "ulusal" yazılır: ilin satırı varsa o, yoksa herhangi bir ilin son günü.
+    Migros, CarrefourSA, Hakmar, Tarım Kredi yalnız o ilden; yoksa yakın büyük şehir, o da yoksa İstanbul
+    (provinces.fallback_chain) — region kullanılan il. Bölgesiz (dosyadan) satırlar en son çare, region yazılmaz.
+    Teklif ek alanları: region, discount (yalnız true), promotion?, change_7d / change_30d (yüzde; varsa)."""
     name = "resmi"
     WINDOW_DAYS = 7
+
+    def __init__(self, region: str | None = None):
+        if region is None:
+            from app import db, prefs
+
+            region = prefs.region((db.current_user() or {}).get("id"))
+        from app import provinces
+
+        self.region = provinces.valid(region) or provinces.DEFAULT
 
     def _rows(self, group_keys: list[str] | None) -> list:
         from app import system
 
         since = (date.today() - timedelta(days=self.WINDOW_DAYS)).isoformat()
-        sql, args = "SELECT chain, group_key, title, brand, price, day FROM official_prices WHERE day >= ?", [since]
+        sql = ("SELECT chain, group_key, title, brand, price, day, region, discount, promotion, change_7d, change_30d "
+               "FROM official_prices WHERE day >= ?")
+        args: list = [since]
         if group_keys is not None:
             if not group_keys:
                 return []
@@ -174,33 +206,67 @@ class OfficialSource:
         with system.connect() as c:
             return c.execute(sql, args).fetchall()
 
+    def _pick(self, chain: str, by_prov: dict[str, list]) -> tuple[str | None, list] | None:
+        """(etiket, satırlar): hangi ilin satırları kullanılacak."""
+        from app import provinces
+
+        if chain in NATIONAL_CHAINS:
+            if self.region in by_prov:
+                return "ulusal", by_prov[self.region]
+            named = [p for p in by_prov if p]
+            if named:  # en yeni günü olan il (eşitse İstanbul önce, sonra ada göre)
+                p = max(named, key=lambda p: (max(r["day"] for r in by_prov[p]), p == provinces.DEFAULT, p))
+                return "ulusal", by_prov[p]
+        else:
+            for p in provinces.fallback_chain(self.region):
+                if p in by_prov:
+                    return p, by_prov[p]
+        return (None, by_prov[""]) if "" in by_prov else None
+
     def fetch(self, group_keys: list[str]) -> dict[str, list[Offer]]:
         from statistics import median
 
-        from app import price_import
+        from app import price_import, provinces
 
-        last: dict[tuple[str, str], str] = {}
-        rows = self._rows(sorted({k for k in group_keys if k}))
-        for ch, g, _t, _b, _p, day in rows:
-            last[(ch, g)] = max(day, last.get((ch, g), day))
-        per: dict[tuple[str, str], dict[tuple[str, str | None], list[float]]] = {}
-        for ch, g, t, b, p, day in rows:
-            if day == last[(ch, g)]:
-                per.setdefault((ch, g), {}).setdefault((t, b), []).append(p)
+        grouped: dict[tuple[str, str], dict[str, list]] = {}
+        for r in self._rows(sorted({k for k in group_keys if k})):
+            prov = provinces.province_of(r["region"]) if r["region"] else ""
+            if prov is not None:
+                grouped.setdefault((r["chain"], r["group_key"]), {}).setdefault(prov, []).append(r)
         out: dict[str, list[Offer]] = {}
-        for (ch, g), prods in per.items():
-            (t, b), price = min(((k, median(v)) for k, v in prods.items()), key=lambda x: (x[1], x[0][0]))
-            off: Offer = {"chain": ch, "price": round(price, 2), "source": self.name, "date": last[(ch, g)],
+        for (ch, g), by_prov in grouped.items():
+            got = self._pick(ch, by_prov)
+            if not got:
+                continue
+            label, rows = got
+            last = max(r["day"] for r in rows)
+            prods: dict[tuple[str, str | None], list] = {}
+            for r in rows:
+                if r["day"] == last:
+                    prods.setdefault((r["title"], r["brand"]), []).append(r)
+            (t, b), price = min(((k, median(x["price"] for x in v)) for k, v in prods.items()),
+                                key=lambda x: (x[1], x[0][0]))
+            top = min(prods[(t, b)], key=lambda x: x["price"])
+            off: Offer = {"chain": ch, "price": round(price, 2), "source": self.name, "date": last,
                           "attribution": price_import.ATTRIBUTION}
             if b:
                 off["brand"] = b
+            if label:
+                off["region"] = label
+            if any(x["discount"] for x in prods[(t, b)]):
+                off["discount"] = True
+            if top["promotion"]:
+                off["promotion"] = top["promotion"]
+            for k in ("change_7d", "change_30d"):
+                if top[k] is not None:
+                    off[k] = round(float(top[k]), 1)
             out.setdefault(g, []).append(off)
         return out
 
     def search(self, query: str) -> dict[str, str]:
         from app import product_groups
 
-        keys = sorted({r[1] for r in self._rows(None)})
+        keys = sorted({r["group_key"] for r in self._rows(None)})
         labels = product_groups.labels(keys)
         return {k: labels.get(k, k) for k in keys if _match(query, k, labels.get(k, k))}
 

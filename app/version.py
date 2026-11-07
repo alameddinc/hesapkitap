@@ -109,6 +109,9 @@ CAPABILITIES = (
                               # (sabit liste product_groups.CATEGORIES; "Süt ve Kahvaltılık" …), yoksa null
     "official_prices",        # /api/prices/groups best[].source "resmi" (varsayılan kapalı; sunucu ayarlıysa) + attribution
                               # "Kaynak: Market Fiyatı (…)" — istemci teklif listesinin altında gösterir
+    "price_region",           # Bölgem: meta.ui.region (il adı | null), PUT /api/me/ui {region} (81 il, app/provinces.py;
+                              # null/"" kaldırır, bilinmeyen 422); resmi teklifte region ("İzmir" | "ulusal"),
+                              # discount?, promotion?, change_7d?/change_30d? (yüzde); seçilmemişse İstanbul
 )
 
 

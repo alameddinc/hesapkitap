@@ -291,6 +291,13 @@ async def scheduler() -> None:
             await asyncio.to_thread(integrity.report_admin, now)
         except Exception:  # noqa: BLE001
             log.exception("integrity report failed")
+        try:  # resmî fiyatlar: BigQuery → official_prices (UTC 05:00 sonrası, yarım saatte bir bakar; app/price_import_bq.py)
+            from app import price_import_bq
+
+            if price_import_bq.enabled() and (got := await asyncio.to_thread(price_import_bq.tick, now)):
+                log.info("resmî fiyat: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("official prices import failed")
         try:  # telefona bildirim (app/push.py): günlük hatırlatmalar 09:00'dan sonra, kuyruk her dakika
             from app import push
 

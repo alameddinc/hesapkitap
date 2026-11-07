@@ -26,7 +26,7 @@ log = logging.getLogger("hesapkitap.price_import")
 ATTRIBUTION = "Kaynak: Market Fiyatı (T.C. Sanayi ve Teknoloji Bakanlığı / TÜBİTAK BİLGEM)"
 CHAIN_MAP = {"carrefour": "CarrefourSA", "carrefoursa": "CarrefourSA", "migros": "Migros", "a101": "A101",
              "sok": "ŞOK", "bim": "BİM", "hakmar": "Hakmar", "tarim_kredi": "Tarım Kredi", "tarimkredi": "Tarım Kredi"}
-KEEP_DAYS = 30
+KEEP_DAYS = int(os.environ.get("HESAPKITAP_OFFICIAL_KEEP_DAYS") or 35)  # sunucuda kaç gün tutulur
 MAX_BYTES = 64 * 1024 * 1024
 URL_ENV, FILE_ENV = "HESAPKITAP_OFFICIAL_PRICES_URL", "HESAPKITAP_OFFICIAL_PRICES_FILE"
 
@@ -71,19 +71,33 @@ def _num(v) -> float | None:
         return None
 
 
-def rows_from(data: dict, today: date | None = None) -> tuple[list[tuple], dict]:
-    """Yanıt → official_prices satırları ve özet {products, matched, rows, skipped_chain, unmatched}."""
+def full_title(title, volume) -> str:
+    """Ürün adı; adda boy yoksa kaynağın boyu eklenir ("Örnek Süt" + "1 L" → "Örnek Süt 1 L"). En çok 120 karakter."""
     from app import product_groups as pg
 
+    t = str(title or "").strip()[:120]
+    if volume and not pg.parse_size(pg.name_norm(t).split())[0]:
+        t = f"{t} {str(volume).strip()}"[:120]
+    return t
+
+
+def group_names(names: list[dict], chunk: int = 500) -> list[dict | None]:
+    """[{name, brand}] → ürün grupları (product_groups.groups_for; çözülemeyen ad yapay zekâ kuyruğuna girer)."""
+    from app import product_groups as pg
+
+    out: list[dict | None] = []
+    for i in range(0, len(names), chunk):
+        out += pg.groups_for(names[i:i + chunk])
+    return out
+
+
+def rows_from(data: dict, today: date | None = None) -> tuple[list[tuple], dict]:
+    """Yanıt → official_prices satırları ve özet {products, matched, rows, skipped_chain, unmatched}."""
     today = today or date.today()
     products = [p for p in (data or {}).get("content") or [] if isinstance(p, dict) and p.get("title")]
-    names = []
-    for p in products:
-        title = str(p["title"])[:120]
-        if not pg.parse_size(pg.name_norm(title).split())[0] and p.get("refinedVolumeOrWeight"):
-            title = f"{title} {p['refinedVolumeOrWeight']}"
-        names.append({"name": title, "brand": p.get("brand") or None})
-    groups = pg.groups_for(names) if names else []
+    names = [{"name": full_title(p["title"], p.get("refinedVolumeOrWeight")), "brand": p.get("brand") or None}
+             for p in products]
+    groups = group_names(names)
     out, stats = [], {"products": len(products), "matched": 0, "rows": 0, "skipped_chain": 0, "unmatched": 0}
     for p, n, g in zip(products, names, groups):
         if not g or g.get("pending"):

@@ -29,7 +29,7 @@ def test_import_maps_chains_groups_and_skips_unknown():
         ("BİM", "sut|1l", 32.5, "2026-11-07", "d-2", 0), ("Migros", "sut|500ml", 18.0, "2026-11-07", "d-5", 0)]
     assert rows[0]["title"] == "Örnekköy Günlük Süt 1 L" and rows[-1]["title"] == "Örnekköy Süt 500 ml"  # boy eklendi
     assert set(rows[0]) == {"id", "chain", "group_key", "title", "brand", "price", "unit_price", "day", "depot_id",
-                            "discount"}                                                     # konum / şube adı yok
+                            "discount", "region", "promotion", "depots", "change_7d", "change_30d"}  # konum / şube adı yok
     assert price_import.import_data(_data(), DAY)["rows"] == 4 and len(_rows()) == 4     # yeniden: üzerine yazar
     with system.connect() as c:
         assert c.execute("SELECT COUNT(*) FROM community_prices").fetchone()[0] == 0      # topluluktan ayrı

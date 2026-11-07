@@ -104,6 +104,40 @@ def price_share_out(uid: int | None) -> dict:
     return {"on": price_share(uid), "text": PRICE_SHARE_TEXT}
 
 
+# Bölgem (kişi bazında, sistem veritabanında): resmî fiyatların hangi ilden gösterileceği (app/provinces.py 81 il).
+# Zorunlu değil; seçilmemişse İstanbul fiyatları gösterilir. Sunucu konum almaz; yalnız il adı saklanır.
+def region(uid: int | None) -> str | None:
+    from app import provinces, system
+
+    return provinces.valid(system.get(f"region:{uid}")) if uid else None
+
+
+def set_region(uid: int, name: str | None) -> str | None:
+    """İl adı (listede olmalı) ya da None / "" (seçimi kaldır). Geçersiz ad: ValueError."""
+    from app import provinces, system
+
+    if name is None or not str(name).strip():
+        system.put(f"region:{uid}", None)
+        return None
+    p = provinces.valid(name)
+    if not p:
+        raise ValueError("Bilinmeyen il")
+    system.put(f"region:{uid}", p)
+    return p
+
+
+def region_counts(min_users: int = 3) -> list[dict]:
+    """İl başına bölge seçen etkin kullanıcı sayısı (en az min_users olan iller; kişi bilgisi yok), çoktan aza."""
+    from app import system
+
+    with system.connect() as c:
+        rows = c.execute("SELECT s.value, COUNT(*) FROM sys_settings s JOIN users u ON u.id = CAST(SUBSTR(s.key, 8) AS "
+                         "INTEGER) WHERE s.key LIKE 'region:%' AND COALESCE(u.disabled, 0) = 0 AND u.deleted_at IS NULL "
+                         "GROUP BY s.value").fetchall()
+    return sorted(({"region": r[0], "users": r[1]} for r in rows if r[1] >= min_users),
+                  key=lambda x: (-x["users"], x["region"]))
+
+
 def _ui_key() -> str:
     u = db.current_user()
     return f"ui:{u['id']}" if u and u.get("id") else "ui:owner"

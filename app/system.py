@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS community_prices (  -- anonim topluluk fiyatı (app/c
 );
 CREATE INDEX IF NOT EXISTS community_prices_group ON community_prices(group_key, chain, day);
 CREATE INDEX IF NOT EXISTS community_prices_name ON community_prices(name_norm);
-CREATE TABLE IF NOT EXISTS official_prices (  -- resmî kaynak fiyatı (app/price_import.py; varsayılan kapalı): kişi yok
+CREATE TABLE IF NOT EXISTS official_prices (  -- resmî kaynak fiyatı (app/price_import.py, app/price_import_bq.py): kişi yok
     id INTEGER PRIMARY KEY,
     chain TEXT NOT NULL,                 -- zincirin görünen adı (receipt_templates.CHAINS)
     group_key TEXT NOT NULL,             -- ürün grubu (product_groups)
@@ -250,11 +250,25 @@ CREATE TABLE IF NOT EXISTS official_prices (  -- resmî kaynak fiyatı (app/pric
     price REAL NOT NULL,
     unit_price REAL,                     -- kaynağın litre / kilo fiyatı (unitPriceValue)
     day TEXT NOT NULL,
-    depot_id TEXT NOT NULL DEFAULT '',   -- kaynağın şube numarası (konum / şube adı saklanmaz)
+    depot_id TEXT NOT NULL DEFAULT '',   -- kaynağın şube numarası (dosya içe aktarımı; konum / şube adı saklanmaz)
     discount INTEGER NOT NULL DEFAULT 0, -- kampanyalı fiyat
-    UNIQUE (chain, depot_id, title, day)
+    region TEXT NOT NULL DEFAULT '',     -- kaynaktaki bölge ("İzmir", "DEFAULT_KADIKOY"); dosya içe aktarımında ''
+    promotion TEXT,                      -- kampanya yazısı
+    depots INTEGER,                      -- kaç şubede bu fiyat (BigQuery özeti)
+    change_7d REAL,                      -- 7 / 30 gün önceki fiyata göre değişim, yüzde (+8.0 = %8 zam)
+    change_30d REAL,
+    UNIQUE (chain, region, depot_id, title, day)
 );
 CREATE INDEX IF NOT EXISTS official_prices_group ON official_prices(group_key, chain, day);
+CREATE TABLE IF NOT EXISTS official_imports (  -- BigQuery içe aktarımı yapılan (gün, bölge): yeniden çekilmez
+    run_date TEXT NOT NULL,
+    region TEXT NOT NULL,
+    rows INTEGER NOT NULL DEFAULT 0,
+    products INTEGER NOT NULL DEFAULT 0,
+    unmatched INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL,
+    PRIMARY KEY (run_date, region)
+);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
@@ -319,6 +333,18 @@ def _migrate(c) -> None:
         c.execute("ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
     if "category" not in {r[1] for r in c.execute("PRAGMA table_info(product_groups)")}:
         c.execute("ALTER TABLE product_groups ADD COLUMN category TEXT")
+    # resmî fiyat: bölge (BigQuery il bazında), kampanya yazısı, şube sayısı, 7 / 30 günlük değişim. Tekillik bölgeyi de
+    # içermeli; SQLite kısıtı değiştiremediği için tablo yeniden kurulur (eski satırlar bölge '' ile taşınır)
+    if "region" not in {r[1] for r in c.execute("PRAGMA table_info(official_prices)")}:
+        c.execute("ALTER TABLE official_prices RENAME TO official_prices_old")
+        c.execute("DROP INDEX IF EXISTS official_prices_group")
+        start = SCHEMA.index("CREATE TABLE IF NOT EXISTS official_prices (")
+        c.executescript(SCHEMA[start:SCHEMA.index("CREATE TABLE IF NOT EXISTS official_imports")])
+        c.execute("INSERT OR IGNORE INTO official_prices (chain, group_key, title, brand, price, unit_price, day, depot_id, "
+                  "discount) SELECT chain, group_key, title, brand, price, unit_price, day, depot_id, discount "
+                  "FROM official_prices_old")
+        c.execute("DROP TABLE official_prices_old")
+    c.execute("CREATE INDEX IF NOT EXISTS official_prices_region ON official_prices(region, day)")
     # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): önbellek ve topluluk fiyatları bir kez
     from app import product_groups
 
@@ -487,7 +513,7 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))
             # fiyat paylaşımı tercihi; topluluk fiyatı satırları kişiye bağlanamaz, kalır (app/community_prices.py)
-            c.execute("DELETE FROM sys_settings WHERE key = ?", (f"price_share:{uid}",))
+            c.execute("DELETE FROM sys_settings WHERE key IN (?, ?)", (f"price_share:{uid}", f"region:{uid}"))
             for sql in ("DELETE FROM password_resets WHERE user_id = ?",   # tablolar ilk kullanımda kurulur (reset, inbound)
                         # gelen posta adresi: kod hiç yeniden verilmesin diye satır kalır, hesapla bağı kopar (D12)
                         "UPDATE inbound SET revoked = 1, user_id = 0 WHERE user_id = ?"):
