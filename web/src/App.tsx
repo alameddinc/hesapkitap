@@ -41,6 +41,7 @@ import { isViewer, routeVisible, useBook, useIsAdmin, useUiPrefs } from "./compo
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 import ConfirmHost from "./components/ConfirmHost";
+import { ReceiptLinkHost } from "./components/ShopReceiptLink";
 import PageBoundary from "./components/PageBoundary";
 import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
 import { send } from "./lib/apiError";
@@ -315,6 +316,7 @@ function Shell() {
       {modal?.type === "rmonth" && <RecurringMonthForm r={modal.r} onClose={close} />}
 
       <ConfirmHost />
+      <ReceiptLinkHost />
       {toast && <Toast key={toast.id} t={toast} onClose={() => setToastState(null)} />}
     </UIContext.Provider>
   );
