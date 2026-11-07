@@ -137,6 +137,7 @@ def test_query_params_pagination_and_token_cache(creds):
     types = {q["name"]: q["parameterType"]["type"] for q in post[2]["queryParameters"]}
     assert types == {"d": "DATE", "region": "STRING", "d7": "DATE", "d30": "DATE"}
     assert [c[0] for c in creds.calls] == ["token", "POST", "GET", "GET"]               # iş bekleme + 2. sayfa
+    assert post[2]["maximumBytesBilled"] == str(2 * 1024 ** 3)                          # maliyet sigortası
     bq.query("SELECT 1 FROM run_log WHERE run_date = @d", {"d": TODAY})
     assert sum(c[0] == "token" for c in creds.calls) == 1                               # belirteç önbellekte
 

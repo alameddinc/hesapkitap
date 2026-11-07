@@ -8,7 +8,8 @@ Ayar (ortam):
   HESAPKITAP_BQ_LOCATION (varsayılan EU).
 Erişim belirteci: servis hesabının anahtarıyla RS256 imzalı JWT (scope bigquery.readonly) → oauth2 token; süresi
 dolana kadar önbellekte. Sorgu: POST …/projects/{p}/queries (adlı sorgu parametreleriyle; standart SQL), iş bitmediyse
-getQueryResults ile beklenir, sayfalar pageToken ile toplanır. Anahtar ve belirteç hiçbir zaman günlüğe yazılmaz.
+getQueryResults ile beklenir, sayfalar pageToken ile toplanır. Her sorguda maximumBytesBilled = MAX_BYTES_BILLED (2 GiB):
+aşan iş faturalanmaz, hata verir. Anahtar ve belirteç hiçbir zaman günlüğe yazılmaz.
 Maliyet: offers tablosu run_date ile bölümlü; her sorgu run_date süzgeci içermeli (app/price_import_bq.py).
 """
 import base64
@@ -34,6 +35,9 @@ QUERY_WAIT_MS = 20_000   # sunucuda iş bekleme (istek başına)
 MAX_WAIT_S = 120         # bir sorgunun toplam bekleme sınırı
 PAGE_ROWS = 10_000
 MAX_ROWS = 200_000       # bir sorgudan en çok satır (güvenlik sınırı)
+# maliyet sigortası: her sorgu işi en çok bu kadar bayt faturalar; bölüm süzgeci unutulmuş ya da bozuk bir sorgu
+# faturalanmak yerine hata verir (BigQuery "bytesBilledLimitExceeded"). Yükleme işleri (load_ndjson) bayt faturalamaz.
+MAX_BYTES_BILLED = 2 * 1024 ** 3
 
 _lock = threading.Lock()
 _cache: dict = {}
@@ -211,7 +215,7 @@ def _call(method: str, url: str, writer: bool = False, headers: dict | None = No
 def query(sql: str, params: dict | None = None, max_rows: int = MAX_ROWS) -> list[dict]:
     """Standart SQL sorgusu (adlı parametreler @ad) → satırlar [{sütun: değer}] (tür dönüşümüyle). Hata: BQError."""
     body = {"query": sql, "useLegacySql": False, "location": location(), "timeoutMs": QUERY_WAIT_MS,
-            "maxResults": PAGE_ROWS}
+            "maxResults": PAGE_ROWS, "maximumBytesBilled": str(MAX_BYTES_BILLED)}
     if params:
         body["parameterMode"] = "NAMED"
         body["queryParameters"] = [_param(k, v) for k, v in params.items()]
