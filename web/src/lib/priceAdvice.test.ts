@@ -28,6 +28,7 @@ test("adviceText: iyi fiyat ve mağaza karşılaştırması", () => {
   assert.equal(s.title, "Köşe Kafe ₺50,00 ucuz");
   assert.equal(s.detail, "Köşe Kafe'de ₺180,00, Espresso Bar'da ₺230,00");
   assert.equal(adviceText({ kind: "store_compare", stores: [{ store: "A", price: 1 }], cheapest: "A", diff: 0 }, m), null);
+  assert.equal(adviceText({ kind: "store_compare", stores: [{ store: "A", price: 20 }, { store: "B", price: 20 }], cheapest: "A", diff: 0 }, m)!.title, "Gittiğin yerlerde fiyat aynı");
   assert.equal(adviceText(null, m), null);
 });
 

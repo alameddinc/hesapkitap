@@ -30,7 +30,7 @@ export function adviceText(a: Advice | null | undefined, m: Money): AdviceText |
   }
   if (a.kind === "store_compare" && a.stores.length >= 2) {
     const cheap = typeof a.cheapest === "string" ? a.cheapest : a.cheapest.store;
-    return { tone: "info", title: `${cheap} ${m(a.diff)} ucuz`,
+    return { tone: "info", title: a.diff >= 0.01 ? `${cheap} ${m(a.diff)} ucuz` : "Gittiğin yerlerde fiyat aynı",
       detail: a.stores.slice(0, 3).map((s) => `${bulunma(s.store)} ${m(s.price)}`).join(", ") };
   }
   return null;

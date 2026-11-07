@@ -319,7 +319,10 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
     select: (d) => (Array.isArray(d) ? d : d.groups ?? []),
   });
   const grp = q.data?.find((x) => x.key === g.key) ?? q.data?.[0];
-  const best = [...(grp?.best ?? [])].sort((a, b) => a.price - b.price).slice(0, 5);
+  // kullanıcıların bu haftaki fiyatı (yetenek community_quality) önce, sonra ucuzdan pahalıya; en ucuz yeşil
+  const sorted = [...(grp?.best ?? [])].sort((a, b) => a.price - b.price).slice(0, 5);
+  const best = [...sorted.filter((b) => b.source === "community"), ...sorted.filter((b) => b.source !== "community")];
+  const cheapest = sorted[0];
   return (
     <section className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
@@ -334,7 +337,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
             const cp = communityParts(b, (n) => maskText(tl(n)));
             return (
               <li key={`${b.chain}-${i}`} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5" data-testid="nereden-satir">
-                <span className={cx("tabular-nums", i === 0 && "font-semibold text-green-700 dark:text-green-400")}>{l.main}{i === 0 && best.length > 1 ? " · en ucuz" : ""} <OfferBadges b={b} /></span>
+                <span className={cx("tabular-nums", b === cheapest && "font-semibold text-green-700 dark:text-green-400")}>{l.main}{b === cheapest && best.length > 1 ? " · en ucuz" : ""} <OfferBadges b={b} /></span>
                 <span className="text-xs text-stone-500">{cp ? cp.main.replace(/^Kullanıcılar \S+ ödüyor/, "kullanıcılar") : l.src}</span>
                 {cp && cp.extra.length > 0 && <span className={cx("w-full text-xs", b.differs ? "font-medium text-amber-700 dark:text-amber-400" : "text-stone-500")} data-testid="topluluk-resmi">{cp.extra.join(" · ")}</span>}
               </li>
