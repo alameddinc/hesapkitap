@@ -57,6 +57,9 @@ export interface Row {
   original_amount?: number;
   location?: string | null; // fişteki adres
   receipt_file?: string | null; // saklı fiş fotoğrafı (GET /api/entries/{id}/receipt)
+  /** yetenek receipt_tax: fişin KDV'si, oran oran dökümü, satıcının VKN'si, vergi dairesi, unvanı (eski sunucuda anahtar yok) */
+  vat_total?: number | null; vat_lines?: { rate: number; amount: number }[] | null;
+  tax_no?: string | null; tax_office?: string | null; legal_name?: string | null;
   bank_doc_id?: number | null; // hesap dökümünden geldi
   wallet_id?: number | null; // ön ödemeli kart
   account_id?: number | null; // banka/nakit hesabı

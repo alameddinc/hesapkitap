@@ -4,7 +4,7 @@ import { send } from "../lib/apiError";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
-import { dateTR, fold, parseAmount, tl } from "../format";
+import { cx, dateTR, fold, parseAmount, tl } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
 import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
@@ -22,6 +22,8 @@ import { MatchPanel } from "./MatchInfo";
 import ReceiptItems, { checkSentence } from "./receipt/ReceiptItems";
 import { BankText, userNote } from "./BankText";
 import SavedReceiptItems from "./receipt/SavedReceiptItems";
+import TaxCard, { SavedTax, type TaxInfo } from "./receipt/TaxCard";
+import { AlertTriangle } from "lucide-react";
 import { checkItems, toServer, type ReceiptItem } from "./receipt/check";
 import { BookChoice, SaveSpender, useSaveTarget } from "./SaveTarget";
 import { bookHeaders, CACHED_NOTE, type BookKey } from "../lib/saveBook";
@@ -104,7 +106,11 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
   const [shares, setShares] = useState<{ person: string; amount: string }[]>([]);
   // fiş kalemleri (önizleme): kullanıcı düzeltir (kaydır, birleştir, sil, ekle); kayıtla birlikte gider
   const [items, setItems] = useState<ReceiptItem[]>(() => (draft?.items ?? []) as ReceiptItem[]);
+  // fişin vergi bilgisi (yetenek receipt_tax): okunan KDV / VKN / vergi dairesi / unvan, kartında düzenlenir
+  const [tax, setTax] = useState<TaxInfo | null>(() => (draft?.tax ? { ...draft.tax, legal_name: draft.tax.legal_name ?? draft.legal_name ?? null } : null));
   const fromReceipt = !editingEntry && !rec && (!!draft?.items?.length || !!draft?.receipt_file);
+  // toplam fiş metninde bulunamadı (sunucu total_check): kullanıcı tutarı değiştirene dek sarı vurgu + not
+  const totalCheck = !editingEntry && draft?.total_check === "kontrol" && draft.amount != null && parseAmount(amount) === draft.amount;
   const itemsCheck = fromReceipt && items.length ? checkItems(items, parseAmount(amount) || null) : null;
   useEffect(() => {
     if (!draft?.items?.length || draft.kind === "gelir") return;
@@ -172,6 +178,8 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
     if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, ...sc, entry_date: date,
       ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
     return api.createEntry({ ...common, ...pay, ...who, ...sc, ...(kind === "gider" ? st.extra() : {}), entry_date: date, legal_name: draft?.legal_name ?? null,
+      ...(kind === "gider" && tax ? { vat_total: tax.vat_total ?? null, vat_lines: tax.vat_lines ?? [], tax_no: tax.tax_no ?? null,
+        tax_office: tax.tax_office ?? null, legal_name: tax.legal_name ?? null } : {}),
       receipt_file: kind === "gider" ? draft?.receipt_file ?? null : null,
       items: kind === "gider" && fromReceipt ? toServer(items) : null,
       branch: draft?.branch ?? null,
@@ -252,8 +260,12 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
         <div className="grid grid-cols-2 gap-3">
           <div className={isGross && kind === "gelir" && isRecurring ? "hidden" : undefined}>
             <label className="label" htmlFor="e-amt">Tutar (₺)</label>
-            <input id="e-amt" className="input text-right disabled:bg-stone-100 disabled:text-stone-500 dark:disabled:bg-stone-800" inputMode="decimal" value={amount}
+            <input id="e-amt" className={cx("input text-right disabled:bg-stone-100 disabled:text-stone-500 dark:disabled:bg-stone-800",
+              totalCheck && "border-amber-400 bg-amber-50 ring-1 ring-amber-400 dark:border-amber-600 dark:bg-amber-950/40 dark:ring-amber-600")}
+              inputMode="decimal" value={amount} aria-describedby={totalCheck ? "e-amt-check" : undefined}
               disabled={docLocked} onChange={(e) => setAmount(e.target.value)} placeholder="0,00" />
+            {totalCheck && <p id="e-amt-check" role="note" className="mt-1 flex items-center gap-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
+              <AlertTriangle size={14} aria-hidden /> Tutarı fişle karşılaştır</p>}
           </div>
           {!isRecurring ? (
             <div>
@@ -439,6 +451,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
             onReread={draft?.receipt_file ? () => api.rereadReceipt(draft.receipt_file!, parseAmount(amount) || null) : undefined}
             note={draft?.reread_used ? "Kalemler fişi tutmadığı için fiş ikinci kez, daha dikkatli okundu." : null} />
         )}
+        {!editingEntry && !rec && kind === "gider" && tax && <TaxCard value={tax} onSave={setTax} />}
         {itemsCheck && !itemsCheck.ok && kind === "gider" && (
           <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
             {checkSentence(itemsCheck)}. Kalemleri düzeltmeden de kaydedebilirsin; tutar formdaki değerdir, kalemler fiyat takibine gider.
@@ -448,6 +461,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
           <SavedReceiptItems entryId={editingEntry.id} total={editingEntry.original_amount ?? editingEntry.amount}
             receiptFile={editingEntry.receipt_file} readOnly={viewer} onToast={onSaved} />
         )}
+        {editingEntry && kind === "gider" && <SavedTax row={editingEntry} readOnly={viewer} />}
         {!editingEntry && kind === "gider" && wholeCat && !parts?.length && (
           <p className="rounded-lg bg-violet-50 p-2 text-xs text-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
             Fişin tamamı kalem kuralına uydu; kategori <b>{wholeCat}</b> yapıldı. Yanlışsa yukarıdan değiştir.

@@ -9,6 +9,7 @@ import Modal from "./Modal";
 import { isQuotaFull, QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "./DocQuota";
 import type { EntryDraft } from "../ui";
 import type { ReceiptCheck } from "./receipt/check";
+import { hasTax, taxFields } from "./receipt/TaxCard";
 
 /** Fotoğrafı yüklemeden önce küçült: mobil fotoğraflar 5-12 MB, 1600px yeterli ve token maliyeti düşer. */
 export async function shrink(file: File, max = 1600): Promise<Blob> {
@@ -38,6 +39,12 @@ export interface DocResult {
   installments?: number;
   card_last4?: string | null;
   legal_name?: string | null;
+  // yetenek receipt_tax: KDV, KDV dökümü, VKN, vergi dairesi
+  vat_total?: number | null;
+  vat_lines?: { rate: number; amount: number }[] | null;
+  tax_no?: string | null;
+  tax_office?: string | null;
+  total_check?: "ok" | "kontrol" | null; // yetenek total_check
   receipt_file?: string | null; // saklanan fiş fotoğrafının içerik adı: kayda bağlanır
   storage_warning?: string;
   // fatura
@@ -74,6 +81,8 @@ export function docToDraft(r: DocResult, photo?: Blob | null): EntryDraft {
         branch: r.branch ?? null,
         cached: !!r.cached,
         check: r.check ?? null,
+        tax: hasTax(r) ? taxFields(r) : undefined,
+        total_check: r.total_check ?? null,
         note: [items && `Fiş: ${items}`, r.confidence !== "yüksek" && `okuma güveni: ${r.confidence}`].filter(Boolean).join(" · "),
   };
 }
