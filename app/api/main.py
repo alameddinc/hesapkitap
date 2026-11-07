@@ -2530,10 +2530,30 @@ def create_entry(body: EntryIn):
     debt = db.link_debt_movement(data.get("counterparty"), body.kind, body.amount, data["entry_date"], eid)
     _apply_spender(choice, eid)
     match = sync.match_info().get(eid)
+    shopping_link = _shopping_link(eid) if body.items and body.kind == "gider" else None  # kalemler kaydedildikten sonra
     return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
             "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
             "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits],
-            "price_alerts": alerts["check"].get("price_alerts", [])}  # yetenek price_alerts
+            "price_alerts": alerts["check"].get("price_alerts", []),  # yetenek price_alerts
+            "shopping_link": shopping_link}  # yetenek shopping_receipt_link
+
+
+def _shopping_link(entry_id: int) -> dict | None:
+    """Kaydedilen fiş alışveriş listesine ait mi (app/shopping_trips.py on_receipt_saved): {status linked|ask, …} |
+    None. Paketinde alışveriş listesi yoksa ya da ortak defterde sayfa kapalıysa None. Hata kaydı bozmaz."""
+    import logging
+
+    from app import book, shopping_trips
+
+    try:
+        if not plans.allows(db.current_user(), "alisveris_listesi"):
+            return None
+        if book.member() and book.denied("GET", "/api/shopping-list"):
+            return None
+        return shopping_trips.on_receipt_saved(entry_id)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("hesapkitap.shopping").warning("fiş listeye bağlanamadı", exc_info=True)
+        return None
 
 
 def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str, branch: str | None = None,
@@ -4496,35 +4516,210 @@ def price_groups(q: str | None = None, limit: int = 30):
 
 class ShoppingIn(BaseModel):
     text: str = Field(min_length=1, max_length=200)
-    qty: float = Field(default=1, gt=0, le=999)
+    qty: float = Field(default=1, gt=0, le=99_999)  # birime göre sınır app/shopping.py UNIT_MAX (adet ≤ 999)
+    unit: str | None = Field(default=None, max_length=8)  # adet | kg | g | L | ml (shopping_units); boşsa metinden
     group_key: str | None = Field(default=None, max_length=60)  # ürün detayından: o grubun boyu (shopping_assumed_size)
 
 
 class ShoppingPatch(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=200)
-    qty: float | None = Field(default=None, gt=0, le=999)
+    qty: float | None = Field(default=None, gt=0, le=99_999)
+    unit: str | None = Field(default=None, max_length=8)
     done: bool | None = None
     group_key: str | None = Field(default=None, max_length=60)  # boy seçimi ("sut|500ml"); null: seçimi kaldır
 
 
+class ShoppingBulkIn(BaseModel):
+    items: list[ShoppingIn] = Field(min_length=1, max_length=50)
+
+
+class ShoppingPlanIn(BaseModel):
+    k: int | None = Field(default=None, ge=1, le=3)  # durak sayısı; boşsa önerilen
+
+
+class ShoppingCompleteIn(BaseModel):
+    carry_over: bool = True  # alınmayanlar listede kalsın (yeni listeye taşı)
+
+
+class ShoppingLinkIn(BaseModel):
+    entry_id: int
+    target: str | None = Field(default=None, pattern="^(list|trip)$")
+    trip_id: int | None = None
+
+
+class TripReuseIn(BaseModel):
+    only_bought: bool = False
+
+
 @app.get("/api/shopping-list")
 def shopping_list():
-    """{items: [{id, text, qty, done, group {key, label, pending?, pinned?} | null, assumed {key, label, size_label} |
-    null (boysuz satır en yaygın boya çözüldü), best {chain, price, unit_price_per?, per_unit?, source, n?} | null
-    (en ucuz teklif; alınmışlarda null), added_by, added_by_name, created_at, done_at}]} — önce işaretlenmemişler."""
-    from app import shopping
+    """{items: [{id, text, qty, unit (adet|kg|g|L|ml), amount_label ("2,5 kg"), mult (teklif çarpanı | null), unit_mismatch,
+    done, group {key, label, pending?, pinned?} | null, assumed {key, label, size_label} | null (boysuz satır en yaygın
+    boya çözüldü; adette), best {chain, price, line_total (price × mult | null), unit_price_per?, per_unit?, source, n?}
+    | null (en ucuz teklif; alınmışlarda null), planned {chain, unit_price, line_total} | null (kaydedilen plan),
+    actual {unit_price, line_total, entry_id} | null (bağlanan fiş), added_by, added_by_name, created_at, done_at}],
+    saved_plan {k, total, chains [{chain, total, item_ids}], items, created_at, date, source_info} | null} — önce
+    işaretlenmemişler."""
+    from app import shopping, shopping_trips
 
-    return {"items": shopping.list_items(with_best=True)}
+    items = shopping.list_items(with_best=True)
+    return {"items": items, "saved_plan": shopping_trips.attach_planned(items)}
 
 
 @app.post("/api/shopping-list")
 def shopping_add(body: ShoppingIn):
+    """{text, qty?, unit?, group_key?}: miktar ve birim verilmezse metinden ("2,5 kg elma", "6x süt")."""
     from app import shopping
 
     try:
-        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"), body.group_key)
+        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"), body.group_key, body.unit)
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+@app.post("/api/shopping-list/bulk")
+def shopping_bulk(body: ShoppingBulkIn):
+    """Birden çok satır (Listeyi doldur, sık aldıkların): {added, skipped, items}."""
+    from app import shopping_autofill
+
+    return shopping_autofill.bulk_add([x.model_dump() for x in body.items], (db.current_user() or {}).get("id"))
+
+
+@app.get("/api/shopping-list/suggest")
+def shopping_suggest(q: str = Query("", max_length=60), limit: int = Query(8, ge=1, le=12)):
+    """Yazarken öneri (shopping_autofill): {items [{text, group_key | null, label, source recent|own|group, count?}]}."""
+    from app import shopping_autofill
+
+    return shopping_autofill.suggest(q, limit)
+
+
+@app.get("/api/shopping-list/frequent")
+def shopping_frequent(limit: int = Query(8, ge=1, le=12)):
+    """Sık aldıkların (son 90 gün, listede olmayanlar): {items [{text, group_key, label, count, last_date}], days}."""
+    from app import shopping_autofill
+
+    return shopping_autofill.frequent(limit)
+
+
+@app.get("/api/shopping-list/due")
+def shopping_due():
+    """Listeyi doldur: düzenli alınıp zamanı gelenler {items [{text, group_key, label, qty, unit, last_date,
+    interval_days, days_since, reason}]}."""
+    from app import shopping_autofill
+
+    return shopping_autofill.due()
+
+
+@app.put("/api/shopping-list/saved-plan")
+def shopping_plan_save(body: ShoppingPlanIn):
+    """"Bu planla git": Nereye gideyim? planını kaydet (k durak; boşsa önerilen) → saved_plan."""
+    from app import shopping_trips
+
+    try:
+        return shopping_trips.save_plan(body.k, (db.current_user() or {}).get("id"))
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+@app.delete("/api/shopping-list/saved-plan")
+def shopping_plan_clear():
+    """"Planı değiştir": kaydedilen planı kaldır."""
+    from app import shopping_trips
+
+    return {"deleted": shopping_trips.clear_plan()}
+
+
+@app.post("/api/shopping-list/complete")
+def shopping_complete(body: ShoppingCompleteIn):
+    """"Alışverişi tamamla": alınanlar geçmiş alışverişe (shopping_trips) yazılır ve listeden silinir; alınmayanlar
+    carry_over ise listede kalır. → trip (+ carried). Alınan yoksa 422."""
+    from app import shopping_trips
+
+    try:
+        return shopping_trips.complete(body.carry_over, (db.current_user() or {}).get("id"))
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+@app.get("/api/shopping-list/receipt-match")
+def shopping_receipt_match(entry_id: int | None = None):
+    """Fiş bu listeye / son alışverişe ait mi? entry_id verilirse o fiş, yoksa son 2 günün bağlanmamış (ve "hayır"
+    denmemiş) fişleri: {entry_id, target list|trip, trip_id, chain, day, count, in_plan, confident, names} | null."""
+    from app import shopping_trips
+
+    return shopping_trips.receipt_match(entry_id) if entry_id else shopping_trips.pending_match()
+
+
+@app.post("/api/shopping-list/link-receipt")
+def shopping_link_receipt(body: ShoppingLinkIn):
+    """"Evet, bu listeye ait": eşleşen satırlar işaretlenir, gerçek fiyatlar yazılır → {linked, target, trip_id, count,
+    chain, names, saving, actual_total, market_total}. Eşleşme yoksa 404."""
+    from app import shopping_trips
+
+    got = shopping_trips.link_receipt(body.entry_id, body.target, body.trip_id)
+    if not got:
+        raise HTTPException(404, "Bu fiş listedeki ürünlerle eşleşmedi")
+    return got
+
+
+@app.post("/api/shopping-list/receipt-dismiss")
+def shopping_receipt_dismiss(body: ShoppingLinkIn):
+    """"Hayır": bu fiş bir daha sorulmaz."""
+    from app import shopping_trips
+
+    shopping_trips.dismiss(body.entry_id)
+    return {"ok": True}
+
+
+@app.get("/api/shopping-trips")
+def shopping_trips_list(limit: int = Query(50, ge=1, le=200)):
+    """Geçmiş alışverişler (yeniden eskiye): {trips [{id, day, completed_at, chains, planned_total, actual_total,
+    market_total, saving, planned_matched, actual_matched, item_count, bought_count, linked, plan_saved, entry_ids,
+    created_by, created_by_name}]}."""
+    from app import shopping_trips
+
+    return {"trips": shopping_trips.trips(limit)}
+
+
+@app.get("/api/shopping-trips/savings")
+def shopping_trips_savings():
+    """Tasarruf (piyasa ortancasına göre; fişle bağlanan alışverişler): {month, year, month_trips, year_trips, basis}."""
+    from app import shopping_trips
+
+    return shopping_trips.savings()
+
+
+@app.get("/api/shopping-trips/{tid}")
+def shopping_trip_get(tid: int):
+    """Alışveriş ayrıntısı: özet + items [{text, qty, unit, amount_label, group_key, label, done, planned_chain,
+    planned_unit, planned_line, actual_unit, actual_line, entry_id, receipt_key, receipt_qty, market_unit,
+    market_line}], plan."""
+    from app import shopping_trips
+
+    got = shopping_trips.get_trip(tid)
+    if not got:
+        raise HTTPException(404, "Alışveriş yok")
+    return got
+
+
+@app.post("/api/shopping-trips/{tid}/reuse")
+def shopping_trip_reuse(tid: int, body: TripReuseIn):
+    """"Tekrar kullan": satırları listeye ekle (listede olan atlanır) → {added, skipped, items}."""
+    from app import shopping_trips
+
+    got = shopping_trips.reuse(tid, body.only_bought, (db.current_user() or {}).get("id"))
+    if got is None:
+        raise HTTPException(404, "Alışveriş yok")
+    return got
+
+
+@app.delete("/api/shopping-trips/{tid}")
+def shopping_trip_delete(tid: int):
+    from app import shopping_trips
+
+    if not shopping_trips.delete_trip(tid):
+        raise HTTPException(404, "Alışveriş yok")
+    return {"deleted": True}
 
 
 @app.get("/api/shopping-list/plan")

@@ -30,7 +30,7 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "zekat": ("/api/zakat", "/api/donations", "/api/holdings"),
     "tasarruf": ("/api/savings", "/api/goals", "/api/subscriptions", "/api/targets"),
     "fiyatlar": ("/api/prices",),
-    "alisveris": ("/api/shopping-list",),
+    "alisveris": ("/api/shopping-list", "/api/shopping-trips"),
 }
 PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ekstreler", "hesaplar": "Hesaplar",
                "transferler": "Transferler", "borclar": "Borç / Alacak", "zekat": "Zekât ve Sadaka",
@@ -48,6 +48,9 @@ MEMBER_WRITES = [
     ("PUT", r"/api/spender"), ("PUT", r"/api/cards/[^/]+/spender"),  # kim harcadı: kayıtta ve kartta (görebildiği)
     ("POST", r"/api/shopping-list"), ("PATCH", r"/api/shopping-list/\d+"),  # ortak alışveriş listesi
     ("DELETE", r"/api/shopping-list/\d+"), ("DELETE", r"/api/shopping-list"),
+    ("POST", r"/api/shopping-list/(bulk|complete|link-receipt|receipt-dismiss)"),  # liste v3: doldur, tamamla, fiş bağla
+    ("PUT", r"/api/shopping-list/saved-plan"), ("DELETE", r"/api/shopping-list/saved-plan"),
+    ("POST", r"/api/shopping-trips/\d+/reuse"),
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",

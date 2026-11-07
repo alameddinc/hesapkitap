@@ -149,6 +149,23 @@ CAPABILITIES = (
                               # at}, wide_spread {count, day, top [{group_key, label, min, max, ratio}]}, catalog
                               # {products, with_generic, brands, updated_at} | null}, disagreements [{chain, group_key,
                               # label, days, community, official, pct}]
+    "shopping_units",         # alışveriş satırı qty + unit (adet|kg|g|L|ml), amount_label "2,5 kg", mult, unit_mismatch;
+                              # POST/PATCH {qty ≤ 999 (g/ml ≤ 99999), unit}; metinden "2.5 kg elma", "elma 2,5kg", "6 süt";
+                              # best.line_total, plan line_total = teklif × mult (g→kg, ml→L); unpriced reason unit_mismatch;
+                              # zincir adları yalnız zincir ("BİM (Dost)" → "BİM", şube/semt yok)
+    "shopping_autofill",      # GET /api/shopping-list/suggest?q → {items [{text, group_key, label, source recent|own|group,
+                              # count?}]}, /frequent → {items [{text, group_key, label, count, last_date}], days}, /due →
+                              # {items [{text, group_key, label, qty, unit, last_date, interval_days, days_since, reason}]};
+                              # POST /api/shopping-list/bulk {items [{text, qty?, unit?, group_key?}]} → {added, skipped, items}
+    "shopping_trips",         # PUT/DELETE /api/shopping-list/saved-plan {k?} ("Bu planla git"); GET /api/shopping-list
+                              # saved_plan {k, total, chains [{chain, total, item_ids}], items, created_at} | null, items[].planned;
+                              # POST /api/shopping-list/complete {carry_over} → trip; GET /api/shopping-trips {trips},
+                              # /{id} (items), POST /{id}/reuse {only_bought}, DELETE /{id}; GET /api/shopping-trips/savings
+                              # {month, year, month_trips, year_trips, basis "market_median"} (402 alisveris_listesi)
+    "shopping_receipt_link",  # POST /api/entries shopping_link {status linked|ask, target list|trip, trip_id, chain, count,
+                              # names, in_plan, confident, saving?} | null; GET /api/shopping-list/receipt-match[?entry_id]
+                              # (son 2 günün bağlanmamış fişi) → aday | null; POST /link-receipt {entry_id, target?, trip_id?},
+                              # POST /receipt-dismiss {entry_id}; items[].actual {unit_price, line_total, entry_id}
 )
 
 

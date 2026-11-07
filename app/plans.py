@@ -152,6 +152,7 @@ LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi su
 FEATURE_LABELS = {k: r[0] for k, r in _ROWS.items()}
 # (yöntem, API yolu öneki) → özellik (paket yoksa 402). Yöntem None: hepsi.
 GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/shopping-list", "alisveris_listesi"),
+         (None, "/api/shopping-trips", "alisveris_listesi"),
          (None, "/api/book/invites", "ortak_defter"),
          (None, "/api/book/member-spend", "aile_rapor"), (None, "/api/spender", "aile_rapor"),
          (None, "/api/plan/simulate", "alsam_mi"), (None, "/api/year-summary", "istatistik"),

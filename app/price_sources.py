@@ -287,6 +287,25 @@ class OfficialSource:
         return {k: labels.get(k, k) for k in keys if _match(query, k, labels.get(k, k))}
 
 
+def chain_name(chain: str | None) -> str:
+    """Görünen zincir adı: yalnız zincir ("BİM (Dost)" → "BİM", "Pizza Amore · Üsküdar" → "Pizza Amore",
+    "MIGROS TICARET A.S." → "Migros"); şube, semt, il ve parantez içi marka atılır."""
+    import re
+
+    from app.receipt_templates import chain_of
+
+    s = (chain or "").strip()
+    if not s:
+        return s
+    known = chain_of(s)
+    if known:
+        return known
+    s = re.sub(r"\s*[(\[].*?[)\]]", "", s)
+    s = re.split(r"\s+[·•|/–—-]\s+|\s*·\s*", s, maxsplit=1)[0]
+    s = s.strip(" ,-") or (chain or "").strip()
+    return chain_of(s) or s
+
+
 def _chain_key(chain: str) -> str:
     from app import db
 

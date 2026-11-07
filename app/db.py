@@ -433,6 +433,28 @@ CREATE TABLE IF NOT EXISTS shopping_list (
     done_at TIMESTAMP,
     pinned_key TEXT                 -- kişinin seçtiği boy ("sut|500ml"); boşsa metinden / en yaygın boy
 );
+-- Kaydedilen plan ("Bu planla git"; app/shopping_trips.py): tek satır, liste tamamlanınca silinir
+CREATE TABLE IF NOT EXISTS shopping_plan (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    data TEXT NOT NULL,             -- JSON: {k, total, chains [{chain, total, item_ids}], items [{id, text, chain, unit_price, line_total}]}
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+-- Geçmiş alışverişler (app/shopping_trips.py): tamamlanan liste, plan ve fişten gelen gerçek fiyatlar
+CREATE TABLE IF NOT EXISTS shopping_trips (
+    id INTEGER PRIMARY KEY,
+    day DATE NOT NULL,              -- tamamlandığı gün (yerel)
+    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    planned_total REAL,             -- alınanların planlanan (ya da tamamlarken en ucuz) toplamı
+    actual_total REAL,              -- fişle eşleşen satırların ödenen toplamı
+    market_total REAL,              -- aynı satırların o günkü piyasa ortancasıyla toplamı
+    saving REAL,                    -- market_total − actual_total (yalnız piyasa fiyatı bilinen satırlar)
+    chains TEXT NOT NULL DEFAULT '[]',   -- JSON: plan zincirleri, yoksa fişlerin zincirleri
+    items TEXT NOT NULL DEFAULT '[]',    -- JSON satırlar (shopping_trips.ITEM_FIELDS)
+    plan TEXT,                      -- JSON: kaydedilen planın kopyası | NULL
+    entry_ids TEXT NOT NULL DEFAULT '[]',
+    created_by INTEGER
+);
 """
 
 # Eski şemaya sonradan eklenen kolonlar: (tablo, kolon, tanım)
@@ -510,6 +532,12 @@ MIGRATIONS = [
     ("entries", "subcategory", "TEXT"),
     ("rules", "subcategory", "TEXT"),             # kural eşleşince atanan alt kategori (isteğe bağlı)
     ("shopping_list", "pinned_key", "TEXT"),
+    ("shopping_list", "unit", "TEXT NOT NULL DEFAULT 'adet'"),   # adet | kg | g | L | ml (miktar birimi)
+    ("shopping_list", "actual_unit", "REAL"),   # bağlanan fişteki birim fiyat
+    ("shopping_list", "actual_line", "REAL"),   # bağlanan fişteki satır tutarı
+    ("shopping_list", "entry_id", "INTEGER"),   # bağlanan fiş kaydı
+    ("shopping_list", "receipt_key", "TEXT"),   # fiş satırının grubu (piyasa karşılaştırması)
+    ("shopping_list", "receipt_qty", "REAL"),   # fiş satırının miktarı
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
