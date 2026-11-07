@@ -144,8 +144,12 @@ def groups_like(q: str, today: date | None = None) -> list[str]:
     keys = sorted({g for _, g in medians(today=today)})
     if q and "|" in q:
         return [k for k in keys if k == q]
-    s = product_groups.slug(q) if q else ""
-    return [k for k in keys if not s or s in k]
+    if not q:
+        return keys
+    s, size = product_groups.query_parts(q)
+    if not s:
+        return [k for k in keys if size and k.endswith(f"|{size}")]
+    return [k for k in keys if s in k.split("|")[0]]
 
 
 def prune(today: date | None = None) -> int:

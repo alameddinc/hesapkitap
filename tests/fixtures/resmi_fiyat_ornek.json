@@ -1,0 +1,42 @@
+{
+  "numberOfFound": 3,
+  "content": [
+    {
+      "id": "ornek-1", "title": "Örnekköy Günlük Süt 1 L", "brand": "Örnekköy", "refinedVolumeOrWeight": "1 L",
+      "categories": ["Süt Ürünleri"], "main_category": "Süt Ürünleri", "menu_category": "Süt",
+      "productDepotInfoList": [
+        {"depotId": "d-1", "depotName": "Örnek Şube 1", "price": 31.5, "unitPrice": "31,50 ₺/L", "unitPriceValue": 31.5,
+         "marketAdi": "bim", "longitude": 0.0, "latitude": 0.0, "indexTime": "2026-11-07T08:00:00", "discount": false,
+         "discountRatio": 0, "promotionText": ""},
+        {"depotId": "d-2", "depotName": "Örnek Şube 2", "price": 32.5, "unitPrice": "32,50 ₺/L", "unitPriceValue": 32.5,
+         "marketAdi": "bim", "longitude": 0.0, "latitude": 0.0, "indexTime": "2026-11-07T08:00:00", "discount": false,
+         "discountRatio": 0, "promotionText": ""},
+        {"depotId": "d-3", "depotName": "Örnek Şube 3", "price": 29.0, "unitPrice": "29,00 ₺/L", "unitPriceValue": 29.0,
+         "marketAdi": "a101", "longitude": 0.0, "latitude": 0.0, "indexTime": "07.11.2026 09:00", "discount": true,
+         "discountRatio": 10, "promotionText": "Örnek kampanya"},
+        {"depotId": "d-4", "depotName": "Örnek Bakkal", "price": 20.0, "unitPrice": "", "unitPriceValue": 20.0,
+         "marketAdi": "ornekbakkal", "longitude": 0.0, "latitude": 0.0, "indexTime": "2026-11-07T08:00:00",
+         "discount": false, "discountRatio": 0, "promotionText": ""}
+      ]
+    },
+    {
+      "id": "ornek-2", "title": "Örnekköy Süt", "brand": "Örnekköy", "refinedVolumeOrWeight": "500 ml",
+      "categories": ["Süt Ürünleri"], "main_category": "Süt Ürünleri", "menu_category": "Süt",
+      "productDepotInfoList": [
+        {"depotId": "d-5", "depotName": "Örnek Şube 5", "price": 18.0, "unitPrice": "36,00 ₺/L", "unitPriceValue": 36.0,
+         "marketAdi": "migros", "longitude": 0.0, "latitude": 0.0, "indexTime": "2026-11-07T08:00:00", "discount": false,
+         "discountRatio": 0, "promotionText": ""}
+      ]
+    },
+    {
+      "id": "ornek-3", "title": "Örnekmarka Tuhafiye Ürünü", "brand": "Örnekmarka", "refinedVolumeOrWeight": "1 adet",
+      "categories": ["Diğer"], "main_category": "Diğer", "menu_category": "Diğer",
+      "productDepotInfoList": [
+        {"depotId": "d-6", "depotName": "Örnek Şube 6", "price": 10.0, "unitPrice": "", "unitPriceValue": 10.0,
+         "marketAdi": "sok", "longitude": 0.0, "latitude": 0.0, "indexTime": "2026-11-07T08:00:00", "discount": false,
+         "discountRatio": 0, "promotionText": ""}
+      ]
+    }
+  ],
+  "facetMap": {}
+}

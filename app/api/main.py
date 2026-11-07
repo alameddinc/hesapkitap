@@ -4343,7 +4343,10 @@ def price_groups(q: str | None = None, limit: int = 30):
     """Nereden alınır: ürün grupları (markadan bağımsız; "süt" → Süt · 1 L, Süt · 500 ml …) ve zincir başına en ucuz
     teklifler. [{key, label, best: [{chain, price, brand?, source "own"|"community", date? (kendi fişin), n? (kaç kişi)}]}]
     best ucuzdan pahalıya, en çok 5 (app/price_sources.py merge). Kendi verin: bu defterin fişleri (ortak defter üyesinde
-    görebildiğin kayıtlar). Sıra: kendi aldıkların (son alım yeni→eski), sonra yalnız toplulukta olanlar (ada göre)."""
+    görebildiğin kayıtlar). Sıra: kendi aldıkların (son alım yeni→eski), sonra yalnız toplulukta olanlar (ada göre);
+    metinde boy varsa ("1l süt", "süt 1 lt") o boydaki gruplar, sonra adı tam aranan ürün olanlar önce; boylar farklıysa
+    aynı öbekte litre / kilo / adet fiyatı (unit_price_per) ucuz olan önce. Grup: category (product_groups.CATEGORIES);
+    teklif: unit_price_per, per_unit ("L" | "kg" | "adet"; boysuz grupta yok)."""
     from app import price_sources
 
     q = (q or "").strip()[:60]
@@ -4358,9 +4361,26 @@ def price_groups(q: str | None = None, limit: int = 30):
     own = next((s for s in srcs if isinstance(s, price_sources.OwnSource)), None)
     last = own.last_dates() if own else {}
     mine = sorted((k for k in labels if k in last), key=lambda k: (last[k], k), reverse=True)
-    keys = (mine + sorted((k for k in labels if k not in last), key=lambda k: labels[k]))[:limit * 2]
+    keys = mine + sorted((k for k in labels if k not in last), key=lambda k: labels[k])
+    if q and "|" not in q:  # "1l süt" / "süt 1 lt": o boy önce; sonra adı tam aranan ürün ("süt" → Süt, Çikolatalı Süt değil)
+        from app import product_groups
+
+        word, size = product_groups.query_parts(q)
+        keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word))  # sıralama kararlı
+    keys = keys[:limit * 2]
     best = price_sources.best_offers(keys, srcs)
-    return [{"key": k, "label": labels[k], "best": best[k]} for k in keys if best.get(k)][:limit]
+    keys = [k for k in keys if best.get(k)]
+    if q and "|" not in q and len({k.split("|", 1)[-1] for k in keys}) > 1:
+        # boylar farklı (500 ml / 1 L): aynı sıra öbeğinde (boy, ad) litre / kilo fiyatı ucuz olan önce
+        from app import product_groups
+
+        word, size = product_groups.query_parts(q)
+        per = lambda k: min((o.get("unit_price_per") or 1e12) for o in best[k])  # noqa: E731
+        keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word, per(k)))
+    from app import product_groups
+
+    cats = product_groups.categories(keys[:limit])
+    return [{"key": k, "label": labels[k], "category": cats.get(k), "best": best[k]} for k in keys[:limit]]
 
 
 # ---------------------------------------------------------------- alışveriş listesi (app/shopping.py)

@@ -4,6 +4,7 @@ Her kullanıcının finans verisi kendi SQLite dosyasındadır (data/users/<id>/
 eski tek kullanıcılı kurulumun data/ekstre.db dosyasını kullanır. Bu modül hiçbir finans verisi tutmaz —
 yönetici kullanıcıları açıp kapatabilir ama verilerini göremez.
 """
+import logging
 import os
 import secrets
 import sqlite3
@@ -219,7 +220,8 @@ CREATE TABLE IF NOT EXISTS product_groups (  -- ürün adı → markadan bağım
     size_value REAL,
     size_unit TEXT,                      -- l | ml | kg | g | ad
     source TEXT NOT NULL CHECK (source IN ('rule', 'ai')),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    category TEXT                        -- kategori (product_groups.CATEGORIES): 'Süt ve Kahvaltılık'
 );
 CREATE INDEX IF NOT EXISTS product_groups_key ON product_groups(group_key);
 CREATE TABLE IF NOT EXISTS product_group_queue (  -- kuralın çözemediği adlar: toplu yapay zekâ bekliyor (yalnız ad)
@@ -239,6 +241,20 @@ CREATE TABLE IF NOT EXISTS community_prices (  -- anonim topluluk fiyatı (app/c
 );
 CREATE INDEX IF NOT EXISTS community_prices_group ON community_prices(group_key, chain, day);
 CREATE INDEX IF NOT EXISTS community_prices_name ON community_prices(name_norm);
+CREATE TABLE IF NOT EXISTS official_prices (  -- resmî kaynak fiyatı (app/price_import.py; varsayılan kapalı): kişi yok
+    id INTEGER PRIMARY KEY,
+    chain TEXT NOT NULL,                 -- zincirin görünen adı (receipt_templates.CHAINS)
+    group_key TEXT NOT NULL,             -- ürün grubu (product_groups)
+    title TEXT NOT NULL,                 -- kaynaktaki ürün adı
+    brand TEXT,
+    price REAL NOT NULL,
+    unit_price REAL,                     -- kaynağın litre / kilo fiyatı (unitPriceValue)
+    day TEXT NOT NULL,
+    depot_id TEXT NOT NULL DEFAULT '',   -- kaynağın şube numarası (konum / şube adı saklanmaz)
+    discount INTEGER NOT NULL DEFAULT 0, -- kampanyalı fiyat
+    UNIQUE (chain, depot_id, title, day)
+);
+CREATE INDEX IF NOT EXISTS official_prices_group ON official_prices(group_key, chain, day);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
@@ -263,6 +279,7 @@ def connect():
     if p not in _ready:  # şema (ve göçler) her dosya için bir kez kurulur
         conn.executescript(SCHEMA)
         _migrate(conn)
+        conn.commit()  # göç yazdıysa (yeniden gruplama) açık işlem kalmasın: iç içe bağlantı kilitlenmez
         _ready.add(p)
     try:
         yield conn
@@ -300,6 +317,22 @@ def _migrate(c) -> None:
     # yapay zekâ maliyet kaydı: önbellekli girdi token'ı (app/ai_costs.py)
     if "cached" not in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}:
         c.execute("ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
+    if "category" not in {r[1] for r in c.execute("PRAGMA table_info(product_groups)")}:
+        c.execute("ALTER TABLE product_groups ADD COLUMN category TEXT")
+    # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): önbellek ve topluluk fiyatları bir kez
+    from app import product_groups
+
+    r = c.execute("SELECT value FROM sys_settings WHERE key = 'product_groups:version'").fetchone()
+    if not r or int(r[0] or 0) < product_groups.GROUPS_VERSION:
+        try:
+            got = product_groups.regroup(c)
+            if got["changed"] or got["queued"]:
+                logging.getLogger("hesapkitap.product_groups").info("ürün grupları yenilendi: %s", got)
+        except Exception:  # noqa: BLE001 - açılışı engellemesin; sonraki açılışta yeniden denenir
+            logging.getLogger("hesapkitap.product_groups").exception("ürün grubu yeniden gruplama başarısız")
+            return
+        c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('product_groups:version', ?)",
+                  (str(product_groups.GROUPS_VERSION),))
 
 
 def init() -> None:

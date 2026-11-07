@@ -59,3 +59,33 @@ def test_member_does_not_see_hidden_receipt_prices(owner):  # noqa: F811
     assert {g["key"] for g in owner.get("/api/prices/groups").json()} == {"sut|1l", "ekmek"}
     viewer = _member(owner, "izleyici", "viewer")
     assert [g["key"] for g in viewer.get("/api/prices/groups").json()] == ["ekmek"]
+
+
+def test_search_prefers_size_and_exact_product(client):
+    _buy(client, "A101", "Torku Süt 1L", 36, brand="Torku")
+    _buy(client, "A101", "Torku Süt 500 ml", 22, brand="Torku")
+    _buy(client, "BİM", "ÇİKOLATALI GÜNLÜK SÜT 200 ML", 15)
+    _buy(client, "BİM", "WHEY SÜT 330 ML", 75)                                  # protein içeceği: süt aramasında yok
+    got = client.get("/api/prices/groups", params={"q": "süt"}).json()
+    keys = [g["key"] for g in got]
+    assert keys[:2] == ["sut|1l", "sut|500ml"] and keys[2] == "cikolatali-sut|200ml"   # tam "Süt" önce, litresi ucuz önce
+    assert got[1]["best"][0] | {} == {"chain": "A101", "price": 22.0, "source": "own", "date": TODAY.isoformat(),
+                                      "brand": "Torku", "unit_price_per": 44.0, "per_unit": "L"}
+    assert got[0]["category"] == "Süt ve Kahvaltılık" and got[0]["best"][0]["unit_price_per"] == 36.0
+    assert "protein-icecegi|330ml" not in keys
+    for q in ("1l süt", "süt 1 lt", "SÜT 1 L"):
+        assert client.get("/api/prices/groups", params={"q": q}).json()[0]["key"] == "sut|1l"
+    assert [g["key"] for g in client.get("/api/prices/groups", params={"q": "çikolatalı süt"}).json()] == [
+        "cikolatali-sut|200ml"]
+    assert [g["key"] for g in client.get("/api/prices/groups", params={"q": "protein"}).json()] == [
+        "protein-icecegi|330ml"]
+
+
+def test_prices_products_carry_unit_price_and_category(client):
+    _buy(client, "A101", "Örnek Su 6X500ML", 30, brand="Örnek")
+    _buy(client, "A101", "Ekmek", 15)
+    prods = {p["product"]: p for p in client.get("/api/prices").json()["products"]}
+    su = prods["Örnek Su 6X500ML"]
+    assert (su["category"], su["unit_price_per"], su["per_unit"]) == ("Su ve İçecek", 10.0, "L")
+    assert su["stores"][0]["unit_price_per"] == 10.0 and su["group"]["category"] == "Su ve İçecek"
+    assert "unit_price_per" not in prods["Ekmek"] and prods["Ekmek"]["category"] == "Fırın ve Unlu Mamul"

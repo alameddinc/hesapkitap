@@ -102,6 +102,13 @@ CAPABILITIES = (
                               # GET /api/shopping-list/plan (402 alisveris_listesi; ortak defterde paylaşılır)
     "price_alerts",           # fiş okuma/kayıtlı fiş check.price_alerts ve POST /api/entries price_alerts [{index, name, paid,
                               # last_paid, last_date, change_pct, chain, note "geçen sefer ₺30"}]; push türü "fiyat"
+    "price_unit",             # birim fiyat: /api/prices products[] ve stores[], /api/prices/groups best[] ve plan best:
+                              # unit_price_per (₺ / L, kg, adet; grubun boyundan) + per_unit "L"|"kg"|"adet" (boysuzda yok);
+                              # aramada boy ("1l süt") ve adı tam eşleşen önce, boylar farklıysa litre fiyatı ucuz önce
+    "price_categories",       # kategori: products[].category, products[].group.category, /api/prices/groups [].category
+                              # (sabit liste product_groups.CATEGORIES; "Süt ve Kahvaltılık" …), yoksa null
+    "official_prices",        # /api/prices/groups best[].source "resmi" (varsayılan kapalı; sunucu ayarlıysa) + attribution
+                              # "Kaynak: Market Fiyatı (…)" — istemci teklif listesinin altında gösterir
 )
 
 

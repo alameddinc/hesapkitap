@@ -15,7 +15,7 @@ def _buy(client, store, name, price):
 
 def test_crud_and_groups(client):
     a = client.post("/api/shopping-list", json={"text": "  süt 1 lt ", "qty": 2}).json()
-    assert (a["text"], a["qty"], a["done"], a["group"]) == ("süt 1 lt", 2, False, {"key": "sut|1l", "label": "Süt · 1 L"})
+    assert (a["text"], a["qty"], a["done"], a["group"]) == ("süt 1 lt", 2, False, {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık"})
     assert a["group_key"] == "sut|1l" and {"id", "added_by", "created_at"} <= set(a)   # istemci sözleşmesi
     b = client.post("/api/shopping-list", json={"text": "ekmek"}).json()
     assert client.post("/api/shopping-list", json={"text": ""}).status_code == 422

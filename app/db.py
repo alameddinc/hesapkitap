@@ -4216,12 +4216,18 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
         st = sorted(per_store.values(), key=lambda s_: s_["price"])
         if len(st) > 1:
             st[0]["cheapest"] = True
+        from app import product_groups
+
+        grp = next((x["group"] for x in reversed(xs) if x.get("group")), None)
+        for s_ in st:  # grubun boyundan litre / kilo / adet fiyatı ("₺59,00/L")
+            s_.update(product_groups.unit_price(s_["price"], grp and grp["key"]))
         change = None
         if len(priced) >= 2 and priced[0]["unit_price"]:
             change = round((priced[-1]["unit_price"] - priced[0]["unit_price"]) / priced[0]["unit_price"] * 100, 1)
         return {"key": last["product_key"], "product": next((x["product"] for x in reversed(xs) if x["product"]), last["name"]),
                 "brand": next((x["brand"] for x in reversed(xs) if x["brand"]), None),
-                "group": next((x["group"] for x in reversed(xs) if x.get("group")), None),
+                "group": grp, "category": grp.get("category") if grp else None,
+                **product_groups.unit_price(priced[-1]["unit_price"] if priced else None, grp and grp["key"]),
                 "unit": last["unit"], "count": len(xs), "last_date": last["purchased_at"],
                 "last_price": priced[-1]["unit_price"] if priced else None,
                 "last_estimated": bool(priced) and priced[-1]["price_known"] == 2,
