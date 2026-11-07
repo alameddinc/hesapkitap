@@ -2512,7 +2512,7 @@ def create_entry(body: EntryIn):
     eid = db.create_entry(data)
     alerts = {"check": {}, "items": [i for i in body.items or [] if isinstance(i, dict)], "merchant": body.description}
     if body.items and body.kind == "gider":
-        _add_price_alerts(alerts, eid, data["entry_date"])  # kalemler yazılmadan: önceki alımlarla
+        _add_price_alerts(alerts, eid, data["entry_date"], market=False)  # kalemler yazılmadan: önceki alımlarla
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
                               total=body.amount, branch=body.branch)
         if data.get("receipt_file"):  # yalnız okunmuş fiş (elle girilen değil): anonim topluluk fiyatı (tercih açıksa)
@@ -5859,10 +5859,13 @@ def parse_receipt(file: UploadFile = File(...)):
     return out
 
 
-def _add_price_alerts(doc: dict, exclude_entry: int | None = None, on: str | None = None) -> None:
+def _add_price_alerts(doc: dict, exclude_entry: int | None = None, on: str | None = None, market: bool = True) -> None:
     """check.price_alerts: kendi son fiyatına göre zam (app/price_alerts.py; fiyat takibi paketinde). on: kayıtlı fişin
-    günü (o günden önceki alımlarla karşılaştırılır; okumada bugün). Hata okumayı bozmaz."""
-    from app import price_alerts
+    günü (o günden önceki alımlarla karşılaştırılır; okumada bugün). market: ayrıca check.market_notes (piyasadan pahalı
+    kalemler, app/market_ref.py receipt_notes; fiş günü: on, yoksa fişteki tarih). Hata okumayı bozmaz."""
+    import logging
+
+    from app import market_ref, price_alerts
 
     if not isinstance(doc.get("check"), dict):
         return
@@ -5871,10 +5874,16 @@ def _add_price_alerts(doc: dict, exclude_entry: int | None = None, on: str | Non
         doc["check"]["price_alerts"] = price_alerts.receipt_alerts(doc.get("items") or [], doc.get("merchant"),
                                                                    exclude_entry, day)
     except Exception:  # noqa: BLE001
-        import logging
-
         logging.getLogger("hesapkitap.price_alerts").warning("fiyat uyarısı hesaplanamadı", exc_info=True)
         doc["check"]["price_alerts"] = []
+    if not market:
+        return
+    try:  # yetenek market_notes
+        doc["check"]["market_notes"] = market_ref.receipt_notes(doc.get("items") or [], doc["check"], doc.get("merchant"),
+                                                                on or doc.get("date"), doc.get("legal_name"))
+    except Exception:  # noqa: BLE001
+        logging.getLogger("hesapkitap.market_ref").warning("piyasa notu hesaplanamadı", exc_info=True)
+        doc["check"]["market_notes"] = []
 
 
 def _mark_unreadable(doc: dict, msg: str) -> None:
@@ -6785,7 +6794,8 @@ def _receipt_items_out(entry_id: int, total: float | None, entry: dict | None = 
     out = {"entry_id": entry_id, "items": items, "check": chk}
     if entry:
         _digit_evidence(chk, bare, vat_lines=entry.get("vat_lines"), merchant=entry.get("description"), exclude_entry=entry_id)
-        _add_price_alerts({**out, "merchant": entry.get("description")}, entry_id, entry.get("entry_date"))
+        _add_price_alerts({**out, "merchant": entry.get("description"), "legal_name": entry.get("legal_name")}, entry_id,
+                          entry.get("entry_date"))
     return out
 
 
