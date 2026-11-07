@@ -2,7 +2,7 @@
 // duraklı plan. Sonuç bir kez hesaplanır, alışveriş sırasında işaretlemek (done) planı yeniden hesaplatmaz; işaret
 // listenin önbelleğinden okunur. "Yeniden hesapla" elle. Yazılar mobil (hesapkitap-mobile AlisverisListesi) ile aynı.
 // Liste v3 (yetenek shopping_trips): birincil eylem "Bu planla git" (PUT /api/shopping-list/saved-plan {k}); satırlarda
-// yalnız zincir adı (marka, il, şube yok); altta tek dipnot "Fiyatlar: Market Fiyatı · dün", yasal kaynak ipucunda.
+// yalnız zincir adı (marka, il, şube yok); altta tek dipnot: sunucunun kaynak yazısı (demoda "Örnek veri: …"), yoksa "Fiyatlar: Market Fiyatı · dün".
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, MapPinned, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
@@ -60,6 +60,8 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
   const done = new Map(items.map((i) => [i.id, i.done]));
   const names = new Map(items.map((i) => [i.id, i.text]));
   const src = r ? sourceLine(r, today) : "";
+  // sunucunun kaynak yazısı dipnotta yazıyorsa ipucunda yinelenmez (yalnız ötekiler)
+  const srcExtra = (r?.sources ?? []).filter((x) => !src.startsWith(x)).join(" ");
   // sunucunun başlığı önerilen plan içindir; başka durak sayısı seçilince istemci başlığı
   const useHead = !!r?.headline && (k == null || k === r.recommended_k);
 
@@ -159,8 +161,8 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
         )}
         {/* tek dipnot; yasal kaynak yazısı ipucunda (ekran okuyucu için de sr-only) */}
         {r && plan && src && (
-          <p className="ml-auto text-xs text-stone-500 dark:text-stone-400" data-testid="optimum-kaynak" title={r.sources.join(" ") || undefined}>
-            {src}{r.sources.length > 0 && <span className="sr-only"> ({r.sources.join(" ")})</span>}</p>
+          <p className="ml-auto text-xs text-stone-500 dark:text-stone-400" data-testid="optimum-kaynak" title={srcExtra || undefined}>
+            {src}{srcExtra && <span className="sr-only"> ({srcExtra})</span>}</p>
         )}
       </div>
     </section>

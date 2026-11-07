@@ -2,6 +2,7 @@
 // piyasa bandı (yetenek price_market; GET /api/prices/market, history[].vs_market): saf yazı hesapları.
 // Yazılar mobil (hesapkitap-mobile) ile birebir aynı. Tutar biçimi parametre: gizli tutar maskesi çağıranda.
 import { agoWord, ayrilma, bulunma } from "./priceView.ts";
+import { OFFICIAL_SOURCE } from "./shopList.ts";
 
 export interface OptLine {
   id: number; text: string; qty: number; group_label: string | null; price: number; line_total: number;
@@ -70,17 +71,18 @@ export function compareRows(r: Optimize, m: Money): string[] {
   return out;
 }
 
-/** Tek dipnot: "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk" (il ve "ulusal" notu yazılmaz; yasal kaynak
- *  yazısı dipnotun ipucunda). */
+/** Tek dipnot: "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk" (il ve "ulusal" notu yazılmaz). Sunucu kaynak
+ *  yazısı verdiyse (sources[0]; demoda "Örnek veri: …") resmî kısım onunla, "Fiyatlar:" öneki olmadan. */
 export function sourceLine(r: Optimize, today: string): string {
   const k = r.source_info?.kinds ?? [];
+  const attr = k.includes("resmi") ? r.sources?.find(Boolean) ?? null : null;
   const parts: string[] = [];
   if (k.includes("resmi")) {
-    parts.push([`Market Fiyatı (TÜBİTAK BİLGEM)`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
+    parts.push([attr ?? OFFICIAL_SOURCE, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
   }
   if (k.includes("own")) parts.push("fişlerin");
   if (k.includes("community")) parts.push("topluluk");
-  return parts.length ? `Fiyatlar: ${parts.join(" · ")}` : "";
+  return parts.length ? `${attr ? "" : "Fiyatlar: "}${parts.join(" · ")}` : "";
 }
 
 /** "Fiyatı bilinmeyen: …" / "Bu planda yok: …" (adlar listeden) */
@@ -106,6 +108,7 @@ export function marketCaption(history: { date: string; price: number | null; vs_
   return `Son alımın piyasanın %${pct} üstünde; ${v.day === h.date.slice(0, 10) ? "aynı gün" : "o günlerde"} ${bulunma(v.cheapest_chain)} ${m(v.min)}`;
 }
 
-/** "Piyasa: Market Fiyatı · İstanbul" / "Piyasa: topluluk" */
-export const marketSource = (mk: Pick<Market, "days" | "region">) =>
-  mk.days.some((d) => d.source === "resmi") ? `Piyasa: Market Fiyatı · ${mk.region}` : "Piyasa: topluluk";
+/** "Piyasa: Market Fiyatı · İstanbul" / "Piyasa: topluluk"; sunucu kaynak yazısı verdiyse (demoda "Örnek veri: …") o. */
+export const marketSource = (mk: Pick<Market, "days" | "region"> & { attribution?: string | null }) =>
+  !mk.days.some((d) => d.source === "resmi") ? "Piyasa: topluluk"
+    : mk.attribution ? `${mk.attribution} · ${mk.region}` : `Piyasa: Market Fiyatı · ${mk.region}`;

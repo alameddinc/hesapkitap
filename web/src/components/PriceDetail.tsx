@@ -65,7 +65,9 @@ export function PriceFootnote({ best, today, className }: { best: GroupBest[]; t
   const t = priceFootnote(best, today);
   const a = attributionOf(best);
   if (!t) return null;
-  return <p className={cx("text-xs text-stone-500 dark:text-stone-400", className)} title={a ?? undefined} data-testid="resmi-kaynak">{t}{a && <span className="sr-only"> ({a})</span>}</p>;
+  const inText = !!a && t.startsWith(a); // sunucunun yazısı dipnotta: ipucunda yinelenmez
+  return <p className={cx("text-xs text-stone-500 dark:text-stone-400", className)} title={inText ? undefined : a ?? undefined} data-testid="resmi-kaynak">
+    {t}{a && !inText && <span className="sr-only"> ({a})</span>}</p>;
 }
 
 /** Tekliflerde resmî kaynak varsa altına yazılacak kaynak satırı. */

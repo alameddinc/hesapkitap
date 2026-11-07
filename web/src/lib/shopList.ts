@@ -72,13 +72,17 @@ export function chainName(chain: string | null | undefined): string {
   return s || raw;
 }
 
-/** Tek dipnot: "Fiyatlar: Market Fiyatı · dün" (resmî teklif varsa; en yeni günün yaşı). İl ve "ulusal" yazılmaz;
- *  yasal kaynak yazısı dipnotun ipucunda (title). */
-export function priceFootnote(offers: { source: string; date?: string | null }[], today: string): string | null {
+/** Sunucu kaynak yazısı vermediyse (eski sunucu) resmî teklifin dipnot adı. Demoda sunucu "Örnek veri: …" verir. */
+export const OFFICIAL_SOURCE = "Market Fiyatı (TÜBİTAK BİLGEM)";
+
+/** Tek dipnot (resmî teklif varsa; en yeni günün yaşı): sunucunun kaynak yazısı (attribution) olduğu gibi, yoksa
+ *  "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün". İl ve "ulusal" yazılmaz. */
+export function priceFootnote(offers: { source: string; date?: string | null; attribution?: string | null }[], today: string): string | null {
   const r = offers.filter((o) => o.source === "resmi");
   if (!r.length) return null;
   const day = r.map((o) => o.date ?? "").filter(Boolean).sort().pop();
-  return `Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)${day ? ` · ${agoWord(day, today)}` : ""}`;
+  const attr = r.find((o) => o.attribution)?.attribution;
+  return `${attr ?? `Fiyatlar: ${OFFICIAL_SOURCE}`}${day ? ` · ${agoWord(day, today)}` : ""}`;
 }
 
 // ---------------------------------------------------------------- satır fiyatı
