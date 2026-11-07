@@ -293,6 +293,13 @@ async def scheduler() -> None:
             await asyncio.to_thread(integrity.report_admin, now)
         except Exception:  # noqa: BLE001
             log.exception("integrity report failed")
+        try:  # ürün grubu sürümü yükseldiyse arka planda parça parça yeniden gruplama (app/product_groups.py regroup_tick)
+            from app import product_groups
+
+            if product_groups.regroup_pending() and (got := await asyncio.to_thread(product_groups.regroup_tick)):
+                log.info("ürün grupları yeniden gruplama: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("regroup tick failed")
         try:  # resmî fiyatlar: BigQuery → official_prices (UTC 05:00 sonrası, yarım saatte bir bakar; app/price_import_bq.py)
             from app import price_import_bq
 

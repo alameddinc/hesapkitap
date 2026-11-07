@@ -413,20 +413,10 @@ def _migrate(c) -> None:
                   "note, outliers, mode) SELECT run_date, region, rows, products, unmatched, imported_at, status, note, "
                   "outliers, 'full' FROM official_imports_old")
         c.execute("DROP TABLE official_imports_old")
-    # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): önbellek ve topluluk fiyatları bir kez
-    from app import product_groups
-
-    r = c.execute("SELECT value FROM sys_settings WHERE key = 'product_groups:version'").fetchone()
-    if not r or int(r[0] or 0) < product_groups.GROUPS_VERSION:
-        try:
-            got = product_groups.regroup(c)
-            if got["changed"] or got["queued"]:
-                logging.getLogger("hesapkitap.product_groups").info("ürün grupları yenilendi: %s", got)
-        except Exception:  # noqa: BLE001 - açılışı engellemesin; sonraki açılışta yeniden denenir
-            logging.getLogger("hesapkitap.product_groups").exception("ürün grubu yeniden gruplama başarısız")
-            return
-        c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('product_groups:version', ?)",
-                  (str(product_groups.GROUPS_VERSION),))
+    # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): yeniden gruplama BURADA YAPILMAZ —
+    # arka planda parça parça (product_groups.regroup_tick, jobs.scheduler). 07.11.2026: bağlantı açılışında tek işlemde
+    # yapılınca canlı sunucu 15 dk kilitlendi (25 bin başlık × indekssiz UPDATE).
+    c.execute("CREATE INDEX IF NOT EXISTS official_prices_title ON official_prices(title)")
 
 
 def init() -> None:

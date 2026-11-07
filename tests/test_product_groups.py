@@ -175,10 +175,36 @@ def test_regroup_fixes_old_rows_and_moves_community_prices():
         assert pg.regroup(c) == {"changed": 0, "queued": 1}                              # tekrar: değişiklik yok
 
 
-def test_regroup_runs_once_on_open():
+def test_regroup_runs_in_background_not_on_open():
+    """Yeniden gruplama bağlantı açılışında değil, arka planda parça parça (07.11.2026 canlı kilitlenme): açılışta sürüm
+    yazılmaz; regroup_tick bitirince yazılır, ikinci çağrıda iş yoktur."""
     from app import system
 
-    assert system.get("product_groups:version") == str(pg.GROUPS_VERSION)
+    assert pg.regroup_pending()
+    with system.connect() as c:
+        c.execute("INSERT OR REPLACE INTO product_groups (name_norm, group_key, label, source, created_at) "
+                  "VALUES ('GUNLUK SUT 1 L', 'eski', 'Eski', 'ai', '2026-11-01')")
+    got = pg.regroup_tick()
+    assert got and got["finished"] and system.get("product_groups:version") == str(pg.GROUPS_VERSION)
+    with system.connect() as c:
+        assert c.execute("SELECT group_key FROM product_groups WHERE name_norm = 'GUNLUK SUT 1 L'").fetchone()[0] == "sut|1l"
+    assert not pg.regroup_pending() and pg.regroup_tick() is None
+
+
+def test_regroup_tick_resumes_in_chunks(monkeypatch):
+    from app import system
+
+    monkeypatch.setattr(pg, "REGROUP_CHUNK", 2)
+    monkeypatch.setattr(pg, "REGROUP_BUDGET_S", 0.0)  # tek parça: her tick bir işlem
+    with system.connect() as c:
+        for i in range(5):
+            c.execute("INSERT OR REPLACE INTO product_groups (name_norm, group_key, label, source, created_at) "
+                      "VALUES (?, 'eski', 'Eski', 'ai', '2026-11-01')", (f"ORNEK SUT {i} 1 L",))
+    steps = 0
+    while pg.regroup_pending() and steps < 20:
+        pg.regroup_tick()
+        steps += 1
+    assert not pg.regroup_pending() and steps >= 3
 
 
 def test_per_unit_and_unit_price():

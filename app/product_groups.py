@@ -841,46 +841,127 @@ def regroup(c) -> dict:
     - topluluk fiyatı satırları yeni anahtara taşınır (community_prices.relabel; tartılı |kg korunur); resmî kaynak
       satırları (official_prices) da adıyla yeniden gruplanır.
     Dönen: {"changed": grubu değişen ya da kuyruktan kurala geçen ad, "queued": kuyruğa giren ad}."""
-    from app import community_prices
-
     changed = queued = 0
     for r in [dict(x) for x in c.execute("SELECT * FROM product_groups WHERE group_key != ''")]:
-        nn, tokens = r["name_norm"], r["name_norm"].split()
-        size, used = parse_size(tokens)
-        old = r["label"].split(" · ")[0]
-        new = rule_group(nn)
-        source = "rule" if new else r["source"]
-        if not new:
-            g = refine(old, tokens)
-            new = _compose(g, size) if g != old else None
-        if r["source"] == "ai" and old in VARIANT_BASES and not new:  # çeşit kelimesi bulunduysa düzeltme yeter
-            words = {w for k in _GENERIC for w in k}
-            rest = [t for t in _strip(tokens, used) if t not in MODIFIERS and t not in VARIANTS and t not in words]
-            if rest:
-                c.execute("INSERT OR IGNORE INTO product_group_queue (name_norm, name, added_at) VALUES (?, ?, ?)",
-                          (nn, nn, _now()))
-                queued += 1
-        if new and new["key"] != r["group_key"]:
-            _store(c, nn, new, source)
-            community_prices.relabel(c, nn, new)
-            changed += 1
-            continue
-        known = path_for(new["label"].split(" · ")[0] if new else old)
-        cat = known[0] if known else r.get("category")
-        sub = known[1] if known else valid_subcategory(cat, r.get("subcategory"))
-        if (cat, sub) != (r.get("category"), r.get("subcategory")):
-            c.execute("UPDATE product_groups SET category = ?, subcategory = ? WHERE name_norm = ?", (cat, sub, nn))
+        ch, q = _regroup_row(c, r)
+        changed += ch
+        queued += q
+    changed += _regroup_queue(c)
+    _regroup_official(c, [tuple(x) for x in c.execute("SELECT DISTINCT title, brand FROM official_prices").fetchall()])
+    return {"changed": changed, "queued": queued}
+
+
+def _regroup_row(c, r: dict) -> tuple[int, int]:
+    """Bir önbellek satırını güncel kurallarla yeniden grupla (regroup gövdesi). Dönen: (değişti mi, kuyruğa girdi mi)."""
+    from app import community_prices
+
+    nn, tokens = r["name_norm"], r["name_norm"].split()
+    size, used = parse_size(tokens)
+    old = r["label"].split(" · ")[0]
+    new = rule_group(nn)
+    source = "rule" if new else r["source"]
+    queued = 0
+    if not new:
+        g = refine(old, tokens)
+        new = _compose(g, size) if g != old else None
+    if r["source"] == "ai" and old in VARIANT_BASES and not new:  # çeşit kelimesi bulunduysa düzeltme yeter
+        words = {w for k in _GENERIC for w in k}
+        rest = [t for t in _strip(tokens, used) if t not in MODIFIERS and t not in VARIANTS and t not in words]
+        if rest:
+            c.execute("INSERT OR IGNORE INTO product_group_queue (name_norm, name, added_at) VALUES (?, ?, ?)",
+                      (nn, nn, _now()))
+            queued = 1
+    if new and new["key"] != r["group_key"]:
+        _store(c, nn, new, source)
+        community_prices.relabel(c, nn, new)
+        return 1, queued
+    known = path_for(new["label"].split(" · ")[0] if new else old)
+    cat = known[0] if known else r.get("category")
+    sub = known[1] if known else valid_subcategory(cat, r.get("subcategory"))
+    if (cat, sub) != (r.get("category"), r.get("subcategory")):
+        c.execute("UPDATE product_groups SET category = ?, subcategory = ? WHERE name_norm = ?", (cat, sub, nn))
+    return 0, queued
+
+
+def _regroup_queue(c) -> int:
+    """Kuyrukta bekleyen ama artık kuralın çözdüğü adlar kuyruktan çıkar (yapay zekâ çağrısı harcanmaz)."""
+    from app import community_prices
+
+    changed = 0
     for q in [dict(x) for x in c.execute("SELECT name_norm, name FROM product_group_queue")]:
         if (new := rule_group(q["name"]) or rule_group(q["name_norm"])):
             _store(c, q["name_norm"], new, "rule")
             c.execute("DELETE FROM product_group_queue WHERE name_norm = ?", (q["name_norm"],))
             community_prices.relabel(c, q["name_norm"], new)
             changed += 1
-    for title, brand in c.execute("SELECT DISTINCT title, brand FROM official_prices").fetchall():
+    return changed
+
+
+def _regroup_official(c, titles: list[tuple]) -> None:
+    """Resmî fiyat satırları adıyla yeniden gruplanır (title indeksli; eşleme önce hesaplanır, toplu güncellenir)."""
+    upd = []
+    for title, brand in titles:
         if (new := rule_group(title, brand)):
-            c.execute("UPDATE official_prices SET group_key = ? WHERE title = ? AND brand IS ? AND group_key != ?",
-                      (new["key"], title, brand, new["key"]))
-    return {"changed": changed, "queued": queued}
+            upd.append((new["key"], title, brand, new["key"]))
+    if upd:
+        c.executemany("UPDATE official_prices SET group_key = ? WHERE title = ? AND brand IS ? AND group_key != ?", upd)
+
+
+REGROUP_CHUNK = 400        # bir işlemde yeniden gruplanan önbellek satırı
+REGROUP_TITLES = 2000      # bir işlemde yeniden gruplanan resmî başlık
+REGROUP_BUDGET_S = 20.0    # bir tick'te en çok bu kadar saniye (açılışı ve istekleri bekletmesin)
+
+
+def regroup_pending() -> bool:
+    from app import system
+
+    return int(system.get("product_groups:version") or 0) < GROUPS_VERSION
+
+
+def regroup_tick() -> dict | None:
+    """Sürüm yükseldiyse yeniden gruplamayı ARKA PLANDA parça parça yap (jobs.scheduler her turda çağırır): her parça
+    ayrı işlem (kilit kısa), ilerleme sys_settings'te (yeniden başlarsa kaldığı yerden). 07.11.2026: tek işlemde
+    açılışta çalışınca canlı sunucu 15 dakika kilitlendi. Bitince sürüm yazılır; iş yoksa None."""
+    import time as _t
+
+    from app import system
+
+    if not regroup_pending():
+        return None
+    t0, done = _t.monotonic(), {"rows": 0, "titles": 0}
+    phase = system.get("product_groups:regroup_phase") or "rows"
+    cur = int(system.get("product_groups:regroup_cursor") or 0)
+    while True:  # en az bir parça; sonra süre bütçesi dolana dek
+        if done["rows"] + done["titles"] and _t.monotonic() - t0 >= REGROUP_BUDGET_S:
+            break
+        with system.connect() as c:
+            if phase == "rows":
+                rows = [dict(x) for x in c.execute("SELECT rowid AS _rid, * FROM product_groups WHERE group_key != '' "
+                                                   "AND rowid > ? ORDER BY rowid LIMIT ?", (cur, REGROUP_CHUNK))]
+                for r in rows:
+                    _regroup_row(c, r)
+                if rows:
+                    cur = rows[-1]["_rid"]
+                    done["rows"] += len(rows)
+                else:
+                    _regroup_queue(c)
+                    phase, cur = "official", 0
+            else:
+                titles = [tuple(x) for x in c.execute("SELECT DISTINCT title, brand FROM official_prices ORDER BY title, "
+                                                      "brand LIMIT ? OFFSET ?", (REGROUP_TITLES, cur))]
+                _regroup_official(c, titles)
+                cur += len(titles)
+                done["titles"] += len(titles)
+                if len(titles) < REGROUP_TITLES:
+                    c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('product_groups:version', ?)",
+                              (str(GROUPS_VERSION),))
+                    for k in ("product_groups:regroup_phase", "product_groups:regroup_cursor"):
+                        c.execute("DELETE FROM sys_settings WHERE key = ?", (k,))
+                    log.info("ürün grupları yeniden gruplandı (arka plan): %s", done)
+                    return {**done, "finished": True}
+            c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('product_groups:regroup_phase', ?)", (phase,))
+            c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('product_groups:regroup_cursor', ?)", (str(cur),))
+    return {**done, "finished": False}
 
 
 # ---------------------------------------------------------------- tutarlılık (gecelik) ve kalite ölçüleri
