@@ -436,7 +436,7 @@ async def _require_login(request: Request, call_next):
         return response
     # şablon gönderimi (hub) ve gelen posta (Cloudflare Email Worker, kendi gizli anahtarıyla): oturumsuz
     public = path.startswith("/api/auth/") or path in ("/api/templates/submit", "/api/mail/inbound", "/api/billing/revenuecat",
-                                                       "/api/me/restore", "/api/regions/demand")  # geri alma: oturum yok, giriş belgesiyle
+                                                       "/api/me/restore", "/api/regions/demand", "/api/ops/alert")  # geri alma: oturum yok, giriş belgesiyle
     if auth.enabled() and path.startswith("/api/") and not public:
         if auth.setup_required():
             return JSONResponse({"detail": "setup_required", "code": "setup_required",
@@ -1314,6 +1314,32 @@ def regions_demand(request: Request):
     if not key or not hmac.compare_digest(got, f"Bearer {key}"):
         raise HTTPException(404, "Not Found")
     return prefs.region_counts(3)
+
+
+class OpsAlertIn(BaseModel):
+    status: str = Field(..., min_length=1, max_length=40)       # failed | blocked | schema_changed | anomaly …
+    region: str | None = Field(None, max_length=60)
+    text: str = Field(..., min_length=1, max_length=400)
+
+
+@app.post("/api/ops/alert")
+def ops_alert(body: OpsAlertIn, request: Request):
+    """Fiyat toplayan iş (Cloud Run, marketfiyati) aksadığında yöneticinin telefonuna push ("sistem" türü, sessiz saate
+    uyar). Yetki yalnız HESAPKITAP_OPS_ALERT_KEY (Authorization: Bearer …); tutmazsa 404. Aynı gün + durum + bölge
+    bir kez gider."""
+    import hmac
+
+    from app import feedback, push
+
+    key = os.environ.get("HESAPKITAP_OPS_ALERT_KEY", "")
+    if not key or not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {key}"):
+        raise HTTPException(404, "Not Found")
+    title = f"Fiyat toplama: {body.status}" + (f" · {body.region}" if body.region else "")
+    pid = f"sistem:{date.today().isoformat()}:{body.status}:{body.region or '-'}"
+    sent = 0
+    for a in feedback.admins():
+        sent += len(push.notify(a["id"], [push.item("sistem", pid, title, body.text, push.R_OZET)]))
+    return {"ok": True, "sent": sent}
 
 
 @app.get("/api/admin/official-prices")
