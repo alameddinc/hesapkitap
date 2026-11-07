@@ -19,6 +19,8 @@ gruplar: aynı boydaki süt hangi markadan olursa olsun aynı gruptur.
    'ai'). Boyu yine kurallar okur (model yalnız genel adı verir). Günde en çok AI_CALLS_PER_DAY çağrı (sunucu geneli);
    maliyet ai_calls'a kind "grup" olarak yazılır. Modele yalnız ürün adı gider: fiş, işyeri, fiyat, kişi bilgisi gitmez.
    Kuyruk boşalana kadar ad geçici gruptadır (pending: true; aynı yazılış aynı geçici grup).
+   Alışveriş listesine yazılan ad beklemez (classify_names / kick_names): eklenince arka planda yalnız o adlar tek
+   çağrıda sorulur (kişi başı ve sunucu geneli günlük sınırlarla; önbellekteki ad hiç sorulmaz).
 
 Saklama şeması app/system.py SCHEMA'dadır (product_groups, product_group_queue).
 """
@@ -559,6 +561,20 @@ def resolve(name: str, brand: str | None = None, unit: str | None = None,
     return None, None
 
 
+def catalog_contains(name: str) -> dict | None:
+    """Alışveriş listesi, yapay zekâdan önce: yazılan adın bütün kelimeleri katalog ürünlerinin adında geçiyorsa
+    (product_catalog.contains) o genel ad + yazılan boy; yoksa None. Yalnız listede: fiş gruplaması (resolve) değişmez."""
+    from app import product_catalog
+
+    if not product_catalog.size():
+        return None
+    gen = product_catalog.contains(name)
+    if not gen:
+        return None
+    tokens = _expand(name_norm(name).split())
+    return _public(_compose(refine(gen, tokens), parse_size(tokens)[0]))
+
+
 def _provisional(name: str, unit: str | None) -> dict | None:
     """Yapay zekâ beklenirken: markası ve boyu atılmış adın kendisi (aynı yazılış aynı geçici grup)."""
     tokens = name_norm(name).split()
@@ -748,10 +764,50 @@ def _valid(g) -> str | None:
     return g if re.fullmatch(r"[A-Za-zÇĞİÖŞÜçğıöşüÂâÎîÛû' .&-]{2,40}", g) else None
 
 
+GENERATION = 0  # yapay zekâ sonucu önbelleğe her yazılınca artar (app/shopping_known.py önbelleği bununla tazelenir)
+
+
+def _ask(batch: list[dict]) -> dict:
+    """Tek toplu çağrı: [{name_norm, name}] → modelin yanıtı (dict). Hata fırlatabilir (çağıran yakalar)."""
+    from app import receipt
+
+    names = "\n".join(f"{i}. {b['name']}" for i, b in enumerate(batch))
+    data, _meta = receipt.gemini_text_json(PROMPT + names, max_output_tokens=2048, kind="grup", model=receipt.DEFAULT_MODEL)
+    return data if isinstance(data, dict) else {}
+
+
+def _apply(batch: list[dict], data: dict) -> int:
+    """Yanıtı önbelleğe yaz, kuyruktan sil. Yanıtta olmayan ad kuyrukta kalır. Dönen: yazılan ad sayısı."""
+    global GENERATION
+    from app import community_prices, system
+
+    got, cats, subs = {}, {}, {}
+    for row in data.get("items") or []:
+        if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < len(batch):
+            got[row["i"]] = row.get("g")
+            cats[row["i"]] = valid_category(row.get("c"))
+            subs[row["i"]] = valid_subcategory(cats[row["i"]], row.get("s"))
+    done = 0
+    with system.connect() as c:
+        for i, b in enumerate(batch):
+            if i not in got:
+                continue  # yanıtta yok: kuyrukta kalır (deneme sayısı arttı)
+            g = refine(_valid(got[i]), b["name_norm"].split())
+            size, _ = parse_size(b["name_norm"].split())
+            grp = _compose(g, size, category=cats.get(i), subcategory=subs.get(i)) if g else None
+            _store(c, b["name_norm"], grp, "ai")
+            c.execute("DELETE FROM product_group_queue WHERE name_norm = ?", (b["name_norm"],))
+            community_prices.relabel(c, b["name_norm"], grp)  # geçici gruptaki topluluk satırları
+            done += 1
+    if done:
+        GENERATION += 1
+    return done
+
+
 def classify_pending(max_calls: int = 1) -> int:
     """Kuyruktaki adları toplu sınıflandır (en çok max_calls çağrı, günlük tavan AI_CALLS_PER_DAY). Dönen: önbelleğe
     yazılan ad sayısı. Yapay zekâ kapalıysa (anahtar yok) 0. Bir çağrının hatası kuyruğu bozmaz (deneme sayısı artar)."""
-    from app import community_prices, receipt, system
+    from app import receipt, system
 
     if not receipt.enabled() or not _LOCK.acquire(blocking=False):
         return 0
@@ -769,33 +825,123 @@ def classify_pending(max_calls: int = 1) -> int:
                 c.execute(f"UPDATE product_group_queue SET tries = tries + 1 WHERE name_norm IN "
                           f"({','.join('?' * len(batch))})", [b["name_norm"] for b in batch])
             system.put(_day_key(), str(ai_calls_today() + 1))
-            names = "\n".join(f"{i}. {b['name']}" for i, b in enumerate(batch))
             try:
-                data, _meta = receipt.gemini_text_json(PROMPT + names, max_output_tokens=2048, kind="grup",
-                                                       model=receipt.DEFAULT_MODEL)
+                data = _ask(batch)
             except Exception:  # noqa: BLE001 - ağ / model hatası: adlar kuyrukta kalır, sonra yeniden denenir
                 log.warning("ürün grubu yapay zekâ çağrısı başarısız", exc_info=True)
                 break
-            got, cats, subs = {}, {}, {}
-            for row in data.get("items") or [] if isinstance(data, dict) else []:
-                if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < len(batch):
-                    got[row["i"]] = row.get("g")
-                    cats[row["i"]] = valid_category(row.get("c"))
-                    subs[row["i"]] = valid_subcategory(cats[row["i"]], row.get("s"))
-            with system.connect() as c:
-                for i, b in enumerate(batch):
-                    if i not in got:
-                        continue  # yanıtta yok: kuyrukta kalır (deneme sayısı arttı)
-                    g = refine(_valid(got[i]), b["name_norm"].split())
-                    size, _ = parse_size(b["name_norm"].split())
-                    grp = _compose(g, size, category=cats.get(i), subcategory=subs.get(i)) if g else None
-                    _store(c, b["name_norm"], grp, "ai")
-                    c.execute("DELETE FROM product_group_queue WHERE name_norm = ?", (b["name_norm"],))
-                    community_prices.relabel(c, b["name_norm"], grp)  # geçici gruptaki topluluk satırları
-                    done += 1
+            done += _apply(batch, data)
     finally:
         _LOCK.release()
     return done
+
+
+# ---------------------------------------------------------------- alışveriş listesine yazılan adlar (hemen, tek çağrı)
+
+LIST_AI_NAMES_PER_USER_DAY = 20   # kişi başı günde en çok bu kadar liste adı yapay zekâya gider
+LIST_AI_CALLS_PER_DAY = 60        # sunucu geneli liste çağrısı tavanı (toplu kuyruğun AI_CALLS_PER_DAY'inden ayrı)
+LOCK_WAIT_S = 90.0                # toplu sınıflandırma sürerken liste çağrısı bekler (aynı ad iki kez sorulmasın)
+
+
+def _list_key(uid: int | None = None) -> str:
+    day = date.today().isoformat()
+    return f"list_groups_ai:{day}:{uid}" if uid else f"list_groups_ai:{day}"
+
+
+def _count(key: str) -> int:
+    from app import system
+
+    try:
+        return int(system.get(key) or 0)
+    except ValueError:
+        return 0
+
+
+def enqueue(names: list[str]) -> None:
+    """Adları yapay zekâ kuyruğuna yaz (önbellekte olan ya da zaten kuyrukta olan eklenmez)."""
+    from app import system
+
+    rows = {name_norm(n): n.strip()[:80] for n in names if n and n.strip() and name_norm(n)}
+    if not rows:
+        return
+    with system.connect() as c:
+        have = {r[0] for r in c.execute(f"SELECT name_norm FROM product_groups WHERE name_norm IN "
+                                        f"({','.join('?' * len(rows))})", list(rows))}
+        c.executemany("INSERT OR IGNORE INTO product_group_queue (name_norm, name, added_at) VALUES (?, ?, ?)",
+                      [(nn, n, _now()) for nn, n in rows.items() if nn not in have])
+
+
+def classify_names(names: list[str], uid: int | None = None) -> int:
+    """Alışveriş listesine yazılan adlar beklemesin: YALNIZ bu adlar (kuyrukta olup önbellekte olmayanlar), tek toplu
+    çağrıda. Maliyet sınırları: sunucu geneli önbellek (aynı ad ikinci kez sorulmaz, kim yazarsa yazsın); kişi başı günde
+    LIST_AI_NAMES_PER_USER_DAY ad; sunucu geneli günde LIST_AI_CALLS_PER_DAY çağrı; kişinin günlük yapay zekâ sınırı
+    (receipt._daily_gate: çağıranın defter bağlamında sayılır) ve yönetici kısıtlamaları. Dönen: önbelleğe yazılan ad."""
+    from app import receipt, system
+
+    nns = list(dict.fromkeys(name_norm(n) for n in names if n and name_norm(n)))
+    if not nns or not receipt.enabled():
+        return 0
+    if not _LOCK.acquire(timeout=LOCK_WAIT_S):
+        return 0
+    try:
+        left = LIST_AI_NAMES_PER_USER_DAY - _count(_list_key(uid)) if uid else BATCH
+        if left <= 0 or _count(_list_key()) >= LIST_AI_CALLS_PER_DAY:
+            return 0
+        with system.connect() as c:
+            q = ",".join("?" * len(nns))
+            cached = {r[0] for r in c.execute(f"SELECT name_norm FROM product_groups WHERE name_norm IN ({q})", nns)}
+            queued = {r["name_norm"]: dict(r) for r in c.execute(
+                f"SELECT name_norm, name FROM product_group_queue WHERE tries < ? AND name_norm IN ({q})",
+                [QUEUE_MAX_TRIES, *nns])}
+        batch = [queued[nn] for nn in nns if nn in queued and nn not in cached][:min(left, BATCH)]
+        if not batch:
+            return 0
+        try:
+            data = _ask(batch)  # kişinin günlük sınırı burada (receipt._daily_gate) sayılır / durdurur
+        except receipt.ReceiptError as e:
+            if isinstance(e, receipt.DailyLimitError):
+                return 0
+            log.warning("liste adı yapay zekâ çağrısı başarısız: %s", e)
+            data = None
+        except Exception:  # noqa: BLE001 - ağ / model hatası: deneme sayısı artar, sonra yeniden denenir
+            log.warning("liste adı yapay zekâ çağrısı başarısız", exc_info=True)
+            data = None
+        system.put(_list_key(), str(_count(_list_key()) + 1))
+        if uid:
+            system.put(_list_key(uid), str(_count(_list_key(uid)) + len(batch)))
+        with system.connect() as c:
+            c.execute(f"UPDATE product_group_queue SET tries = tries + 1 WHERE name_norm IN "
+                      f"({','.join('?' * len(batch))})", [b["name_norm"] for b in batch])
+            c.execute("DELETE FROM sys_settings WHERE key LIKE 'list_groups_ai:%' AND key < ?",
+                      (f"list_groups_ai:{date.today().isoformat()}",))
+        return _apply(batch, data) if data is not None else 0
+    finally:
+        _LOCK.release()
+
+
+def _spawn(fn) -> None:
+    threading.Thread(target=fn, daemon=True, name="product-groups-list").start()
+
+
+def kick_names(names: list[str]) -> None:
+    """Listeye yazılan adları arka planda hemen sınıflandır (istek yolu beklemez), açık defterin bağlamında: kişinin
+    günlük yapay zekâ sınırı ona sayılır. Yapay zekâ kapalıysa ya da ad yoksa hiçbir şey."""
+    import os
+
+    from app import db, receipt
+
+    names = [n for n in names if n and n.strip()]
+    if not names or not receipt.enabled():
+        return
+    u = db.current_user()
+    path = db.db_path()
+    path = None if os.path.abspath(path) == os.path.abspath(db.DB_PATH) else path
+
+    def go():
+        with db.use_space(path, u):
+            _safe(classify_names, names, (u or {}).get("id"))
+
+    _spawn(go)
 
 
 def kick() -> None:

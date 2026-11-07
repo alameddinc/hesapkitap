@@ -288,6 +288,35 @@ def match(name: str, exclude: str | None = None) -> tuple[str | None, float]:
     return g, conf
 
 
+CONTAIN_SHARE = 0.6  # içeren ürünlerin bu payı aynı genel addaysa o ad
+
+
+def contains(name: str) -> str | None:
+    """Alışveriş listesine yazılan ad ("Orneksan slims mavi"): kelimelerinin HEPSİ bir katalog ürününün adında geçiyorsa
+    (en az iki kelime; tek kelimede yalnız tek ürün içeriyorsa) içeren ürünlerin çoğunluk genel adı (pay ≥
+    CONTAIN_SHARE); yoksa None. match()'in oylamasından katı: yazılan kısa adın fazladan kelimesi yok."""
+    idx = _load()
+    q = set(_tokens(name))
+    if not q or not idx["prods"]:
+        return None
+    posts = sorted((idx["post"].get(t) or () for t in q), key=len)
+    if not posts[0]:
+        return None
+    cand = set(posts[0])
+    for p in posts[1:]:
+        cand &= set(p)
+        if not cand:
+            return None
+    if len(q) == 1 and len(cand) != 1:
+        return None
+    votes: dict[str, int] = {}
+    for i in cand:
+        g = idx["prods"][i][2]
+        votes[g] = votes.get(g, 0) + 1
+    g = max(votes, key=lambda k: (votes[k], k))
+    return g if votes[g] / len(cand) >= CONTAIN_SHARE else None
+
+
 def brands() -> list[str]:
     from app import system
 

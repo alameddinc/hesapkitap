@@ -33,11 +33,39 @@ def _name(label: str | None) -> str:
     return (label or "").split(" · ")[0]
 
 
-def _in_list() -> tuple[set[str], set[str]]:
+def _in_list(fast: bool = False) -> tuple[set[str], set[str]]:
+    """(listedeki ana gruplar, listedeki metinler); işaretli satır da listede sayılır. fast: grupları yeniden çözmeden
+    kayıtlı group_key'den (yazarken öneri her tuşta listeyi baştan çözmesin)."""
     from app import shopping
 
-    items = shopping.list_items()  # işaretli satır da listede sayılır
+    if fast:
+        with db.connect() as c:
+            items = db.rows(c.execute("SELECT text, group_key FROM shopping_list"))
+    else:
+        items = shopping.list_items()
     return {_base(i["group_key"]) for i in items if i["group_key"]}, {i["text"].strip().lower() for i in items}
+
+
+_trip_cache: dict = {}
+
+
+def _recent_trip_items() -> list[dict]:
+    """Son 20 geçmiş alışverişin satırları (yeniden eskiye), defter + geçmiş damgası başına önbellekte."""
+    import os
+
+    from app import shopping_trips
+
+    with db.connect() as c:
+        st = tuple(c.execute("SELECT COUNT(*), IFNULL(MAX(id), 0) FROM shopping_trips").fetchone())
+    ck = (os.path.abspath(db.db_path()), (db.current_user() or {}).get("id"))
+    hit = _trip_cache.get(ck)
+    if hit and hit[0] == st:
+        return hit[1]
+    rows = [x for t in shopping_trips.trips(limit=20) for x in (shopping_trips.get_trip(t["id"]) or {}).get("items", [])]
+    if len(_trip_cache) >= 64:
+        _trip_cache.clear()
+    _trip_cache[ck] = (st, rows)
+    return rows
 
 
 def _purchases(days: int) -> list[dict]:
@@ -54,9 +82,11 @@ def _fold(s: str) -> str:
 
 
 def suggest(q: str, limit: int = SUGGEST_MAX) -> dict:
-    """Yazarken öneri: {items [{text, group_key, label, source recent|own|group, count?}]}. Önce listedeki / geçmiş
-    alışverişteki satırlar, sonra kendi aldıkların (çok alınan önce), sonra ürün grubu adları ("Süt · 1 L")."""
-    from app import product_groups, shopping, system
+    """Yazarken öneri: {items [{text, group_key, label, source recent|own|product|group, count?, last_price?, place?}]}.
+    Önce geçmiş alışverişteki satırlar, sonra kendi aldığın ürün grupları (çok alınan önce), sonra kendi aldığın ürünlerin
+    adları ("Örneksan Slims Mavi Sigara · son ₺95"; app/shopping_known.py, en çok shopping_known.SUGGEST_MAX), sonra
+    ürün grubu adları ("Süt · 1 L"). Kişinin fişleri ve geçmişi defter başına önbellekte (her tuşta yeniden okunmaz)."""
+    from app import product_groups, shopping, shopping_known, system
 
     q = " ".join((q or "").split())[:40]
     s = _fold(q)
@@ -76,26 +106,31 @@ def suggest(q: str, limit: int = SUGGEST_MAX) -> dict:
         return any(n and (_fold(n).startswith(s) or f"-{s}" in _fold(n)) for n in names)
 
     # 1. son kullanılan satırlar (geçmiş alışveriş; listede olanlar değil)
-    have_b, have_t = _in_list()
-    from app import shopping_trips
-
-    for t in shopping_trips.trips(limit=20):
-        for x in (shopping_trips.get_trip(t["id"]) or {}).get("items", []):
-            if hit(x.get("text"), x.get("label")) and _base(x.get("group_key")) not in have_b \
-                    and x["text"].strip().lower() not in have_t:
-                push(x["text"], x.get("group_key") if x.get("group_key") and "|" in x["group_key"] else None,
-                     x.get("label"), "recent")
-    # 2. kendi aldıkların
+    have_b, have_t = _in_list(fast=True)
+    for x in _recent_trip_items():
+        if hit(x.get("text"), x.get("label")) and _base(x.get("group_key")) not in have_b \
+                and x["text"].strip().lower() not in have_t:
+            push(x["text"], x.get("group_key") if x.get("group_key") and "|" in x["group_key"] else None,
+                 x.get("label"), "recent")
+    # 2. kendi aldıkların (ürün grubu; son DUE_DAYS gün)
+    since = (date.today() - timedelta(days=DUE_DAYS)).isoformat()
     counts: dict[str, int] = defaultdict(int)
     labels: dict[str, str] = {}
-    for it in _purchases(DUE_DAYS):
-        g = it["group"]
-        counts[g["key"]] += 1
-        labels[g["key"]] = g["label"]
+    prods = shopping_known.products()
+    for p in prods:
+        g = p.get("group")
+        if g and not g.get("pending") and p["last_date"] >= since:
+            counts[g["key"]] += p["count"]
+            labels[g["key"]] = g["label"]
     for k in sorted(counts, key=lambda k: (-counts[k], k)):
         if hit(labels[k]):
             push(_name(labels[k]), k if "|" in k else None, labels[k], "own", count=counts[k])
-    # 3. ürün grupları (sunucu geneli adlar; fiyatı en çok bilinen boy önce)
+    # 3. kendi aldığın ürünlerin adları ("örnek" → "Örneksan Slims Mavi Sigara · son ₺95")
+    for x in shopping_known.suggest(q):
+        if x["text"].strip().lower() not in have_t:
+            push(x["text"], x["group_key"], x["label"], "product", count=x["count"], last_price=x["last_price"],
+                 place=x["place"])
+    # 4. ürün grupları (sunucu geneli adlar; fiyatı en çok bilinen boy önce)
     if len(out) < limit:
         with system.connect() as c:
             rows = c.execute("SELECT group_key, MAX(label) FROM product_groups WHERE group_key != '' AND "

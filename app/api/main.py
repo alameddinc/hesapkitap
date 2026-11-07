@@ -4557,7 +4557,10 @@ def shopping_list():
     """{items: [{id, text, qty, unit (adet|kg|g|L|ml), amount_label ("2,5 kg"), mult (teklif çarpanı | null), unit_mismatch,
     done, group {key, label, pending?, pinned?} | null, assumed {key, label, size_label} | null (boysuz satır en yaygın
     boya çözüldü; adette), best {chain, price, line_total (price × mult | null), unit_price_per?, per_unit?, source, n?}
-    | null (en ucuz teklif; alınmışlarda null), planned {chain, unit_price, line_total} | null (kaydedilen plan),
+    | null (en ucuz teklif; alınmışlarda null; kişinin ürününe bağlı satırda source "own" + product + date: "Senin son
+    alımın: ₺95 · Örnekbüfe"), own_product {name, price, place, date} | null (yazılan ad kişinin fişteki ürününe
+    bağlandı), own_place {place, price} | null (kişinin bu ürünü son kafede aldığı yer ve fiyat; market eşleşmesi
+    değişmez), planned {chain, unit_price, line_total} | null (kaydedilen plan),
     actual {unit_price, line_total, entry_id} | null (bağlanan fiş), added_by, added_by_name, created_at, done_at}],
     saved_plan {k, total, chains [{chain, total, item_ids}], items, created_at, date, source_info} | null} — önce
     işaretlenmemişler."""
@@ -4588,7 +4591,8 @@ def shopping_bulk(body: ShoppingBulkIn):
 
 @app.get("/api/shopping-list/suggest")
 def shopping_suggest(q: str = Query("", max_length=60), limit: int = Query(8, ge=1, le=12)):
-    """Yazarken öneri (shopping_autofill): {items [{text, group_key | null, label, source recent|own|group, count?}]}."""
+    """Yazarken öneri (shopping_autofill): {items [{text, group_key | null, label, source recent|own|product|group,
+    count?, last_price?, place?}]} — product: kendi aldığın ürünün adı ("Örneksan Slims Mavi Sigara · son ₺95")."""
     from app import shopping_autofill
 
     return shopping_autofill.suggest(q, limit)
@@ -4747,7 +4751,9 @@ def shopping_sizes(rid: int):
 def shopping_optimize(max_stops: int = Query(3, ge=1, le=3), stop_cost: float | None = Query(None, ge=0, le=10_000)):
     """Nereye gideyim? En iyi 1 / 2 / 3 duraklı plan ve önerilen durak sayısı (app/shopping.py optimize).
     {region, date, stop_cost, max_stops, plans: [{k, stops: [{chain, total, items: [{id, text, qty, group_label, price
-    (birim), line_total, unit_price_per?, per_unit?, brand?, source, date?, region?}]}], total, covered, missing [id],
+    (birim), line_total, unit_price_per?, per_unit?, brand?, source, date?, region?, product? (kişinin ürününün son
+    alımı), own_place {place, price} | null (kafe alımı), cheaper_elsewhere {chain, price}? (satırın en ucuz zinciri
+    birleşimde değil: "Hakmar'da ₺41,50")}]}], total, covered, missing [id],
     saving_vs_single, saving_vs_prev, extra_vs_best, recommended}], single: [{chain, total, covered, missing [id],
     vs_recommended}], recommended_k (null: fiyatlı satır yok), one_store (single[0]), priced, unpriced [id],
     headline {title, subtitle, cta, chains, total, saving, count} | null, unpriced_info [{id, text, reason no_size |
