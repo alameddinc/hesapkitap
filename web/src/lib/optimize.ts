@@ -76,7 +76,7 @@ export function sourceLine(r: Optimize, today: string): string {
   const k = r.source_info?.kinds ?? [];
   const parts: string[] = [];
   if (k.includes("resmi")) {
-    parts.push([`Market Fiyatı`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
+    parts.push([`Market Fiyatı (TÜBİTAK BİLGEM)`, r.source_info.resmi_date ? agoWord(r.source_info.resmi_date, today) : null].filter(Boolean).join(" · "));
   }
   if (k.includes("own")) parts.push("fişlerin");
   if (k.includes("community")) parts.push("topluluk");

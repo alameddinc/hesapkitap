@@ -63,9 +63,9 @@ test("zincir adı: marka, şube ve semt atılır", () => {
 });
 
 test("tek dipnot: il ve ulusal yazılmaz", () => {
-  assert.equal(priceFootnote([{ source: "resmi", date: "2026-11-06" }, { source: "resmi", date: "2026-11-05" }], TODAY), "Fiyatlar: Market Fiyatı · dün");
+  assert.equal(priceFootnote([{ source: "resmi", date: "2026-11-06" }, { source: "resmi", date: "2026-11-05" }], TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün");
   assert.equal(priceFootnote([{ source: "own", date: "2026-11-01" }], TODAY), null);
-  assert.equal(priceFootnote([{ source: "resmi" }], TODAY), "Fiyatlar: Market Fiyatı");
+  assert.equal(priceFootnote([{ source: "resmi" }], TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)");
 });
 
 test("satır fiyatı: birim fiyat × miktar", () => {

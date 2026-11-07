@@ -78,7 +78,7 @@ export function priceFootnote(offers: { source: string; date?: string | null }[]
   const r = offers.filter((o) => o.source === "resmi");
   if (!r.length) return null;
   const day = r.map((o) => o.date ?? "").filter(Boolean).sort().pop();
-  return `Fiyatlar: Market Fiyatı${day ? ` · ${agoWord(day, today)}` : ""}`;
+  return `Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM)${day ? ` · ${agoWord(day, today)}` : ""}`;
 }
 
 // ---------------------------------------------------------------- satır fiyatı

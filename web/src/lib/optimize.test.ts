@@ -57,8 +57,8 @@ test("karşılaştırma satırları", () => {
 });
 
 test("kaynak satırı ve adlar", () => {
-  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı · bugün · fişlerin · topluluk");
-  assert.equal(sourceLine({ ...R, source_info: { kinds: ["resmi"], resmi_date: "2026-11-06", national: false } }, TODAY), "Fiyatlar: Market Fiyatı · dün");
+  assert.equal(sourceLine(R, TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · bugün · fişlerin · topluluk");
+  assert.equal(sourceLine({ ...R, source_info: { kinds: ["resmi"], resmi_date: "2026-11-06", national: false } }, TODAY), "Fiyatlar: Market Fiyatı (TÜBİTAK BİLGEM) · dün");
   assert.equal(sourceLine({ ...R, source_info: { kinds: ["own", "community"], resmi_date: null, national: false } }, TODAY), "Fiyatlar: fişlerin · topluluk");
   assert.equal(namesLine("Fiyatı bilinmeyen", [9, 7], new Map([[9, "Örnek Şey"]])), "Fiyatı bilinmeyen: Örnek Şey");
   assert.equal(namesLine("Bu planda yok", [], new Map()), "");
