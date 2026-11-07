@@ -36,7 +36,8 @@ export default function NameSuggest({ id, value, onChange, autoFocus, maxLength 
   const show = on && focus && touched && items.length > 0;
   const pick = (name: string) => { onChange(name); setTouched(false); setHi(-1); };
   return (
-    <div className="relative">
+    <div>
+      <div className="relative">
       <input id={id} className="input" value={value} maxLength={maxLength} autoFocus={autoFocus} autoComplete="off"
         role={on ? "combobox" : undefined} aria-expanded={on ? show : undefined} aria-controls={on ? listId : undefined} aria-autocomplete={on ? "list" : undefined}
         onFocus={() => setFocus(true)} onBlur={() => setTimeout(() => setFocus(false), 120)}
@@ -65,6 +66,7 @@ export default function NameSuggest({ id, value, onChange, autoFocus, maxLength 
           ))}
         </ul>
       )}
+      </div>
       {on && dym && (
         <p className="mt-1 text-sm text-stone-600 dark:text-stone-300" data-testid="bunu-mu">
           Bunu mu demek istedin: <button type="button" className="font-medium text-blue-700 underline underline-offset-2 dark:text-blue-400" onClick={() => pick(dym.name)}>{dym.name}</button>?</p>

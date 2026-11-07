@@ -6,7 +6,7 @@
 // Fiyat UX v2 (yetenek shopping_assumed_size / shopping_headline): satırın altında "En ucuz: BİM ₺32,50 · 1 L", boysuz
 // satırda "1 L kabul edildi" (dokun → boy seç), fiyatsız satırda ne yapmalı; altta sabit "Nereye gideyim?" çubuğu planı açar.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Info, MapPinned, Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Info, MapPinned, Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import Modal from "../components/Modal";
 import { assumedText, barMain, bestInline, sizeOf, type Assumed, type Headline, type ShopBest, type UnpricedInfo } from "../lib/priceAdvice";
@@ -269,7 +269,7 @@ function SizePicker({ it, money, onClose, onPick }: { it: ShopItem; money: (n: n
             <li key={o.key}>
               <button type="button" onClick={() => onPick(o.key)} aria-pressed={o.key === cur}
                 className={cx("flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60", o.key === cur && "bg-green-50/70 dark:bg-green-950/30")}>
-                <span className="min-w-0 flex-1 font-medium">{o.size_label}</span>
+                <span className="min-w-0 flex-1 font-medium">{o.size_label}{o.key === cur && <Check size={15} className="ml-1.5 inline text-green-700 dark:text-green-400" aria-label="seçili" />}</span>
                 <span className="shrink-0 text-right text-sm text-stone-600 tabular-nums dark:text-stone-300">
                   {o.price != null ? <>{o.chain} {money(o.price)}{o.unit_price_per != null && o.per_unit ? <span className="block text-xs text-stone-500">{money(o.unit_price_per)}/{o.per_unit}</span> : null}</> : <span className="text-stone-400">fiyat yok</span>}
                 </span>
