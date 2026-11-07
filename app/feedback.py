@@ -249,7 +249,7 @@ def notify_admins(fid: int, message: str, uid: int | None, demo: bool, first_sho
     for a in admins():
         try:
             push.notify(a["id"], [push.item("geri_bildirim", f"geri-bildirim:{fid}", f"Geri bildirim: {who}", short,
-                                            push.R_OZET)])
+                                            push.R_AYARLAR)])
         except Exception:  # noqa: BLE001
             log.exception("geri bildirim push")
     try:

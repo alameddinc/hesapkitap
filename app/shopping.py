@@ -23,25 +23,87 @@ def _people() -> dict[int, str]:
         return {}
 
 
+KEY_RE = r"^[a-z0-9-]{1,40}(\|[a-z0-9.]{1,16})?$"
+COMMON_DAYS = 14   # en yaygın boy: son bu kadar günün resmî + topluluk satırları
+
+
+def common_sizes(bases: list[str]) -> dict[str, list[str]]:
+    """Boysuz genel ürün → en yaygın boylu gruplar (çoktan aza): resmî fiyat (son COMMON_DAYS gün, zincir × ürün adı)
+    ve topluluk satırları (kişi × gün) sayılır. "sut" → ["sut|1l", "sut|500ml", …]; "elma" → ["elma|kg", …]."""
+    from datetime import date, timedelta
+
+    from app import system
+
+    bases = sorted({b for b in bases if b})
+    if not bases:
+        return {}
+    since = (date.today() - timedelta(days=COMMON_DAYS)).isoformat()
+    like = " OR ".join("group_key LIKE ?" for _ in bases)
+    args = [f"{b}|%" for b in bases]
+    with system.connect() as c:
+        off = c.execute(f"SELECT group_key, COUNT(DISTINCT chain || '|' || title) FROM official_prices WHERE day >= ? "
+                        f"AND ({like}) GROUP BY group_key", [since, *args]).fetchall()
+        com = c.execute(f"SELECT group_key, COUNT(DISTINCT contributor || day) FROM community_prices WHERE day >= ? "
+                        f"AND ({like}) GROUP BY group_key", [since, *args]).fetchall()
+    n: dict[str, int] = {}
+    for k, v in [*off, *com]:
+        n[k] = n.get(k, 0) + v
+    out: dict[str, list[str]] = {}
+    for k in sorted(n, key=lambda k: (-n[k], k)):
+        out.setdefault(k.split("|", 1)[0], []).append(k)
+    return out
+
+
 def _resolve(texts: list[str]) -> list[dict | None]:
     from app import product_groups
 
     return product_groups.groups_for([{"name": t} for t in texts])
 
 
-def _out(r: dict, group: dict | None, names: dict[int, str]) -> dict:
+def _sized(rs: list[dict], groups: list[dict | None]) -> list[tuple[dict | None, dict | None]]:
+    """(grup, assumed): kişinin seçtiği boy (pinned_key) önce; boysuz yazılan satır ("Süt", "Elma") en yaygın boya
+    çözülür ve assumed {key, label, size_label} döner (istemci "1 L kabul edildi" yazar, dokununca boy seçtirir)."""
+    from app import product_groups
+
+    bases = [g["key"] for r, g in zip(rs, groups) if g and "|" not in g["key"] and not g.get("pending")
+             and not r.get("pinned_key")]
+    common = common_sizes(bases)
+    want = [r["pinned_key"] for r in rs if r.get("pinned_key")] + [v[0] for v in common.values()]
+    labels = product_groups.labels(want)
+    out = []
+    for r, g in zip(rs, groups):
+        pin = r.get("pinned_key")
+        if pin:
+            base = (g or {}).get("label", "").split(" · ")[0] or pin.split("|")[0]
+            sl = product_groups.size_label(pin)
+            lab = labels.get(pin) or (f"{base} · {sl}" if sl else base)
+            out.append(({**({k: g[k] for k in ("category", "subcategory") if g and g.get(k)}), "key": pin,
+                         "label": lab, "pinned": True}, None))
+        elif g and "|" not in g["key"] and not g.get("pending") and common.get(g["key"]):
+            k = common[g["key"]][0]
+            sl = product_groups.size_label(k)
+            lab = labels.get(k) or f"{g['label']} · {sl}"
+            out.append(({**g, "key": k, "label": lab}, {"key": k, "label": lab, "size_label": sl}))
+        else:
+            out.append((g, None))
+    return out
+
+
+def _out(r: dict, group: dict | None, names: dict[int, str], assumed: dict | None = None) -> dict:
     return {"id": r["id"], "text": r["text"], "qty": r["qty"], "done": bool(r["done"]), "group": group,
-            "group_key": group["key"] if group else None,
+            "group_key": group["key"] if group else None, "assumed": assumed,
             "added_by": r["added_by"], "added_by_name": names.get(r["added_by"]), "created_at": r["created_at"],
             "done_at": r["done_at"]}
 
 
-def list_items() -> list[dict]:
-    """Liste (önce işaretlenmemişler, eklenme sırasıyla). Geçici grubu öğrenilmiş satırın group_key'i güncellenir."""
+def list_items(with_best: bool = False) -> list[dict]:
+    """Liste (önce işaretlenmemişler, eklenme sırasıyla). Geçici grubu öğrenilmiş satırın group_key'i güncellenir.
+    with_best: her satıra best (en ucuz teklif {chain, price, unit_price_per?, per_unit?, source} | null)."""
     with db.connect() as c:
         rs = db.rows(c.execute("SELECT * FROM shopping_list ORDER BY done, id"))
     groups = _resolve([r["text"] for r in rs]) if rs else []
-    stale = [(g["key"] if g else None, r["id"]) for r, g in zip(rs, groups) if (g["key"] if g else None) != r["group_key"]]
+    sized = _sized(rs, groups) if rs else []
+    stale = [(g["key"] if g else None, r["id"]) for r, (g, _a) in zip(rs, sized) if (g["key"] if g else None) != r["group_key"]]
     if stale:
         with db.connect() as c:
             c.executemany("UPDATE shopping_list SET group_key = ? WHERE id = ?", stale)
@@ -50,7 +112,45 @@ def list_items() -> list[dict]:
 
         product_groups.kick()
     names = _people()
-    return [_out(r, g, names) for r, g in zip(rs, groups)]
+    out = [_out(r, g, names, a) for r, (g, a) in zip(rs, sized)]
+    if with_best:
+        from app import price_sources
+
+        best = price_sources.best_offers([i["group"]["key"] for i in out if i["group"] and not i["done"]], limit=1)
+        for i in out:
+            o = (best.get(i["group"]["key"]) or [None])[0] if i["group"] and not i["done"] else None
+            i["best"] = {k: o[k] for k in ("chain", "price", "unit_price_per", "per_unit", "source", "n") if k in o} \
+                if o else None
+    return out
+
+
+def sizes(rid: int) -> list[dict] | None:
+    """Satırın boy seçenekleri (GET /api/shopping-list/{id}/sizes): [{key, label, size_label, chain, price,
+    unit_price_per?, per_unit?}] en yaygından, en çok 8. Satır yoksa None."""
+    from app import price_sources, product_groups
+
+    with db.connect() as c:
+        r = c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+    if not r:
+        return None
+    g = _resolve([r["text"]])[0]
+    if not g:
+        return []
+    base = g["key"].split("|", 1)[0]
+    keys = common_sizes([base]).get(base, [])[:8]
+    if "|" in g["key"] and g["key"] not in keys:
+        keys = [g["key"], *keys][:8]
+    labels = product_groups.labels(keys)
+    best = price_sources.best_offers(keys, limit=1)
+    name = g["label"].split(" · ")[0]
+    out = []
+    for k in keys:
+        o = (best.get(k) or [None])[0]
+        sl = product_groups.size_label(k)
+        out.append({"key": k, "label": labels.get(k) or f"{name} · {sl}", "size_label": sl,
+                    "chain": o["chain"] if o else None, "price": o["price"] if o else None,
+                    **({x: o[x] for x in ("unit_price_per", "per_unit") if o and x in o})})
+    return out
 
 
 def _clean_text(text: str) -> str:
@@ -67,30 +167,64 @@ def _clean_qty(qty) -> float:
     return round(q, 3)
 
 
-def add(text: str, qty: float = 1, uid: int | None = None) -> dict:
+def _clean_key(key) -> str | None:
+    import re
+
+    if key is None or key == "":
+        return None
+    if not isinstance(key, str) or not re.fullmatch(KEY_RE, key):
+        raise ValueError("Geçersiz ürün grubu")
+    return key
+
+
+def _lead_qty(t: str, q: float) -> tuple[str, float]:
+    """"6x Süt" / "6 x süt" / "x6 süt" → ("Süt", 6) — adet ayrıca verilmemişse (q == 1)."""
+    import re
+
+    m = re.fullmatch(r"(\d{1,3})\s*[xX×*]\s+(\D.*)", t) or re.fullmatch(r"[xX×](\d{1,3})\s+(\D.*)", t)
+    if m and q == 1 and 0 < int(m[1]) <= 999:
+        return m[2].strip(), float(m[1])
+    return t, q
+
+
+def _row_out(r: dict) -> dict:
+    g = _resolve([r["text"]])[0]
+    sg, a = _sized([r], [g])[0]
+    return _out(r, sg, _people(), a)
+
+
+def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None) -> dict:
     t, q = _clean_text(text), _clean_qty(qty)
+    t, q = _lead_qty(t, q)
+    pin = _clean_key(group_key)
     with db.connect() as c:
         if c.execute("SELECT COUNT(*) FROM shopping_list").fetchone()[0] >= MAX_ITEMS:
             raise ValueError(f"Listede en fazla {MAX_ITEMS} satır olabilir")
     g = _resolve([t])[0]
     with db.connect() as c:
-        rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, added_by) VALUES (?, ?, ?, ?)",
-                        (t, g["key"] if g else None, q, uid)).lastrowid
+        rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, added_by, pinned_key) VALUES (?, ?, ?, ?, ?)",
+                        (t, pin or (g["key"] if g else None), q, uid, pin)).lastrowid
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
     if g and g.get("pending"):
         from app import product_groups
 
         product_groups.kick()
-    return _out(r, g, _people())
+    return _row_out(r)
 
 
 def update(rid: int, data: dict) -> dict | None:
-    """text, qty, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş)."""
+    """text, qty, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş), group_key (boy seçimi; null kaldırır;
+    metin değişince seçim de kalkar)."""
     sets: dict = {}
     if data.get("text") is not None:
         sets["text"] = _clean_text(data["text"])
         g = _resolve([sets["text"]])[0]
         sets["group_key"] = g["key"] if g else None
+        sets["pinned_key"] = None
+    if "group_key" in data:
+        sets["pinned_key"] = _clean_key(data["group_key"])
+        if sets["pinned_key"]:
+            sets["group_key"] = sets["pinned_key"]
     if data.get("qty") is not None:
         sets["qty"] = _clean_qty(data["qty"])
     with db.connect() as c:
@@ -102,7 +236,7 @@ def update(rid: int, data: dict) -> dict | None:
             c.execute("UPDATE shopping_list SET done = ?, done_at = CASE WHEN ? THEN CURRENT_TIMESTAMP END WHERE id = ?",
                       (int(bool(data["done"])), int(bool(data["done"])), rid))
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
-    return _out(r, _resolve([r["text"]])[0], _people())
+    return _row_out(r)
 
 
 def delete(rid: int) -> bool:
@@ -127,7 +261,7 @@ def plan() -> dict:
     rows, chains = [], {}
     for it in items:
         offers = best.get(it["group"]["key"], []) if it["group"] else []
-        rows.append({**{k: it[k] for k in ("id", "text", "qty", "group")}, "best": offers[0] if offers else None,
+        rows.append({**{k: it[k] for k in ("id", "text", "qty", "group", "assumed")}, "best": offers[0] if offers else None,
                      "offers": offers[:5]})
         for o in offers:
             ch = chains.setdefault(o["chain"], {"chain": o["chain"], "total": 0.0, "covered": 0, "ids": set()})
@@ -167,7 +301,7 @@ def _line(it: dict, o: dict) -> dict:
            "group_label": it["group"]["label"] if it["group"] else None,
            "price": o["price"], "line_total": money.money(it["qty"] * o["price"]),
            "unit_price_per": o.get("unit_price_per"), "per_unit": o.get("per_unit"), "brand": o.get("brand"),
-           "source": o["source"], "date": o.get("date")}
+           "source": o["source"], "date": o.get("date"), "assumed": it.get("assumed")}
     if o.get("region"):
         out["region"] = o["region"]
     return out
@@ -262,10 +396,62 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
     srcs = sorted({x["source"] for x in used}, key=lambda x: (order.index(x) if x in order else len(order), x))
     resmi_days = [x["date"] for x in used if x["source"] == "resmi" and x.get("date")]
     attribution = sorted({o["attribution"] for v in offers.values() for o in v.values() if o.get("attribution")})
+    rec_plan = plans[rec - 1] if rec else None
     return {"region": region, "date": date.today().isoformat(), "stop_cost": cost, "max_stops": max_stops,
+            "headline": headline(rec_plan, plans[0] if plans else None, len(priced)),
+            "unpriced_info": [_unpriced(it) for it in items if it["id"] in unpriced],
+            "empty": _empty(items, priced),
             "plans": plans, "single": single, "recommended_k": rec,
             "one_store": single[0] if single else None,
             "priced": len(priced), "unpriced": unpriced,
             "sources": attribution,
             "source_info": {"kinds": srcs, "resmi_date": max(resmi_days) if resmi_days else None,
                             "national": any(x["source"] == "resmi" and x.get("region") == "ulusal" for x in used)}}
+
+
+def headline(p: dict | None, one: dict | None, priced: int) -> dict | None:
+    """Önerilen planın tek cümlesi (shopping_headline): {title, subtitle, cta, chains, total, saving, count}.
+    k=1: "Önerimiz: Hepsini BİM'den al — ₺195" / "6 ürün" / "BİM'e git"; k>1: "Önerimiz: BİM + Migros — ₺1.200" /
+    "₺340 daha ucuz" (tek mağazaya göre) / "BİM + Migros". Fiyatlı satır yoksa None."""
+    from app import money
+    from app.textnorm import suffix
+
+    if not p:
+        return None
+    chains = [st["chain"] for st in p["stops"]]
+    total, count = p["total"], p["covered"]
+    saving = money.money(one["total"] - total) if one and one["covered"] == count and p["k"] > 1 else 0.0
+    if p["k"] == 1:
+        head = "Hepsini " if count == priced else ""
+        title = f"Önerimiz: {head}{suffix(chains[0], 'den')} al — {money.tl(total, trim=True)}"
+        cta = f"{suffix(chains[0], 'e')} git"
+    else:
+        title = f"Önerimiz: {' + '.join(chains)} — {money.tl(total, trim=True)}"
+        cta = " + ".join(chains)
+    sub = f"{money.tl(saving, trim=True)} daha ucuz" if saving > 0 else f"{count} ürün"
+    return {"title": title, "subtitle": sub, "cta": cta, "chains": chains, "total": total, "saving": saving,
+            "count": count}
+
+
+_HINTS = {
+    "no_group": "Ürünü tanıyamadık; daha genel yaz: \u201csüt\u201d, \u201cekmek\u201d.",
+    "pending": "Ürün tanınıyor; fiyatı birazdan gelir.",
+    "no_size": "Ürüne boy ekle: \u201csüt 1 L\u201d.",
+    "no_price": "Bu ürünün fiyatı henüz yok; fiş okuttukça fiyatlar gelir.",
+}
+
+
+def _unpriced(it: dict) -> dict:
+    g = it.get("group")
+    reason = "no_group" if not g else "pending" if g.get("pending") else "no_size" if "|" not in g["key"] else "no_price"
+    return {"id": it["id"], "text": it["text"], "reason": reason, "hint": _HINTS[reason]}
+
+
+def _empty(items: list[dict], priced: list[dict]) -> dict | None:
+    """Fiyatlı satır yoksa ne yapmalı (liste boşsa None: istemcinin kendi boş durumu)."""
+    if not items or priced:
+        return None
+    no_size = any(it.get("group") and "|" not in it["group"]["key"] and not it["group"].get("pending") for it in items)
+    text = ("Ürüne boy ekle: \u201csüt 1 L\u201d. Fiş okuttukça fiyatlar da gelir." if no_size else
+            "Fiş okuttukça fiyatlar gelir; Bölgem'i seçersen market fiyatlarını da görürsün.")
+    return {"title": "Henüz fiyat yok", "text": text}

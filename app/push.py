@@ -103,6 +103,7 @@ R_OZET, R_ODEMELER, R_EKSTRELER, R_BUTCELER = "#/ozet", "#/diger/odemeler", "#/d
 R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger/tasarruf", "#/diger/zekat"
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 R_FIYATLAR = "#/diger/fiyatlar"
+R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 
 
 def _b64e(b: bytes) -> str:
@@ -632,9 +633,12 @@ def ops_alert(status: str, region: str | None, text: str, today: date | None = N
     "sistem" türü push (sessiz saate uyar). Aynı gün + durum + bölge bir kez gider. Dönen: kuyruğa giren bildirim."""
     from app import feedback
 
-    title = f"Fiyat toplama: {status}" + (f" · {region}" if region else "")
+    if status == "test":  # toplayıcının deneme çağrısı: ne olduğu açık yazsın
+        title, text = "Fiyat toplama: test", "Test bildirimi: fiyat toplama uyarıları çalışıyor."
+    else:
+        title = f"Fiyat toplama: {status}" + (f" · {region}" if region else "")
     pid = f"sistem:{(today or date.today()).isoformat()}:{status}:{region or '-'}"
-    return sum(len(notify(a["id"], [item("sistem", pid, title, text, R_OZET)])) for a in feedback.admins())
+    return sum(len(notify(a["id"], [item("sistem", pid, title, text, R_SISTEM)])) for a in feedback.admins())
 
 
 # ---------------------------------------------------------------- zamanlı türler (kullanıcının defterinde)
@@ -794,7 +798,11 @@ def _fiyat(today: date) -> list[dict]:
     if not rises:
         return []
     sig = hashlib.sha256(json.dumps([(r["chain"], r["group"], r["median"]) for r in rises]).encode()).hexdigest()[:12]
-    return [item("fiyat", f"fiyat:{sig}", "Fiyat artışı", price_alerts.digest(rises), R_FIYATLAR)]
+    from urllib.parse import quote
+
+    one = rises[0].get("product_key") if len(rises) == 1 else None  # tek ürün: doğrudan o ürünün sayfası
+    route = f"{R_FIYATLAR}/{quote(one, safe='')}" if one else R_FIYATLAR
+    return [item("fiyat", f"fiyat:{sig}", "Fiyat artışı", price_alerts.digest(rises), route)]
 
 
 def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:

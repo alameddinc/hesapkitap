@@ -82,11 +82,11 @@ def test_community_rises_and_daily_push(client):
         cp.contribute(uid, "BİM", None, [{"name": "Su 1,5 L", "qty": 1, "amount": 20}], _d(1))  # 1 alım: sık değil
     rises = pa.community_rises()
     assert rises == [{"group": "sut|1l", "label": "Süt · 1 L", "chain": "A101", "last_paid": 36.0, "median": 42.0,
-                      "n": 3, "change_pct": 16.7}]                         # ekmek ₺0,5: eşik altı
+                      "n": 3, "change_pct": 16.7, "product_key": "TORKU SUT 1 L"}]  # ekmek ₺0,5: eşik altı
     assert pa.digest(rises) == "Sık aldığın 1 üründe fiyat arttı: Süt · 1 L A101 ₺36 → ₺42"
     with db.use_space(None, None):
         [it] = [i for i in push.collect({"id": 1}, TODAY) if i["kind"] == "fiyat"]
-    assert (it["title"], it["route"]) == ("Fiyat artışı", "#/diger/fiyatlar") and it["id"].startswith("fiyat:")
+    assert (it["title"], it["route"]) == ("Fiyat artışı", "#/diger/fiyatlar/TORKU%20SUT%201%20L") and it["id"].startswith("fiyat:")
     now = datetime.now(ZoneInfo("Europe/Istanbul")).replace(hour=12)
     assert [x["kind"] for x in push.notify(1, [it], now, daily=True, background=False)] == ["fiyat"]
     assert push.notify(1, [it], now, daily=True, background=False) == []    # aynı artış ikinci kez gitmez

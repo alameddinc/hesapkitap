@@ -123,3 +123,34 @@ def legal_key(name: str) -> str:
             break
         words.append(w)
     return " ".join(words[:3])
+
+
+_DIGIT_WORDS = {"0": "sıfır", "1": "bir", "2": "iki", "3": "üç", "4": "dört", "5": "beş", "6": "altı", "7": "yedi",
+                "8": "sekiz", "9": "dokuz"}
+_HARD = set("fstkçşhp")
+_READ_AS = {"center": "sentır", "market": "market"}  # yabancı adın okunuşu (Macrocenter'dan, Happy Center'a)
+
+
+def suffix(name: str, case: str) -> str:
+    """Özel ada kesme işaretiyle durum eki: case "den" (ayrılma: "BİM'den", "ŞOK'tan", "Migros'tan", "A101'den",
+    "CarrefourSA'dan") ya da "e" (yönelme: "BİM'e", "Migros'a", "CarrefourSA'ya", "Tarım Kredi'ye"). Kısaltma gibi
+    yazılan ad (BİM, ŞOK) okunduğu gibi; rakamla biten ad rakamın okunuşuyla."""
+    s = (name or "").strip()
+    if not s:
+        return s
+    spoken = s.lower().replace("i̇", "i")
+    if spoken[-1].isdigit():
+        spoken = _DIGIT_WORDS[spoken[-1]]
+    for w, r in _READ_AS.items():
+        if spoken.endswith(w):
+            spoken = spoken[: -len(w)] + r
+    vowels = [ch for ch in spoken if ch in "aeıioöuü"]
+    last = vowels[-1] if vowels else "e"
+    front = last in "eiöü"
+    end = spoken[-1]
+    if case == "e":
+        if end in "aeıioöuü":
+            return f"{s}'{'ye' if front else 'ya'}"
+        return f"{s}'{'e' if front else 'a'}"
+    d = "t" if end in _HARD else "d"
+    return f"{s}'{d}{'en' if front else 'an'}"

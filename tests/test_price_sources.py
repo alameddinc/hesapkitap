@@ -32,7 +32,8 @@ def test_own_and_community_sources(client):
     assert got == [("A101", 37.0), ("Örnek Bakkal", 40.0)]
     assert own.search("süt") == {"sut|1l": "Süt · 1 L"} and own.search("ekmek") == {}
     com = ps.CommunitySource()
-    assert com.fetch(["sut|1l"]) == {"sut|1l": [{"chain": "Migros", "price": 34.0, "source": "community", "n": 3}]}
+    assert com.fetch(["sut|1l"]) == {"sut|1l": [{"chain": "Migros", "price": 34.0, "source": "community", "n": 3,
+                                                 "window_days": 7}]}
     assert com.search("süt") == {"sut|1l": "Süt · 1 L"}
 
 

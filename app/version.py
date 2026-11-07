@@ -124,6 +124,31 @@ CAPABILITIES = (
                               # market_min, cheapest_chain, pct, day, source resmi|community, region il|"ulusal"|null}]:
                               # birim fiyat piyasa ortancasından ≥%10 ve ≥₺2 yüksek (fiş günü ±3), en çok 5, pahalı önce;
                               # okuma hatası olabilecek kalem (digit_fix, suspect, kayma, adet × birim) atlanır
+    "price_advice",           # /api/prices products[] (üst düzey): market (bool: piyasa karşılaştırması anlamlı mı; kafe /
+                              # lokanta / zincir dışı false), market_ref {median, min, cheapest_chain, day, source} | null,
+                              # advice null | {kind cheaper_at, chain, price, paid, diff, qty, saving, unit_price_per?,
+                              # per_unit?, source, n?, date?} | {kind good_price, paid, median, pct} | {kind store_compare,
+                              # stores [{store, price, date}], cheapest, diff}; aliases? (birleşen yazılışlar)
+    "price_suggest",          # GET /api/prices/suggest?q&limit → {items [{name, group_key, group_label, last_price,
+                              # last_store, count}], did_you_mean {name, group_label} | null} (402 fiyatlar)
+    "shopping_assumed_size",  # alışveriş satırı assumed {key, label, size_label} | null (boysuz satır en yaygın boya),
+                              # group.pinned?; GET /api/shopping-list items[].best {chain, price, unit_price_per?, per_unit?,
+                              # source, n?} | null; GET /api/shopping-list/{id}/sizes → [{key, label, size_label, chain,
+                              # price, unit_price_per?, per_unit?}]; PATCH {group_key | null}, POST {text, qty, group_key?};
+                              # "6x Süt" → text "Süt", qty 6
+    "shopping_headline",      # /api/shopping-list/optimize headline {title, subtitle, cta, chains, total, saving, count} |
+                              # null, unpriced_info [{id, text, reason no_size|no_group|no_price|pending, hint}],
+                              # empty {title, text} | null; stops[].items[].assumed
+    "community_quality",      # topluluk teklifi: son 7 gün, ≥3 kişi, indirimsiz; n, window_days, discounted_price?, region?;
+                              # aynı zincirde Market Fiyatı da varsa topluluk önce + official {price, date?, region?},
+                              # differs (fark > %10); yalnız toplamı tutan fişin satırları yazılır
+    "push_routes",            # "sistem" push route "#/diger/ayarlar/sistem" (yöneticiye Sistem durumu), geri_bildirim
+                              # "#/diger/ayarlar", fiyat tek üründe "#/diger/fiyatlar/<ürün anahtarı>"
+    "grouping_quality",       # GET /api/admin/official-prices grouping_quality {names, grouped, grouped_pct, pending,
+                              # not_product, by_source, conflicts {count, top [{form, groups [{key, label, n}], resolved_to}],
+                              # at}, wide_spread {count, day, top [{group_key, label, min, max, ratio}]}, catalog
+                              # {products, with_generic, brands, updated_at} | null}, disagreements [{chain, group_key,
+                              # label, days, community, official, pct}]
 )
 
 

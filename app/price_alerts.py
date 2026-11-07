@@ -79,6 +79,7 @@ def community_rises(today: date | None = None) -> list[dict]:
         st = per.setdefault((chain, g["key"]), {"label": g["label"], "entries": set(), "last": None})
         st["entries"].add(it["entry_id"])
         st["last"] = it["unit_price"]
+        st["product_key"] = it["product_key"]
     freq = {k: v for k, v in per.items() if len(v["entries"]) >= FREQUENT_MIN}
     if not freq:
         return []
@@ -88,7 +89,7 @@ def community_rises(today: date | None = None) -> list[dict]:
         m = med.get((chain, g))
         if m and (pct := _rise(m["median"], st["last"])) is not None:
             out.append({"group": g, "label": st["label"], "chain": chain, "last_paid": st["last"],
-                        "median": m["median"], "n": m["n"], "change_pct": pct})
+                        "median": m["median"], "n": m["n"], "change_pct": pct, "product_key": st.get("product_key")})
     return sorted(out, key=lambda x: (-x["change_pct"], x["label"]))
 
 

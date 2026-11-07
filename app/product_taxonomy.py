@@ -180,7 +180,8 @@ TAXONOMY: dict[str, dict[str, list[str]]] = {
             "Su=DOGAL KAYNAK SUYU,KAYNAK SUYU,ICME SUYU", "Maden Suyu=MADEN SU", "Soda",
         ],
         "Gazlı İçecek": [
-            "Kola=COLA", "Gazoz",
+            "Kola=COLA,KOLALI GAZLI ICECEK", "Gazoz", "Portakallı Gazoz=PORTAKAL AROMALI GAZOZ",
+            "Limonlu Gazoz=LIMON AROMALI GAZOZ",
         ],
         "Meyve Suyu": [
             "Meyve Suyu=PORTAKAL SUYU,ELMA SUYU,VISNE SUYU,NEKTAR,MEYVE NEKTARI", "Şalgam=SALGAM SUYU",
@@ -362,3 +363,19 @@ PACKAGING = {"KASE", "KAVANOZ", "TENEKE", "BIDON", "KOVA", "VAKUMLU", "TABAK", "
              "CITKAPAK", "KAPAK", "KAPAKLI", "SET", "SETI", "SERI", "SERISI", "MAP", "SKINPACK", "FILE", "CM", "GRAM",
              "KILO", "LITRE", "ADETLI", "PAKETLI", "DOYPACK", "POUCH", "SISESI", "KUTUSU", "MULTIPACK", "KAP",
              "TABAGI", "HEDIYELI", "HEDIYE"}
+
+# Marka → genel ürün (küçük düzeltme katmanı; asıl dayanak katalog, app/product_catalog.py): adı yalnız markayla anılan
+# ürünler ("COLA TURKA 330ML", "FANTA 1L", "NESCAFE GOLD"). Adda marka öbeğinden başka güçlü bir genel ürün varsa o
+# seçilir ("NUTELLA BİSKÜVİ" → Bisküvi). Anahtar normalize (Türkçe harfsiz BÜYÜK) marka öbeği; değer sözlükteki genel ad.
+BRAND_PRODUCTS: dict[str, str] = {
+    "COCA COLA": "Kola", "COCACOLA": "Kola", "COLA TURKA": "Kola", "PEPSI": "Kola", "PEPSI COLA": "Kola",
+    "PEPSI MAX": "Kola", "LE COLA": "Kola", "COKE": "Kola",
+    "FANTA": "Portakallı Gazoz", "YEDIGUN": "Portakallı Gazoz", "SPRITE": "Limonlu Gazoz", "7UP": "Limonlu Gazoz",
+    "7 UP": "Limonlu Gazoz", "SEVEN UP": "Limonlu Gazoz",
+    "ICE TEA": "Soğuk Çay", "ICETEA": "Soğuk Çay", "FUSE TEA": "Soğuk Çay", "FUSETEA": "Soğuk Çay",
+    "NESTEA": "Soğuk Çay", "LIPTON ICE": "Soğuk Çay",
+    "NESCAFE": "Kahve", "JACOBS": "Kahve",
+    "RED BULL": "Enerji İçeceği", "REDBULL": "Enerji İçeceği", "MONSTER": "Enerji İçeceği", "BURN": "Enerji İçeceği",
+    "NUTELLA": "Fındık Kreması", "SARELLE": "Fındık Kreması",
+    "CAPPY": "Meyve Suyu", "MEYSU": "Meyve Suyu",
+}

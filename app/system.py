@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS product_groups (  -- ürün adı → markadan bağım
     label TEXT NOT NULL,                 -- 'Süt · 1 L'
     size_value REAL,
     size_unit TEXT,                      -- l | ml | kg | g | ad
-    source TEXT NOT NULL CHECK (source IN ('rule', 'ai')),
+    source TEXT NOT NULL CHECK (source IN ('rule', 'ai', 'catalog', 'consistency')),  -- katalog: app/product_catalog.py
     created_at TEXT NOT NULL,
     category TEXT,                       -- kategori (product_groups.CATEGORIES): 'Süt ve Kahvaltılık'
     subcategory TEXT                     -- alt kategori (product_taxonomy.TAXONOMY): 'Peynir'
@@ -231,6 +231,21 @@ CREATE TABLE IF NOT EXISTS product_group_queue (  -- kuralın çözemediği adla
     added_at TEXT NOT NULL,
     tries INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS catalog_products (  -- Market Fiyatı ürün listesi (app/product_catalog.py): kişi verisi yok
+    product_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    brand TEXT,
+    volume TEXT,
+    menu_category TEXT,
+    main_category TEXT,
+    categories TEXT,
+    generic TEXT,                        -- genel ad ('Kola'); çözülemediyse NULL
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS catalog_brands (  -- katalogdaki markalar (gruplamada atılır)
+    brand TEXT PRIMARY KEY,
+    products INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS community_prices (  -- anonim topluluk fiyatı (app/community_prices.py): şube/kişi/kayıt yok
     id INTEGER PRIMARY KEY,
     chain TEXT NOT NULL,                 -- bilinen zincir (receipt_templates.CHAINS görünen adı)
@@ -239,7 +254,8 @@ CREATE TABLE IF NOT EXISTS community_prices (  -- anonim topluluk fiyatı (app/c
     unit_price REAL NOT NULL,
     day TEXT NOT NULL,                   -- alım günü
     contributor TEXT NOT NULL,           -- HMAC(günün tuzu, kullanıcı id): günler arası ve kullanıcıya bağlanamaz
-    region TEXT                          -- fişin şube yazısında geçen il (provinces.find_in); kişinin konumu değil
+    region TEXT,                         -- fişin şube yazısında geçen il (provinces.find_in); kişinin konumu değil
+    discounted INTEGER NOT NULL DEFAULT 0 -- kalemde indirim uygulanmış (net fiyat); ortancaya girmez, ayrı ipucu
 );
 CREATE INDEX IF NOT EXISTS community_prices_group ON community_prices(group_key, chain, day);
 CREATE INDEX IF NOT EXISTS community_prices_name ON community_prices(name_norm);
@@ -272,7 +288,8 @@ CREATE TABLE IF NOT EXISTS official_imports (  -- BigQuery içe aktarımı yapı
     status TEXT NOT NULL DEFAULT 'ok',   -- ok | anomaly (veri kalite denetimi: alınmadı, önceki gün korunur)
     note TEXT,                           -- anomali nedeni
     outliers INTEGER NOT NULL DEFAULT 0, -- grup ortancasından 3 kat uzak düşen teklif
-    PRIMARY KEY (run_date, region)
+    mode TEXT NOT NULL DEFAULT 'full',   -- run_log.mode: full | regional_chains (yalnız il zincirleri)
+    PRIMARY KEY (run_date, region, mode)
 );
 CREATE TABLE IF NOT EXISTS community_exports (  -- topluluk fiyatı → BigQuery (app/community_export.py): gönderilen gün
     day TEXT PRIMARY KEY,
@@ -358,6 +375,16 @@ def _migrate(c) -> None:
     for col in ("category", "subcategory"):
         if col not in have:
             c.execute(f"ALTER TABLE product_groups ADD COLUMN {col} TEXT")
+    sql = (c.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'product_groups'").fetchone() or [""])[0]
+    if "'catalog'" not in (sql or ""):  # kaynak listesi genişledi (katalog, tutarlılık işi): CHECK değişmez → yeniden kur
+        c.execute("ALTER TABLE product_groups RENAME TO product_groups_old")
+        c.execute("DROP INDEX IF EXISTS product_groups_key")
+        start = SCHEMA.index("CREATE TABLE IF NOT EXISTS product_groups (")
+        c.executescript(SCHEMA[start:SCHEMA.index("CREATE TABLE IF NOT EXISTS product_group_queue")])
+        c.execute("INSERT OR IGNORE INTO product_groups (name_norm, group_key, label, size_value, size_unit, source, "
+                  "created_at, category, subcategory) SELECT name_norm, group_key, label, size_value, size_unit, source, "
+                  "created_at, category, subcategory FROM product_groups_old")
+        c.execute("DROP TABLE product_groups_old")
     # resmî fiyat: bölge (BigQuery il bazında), kampanya yazısı, şube sayısı, 7 / 30 günlük değişim. Tekillik bölgeyi de
     # içermeli; SQLite kısıtı değiştiremediği için tablo yeniden kurulur (eski satırlar bölge '' ile taşınır)
     if "region" not in {r[1] for r in c.execute("PRAGMA table_info(official_prices)")}:
@@ -372,10 +399,20 @@ def _migrate(c) -> None:
     c.execute("CREATE INDEX IF NOT EXISTS official_prices_region ON official_prices(region, day)")
     if "region" not in {r[1] for r in c.execute("PRAGMA table_info(community_prices)")}:  # fişin şubesindeki il
         c.execute("ALTER TABLE community_prices ADD COLUMN region TEXT")
+    if "discounted" not in {r[1] for r in c.execute("PRAGMA table_info(community_prices)")}:  # indirimli kalem ayrı
+        c.execute("ALTER TABLE community_prices ADD COLUMN discounted INTEGER NOT NULL DEFAULT 0")
     have = {r[1] for r in c.execute("PRAGMA table_info(official_imports)")}  # veri kalite denetimi (price_import_bq)
     for col, ddl in (("status", "TEXT NOT NULL DEFAULT 'ok'"), ("note", "TEXT"), ("outliers", "INTEGER NOT NULL DEFAULT 0")):
         if col not in have:
             c.execute(f"ALTER TABLE official_imports ADD COLUMN {col} {ddl}")
+    if "mode" not in have:  # run_log.mode (full | regional_chains): tekillik kipi de içermeli → tablo yeniden kurulur
+        c.execute("ALTER TABLE official_imports RENAME TO official_imports_old")
+        start = SCHEMA.index("CREATE TABLE IF NOT EXISTS official_imports (")
+        c.executescript(SCHEMA[start:SCHEMA.index("CREATE TABLE IF NOT EXISTS community_exports")])
+        c.execute("INSERT OR IGNORE INTO official_imports (run_date, region, rows, products, unmatched, imported_at, status, "
+                  "note, outliers, mode) SELECT run_date, region, rows, products, unmatched, imported_at, status, note, "
+                  "outliers, 'full' FROM official_imports_old")
+        c.execute("DROP TABLE official_imports_old")
     # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): önbellek ve topluluk fiyatları bir kez
     from app import product_groups
 

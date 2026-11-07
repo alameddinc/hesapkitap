@@ -430,7 +430,8 @@ CREATE TABLE IF NOT EXISTS shopping_list (
     done INTEGER NOT NULL DEFAULT 0,
     added_by INTEGER,               -- ekleyen kullanıcı (ortak defter)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    done_at TIMESTAMP
+    done_at TIMESTAMP,
+    pinned_key TEXT                 -- kişinin seçtiği boy ("sut|500ml"); boşsa metinden / en yaygın boy
 );
 """
 
@@ -508,6 +509,7 @@ MIGRATIONS = [
     ("transactions", "subcategory", "TEXT"),      # alt kategori (subcategories; ana kategori category'de kalır)
     ("entries", "subcategory", "TEXT"),
     ("rules", "subcategory", "TEXT"),             # kural eşleşince atanan alt kategori (isteğe bağlı)
+    ("shopping_list", "pinned_key", "TEXT"),
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -4238,12 +4240,27 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
                 "history": [{"date": x["purchased_at"], "price": x["unit_price"] if x["price_known"] else None,
                              "store": names.get(x["store_key"], x["merchant"]), "branch": x["branch"], "qty": x["qty"],
                              "name": x["name"], "estimated": x["price_known"] == 2,
-                             **({"uid": f"m{x['entry_id']}"} if x["entry_id"] else {})} for x in xs]}
+                             **({"uid": f"m{x['entry_id']}"} if x["entry_id"] else {})} for x in xs],
+                "_entries": [(x.get("category"), x.get("legal_name")) for x in xs]}  # iç alan: price_advice siler
 
+    alias = merge_spellings(items)  # "ZIRVE SLIM MAVI" → "ZIRVE SLIMS MAVI" (aynı grup, neredeyse aynı yazılış)
+    for it in items:
+        it["product_key"] = alias.get(it["product_key"], it["product_key"])
     by: dict[str, list[dict]] = {}
     for it in items:
         by.setdefault(it["product_key"], []).append(it)
-    prods = sorted((summarize(xs) for xs in by.values()), key=lambda x: x["last_date"], reverse=True)
+    prods = []
+    for xs in by.values():
+        p = summarize(xs)
+        spell = {}
+        for x in xs:
+            n = (x["product"] or x["name"] or "").strip()
+            spell[n] = spell.get(n, 0) + 1
+        if len({product_key(n) for n in spell}) > 1:  # birleşik: en sık yazılış ad, diğerleri aliases
+            p["product"] = max(spell, key=lambda n: (spell[n], n))
+            p["aliases"] = sorted(n for n in spell if product_key(n) != product_key(p["product"]))
+        prods.append(p)
+    prods.sort(key=lambda x: x["last_date"], reverse=True)
 
     stores_out = []
     for sk in {it["store_key"] for it in items}:
@@ -4267,9 +4284,65 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
     return {"products": prods, "stores": stores_out, "brands": brands_out, "all_stores": all_stores, "all_brands": all_brands}
 
 
+def _edit_distance(a: str, b: str, cap: int = 3) -> int:
+    """Levenshtein (cap'te keser)."""
+    if abs(len(a) - len(b)) >= cap:
+        return cap
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) >= cap:
+            return cap
+        prev = cur
+    return min(prev[-1], cap)
+
+
+def near_same(a: str, b: str) -> bool:
+    """İki normalize ad (product_key) aynı ürünün yazılışı mı: rakamlar aynı ve (kelime Jaccard ≥ 0.8 ya da düzenleme
+    uzaklığı ≤ 2; kısa adda — 8 harften az — yalnız 1)."""
+    if a == b:
+        return True
+    ta, tb = a.split(), b.split()
+    if [t for t in ta if t.isdigit()] != [t for t in tb if t.isdigit()]:
+        return False
+    sa, sb = set(ta), set(tb)
+    if sa and len(sa & sb) / len(sa | sb) >= 0.8:
+        return True
+    return _edit_distance(a, b) <= (2 if min(len(a), len(b)) >= 8 else 1)
+
+
+def merge_spellings(items: list[dict]) -> dict[str, str]:
+    """Aynı gruptaki (group key; grupsuzlar kendi aralarında) neredeyse aynı yazılışlar (near_same) → en sık
+    yazılışın product_key'i. Dönen: birleşen anahtar → temsilci (kendisi temsilciyse yok)."""
+    count: dict[str, int] = {}
+    grp: dict[str, str | None] = {}
+    for it in items:
+        k = it["product_key"]
+        count[k] = count.get(k, 0) + 1
+        if it.get("group") and not it["group"].get("pending"):  # geçici grup yazılışa bağlı: birleşmeyi engellemez
+            grp[k] = it["group"]["key"]
+        else:
+            grp.setdefault(k, None)
+    reps: dict[str | None, list[str]] = {}
+    out: dict[str, str] = {}
+    for k in sorted(count, key=lambda k: (-count[k], k)):
+        bucket = reps.setdefault(grp[k], [])
+        hit = next((r for r in bucket if near_same(k, r)), None)
+        if hit:
+            out[k] = hit
+        else:
+            bucket.append(k)
+    return out
+
+
 def price_history(min_count: int = 2) -> list[dict]:
     """En az iki fiyatı bilinen ürünler, değişime göre (Özet uyarısı için)."""
-    return sorted([p for p in products()["products"] if p["change_pct"] is not None], key=lambda x: -abs(x["change_pct"]))
+    out = [p for p in products()["products"] if p["change_pct"] is not None]
+    for p in out:
+        p.pop("_entries", None)
+    return sorted(out, key=lambda x: -abs(x["change_pct"]))
 
 
 # ---------------------------------------------------------------- birikim hedefleri

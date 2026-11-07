@@ -30,9 +30,11 @@ def test_contribute_only_known_chain_and_products():
                     {"name": "Ekmek", "qty": 2, "amount": 30}, {"name": "Su", "qty": 1, "amount": None}]
     assert cp.contribute(1, "A101 YENİ MAĞAZACILIK", None, items, "2026-11-05", DAY) == 2
     rows = _rows()
-    assert [(r["chain"], r["group_key"], r["unit_price"], r["day"]) for r in rows] == [
-        ("A101", "sut|1l", 36.0, "2026-11-05"), ("A101", "ekmek", 15.0, "2026-11-05")]
-    assert set(rows[0]) == {"id", "chain", "group_key", "name_norm", "unit_price", "day", "contributor", "region"}  # şube/kişi yok
+    # sütün altındaki İNDİRİM satırı sütün indirimi: net fiyatla, indirimli diye (normal ortancaya girmez)
+    assert [(r["chain"], r["group_key"], r["unit_price"], r["day"], r["discounted"]) for r in rows] == [
+        ("A101", "sut|1l", 31.0, "2026-11-05", 1), ("A101", "ekmek", 15.0, "2026-11-05", 0)]
+    assert set(rows[0]) == {"id", "chain", "group_key", "name_norm", "unit_price", "day", "contributor", "region",
+                            "discounted"}  # şube/kişi yok
     assert rows[0]["region"] is None                                                         # şube yazısı yok: il yok
 
 
@@ -54,7 +56,7 @@ def test_median_needs_three_contributors():
         cp.contribute(3, "A101", None, [{"name": "Süt 1 L", "qty": 1, "amount": p}], "2026-11-05", DAY)
     assert cp.medians(today=DAY) == {("A101", "sut|1l"): {"median": 38.0, "n": 3}}
     assert cp.median_for("A101", "sut|1l", DAY)["n"] == 3 and cp.median_for("BİM", "sut|1l", DAY) is None
-    assert cp.medians(today=date(2026, 11, 30)) == {}                                     # 14 günden eski
+    assert cp.medians(today=date(2026, 11, 30)) == {}                                     # 7 günden eski
 
 
 def test_relabel_after_ai_learns(monkeypatch):

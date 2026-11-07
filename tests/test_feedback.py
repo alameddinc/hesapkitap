@@ -67,7 +67,7 @@ def test_send_and_admin_flow(owner):  # noqa: F811
     # yöneticiye push kuyruğa girdi (tür geri_bildirim, varsayılan açık)
     q = [x["payload"] for x in push.queue(_uid("admin")) if x["payload"]["kind"] == "geri_bildirim"]
     assert len(q) == 1 and q[0]["id"] == f"geri-bildirim:{fid}" and "admin" in q[0]["title"]
-    assert q[0]["body"] == "Fiş okuturken ekran dondu" and q[0]["route"] == "#/ozet"
+    assert q[0]["body"] == "Fiş okuturken ekran dondu" and q[0]["route"] == "#/diger/ayarlar"
     assert owner.get("/api/push/prefs").json()["labels"]["geri_bildirim"] == "Kullanıcı geri bildirimi"
 
 

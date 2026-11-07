@@ -1340,11 +1340,14 @@ def ops_alert(body: OpsAlertIn, request: Request):
 @app.get("/api/admin/official-prices")
 def admin_official_prices():
     """Resmî fiyat içe aktarımı (BigQuery → official_prices): {configured, last_day, regions, rows, imported_at,
-    last_run_at, last_error, last_error_at} (app/price_import_bq.py status)."""
-    from app import price_import_bq
+    last_run_at, last_error, last_error_at} (app/price_import_bq.py status) + grouping_quality (app/product_groups.py
+    quality: gruplanan ad oranı, kaynaklar, çelişen gruplar, fiyatı 3 kat açılan gruplar, katalog) + disagreements
+    (topluluk ile Market Fiyatı son 7 günün en az 3'ünde %10'dan çok ayrışan zincir × ürün; app/community_prices.py)."""
+    from app import community_prices, price_import_bq, product_groups
 
     _require_admin()
-    return price_import_bq.status()
+    return {**price_import_bq.status(), "grouping_quality": product_groups.quality(),
+            "disagreements": community_prices.disagreements()}
 
 
 @app.get("/api/admin/app-update")
@@ -2511,7 +2514,7 @@ def create_entry(body: EntryIn):
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
                               total=body.amount, branch=body.branch)
         if data.get("receipt_file"):  # yalnız okunmuş fiş (elle girilen değil): anonim topluluk fiyatı (tercih açıksa)
-            _share_prices(body.description, body.legal_name, body.items, data["entry_date"], body.branch)
+            _share_prices(body.description, body.legal_name, body.items, data["entry_date"], body.branch, body.amount)
     splits = []
     if body.splits and body.kind == "gider":
         try:
@@ -2533,15 +2536,16 @@ def create_entry(body: EntryIn):
             "price_alerts": alerts["check"].get("price_alerts", [])}  # yetenek price_alerts
 
 
-def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str, branch: str | None = None) -> None:
+def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str, branch: str | None = None,
+                  total: float | None = None) -> None:
     """Fiş kalemlerini anonim topluluk fiyatına kat (app/community_prices.py; branch: fişteki şube yazısı, yalnız il adı
-    için). Hata kaydı bozmaz."""
+    için; total: kaydın tutarı — kalemler tutmuyorsa hiçbiri yazılmaz). Hata kaydı bozmaz."""
     from app import community_prices
 
     try:
         u = db.current_user()
         community_prices.contribute((u or {}).get("id"), merchant, legal_name, [i for i in items if isinstance(i, dict)], on,
-                                    branch=branch)
+                                    branch=branch, receipt_total=total)
     except Exception:  # noqa: BLE001
         import logging
 
@@ -4410,11 +4414,24 @@ def prices(since: date | None = None, store: str | None = None, brand: str | Non
     """Fişlerden fiyat takibi: ürün / mağaza / marka kırılımı; tarihten beri, mağaza, marka filtresi.
     products[].history[] ve stores[].products[].history[]: vs_market {median, min, max, pct, verdict "ucuz"|"normal"|
     "pahali", cheapest_chain, day, source "resmi"|"community"} — o günün (±3 gün) piyasa fiyatına göre (app/market_ref.py)."""
-    from app import market_ref
+    from app import market_ref, price_advice
 
     out = db.products(since.isoformat() if since else None, store or None, brand or None)
     market_ref.attach(out["products"] + [p for s in out["stores"] for p in s["products"]])
+    price_advice.attach(out["products"])  # market, market_ref, advice (price_advice yeteneği)
+    for p in out["products"] + [p for s in out["stores"] for p in s["products"]]:
+        p.pop("_entries", None)
     return out
+
+
+@app.get("/api/prices/suggest")
+def prices_suggest(q: str = Query("", max_length=80), limit: int = Query(8, ge=1, le=20)):
+    """Fiş kalemi / elle gider kalem adı önerisi (price_suggest): {items: [{name, group_key, group_label, last_price,
+    last_store, count}], did_you_mean: {name, group_label} | null} — kendi fişlerindeki adlar (neredeyse aynı
+    yazılışlar birleşik), sonra genel ürün adları (app/price_advice.py suggest)."""
+    from app import price_advice
+
+    return price_advice.suggest(q, limit)
 
 
 @app.get("/api/prices/market")
@@ -4480,21 +4497,24 @@ def price_groups(q: str | None = None, limit: int = 30):
 class ShoppingIn(BaseModel):
     text: str = Field(min_length=1, max_length=200)
     qty: float = Field(default=1, gt=0, le=999)
+    group_key: str | None = Field(default=None, max_length=60)  # ürün detayından: o grubun boyu (shopping_assumed_size)
 
 
 class ShoppingPatch(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=200)
     qty: float | None = Field(default=None, gt=0, le=999)
     done: bool | None = None
+    group_key: str | None = Field(default=None, max_length=60)  # boy seçimi ("sut|500ml"); null: seçimi kaldır
 
 
 @app.get("/api/shopping-list")
 def shopping_list():
-    """{items: [{id, text, qty, done, group {key, label, pending?} | null, added_by, added_by_name, created_at,
-    done_at}]} — önce işaretlenmemişler."""
+    """{items: [{id, text, qty, done, group {key, label, pending?, pinned?} | null, assumed {key, label, size_label} |
+    null (boysuz satır en yaygın boya çözüldü), best {chain, price, unit_price_per?, per_unit?, source, n?} | null
+    (en ucuz teklif; alınmışlarda null), added_by, added_by_name, created_at, done_at}]} — önce işaretlenmemişler."""
     from app import shopping
 
-    return {"items": shopping.list_items()}
+    return {"items": shopping.list_items(with_best=True)}
 
 
 @app.post("/api/shopping-list")
@@ -4502,7 +4522,7 @@ def shopping_add(body: ShoppingIn):
     from app import shopping
 
     try:
-        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"))
+        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"), body.group_key)
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
 
@@ -4515,13 +4535,27 @@ def shopping_plan():
     return shopping.plan()
 
 
+@app.get("/api/shopping-list/{rid}/sizes")
+def shopping_sizes(rid: int):
+    """Satırın boy seçenekleri: [{key, label, size_label, chain | null, price | null, unit_price_per?, per_unit?}] en
+    yaygından (resmî + topluluk satırları); seçim PATCH {group_key}."""
+    from app import shopping
+
+    got = shopping.sizes(rid)
+    if got is None:
+        raise HTTPException(404, "Satır yok")
+    return got
+
+
 @app.get("/api/shopping-list/optimize")
 def shopping_optimize(max_stops: int = Query(3, ge=1, le=3), stop_cost: float | None = Query(None, ge=0, le=10_000)):
     """Nereye gideyim? En iyi 1 / 2 / 3 duraklı plan ve önerilen durak sayısı (app/shopping.py optimize).
     {region, date, stop_cost, max_stops, plans: [{k, stops: [{chain, total, items: [{id, text, qty, group_label, price
     (birim), line_total, unit_price_per?, per_unit?, brand?, source, date?, region?}]}], total, covered, missing [id],
     saving_vs_single, saving_vs_prev, extra_vs_best, recommended}], single: [{chain, total, covered, missing [id],
-    vs_recommended}], recommended_k (null: fiyatlı satır yok), one_store (single[0]), priced, unpriced [id], sources
+    vs_recommended}], recommended_k (null: fiyatlı satır yok), one_store (single[0]), priced, unpriced [id],
+    headline {title, subtitle, cta, chains, total, saving, count} | null, unpriced_info [{id, text, reason no_size |
+    no_group | no_price | pending, hint}], empty {title, text} | null, sources
     [kaynak yazısı], source_info {kinds [resmi|community|own], resmi_date, national}}. stop_cost verilmezse kişinin
     tercihi (meta.ui.stop_cost; varsayılan 100 ₺)."""
     from app import shopping

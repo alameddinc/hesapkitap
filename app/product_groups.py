@@ -27,7 +27,7 @@ import re
 import threading
 from datetime import date, datetime, timezone
 
-from app.product_taxonomy import PACKAGING, QUALIFIERS, TAXONOMY
+from app.product_taxonomy import BRAND_PRODUCTS, PACKAGING, QUALIFIERS, TAXONOMY
 from app.textnorm import normalize
 
 log = logging.getLogger("hesapkitap.product_groups")
@@ -298,6 +298,37 @@ for _w in sorted(_VOCAB | DESCRIPTORS, key=lambda w: (len(w), w)):
         _PREFIX_POOL.setdefault(_w[:4], []).append(_w)
 _BRAND_TOKENS = _BRAND_SINGLE | {t for v in _BRAND_MULTI.values() for ph in v for t in ph if t not in _VOCAB}
 _BRAND_PREFIX: set[str] = {t[:k] for t in _BRAND_TOKENS if len(t) > 5 for k in range(5, len(t))}
+_BASE_BRANDS = (set(_BRAND_SINGLE), {k: list(v) for k, v in _BRAND_MULTI.items()})
+_EXTRA_BRANDS: tuple[str, ...] = ()
+
+
+def add_brands(names: list[str]) -> None:
+    """Katalog markalarını (app/product_catalog.py, Market Fiyatı) gömülü listeye ekle; yeniden çağrılınca önceki ekler
+    yerine yenisi geçer (boş liste: yalnız gömülü liste). Sözlükte / tanımlayıcılarda geçen ya da 3 harften kısa tek
+    kelimelik marka atılmaz (ürünün kendisini anlatıyor olabilir)."""
+    global _EXTRA_BRANDS
+    names = tuple(sorted({n for n in names if n}))
+    if names == _EXTRA_BRANDS:
+        return
+    single, multi = set(_BASE_BRANDS[0]), {k: list(v) for k, v in _BASE_BRANDS[1].items()}
+    for n in names:
+        toks = tuple(name_norm(n).split())
+        if len(toks) == 1 and len(toks[0]) >= 3 and toks[0] not in _VOCAB and toks[0] not in DESCRIPTORS \
+                and not toks[0].isdigit():
+            single.add(toks[0])
+        elif len(toks) > 1 and toks not in multi.get(toks[0], []):
+            multi.setdefault(toks[0], []).append(toks)
+    for v in multi.values():
+        v.sort(key=len, reverse=True)
+    _BRAND_SINGLE.clear()
+    _BRAND_SINGLE.update(single)
+    _BRAND_MULTI.clear()
+    _BRAND_MULTI.update(multi)
+    _BRAND_TOKENS.clear()
+    _BRAND_TOKENS.update(_BRAND_SINGLE | {t for v in _BRAND_MULTI.values() for ph in v for t in ph if t not in _VOCAB})
+    _BRAND_PREFIX.clear()
+    _BRAND_PREFIX.update({t[:k] for t in _BRAND_TOKENS if len(t) > 5 for k in range(5, len(t))})
+    _EXTRA_BRANDS = names
 
 
 def _expand(tokens: list[str]) -> list[str]:
@@ -450,6 +481,22 @@ def per_unit(key: str | None) -> tuple[float, str] | None:
     return amount, unit
 
 
+def size_label(key: str | None) -> str | None:
+    """Grup anahtarının boyu görünen biçimde: "sut|1l" → "1 L", "su|6x500ml" → "6×500 ml", "elma|kg" → "kg",
+    "yumurta|30ad" → "30 adet"; boysuz None."""
+    if not key or "|" not in key:
+        return None
+    sz = key.split("|", 1)[1]
+    if sz == "kg":
+        return "kg"
+    m = _KEY_SIZE.match(sz)
+    if not m:
+        return None
+    v = m[2].replace(".", ",")
+    unit = {"l": "L", "ml": "ml", "kg": "kg", "g": "g", "ad": "adet"}[m[3]]
+    return f"{m[1]}×{v} {unit}" if m[1] else f"{v} {unit}"
+
+
 def unit_price(price: float | None, key: str | None) -> dict:
     """{unit_price_per, per_unit} ("₺59,00/L" için) ya da {} (boysuz grup, fiyat yok)."""
     pu = per_unit(key)
@@ -458,12 +505,58 @@ def unit_price(price: float | None, key: str | None) -> dict:
     return {"unit_price_per": round(price / pu[0], 2), "per_unit": pu[1]}
 
 
+_OVERRIDES = {tuple(name_norm(k).split()): v for k, v in BRAND_PRODUCTS.items()}
+_MAX_OVR = max(len(k) for k in _OVERRIDES)
+
+
+def _override(tokens: list[str], used: set[int], brand: str | None) -> str | None:
+    """Marka → genel ürün düzeltmesi (product_taxonomy.BRAND_PRODUCTS): adda en uzun marka öbeği varsa onun genel adı;
+    ama adın geri kalanında güçlü bir genel ürün varsa o ("NUTELLA BİSKÜVİ" → Bisküvi, "COLA TURKA KOLA" → Kola)."""
+    hit = None
+    for i in range(len(tokens)):
+        for j in range(min(len(tokens), i + _MAX_OVR), i, -1):
+            if tuple(tokens[i:j]) in _OVERRIDES and (hit is None or j - i > hit[1] - hit[0]):
+                hit = (i, j)
+                break
+    if not hit:
+        return None
+    gen = _OVERRIDES[tuple(tokens[hit[0]:hit[1]])]
+    rest = _strip([t if not hit[0] <= i < hit[1] else "" for i, t in enumerate(tokens)], used, brand, partial=True)
+    strong = [((j, j - i), _GENERIC[k]) for i in range(len(rest)) for j in range(i + 1, min(len(rest), i + _MAX_PHRASE) + 1)
+              if (k := tuple(rest[i:j])) in _GENERIC and k not in _WEAK]
+    if strong:
+        return _generic(rest) or refine(max(strong)[1], rest)
+    return refine(gen, rest)
+
+
 def rule_group(name: str, brand: str | None = None, unit: str | None = None) -> dict | None:
-    """Yalnız kurallarla grup ({key, label, size_value, size_unit, category, subcategory}); çözemezse None."""
+    """Yalnız kurallarla grup ({key, label, size_value, size_unit, category, subcategory}); çözemezse None.
+    Marka → ürün düzeltmesi (BRAND_PRODUCTS) önce. Birimsiz çıplak rakam ("COLA TURKA 50") boy değildir."""
     tokens = _expand(name_norm(name).split())
     size, used = parse_size(tokens)
-    g = _generic(_strip(tokens, used, brand)) or _generic(_strip(tokens, used, brand, partial=True))
+    g = _override(tokens, used, brand) or _generic(_strip(tokens, used, brand)) or \
+        _generic(_strip(tokens, used, brand, partial=True))
     return _compose(g, size, unit if unit in ("kg", "lt") else None) if g else None
+
+
+def resolve(name: str, brand: str | None = None, unit: str | None = None,
+            exclude: str | None = None) -> tuple[dict | None, str | None]:
+    """Ad → (grup, kaynak "rule" | "catalog" | None). Önce kurallar (marka → ürün düzeltmesi dahil; marka listesi
+    katalogla büyür), çözülmezse katalog eşleşmesi (Market Fiyatı ürün listesi, app/product_catalog.py; güven ≥
+    MIN_CONFIDENCE). Hiçbiri yoksa (None, None): önbellek / yapay zekâ (groups_for). Ölçüm (07.11.2026, 25 580 katalog
+    ürünü, scratchpad eval): katalogu kuraldan önce koymak tutarsızlığı artırdı (aynı ürün markalı / markasız 236 → 490
+    farklı gruba), bu yüzden kural önce. exclude: ölçümde katalog ürününün kendisi (dışarıda bırakılır)."""
+    from app import product_catalog
+
+    if (g := rule_group(name, brand, unit)):
+        return g, "rule"
+    if not product_catalog.size():
+        return None, None
+    gen, conf = product_catalog.match(name, exclude)
+    if gen and conf >= product_catalog.MIN_CONFIDENCE:
+        tokens = _expand(name_norm(name).split())
+        return _compose(refine(gen, tokens), parse_size(tokens)[0], unit if unit in ("kg", "lt") else None), "catalog"
+    return None, None
 
 
 def _provisional(name: str, unit: str | None) -> dict | None:
@@ -512,9 +605,10 @@ def groups_for(items: list[dict], learn: bool = True) -> list[dict | None]:
         if not name:
             continue
         unit = it.get("unit")
-        if (g := rule_group(name, it.get("brand"), unit)):
+        g, src = resolve(name, it.get("brand"), unit)
+        if g:
             out[i] = g
-            fresh.setdefault(name_norm(name), rule_group(name, it.get("brand")) or g)
+            fresh.setdefault(name_norm(name), ((resolve(name, it.get("brand"))[0] if unit else None) or g, src))
         else:
             miss.setdefault(name_norm(name), []).append(i)
     if not miss and not fresh:
@@ -523,9 +617,9 @@ def groups_for(items: list[dict], learn: bool = True) -> list[dict | None]:
         if fresh:
             have = {r[0] for r in c.execute(f"SELECT name_norm FROM product_groups WHERE name_norm IN "
                                             f"({','.join('?' * len(fresh))})", list(fresh))}
-            for nn, g in fresh.items():
+            for nn, (g, src) in fresh.items():
                 if nn not in have:
-                    _store(c, nn, g, "rule")
+                    _store(c, nn, g, src or "rule")
         cached = {}
         if miss:
             cached = {r["name_norm"]: dict(r) for r in c.execute(
@@ -621,7 +715,9 @@ marka, boy/gramaj, yağ oranı (tam/yarım yağlı, light) ve ambalaj YAZMA. At�
 → "Gofret"). Ama süt, yoğurt, kefir, ayran gibi içecek ve süt ürünlerinde ürünü değiştiren çeşidi YAZ: aromalı süt ayrı
 ürün ("ÇİKOLATALI GÜNLÜK SÜT 200ML" → "Çikolatalı Süt", "ÇİLEKLİ SÜT" → "Çilekli Süt"), "LAKTOZSUZ SÜT" → "Laktozsuz
 Süt", "KEÇİ SÜTÜ" → "Keçi Sütü"; protein / whey içecek süt değildir ("WHEY SÜT 330ML" → "Protein İçeceği"). Yalnız
-marka olan kelimeyi at ("HARRAS GÜNLÜK SÜT 1L" → "Süt"). Kısaltmaları aç. Ürün değilse (poşet, indirim, hizmet,
+marka olan kelimeyi at ("HARRAS GÜNLÜK SÜT 1L" → "Süt"). Yalnız markasıyla anılan üründe markanın ürününü yaz
+(""" + "; ".join(f'"{b.title()}" → "{g}"' for g, b in {g: b for b, g in reversed(BRAND_PRODUCTS.items())}.items()) + """); "Gazlı İçecek",
+"İçecek", "Gıda" gibi raf adı YAZMA, ürünün kendisini yaz ("COLA TURKA 330ML" → "Kola"). Kısaltmaları aç. Ürün değilse (poşet, indirim, hizmet,
 depozito) g = null. Her ad için bir satır, sırayı koru.
 c = kategori, yalnız şu listeden biri (tırnaksız yaz): """ + "; ".join(f'"{c}"' for c in CATEGORIES) + """.
 s = alt kategori, c'nin altındakilerden biri (uymuyorsa yazma): """ + "; ".join(
@@ -726,8 +822,10 @@ def _safe(fn, *a):
 
 # ---------------------------------------------------------------- yeniden gruplama (kurallar değişince, bir kez)
 
-GROUPS_VERSION = 3  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği ayrı grup (refine)
+GROUPS_VERSION = 4  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği ayrı grup (refine)
 #                    3: geniş sözlük (product_taxonomy), marka listesi, alt kategori; kural yapay zekâ sonucunun önünde
+#                    4: marka → ürün düzeltmesi (BRAND_PRODUCTS: Cola Turka → Kola, Fanta → Portakallı Gazoz …);
+#                       katalog eşleşmesi gecelik tutarlılık işinde (consistency)
 
 
 def regroup(c) -> dict:
@@ -783,3 +881,120 @@ def regroup(c) -> dict:
             c.execute("UPDATE official_prices SET group_key = ? WHERE title = ? AND brand IS ? AND group_key != ?",
                       (new["key"], title, brand, new["key"]))
     return {"changed": changed, "queued": queued}
+
+
+# ---------------------------------------------------------------- tutarlılık (gecelik) ve kalite ölçüleri
+
+CONFLICTS_KEY = "groups:conflicts"
+CONFLICTS_TOP = 30
+SPREAD_FACTOR = 3.0
+_SOURCE_RANK = {"override": 3, "rule": 3, "catalog": 2, "consistency": 2, "ai": 1}
+
+
+def form_of(nn: str) -> str:
+    """Adın biçimi: boyu, markası (bilinen markalar), tanımlayıcıları, rakamları atılmış kelimeler ("COLA TURKA 330 ML"
+    → "COLA"; marka listesi katalogdan büyür). Aynı biçim iki ayrı genel ada düşmemeli (consistency)."""
+    tokens = _expand(nn.split())
+    _, used = parse_size(tokens)
+    return " ".join(_strip(tokens, used, partial=True))
+
+
+def _rekey(c, r: dict, generic: str, source: str) -> dict | None:
+    """Önbellek satırını yeni genel ada taşı (boyu adından; tartılı |kg korunur); topluluk satırları da taşınır."""
+    from app import community_prices
+
+    size, _ = parse_size(r["name_norm"].split())
+    new = _compose(generic, size, "kg" if r["group_key"].endswith("|kg") else None)
+    if new["key"] == r["group_key"]:
+        return None
+    _store(c, r["name_norm"], new, source)
+    community_prices.relabel(c, r["name_norm"], new)
+    return new
+
+
+def consistency(c) -> dict:
+    """Aynı biçimdeki adlar tek genel ada (gecelik, katalog yenilenince; c: system.connect()).
+    1. Yapay zekâ / geçici sonuçlu ad bugün katalog ya da kuralla çözülüyorsa o gruba geçer (kural yapay zekâdan önce).
+    2. Aynı biçim (form_of) birden çok genel ada düşmüşse: biçimin kendisi çözülüyorsa (katalog / kural) o, değilse
+       kaynağı güçlü (kural, katalog > yapay zekâ) ve çok olan kazanır; diğerleri o genel ada (kendi boyuyla) taşınır.
+    Çelişen biçimler (en çok CONFLICTS_TOP) sys_settings'e yazılır: yönetici paneli "çelişen gruplar".
+    Dönen {rekeyed, conflicts}."""
+    import json
+
+    from app import product_catalog
+
+    product_catalog.size()  # dizin önce (yazma başlamadan; iç içe okuma bağlantısı)
+    rows = [dict(x) for x in c.execute("SELECT * FROM product_groups WHERE group_key != ''")]
+    rekeyed = 0
+    for r in rows:
+        if r["source"] in ("ai", "consistency"):
+            g, src = resolve(r["name_norm"])
+            if g and g["key"].split("|")[0] != r["group_key"].split("|")[0]:
+                if (new := _rekey(c, r, g["label"].split(" · ")[0], src or "catalog")):
+                    r.update(group_key=new["key"], label=new["label"], source=src or "catalog")
+                    rekeyed += 1
+    by: dict[str, dict[str, list[dict]]] = {}
+    for r in rows:
+        f = form_of(r["name_norm"])
+        if f:
+            by.setdefault(f, {}).setdefault(r["group_key"].split("|")[0], []).append(r)
+    found = []
+    for f, groups in by.items():
+        if len(groups) < 2:
+            continue
+        g, _src = resolve(f)
+        base = g["key"].split("|")[0] if g else None
+        if base not in groups:
+            base = max(groups, key=lambda b: (max(_SOURCE_RANK.get(x["source"], 0) for x in groups[b]),
+                                              len(groups[b]), b))
+        label = (g["label"].split(" · ")[0] if g and g["key"].split("|")[0] == base
+                 else groups[base][0]["label"].split(" · ")[0])
+        found.append({"form": f, "groups": sorted(({"key": b, "label": v[0]["label"].split(" · ")[0], "n": len(v)}
+                                                   for b, v in groups.items()), key=lambda x: (-x["n"], x["key"])),
+                      "resolved_to": label})
+        for b, v in groups.items():
+            if b != base:
+                for r in v:
+                    if _rekey(c, r, label, "consistency"):
+                        rekeyed += 1
+    found.sort(key=lambda x: (-sum(g["n"] for g in x["groups"]), x["form"]))
+    c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES (?, ?)",
+              (CONFLICTS_KEY, json.dumps({"at": _now(), "count": len(found), "top": found[:CONFLICTS_TOP]},
+                                         ensure_ascii=False)))
+    if found or rekeyed:
+        log.info("ürün grubu tutarlılığı: %d çelişen biçim, %d ad taşındı", len(found), rekeyed)
+    return {"rekeyed": rekeyed, "conflicts": len(found)}
+
+
+def quality() -> dict:
+    """Yönetici paneli grouping_quality: {names, grouped, grouped_pct, pending, not_product, by_source, conflicts {count,
+    top, at}, wide_spread {count, top [{group_key, label, min, max, ratio}]}, catalog}. wide_spread: resmî fiyatın son
+    gününde aynı gruptaki ürünlerin fiyatı SPREAD_FACTOR katından fazla açılıyor (büyük olasılıkla yanlış eşleme)."""
+    import json
+
+    from app import product_catalog, system
+
+    with system.connect() as c:
+        src = {r[0] or "?": r[1] for r in c.execute(
+            "SELECT source, COUNT(*) FROM product_groups WHERE group_key != '' GROUP BY source")}
+        not_product = c.execute("SELECT COUNT(*) FROM product_groups WHERE group_key = ''").fetchone()[0]
+        queued = c.execute("SELECT COUNT(*) FROM product_group_queue").fetchone()[0]
+        last = c.execute("SELECT MAX(day) FROM official_prices").fetchone()[0]
+        spread = c.execute("SELECT group_key, MIN(price), MAX(price), COUNT(*) FROM official_prices WHERE day = ? "
+                           "AND price > 0 GROUP BY group_key HAVING COUNT(*) >= 3", (last,)).fetchall() if last else []
+        raw = c.execute("SELECT value FROM sys_settings WHERE key = ?", (CONFLICTS_KEY,)).fetchone()
+    try:
+        conf = json.loads(raw[0]) if raw else {}
+    except ValueError:
+        conf = {}
+    grouped = sum(src.values())
+    wide = sorted(({"group_key": g, "min": round(lo, 2), "max": round(hi, 2), "ratio": round(hi / lo, 1)}
+                   for g, lo, hi, _n in spread if lo > 0 and hi / lo > SPREAD_FACTOR), key=lambda x: -x["ratio"])
+    names = labels([w["group_key"] for w in wide[:20]])
+    return {"names": grouped + not_product + queued, "grouped": grouped,
+            "grouped_pct": round(100 * grouped / (grouped + queued), 1) if grouped + queued else None,
+            "pending": queued, "not_product": not_product, "by_source": src,
+            "conflicts": {"count": conf.get("count", 0), "top": conf.get("top", []), "at": conf.get("at")},
+            "wide_spread": {"count": len(wide), "day": last,
+                            "top": [{**w, "label": names.get(w["group_key"], w["group_key"])} for w in wide[:20]]},
+            "catalog": product_catalog.status()}

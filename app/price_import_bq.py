@@ -19,9 +19,12 @@ Veri kalite denetimi (yazmadan önce):
   değişiminin ortancası SHIFT_LIMIT'i aştıysa (en az SHIFT_MIN_GROUPS ortak grupta) o gün ALINMAZ: önceki veri kalır,
   official_imports'a status "anomaly" + note yazılır (yeniden çekilmez; elle: python -m app.price_import_bq GÜN BÖLGE
   --force) ve yöneticilere push ("sistem" türü, push.ops_alert).
+Kip (run_log.mode; sütun yoksa full): regional_chains çalışmasında o ilde yalnız il zincirleri (CarrefourSA, Hakmar,
+Tarım Kredi) çekilir — yalnız gelen zincirlerin satırları değişir, satır düşüşü / kayma denetimi aynı (il, kip)ın önceki
+alımıyla; official_imports'a kip yazılır.
 Yarıda kalırsa (hata, yeniden başlatma) yazılmayan bölge sonraki turda yeniden denenir. Birden çok işçi aynı anda
 çalıştırmasın diye tur hakkı sys_settings'te kilitle alınır. Son hata ve son tur özeti yönetici paneline (status()).
-Elle: python -m app.price_import_bq [YYYY-MM-DD bölge [--force]]
+Elle: python -m app.price_import_bq [YYYY-MM-DD bölge [--force] [--mode=regional_chains]]
 """
 import json
 import logging
@@ -83,24 +86,44 @@ ORDER BY c.market, c.product_id
 LIMIT {MAX_ROWS_PER_REGION}"""
 
 
-def runs_sql() -> str:
-    return (f"SELECT CAST(run_date AS STRING) AS run_date, region FROM {bq.table('run_log')} "
-            "WHERE run_date BETWEEN @d0 AND @d1 AND status = 'success' GROUP BY run_date, region")
+MODES = ("full", "regional_chains")
+_no_mode: dict = {}  # run_log'da mode sütunu yok (eski toplayıcı): gün başına bir kez denenir
 
 
-def imported() -> set[tuple[str, str]]:
+def runs_sql(with_mode: bool = True) -> str:
+    mode = ", IFNULL(mode, 'full') AS mode" if with_mode else ""
+    return (f"SELECT CAST(run_date AS STRING) AS run_date, region{mode} FROM {bq.table('run_log')} "
+            f"WHERE run_date BETWEEN @d0 AND @d1 AND status = 'success' GROUP BY run_date, region{', mode' if with_mode else ''}")
+
+
+def imported() -> set[tuple[str, str, str]]:
     from app import system
 
     with system.connect() as c:
-        return {(r[0], r[1]) for r in c.execute("SELECT run_date, region FROM official_imports")}
+        return {(r[0], r[1], r[2] or "full") for r in c.execute("SELECT run_date, region, mode FROM official_imports")}
 
 
-def pending_runs(today: date) -> list[tuple[str, str]]:
-    """BigQuery'de başarıyla biten, burada henüz alınmamış (gün, bölge)lar: yeni gün önce."""
-    got = bq.query(runs_sql(), {"d0": today - timedelta(days=LOOKBACK_DAYS), "d1": today})
+def _mode(v) -> str:
+    return v if v in MODES else "full"
+
+
+def pending_runs(today: date) -> list[tuple[str, str, str]]:
+    """BigQuery'de başarıyla biten, burada henüz alınmamış (gün, bölge, kip)lar: yeni gün önce. Kip run_log.mode
+    (full | regional_chains: o ilde yalnız CarrefourSA / Hakmar / Tarım Kredi şubeleri çekildi); sütun yoksa full."""
+    params = {"d0": today - timedelta(days=LOOKBACK_DAYS), "d1": today}
+    got = None
+    if _no_mode.get("day") != today.isoformat():
+        try:
+            got = bq.query(runs_sql(), params)
+        except bq.BQError as e:
+            if "mode" not in str(e).lower():
+                raise
+            _no_mode["day"] = today.isoformat()
+    if got is None:
+        got = bq.query(runs_sql(with_mode=False), params)
     done = imported()
-    runs = {(r["run_date"], r["region"]) for r in got if r.get("run_date") and r.get("region")}
-    return sorted(runs - done, key=lambda x: (x[0], x[1]), reverse=True)
+    runs = {(r["run_date"], r["region"], _mode(r.get("mode"))) for r in got if r.get("run_date") and r.get("region")}
+    return sorted(runs - done, key=lambda x: (x[0], x[1], x[2]), reverse=True)
 
 
 def rows_for(bq_rows: list[dict], day: str, region: str) -> tuple[list[tuple], dict]:
@@ -166,20 +189,23 @@ def _group_medians(rows) -> dict[str, float]:
     return {g: median(v) for g, v in by.items()}
 
 
-def anomaly(c, day: str, region: str, rows: list[tuple]) -> str | None:
-    """Bölgenin önceki alınmış (status ok) günüyle kıyas; sorun varsa neden metni, yoksa None. İlk gün denetlenmez."""
+def anomaly(c, day: str, region: str, rows: list[tuple], mode: str = "full") -> str | None:
+    """Bölgenin aynı kipteki (full | regional_chains) önceki alınmış (status ok) günüyle kıyas; sorun varsa neden
+    metni, yoksa None. İlk gün denetlenmez. regional_chains kipinde fiyat kayması yalnız o çalışmadaki zincirlerle."""
     from statistics import median
 
-    prev = c.execute("SELECT run_date, rows FROM official_imports WHERE region = ? AND run_date < ? AND status = 'ok' "
-                     "ORDER BY run_date DESC LIMIT 1", (region, day)).fetchone()
+    prev = c.execute("SELECT run_date, rows FROM official_imports WHERE region = ? AND mode = ? AND run_date < ? "
+                     "AND status = 'ok' ORDER BY run_date DESC LIMIT 1", (region, mode, day)).fetchone()
     if not prev:
         return None
     pday, prows = prev[0], prev[1] or 0
     if prows and len(rows) < prows * (1 - DROP_LIMIT):
         return f"satır sayısı {prows} → {len(rows)} (önceki gün {pday})"
-    old = _group_medians(c.execute("SELECT group_key, price FROM official_prices WHERE day = ? AND region = ?",
-                                   (pday, region)).fetchall())
-    if not old:  # önceki günün satırları silinmiş (KEEP_DAYS): günlük özetten
+    chains = sorted({r[0] for r in rows}) if mode != "full" else None
+    only = f" AND chain IN ({','.join('?' * len(chains))})" if chains else ""
+    old = _group_medians(c.execute(f"SELECT group_key, price FROM official_prices WHERE day = ? AND region = ?{only}",
+                                   (pday, region, *(chains or []))).fetchall())
+    if not old and mode == "full":  # önceki günün satırları silinmiş (KEEP_DAYS): günlük özetten
         from app import provinces
 
         prov = provinces.province_of(region) or ""
@@ -195,9 +221,12 @@ def anomaly(c, day: str, region: str, rows: list[tuple]) -> str | None:
     return None
 
 
-def import_region(day: str, region: str, force: bool = False) -> dict:
-    """Bir (gün, bölge): BigQuery'den çek, o gün + bölgenin satırlarını değiştir, alındı diye işaretle. Kalite
-    denetimi (anomaly) tutmazsa yazmaz: stats.anomaly = neden (force: denetimi atla)."""
+def import_region(day: str, region: str, force: bool = False, mode: str = "full") -> dict:
+    """Bir (gün, bölge, kip): BigQuery'den çek, o gün + bölgenin satırlarını değiştir, alındı diye işaretle. Kalite
+    denetimi (anomaly, aynı kipin önceki günüyle) tutmazsa yazmaz: stats.anomaly = neden (force: denetimi atla).
+    regional_chains kipinde yalnız bu çalışmada gelen zincirlerin satırları değişir (ulusal zincirlerin — BİM, A101,
+    ŞOK, Migros — o ildeki satırları silinmez)."""
+    mode = _mode(mode)
     from app import market_ref, price_import, product_groups, system
 
     d = date.fromisoformat(day)
@@ -207,23 +236,29 @@ def import_region(day: str, region: str, force: bool = False) -> dict:
     _note_inconsistent(day, stats.pop("inconsistent"))
     cut = (date.today() - timedelta(days=price_import.KEEP_DAYS)).isoformat()
     with system.connect() as c:
-        if not force and (why := anomaly(c, day, region, rows)):
+        if not force and (why := anomaly(c, day, region, rows, mode)):
             c.execute("INSERT OR REPLACE INTO official_imports (run_date, region, rows, products, unmatched, imported_at, "
-                      "status, note, outliers) VALUES (?, ?, 0, ?, ?, ?, 'anomaly', ?, ?)",
-                      (day, region, stats["products"], stats["unmatched"], _now_iso(), why, stats["outliers"]))
+                      "status, note, outliers, mode) VALUES (?, ?, 0, ?, ?, ?, 'anomaly', ?, ?, ?)",
+                      (day, region, stats["products"], stats["unmatched"], _now_iso(), why, stats["outliers"], mode))
             stats["anomaly"] = why
     if stats.get("anomaly"):
         log.warning("resmî fiyat alınmadı (anomali): %s %s %s", day, region, stats["anomaly"])
         _alert(day, region, stats["anomaly"])
         return stats
     with system.connect() as c:
-        c.execute("DELETE FROM official_prices WHERE day = ? AND region = ?", (day, region))
+        if mode == "full":
+            c.execute("DELETE FROM official_prices WHERE day = ? AND region = ?", (day, region))
+        else:  # yalnız il zincirleri çekildi: ulusal zincirlerin satırları kalır
+            chains = sorted({r[0] for r in rows})
+            if chains:
+                c.execute(f"DELETE FROM official_prices WHERE day = ? AND region = ? AND chain IN "
+                          f"({','.join('?' * len(chains))})", (day, region, *chains))
         c.executemany("INSERT OR REPLACE INTO official_prices (chain, group_key, title, brand, price, unit_price, day, "
                       "depot_id, discount, region, promotion, depots, change_7d, change_30d) "
                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
         c.execute("INSERT OR REPLACE INTO official_imports (run_date, region, rows, products, unmatched, imported_at, "
-                  "status, note, outliers) VALUES (?, ?, ?, ?, ?, ?, 'ok', NULL, ?)",
-                  (day, region, stats["rows"], stats["products"], stats["unmatched"], _now_iso(), stats["outliers"]))
+                  "status, note, outliers, mode) VALUES (?, ?, ?, ?, ?, ?, 'ok', NULL, ?, ?)",
+                  (day, region, stats["rows"], stats["products"], stats["unmatched"], _now_iso(), stats["outliers"], mode))
         market_ref.summarize_day(c, day, region)  # günlük piyasa özeti (400 gün; bant zamanla büyür)
         c.execute("DELETE FROM official_prices WHERE day < ?", (cut,))
         c.execute("DELETE FROM official_imports WHERE run_date < ?", (cut,))
@@ -290,8 +325,8 @@ def run(now: datetime, max_regions: int | None = None) -> dict:
     done: list[list] = []
     try:
         todo = pending_runs(utc.date())
-        for day, region in todo[:max_regions or MAX_REGIONS_PER_TICK]:
-            st = import_region(day, region)
+        for day, region, mode in todo[:max_regions or MAX_REGIONS_PER_TICK]:
+            st = import_region(day, region, mode=mode)
             done.append([day, region, 0 if st.get("anomaly") else st["rows"]] + (["anomaly"] if st.get("anomaly") else []))
     except bq.BQError as e:
         log.warning("resmî fiyat içe aktarımı: %s", e)
@@ -348,7 +383,7 @@ def status() -> dict:
                  key=lambda x: (-x["dropped"], x["group_key"]))[:INCONSISTENT_TOP]
     from app import community_export
 
-    return {"configured": enabled(), "last_day": last, "regions": [x[0] for x in regs],
+    return {"configured": enabled(), "last_day": last, "regions": sorted({x[0] for x in regs}),
             "rows": sum(x[1] for x in regs), "imported_at": max((x[2] for x in regs), default=None),
             "last_run_at": st.get("last_run_at"), "last_error": st.get("last_error") if err_newer else None,
             "last_error_at": st.get("last_error_at") if err_newer else None,
@@ -363,9 +398,10 @@ def main(argv: list[str]) -> int:
         print(f"BigQuery kapalı: {bq.CRED_ENV} ayarlı değil ya da dosya okunamıyor", file=sys.stderr)
         return 2
     force = "--force" in argv
-    argv = [a for a in argv if a != "--force"]
+    mode = next((a.split("=", 1)[1] for a in argv if a.startswith("--mode=")), "full")
+    argv = [a for a in argv if a != "--force" and not a.startswith("--mode=")]
     if len(argv) == 3:
-        print(json.dumps(import_region(argv[1], argv[2], force=force), ensure_ascii=False))
+        print(json.dumps(import_region(argv[1], argv[2], force=force, mode=mode), ensure_ascii=False))
     else:
         print(json.dumps(run(datetime.now(timezone.utc), max_regions=100), ensure_ascii=False))
     return 0

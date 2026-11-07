@@ -231,6 +231,8 @@ def run_global(now: datetime) -> list[str] | None:
 
         if n := product_groups.classify_pending(max_calls=product_groups.AI_CALLS_PER_DAY):
             log.info("ürün grubu öğrenildi: %d ad", n)
+        with system.connect() as c:  # aynı biçim tek genel ada (çelişen gruplar yönetici panelinde)
+            product_groups.consistency(c)
     except Exception:  # noqa: BLE001 - gece bakımını engellemesin
         log.exception("ürün grubu sınıflandırma başarısız")
     return system.purge_archived(now=now.timestamp())
@@ -298,6 +300,13 @@ async def scheduler() -> None:
                 log.info("resmî fiyat: %s", got)
         except Exception:  # noqa: BLE001
             log.exception("official prices import failed")
+        try:  # ürün kataloğu (Market Fiyatı ürün listesi → gruplama dayanağı) + gruplama tutarlılığı, günde bir
+            from app import product_catalog
+
+            if (got := await asyncio.to_thread(product_catalog.tick, now)):
+                log.info("ürün kataloğu: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("product catalog refresh failed")
         try:  # topluluk fiyatları → BigQuery (00:30 sonrası, dün; app/community_export.py; yazıcı kimliği yoksa kapalı)
             from app import community_export
 

@@ -11,7 +11,8 @@ unit_price_per / per_unit: grubun boyundan litre / kilo / adet fiyatı (product_
 Kayıtlı kaynaklar:
 - "own": kullanıcının kendi defterindeki fişler (db.priced_items; ortak defter üyesinde yalnız görebildiği kayıtlar),
   zincir/mağaza başına son fiyat.
-- "community": anonim topluluk ortancası (app/community_prices.py; son 14 gün, en az 3 kişi).
+- "community": anonim topluluk ortancası (app/community_prices.py; son 7 gün, en az 3 kişi, indirimsiz satırlar;
+  kişinin ilinde yeterli kişi varsa o il). Teklifte n, window_days, discounted_price? (indirimli ortanca), region?.
 - "resmi": resmî kaynak (Market Fiyatı; app/price_import_bq.py BigQuery'den gecelik ya da app/price_import.py dosyadan
   official_prices'a aktarılır). VARSAYILAN KAPALI: yalnız HESAPKITAP_PRICE_SOURCES "resmi" içerir VE
   HESAPKITAP_BQ_CREDENTIALS (ya da HESAPKITAP_OFFICIAL_PRICES_URL / _FILE) ayarlıysa etkin. Teklifte attribution (kaynak
@@ -30,6 +31,10 @@ from typing import Protocol, TypedDict
 
 class Offer(TypedDict, total=False):
     chain: str
+    window_days: int
+    discounted_price: float
+    official: dict
+    differs: bool
     price: float
     source: str
     date: str
@@ -147,15 +152,24 @@ class OwnSource:
 
 @register
 class CommunitySource:
-    """Anonim topluluk ortancası (en az 3 kişi, son 14 gün)."""
+    """Anonim topluluk ortancası (en az 3 kişi, son 7 gün, indirimsiz)."""
     name = "community"
 
     def fetch(self, group_keys: list[str]) -> dict[str, list[Offer]]:
         from app import community_prices
 
+        from app import db, prefs
+
+        region = prefs.region((db.current_user() or {}).get("id"))
         out: dict[str, list[Offer]] = {}
-        for (chain, g), m in community_prices.medians(group_keys).items():
-            out.setdefault(g, []).append({"chain": chain, "price": m["median"], "source": self.name, "n": m["n"]})
+        for (chain, g), m in community_prices.medians(group_keys, region=region).items():
+            off: Offer = {"chain": chain, "price": m["median"], "source": self.name, "n": m["n"],
+                          "window_days": community_prices.WINDOW_DAYS}
+            if m.get("discounted") is not None:
+                off["discounted_price"] = m["discounted"]
+            if m.get("region"):
+                off["region"] = m["region"]
+            out.setdefault(g, []).append(off)
         return out
 
     def search(self, query: str) -> dict[str, str]:
@@ -279,21 +293,40 @@ def _chain_key(chain: str) -> str:
     return db._store_key(chain)
 
 
+DIFFER_PCT = 10.0  # topluluk ile Market Fiyatı bu kadar ayrışırsa ikisi de açıkça gösterilir (differs)
+
+
 def merge(offers: list[Offer], limit: int = 5, today: date | None = None) -> list[Offer]:
-    """Zincir başına tek teklif (kendi taze fiyatın > topluluk > kendi eski fiyatın), ucuzdan pahalıya."""
+    """Zincir başına tek teklif (kendi taze fiyatın > topluluk (son 7 gün, ≥3 kişi) > Market Fiyatı > kendi eski
+    fiyatın), ucuzdan pahalıya. Aynı zincirde hem topluluk hem Market Fiyatı varsa topluluk teklifi gelir ve Market
+    Fiyatını official {price, date, region?} olarak taşır; fark %DIFFER_PCT'ten çoksa differs: true."""
     fresh = ((today or date.today()) - timedelta(days=OWN_FRESH_DAYS)).isoformat()
 
-    def rank(o: Offer) -> int:
+    def rank(o: Offer) -> float:
         if o["source"] == "own":
             return 0 if o.get("date", "") >= fresh else 2
-        return 1 if o["source"] in ("community", "resmi") else 3
+        return {"community": 1, "resmi": 1.5}.get(o["source"], 3)
 
     best: dict[str, Offer] = {}
+    official: dict[str, Offer] = {}
     for o in offers:
         k = _chain_key(o["chain"])
+        if o["source"] == "resmi" and (k not in official or o["price"] < official[k]["price"]):
+            official[k] = o
         if k not in best or (rank(o), o["price"]) < (rank(best[k]), best[k]["price"]):
             best[k] = o
-    return sorted(best.values(), key=lambda o: (o["price"], o["chain"]))[:limit]
+    out = []
+    for k, o in best.items():
+        r = official.get(k)
+        if o["source"] == "community" and r:
+            o = {**o, "official": {"price": r["price"], **({"date": r["date"]} if r.get("date") else {}),
+                                   **({"region": r["region"]} if r.get("region") else {})}}
+            if r["price"] and abs(o["price"] - r["price"]) / r["price"] * 100 > DIFFER_PCT:
+                o["differs"] = True
+            if r.get("attribution"):
+                o["attribution"] = r["attribution"]
+        out.append(o)
+    return sorted(out, key=lambda o: (o["price"], o["chain"]))[:limit]
 
 
 def best_offers(group_keys: list[str], sources: list[PriceSource] | None = None, limit: int = 5,
