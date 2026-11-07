@@ -2042,13 +2042,15 @@ class UiIn(BaseModel):
     reset_layout: bool = False
     price_share: bool | None = None  # fiyat paylaşımı (kişi başı; /api/me/price-share ile aynı tercih)
     region: str | None = Field(None, max_length=40)  # Bölgem: il adı (app/provinces.py); null / "" seçimi kaldırır
+    stop_cost: float | None = Field(None, ge=0, le=10_000)  # "Nereye gideyim?": ekstra durak için en az tasarruf (₺)
 
 
 @app.put("/api/me/ui")
 def put_ui(body: UiIn):
     """Kişisel görünüm: sade mod, Özet düzeni (herkes kendi). price_share verilirse fiyat paylaşımı tercihi de yazılır
     (sistem veritabanında kişi başı; yanıtta da döner). region verilirse (gönderildiyse; null / "" kaldırır) Bölgem:
-    81 ilden biri (bilinmeyen 422); resmî fiyatlar o ilden gelir. Yanıtta region döner."""
+    81 ilden biri (bilinmeyen 422); resmî fiyatlar o ilden gelir. Yanıtta region döner. stop_cost (₺, 0–10000; null
+    varsayılana döner: 100): alışveriş listesi "Nereye gideyim?" ekstra durağı bu kadar ucuzlatmıyorsa önermez."""
     data = body.model_dump(exclude_unset=True, exclude={"reset_layout", "price_share", "region"})
     if body.reset_layout:
         data["layout"] = None
@@ -2073,7 +2075,10 @@ def put_ui(body: UiIn):
 def _ui_out() -> dict:
     """meta.ui: görünüm tercihleri + price_share (fiyat paylaşımı, kişi başı) + region (Bölgem: il adı | null)."""
     uid = (db.current_user() or {}).get("id")
-    return {**prefs.ui(), "price_share": prefs.price_share(uid), "region": prefs.region(uid)}
+    from app import shopping
+
+    return {**prefs.ui(), "price_share": prefs.price_share(uid), "region": prefs.region(uid),
+            "stop_cost": shopping.stop_cost_pref()}
 
 
 def _history_gate(month: str | None) -> None:
@@ -4365,8 +4370,23 @@ def day_detail(d: date, all: bool = True):
 
 @app.get("/api/prices")
 def prices(since: date | None = None, store: str | None = None, brand: str | None = None):
-    """Fişlerden fiyat takibi: ürün / mağaza / marka kırılımı; tarihten beri, mağaza, marka filtresi."""
-    return db.products(since.isoformat() if since else None, store or None, brand or None)
+    """Fişlerden fiyat takibi: ürün / mağaza / marka kırılımı; tarihten beri, mağaza, marka filtresi.
+    products[].history[] ve stores[].products[].history[]: vs_market {median, min, max, pct, verdict "ucuz"|"normal"|
+    "pahali", cheapest_chain, day, source "resmi"|"community"} — o günün (±3 gün) piyasa fiyatına göre (app/market_ref.py)."""
+    from app import market_ref
+
+    out = db.products(since.isoformat() if since else None, store or None, brand or None)
+    market_ref.attach(out["products"] + [p for s in out["stores"] for p in s["products"]])
+    return out
+
+
+@app.get("/api/prices/market")
+def prices_market(group: str = Query(min_length=1, max_length=80), days: int = Query(90, ge=1, le=400)):
+    """Ürün grubunun gün gün piyasa bandı (kişinin ili; app/market_ref.py market): {group, region, days: [{day, min,
+    median, max, cheapest_chain, chains, source}], attribution}. Veri yoksa days boş."""
+    from app import market_ref
+
+    return market_ref.market(group, days)
 
 
 @app.get("/api/prices/groups")
@@ -4456,6 +4476,20 @@ def shopping_plan():
     from app import shopping
 
     return shopping.plan()
+
+
+@app.get("/api/shopping-list/optimize")
+def shopping_optimize(max_stops: int = Query(3, ge=1, le=3), stop_cost: float | None = Query(None, ge=0, le=10_000)):
+    """Nereye gideyim? En iyi 1 / 2 / 3 duraklı plan ve önerilen durak sayısı (app/shopping.py optimize).
+    {region, date, stop_cost, max_stops, plans: [{k, stops: [{chain, total, items: [{id, text, qty, group_label, price
+    (birim), line_total, unit_price_per?, per_unit?, brand?, source, date?, region?}]}], total, covered, missing [id],
+    saving_vs_single, saving_vs_prev, extra_vs_best, recommended}], single: [{chain, total, covered, missing [id],
+    vs_recommended}], recommended_k (null: fiyatlı satır yok), one_store (single[0]), priced, unpriced [id], sources
+    [kaynak yazısı], source_info {kinds [resmi|community|own], resmi_date, national}}. stop_cost verilmezse kişinin
+    tercihi (meta.ui.stop_cost; varsayılan 100 ₺)."""
+    from app import shopping
+
+    return shopping.optimize(max_stops, stop_cost)
 
 
 @app.patch("/api/shopping-list/{rid}")
