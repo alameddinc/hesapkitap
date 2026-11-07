@@ -1,11 +1,14 @@
 // Fiyatlar → ürüne tıklayınca: anlaşılır özet ("₺138,00 → ₺129,00 (−%7) · 12 Eki → bugün"), iki alımdan itibaren altında
 // grafik (her alım işaretli, ilk/son değer yazılı, yuvarlak eksen, yalnız alım olan aylar); tek alımda yalnız fiyat ve gün; "Alımların" listesi (fişe gider), tek market
 // notu; sunucu "price_groups" verirse markası fark etmeyen grup ve "Nereden alınır" (kendi + topluluk fiyatı).
+// Yetenek price_market: grafikte piyasa bandı (GET /api/prices/market: gün gün en düşük–en yüksek, kesikli ortanca;
+// grafik o zaman takvim eksenli), alım noktası history[].vs_market'e göre yeşil / sarı / kırmızı, altında son alımın yeri.
 import { useQuery } from "@tanstack/react-query";
 import { ReceiptText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
+import { marketCaption, marketSource, type Market, type VsMarket } from "../lib/optimize";
 import { ayrilma, change7Text, changePct, dayWord, daysBetween, monthShort, niceTicks, officialSrc, pctWord, pricedPoints, type PricePoint } from "../lib/priceView";
 import { useUI } from "../ui";
 import { useMeta, useOpenRow } from "./hooks";
@@ -15,8 +18,20 @@ export interface PriceHistory {
   date: string; price: number | null; store: string; branch: string | null; qty: number; name: string;
   /** yeni sunucu: kaydın uid'i ("m12") ve fiş kaydı; tahmini fiyat (fişte birim fiyat yoktu) */
   uid?: string | null; entry_id?: number | null; estimated?: boolean;
+  /** yetenek price_market: o günün (±3 gün) piyasa fiyatına göre */
+  vs_market?: VsMarket | null;
 }
-export interface PriceGroupRef { key: string; label: string; category?: string | null }
+export interface PriceGroupRef { key: string; label: string; category?: string | null; pending?: boolean }
+const VERDICT_BOX = {
+  ucuz: "bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300",
+  normal: "bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+  pahali: "bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300",
+} as const;
+const VERDICT_DOT = {
+  ucuz: "fill-green-600 dark:fill-green-400",
+  normal: "fill-amber-500 dark:fill-amber-400",
+  pahali: "fill-red-600 dark:fill-red-400",
+} as const;
 export interface GroupBest {
   chain: string; price: number; brand?: string | null; source: "own" | "community" | "resmi"; date?: string | null; n?: number | null;
   /** yetenek price_unit: grubun boyundan litre / kilo / adet fiyatı */
@@ -71,6 +86,16 @@ export default function PriceDetail({ p }: { p: { product: string; unit: string;
   const pts = pricedPoints(p.history);
   const stores = [...new Set(p.history.map((h) => h.store))];
   const group = caps?.includes("price_groups") ? p.group ?? null : null;
+  const mkKey = caps?.includes("price_market") && p.group && !p.group.pending ? p.group.key : null;
+  // bant geçmişi kapsasın: en az 90 gün, ilk alıma kadar (en çok 400)
+  const mkDays = Math.min(400, Math.max(90, pts.length ? daysBetween(pts[0]!.date, today) + 3 : 90));
+  const mk = useQuery({
+    queryKey: ["price-market", mkKey, mkDays], enabled: !!mkKey, retry: false, staleTime: 10 * 60_000,
+    queryFn: () => send<Market>(`/api/prices/market?group=${encodeURIComponent(mkKey!)}&days=${mkDays}`),
+  });
+  const band = mk.data?.days.length ? mk.data : null;
+  const verdicts = p.history.map((h) => h.vs_market?.verdict ?? null);
+  const caption = band ? marketCaption(p.history, (n) => maskText(tl(n))) : null;
   const rows = [...p.history].map((h, i) => ({ h, i })).sort((a, b) => b.h.date.localeCompare(a.h.date) || b.i - a.i);
   const open = (h: PriceHistory) => {
     const uid = h.uid ?? (h.entry_id != null ? `m${h.entry_id}` : null);
@@ -81,7 +106,11 @@ export default function PriceDetail({ p }: { p: { product: string; unit: string;
   return (
     <div className="space-y-3 px-4 pb-4" data-testid="fiyat-detay">
       {pts.length > 0 && <Summary pts={pts} unit={p.unit} today={today} />}
-      {pts.length >= 2 && <Chart pts={pts} unit={p.unit} today={today} />}
+      {(pts.length >= 2 || (pts.length === 1 && (band?.days.length ?? 0) >= 2)) && <Chart pts={pts} unit={p.unit} today={today} band={band} verdicts={verdicts} />}
+      {caption && (
+        <p data-testid="piyasa-yazi" className={cx("rounded-lg px-3 py-2 text-sm font-medium",
+          VERDICT_BOX[[...p.history].filter((h) => h.price != null && h.vs_market).sort((a, b) => a.date.localeCompare(b.date)).pop()?.vs_market?.verdict ?? "normal"])}>{caption}</p>
+      )}
       {stores.length === 1 && (
         <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
           Yalnız {ayrilma(maskText(stores[0]))} aldın; başka marketten alınca karşılaştırırız.</p>
@@ -137,7 +166,9 @@ function Summary({ pts, unit, today }: { pts: PricePoint[]; unit: string; today:
 }
 
 /** ≥2 alım (özetin altında): her alım bir nokta, ilk ve son değer yazılı; tahmini fiyata giden parça kesikli. */
-function Chart({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: string }) {
+function Chart({ pts, unit, today, band, verdicts }: {
+  pts: PricePoint[]; unit: string; today: string; band?: Market | null; verdicts?: ("ucuz" | "normal" | "pahali" | null)[];
+}) {
   // çizim kutusu kabın gerçek genişliği: yazılar her ekranda aynı boyda (viewBox ölçeklenmez)
   const box = useRef<HTMLDivElement>(null);
   const [W, setW] = useState(340);
@@ -149,9 +180,15 @@ function Chart({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: s
     return () => ro.disconnect();
   }, []);
   const H = W < 480 ? 180 : 210, L = 44, R = 14, T = 28, B = 24;
-  const prices = pts.map((x) => x.price);
+  // piyasa bandı varsa takvim ekseni (alımlar ve bant aynı günlere düşsün); yoksa alım sırası
+  const bd = band?.days ?? [];
+  const d0 = bd.length ? [pts[0]!.date, bd[0]!.day].sort()[0]! : "";
+  const d1 = bd.length ? [pts[pts.length - 1]!.date, bd[bd.length - 1]!.day].sort()[1]! : "";
+  const span = bd.length ? Math.max(1, daysBetween(d0, d1)) : 0;
+  const xd = (day: string) => L + (daysBetween(d0, day) / span) * (W - L - R);
+  const prices = [...pts.map((q) => q.price), ...bd.flatMap((d) => [d.min, d.max])];
   const ax = niceTicks(Math.min(...prices), Math.max(...prices));
-  const x = (i: number) => (pts.length === 1 ? (L + W - R) / 2 : L + (i * (W - L - R)) / (pts.length - 1));
+  const x = (i: number) => (bd.length ? xd(pts[i]!.date) : pts.length === 1 ? (L + W - R) / 2 : L + (i * (W - L - R)) / (pts.length - 1));
   const y = (v: number) => T + (1 - (v - ax.lo) / (ax.hi - ax.lo || 1)) * (H - T - B);
   const anyEst = pts.some((x) => x.estimated);
   // ay etiketi: ayın ilk alımının altında (yalnız alım olan aylar)
@@ -172,17 +209,29 @@ function Chart({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: s
             {!hidden && <text x={L - 6} y={y(v) + 4} textAnchor="end" fontSize={11} className="fill-stone-500">{tick(v)}</text>}
           </g>
         ))}
+        {bd.length > 1 && (
+          <g data-testid="piyasa-bandi">
+            <path d={`M${bd.map((d) => `${xd(d.day)},${y(d.max)}`).join("L")}L${[...bd].reverse().map((d) => `${xd(d.day)},${y(d.min)}`).join("L")}Z`}
+              className="fill-stone-200/70 dark:fill-stone-700/50" />
+            <polyline points={bd.map((d) => `${xd(d.day)},${y(d.median)}`).join(" ")} fill="none" strokeWidth={1.5} strokeDasharray="4 4"
+              className="stroke-stone-400 dark:stroke-stone-500" />
+          </g>
+        )}
+        {bd.length === 1 && <line x1={xd(bd[0]!.day) - 6} x2={xd(bd[0]!.day) + 6} y1={y(bd[0]!.median)} y2={y(bd[0]!.median)} strokeWidth={2} className="stroke-stone-400" />}
         {pts.slice(1).map((pt, k) => {
           const a = pts[k]!;
           return <line key={k} x1={x(k)} y1={y(a.price)} x2={x(k + 1)} y2={y(pt.price)} strokeWidth={2.5} strokeLinecap="round"
             strokeDasharray={a.estimated || pt.estimated ? "6 5" : undefined} className="stroke-blue-600 dark:stroke-blue-400" />;
         })}
-        {pts.map((pt, i) => (
-          <circle key={i} cx={x(i)} cy={y(pt.price)} r={4.5} strokeWidth={2}
-            className={cx("stroke-blue-600 dark:stroke-blue-400", pt.estimated ? "fill-white dark:fill-stone-900" : "fill-blue-600 dark:fill-blue-400")}>
-            <title>{`${dayWord(pt.date, today)} · ${pt.store} · ${tl(pt.price)}${pt.estimated ? " (tahmini)" : ""}`}</title>
-          </circle>
-        ))}
+        {pts.map((pt, i) => {
+          const v = verdicts?.[pt.i] ?? null;
+          return (
+            <circle key={i} cx={x(i)} cy={y(pt.price)} r={v ? 5.5 : 4.5} strokeWidth={2} data-verdict={v ?? undefined}
+              className={v ? cx(VERDICT_DOT[v], "stroke-white dark:stroke-stone-900") : cx("stroke-blue-600 dark:stroke-blue-400", pt.estimated ? "fill-white dark:fill-stone-900" : "fill-blue-600 dark:fill-blue-400")}>
+              <title>{`${dayWord(pt.date, today)} · ${pt.store} · ${tl(pt.price)}${pt.estimated ? " (tahmini)" : ""}${v ? ` · ${v === "ucuz" ? "ucuz" : v === "pahali" ? "pahalı" : "normal"}` : ""}`}</title>
+            </circle>
+          );
+        })}
         {!hidden && [0, pts.length - 1].map((i) => {
           const pt = pts[i]!;
           // değer noktanın üstünde (üstte T kadar boşluk var); uçta taşmasın diye içe doğru hizalı
@@ -196,8 +245,11 @@ function Chart({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: s
       </div>
       <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
         <span className="inline-flex items-center gap-1.5"><span className="inline-block size-2.5 rounded-full bg-blue-600 dark:bg-blue-400" aria-hidden /> Fişteki birim fiyat{per(unit) && ` (${per(unit).slice(1)})`}</span>
+        {bd.length > 0 && <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm bg-stone-200 dark:bg-stone-700" aria-hidden /> Piyasa (en düşük–en yüksek)</span>}
+        {bd.length > 1 && <span className="inline-flex items-center gap-1.5"><svg width="22" height="6" aria-hidden><line x1="0" y1="3" x2="22" y2="3" strokeDasharray="4 4" strokeWidth="1.5" className="stroke-stone-400" /></svg> ortanca</span>}
         {anyEst && <span className="inline-flex items-center gap-1.5"><svg width="22" height="6" aria-hidden><line x1="0" y1="3" x2="22" y2="3" strokeDasharray="5 4" strokeWidth="2.5" className="stroke-blue-600 dark:stroke-blue-400" /></svg> Kesikli: tahmini fiyat</span>}
       </p>
+      {band && <p className="text-[11px] text-stone-400 dark:text-stone-500" data-testid="piyasa-kaynak">{marketSource(band)}</p>}
     </figure>
   );
 }

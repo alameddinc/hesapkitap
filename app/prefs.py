@@ -160,5 +160,11 @@ def set_ui(data: dict) -> dict:
         if k in data:
             lay = data[k]
             cur[k] = [str(x)[:40] for x in lay][:40] if isinstance(lay, list) else None
+    if "stop_cost" in data:  # alışveriş listesi "Nereye gideyim?": ekstra durak için en az tasarruf (₺); None varsayılan
+        v = data["stop_cost"]
+        if v is None:
+            cur.pop("stop_cost", None)
+        else:
+            cur["stop_cost"] = round(min(max(float(v), 0.0), 10_000.0), 2)
     db.set_setting(_ui_key(), json.dumps(cur, ensure_ascii=False))
     return cur

@@ -1,20 +1,22 @@
 // Alışveriş listesi (yetenek shopping_list; paket satırı alisveris_listesi): serbest yazılan ürünler, adet, alındı
 // işareti, silme. Ortak defterde ortaktır: ekleyenin baş harfi görünür, "Sadece görür" yetkisinde liste salt okunur.
 // Fiyat: GET /api/shopping-list/plan → ürün başına en ucuz market ve "Hepsini tek yerden" özeti. Değişiklikler önce
-// ekranda olur (iyimser), sunucu reddederse geri alınır. Mobil karşılığı: hesapkitap-mobile src/screens/Alisveris.tsx.
+// ekranda olur (iyimser), sunucu reddederse geri alınır. Üstte "Nereye gideyim?" (yetenek shopping_optimize,
+// components/ShopOptimize.tsx): en iyi 1 / 2 / 3 duraklı plan. Mobil karşılığı: hesapkitap-mobile src/screens/Alisveris.tsx.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { cx, maskText, tl } from "../format";
+import { cx, maskText, tl, todayISO } from "../format";
 import { ApiError, bodyOf, failureText, send } from "../lib/apiError";
-import { bestChain, type PlanChain } from "../lib/priceView";
+import { agoWord, bestChain, type PlanChain } from "../lib/priceView";
 import { useUI } from "../ui";
-import { isViewer, useBook, usePeople } from "../components/hooks";
+import { isViewer, useBook, useMeta, usePeople } from "../components/hooks";
 import { PlanGate } from "../components/Plan";
+import ShopOptimize from "../components/ShopOptimize";
 import { AddedBy } from "../components/TxnList";
 
 export interface ShopItem { id: number; text: string; group_key: string | null; qty: number | null; done: boolean; added_by: number | null; created_at: string }
-interface Best { chain: string; price: number; brand?: string | null; source: "own" | "community" }
+interface Best { chain: string; price: number; brand?: string | null; source: "own" | "community" | "resmi"; date?: string | null }
 interface ShopPlan { items: { id: number; best: Best | null }[]; chains: PlanChain[] }
 
 const LIST = ["shopping-list"] as const;
@@ -48,6 +50,8 @@ function ShoppingList() {
   const book = useBook();
   const people = usePeople();
   const ro = isViewer(book.data);
+  const optimizeOn = !!useMeta().data?.capabilities?.includes("shopping_optimize");
+  const today = todayISO();
   const list = useQuery({ queryKey: LIST, queryFn: fetchList });
   const plan = useQuery({ queryKey: PLAN, queryFn: () => send<ShopPlan>(`${BASE}/plan`), retry: false, enabled: !!list.data?.length });
   const [text, setText] = useState("");
@@ -93,8 +97,14 @@ function ShoppingList() {
   const bestOf = new Map((plan.data?.items ?? []).map((x) => [x.id, x.best]));
   const top = bestChain(plan.data?.chains);
 
+  // fiyatlı ürün varsa görünür; alışverişte hepsi işaretlenince de kaybolmasın (sonuç ekranda kalsın)
+  const priced = (plan.data?.items ?? []).some((x) => x.best && open.some((o) => o.id === x.id));
+  const [optShown, setOptShown] = useState(false);
+  if (priced && !optShown) setOptShown(true);
+
   return (
     <div className="space-y-3">
+      {optimizeOn && optShown && items.length > 0 && <ShopOptimize items={items} ro={ro} onTick={(id, d) => patch.mutate({ id, done: d })} />}
       {top && open.length > 0 && (
         <section className="card flex items-center gap-3 p-4" data-testid="tek-yerden">
           <ShoppingCart size={20} className="shrink-0 text-green-700 dark:text-green-400" aria-hidden />
@@ -144,7 +154,7 @@ function ShoppingList() {
                     {who && <AddedBy name={people.isMe(it.added_by) ? null : who.name} initial={who.name} />}
                   </div>
                   {best && !it.done && (
-                    <div className="text-xs text-stone-500 tabular-nums">en ucuz: {maskText(best.chain)} {tl(best.price)}{best.brand ? ` (${best.brand})` : ""}{best.source === "community" ? " · topluluk" : ""}</div>
+                    <div className="text-xs text-stone-500 tabular-nums">en ucuz: {maskText(best.chain)} {tl(best.price)}{best.brand ? ` (${best.brand})` : ""}{best.source === "community" ? " · topluluk" : ""}{best.source === "resmi" && best.date && best.date < today ? ` · ${agoWord(best.date, today)}` : ""}</div>
                   )}
                 </div>
                 {ro ? (q > 1 && <span className="shrink-0 text-sm text-stone-500 tabular-nums">×{q}</span>) : (

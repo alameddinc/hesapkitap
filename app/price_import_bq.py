@@ -9,7 +9,8 @@ Akış (tick, zamanlayıcıdan her dakika; ağır iş TRY_EVERY_S'de bir):
    fiyat → change_7d / change_30d (yüzde). Sorgu yalnız bu üç run_date bölümünü okur (maliyet ≈ 0).
 3. Zincir adı price_import.CHAIN_MAP ile, ad + marka + boy ürün grubuna (app/product_groups.py; çözülemeyen ad yapay zekâ
    kuyruğuna girer, sonraki içe aktarımda gruplanır). O (gün, bölge)nın satırları tek işlemde değiştirilir (yeniden
-   çalışırsa aynı sonuç), official_imports'a yazılır; KEEP_DAYS'ten eskiler silinir.
+   çalışırsa aynı sonuç), official_imports'a yazılır; KEEP_DAYS'ten eskiler silinir. Aynı işlemde günün grup özeti
+   official_daily'ye (app/market_ref.py summarize_day; 400 gün tutulur: ürün grafiğindeki piyasa bandı).
 Yarıda kalırsa (hata, yeniden başlatma) yazılmayan bölge sonraki turda yeniden denenir. Birden çok işçi aynı anda
 çalıştırmasın diye tur hakkı sys_settings'te kilitle alınır. Son hata ve son tur özeti yönetici paneline (status()).
 Elle: python -m app.price_import_bq [YYYY-MM-DD bölge]
@@ -122,7 +123,7 @@ def rows_for(bq_rows: list[dict], day: str, region: str) -> tuple[list[tuple], d
 
 def import_region(day: str, region: str) -> dict:
     """Bir (gün, bölge): BigQuery'den çek, o gün + bölgenin satırlarını değiştir, alındı diye işaretle."""
-    from app import price_import, product_groups, system
+    from app import market_ref, price_import, product_groups, system
 
     d = date.fromisoformat(day)
     got = bq.query(offers_sql(), {"d": d, "d7": d - timedelta(days=7), "d30": d - timedelta(days=30), "region": region},
@@ -137,6 +138,7 @@ def import_region(day: str, region: str) -> dict:
         c.execute("INSERT OR REPLACE INTO official_imports (run_date, region, rows, products, unmatched, imported_at) "
                   "VALUES (?, ?, ?, ?, ?, ?)", (day, region, stats["rows"], stats["products"], stats["unmatched"],
                                                 _now_iso()))
+        market_ref.summarize_day(c, day, region)  # günlük piyasa özeti (400 gün; bant zamanla büyür)
         c.execute("DELETE FROM official_prices WHERE day < ?", (cut,))
         c.execute("DELETE FROM official_imports WHERE run_date < ?", (cut,))
     product_groups.kick()  # kuyruğa giren adlar: arka planda yapay zekâ (açıksa)

@@ -114,6 +114,12 @@ CAPABILITIES = (
     "price_region",           # Bölgem: meta.ui.region (il adı | null), PUT /api/me/ui {region} (81 il, app/provinces.py;
                               # null/"" kaldırır, bilinmeyen 422); resmi teklifte region ("İzmir" | "ulusal"),
                               # discount?, promotion?, change_7d?/change_30d? (yüzde); seçilmemişse İstanbul
+    "shopping_optimize",      # GET /api/shopping-list/optimize?max_stops=1..3&stop_cost → en iyi 1/2/3 duraklı plan,
+                              # recommended_k, single (hepsi tek yerden, vs_recommended), unpriced; meta.ui.stop_cost,
+                              # PUT /api/me/ui {stop_cost} (₺, null → 100)
+    "price_market",           # piyasa bandı: GET /api/prices/market?group&days=90 → {group, region, days [{day, min, median,
+                              # max, cheapest_chain, chains, source resmi|community}], attribution}; /api/prices history[]
+                              # vs_market {median, min, max, pct, verdict ucuz|normal|pahali, cheapest_chain, day, source}
 )
 
 

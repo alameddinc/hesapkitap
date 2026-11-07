@@ -270,6 +270,17 @@ CREATE TABLE IF NOT EXISTS official_imports (  -- BigQuery içe aktarımı yapı
     imported_at TEXT NOT NULL,
     PRIMARY KEY (run_date, region)
 );
+CREATE TABLE IF NOT EXISTS official_daily (  -- resmî fiyatın günlük özeti (app/market_ref.py): grup + il + gün; 400 gün
+    group_key TEXT NOT NULL,
+    region TEXT NOT NULL,                -- il (provinces.province_of); dosya içe aktarımında ''
+    day TEXT NOT NULL,
+    min REAL NOT NULL,                   -- zincir başına en ucuz ürünün fiyatı: en düşük / ortanca / en yüksek
+    median REAL NOT NULL,
+    max REAL NOT NULL,
+    cheapest_chain TEXT NOT NULL,
+    chains INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (group_key, region, day)
+);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
