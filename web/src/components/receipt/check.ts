@@ -16,6 +16,8 @@ export interface ReceiptCheck {
   suspect?: number[]; groups?: VatGroup[]; line_count?: { printed: number; read: number } | null;
   /** fiyat artışı (sunucu fiyat takibi): bu satırın birim fiyatı geçen seferkinden farklı. Alan yoksa sunucu eski. */
   price_alerts?: PriceAlert[];
+  /** yetenek market_notes: birim fiyatı piyasa ortancasından ≥%10 ve ≥₺2 yüksek kalemler (en çok 5, pahalı önce) */
+  market_notes?: MarketNote[];
 }
 /** Bu kalem geçen sefer başka fiyattı: "geçen sefer ₺30,00 (+%17)". Yalnız o satır değişmediyse (ad aynı) gösterilir. */
 export interface PriceAlert { index: number; name: string; paid: number; last_paid: number; last_date: string; change_pct: number; chain?: string | null }
@@ -24,6 +26,36 @@ export function livePriceAlerts(alerts: PriceAlert[] | null | undefined, items: 
   const out = new Map<number, PriceAlert>();
   for (const a of alerts ?? []) if (items[a.index]?.name === a.name && Math.abs(a.change_pct) >= 0.5) out.set(a.index, a);
   return out;
+}
+/** Piyasadan pahalı kalem (check.market_notes). source resmi: Market Fiyatı (region il ya da "ulusal"); community: topluluk. */
+export interface MarketNote {
+  index: number; name: string; group?: string; label: string; paid_unit: number; market_median: number; market_min: number;
+  cheapest_chain: string; pct: number; day?: string; source: "resmi" | "community"; region: string | null;
+}
+/** Hâlâ geçerli piyasa notları: satırın adı ve birim fiyatı değişmediyse (kullanıcı düzelttiyse/sildiyse düşer). */
+export function liveMarketNotes(notes: MarketNote[] | null | undefined, items: ReceiptItem[]): MarketNote[] {
+  return (notes ?? []).filter((n) => {
+    const it = items[n.index];
+    if (!it || it.name !== n.name || it.amount == null) return false;
+    const q = it.qty && it.qty > 0 ? it.qty : 1;
+    return Math.abs(it.amount / q - n.paid_unit) <= TOL;
+  });
+}
+const pctText = (p: number) => `+%${Math.round(p).toLocaleString("tr-TR")}`;
+/** "Bu fişte 2 ürün piyasadan pahalı" */
+export const marketHeadline = (notes: MarketNote[]) => `Bu fişte ${notes.length} ürün piyasadan pahalı`;
+/** "Süt · 1 L ₺42,00 (piyasa ₺35,95, +%17)" — fmt: para biçimi (web tl, mobilde ui.money(tl)) */
+export const marketLine = (n: MarketNote, fmt: (x: number) => string) =>
+  `${n.label} ${fmt(n.paid_unit)} (piyasa ${fmt(n.market_median)}, ${pctText(n.pct)})`;
+/** Dipnot: kaynak ve il ("Piyasa: Market Fiyatı · İstanbul · o ildeki en ucuz şube fiyatları; senin şuben farklı olabilir"). */
+export function marketFootnote(notes: MarketNote[]): string {
+  const off = notes.find((n) => n.source === "resmi");
+  const comm = notes.some((n) => n.source === "community");
+  const parts: string[] = [];
+  if (off) parts.push(off.region === "ulusal" ? "Market Fiyatı · ülke geneli · zincirlerin en ucuz şube fiyatları"
+    : `Market Fiyatı · ${off.region ?? "İstanbul"} · o ildeki en ucuz şube fiyatları`);
+  if (comm) parts.push("topluluk fiyatları (en az 3 kişinin fişi)");
+  return `Piyasa: ${parts.join(" ve ")}; senin şuben farklı olabilir`;
 }
 /** Karışan rakam önerisi: bu kalemin tutarı `from` yerine `to` olabilir (termal baskıda 6↔8 …). Kendiliğinden uygulanmaz. */
 export interface DigitFix {

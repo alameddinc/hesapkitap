@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { applyDigitFixes, checkItems, digitPairs, liveDigit, livePriceAlerts, type ReceiptCheck, type ReceiptItem } from "./check.ts";
+import { applyDigitFixes, checkItems, digitPairs, liveDigit, liveMarketNotes, livePriceAlerts, marketFootnote, marketHeadline, marketLine, type ReceiptCheck, type ReceiptItem } from "./check.ts";
 
 const items: ReceiptItem[] = [
   { name: "SUT 1L", qty: 1, amount: 64.5 },
@@ -80,4 +80,22 @@ test("livePriceAlerts: yalnız adı değişmeyen satırda, küçük oynama yok s
   assert.deepEqual([...livePriceAlerts(alerts, items).keys()], [0]);
   assert.equal(livePriceAlerts([{ ...alerts[0]!, change_pct: 0.2 }], items).size, 0);
   assert.equal(livePriceAlerts(undefined, items).size, 0);
+});
+
+test("piyasa notları: yalnız değişmeyen satır, özet ve dipnot metni", () => {
+  const items = [{ name: "SUT 1L", qty: 1, amount: 42 }, { name: "PEYNIR", qty: 2, amount: 300 }, { name: "EKMEK", amount: 14 }];
+  const notes = [
+    { index: 0, name: "SUT 1L", label: "Süt · 1 L", paid_unit: 42, market_median: 35.95, market_min: 33, cheapest_chain: "BİM", pct: 16.8, source: "resmi" as const, region: "İstanbul" },
+    { index: 1, name: "PEYNIR", label: "Beyaz Peynir · 500 g", paid_unit: 150, market_median: 120, market_min: 100, cheapest_chain: "A101", pct: 25, source: "resmi" as const, region: "İstanbul" },
+    { index: 2, name: "EKMEK", label: "Ekmek", paid_unit: 14, market_median: 10, market_min: 8, cheapest_chain: "ŞOK", pct: 40, source: "community" as const, region: null },
+  ];
+  assert.equal(liveMarketNotes(notes, items).length, 3);
+  assert.equal(liveMarketNotes(notes, [{ ...items[0]!, amount: 36 }, items[1]!, { ...items[2]!, name: "SIMIT" }]).length, 1);
+  assert.equal(liveMarketNotes(undefined, items).length, 0);
+  const tl = (x: number) => `₺${x.toFixed(2).replace(".", ",")}`;
+  assert.equal(marketHeadline(notes.slice(0, 2)), "Bu fişte 2 ürün piyasadan pahalı");
+  assert.equal(marketLine(notes[0]!, tl), "Süt · 1 L ₺42,00 (piyasa ₺35,95, +%17)");
+  assert.equal(marketFootnote(notes.slice(0, 1)), "Piyasa: Market Fiyatı · İstanbul · o ildeki en ucuz şube fiyatları; senin şuben farklı olabilir");
+  assert.equal(marketFootnote([notes[2]!]), "Piyasa: topluluk fiyatları (en az 3 kişinin fişi); senin şuben farklı olabilir");
+  assert.match(marketFootnote([{ ...notes[0]!, region: "ulusal" }]), /ülke geneli/);
 });

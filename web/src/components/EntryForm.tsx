@@ -424,7 +424,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
         </div>
         {fromReceipt && kind === "gider" && (
           <ReceiptItems items={items} total={parseAmount(amount) || null} onChange={setItems} photo={draft?.photo_url}
-            serverCheck={meta.data?.capabilities?.includes("digit_fix") ? draft?.check : null} priceAlerts={draft?.check?.price_alerts}
+            serverCheck={meta.data?.capabilities?.includes("digit_fix") ? draft?.check : null} priceAlerts={draft?.check?.price_alerts} marketNotes={draft?.check?.market_notes}
             onReread={draft?.receipt_file ? () => api.rereadReceipt(draft.receipt_file!, parseAmount(amount) || null) : undefined}
             note={draft?.reread_used ? "Kalemler fişi tutmadığı için fiş ikinci kez, daha dikkatli okundu." : null} />
         )}
