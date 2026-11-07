@@ -2,9 +2,10 @@
 kaç liraya satıldığı, en az MIN_CONTRIBUTORS farklı kişinin fişinden.
 
 Ne yazılır (fiş kaydedilince, kişinin "fiyat paylaşımı" tercihi açıksa — varsayılan AÇIK, app/prefs.py price_share):
-    community_prices(chain, group_key, name_norm, unit_price, day, contributor)
+    community_prices(chain, group_key, name_norm, unit_price, day, contributor, region)
   - yalnız fotoğraf/PDF'ten okunmuş fişin kalemleri (elle girilen kayıt değil), yalnız bilinen zincirde;
-  - şube, adres, kart, tutarın tamamı, kayıt id'si, kullanıcı id'si YOK;
+  - şube, adres, kart, tutarın tamamı, kayıt id'si, kullanıcı id'si YOK; region yalnız fişin şube yazısında il adı
+    geçiyorsa o il (provinces.find_in; "Kadıköy Moda" → NULL) — kişinin konumu / Bölgem'i kullanılmaz;
   - contributor = HMAC(günün tuzu, kullanıcı id) — tuz her gün yenilenir, eskisi silinir: aynı kişinin farklı
     günlerdeki satırları birbirine, hiçbir satır bir kullanıcıya bağlanamaz (sunucuyu işleten dahil). Yalnız aynı gün
     aynı kişinin satırları tek kişi sayılır (n şişmesin).
@@ -12,7 +13,8 @@ Ne okunur: yalnız toplam — (zincir, grup) için son WINDOW_DAYS günde en az 
 ortanca fiyat ve kişi sayısı (median, n). Önce kişi başı ortanca, sonra kişiler arası ortanca (bir kişinin çok satırı
 sonucu çekmesin). Ham satır, şube ya da kişi başı tarih hiçbir uçtan dönmez.
 Hesap silme: satırlar kişiye bağlanamadığı için silinemez ve kalır (anonim istatistik); kişinin tercihi silinir.
-Saklama KEEP_DAYS gün (app/jobs.py run_global → prune). Şema app/system.py SCHEMA'da.
+Saklama KEEP_DAYS gün (app/jobs.py run_global → prune). Şema app/system.py SCHEMA'da. Gecelik BigQuery dışa aktarımı
+(yalnız gün + zincir + grup + ad başına ortanca ve sayılar): app/community_export.py.
 """
 import hashlib
 import hmac
@@ -48,7 +50,7 @@ def contributor(uid: int, today: date | None = None) -> str:
 
 
 def contribute(uid: int | None, merchant: str | None, legal_name: str | None, items: list[dict], purchased_at: str,
-               today: date | None = None) -> int:
+               today: date | None = None, branch: str | None = None) -> int:
     """Kaydedilen fişin kalemlerinden topluluk satırları (yazılan satır sayısı). Kişi tercihi kapalıysa, işyeri bilinen
     bir zincir değilse, demo / kullanıcısız istekte 0. Kalem: fiyatı okunmuş ürün satırı (indirim, hizmet, grup satırı,
     işyeri adı olan satır değil), birim fiyat = tutar ÷ adet."""
@@ -81,12 +83,15 @@ def contribute(uid: int | None, merchant: str | None, legal_name: str | None, it
     if not rows:
         return 0
     groups = product_groups.groups_for([it for it, _ in rows])
+    from app import provinces
+
     who = contributor(uid, today)
-    out = [(chain, g["key"], product_groups.name_norm(it.get("product") or it["name"]), up, day.isoformat(), who)
+    region = provinces.find_in(branch)
+    out = [(chain, g["key"], product_groups.name_norm(it.get("product") or it["name"]), up, day.isoformat(), who, region)
            for (it, up), g in zip(rows, groups) if g]
     with system.connect() as c:
-        c.executemany("INSERT INTO community_prices (chain, group_key, name_norm, unit_price, day, contributor) "
-                      "VALUES (?, ?, ?, ?, ?, ?)", out)
+        c.executemany("INSERT INTO community_prices (chain, group_key, name_norm, unit_price, day, contributor, region) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?)", out)
     if any(g and g.get("pending") for g in groups):
         product_groups.kick()
     return len(out)

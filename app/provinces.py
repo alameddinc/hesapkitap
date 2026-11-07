@@ -60,3 +60,15 @@ def fallback_chain(province: str | None) -> list[str]:
         if x and x not in out:
             out.append(x)
     return out
+
+
+def find_in(text: str | None) -> str | None:
+    """Fişin şube / adres yazısında il adı kelime olarak geçiyorsa o il ("İZMİR KARŞIYAKA" → "İzmir"); semt adı
+    ("Kadıköy Moda") il değildir → None. Birden çok il geçerse None (belirsiz)."""
+    from app.textnorm import normalize
+
+    words = set(normalize(text or "").replace("/", " ").replace("-", " ").split())
+    if not words:
+        return None
+    hits = [p for p in PROVINCES if normalize(p) in words]
+    return hits[0] if len(hits) == 1 else None

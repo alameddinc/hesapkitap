@@ -2,6 +2,8 @@
 
 Ayar (ortam):
 - HESAPKITAP_BQ_CREDENTIALS: servis hesabı JSON dosyasının yolu (kapsayıcıda /app/data/secrets/bq.json). Yoksa kapalı.
+- HESAPKITAP_BQ_WRITER_CREDENTIALS: yazıcı servis hesabı (kapsayıcıda /app/data/secrets/bq-writer.json; scope bigquery,
+  yalnız community_observations tablosuna yazar + iş çalıştırır). Yalnız load_ndjson kullanır (app/community_export.py).
 - HESAPKITAP_BQ_PROJECT (varsayılan hesapkitapproject), HESAPKITAP_BQ_DATASET (varsayılan marketfiyati),
   HESAPKITAP_BQ_LOCATION (varsayılan EU).
 Erişim belirteci: servis hesabının anahtarıyla RS256 imzalı JWT (scope bigquery.readonly) → oauth2 token; süresi
@@ -20,9 +22,13 @@ from datetime import date
 log = logging.getLogger("hesapkitap.bq")
 
 SCOPE = "https://www.googleapis.com/auth/bigquery.readonly"
+WRITE_SCOPE = "https://www.googleapis.com/auth/bigquery"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://bigquery.googleapis.com/bigquery/v2"
+UPLOAD_API = "https://bigquery.googleapis.com/upload/bigquery/v2"
 CRED_ENV = "HESAPKITAP_BQ_CREDENTIALS"
+WRITER_ENV = "HESAPKITAP_BQ_WRITER_CREDENTIALS"
+LOAD_POLL_S = 2
 TIMEOUT_S = 30           # HTTP isteği
 QUERY_WAIT_MS = 20_000   # sunucuda iş bekleme (istek başına)
 MAX_WAIT_S = 120         # bir sorgunun toplam bekleme sınırı
@@ -60,8 +66,13 @@ def configured() -> bool:
     return _creds() is not None
 
 
-def _creds() -> dict | None:
-    path = (os.environ.get(CRED_ENV) or "").strip()
+def writer_configured() -> bool:
+    """Yazıcı kimlik dosyası ayarlı ve okunabilir mi?"""
+    return _creds(WRITER_ENV) is not None
+
+
+def _creds(env: str = CRED_ENV) -> dict | None:
+    path = (os.environ.get(env) or "").strip()
     if not path:
         return None
     try:
@@ -99,14 +110,14 @@ def _b64(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
 
-def assertion(creds: dict, now: float | None = None) -> str:
+def assertion(creds: dict, now: float | None = None, scope: str = SCOPE) -> str:
     """jwt-bearer onayı: RS256, 1 saat geçerli (app/push.py fcm_assertion ile aynı kalıp)."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
 
     iat = int(now or time.time())
     head = {"alg": "RS256", "typ": "JWT", **({"kid": creds["kid"]} if creds.get("kid") else {})}
-    body = {"iss": creds["client_email"], "scope": SCOPE, "aud": creds["token_uri"], "iat": iat, "exp": iat + 3600}
+    body = {"iss": creds["client_email"], "scope": scope, "aud": creds["token_uri"], "iat": iat, "exp": iat + 3600}
     signing = f"{_b64(json.dumps(head, separators=(',', ':')).encode())}." \
               f"{_b64(json.dumps(body, separators=(',', ':')).encode())}"
     sig = creds["key"].sign(signing.encode(), padding.PKCS1v15(), hashes.SHA256())
@@ -122,22 +133,24 @@ def _http():
     return HTTP_CLIENT
 
 
-def access_token(fresh: bool = False) -> str:
-    creds = _creds()
+def access_token(fresh: bool = False, writer: bool = False) -> str:
+    """Erişim belirteci (writer: yazıcı hesap, scope bigquery); her hesap için ayrı önbellek."""
+    creds = _creds(WRITER_ENV if writer else CRED_ENV)
     if not creds:
         raise BQError("BigQuery kimliği yok")
+    slot = "token:w" if writer else "token"
     with _lock:
-        c = _cache.get("token")
+        c = _cache.get(slot)
         if c and not fresh and time.time() < c[0]:
             return c[1]
     r = _http().post(creds["token_uri"], data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                                               "assertion": assertion(creds)})
+                                               "assertion": assertion(creds, scope=WRITE_SCOPE if writer else SCOPE)})
     if r.status_code != 200:
         raise BQError(f"BigQuery erişim belirteci alınamadı ({r.status_code})")
     data = r.json()
     ttl = max(60, int(data.get("expires_in") or 3600) - 300)
     with _lock:
-        _cache["token"] = (time.time() + ttl, data["access_token"])
+        _cache[slot] = (time.time() + ttl, data["access_token"])
     return data["access_token"]
 
 
@@ -174,13 +187,13 @@ def _rows(schema: dict | None, rows: list | None) -> list[dict]:
     return [{f["name"]: _cell(c.get("v"), f) for f, c in zip(fields, r.get("f") or [])} for r in rows or []]
 
 
-def _call(method: str, url: str, **kw) -> dict:
+def _call(method: str, url: str, writer: bool = False, headers: dict | None = None, **kw) -> dict:
     import httpx
 
     for attempt in range(2):
         try:
-            r = _http().request(method, url, headers={"Authorization": f"Bearer {access_token(fresh=bool(attempt))}"},
-                                timeout=TIMEOUT_S + QUERY_WAIT_MS / 1000, **kw)
+            h = {"Authorization": f"Bearer {access_token(fresh=bool(attempt), writer=writer)}", **(headers or {})}
+            r = _http().request(method, url, headers=h, timeout=TIMEOUT_S + QUERY_WAIT_MS / 1000, **kw)
         except httpx.HTTPError as e:
             raise BQError(f"BigQuery'ye ulaşılamadı: {type(e).__name__}") from e
         if r.status_code == 401 and not attempt:  # belirteç süresi dolmuş: bir kez yenile
@@ -224,3 +237,34 @@ def query(sql: str, params: dict | None = None, max_rows: int = MAX_ROWS) -> lis
         out += _rows(res.get("schema") or schema, res.get("rows"))
         token = res.get("pageToken")
     return out[:max_rows]
+
+
+def load_ndjson(table_name: str, partition: date, rows: list[dict], schema: list[dict], job_id: str) -> dict:
+    """Yazıcı hesapla bir gün bölümünü yeniden yaz: çok parçalı yükleme (iş tanımı JSON + NEWLINE_DELIMITED_JSON),
+    hedef `tablo$YYYYMMDD`, WRITE_TRUNCATE (yeniden çalışırsa aynı sonuç), CREATE_NEVER; iş bitene kadar beklenir.
+    Dönen: iş durumu {state, output_rows}. Hata: BQError."""
+    import uuid
+
+    conf = {"jobReference": {"projectId": project(), "jobId": job_id, "location": location()},
+            "configuration": {"load": {
+                "destinationTable": {"projectId": project(), "datasetId": dataset(),
+                                     "tableId": f"{table_name}${partition:%Y%m%d}"},
+                "sourceFormat": "NEWLINE_DELIMITED_JSON", "writeDisposition": "WRITE_TRUNCATE",
+                "createDisposition": "CREATE_NEVER", "schema": {"fields": schema}}}}
+    data = "\n".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) for r in rows).encode()
+    sep = f"hk{uuid.uuid4().hex}"
+    body = (f"--{sep}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(conf)}\r\n"
+            f"--{sep}\r\nContent-Type: application/octet-stream\r\n\r\n").encode() + data + f"\r\n--{sep}--\r\n".encode()
+    res = _call("POST", f"{UPLOAD_API}/projects/{project()}/jobs", writer=True, params={"uploadType": "multipart"},
+                headers={"Content-Type": f"multipart/related; boundary={sep}"}, content=body)
+    t0 = time.monotonic()
+    while (res.get("status") or {}).get("state") != "DONE":
+        if time.monotonic() - t0 > MAX_WAIT_S:
+            raise BQError("BigQuery yükleme işi zaman aşımına uğradı")
+        time.sleep(LOAD_POLL_S)
+        res = _call("GET", f"{API}/projects/{project()}/jobs/{job_id}", writer=True, params={"location": location()})
+    err = (res.get("status") or {}).get("errorResult")
+    if err:
+        raise BQError(f"BigQuery yükleme: {str(err.get('message') or err.get('reason') or '')[:300]}")
+    out = ((res.get("statistics") or {}).get("load") or {}).get("outputRows")
+    return {"state": "DONE", "output_rows": int(out) if out is not None else None}

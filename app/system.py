@@ -238,7 +238,8 @@ CREATE TABLE IF NOT EXISTS community_prices (  -- anonim topluluk fiyatı (app/c
     name_norm TEXT NOT NULL,             -- yapay zekâ grubu öğrenince satır doğru gruba geçsin diye
     unit_price REAL NOT NULL,
     day TEXT NOT NULL,                   -- alım günü
-    contributor TEXT NOT NULL            -- HMAC(günün tuzu, kullanıcı id): günler arası ve kullanıcıya bağlanamaz
+    contributor TEXT NOT NULL,           -- HMAC(günün tuzu, kullanıcı id): günler arası ve kullanıcıya bağlanamaz
+    region TEXT                          -- fişin şube yazısında geçen il (provinces.find_in); kişinin konumu değil
 );
 CREATE INDEX IF NOT EXISTS community_prices_group ON community_prices(group_key, chain, day);
 CREATE INDEX IF NOT EXISTS community_prices_name ON community_prices(name_norm);
@@ -268,7 +269,17 @@ CREATE TABLE IF NOT EXISTS official_imports (  -- BigQuery içe aktarımı yapı
     products INTEGER NOT NULL DEFAULT 0,
     unmatched INTEGER NOT NULL DEFAULT 0,
     imported_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ok',   -- ok | anomaly (veri kalite denetimi: alınmadı, önceki gün korunur)
+    note TEXT,                           -- anomali nedeni
+    outliers INTEGER NOT NULL DEFAULT 0, -- grup ortancasından 3 kat uzak düşen teklif
     PRIMARY KEY (run_date, region)
+);
+CREATE TABLE IF NOT EXISTS community_exports (  -- topluluk fiyatı → BigQuery (app/community_export.py): gönderilen gün
+    day TEXT PRIMARY KEY,
+    rows INTEGER NOT NULL DEFAULT 0,
+    signature TEXT NOT NULL,             -- kaynak satırların özeti: değişirse gün yeniden gönderilir
+    exported_at TEXT NOT NULL,
+    job_id TEXT
 );
 CREATE TABLE IF NOT EXISTS official_daily (  -- resmî fiyatın günlük özeti (app/market_ref.py): grup + il + gün; 400 gün
     group_key TEXT NOT NULL,
@@ -359,6 +370,12 @@ def _migrate(c) -> None:
                   "FROM official_prices_old")
         c.execute("DROP TABLE official_prices_old")
     c.execute("CREATE INDEX IF NOT EXISTS official_prices_region ON official_prices(region, day)")
+    if "region" not in {r[1] for r in c.execute("PRAGMA table_info(community_prices)")}:  # fişin şubesindeki il
+        c.execute("ALTER TABLE community_prices ADD COLUMN region TEXT")
+    have = {r[1] for r in c.execute("PRAGMA table_info(official_imports)")}  # veri kalite denetimi (price_import_bq)
+    for col, ddl in (("status", "TEXT NOT NULL DEFAULT 'ok'"), ("note", "TEXT"), ("outliers", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in have:
+            c.execute(f"ALTER TABLE official_imports ADD COLUMN {col} {ddl}")
     # ürün grubu kuralları değişti (app/product_groups.py GROUPS_VERSION): önbellek ve topluluk fiyatları bir kez
     from app import product_groups
 

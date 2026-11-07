@@ -55,8 +55,10 @@ def _official_on() -> bool:
     return "resmi" in price_sources.enabled_names()
 
 
-def series(group_keys: list[str], since: str, region: str | None = None) -> dict[str, dict[str, dict]]:
-    """Grup → {gün → referans} (since ve sonrası). region: il (None: kişinin Bölgem'i / İstanbul)."""
+def series(group_keys: list[str], since: str, region: str | None = None,
+           used: dict[str, str] | None = None) -> dict[str, dict[str, dict]]:
+    """Grup → {gün → referans} (since ve sonrası). region: il (None: kişinin Bölgem'i / İstanbul). used verilirse
+    grup → resmî günlerin alındığı il ('' bölgesiz) yazılır (topluluk günlerinin ili yoktur)."""
     from app import community_prices, db, prefs, provinces, system
 
     keys = sorted({k for k in group_keys if k})
@@ -96,8 +98,10 @@ def series(group_keys: list[str], since: str, region: str | None = None) -> dict
             comm.setdefault(g, {}).setdefault(day, {})[ch] = median(median(v) for v in ps.values())
     out: dict[str, dict[str, dict]] = {}
     for g in keys:
-        days = next((off[(g, p)] for p in order if off.get((g, p))), {})
-        merged = dict(days)
+        prov = next((p for p in order if off.get((g, p))), None)
+        merged = dict(off[(g, prov)]) if prov is not None else {}
+        if used is not None and prov is not None:
+            used[g] = prov
         for day, by in comm.get(g, {}).items():
             merged.setdefault(day, {**_band(by), "source": "community"})
         if merged:
@@ -161,3 +165,88 @@ def attach(products: list[dict]) -> None:
                 v = compare(h["price"], nearest(by, h["date"]))
                 if v:
                     h["vs_market"] = v
+
+
+# fiş notu (check.market_notes): birim fiyat piyasa ortancasından en az NOTE_PCT yüksek VE en az NOTE_MIN_DIFF ₺ fazla
+NOTE_PCT = 10.0
+NOTE_MIN_DIFF = 2.0
+NOTE_MAX = 5
+
+
+def _skipped(chk: dict | None) -> set[int]:
+    """Okuma hatası olabilecek kalemler (okuma hatası piyasa notundan önce gelir): karışan rakam önerisi (digit_fix),
+    şüpheli (suspect), önerilen kaydırmanın etkilediği satırlar, adet × birim tutmayan kalem."""
+    chk = chk or {}
+    out = {f["index"] for f in chk.get("digit_fix") or [] if isinstance(f, dict) and "index" in f}
+    out |= {i for i in chk.get("suspect") or [] if isinstance(i, int)}
+    out |= {x["index"] for x in chk.get("items") or [] if isinstance(x, dict) and x.get("mismatch")}
+    if (sh := chk.get("suggested_shift")) and isinstance(sh.get("from_index"), int):
+        out |= set(range(sh["from_index"], len(chk.get("items") or []) + 1))
+    return out
+
+
+def _paid_unit(it: dict, key: str) -> float | None:
+    """Kalemin grubun birimindeki fiyatı (tutar ÷ adet) ya da None (adet / birim tutarsız: tartılı ürün tartısız grupta
+    ya da tersi)."""
+    from app import money
+
+    amt, qty = it.get("amount"), it.get("qty") or 1
+    if not isinstance(amt, (int, float)) or isinstance(amt, bool) or amt <= 0 or not isinstance(qty, (int, float)) \
+            or isinstance(qty, bool) or qty <= 0:
+        return None
+    unit = (it.get("unit") or "").strip().lower()
+    weighed = unit in ("kg", "lt", "l") or abs(qty - round(qty)) > 1e-6
+    size = key.split("|", 1)[1] if "|" in key else ""
+    if weighed != (size == "kg" or (size == "1l" and unit in ("lt", "l"))):
+        return None
+    return money.money(amt / qty)
+
+
+def receipt_notes(items: list[dict], chk: dict | None, merchant: str | None, day: str | None,
+                  legal_name: str | None = None) -> list[dict]:
+    """check.market_notes: fişte piyasadan pahalı kalemler, en pahalı önce, en çok NOTE_MAX —
+    [{index, name, group, label, paid_unit, market_median, market_min, cheapest_chain, pct, day, source resmi|community,
+    region (il | "ulusal" | null)}]. Piyasa: alım günü ±NEAR_DAYS içindeki referans (series; kişinin Bölgem'i →
+    yakın büyük şehir → İstanbul). Fişin zinciri ulusal fiyatlı (price_sources.NATIONAL_CHAINS: BİM, A101, ŞOK, Migros)
+    ise region "ulusal" (o zincirin fiyatı ilden bağımsız). Okuma hatası olabilecek kalemler atlanır (_skipped).
+    Fiyat takibi paketi / sayfası kapalıysa []. Yapay zekâ ve ağ çağrısı yok."""
+    from app import db, money, price_alerts, product_groups, price_sources
+    from app.receipt_templates import chain_of
+
+    if not items or not price_alerts.allowed():
+        return []
+    try:
+        d0 = date.fromisoformat(str(day)[:10]) if day else date.today()
+    except ValueError:
+        d0 = date.today()
+    skip = _skipped(chk)
+    groups = product_groups.groups_for(items, learn=False)
+    want: list[tuple[int, dict, dict, float]] = []
+    for i, (it, g) in enumerate(zip(items, groups)):
+        if i in skip or not g or g.get("pending"):
+            continue
+        name = it.get("name") or ""
+        if db.item_kind(name, it.get("product"), it.get("amount")) != "product":
+            continue
+        if (paid := _paid_unit(it, g["key"])) is not None:
+            want.append((i, it, g, paid))
+    if not want:
+        return []
+    used: dict[str, str] = {}
+    ser = series([g["key"] for _, _, g, _ in want], (d0 - timedelta(days=NEAR_DAYS)).isoformat(), used=used)
+    national = chain_of(merchant, legal_name) in price_sources.NATIONAL_CHAINS
+    out = []
+    for i, it, g, paid in want:
+        ref = nearest(ser.get(g["key"]) or {}, d0.isoformat())
+        if not ref or not ref.get("median"):
+            continue
+        med = ref["median"]
+        if paid - med < NOTE_MIN_DIFF or (pct := round((paid - med) / med * 100, 1)) < NOTE_PCT:
+            continue
+        region = ("ulusal" if national else used.get(g["key"]) or None) if ref["source"] == "resmi" else None
+        out.append({"index": i, "name": it.get("name") or g["label"], "group": g["key"], "label": g["label"],
+                    "paid_unit": paid, "market_median": money.money(med), "market_min": money.money(ref["min"]),
+                    "cheapest_chain": ref["cheapest_chain"], "pct": pct, "day": ref["day"], "source": ref["source"],
+                    "region": region})
+    out.sort(key=lambda n: (-n["pct"], n["index"]))
+    return out[:NOTE_MAX]

@@ -146,7 +146,13 @@ function Overview() {
 }
 
 interface OfficialStatus { configured: boolean; last_day: string | null; regions: string[]; rows: number; imported_at: string | null;
-  last_run_at: string | null; last_error: string | null; last_error_at: string | null }
+  last_run_at: string | null; last_error: string | null; last_error_at: string | null;
+  /** veri kalite denetimi (yeni sunucu): atılan aykırı teklif, alınmayan günler, tutarsız gruplar */
+  outliers?: number; anomalies?: { day: string; region: string; note: string | null; at: string }[];
+  inconsistent_groups?: { day: string | null; groups: { group_key: string; median: number; dropped: number }[] };
+  /** topluluk fiyatları → BigQuery (yeni sunucu) */
+  community_export?: { configured: boolean; last_day: string | null; rows: number; exported_at: string | null;
+    last_run_at: string | null; last_error: string | null; last_error_at: string | null } }
 
 /** Resmî fiyatlar (BigQuery → sunucu, gecelik): son içe aktarılan gün, iller, satır, son hata. Eski sunucuda (404) yok. */
 function OfficialPrices() {
@@ -166,6 +172,36 @@ function OfficialPrices() {
       </dl>
       {s.last_error && <p className="rounded bg-amber-50 px-2 py-1 text-xs break-words text-amber-900 dark:bg-amber-950 dark:text-amber-200">Son hata ({day(s.last_error_at)}): {s.last_error}</p>}
       {!s.configured && <p className="text-xs text-stone-500">BigQuery kimliği ayarlı değil; eski veriler gösteriliyor.</p>}
+      {!!s.anomalies?.length && (
+        <div className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200" data-testid="resmi-anomali">
+          <p className="font-medium">Alınmayan günler (önceki veri korunuyor)</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {s.anomalies.map((a) => <li key={`${a.day}-${a.region}`} className="break-words">{day(a.day)} · {a.region}: {a.note}</li>)}
+          </ul>
+        </div>
+      )}
+      {!!s.inconsistent_groups?.groups.length && (
+        <details className="text-xs" data-testid="tutarsiz-gruplar">
+          <summary className="cursor-pointer text-stone-600 dark:text-stone-300">
+            Tutarsız gruplar · {day(s.inconsistent_groups.day)} · {(s.outliers ?? 0).toLocaleString("tr-TR")} teklif atıldı</summary>
+          <table className="mt-1 w-full tabular-nums">
+            <thead><tr className="text-left text-stone-500"><th className="font-normal">Grup</th><th className="text-right font-normal">Ortanca</th><th className="text-right font-normal">Atılan</th></tr></thead>
+            <tbody>
+              {s.inconsistent_groups.groups.map((g) => (
+                <tr key={g.group_key}><td className="pr-2 break-all">{g.group_key}</td>
+                  <td className="text-right">{tl(g.median)}</td><td className="text-right">{g.dropped}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+      {s.community_export && (s.community_export.configured || s.community_export.last_day) && (
+        <div className="border-t border-stone-100 pt-1.5 dark:border-stone-800" data-testid="topluluk-aktarim">
+          <h3 className="text-xs font-semibold text-stone-600 dark:text-stone-300">Topluluk fiyatları → BigQuery</h3>
+          <p className="text-xs text-stone-500 tabular-nums">Son gün {day(s.community_export.last_day)} · {s.community_export.rows.toLocaleString("tr-TR")} satır · son deneme {day(s.community_export.last_run_at)}</p>
+          {s.community_export.last_error && <p className="mt-0.5 rounded bg-amber-50 px-2 py-1 text-xs break-words text-amber-900 dark:bg-amber-950 dark:text-amber-200">Son hata ({day(s.community_export.last_error_at)}): {s.community_export.last_error}</p>}
+        </div>
+      )}
     </section>
   );
 }

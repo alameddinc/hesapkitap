@@ -1,12 +1,12 @@
 // Fiş kalemleri: toplam denetimi, tutmayan satır, önerilen kaydırma (önce/sonra), elle kaydırma, birleştirme,
 // satır düzenle/sil/ekle, fiş fotoğrafı (tıklayınca büyür), "Fişten yeniden oku" (karşılaştırıp seç).
 // Fiş önizlemesinde (EntryForm taslağı) ve kayıtlı giderde (SavedReceiptItems) aynı parça. Mobil: fis/Kalemler.tsx.
-import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronRight, Combine, Maximize2, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Combine, Maximize2, Plus, RefreshCw, Tag, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api";
 import { cx, parseAmount, tl } from "../../format";
 import Modal from "../Modal";
-import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, livePriceAlerts, type DigitFix, type ItemCheck, type PriceAlert, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
+import { applyDigitFixes, checkItems, digitPairs, liveDigit, mergeWithNext, shiftAmounts, TOL, withAmounts, livePriceAlerts, liveMarketNotes, marketFootnote, marketHeadline, marketLine, type DigitFix, type MarketNote, type ItemCheck, type PriceAlert, type LiveDigit, type ReceiptCheck, type ReceiptItem, type Reread } from "./check";
 
 const label = (k: ReceiptItem) => `${(k.qty ?? 1) > 1 ? `${k.qty}× ` : ""}${k.name}`;
 const num = (v: number | null | undefined) => (v == null ? "" : String(v).replace(".", ","));
@@ -82,7 +82,38 @@ function DigitHints({ live, items, onChange }: { live: LiveDigit; items: Receipt
 export const priceAlertText = (a: PriceAlert) =>
   `geçen sefer ${tl(a.last_paid)} (${a.change_pct > 0 ? "+" : "−"}%${Math.round(Math.abs(a.change_pct)).toLocaleString("tr-TR")})`;
 
-export default function ReceiptItems({ items, total, onChange, photo, onReread, note, collapsed = 6, serverCheck, priceAlerts }: {
+/** Fişin altında tek sakin satır: "Bu fişte 2 ürün piyasadan pahalı: Süt · 1 L ₺42,00 (piyasa ₺35,95, +%17)…";
+ *  dokununca hepsi ve en ucuz zincir; altta küçük gri kaynak notu. Satır satır kırmızı yok. */
+export function MarketNotes({ notes }: { notes: MarketNote[] }) {
+  const [open, setOpen] = useState(false);
+  if (!notes.length) return null;
+  const first = notes[0]!;
+  return (
+    <div className="border-t border-stone-100 px-3 py-2 text-sm dark:border-stone-800" data-testid="piyasa-notu">
+      <button type="button" className="flex w-full items-start gap-2 text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Tag size={15} className="mt-0.5 shrink-0 text-stone-400" aria-hidden />
+        <span className="min-w-0 flex-1 text-stone-700 dark:text-stone-300">
+          <span className="font-medium">{marketHeadline(notes)}</span>
+          {!open && <span className="tabular-nums">: {marketLine(first, tl)}{notes.length > 1 ? "…" : ""}</span>}
+        </span>
+        <ChevronDown size={16} className={cx("mt-0.5 shrink-0 text-stone-400 transition", open && "rotate-180")} aria-hidden />
+      </button>
+      {open && (
+        <ul className="mt-1.5 space-y-1 pl-6">
+          {notes.map((n) => (
+            <li key={n.index} className="text-stone-700 tabular-nums dark:text-stone-300">
+              {marketLine(n, tl)}
+              <span className="block text-xs text-stone-500 dark:text-stone-400">en ucuz: {n.cheapest_chain} {tl(n.market_min)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-1 pl-6 text-xs text-stone-500 dark:text-stone-400">{marketFootnote(notes)}</p>
+    </div>
+  );
+}
+
+export default function ReceiptItems({ items, total, onChange, photo, onReread, note, collapsed = 6, serverCheck, priceAlerts, marketNotes }: {
   items: ReceiptItem[];
   /** fiş toplamı (önizlemede formdaki tutar, kayıtlıda kaydın tutarı) */
   total: number | null | undefined;
@@ -97,9 +128,12 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
   serverCheck?: ReceiptCheck | null;
   /** sunucunun fiyat uyarıları (check.price_alerts): satırın altında sarı "geçen sefer …" */
   priceAlerts?: PriceAlert[] | null;
+  /** sunucunun piyasa notları (check.market_notes): listenin altında tek özet satır */
+  marketNotes?: MarketNote[] | null;
 }) {
   const chk = useMemo(() => checkItems(items, total), [items, total]);
   const rises = useMemo(() => livePriceAlerts(priceAlerts, items), [priceAlerts, items]);
+  const pricey = useMemo(() => liveMarketNotes(marketNotes, items), [marketNotes, items]);
   const live = useMemo(() => liveDigit(serverCheck, items, chk), [serverCheck, items, chk]);
   const [all, setAll] = useState(false);
   const [edit, setEdit] = useState<number | "new" | null>(null);
@@ -191,6 +225,7 @@ export default function ReceiptItems({ items, total, onChange, photo, onReread, 
         <button type="button" className="w-full border-t border-stone-100 py-2 text-sm text-blue-600 hover:bg-stone-50 dark:border-stone-800 dark:text-blue-400 dark:hover:bg-stone-800/50"
           onClick={() => setAll(!all)}>{all ? "Daha az göster" : `${items.length - collapsed} kalem daha göster`}</button>
       )}
+      <MarketNotes notes={pricey} />
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 px-3 py-2 dark:border-stone-800">
         <button type="button" className="btn-ghost px-2 text-xs" onClick={() => setEdit("new")}><Plus size={14} aria-hidden /> Kalem ekle</button>
         {onReread && (

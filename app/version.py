@@ -120,6 +120,10 @@ CAPABILITIES = (
     "price_market",           # piyasa bandı: GET /api/prices/market?group&days=90 → {group, region, days [{day, min, median,
                               # max, cheapest_chain, chains, source resmi|community}], attribution}; /api/prices history[]
                               # vs_market {median, min, max, pct, verdict ucuz|normal|pahali, cheapest_chain, day, source}
+    "market_notes",           # fiş okuma / kayıtlı fiş check.market_notes [{index, name, group, label, paid_unit, market_median,
+                              # market_min, cheapest_chain, pct, day, source resmi|community, region il|"ulusal"|null}]:
+                              # birim fiyat piyasa ortancasından ≥%10 ve ≥₺2 yüksek (fiş günü ±3), en çok 5, pahalı önce;
+                              # okuma hatası olabilecek kalem (digit_fix, suspect, kayma, adet × birim) atlanır
 )
 
 
