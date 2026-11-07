@@ -6,9 +6,10 @@ import { ReceiptText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
-import { ayrilma, changePct, dayWord, daysBetween, monthShort, niceTicks, pctWord, pricedPoints, type PricePoint } from "../lib/priceView";
+import { ayrilma, change7Text, changePct, dayWord, daysBetween, monthShort, niceTicks, officialSrc, pctWord, pricedPoints, type PricePoint } from "../lib/priceView";
 import { useUI } from "../ui";
 import { useMeta, useOpenRow } from "./hooks";
+import { RegionPrompt } from "./RegionPicker";
 
 export interface PriceHistory {
   date: string; price: number | null; store: string; branch: string | null; qty: number; name: string;
@@ -22,12 +23,26 @@ export interface GroupBest {
   unit_price_per?: number | null; per_unit?: "L" | "kg" | "adet" | null;
   /** source "resmi": kaynak yazısı (gösterilmesi gerekir) */
   attribution?: string | null;
+  /** yetenek price_region (resmi): kullanılan il ("İzmir") ya da "ulusal" (BİM, A101, ŞOK); indirim; 7 / 30 gün değişim (%) */
+  region?: string | null; discount?: boolean; promotion?: string | null; change_7d?: number | null; change_30d?: number | null;
 }
 export interface PriceGroup { key: string; label: string; category?: string | null; best: GroupBest[] }
 
 export const OFFICIAL_ATTRIBUTION = "Kaynak: Market Fiyatı (T.C. Sanayi ve Teknoloji Bakanlığı / TÜBİTAK BİLGEM)";
 /** "₺59,00/L" (birim fiyat yoksa boş) */
 export const perUnitText = (v?: number | null, u?: string | null) => (v != null && u ? `${tl(v)}/${u}` : "");
+/** Resmî teklifin rozetleri: "İndirim" ve |7 gün| ≥ %3 ise "7 günde +%8" (zam kırmızı, düşüş yeşil). */
+export function OfferBadges({ b }: { b: GroupBest }) {
+  const ch = change7Text(b.change_7d);
+  if (!b.discount && !ch) return null;
+  return (
+    <span className="inline-flex flex-wrap gap-1 align-middle">
+      {b.discount && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300" title={b.promotion ?? undefined}>İndirim</span>}
+      {ch && <span className={cx("rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums", (b.change_7d ?? 0) > 0 ? "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-300")}>{ch}</span>}
+    </span>
+  );
+}
+
 /** Tekliflerde resmî kaynak varsa altına yazılacak kaynak satırı. */
 export const attributionOf = (best: GroupBest[]) => {
   const r = best.find((b) => b.source === "resmi");
@@ -38,8 +53,10 @@ const srcWord = (b: GroupBest) => (b.source === "community" ? "topluluk" : b.sou
 const per = (u: string) => (u === "kg" ? "/kg" : u === "lt" ? "/lt" : "");
 const qtyText = (q: number, unit: string) => `${q.toLocaleString("tr-TR", { maximumFractionDigits: 3 })} ${unit === "adet" ? "adet" : unit}`;
 
-/** "BİM ₺34,50 (Torku)" + kaynak: "senin fişin, 3 gün" / "topluluk, 14 gün" */
+/** "BİM ₺34,50 (Torku)" + kaynak: "senin fişin, 3 gün" / "topluluk, 14 gün" / "Market Fiyatı, bugün, İzmir" */
 export function bestLine(b: GroupBest, today: string) {
+  const pu0 = perUnitText(b.unit_price_per, b.per_unit);
+  if (b.source === "resmi") return { main: `${maskText(b.chain)} ${tl(b.price)}${pu0 ? ` · ${pu0}` : ""}${b.brand ? ` (${b.brand})` : ""}`, src: officialSrc(b, today) };
   const age = b.date ? daysBetween(b.date, today) : null;
   const ago = age == null ? "" : age <= 0 ? ", bugün" : `, ${age} gün`;
   const pu = perUnitText(b.unit_price_per, b.per_unit);
@@ -193,7 +210,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
     select: (d) => (Array.isArray(d) ? d : d.groups ?? []),
   });
   const grp = q.data?.find((x) => x.key === g.key) ?? q.data?.[0];
-  const best = [...(grp?.best ?? [])].sort((a, b) => a.price - b.price);
+  const best = [...(grp?.best ?? [])].sort((a, b) => a.price - b.price).slice(0, 5);
   return (
     <section className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
@@ -206,15 +223,16 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
           {best.map((b, i) => {
             const l = bestLine(b, today);
             return (
-              <li key={`${b.chain}-${i}`} className="flex flex-wrap items-baseline justify-between gap-x-3">
-                <span className={cx("tabular-nums", i === 0 && "font-semibold text-green-700 dark:text-green-400")}>{l.main}{i === 0 && best.length > 1 ? " · en ucuz" : ""}</span>
+              <li key={`${b.chain}-${i}`} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5" data-testid="nereden-satir">
+                <span className={cx("tabular-nums", i === 0 && "font-semibold text-green-700 dark:text-green-400")}>{l.main}{i === 0 && best.length > 1 ? " · en ucuz" : ""} <OfferBadges b={b} /></span>
                 <span className="text-xs text-stone-500">{l.src}{b.source === "community" && b.n ? ` · ${b.n} kişi` : ""}</span>
               </li>
             );
           })}
         </ul>
       )}
-      {attributionOf(best) && <p className="text-xs text-stone-500" data-testid="resmi-kaynak">{attributionOf(best)}</p>}
+      <RegionPrompt show={best.some((b) => b.source === "resmi")} />
+      {attributionOf(best) && <p className="text-[11px] text-stone-500" data-testid="resmi-kaynak">{attributionOf(best)}</p>}
     </section>
   );
 }

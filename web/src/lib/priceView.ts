@@ -83,3 +83,16 @@ export function bestChain(chains: PlanChain[] | null | undefined): PlanChain | n
   if (!list.length) return null;
   return [...list].sort((a, b) => b.covered - a.covered || a.total - b.total)[0]!;
 }
+
+/** Resmî teklifin kaynak yazısı: "Market Fiyatı, bugün, İzmir"; BİM / A101 / ŞOK "Market Fiyatı, ulusal"; bölgesiz
+ *  (eski dosya içe aktarımı) "Market Fiyatı, bugün". */
+export function officialSrc(b: { date?: string | null; region?: string | null }, today: string): string {
+  if (b.region === "ulusal") return "Market Fiyatı, ulusal";
+  return ["Market Fiyatı", b.date ? dayWord(b.date, today) : null, b.region || null].filter(Boolean).join(", ");
+}
+
+/** Haftalık değişim çipi: |değişim| ≥ %3 ise "7 günde +%8" / "7 günde −%4", değilse null. */
+export function change7Text(change?: number | null): string | null {
+  if (change == null || !Number.isFinite(change) || Math.abs(change) < 3) return null;
+  return `7 günde ${pctWord(Math.round(change))}`;
+}

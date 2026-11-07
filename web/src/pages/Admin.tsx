@@ -127,6 +127,7 @@ function Overview() {
           </button>
         ))}
       </section>
+      <OfficialPrices />
       <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
         {SUBS.filter((x) => x.key !== "genel").map((x) => (
           <li key={x.key}>
@@ -141,6 +142,31 @@ function Overview() {
       </ul>
       <p className="text-xs text-stone-500">Yönetici yalnız hesapları ve sunucu ayarlarını görür; kullanıcıların harcamaları burada görünmez.</p>
     </>
+  );
+}
+
+interface OfficialStatus { configured: boolean; last_day: string | null; regions: string[]; rows: number; imported_at: string | null;
+  last_run_at: string | null; last_error: string | null; last_error_at: string | null }
+
+/** Resmî fiyatlar (BigQuery → sunucu, gecelik): son içe aktarılan gün, iller, satır, son hata. Eski sunucuda (404) yok. */
+function OfficialPrices() {
+  const q = useQuery({ queryKey: ["admin-official-prices"], retry: false,
+    queryFn: () => call<OfficialStatus>("GET", "/api/admin/official-prices") });
+  const s = q.data;
+  if (!s || (!s.configured && !s.last_day)) return null;
+  const day = (iso: string | null) => (iso ? new Date(iso.length === 10 ? `${iso}T12:00:00` : iso).toLocaleString("tr-TR", iso.length === 10 ? { day: "numeric", month: "long" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+  return (
+    <section className={cx("card space-y-1.5 p-4 text-sm", s.last_error && "border-amber-300 dark:border-amber-800")} data-testid="resmi-fiyatlar">
+      <h2 className="font-semibold">Resmî fiyatlar</h2>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+        <dt className="text-stone-500">Son gün</dt><dd className="tabular-nums">{day(s.last_day)}</dd>
+        <dt className="text-stone-500">İller</dt><dd className="break-words">{s.regions.length ? `${s.regions.length} · ${s.regions.join(", ")}` : "—"}</dd>
+        <dt className="text-stone-500">Satır</dt><dd className="tabular-nums">{s.rows.toLocaleString("tr-TR")}</dd>
+        <dt className="text-stone-500">Son deneme</dt><dd className="tabular-nums">{day(s.last_run_at)}</dd>
+      </dl>
+      {s.last_error && <p className="rounded bg-amber-50 px-2 py-1 text-xs break-words text-amber-900 dark:bg-amber-950 dark:text-amber-200">Son hata ({day(s.last_error_at)}): {s.last_error}</p>}
+      {!s.configured && <p className="text-xs text-stone-500">BigQuery kimliği ayarlı değil; eski veriler gösteriliyor.</p>}
+    </section>
   );
 }
 

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ayrilma, bestChain, changePct, dayWord, niceTicks, pctWord, pricedPoints } from "./priceView.ts";
+import { ayrilma, bestChain, change7Text, changePct, dayWord, niceTicks, officialSrc, pctWord, pricedPoints } from "./priceView.ts";
+import { searchProvinces } from "./provinces.ts";
 
 test("niceTicks: en küçük ve en büyük fiyat eksenin içinde, adımlar yuvarlak", () => {
   const t = niceTicks(127.5, 138);
@@ -44,4 +45,21 @@ test("bestChain: en çok ürün, eşitse en ucuz", () => {
     { chain: "File", total: 405, covered: 6, missing: 1 },
   ])?.chain, "File");
   assert.equal(bestChain([]), null);
+});
+
+test("resmî teklif: kaynak yazısı ve haftalık değişim çipi", () => {
+  assert.equal(officialSrc({ date: "2026-11-07", region: "İzmir" }, "2026-11-07"), "Market Fiyatı, bugün, İzmir");
+  assert.equal(officialSrc({ date: "2026-11-06", region: "ulusal" }, "2026-11-07"), "Market Fiyatı, ulusal");
+  assert.equal(officialSrc({ date: "2026-11-06" }, "2026-11-07"), "Market Fiyatı, dün");
+  assert.equal(change7Text(8.2), "7 günde +%8");
+  assert.equal(change7Text(-4), "7 günde −%4");
+  assert.equal(change7Text(2.9), null);
+  assert.equal(change7Text(null), null);
+});
+
+test("il araması: Türkçe harf duyarsız, baştan eşleşen önce", () => {
+  assert.deepEqual(searchProvinces("izm"), ["İzmir"]);
+  assert.equal(searchProvinces("sanli")[0], "Şanlıurfa");
+  assert.equal(searchProvinces("").length, 81);
+  assert.equal(searchProvinces("ist")[0], "İstanbul");
 });

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import MailSubject from "../components/MailSubject";
+import { RegionForm } from "../components/RegionPicker";
 import { ask } from "../lib/ask";
 import Sessions from "../components/Sessions";
 import { call, errorText, send } from "../lib/apiError";
@@ -311,6 +312,7 @@ function MemberSettings({ owner, role, roleLabel }: { owner: string; role?: stri
       </section>
       <ViewPrefs />
       <PriceShareForm />
+      <RegionForm />
       <ShareSetup />
       <PasswordForm />
       <Sessions />
@@ -513,6 +515,7 @@ function OwnerSettings({ ownBook }: { ownBook?: boolean }) {
       </section>
       <PrivacyForm />
       <PriceShareForm />
+      <RegionForm />
       <CycleForm />
       <PdfPasswords />
       {auth.data?.password_source === "app" && <PasswordForm />}
