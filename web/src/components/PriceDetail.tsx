@@ -1,5 +1,5 @@
-// Fiyatlar → ürüne tıklayınca: anlaşılır özet (az alımda "₺138,00 → ₺129,00 (−%7)"), yeterli alımda grafik (her alım
-// işaretli, ilk/son değer yazılı, yuvarlak eksen, yalnız alım olan aylar), "Alımların" listesi (fişe gider), tek market
+// Fiyatlar → ürüne tıklayınca: anlaşılır özet ("₺138,00 → ₺129,00 (−%7) · 12 Eki → bugün"), iki alımdan itibaren altında
+// grafik (her alım işaretli, ilk/son değer yazılı, yuvarlak eksen, yalnız alım olan aylar); tek alımda yalnız fiyat ve gün; "Alımların" listesi (fişe gider), tek market
 // notu; sunucu "price_groups" verirse markası fark etmeyen grup ve "Nereden alınır" (kendi + topluluk fiyatı).
 import { useQuery } from "@tanstack/react-query";
 import { ReceiptText } from "lucide-react";
@@ -15,9 +15,25 @@ export interface PriceHistory {
   /** yeni sunucu: kaydın uid'i ("m12") ve fiş kaydı; tahmini fiyat (fişte birim fiyat yoktu) */
   uid?: string | null; entry_id?: number | null; estimated?: boolean;
 }
-export interface PriceGroupRef { key: string; label: string }
-export interface GroupBest { chain: string; price: number; brand?: string | null; source: "own" | "community"; date?: string | null; n?: number | null }
-export interface PriceGroup { key: string; label: string; best: GroupBest[] }
+export interface PriceGroupRef { key: string; label: string; category?: string | null }
+export interface GroupBest {
+  chain: string; price: number; brand?: string | null; source: "own" | "community" | "resmi"; date?: string | null; n?: number | null;
+  /** yetenek price_unit: grubun boyundan litre / kilo / adet fiyatı */
+  unit_price_per?: number | null; per_unit?: "L" | "kg" | "adet" | null;
+  /** source "resmi": kaynak yazısı (gösterilmesi gerekir) */
+  attribution?: string | null;
+}
+export interface PriceGroup { key: string; label: string; category?: string | null; best: GroupBest[] }
+
+export const OFFICIAL_ATTRIBUTION = "Kaynak: Market Fiyatı (T.C. Sanayi ve Teknoloji Bakanlığı / TÜBİTAK BİLGEM)";
+/** "₺59,00/L" (birim fiyat yoksa boş) */
+export const perUnitText = (v?: number | null, u?: string | null) => (v != null && u ? `${tl(v)}/${u}` : "");
+/** Tekliflerde resmî kaynak varsa altına yazılacak kaynak satırı. */
+export const attributionOf = (best: GroupBest[]) => {
+  const r = best.find((b) => b.source === "resmi");
+  return r ? r.attribution || OFFICIAL_ATTRIBUTION : null;
+};
+const srcWord = (b: GroupBest) => (b.source === "community" ? "topluluk" : b.source === "resmi" ? "Market Fiyatı" : "senin fişin");
 
 const per = (u: string) => (u === "kg" ? "/kg" : u === "lt" ? "/lt" : "");
 const qtyText = (q: number, unit: string) => `${q.toLocaleString("tr-TR", { maximumFractionDigits: 3 })} ${unit === "adet" ? "adet" : unit}`;
@@ -26,7 +42,8 @@ const qtyText = (q: number, unit: string) => `${q.toLocaleString("tr-TR", { maxi
 export function bestLine(b: GroupBest, today: string) {
   const age = b.date ? daysBetween(b.date, today) : null;
   const ago = age == null ? "" : age <= 0 ? ", bugün" : `, ${age} gün`;
-  return { main: `${maskText(b.chain)} ${tl(b.price)}${b.brand ? ` (${b.brand})` : ""}`, src: `${b.source === "community" ? "topluluk" : "senin fişin"}${ago}` };
+  const pu = perUnitText(b.unit_price_per, b.per_unit);
+  return { main: `${maskText(b.chain)} ${tl(b.price)}${pu ? ` · ${pu}` : ""}${b.brand ? ` (${b.brand})` : ""}`, src: `${srcWord(b)}${ago}` };
 }
 
 export default function PriceDetail({ p }: { p: { product: string; unit: string; history: PriceHistory[]; group?: PriceGroupRef | null } }) {
@@ -46,7 +63,8 @@ export default function PriceDetail({ p }: { p: { product: string; unit: string;
 
   return (
     <div className="space-y-3 px-4 pb-4" data-testid="fiyat-detay">
-      {pts.length >= 3 ? <Chart pts={pts} unit={p.unit} today={today} /> : pts.length > 0 && <Summary pts={pts} unit={p.unit} today={today} />}
+      {pts.length > 0 && <Summary pts={pts} unit={p.unit} today={today} />}
+      {pts.length >= 2 && <Chart pts={pts} unit={p.unit} today={today} />}
       {stores.length === 1 && (
         <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
           Yalnız {ayrilma(maskText(stores[0]))} aldın; başka marketten alınca karşılaştırırız.</p>
@@ -78,7 +96,7 @@ export default function PriceDetail({ p }: { p: { product: string; unit: string;
   );
 }
 
-/** 1–2 alım: grafik yerine tek cümle. */
+/** Özet: tek alımda fiyat ve gün; iki ve üstünde ilk → son fiyat, değişim ve günler (altında grafik). */
 function Summary({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: string }) {
   const a = pts[0]!, b = pts[pts.length - 1]!;
   if (pts.length === 1) {
@@ -96,12 +114,12 @@ function Summary({ pts, unit, today }: { pts: PricePoint[]; unit: string; today:
         {tl(a.price)} → {tl(b.price)}{" "}
         <span className={cx("text-base", c > 0 ? "text-red-600 dark:text-red-400" : c < 0 ? "text-green-700 dark:text-green-400" : "text-stone-500")}>({pctWord(c)})</span>
       </p>
-      <p className="text-xs text-stone-500">{dayWord(a.date, today)} → {dayWord(b.date, today)} · {a.store === b.store ? maskText(a.store) : `${maskText(a.store)} → ${maskText(b.store)}`}</p>
+      <p className="text-xs text-stone-500">{dayWord(a.date, today)} → {dayWord(b.date, today)} · {pts.length} alım · {a.store === b.store ? maskText(a.store) : `${maskText(a.store)} → ${maskText(b.store)}`}</p>
     </div>
   );
 }
 
-/** ≥3 alım: her alım bir nokta, ilk ve son değer yazılı; tahmini fiyata giden parça kesikli. */
+/** ≥2 alım (özetin altında): her alım bir nokta, ilk ve son değer yazılı; tahmini fiyata giden parça kesikli. */
 function Chart({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: string }) {
   // çizim kutusu kabın gerçek genişliği: yazılar her ekranda aynı boyda (viewBox ölçeklenmez)
   const box = useRef<HTMLDivElement>(null);
@@ -126,11 +144,8 @@ function Chart({ pts, unit, today }: { pts: PricePoint[]; unit: string; today: s
   const tick = (v: number) => `₺${v.toLocaleString("tr-TR", { maximumFractionDigits: 2 })}`;
   const hidden = tl(1).includes("•");
   return (
-    <figure className="space-y-1">
-      <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-stone-500">
-        <span>{pts.length} alım · {dayWord(first.date, today)} → {dayWord(last.date, today)}</span>
-        <span className={cx("font-semibold tabular-nums", c > 0 ? "text-red-600 dark:text-red-400" : c < 0 ? "text-green-700 dark:text-green-400" : "")}>{pctWord(c)}</span>
-      </figcaption>
+    <figure className="space-y-1" data-testid="fiyat-grafik">
+      <figcaption className="sr-only">{pts.length} alım · {dayWord(first.date, today)} → {dayWord(last.date, today)} · {pctWord(c)}</figcaption>
       <div ref={box}>
       <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block max-w-full" role="img"
         aria-label={`${pts.length} alımda fiyat ${tick(first.price)} liradan ${tick(last.price)} liraya`}>
@@ -199,6 +214,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
           })}
         </ul>
       )}
+      {attributionOf(best) && <p className="text-xs text-stone-500" data-testid="resmi-kaynak">{attributionOf(best)}</p>}
     </section>
   );
 }
