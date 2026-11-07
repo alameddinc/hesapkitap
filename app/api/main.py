@@ -1329,17 +1329,12 @@ def ops_alert(body: OpsAlertIn, request: Request):
     bir kez gider."""
     import hmac
 
-    from app import feedback, push
+    from app import push
 
     key = os.environ.get("HESAPKITAP_OPS_ALERT_KEY", "")
     if not key or not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {key}"):
         raise HTTPException(404, "Not Found")
-    title = f"Fiyat toplama: {body.status}" + (f" · {body.region}" if body.region else "")
-    pid = f"sistem:{date.today().isoformat()}:{body.status}:{body.region or '-'}"
-    sent = 0
-    for a in feedback.admins():
-        sent += len(push.notify(a["id"], [push.item("sistem", pid, title, body.text, push.R_OZET)]))
-    return {"ok": True, "sent": sent}
+    return {"ok": True, "sent": push.ops_alert(body.status, body.region, body.text)}
 
 
 @app.get("/api/admin/official-prices")
@@ -2516,7 +2511,7 @@ def create_entry(body: EntryIn):
         db.save_receipt_items(eid, [i for i in body.items if isinstance(i, dict)], body.description, data["entry_date"],
                               total=body.amount, branch=body.branch)
         if data.get("receipt_file"):  # yalnız okunmuş fiş (elle girilen değil): anonim topluluk fiyatı (tercih açıksa)
-            _share_prices(body.description, body.legal_name, body.items, data["entry_date"])
+            _share_prices(body.description, body.legal_name, body.items, data["entry_date"], body.branch)
     splits = []
     if body.splits and body.kind == "gider":
         try:
@@ -2538,13 +2533,15 @@ def create_entry(body: EntryIn):
             "price_alerts": alerts["check"].get("price_alerts", [])}  # yetenek price_alerts
 
 
-def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str) -> None:
-    """Fiş kalemlerini anonim topluluk fiyatına kat (app/community_prices.py). Hata kaydı bozmaz."""
+def _share_prices(merchant: str | None, legal_name: str | None, items: list, on: str, branch: str | None = None) -> None:
+    """Fiş kalemlerini anonim topluluk fiyatına kat (app/community_prices.py; branch: fişteki şube yazısı, yalnız il adı
+    için). Hata kaydı bozmaz."""
     from app import community_prices
 
     try:
         u = db.current_user()
-        community_prices.contribute((u or {}).get("id"), merchant, legal_name, [i for i in items if isinstance(i, dict)], on)
+        community_prices.contribute((u or {}).get("id"), merchant, legal_name, [i for i in items if isinstance(i, dict)], on,
+                                    branch=branch)
     except Exception:  # noqa: BLE001
         import logging
 

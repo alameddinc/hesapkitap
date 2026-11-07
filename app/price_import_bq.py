@@ -11,9 +11,17 @@ Akış (tick, zamanlayıcıdan her dakika; ağır iş TRY_EVERY_S'de bir):
    kuyruğuna girer, sonraki içe aktarımda gruplanır). O (gün, bölge)nın satırları tek işlemde değiştirilir (yeniden
    çalışırsa aynı sonuç), official_imports'a yazılır; KEEP_DAYS'ten eskiler silinir. Aynı işlemde günün grup özeti
    official_daily'ye (app/market_ref.py summarize_day; 400 gün tutulur: ürün grafiğindeki piyasa bandı).
+Veri kalite denetimi (yazmadan önce):
+- Grup içi aykırı teklif: (gün, bölge, grup) içinde en az OUTLIER_MIN_ROWS teklif varsa ortancanın 1/OUTLIER_FACTOR'ünden
+  ucuz ya da OUTLIER_FACTOR katından pahalı teklif atılır (büyük olasılıkla yanlış boy eşlemesi); stats.outliers, yönetici
+  panelinde "tutarsız gruplar" (en çok atılan INCONSISTENT_TOP grup).
+- Bölgenin önceki alınmış günüyle kıyas: satır sayısı DROP_LIMIT'ten fazla düştüyse ya da eşleşen grupların fiyat
+  değişiminin ortancası SHIFT_LIMIT'i aştıysa (en az SHIFT_MIN_GROUPS ortak grupta) o gün ALINMAZ: önceki veri kalır,
+  official_imports'a status "anomaly" + note yazılır (yeniden çekilmez; elle: python -m app.price_import_bq GÜN BÖLGE
+  --force) ve yöneticilere push ("sistem" türü, push.ops_alert).
 Yarıda kalırsa (hata, yeniden başlatma) yazılmayan bölge sonraki turda yeniden denenir. Birden çok işçi aynı anda
 çalıştırmasın diye tur hakkı sys_settings'te kilitle alınır. Son hata ve son tur özeti yönetici paneline (status()).
-Elle: python -m app.price_import_bq [YYYY-MM-DD bölge]
+Elle: python -m app.price_import_bq [YYYY-MM-DD bölge [--force]]
 """
 import json
 import logging
@@ -31,6 +39,12 @@ MAX_REGIONS_PER_TICK = 6
 MAX_ROWS_PER_REGION = 60_000
 LOOKBACK_DAYS = 1            # bugün + dün
 LEASE_KEY, STATUS_KEY = "bq:next_try", "bq:status"
+OUTLIER_FACTOR = 3.0
+OUTLIER_MIN_ROWS = 3
+DROP_LIMIT = 0.5             # satır sayısı önceki güne göre yarıdan çok düştüyse
+SHIFT_LIMIT = 0.3            # eşleşen grupların fiyat değişimi ortancası %30'u aştıysa
+SHIFT_MIN_GROUPS = 5
+INCONSISTENT_TOP = 20
 
 
 def enabled() -> bool:
@@ -116,34 +130,127 @@ def rows_for(bq_rows: list[dict], day: str, region: str) -> tuple[list[tuple], d
         k = (chain, n["name"])  # aynı adlı iki ürün: ucuz olan (tekillik zincir + bölge + ad + gün)
         if k not in best or row[4] < best[k][4]:
             best[k] = row
-    out = list(best.values())
+    out, dropped = drop_outliers(list(best.values()))
+    stats["outliers"] = sum(d["dropped"] for d in dropped.values())
+    stats["inconsistent"] = dropped
     stats["rows"] = len(out)
     return out, stats
 
 
-def import_region(day: str, region: str) -> dict:
-    """Bir (gün, bölge): BigQuery'den çek, o gün + bölgenin satırlarını değiştir, alındı diye işaretle."""
+def drop_outliers(rows: list[tuple]) -> tuple[list[tuple], dict[str, dict]]:
+    """Grup içi aykırı teklifleri at (satır: (zincir, grup, ad, marka, fiyat, …)). Dönen: (kalan satırlar,
+    {grup: {median, dropped}} — yalnız teklifi atılan gruplar)."""
+    from statistics import median
+
+    by: dict[str, list[float]] = {}
+    for r in rows:
+        by.setdefault(r[1], []).append(r[4])
+    meds = {g: median(v) for g, v in by.items() if len(v) >= OUTLIER_MIN_ROWS}
+    keep, dropped = [], {}
+    for r in rows:
+        m = meds.get(r[1])
+        if m and (r[4] < m / OUTLIER_FACTOR or r[4] > m * OUTLIER_FACTOR):
+            d = dropped.setdefault(r[1], {"median": round(m, 2), "dropped": 0})
+            d["dropped"] += 1
+        else:
+            keep.append(r)
+    return keep, dropped
+
+
+def _group_medians(rows) -> dict[str, float]:
+    from statistics import median
+
+    by: dict[str, list[float]] = {}
+    for g, p in rows:
+        by.setdefault(g, []).append(p)
+    return {g: median(v) for g, v in by.items()}
+
+
+def anomaly(c, day: str, region: str, rows: list[tuple]) -> str | None:
+    """Bölgenin önceki alınmış (status ok) günüyle kıyas; sorun varsa neden metni, yoksa None. İlk gün denetlenmez."""
+    from statistics import median
+
+    prev = c.execute("SELECT run_date, rows FROM official_imports WHERE region = ? AND run_date < ? AND status = 'ok' "
+                     "ORDER BY run_date DESC LIMIT 1", (region, day)).fetchone()
+    if not prev:
+        return None
+    pday, prows = prev[0], prev[1] or 0
+    if prows and len(rows) < prows * (1 - DROP_LIMIT):
+        return f"satır sayısı {prows} → {len(rows)} (önceki gün {pday})"
+    old = _group_medians(c.execute("SELECT group_key, price FROM official_prices WHERE day = ? AND region = ?",
+                                   (pday, region)).fetchall())
+    if not old:  # önceki günün satırları silinmiş (KEEP_DAYS): günlük özetten
+        from app import provinces
+
+        prov = provinces.province_of(region) or ""
+        old = {g: m for g, m in c.execute("SELECT group_key, median FROM official_daily WHERE day = ? AND region = ?",
+                                          (pday, prov))}
+    new = _group_medians([(r[1], r[4]) for r in rows])
+    common = [g for g in new if g in old and old[g] > 0]
+    if len(common) < SHIFT_MIN_GROUPS:
+        return None
+    shift = median(new[g] / old[g] - 1 for g in common)
+    if abs(shift) > SHIFT_LIMIT:
+        return f"fiyat ortancası %{shift * 100:+.0f} ({len(common)} grup, önceki gün {pday})"
+    return None
+
+
+def import_region(day: str, region: str, force: bool = False) -> dict:
+    """Bir (gün, bölge): BigQuery'den çek, o gün + bölgenin satırlarını değiştir, alındı diye işaretle. Kalite
+    denetimi (anomaly) tutmazsa yazmaz: stats.anomaly = neden (force: denetimi atla)."""
     from app import market_ref, price_import, product_groups, system
 
     d = date.fromisoformat(day)
     got = bq.query(offers_sql(), {"d": d, "d7": d - timedelta(days=7), "d30": d - timedelta(days=30), "region": region},
                    max_rows=MAX_ROWS_PER_REGION)
     rows, stats = rows_for(got, day, region)
+    _note_inconsistent(day, stats.pop("inconsistent"))
     cut = (date.today() - timedelta(days=price_import.KEEP_DAYS)).isoformat()
+    with system.connect() as c:
+        if not force and (why := anomaly(c, day, region, rows)):
+            c.execute("INSERT OR REPLACE INTO official_imports (run_date, region, rows, products, unmatched, imported_at, "
+                      "status, note, outliers) VALUES (?, ?, 0, ?, ?, ?, 'anomaly', ?, ?)",
+                      (day, region, stats["products"], stats["unmatched"], _now_iso(), why, stats["outliers"]))
+            stats["anomaly"] = why
+    if stats.get("anomaly"):
+        log.warning("resmî fiyat alınmadı (anomali): %s %s %s", day, region, stats["anomaly"])
+        _alert(day, region, stats["anomaly"])
+        return stats
     with system.connect() as c:
         c.execute("DELETE FROM official_prices WHERE day = ? AND region = ?", (day, region))
         c.executemany("INSERT OR REPLACE INTO official_prices (chain, group_key, title, brand, price, unit_price, day, "
                       "depot_id, discount, region, promotion, depots, change_7d, change_30d) "
                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-        c.execute("INSERT OR REPLACE INTO official_imports (run_date, region, rows, products, unmatched, imported_at) "
-                  "VALUES (?, ?, ?, ?, ?, ?)", (day, region, stats["rows"], stats["products"], stats["unmatched"],
-                                                _now_iso()))
+        c.execute("INSERT OR REPLACE INTO official_imports (run_date, region, rows, products, unmatched, imported_at, "
+                  "status, note, outliers) VALUES (?, ?, ?, ?, ?, ?, 'ok', NULL, ?)",
+                  (day, region, stats["rows"], stats["products"], stats["unmatched"], _now_iso(), stats["outliers"]))
         market_ref.summarize_day(c, day, region)  # günlük piyasa özeti (400 gün; bant zamanla büyür)
         c.execute("DELETE FROM official_prices WHERE day < ?", (cut,))
         c.execute("DELETE FROM official_imports WHERE run_date < ?", (cut,))
     product_groups.kick()  # kuyruğa giren adlar: arka planda yapay zekâ (açıksa)
     log.info("resmî fiyat içe aktarıldı: %s %s %s", day, region, stats)
     return stats
+
+
+def _alert(day: str, region: str, why: str) -> None:
+    """Anomali: yöneticilere push (aynı gün + bölge bir kez). Hata içe aktarımı bozmaz."""
+    try:
+        from app import push
+
+        push.ops_alert("anomaly", region, f"{day}: {why}. Veri alınmadı, önceki gün korunuyor.")
+    except Exception:  # noqa: BLE001
+        log.exception("anomali bildirimi gönderilemedi")
+
+
+def _note_inconsistent(day: str, groups: dict[str, dict]) -> None:
+    """Tutarsız gruplar (yönetici paneli): aynı günün bölgeleri birleşir (atılan toplanır), yeni gün öncekini siler."""
+    cur = _status().get("inconsistent") or {}
+    by = dict(cur.get("groups") or {}) if cur.get("day") == day else {}
+    for g, d in groups.items():
+        old = by.get(g) or {"median": d["median"], "dropped": 0}
+        by[g] = {"median": d["median"], "dropped": old["dropped"] + d["dropped"]}
+    if groups or cur.get("day") != day:
+        _save_status(inconsistent={"day": day, "groups": by})
 
 
 def _claim(now: datetime) -> bool:
@@ -185,7 +292,7 @@ def run(now: datetime, max_regions: int | None = None) -> dict:
         todo = pending_runs(utc.date())
         for day, region in todo[:max_regions or MAX_REGIONS_PER_TICK]:
             st = import_region(day, region)
-            done.append([day, region, st["rows"]])
+            done.append([day, region, 0 if st.get("anomaly") else st["rows"]] + (["anomaly"] if st.get("anomaly") else []))
     except bq.BQError as e:
         log.warning("resmî fiyat içe aktarımı: %s", e)
         _save_status(last_run_at=_now_iso(), last_error=str(e)[:300], last_error_at=_now_iso())
@@ -227,15 +334,27 @@ def status() -> dict:
 
     st = _status()
     with system.connect() as c:
-        r = c.execute("SELECT MAX(run_date) FROM official_imports").fetchone()
+        r = c.execute("SELECT MAX(run_date) FROM official_imports WHERE status = 'ok'").fetchone()
         last = r[0] if r else None
-        regs = c.execute("SELECT region, rows, imported_at FROM official_imports WHERE run_date = ? ORDER BY region",
-                         (last,)).fetchall() if last else []
+        regs = c.execute("SELECT region, rows, imported_at, outliers FROM official_imports WHERE run_date = ? "
+                         "AND status = 'ok' ORDER BY region", (last,)).fetchall() if last else []
+        since = (date.today() - timedelta(days=7)).isoformat()
+        anomalies = [{"day": a[0], "region": a[1], "note": a[2], "at": a[3]} for a in c.execute(
+            "SELECT run_date, region, note, imported_at FROM official_imports WHERE status = 'anomaly' AND run_date >= ? "
+            "ORDER BY run_date DESC, region", (since,))]
     err_newer = st.get("last_error") and (not regs or (st.get("last_error_at") or "") >= max(x[2] for x in regs))
+    inc = st.get("inconsistent") or {}
+    top = sorted(({"group_key": g, **d} for g, d in (inc.get("groups") or {}).items()),
+                 key=lambda x: (-x["dropped"], x["group_key"]))[:INCONSISTENT_TOP]
+    from app import community_export
+
     return {"configured": enabled(), "last_day": last, "regions": [x[0] for x in regs],
             "rows": sum(x[1] for x in regs), "imported_at": max((x[2] for x in regs), default=None),
             "last_run_at": st.get("last_run_at"), "last_error": st.get("last_error") if err_newer else None,
-            "last_error_at": st.get("last_error_at") if err_newer else None}
+            "last_error_at": st.get("last_error_at") if err_newer else None,
+            "outliers": sum(x[3] or 0 for x in regs), "anomalies": anomalies,
+            "inconsistent_groups": {"day": inc.get("day"), "groups": top},
+            "community_export": community_export.status()}
 
 
 def main(argv: list[str]) -> int:
@@ -243,8 +362,10 @@ def main(argv: list[str]) -> int:
     if not enabled():
         print(f"BigQuery kapalı: {bq.CRED_ENV} ayarlı değil ya da dosya okunamıyor", file=sys.stderr)
         return 2
+    force = "--force" in argv
+    argv = [a for a in argv if a != "--force"]
     if len(argv) == 3:
-        print(json.dumps(import_region(argv[1], argv[2]), ensure_ascii=False))
+        print(json.dumps(import_region(argv[1], argv[2], force=force), ensure_ascii=False))
     else:
         print(json.dumps(run(datetime.now(timezone.utc), max_regions=100), ensure_ascii=False))
     return 0

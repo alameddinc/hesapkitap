@@ -32,7 +32,8 @@ def test_contribute_only_known_chain_and_products():
     rows = _rows()
     assert [(r["chain"], r["group_key"], r["unit_price"], r["day"]) for r in rows] == [
         ("A101", "sut|1l", 36.0, "2026-11-05"), ("A101", "ekmek", 15.0, "2026-11-05")]
-    assert set(rows[0]) == {"id", "chain", "group_key", "name_norm", "unit_price", "day", "contributor"}  # şube/kişi yok
+    assert set(rows[0]) == {"id", "chain", "group_key", "name_norm", "unit_price", "day", "contributor", "region"}  # şube/kişi yok
+    assert rows[0]["region"] is None                                                         # şube yazısı yok: il yok
 
 
 def test_pref_off_stops_contribution(client):

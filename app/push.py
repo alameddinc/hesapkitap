@@ -625,6 +625,16 @@ def notify(uid: int, items: list[dict], now: datetime | None = None, daily: bool
     return out
 
 
+def ops_alert(status: str, region: str | None, text: str, today: date | None = None) -> int:
+    """Fiyat verisi aksadı (toplayıcı işin POST /api/ops/alert'i, içe aktarım anomalisi): yöneticilerin telefonuna
+    "sistem" türü push (sessiz saate uyar). Aynı gün + durum + bölge bir kez gider. Dönen: kuyruğa giren bildirim."""
+    from app import feedback
+
+    title = f"Fiyat toplama: {status}" + (f" · {region}" if region else "")
+    pid = f"sistem:{(today or date.today()).isoformat()}:{status}:{region or '-'}"
+    return sum(len(notify(a["id"], [item("sistem", pid, title, text, R_OZET)])) for a in feedback.admins())
+
+
 # ---------------------------------------------------------------- zamanlı türler (kullanıcının defterinde)
 
 def _odeme_ekstre_dokum(today: date, on: dict) -> list[dict]:

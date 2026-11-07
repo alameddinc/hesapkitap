@@ -298,6 +298,13 @@ async def scheduler() -> None:
                 log.info("resmî fiyat: %s", got)
         except Exception:  # noqa: BLE001
             log.exception("official prices import failed")
+        try:  # topluluk fiyatları → BigQuery (00:30 sonrası, dün; app/community_export.py; yazıcı kimliği yoksa kapalı)
+            from app import community_export
+
+            if community_export.enabled() and (got := await asyncio.to_thread(community_export.tick, now)):
+                log.info("topluluk dışa aktarımı: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("community export failed")
         try:  # telefona bildirim (app/push.py): günlük hatırlatmalar 09:00'dan sonra, kuyruk her dakika
             from app import push
 
