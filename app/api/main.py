@@ -4376,7 +4376,8 @@ def price_groups(q: str | None = None, limit: int = 30):
     best ucuzdan pahalıya, en çok 5 (app/price_sources.py merge). Kendi verin: bu defterin fişleri (ortak defter üyesinde
     görebildiğin kayıtlar). Sıra: kendi aldıkların (son alım yeni→eski), sonra yalnız toplulukta olanlar (ada göre);
     metinde boy varsa ("1l süt", "süt 1 lt") o boydaki gruplar, sonra adı tam aranan ürün olanlar önce; boylar farklıysa
-    aynı öbekte litre / kilo / adet fiyatı (unit_price_per) ucuz olan önce. Grup: category (product_groups.CATEGORIES);
+    aynı öbekte litre / kilo / adet fiyatı (unit_price_per) ucuz olan önce. Grup: category (product_groups.CATEGORIES),
+    subcategory (alt kategori, app/product_taxonomy.py; bilinmiyorsa null);
     teklif: unit_price_per, per_unit ("L" | "kg" | "adet"; boysuz grupta yok). source "resmi" (sunucu açtıysa):
     attribution, region (kişinin ili ya da yedek il; BİM/A101/ŞOK "ulusal"), discount?, promotion?, change_7d?,
     change_30d? (yüzde) — il meta.ui.region'dan (seçilmemişse İstanbul)."""
@@ -4412,8 +4413,9 @@ def price_groups(q: str | None = None, limit: int = 30):
         keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word, per(k)))
     from app import product_groups
 
-    cats = product_groups.categories(keys[:limit])
-    return [{"key": k, "label": labels[k], "category": cats.get(k), "best": best[k]} for k in keys[:limit]]
+    paths = product_groups.paths(keys[:limit])
+    return [{"key": k, "label": labels[k], "category": (paths.get(k) or (None, None))[0],
+             "subcategory": (paths.get(k) or (None, None))[1], "best": best[k]} for k in keys[:limit]]
 
 
 # ---------------------------------------------------------------- alışveriş listesi (app/shopping.py)

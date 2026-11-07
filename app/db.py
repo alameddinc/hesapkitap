@@ -4170,7 +4170,8 @@ def priced_items(visible_only: bool = True) -> list[dict]:
 
 
 def attach_groups(items: list[dict], learn: bool = True) -> None:
-    """Her fiş satırına group ({key, label[, pending]} | None; app/product_groups.py), aynı yazılış bir kez çözülür.
+    """Her fiş satırına group ({key, label[, category, subcategory, pending]} | None; app/product_groups.py), aynı
+    yazılış bir kez çözülür.
     Kuralın çözemediği ad kuyruğa girer; yapay zekâ açıksa arka planda tek toplu çağrı (product_groups.kick)."""
     from app import product_groups
 
@@ -4227,6 +4228,7 @@ def products(since: str | None = None, store: str | None = None, brand: str | No
         return {"key": last["product_key"], "product": next((x["product"] for x in reversed(xs) if x["product"]), last["name"]),
                 "brand": next((x["brand"] for x in reversed(xs) if x["brand"]), None),
                 "group": grp, "category": grp.get("category") if grp else None,
+                "subcategory": grp.get("subcategory") if grp else None,
                 **product_groups.unit_price(priced[-1]["unit_price"] if priced else None, grp and grp["key"]),
                 "unit": last["unit"], "count": len(xs), "last_date": last["purchased_at"],
                 "last_price": priced[-1]["unit_price"] if priced else None,

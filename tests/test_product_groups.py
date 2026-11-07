@@ -27,7 +27,7 @@ def test_rule_group_unknown_brand_and_weighed():
     assert pg.rule_group("Örnekmarka Süt 1L", brand="Örnekmarka")["key"] == "sut|1l"  # kalemin markası atılır
     assert pg.rule_group("BEYAZ PEYNİR", unit="kg") == {"key": "beyaz-peynir|kg", "label": "Beyaz Peynir · kg",
                                                          "size_value": 1.0, "size_unit": "kg",
-                                                         "category": "Süt ve Kahvaltılık"}
+                                                         "category": "Süt ve Kahvaltılık", "subcategory": "Peynir"}
 
 
 def test_name_norm():
@@ -40,7 +40,8 @@ def test_groups_for_caches_rules_and_queues_unknown():
     from app import system
 
     out = pg.groups_for([{"name": "Torku Süt 1L"}, {"name": "ORNK CIK.GOFR 36G"}, {"name": ""}])
-    assert out[0] == {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık"}
+    assert out[0] == {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık",
+                      "subcategory": "Süt"}
     assert out[1]["pending"] is True and out[1]["key"].endswith("|36g")   # geçici grup, boy yine okunur
     assert out[2] is None
     with system.connect() as c:
@@ -68,7 +69,8 @@ def test_classify_pending_batches_and_caps(monkeypatch):
     assert pg.classify_pending(max_calls=5) == 61
     assert len(calls) == 2 and all(k == "grup" and m == receipt.DEFAULT_MODEL for k, m, _ in calls)  # ≤50 ad / çağrı
     assert pg.pending() == 0
-    assert pg.group_for("ORNEKURUN7 1L") == {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık"}       # önbellekten (source ai)
+    assert pg.group_for("ORNEKURUN7 1L") == {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık",
+                      "subcategory": "Süt"}       # önbellekten (source ai)
     assert pg.group_for("POSET") is None                                                 # ürün değil
     with system.connect() as c:
         assert c.execute("SELECT COUNT(*) FROM ai_calls WHERE kind = 'grup'").fetchone()[0] == 2
@@ -138,8 +140,10 @@ def test_ai_generic_answer_is_refined(monkeypatch):
     monkeypatch.setattr(receipt, "gemini_text_json", fake)
     assert pg.classify_pending() == 2
     assert pg.group_for("ORNEKMARKA WHEY SUT 330ML") == {"key": "protein-icecegi|330ml",
-                                                         "label": "Protein İçeceği · 330 ml", "category": "Su ve İçecek"}
-    assert pg.group_for("ORNEKMARKA SUT 1L") == {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık"}
+                                                         "label": "Protein İçeceği · 330 ml", "category": "Su ve İçecek",
+                                                         "subcategory": "Diğer İçecekler"}
+    assert pg.group_for("ORNEKMARKA SUT 1L") == {"key": "sut|1l", "label": "Süt · 1 L", "category": "Süt ve Kahvaltılık",
+                      "subcategory": "Süt"}
 
 
 def test_regroup_fixes_old_rows_and_moves_community_prices():
