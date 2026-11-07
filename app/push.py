@@ -295,8 +295,10 @@ def fcm_access_token(fresh: bool = False) -> str:
 # ---------------------------------------------------------------- gönderim
 
 def collapse_id(pid: str) -> str:
-    """apns-collapse-id en çok 64 bayt; uzun kimlik özetlenir (Android tag'i de aynı değer)."""
-    return pid if len(pid.encode()) <= 64 else "h:" + hashlib.sha256(pid.encode()).hexdigest()[:40]
+    """apns-collapse-id en çok 64 bayt ve HTTP başlığı olduğu için yalnız ASCII: uzun ya da ASCII dışı karakterli kimlik
+    ("sistem:…:İstanbul", ürün / kişi adı) özetlenir (Android tag'i de aynı değer). 07.11.2026: "İ" başlığı bozuyordu,
+    APNs isteği gönderilemiyordu."""
+    return pid if pid.isascii() and len(pid) <= 64 else "h:" + hashlib.sha256(pid.encode()).hexdigest()[:40]
 
 
 def fcm_message(token: str, p: dict) -> dict:

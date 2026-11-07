@@ -565,3 +565,13 @@ def test_revoke_all_sessions_forgets_push_devices(owner, nokeys):  # noqa: F811
     assert len(push.devices(admin["id"])) == 1
     assert owner.post("/api/me/sessions/revoke-all", json={"keep_current": True}).status_code == 200
     assert push.devices(admin["id"]) == []
+
+
+def test_collapse_id_is_ascii_header_safe():
+    """APNs başlığı ASCII olmalı: Türkçe karakterli kimlik özetlenir (aynı kimlik → aynı özet)."""
+    from app import push
+
+    for pid in ("sistem:2026-11-07:test:İstanbul", "katildi:7:ayşe", "fiyat:süt|1l:ŞOK"):
+        cid = push.collapse_id(pid)
+        assert cid.isascii() and len(cid) <= 64 and cid == push.collapse_id(pid)
+    assert push.collapse_id("odeme:1234:2026-11-05") == "odeme:1234:2026-11-05"  # ASCII ve kısa: aynen
