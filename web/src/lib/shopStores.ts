@@ -59,6 +59,31 @@ export const unitPriceText = (v: number | null | undefined, per: string | null |
 export interface SizeRow {
   key: string; label: string; size_label: string; size_amount?: number | null; chain: string | null; price: number | null;
   unit_price_per?: number | null; per_unit?: string | null; best_value?: boolean; hidden_count?: number;
+  /** yetenek shop_unit_sizes: boyun türü (fiyatsız boyda da) */
+  size_unit?: "L" | "kg" | "adet" | null;
+}
+
+/** Miktar biriminin türü: kg / g → kg, L / ml → L; adette null (her boy paket olarak alınır). */
+export const unitFamily = (u: string | null | undefined): "kg" | "L" | null =>
+  u === "kg" || u === "g" ? "kg" : u === "L" || u === "ml" ? "L" : null;
+
+/** Seçili birimde gösterilecek boylar (shop_unit_sizes): kg / L satırında yalnız o türün boyları; türü bilinmeyen boy
+ *  (eski sunucu, fiyatsız) kalır. Adette hepsi. */
+export function sizesForUnit<T extends Pick<SizeRow, "size_unit" | "per_unit">>(rows: T[] | undefined, unit: string | null | undefined): T[] {
+  const fam = unitFamily(unit);
+  if (!rows || !fam) return rows ?? [];
+  return rows.filter((r) => { const f = r.size_unit ?? r.per_unit; return !f || f === fam; });
+}
+
+/** kg / L satırında boyun kaç paket ettiği: 1 kg için 250 g → "4 paket"; tam bölünmüyorsa yukarı ("≈ 3 paket"). */
+export function packsText(qty: number, unit: string | null | undefined, sizeAmount: number | null | undefined): string | null {
+  const fam = unitFamily(unit);
+  if (!fam || !sizeAmount || !(qty > 0)) return null;
+  const need = unit === "g" || unit === "ml" ? qty / 1000 : qty;
+  const n = need / sizeAmount;
+  const whole = Math.abs(n - Math.round(n)) < 1e-6;
+  const c = whole ? Math.round(n) : Math.ceil(n);
+  return c >= 1 ? `${whole ? "" : "≈ "}${c} paket` : null;
 }
 /** Boy satırının alt yazısı: "En ucuz: BİM ₺32,50 · ₺32,50/L" / "En ucuz: BİM ₺32,50" / "Fiyat yok" */
 export function sizeSub(o: Pick<SizeRow, "chain" | "price" | "unit_price_per" | "per_unit">, m: Money): string {

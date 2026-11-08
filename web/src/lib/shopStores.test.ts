@@ -5,8 +5,23 @@ import { test } from "node:test";
 import {
   applyHidden, betterSizeText, closedCount, hiddenText, localSub, missingCheapestText, offerSource, offerSub, offersTitle, optimizePath,
   pinnedChoiceText, pinnedUnpricedText, sizeSub, sizesHidden, storeChoices, storeLine, storesButtonText, storesSettingValue, toggleHidden,
-  togglePick, unitPriceText, withBrand, keySizeLabel, sizeOptions,
+  togglePick, unitPriceText, withBrand, keySizeLabel, sizeOptions, sizesForUnit, packsText, unitFamily,
 } from "./shopStores.ts";
+
+test("kg / L satırında boy listesi (shop_unit_sizes): yalnız o tür, paket sayısı", () => {
+  const rows = [{ key: "cekirdek-kahve|250g", size_unit: "kg" as const }, { key: "cekirdek-kahve|1kg", size_unit: "kg" as const },
+    { key: "cekirdek-kahve|10ad", size_unit: "adet" as const }, { key: "x|500ml", per_unit: "L" }, { key: "x|y" }];
+  assert.deepEqual(sizesForUnit(rows, "kg").map((r) => r.key), ["cekirdek-kahve|250g", "cekirdek-kahve|1kg", "x|y"]);
+  assert.deepEqual(sizesForUnit(rows, "ml").map((r) => r.key), ["x|500ml", "x|y"]);
+  assert.equal(sizesForUnit(rows, "adet").length, 5);
+  assert.equal(unitFamily("g"), "kg");
+  assert.equal(unitFamily("adet"), null);
+  assert.equal(packsText(1, "kg", 0.25), "4 paket");
+  assert.equal(packsText(500, "g", 0.25), "2 paket");
+  assert.equal(packsText(1, "kg", 0.3), "≈ 4 paket");
+  assert.equal(packsText(1, "kg", 1), "1 paket");
+  assert.equal(packsText(1, "adet", 1), null);
+});
 
 test("grup anahtarının boyu ve boy seçenekleri", () => {
   assert.equal(keySizeLabel("sut|1l"), "1 L");
