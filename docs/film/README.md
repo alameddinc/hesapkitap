@@ -39,9 +39,10 @@ Okuma testleri: `tests/test_film_files.py`.
 **6 okursa** çıkar, 8 okursa fiş zaten doğrudur (öneri gerekmez).
 
 - `fis-market-a.jpg`: öneriyi yalnız fiş toplamı verir. **Telefon uygulaması fotoğrafla birlikte cihazda çıkardığı
-  metni (Apple Vision / ML Kit) de gönderir**; o metin aynı satırda 62,95 okursa satır "doğrulanmış" sayılır ve
-  öneri **çıkmaz** (Apple Vision bu fotoğrafta 62,95 okuyor). Bu fiş ancak metinsiz yüklemede (web'den dosya) öneri
-  gösterir.
+  metni (Apple Vision / ML Kit) de gönderir**; Apple Vision bu fotoğrafta 62,95 okuyor, yani metin yapay zekâyla aynı
+  yanlışı doğrular. Metnin doğruladığı satırlar önce aranmaz; tanıksız satırlarda çözüm yoksa onlarda da tek rakam
+  aranır ve fark tam, tek yoldan kapanıyorsa öneri **çıkar** (aynı yazı; yanıtta `ocr_agrees: true`, puan −1). Hem
+  telefonla hem web'den dosyayla öneri görünür.
 - `fis-market-a-adetli.jpg`: öneriyi adet × birim (4 × 20,50 = 82,00) verir; telefon metninden bağımsızdır.
   **Telefonla çekimde bunu kullan.**
 - Toplam tutmayınca uygulama fişi bir kez daha güçlü modelle, fiş toplamını söyleyerek okur (`_auto_reread`); güçlü

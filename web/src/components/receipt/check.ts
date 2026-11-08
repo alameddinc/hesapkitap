@@ -64,10 +64,14 @@ export interface DigitFix {
   /** ocr: telefonun okuması da `to` diyor · qty: adet × birim fiyat `to` ediyor · history: geçen sefer bu fiyat · group: fark bu KDV grubunda
    *  · community: başkaları bu ürüne community_price ödüyor */
   evidence?: ("ocr" | "qty" | "history" | "group" | "community")[]; score?: number; history_price?: number; community_price?: number;
+  /** telefon metni de okunanla aynı (yanlış) okumuş: güven düşük, metin aynı */
+  ocr_agrees?: boolean;
 }
 export interface VatGroup { rate: number; items_total: number; tax: number; printed: number | null; indices: number[]; ok: boolean }
 /** POST /api/receipts/reread ve /api/entries/{id}/receipt-reread yanıtı (hiçbir şey kaydedilmez). */
-export interface Reread { items: ReceiptItem[]; total: number | null; model?: string; confidence?: string; check?: ReceiptCheck; receipt_file?: string }
+/** kept_edits: yeni okumada da korunan elle düzeltmeler (read: modelin yeni okuduğu, amount: kullanıcının). */
+export interface Reread { items: ReceiptItem[]; total: number | null; model?: string; confidence?: string; check?: ReceiptCheck; receipt_file?: string;
+  kept_edits?: { index: number; name: string; read: number | null; amount: number }[] }
 
 export const TOL = 0.02;
 

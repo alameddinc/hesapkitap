@@ -213,6 +213,32 @@ def test_digit_fix_single_line_receipt():
     assert chk["digit_fix"][0]["to"] == 82.95 and set(chk["digit_fix"][0]["evidence"]) == {"ocr", "group"}
 
 
+def test_digit_fix_single_line_when_phone_text_reads_the_same_six():
+    """fis-market-a.jpg telefonla: Apple Vision de silik 8'i 6 okur (62,95), her satır metinde okunanla aynı. Eskiden
+    bütün satırlar "doğrulanmış" sayılıp öneri çıkmazdı; şimdi tanıksız satırda çözüm yoksa metnin doğruladığı
+    satırlarda da tek rakam aranır: deterjan 6→8 (güven düşük, ocr_agrees), fiş tutar."""
+    from app import receipt_check
+
+    items = _ai_items("a")
+    real = mk.receipt_items(T, "a")
+    total = mk.receipt_total(real)
+    text = mk.receipt_text(T, "a", faded_as="6")
+    assert "*62,95" in text
+    vl = [{"rate": r, "amount": v} for r, v in mk.receipt_vat(real).items()]
+    for kw in ({}, {"vat_lines": vl}):
+        chk = receipt_check.check(items, total)
+        receipt_check.add_evidence(chk, items, text, kw.get("vat_lines"))
+        fix = chk["digit_fix"]
+        assert [(f["index"], f["from"], f["to"], f["digits"]) for f in fix] == [(4, 62.95, 82.95, "6→8")]
+        assert fix[0]["ocr_agrees"] is True and "ocr" not in fix[0]["evidence"]
+        assert chk["residual"] == 0 and chk["suspect"] == []
+    # fişin kendisi tutuyorsa (yapay zekâ 8 okudu, metin 6 okudu) öneri yok
+    ok = [{**x, "amount": r["amount"]} for x, r in zip(items, real)]
+    chk = receipt_check.check(ok, total)
+    receipt_check.add_evidence(chk, ok, text, vl)
+    assert chk["ok"] and chk["digit_fix"] == []
+
+
 def test_digit_fix_quantity_receipt_survives_phone_text():
     """fis-market-a-adetli.jpg: "4 AD X 20,50" satırının tutarı 82,00 → 62,00 okunursa adet × birim tanığı ("qty")
     öneriyi verir — telefon metni de 62,00 okusa bile (Apple Vision bu fotoğrafta 62,00 okuyor)."""

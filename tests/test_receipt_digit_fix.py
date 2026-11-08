@@ -188,6 +188,46 @@ def test_ocr_four_lines_close_the_gap():
     assert receipt_check.digit_check(items, 465.90)["digit_fix"] == []  # metinsiz: 4 satır aranmaz
 
 
+ALL_AGREE = "SUT 1L *64,50\nMEYVE PURESI *69,00\nEKMEK *10,00"  # telefon metni de her satırı okunanla aynı okudu
+
+
+def test_ocr_agreeing_line_still_searched_when_nothing_else_closes():
+    # silik 8'i metin de 6 okudu (MEYVE 69,00); SUT'ta onlar basamağı 6 değil: tek çözüm MEYVE, güveni düşük
+    items = [_it("SUT 1L", 44.50), _it("MEYVE PURESI", 69.00), _it("EKMEK", 10.00)]
+    text = "SUT 1L *44,50\nMEYVE PURESI *69,00\nEKMEK *10,00"
+    chk = receipt_check.digit_check(items, 143.5, text)
+    assert [(f["index"], f["to"], f["digits"], f["evidence"], f["score"], f["ocr_agrees"]) for f in chk["digit_fix"]] == [
+        (1, 89.0, "6→8", [], -1, True)]
+    assert chk["residual"] == 0 and chk["suspect"] == []
+    assert "ocr_agrees" not in receipt_check.digit_check(items, 143.5)["digit_fix"][0]  # metinsiz: olağan öneri
+
+
+def test_ocr_agreeing_lines_ambiguous_no_fix_but_suspects():
+    chk = receipt_check.digit_check(TWO, 163.5, ALL_AGREE)  # iki satırda da onlarda 6: hangisi belli değil
+    assert chk["digit_fix"] == [] and chk["residual"] == 20.0 and chk["suspect"] == [0, 1]
+
+
+def test_ocr_agreeing_lines_history_breaks_tie():
+    chk = receipt_check.digit_check(TWO, 163.5, ALL_AGREE, history={1: [89.0]})
+    assert [(f["index"], f["evidence"], f["score"], f.get("ocr_agrees")) for f in chk["digit_fix"]] == [
+        (1, ["history"], 1, True)]
+
+
+def test_ocr_agreeing_lines_not_used_when_unverified_line_closes_the_gap():
+    text = "SUT 1L *64,50\nEKMEK *10,00"  # MEYVE metinde yok (tanıksız): çözüm orada, SUT'a bakılmaz
+    got = receipt_check.digit_fixes(TWO, 163.5, text)
+    assert [(f["index"], f.get("ocr_agrees")) for f in got] == [(1, None)]
+
+
+def test_ocr_agreeing_lines_need_exact_single_swap():
+    assert receipt_check.digit_check(TWO, 147.5, ALL_AGREE)["digit_fix"] == []  # ₺4: hiçbir eşin farkı değil
+    # ₺40: iki satır birden (64,50→84,50 ve 69→89) gerekir; metnin doğruladığı satırlarda yalnız tek satır aranır
+    assert receipt_check.digit_check(TWO, 183.5, ALL_AGREE)["digit_fix"] == []
+    ok = receipt_check.check(TWO, 143.5)  # fiş tutuyor: metin ne derse desin öneri yok
+    receipt_check.add_evidence(ok, TWO, ALL_AGREE)
+    assert ok["ok"] and ok["digit_fix"] == [] and ok["suspect"] == []
+
+
 def test_unknown_count_two_witnessed_third_residual():
     # üç satır yanlış; metin ikisine tanık (ELMA +30, ARMUT +20); kalan ₺10 iki satırda olabilir (5→6 ya da 8→9)
     items = [_it("ELMA KG", 53.00), _it("ARMUT KG", 61.00), _it("PATATES", 52.00), _it("SOGAN", 81.00)]

@@ -7201,10 +7201,14 @@ def put_receipt_items(entry_id: int, body: ReceiptItemsIn):
     return {"saved": n, **_receipt_items_out(entry_id, e["amount"], e)}
 
 
-def _reread_photo(name: str | None, total: float | None) -> dict:
+def _reread_photo(name: str | None, total: float | None, current: list[dict] | None = None) -> dict:
     """Saklı fotoğrafı daha güçlü modelle yeniden oku: hazır sürümde doc_reads.REREAD_COST (2) okuma hakkı (önce
     günlük, kalanı ek paket; yetmezse okumadan 402 "hak doldu"), yanıtta charged {daily, extra}. Ayrıca fotoğraf başına
-    günde _REREAD_PER_DAY. Sonuç kaydedilmez."""
+    günde _REREAD_PER_DAY. Sonuç kaydedilmez.
+    Kullanıcının düzeltmeleri korunur: current (şu anki kalemler) yapay zekânın bu fotoğraftaki önceki okumasından
+    (okuma önbelleği, doc_cache.for_file) farklı tutarlı kalemleri yeni okumada da kalır (receipt_check.user_edits /
+    keep_user_edits); yanıtta kept_edits [{index, name, read, amount}]. Önceki okuma bilinmiyorsa (kendi sunucusu,
+    30 günden eski) korunmaz. Önbelleğe yapay zekânın ham okuması yazılır."""
     import json as _json
     from datetime import date as _date
 
@@ -7240,36 +7244,52 @@ def _reread_photo(name: str | None, total: float | None) -> dict:
     db.set_setting(key, _json.dumps({"day": today, "n": used + 1}))
     if charged := doc_reads.charge_reread():
         out["charged"] = charged
-    out["check"] = receipt_check.check(out["items"], total if total is not None else out.get("total"))
-    out["receipt_file"] = name
     from app import doc_cache
 
-    def _fresh(res: dict) -> dict:  # önbellekteki okuma bu fotoğrafın yeni kalemleriyle
-        return {**res, "items": out["items"],
-                "check": receipt_check.check(out["items"], res.get("total") if res.get("total") is not None else total)}
+    raw = [dict(i) for i in out.get("items") or []]
+    prev = doc_cache.for_file(name) if current else None
+    edits = receipt_check.user_edits(current, (prev or {}).get("items"))
+    out["kept_edits"] = receipt_check.keep_user_edits(out["items"], edits) if edits else []
+    out["check"] = receipt_check.check(out["items"], total if total is not None else out.get("total"))
+    out["receipt_file"] = name
+
+    def _fresh(res: dict) -> dict:  # önbellekteki okuma bu fotoğrafın yeni (ham) kalemleriyle
+        return {**res, "items": raw,
+                "check": receipt_check.check(raw, res.get("total") if res.get("total") is not None else total)}
 
     doc_cache.refresh_file(name, _fresh)
     return out
 
 
+class EntryRereadIn(BaseModel):
+    items: list[dict] | None = None  # düzenleyicideki (henüz kaydedilmemiş olabilir) kalemler; yoksa kayıtlılar
+
+
 @app.post("/api/entries/{entry_id}/receipt-reread")
 @_heavy
-def reread_entry_receipt(entry_id: int):
-    """Kayıtlı giderin fiş fotoğrafını kaydın tutarıyla yeniden oku; istemci onaylarsa PUT …/receipt-items ile yazar."""
+def reread_entry_receipt(entry_id: int, body: EntryRereadIn | None = None):
+    """Kayıtlı giderin fiş fotoğrafını kaydın tutarıyla yeniden oku; istemci onaylarsa PUT …/receipt-items ile yazar.
+    Kullanıcının elle düzelttiği kalemler korunur (_reread_photo kept_edits)."""
     e = _entry_for_receipt(entry_id)
-    return _reread_photo(e.get("receipt_file"), e["amount"])
+    current = body.items if body and body.items is not None else None
+    if current is None:
+        with db.connect() as c:
+            current = [dict(x) for x in c.execute(
+                "SELECT name, qty, amount, unit_price FROM receipt_items WHERE entry_id = ? ORDER BY id", (entry_id,))]
+    return _reread_photo(e.get("receipt_file"), e["amount"], [i for i in current if isinstance(i, dict)][:60])
 
 
 class RereadIn(BaseModel):
     receipt_file: str
     total: Money | None = None
+    items: list[dict] | None = None  # düzenleyicideki kalemler: elle düzeltilenler yeniden okumada korunur
 
 
 @app.post("/api/receipts/reread")
 @_heavy
 def reread_receipt(body: RereadIn):
-    """Kaydetmeden önce (önizleme): okumadan dönen receipt_file adıyla yeniden oku."""
-    return _reread_photo(body.receipt_file, body.total)
+    """Kaydetmeden önce (önizleme): okumadan dönen receipt_file adıyla yeniden oku (items: elle düzeltilenler korunur)."""
+    return _reread_photo(body.receipt_file, body.total, [i for i in body.items or [] if isinstance(i, dict)][:60])
 
 
 @app.get("/api/bills/summary")

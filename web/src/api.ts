@@ -690,8 +690,11 @@ export const api = {
   receiptItems: (id: number) => req<{ entry_id: number; items: ReceiptItem[]; check: ReceiptCheck }>("GET", `/api/entries/${id}/receipt-items`),
   saveReceiptItems: (id: number, items: ReceiptItem[]) =>
     req<{ saved: number; entry_id: number; items: ReceiptItem[]; check: ReceiptCheck }>("PUT", `/api/entries/${id}/receipt-items`, { items: toServer(items) }),
-  rereadEntryReceipt: (id: number) => req<Reread>("POST", `/api/entries/${id}/receipt-reread`),
-  rereadReceipt: (receipt_file: string, total?: number | null) => req<Reread>("POST", "/api/receipts/reread", { receipt_file, total: total ?? null }),
+  // items: düzenleyicideki kalemler; sunucu elle düzeltilen tutarları yeni okumada korur (kept_edits)
+  rereadEntryReceipt: (id: number, items?: ReceiptItem[]) =>
+    req<Reread>("POST", `/api/entries/${id}/receipt-reread`, items ? { items: toServer(items) } : undefined),
+  rereadReceipt: (receipt_file: string, total?: number | null, items?: ReceiptItem[]) =>
+    req<Reread>("POST", "/api/receipts/reread", { receipt_file, total: total ?? null, ...(items ? { items: toServer(items) } : {}) }),
   testRule: (pattern: string, text: string) =>
     req<{ normalized: string; match: boolean }>("GET", `/api/rules/test${q({ pattern, text })}`),
 };

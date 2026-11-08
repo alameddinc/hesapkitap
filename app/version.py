@@ -88,9 +88,13 @@ CAPABILITIES = (
                               # yok); okunamayan fotoğraf günde 5'ten sonra 1 hak; me/ai reads family_limit/family_left
     "digit_fix",              # fiş denetiminde karışan rakam (termal baskı 6↔8 …): check.digit_fix [{index, name, from, to,
                               # digits "6→8", unit_price_from?, unit_price_to?, evidence [ocr|qty|history|group], score,
-                              # history_price?}], digit_fix_all {indices, total_ok} | null, residual (TL), suspect [sıra],
+                              # history_price?, ocr_agrees? (telefon metni de aynı yanlışı okumuş: güven düşük)}],
+                              # digit_fix_all {indices, total_ok} | null, residual (TL), suspect [sıra],
                               # groups [{rate, items_total, tax, printed, indices, ok}], line_count {printed, read} | null;
                               # kendiliğinden uygulanmaz
+    "reread_keeps_edits",     # POST /api/receipts/reread {receipt_file, total, items?} ve POST /api/entries/{id}/receipt-
+                              # reread {items?} (yoksa kayıtlı kalemler): elle düzeltilen tutar yeni okumada korunur;
+                              # yanıtta kept_edits [{index, name, read, amount}]
     "price_groups",           # markadan bağımsız ürün grubu: /api/prices products[].group {key "sut|1l", label "Süt · 1 L",
                               # pending? (yapay zekâ bekliyor; geçici grup)} | null; history[].estimated, history[].uid ("m<kayıt id>")
     "community_prices",       # anonim topluluk fiyatı: GET/PUT /api/me/price-share {on} → {on, text} (meta.price_share);

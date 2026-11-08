@@ -8,7 +8,7 @@ kalemi işaretler ve önerilen kaydırmayı tek dokunuşla uygulatır (sonra PUT
      "shift_start" (art arda tutmayan kalemlerin başladığı sıra, yoksa null),
      "suggested_shift": null | {"from_index", "direction": "up"|"down", "amounts": [...], "items_total", "diff"},
      "residual" (öneriler uygulanınca kalan fark, TL), "digit_fix": [{"index", "name", "from", "to", "digits": "6→8"[, "unit_price_from", "unit_price_to"][, "evidence":
-                   "ocr"|"qty"|"history"|"community"|"group"][, "community_price", "community_note"]}], "digit_fix_all": null | {"indices": [...], "total_ok"}, "suspect": [sıra, ...]}
+                   "ocr"|"qty"|"history"|"community"|"group"][, "community_price", "community_note"][, "ocr_agrees": true]}], "digit_fix_all": null | {"indices": [...], "total_ok"}, "suspect": [sıra, ...]}
 direction: "down" = from_index'ten itibaren her fiyat bir alt satıra iner (o satıra boşluk: adet × birim ile dolar);
 "up" = her fiyat bir üst satıra çıkar.
 digit_fix / digit_fix_all / suspect: termal fişte karışan rakam (6↔8 …) düzeltilince kalemler fiş toplamını kuruşu kuruşuna
@@ -334,6 +334,14 @@ def _deepen(items: list[dict], pool: set[int], need: int) -> list[tuple[dict, ..
     return sols
 
 
+def _agreed(f: dict) -> dict:
+    """Telefon metninin okunanla aynı okuduğu satırın düzeltmesi: silik rakamı metin de aynı yanlış okumuş olabilir
+    (silik 8 ikisinde de 6). Güveni düşük: puan −1, ocr_agrees true (arayüz metni aynı)."""
+    f["score"] -= 1
+    f["ocr_agrees"] = True
+    return f
+
+
 def _public(fixes) -> list[dict]:
     return [{k: v for k, v in f.items() if not k.startswith("_")} for f in fixes]
 
@@ -355,6 +363,9 @@ def digit_check(items: list[dict], receipt_total: float | None, text: str | None
        _deepen ile aranır: k=1, 2, 3; çözümü olan ilk k'de çözümler puanlanır (_score; history: önceki fiyat) ve en
        yüksek puanlı tek çözüm (eşi yoksa) eklenir; yoksa suspect (o k'nin çözümlerinde en çok geçen satırlar, çözüm
        yoksa en çok karışabilir rakamı olanlar; en çok SUSPECT_MAX).
+    5. Tanıksız satırlarda hiç çözüm yoksa metnin doğruladığı satırlar da aranır, yalnız tek satır (k=1): metin silik
+       rakamı okunanla aynı yanlış okumuş olabilir (silik 8 ikisinde de 6). Fark tam kapanmalı ve çözüm tek ya da
+       puanca açık önde olmalı; öneri ocr_agrees true, puanı −1 (_agreed).
     residual: önerilerin hepsi uygulanınca kalan fark (0: fiş tutar); öneri yoksa fiş − kalemler. 2+ öneride
     digit_fix_all {indices, total_ok: residual == 0} ("Hepsini düzelt")."""
     if receipt_total is None:
@@ -379,6 +390,11 @@ def digit_check(items: list[dict], receipt_total: float | None, text: str | None
         pool = {i for i, (f, agrees) in seen.items() if not f and not agrees and (local is None or i in local)}
         sols = [tuple(_score(dict(f), items[f["index"]], history, local is not None, community) for f in sol)
                 for sol in _deepen(items, pool, rest)]
+        if not sols:  # tanıksız satırlarda çözüm yok: telefon metninin de aynı (yanlış) okuduğu satırlar, yalnız k=1
+            agreed = {i for i, (f, agrees) in seen.items() if not f and agrees and (local is None or i in local)}
+            sols = [(_agreed(_score(f, items[i], history, local is not None, community)),)
+                    for i, it in _priced(items) if i in agreed for f in _line_fixes(i, it, rest)]
+            pool |= agreed
         ranked = sorted(sols, key=lambda sol: -sum(f["score"] for f in sol))
         if ranked and (len(ranked) == 1 or sum(f["score"] for f in ranked[0]) > sum(f["score"] for f in ranked[1])):
             fixes += list(ranked[0])
@@ -514,3 +530,92 @@ def take_reread(doc: dict, again: dict, text: str | None = None) -> bool:
         doc["items"], doc["check"] = items, chk2
         return True
     return False
+
+
+# ---------------------------------------------------------------- elle yeniden okumada kullanıcının düzeltmeleri
+
+def _name_key(name: str | None) -> str:
+    return " ".join(sorted(_tokens(name or "")))
+
+
+def _num(v) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _by_name(items: list[dict]) -> dict[str, list[int]]:
+    out: dict[str, list[int]] = {}
+    for i, it in enumerate(items):
+        if k := _name_key(it.get("name")):
+            out.setdefault(k, []).append(i)
+    return out
+
+
+def user_edits(current: list[dict] | None, original: list[dict] | None) -> list[dict]:
+    """Kullanıcının elle düzelttiği kalemler: şu anki kalemlerden (istemcinin düzenleyicisi ya da kayıtlı kalemler)
+    yapay zekânın önceki okumasında aynı adla (aynı adlılar sırayla) bulunan, tutarı ya da adedi değişmiş olanlar:
+    [{name, amount, qty, unit_price, original, nth (aynı adlıların kaçıncısı)}]. Adı değişmiş ya da eklenmiş kalemin yeri bilinmediğinden alınmaz."""
+    if not current or not original:
+        return []
+    orig = _by_name(original)
+    used: dict[str, int] = {}
+    out = []
+    for it in current:
+        k = _name_key(it.get("name"))
+        n = used.get(k, 0)
+        if not k or n >= len(orig.get(k, [])):
+            continue
+        used[k] = n + 1
+        o = original[orig[k][n]]
+        a, oa = _num(it.get("amount")), _num(o.get("amount"))
+        q, oq = _num(it.get("qty")) or 1, _num(o.get("qty")) or 1
+        if a is None or (oa is not None and money.kurus(a) == money.kurus(oa) and abs(q - oq) < 1e-9):
+            continue
+        out.append({"name": it.get("name") or "", "amount": money.money(a), "qty": q,
+                    "unit_price": _num(it.get("unit_price")), "original": oa, "nth": n})
+    return out
+
+
+def _near(name: str, items: list[dict], taken: set[int]) -> int | None:
+    """OCR'a dayanıklı ad eşleşmesi (iki yönde ≥ NAME_OVERLAP); tek aday yoksa None."""
+    want = _tokens(name)
+    if not want:
+        return None
+    hits = []
+    for i, it in enumerate(items):
+        got = _tokens(it.get("name") or "")
+        if i in taken or not got:
+            continue
+        if sum(any(_same_word(w, g) for g in got) for w in want) / len(want) >= NAME_OVERLAP and \
+                sum(any(_same_word(g, w) for w in want) for g in got) / len(got) >= NAME_OVERLAP:
+            hits.append(i)
+    return hits[0] if len(hits) == 1 else None
+
+
+def keep_user_edits(items: list[dict], edits: list[dict]) -> list[dict]:
+    """Yeniden okunan kalemlere (items, yerinde) kullanıcının düzeltmelerini geri koy: aynı adlı kalem (aynı adlıların
+    aynı sıradakisi; yoksa OCR'a dayanıklı ad eşleşmesiyle tek aday) yeni okumada başka tutar okunduysa kullanıcının tutarı,
+    adedi ve birim fiyatı kalır. Geri konanlar: [{index, name, read (yeni okunan), amount (kullanıcının)}]."""
+    if not edits or not items:
+        return []
+    names = _by_name(items)
+    taken: set[int] = set()
+    kept = []
+    for e in edits:
+        same = names.get(_name_key(e["name"]), [])
+        if same:
+            idx = same[e.get("nth", 0)] if e.get("nth", 0) < len(same) else None
+        else:
+            idx = _near(e["name"], items, taken)
+        if idx is None or idx in taken:
+            continue
+        taken.add(idx)
+        it = items[idx]
+        read = _num(it.get("amount"))
+        if read is not None and money.kurus(read) == money.kurus(e["amount"]) and \
+                abs((_num(it.get("qty")) or 1) - e["qty"]) < 1e-9:
+            continue  # yeni okuma kullanıcıyla aynı
+        up = e["unit_price"] if e["unit_price"] is not None else \
+            (money.money(e["amount"] / e["qty"]) if _num(it.get("unit_price")) is not None else None)
+        it.update(amount=e["amount"], qty=e["qty"], unit_price=up)
+        kept.append({"index": idx, "name": it.get("name") or "", "read": read, "amount": e["amount"]})
+    return kept

@@ -177,6 +177,53 @@ def test_auto_reread_daily_cap(client, monkeypatch):
     assert len(calls) == 3 and "reread" not in r  # sınır doldu: yalnız ilk okuma
 
 
+# ---------------------------------------------------------------- elle yeniden okuma kullanıcının düzeltmesini korur
+
+_FADED = {**_FIS, "total": 102.95, "items": [{"name": "SUT 1 L", "amount": 20.0}, {"name": "BULASIK DETERJANI", "amount": 62.95}]}
+
+
+def test_reread_keeps_user_corrected_price(hosted, monkeypatch):  # noqa: F811
+    """Kullanıcı silik 8'i elle düzeltti (62,95 → 82,95), sonra "Fişten yeniden oku": model yine 62,95 okusa da
+    düzeltme kalır (kept_edits); kayıtlı fişte de (kayıtlı kalemler ya da düzenleyicideki kalemler)."""
+    from app import system
+
+    _ai(monkeypatch, _FADED, {"total": 102.95, "items": [{"name": "SUT 1 L", "amount": 20.0},
+                                                          {"name": "BULASIK DETERJANI", "amount": 62.95},
+                                                          {"name": "POSET", "amount": 0.0}]})
+    c, u = _user(hosted)
+    system.update_user(u["id"], plan="premium", plan_until=None)
+    r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
+    assert r["check"]["diff"] == 20.0
+    edited = [dict(i) for i in r["items"]]
+    edited[1]["amount"] = 82.95
+    out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 102.95, "items": edited}).json()
+    assert [i["amount"] for i in out["items"][:2]] == [20.0, 82.95] and out["check"]["ok"]
+    assert out["kept_edits"] == [{"index": 1, "name": "BULASIK DETERJANI", "read": 62.95, "amount": 82.95}]
+    # düzeltme gönderilmezse (eski istemci) yeni okuma aynen döner
+    out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 102.95}).json()
+    assert out["items"][1]["amount"] == 62.95 and out["kept_edits"] == []
+    # kayıtlı fiş: kaydedilmiş düzeltme korunur
+    eid = c.post("/api/entries", json={"entry_date": "2026-10-29", "description": "Ornek", "amount": 102.95,
+                                       "kind": "gider", "category": "Market & Gıda", "receipt_file": r["receipt_file"],
+                                       "items": [{**i, "unit": "adet"} for i in edited]}).json()["id"]
+    out = c.post(f"/api/entries/{eid}/receipt-reread").json()
+    assert out["items"][1]["amount"] == 82.95 and out["kept_edits"][0]["read"] == 62.95 and out["check"]["ok"]
+
+
+def test_user_edits_rules():
+    ai = [_it("SUT 1 L", 20.0), _it("DETERJAN", 62.95), _it("SU", 5.0), _it("SU", 5.0)]
+    cur = [_it("SUT 1 L", 20.0), _it("DETERJAN", 82.95), _it("SU", 5.0), _it("SU", 7.5), _it("YENI KALEM", 3.0)]
+    edits = receipt_check.user_edits(cur, ai)
+    assert [(e["name"], e["amount"], e["original"]) for e in edits] == [("DETERJAN", 82.95, 62.95), ("SU", 7.5, 5.0)]
+    assert receipt_check.user_edits(cur, None) == [] and receipt_check.user_edits(ai, ai) == []
+    # yeni okumada ad biraz farklı (OCR): tek aday eşleşir; ikinci SU'ya konur; yeni okuma kullanıcıyla aynıysa dokunulmaz
+    again = [_it("SUT 1 L", 20.0), _it("DETERJN", 62.95, 1, 62.95), _it("SU", 5.0), _it("SU", 7.5)]
+    kept = receipt_check.keep_user_edits(again, edits)
+    assert kept == [{"index": 1, "name": "DETERJN", "read": 62.95, "amount": 82.95}]
+    assert again[1]["amount"] == 82.95 and again[1]["unit_price"] == 82.95 and again[3]["amount"] == 7.5
+    assert receipt_check.keep_user_edits([_it("BASKA", 1.0)], edits) == []
+
+
 def test_needs_reread_rules():
     # kalemli fişte (2+ kalem) toplam tutsa da adet × birim tutmayan kalem: yeniden oku (04.11.2026 kararı)
     items = [_it("MUZ", 75.0, 2, 40.0), _it("EKMEK", 25.0)]

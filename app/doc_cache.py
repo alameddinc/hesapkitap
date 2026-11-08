@@ -83,6 +83,24 @@ def put(key: bytes | str, kind: str, result: dict, file: str | None = None) -> N
         logging.getLogger("ekstre.doc_cache").exception("okuma önbelleği yazılamadı")
 
 
+def for_file(file: str) -> dict | None:
+    """Bu defterde receipt_file'ı file olan en yeni önbellek sonucu (TTL içinde; elle yeniden okumada kullanıcının
+    düzelttiği kalemleri bulmak için: yapay zekânın önceki okuması). Yoksa None."""
+    from app import system
+
+    book = _where()
+    if book is None or not file:
+        return None
+    with system.connect() as c:
+        r = c.execute("SELECT result FROM doc_cache WHERE book_id = ? AND file = ? AND created_at >= ? "
+                      "ORDER BY created_at DESC LIMIT 1", (book, file, _now() - TTL)).fetchone()
+    try:
+        out = json.loads(r[0]) if r else None
+    except ValueError:
+        return None
+    return out if isinstance(out, dict) else None
+
+
 def refresh_file(file: str, update) -> int:
     """Bu defterde receipt_file'ı file olan önbellek satırlarını update(result) -> result ile yenile (elle yeniden
     okuma). Yenilenen satır sayısı."""
