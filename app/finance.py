@@ -566,6 +566,8 @@ def summary(month: str, today: date | None = None) -> dict:
         "statements": statements,
         "trend": trend,
         "insights": insights(month, today=today),
+        # bu dönemin taksitleri (yetenek "summary_installments"): harcamaya EKLENMEZ, kırılımdır — installments_due
+        "installments": {k: v for k, v in installments_due(month, today=today).items() if k != "items"},
     }
 
 
@@ -1052,6 +1054,126 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
     return {"cards": cards, "overdue": nw["card_overdue"],
             "totals": {"so_far": _round(so_far), "at_cut": _round(at_cut), "unpaid": nw["totals"]["card_debt"],
                        "estimated": nw["totals"]["card_estimated"], "overdue": nw["totals"]["card_overdue"]}}
+
+
+# ---------------------------------------------------------------- bu ayın taksitleri (Özet)
+
+def _card_short(bank: str | None, card_no: str | None) -> str | None:
+    """"VakıfBank …9012": listede kısa kart adı (kart numarasının yalnız son 4 hanesi)."""
+    l4 = "".join(ch for ch in (card_no or "") if ch.isdigit())[-4:]
+    s = f"{bank or ''} …{l4}".strip() if l4 else (bank or "")
+    return s or None
+
+
+def _inst_parts(inst: str | None) -> tuple[int, int] | None:
+    try:
+        no, of = map(int, (inst or "").split("/"))
+        return no, of
+    except ValueError:
+        return None
+
+
+@_memo
+def installments_due(month: str, today: date | None = None) -> dict:
+    """Dönemin (Özet'te seçili ay) taksitleri: "Bu ay ödenecek taksitler · ₺4.250 · 6 taksit" ve kalan taksit borcu.
+
+    ANLAM (çift sayım yok): dönemin harcaması (summary.totals.expense) bu dönemin taksit dilimlerini ZATEN içerir —
+    ekstredeki "3/6 taksit" satırı ekstrenin kesim ayına, elle girilen taksitli kart harcamasının her dilimi kendi ayına
+    yazılır (_all_rows). Bu yanıt harcamaya EKLENMEZ; harcamanın taksit kırılımı + henüz ekstresi gelmemiş ama tutarı
+    belli olan taksitlerdir:
+      in_spend  bu dönemin harcamasına dahil taksitler (ekstre satırı ya da elle girilen dilim; finance.counts kuralı:
+                silinen/atlanan/ekstreyle eşleşmiş elle kayıt sayılmaz — eşleşmişte kart satırı sayılır)
+      expected  kartın bu döneme ait ekstresi henüz yok: son ekstrenin "kalan taksit" bilgisinden bu döneme düşen
+                taksitler (card_projection; Planlama'daki "taksit" satırlarıyla aynı). Harcamaya ekstre gelince girer.
+      total     in_spend + expected = "bu ay ödenecek taksitler" (şu anda ne durumdayız: bu dönem taksitlere ne gidiyor)
+      remaining bu dönemden SONRAKİ aylara düşen taksitlerin toplamı ("kalan taksit borcu"): son ekstrelerin kalan
+                taksitleri + elle girilen taksitlerin sonraki dilimleri (ekstreyle eşleşmişlerin sonraki dilimleri zaten
+                ekstrenin kalan taksitinde; ikinci kez sayılmaz)
+    count / remaining_count yalnız alışveriş taksitlerini sayar; vade farkı, BSMV, KKDF taksitleri (fee: true) tutara
+    girer ama "6 taksit" sayısını şişirmez. İade taksiti eksi tutarla toplamı düşürür, sayıya girmez.
+    Ortak defter: kart işlemleri, kayıtlar ve ekstreler okunurken süzüldüğü için gizli kart/kayıt/faiz hiçbir kaleme
+    girmez (hide_fees'te vade farkı taksitleri de yok). items[].row: dokununca açılacak gerçek satır (GET /api/transactions
+    satırıyla aynı biçim; beklenen taksitte kaynağı olan son ekstredeki kart işlemi)."""
+    today = today or date.today()
+    statements = db.list_statements()
+    due_of = {(s["card_no"], s["period"]): s.get("due_date") for s in statements}
+    latest = _latest_statement_per_account()
+    aliases = db.card_aliases()
+
+    def due_for(acc: str | None, m: str) -> str | None:
+        if not acc:
+            return None
+        if (acc, m) in due_of:
+            return due_of[(acc, m)]
+        st = latest.get(acc)
+        if st and add_months(st["period"], 1) == m:  # son ekstreden sonraki ekstre: "sonraki son ödeme"
+            due = _next_cut(st)[1]
+            return due.isoformat() if due else None
+        return None
+
+    items: list[dict] = []
+    for r in transactions(month):
+        parts = _inst_parts(r.get("installment"))
+        if not parts or r["month"] != month or r["kind"] not in (*CARD_SPEND, FEE, EXPENSE):
+            continue
+        spend, _ = counts(r)
+        if not spend:
+            continue
+        if r["source"] == "card":
+            acc, card = r.get("account"), _card_short(r.get("bank"), r.get("account"))
+        else:
+            acc = aliases.get(r.get("card_last4") or "")
+            st = latest.get(acc) if acc else None
+            card = _card_short(st["bank"] if st else None, acc) if acc else (
+                f"Kart …{r['card_last4']}" if r.get("card_last4") else None)
+        items.append({"uid": r["uid"], "source": r["source"], "title": r["merchant"], "description": r["description"],
+                      "card": card, "installment": r["installment"], "no": parts[0], "of": parts[1],
+                      "amount": _round(r["amount"]), "in_spend": True, "fee": r["kind"] == FEE,
+                      "due_date": due_for(acc, month), "row": r})
+
+    proj = card_projection()
+    by_id = {t["id"]: t for t in db.card_transactions()}
+    states, merchant_aliases = db.subscription_states(), db.merchant_aliases()
+    remaining = 0.0
+    remaining_keys: set = set()
+    for acc, p in proj.items():
+        for i in p["installments"]:
+            if i["month"] > month:
+                remaining += i["amount"]
+                if not i["fee"] and i["amount"] > 0:
+                    remaining_keys.add(("c", i["txn_id"]))
+                continue
+            if i["month"] != month or p["latest_period"] >= month:
+                continue  # bu dönemin ekstresi var (ya da geçmiş dönem): gerçek satırlar yukarıda
+            t = by_id.get(i["txn_id"])
+            if not t:
+                continue
+            row = _card_row(t, states, merchant_aliases)
+            no, of = _inst_parts(i["installment"]) or (0, 0)
+            items.append({"uid": f"c{i['txn_id']}:{i['installment']}", "source": "projected", "title": row["merchant"],
+                          "description": t["description"], "card": _card_short(p["bank"], acc),
+                          "installment": i["installment"], "no": no, "of": of, "amount": _round(i["amount"]),
+                          "in_spend": False, "fee": i["fee"], "due_date": due_for(acc, month), "row": row})
+    # elle girilen taksitlerin sonraki dilimleri (ekstreyle eşleşmemiş; eşleşmişin devamı ekstrenin kalan taksitinde)
+    for e in db.installment_entries():
+        if e["skipped"] or e["linked_txn_id"]:
+            continue
+        for k, m, amt in db.installment_parts(e):
+            if m > month:
+                remaining += amt
+                remaining_keys.add(("m", e["id"]))
+    # geçmiş dönem seçiliyse: o dönemden sonraki ekstrelerde gerçekleşmiş taksit satırları da "sonrası"dır
+    for t in db.card_transactions():
+        if t["period"] > month and t["installment_no"] is not None and t["txn_type"] in (*CARD_SPEND, FEE):
+            remaining += t["amount"]
+
+    items.sort(key=lambda x: (x["fee"], -x["amount"], x["title"]))
+    in_spend = sum(x["amount"] for x in items if x["in_spend"])
+    expected = sum(x["amount"] for x in items if not x["in_spend"])
+    return {"month": month, "current": month == current_period(today),
+            "total": _round(in_spend + expected), "count": sum(1 for x in items if not x["fee"] and x["amount"] > 0),
+            "in_spend": _round(in_spend), "expected": _round(expected),
+            "remaining": _round(remaining), "remaining_count": len(remaining_keys), "items": items}
 
 
 def recurring_suggestions(today: date | None = None) -> list[dict]:

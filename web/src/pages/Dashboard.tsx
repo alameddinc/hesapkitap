@@ -28,6 +28,7 @@ import { PlanGate } from "../components/Plan";
 import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
+import TaksitSatiri from "../components/Taksitler";
 import { boundsOf, cx, monthLabel, signed, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
 
@@ -205,6 +206,8 @@ export default function Dashboard() {
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
         </div>
         <div className="hidden sm:block"><EstimateNote summary={s} /></div>
+        {/* harcamanın taksit kırılımı: harcamaya eklenmez (sunucu finance.installments_due) */}
+        <TaksitSatiri summary={s} />
         {/* Aralık sonu / Ocak başı: "2026 yılın nasıl geçti?" → yıl özeti (yalnız içinde bulunulan dönemde) */}
         {month === meta?.current_month && <YearShortcut />}
       </>);

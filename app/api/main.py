@@ -2137,6 +2137,28 @@ def summary(month: str | None = None):
     return out
 
 
+@app.get("/api/installments")
+def installments_due(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Özet → "Bu ay ödenecek taksitler" listesi (yetenek summary_installments; finance.installments_due): dönemin
+    taksitleri, harcamaya dahil olanlar (in_spend) ve ekstresi beklenenler, kalan taksit borcu. Her kalemde row: dokununca
+    düzenlenecek satır (GET /api/transactions ile aynı biçim). Özet'in temel bilgisi: ücretsiz pakette de açık (geçmiş
+    dönem kuralı /api/summary ile aynı). Ortak defterde her kalemde spender / spender_name (Kim harcadı kuralı)."""
+    _history_gate(month)
+    out = finance.installments_due(month or finance.current_period())
+    if ppl := _shared_people():
+        sp = finance.Spenders(ppl)
+        for i in out["items"]:
+            r = i["row"]
+            r["spender"], r["spender_set"] = sp.of(r), sp.is_set(r)
+            i["spender"] = r["spender"]
+            i["spender_name"] = sp.name(r["spender"])
+    for i in out["items"]:
+        i["row"].setdefault("raw", None)
+        i["row"].setdefault("note_user", i["row"].get("note"))
+        i["row"]["counts_as_spend"], i["row"]["counts_as_income"] = finance.counts(i["row"])
+    return FastJSON(out)
+
+
 class InsightKeyIn(BaseModel):
     key: str = Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x1f]+$")
 

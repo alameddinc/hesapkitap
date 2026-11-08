@@ -166,6 +166,11 @@ CAPABILITIES = (
                               # names, in_plan, confident, saving?} | null; GET /api/shopping-list/receipt-match[?entry_id]
                               # (son 2 günün bağlanmamış fişi) → aday | null; POST /link-receipt {entry_id, target?, trip_id?},
                               # POST /receipt-dismiss {entry_id}; items[].actual {unit_price, line_total, entry_id}
+    "summary_installments",   # /api/summary installments {month, current, total, count, in_spend, expected, remaining,
+                              # remaining_count} — dönemin taksitleri, harcamaya EKLENMEZ (in_spend zaten totals.expense
+                              # içinde; expected ekstresi beklenen); GET /api/installments?month → aynısı + items [{uid,
+                              # source card|manual|projected, title, card, installment "3/6", no, of, amount, in_spend,
+                              # fee, due_date, row (dokununca düzenlenecek satır), spender?, spender_name?}]
 )
 
 

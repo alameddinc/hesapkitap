@@ -39,6 +39,11 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
                      "category": "Market & Gıda", "payment": "nakit"})
     db.create_entry({"entry_date": "2026-10-03", "description": "Serbest proje", "amount": 12000, "kind": "gelir",
                      "category": "Ek Gelir"})
+    # elle girilen taksitli kart harcamaları (ekstresi olmayan kart): Özet → "Bu ay ödenecek taksitler", Planlama
+    db.create_entry({"entry_date": "2026-08-18", "description": "Örnek Beyaz Eşya · Buzdolabı", "amount": 18000,
+                     "kind": "gider", "category": "Elektronik", "payment": "kredi_karti", "installments": 6})
+    db.create_entry({"entry_date": "2026-10-09", "description": "Örnek Gözlükçü", "amount": 4500, "kind": "gider",
+                     "category": "Sağlık", "payment": "kredi_karti", "installments": 3})
     db.create_bill({"provider": "Örnek Elektrik", "amount": 845.30, "due_date": "2026-10-28", "category": "Elektrik",
                     "description": "Eylül 2026"})
     db.create_bill({"provider": "Örnek İnternet", "amount": 549.90, "due_date": "2026-10-24", "category": "İnternet & TV"})

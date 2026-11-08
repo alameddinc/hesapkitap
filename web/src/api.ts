@@ -1,3 +1,4 @@
+import type { TaksitKalem, TaksitOzet } from "./lib/taksit";
 import { ApiError, call, send } from "./lib/apiError";
 import { bookHeaders, type BookKey } from "./lib/saveBook";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
@@ -250,7 +251,12 @@ export interface Summary {
   insights: Insight[];
   /** kişinin bu dönemde gizlediği uyarı sayısı (listesi: api.hiddenInsights) */
   insights_hidden?: number;
+  /** bu dönemin taksitleri (yetenek summary_installments; eski sunucuda yok): harcamaya eklenmez, kırılımdır */
+  installments?: TaksitOzet;
 }
+
+/** GET /api/installments?month: Özet "Bu ay ödenecek taksitler" listesi; row dokununca düzenlenecek satır. */
+export interface TaksitListesi extends TaksitOzet { items: (TaksitKalem & { row: Row })[] }
 
 /** GET /api/insights/hidden: gizlenen uyarı (Geri getir: restoreInsight) */
 export interface HiddenInsight { key: string; title: string; level: Insight["level"]; detail?: string }
@@ -564,6 +570,7 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
 export const api = {
   meta: () => req<Meta>("GET", "/api/meta"),
   summary: (month: string) => req<Summary>("GET", `/api/summary${q({ month })}`),
+  installments: (month: string) => req<TaksitListesi>("GET", `/api/installments${q({ month })}`),
   /** Özet uyarısını kişi başına gizle / gizlemeyi geri al (summary.insights[].key) */
   dismissInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/dismiss", { key }),
   restoreInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/restore", { key }),

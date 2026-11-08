@@ -1379,10 +1379,15 @@ def installment_parts(e: dict) -> list[tuple[int, str, float]]:
 
 
 def installment_entries() -> list[dict]:
+    """Taksitli kredi kartı harcamaları (tüm aylar). Ortak defter üyesine list_entries gibi süzülür: gizli kayıt, gizli
+    kartın ya da hesabın kaydı taksit dilimleriyle de görünmesin (önbellek anahtarında görüntüleyen)."""
+    from app import book
+
     def load():
         with connect() as c:
-            return rows(c.execute("SELECT * FROM entries WHERE installments > 1 AND payment = 'kredi_karti' AND kind = 'gider'"))
-    return [dict(r) for r in _cached("installment_entries", load)]
+            return book.filter_entries(rows(c.execute(
+                "SELECT * FROM entries WHERE installments > 1 AND payment = 'kredi_karti' AND kind = 'gider'")))
+    return [dict(r) for r in _cached("installment_entries", load, _viewer())]
 
 
 def list_entries(month: str | None = None) -> list[dict]:
