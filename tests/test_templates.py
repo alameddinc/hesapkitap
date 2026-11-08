@@ -15,6 +15,14 @@ Ali Veli
 """
 
 
+def test_bank_of_unknown_bank_is_empty():
+    """Tanınmayan banka: başlık metni banka adı sayılmaz (önceden ilk 600 karakter aynen dönüyordu; dekont bunu hesap
+    adı yapıyordu)."""
+    text = "KURGU BANK\nHesap Hareketleri\nIBAN: TR00 0000 0000 0000 0000 0000 01\n01.10.2026 MAAŞ 1.000,00 2.000,00"
+    assert templates.bank_of(text) == ""
+    assert templates.bank_of("TÜRKİYE HALK BANKASI A.Ş.\nHesap Hareketleri") == "Halkbank"
+
+
 def test_learn_apply_and_reuse():
     assert templates.bank_of(HALK) == "Halkbank"
     spec, res = templates.learn(HALK, "Halkbank")
