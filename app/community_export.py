@@ -68,7 +68,8 @@ def _source(day: str) -> list:
 
     with system.connect() as c:
         return c.execute("SELECT chain, group_key, name_norm, contributor, unit_price, region FROM community_prices "
-                         "WHERE day = ? AND discounted = 0 ORDER BY id", (day,)).fetchall()  # indirimli kalem fiyat değil
+                         "WHERE day = ? AND discounted = 0 AND contributor NOT LIKE 'film-%' ORDER BY id",
+                         (day,)).fetchall()  # indirimli kalem fiyat değil
 
 
 def _signature(rows: list) -> str:

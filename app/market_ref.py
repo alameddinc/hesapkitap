@@ -86,9 +86,11 @@ def series(group_keys: list[str], since: str, region: str | None = None,
                     by[ch] = min(p, by.get(ch, p))
         for (g, prov, day), by in live.items():
             off.setdefault((g, prov), {}).setdefault(day, {**_band(by), "source": "resmi"})
+    from app import film_scope
+
     with system.connect() as c:
         got = c.execute(f"SELECT group_key, day, chain, contributor, unit_price FROM community_prices WHERE day >= ? "
-                        f"AND group_key IN ({q})", [since, *keys]).fetchall()
+                        f"AND group_key IN ({q}){film_scope.community_clause()}", [since, *keys]).fetchall()
     people: dict[tuple[str, str, str], dict[str, list[float]]] = {}
     for g, day, ch, who, p in got:
         people.setdefault((g, day, ch), {}).setdefault(who, []).append(p)

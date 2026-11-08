@@ -107,6 +107,10 @@ def contribute(uid: int | None, merchant: str | None, legal_name: str | None, it
     today = today or date.today()
     if not uid or demo_mode.enabled() or not prefs.price_share(uid):
         return 0
+    from app import film_scope
+
+    if film_scope.is_film_user(uid):  # reklam filmi hesabı topluluğa katılmaz (app/film_scope.py)
+        return 0
     chain = chain_of(merchant, legal_name)
     if not chain:
         return 0
@@ -166,8 +170,11 @@ def medians(group_keys: list[str] | None = None, chain: str | None = None, today
     yalnız indirimsiz satırlar (indirimlilerin ortancası discounted; o da en az min_contributors kişiyle). Önce kişi
     başı ortanca, sonra kişiler arası ortanca. group_keys / chain verilirse yalnız onlar. region (il) verilirse önce o
     ilin satırları (yeterli kişi varsa; region yazılır), yoksa bütün satırlar."""
+    from app import film_scope
+
     since = ((today or date.today()) - timedelta(days=WINDOW_DAYS)).isoformat()
-    sql = "SELECT chain, group_key, contributor, unit_price, region, discounted FROM community_prices WHERE day >= ?"
+    sql = ("SELECT chain, group_key, contributor, unit_price, region, discounted FROM community_prices WHERE day >= ?"
+           + film_scope.community_clause())
     args: list = [since]
     if group_keys is not None:
         keys = sorted({k for k in group_keys if k})
@@ -219,7 +226,7 @@ def disagreements(today: date | None = None) -> list[dict]:
     since = (today - timedelta(days=6 + WINDOW_DAYS)).isoformat()
     with system.connect() as c:
         comm = c.execute("SELECT chain, group_key, contributor, unit_price, day FROM community_prices WHERE day >= ? "
-                         "AND discounted = 0", (since,)).fetchall()
+                         "AND discounted = 0 AND contributor NOT LIKE 'film-%'", (since,)).fetchall()
         if not comm:
             return []
         off = c.execute("SELECT chain, group_key, day, price FROM official_prices WHERE day >= ? AND price > 0",

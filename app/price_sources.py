@@ -80,6 +80,10 @@ def enabled_names() -> list[str]:
     names = [n for n in (x.strip() for x in raw.split(",")) if n in _REGISTRY]
     if demo_mode.enabled() and "resmi" not in names:  # demo: uydurma piyasa verisi (app/demo_prices.py) hep açık
         names.append("resmi")
+    from app import film_scope
+
+    if film_scope.is_film_user():  # reklam filmi hesabı: yalnız uydurma topluluk satırları (app/film_scope.py)
+        return [n for n in names if n != "resmi"]
     return [n for n in names if n != "resmi" or official_configured()]  # resmî kaynak: BigQuery ya da adres / dosya da gerekir
 
 

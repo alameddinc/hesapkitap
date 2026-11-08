@@ -44,7 +44,7 @@ def common_sizes(bases: list[str]) -> dict[str, list[str]]:
     ve topluluk satırları (kişi × gün) sayılır. "sut" → ["sut|1l", "sut|500ml", …]; "elma" → ["elma|kg", …]."""
     from datetime import date, timedelta
 
-    from app import system
+    from app import film_scope, system
 
     bases = sorted({b for b in bases if b})
     if not bases:
@@ -56,7 +56,7 @@ def common_sizes(bases: list[str]) -> dict[str, list[str]]:
         off = c.execute(f"SELECT group_key, COUNT(DISTINCT chain || '|' || title) FROM official_prices WHERE day >= ? "
                         f"AND ({like}) GROUP BY group_key", [since, *args]).fetchall()
         com = c.execute(f"SELECT group_key, COUNT(DISTINCT contributor || day) FROM community_prices WHERE day >= ? "
-                        f"AND ({like}) GROUP BY group_key", [since, *args]).fetchall()
+                        f"AND ({like}){film_scope.community_clause()} GROUP BY group_key", [since, *args]).fetchall()
     n: dict[str, int] = {}
     for k, v in [*off, *com]:
         n[k] = n.get(k, 0) + v
