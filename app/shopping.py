@@ -329,6 +329,54 @@ def mark_best_value(rows: list[dict]) -> None:
             min(fam, key=lambda x: (x["unit_price_per"], _size_sort(x["key"])))["best_value"] = True
 
 
+def combo_keys(key: str, extra: list[str] | None = None) -> list[str]:
+    """Seçici için boylar: verilen anahtar boyluysa ("sut|1l") yalnız o; boysuzsa ("sut") en yaygın 8 boy (+ extra)."""
+    if "|" in key:
+        return [key]
+    base = key
+    keys = common_sizes([base]).get(base, [])[:8]
+    return list(dict.fromkeys([*(k for k in extra or [] if k and k.split("|", 1)[0] == base), *keys])) or [base]
+
+
+def combos_out(keys: list[str], chain: str | None = None, hidden=None) -> dict:
+    """Zincir × marka × boy seçicisi (shop_combo_picker): {keys, rows [price_sources.combos satırı + size_label],
+    chains [zincir, ucuzdan], brands [marka, çok satırlı önce], sizes [{key, size_label}] küçükten büyüğe, hidden
+    {count, chains, local}, attribution [kaynak yazısı]}."""
+    from app import price_import, price_sources, product_groups
+
+    rows = price_sources.combos(keys, hidden=hidden, chain=chain)
+    for r in rows:
+        r["size_label"] = product_groups.size_label(r["key"])
+    chains = list(dict.fromkeys(r["chain"] for r in rows))
+    cnt: dict[str, int] = {}
+    for r in rows:
+        if r["brand"]:
+            cnt[r["brand"]] = cnt.get(r["brand"], 0) + 1
+    present = sorted({r["key"] for r in rows}, key=_size_sort)
+    return {"keys": keys, "rows": rows, "chains": chains,
+            "brands": sorted(cnt, key=lambda b: (-cnt[b], b.casefold())),
+            "sizes": [{"key": k, "size_label": product_groups.size_label(k)} for k in present],
+            "hidden": hidden.out(keys) if hidden is not None else {"count": 0, "chains": [], "local": False},
+            "attribution": [price_import.attribution()] if any(r["source"] == "resmi" for r in rows) else []}
+
+
+def item_combos(rid: int, chain: str | None = None, all_sizes: bool = True, hidden=None) -> dict | None:
+    """Satırın seçicisi (GET /api/shopping-list/{id}/combos): bütün yaygın boylar (all_sizes) ya da satırın boyu;
+    selected {store, brand, key} satırın şimdiki seçimi. Satır yoksa None."""
+    with db.connect() as c:
+        r = c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+    if not r:
+        return None
+    g = _resolve([r["text"]])[0]
+    sel = {"store": r["store"], "brand": r["brand"], "key": r["pinned_key"] or (g or {}).get("key")}
+    if not g or g.get("pending"):
+        return {"keys": [], "rows": [], "chains": [], "brands": [], "sizes": [],
+                "hidden": {"count": 0, "chains": [], "local": False}, "attribution": [], "selected": sel}
+    key = r["pinned_key"] or g["key"]
+    keys = combo_keys(key.split("|", 1)[0], [key]) if all_sizes else combo_keys(key)
+    return {**combos_out(keys, chain, hidden), "selected": sel}
+
+
 def brand_keys(base: str) -> list[str]:
     """Bir ürünün (boysuz anahtar "sut") marka aranacak grupları: en yaygın boylar + boysuz anahtar."""
     return [*common_sizes([base]).get(base, [])[:12], base]

@@ -11,7 +11,7 @@ import { offerSub, offersTitle, type OffersData } from "../lib/shopStores";
 import { OfferBadges, PriceFootnote, type GroupBest } from "./PriceDetail";
 import { HiddenHint } from "./ShopStores";
 
-export interface BrandOpt { brand: string; sizes: string[]; chains: number }
+export interface BrandOpt { brand: string; sizes: string[]; chains: number; /** yeni sunucu: {anahtar: "1 L"} */ size_labels?: Record<string, string> }
 
 /** "Marka fark etmez" + markalar; null = marka fark etmez. */
 export function BrandChips({ brands, value, onChange, id = "marka" }: {

@@ -6,6 +6,8 @@
 // Liste v4 (her biri ayrı yetenek): headline.profit ("Bu planla ₺120 tasarruf", shop_best_value), satırda birim fiyat ve
 // "En kârlı boy" önerisi (yalnız öneri; dokununca düzenle), bağlı durak rozeti "Senin seçimin" ve pinned_unpriced,
 // "Marketleri ben seçeyim" (shop_store_pin; chain_options, en çok 3, ?chains=…, manual.missing), gizli mağaza ipucu.
+// Liste v5 (shop_combo_picker): durak satırında "Markayı seç" → "Zincir ve marka seç" (o durağın zinciriyle süzülü);
+// seçimden sonra plan yeniden hesaplanır (liste değişince sorgu anahtarı değişir; manuel plan da tazelenir).
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, MapPinned, RefreshCw, Store, TrendingDown, X } from "lucide-react";
 import { useState } from "react";
@@ -18,6 +20,7 @@ import { betterSizeText, MAX_PICK, missingCheapestText, optimizePath, pinnedUnpr
 import { useCap } from "./hooks";
 import Segmented from "./Segmented";
 import { HiddenHint } from "./ShopStores";
+import { ComboSheet } from "./ShopCombos";
 
 export const OPTIMIZE = ["shopping-optimize"] as const;
 /** "₺1.200" (tam lirada kuruşsuz), "₺59,90" */
@@ -55,6 +58,8 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
   });
   const pinOn = useCap("shop_store_pin");
   const bestOn = useCap("shop_best_value");
+  const comboOn = useCap("shop_combo_picker");
+  const [comboFor, setComboFor] = useState<{ id: number; chain: string } | null>(null);
   // "Marketleri ben seçeyim": seçici açık mı, seçilenler, gösterilen manuel plan (null: önerilen)
   const [picking, setPicking] = useState(false);
   const [pick, setPick] = useState<string[]>([]);
@@ -156,6 +161,10 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
                             <button type="button" className="mt-0.5 block text-left text-xs font-medium break-words text-green-700 tabular-nums underline-offset-2 hover:underline dark:text-green-400"
                               onClick={() => onFix(l.id)} data-testid="karli-boy">{maskText(betterSizeText(bs, money))}</button>
                           ) : <div className="mt-0.5 text-xs font-medium break-words text-green-700 tabular-nums dark:text-green-400" data-testid="karli-boy">{maskText(betterSizeText(bs, money))}</div>)}
+                          {comboOn && !ro && (
+                            <button type="button" className="mt-0.5 text-xs font-medium text-blue-700 underline-offset-2 hover:underline dark:text-blue-300"
+                              onClick={() => setComboFor({ id: l.id, chain: s.chain })} aria-label={`${l.text}: markayı seç`} data-testid="markayi-sec">Markayı seç</button>
+                          )}
                         </div>
                         <span className={cx("shrink-0 text-right text-sm tabular-nums", d && "text-stone-400")}>{money(l.line_total)}
                           {pu && <span className="block text-xs text-stone-500 dark:text-stone-400" data-testid="satir-birim">{pu}</span>}</span>
@@ -261,6 +270,7 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
             {src}{srcExtra && <span className="sr-only"> ({srcExtra})</span>}</p>
         )}
       </div>
+      {comboFor && <ComboSheet itemId={comboFor.id} chain={comboFor.chain} onClose={() => setComboFor(null)} onDone={() => { if (!ext) void own.refetch(); }} />}
     </section>
   );
 }
