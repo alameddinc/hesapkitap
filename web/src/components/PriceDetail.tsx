@@ -5,6 +5,7 @@
 // grafik o zaman takvim eksenli), alım noktası history[].vs_market'e göre yeşil / sarı / kırmızı, altında son alımın yeri.
 // Liste v4: "Nereden alınır"da gizli mağaza ipucu (shop_store_filter; hidden_count) ve marka + boy seçimiyle "Mağazalara
 // göre" listesi (shop_brand_size; GET /api/prices/brands + /api/prices/offers, components/ShopOffers.tsx).
+// Liste v5 (shop_combo_picker): onların yerine salt görüntü "Zincir ve marka" listesi (GET /api/prices/combos).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ListPlus, ReceiptText, Store, TrendingDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -20,6 +21,7 @@ import { useCap, useMeta, useOpenRow } from "./hooks";
 import { RegionPrompt } from "./RegionPicker";
 import { BrandChips, OffersList, type BrandOpt } from "./ShopOffers";
 import { HiddenHint } from "./ShopStores";
+import { ComboList, useGroupCombos } from "./ShopCombos";
 
 export interface PriceHistory {
   date: string; price: number | null; store: string; branch: string | null; qty: number; name: string;
@@ -347,6 +349,8 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
   const cheapest = sorted[0];
   const newest = newestOfficial(best);
   const brandOn = useCap("shop_brand_size");
+  const comboOn = useCap("shop_combo_picker");
+  if (comboOn) return <GroupCombos g={g} officialHere={best.some((b) => b.source === "resmi")} />;
   if (brandOn) return <GroupBrandSize g={g} hidden={grp?.hidden_count} officialHere={best.some((b) => b.source === "resmi")} />;
   return (
     <section className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
@@ -390,6 +394,8 @@ function GroupBrandSize({ g, hidden, officialHere }: { g: PriceGroupRef; hidden?
   const key = size && opts.includes(size) ? size : opts[0] ?? (g.key.includes("|") ? g.key : null);
   const money = (n: number) => maskText(tl(n));
   const brands = br.data?.brands ?? [];
+  // boy adı sunucudan (brands[].size_labels); eski sunucuda istemci yedeği
+  const sizeName = (k: string) => brands.find((b) => b.size_labels?.[k])?.size_labels?.[k] ?? keySizeLabel(k);
   return (
     <section className="space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
@@ -409,14 +415,27 @@ function GroupBrandSize({ g, hidden, officialHere }: { g: PriceGroupRef; hidden?
                 className={cx("rounded-full border px-3 py-1 text-sm tabular-nums",
                   k === key ? "border-green-700 bg-green-700 text-white dark:border-green-500 dark:bg-green-600"
                     : "border-stone-300 text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800")}>
-                {keySizeLabel(k)}</button>
+                {sizeName(k)}</button>
             ))}
           </div>
         </div>
       )}
-      {key ? <OffersList group={key} brand={brand} sizeLabel={keySizeLabel(key)} money={money} />
+      {key ? <OffersList group={key} brand={brand} sizeLabel={sizeName(key)} money={money} />
         : <HiddenHint count={hidden} />}
       <RegionPrompt show={officialHere} />
+    </section>
+  );
+}
+
+/** Grup ayrıntısı, v5 (yetenek shop_combo_picker): zincir × marka × boy listesi, salt görüntü. */
+function GroupCombos({ g, officialHere }: { g: PriceGroupRef; officialHere: boolean }) {
+  const q = useGroupCombos(g.key);
+  return (
+    <section className="space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
+      <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
+      <h3 className="text-sm font-semibold">Zincir ve marka</h3>
+      <ComboList data={q.data} loading={q.isLoading} error={q.error as Error | null} bleed="-mx-3 px-3" />
+      <RegionPrompt show={officialHere || !!q.data?.rows.some((r) => r.source === "resmi")} />
     </section>
   );
 }

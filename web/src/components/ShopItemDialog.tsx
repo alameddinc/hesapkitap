@@ -5,8 +5,10 @@
 // Liste v4 (her biri ayrı yetenek; eski sunucuda görünmez): "Marka" çipleri (shop_brand_size; GET /{id}/brands, boş ise
 // bölüm yok), boy listesi küçükten büyüğe "En ucuz: … · ₺/L" + "En kârlı" rozeti (shop_best_value), seçili boyun
 // "Mağazalara göre" listesi (GET /api/prices/offers), "Mağaza" seçimi (shop_store_pin; store null = otomatik).
+// Liste v5 (shop_combo_picker): bu üç bölümün yerine tek "Zincir ve marka" bölümü — seçim özeti + "Değiştir" → seçici
+// (components/ShopCombos.tsx; dokununca tek PATCH). Boy listesi aynen kalır.
 import { useQuery } from "@tanstack/react-query";
-import { Check, Info, Minus, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Info, Minus, Plus, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 import { cx } from "../format";
 import { send } from "../lib/apiError";
@@ -18,6 +20,8 @@ import Modal from "./Modal";
 import { SuggestList, useSuggest, type Suggestion } from "./ShopAutofill";
 import { BrandChips, OffersList, useOffers, type BrandOpt } from "./ShopOffers";
 import { HiddenHint } from "./ShopStores";
+import { ComboSheet, useItemCombos } from "./ShopCombos";
+import { comboSummary } from "../lib/combos";
 
 export interface EditableItem {
   id: number; text: string; qty: number | null; unit?: string | null; group_key: string | null;
@@ -49,8 +53,11 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
   const okQty = validQty(qty, unit);
   const sug = useSuggest(text, autofill && sugOpen);
   const sugItems = (sug.data ?? []).filter((s) => !(s.text === it.text && (s.group_key ?? null) === (cur ?? null)));
-  const brandOn = useCap("shop_brand_size");
-  const pinOn = useCap("shop_store_pin");
+  // v5 seçicisi varsa v4'ün ayrı marka / mağazalara göre / mağaza bölümleri yok
+  const comboOn = useCap("shop_combo_picker");
+  const brandOn = useCap("shop_brand_size") && !comboOn;
+  const pinOn = useCap("shop_store_pin") && !comboOn;
+  const [comboOpen, setComboOpen] = useState(false);
   const bestOn = useCap("shop_best_value");
   const known = !!it.group && !it.group.pending;
   const brand0 = it.brand ?? null;
@@ -75,6 +82,7 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
   const offSize = sizes.data?.find((o) => o.key === offKey)?.size_label ?? it.assumed?.size_label ?? null;
   const offers = useOffers(offKey, brand, brandOn || pinOn);
   const choices = storeChoices(offers.data?.offers, store);
+  const combos = useItemCombos(it.id, comboOn && known && !renamed);
 
   const step = (dir: 1 | -1) => setQtyS(fmtQty(stepQty(qty, unit, dir)));
   const pickUnit = (u: Unit) => { setQtyS(fmtQty(convertQty(okQty ? qty : Number.NaN, unit, u))); setUnit(u); };
@@ -186,11 +194,25 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
               ))}
             </ul>)}
             {/* "Mağazalara göre" açıksa ipucu onun altında (tek yerde) */}
-            {showSizes && !(brandOn && offKey) && <HiddenHint count={sizesHidden(sizes.data, size)} className="mt-1.5" />}
+            {showSizes && !(brandOn && offKey) && !comboOn && <HiddenHint count={sizesHidden(sizes.data, size)} className="mt-1.5" />}
             {pinned && <button type="button" className="btn-ghost mt-2 border border-stone-300 text-sm dark:border-stone-700" disabled={busy}
               onClick={() => onSave({ group_key: null })}>Otomatik seç</button>}
           </div>
         )}
+
+        {comboOn && known && !renamed && (
+          <div data-testid="zincir-marka">
+            <span className="label">Zincir ve marka</span>
+            <button type="button" onClick={() => setComboOpen(true)} disabled={busy}
+              className="flex w-full items-center gap-3 rounded-lg border border-stone-200 px-3 py-2.5 text-left hover:bg-stone-50 dark:border-stone-700 dark:hover:bg-stone-800/60">
+              <span className="min-w-0 flex-1 font-medium break-words tabular-nums" data-testid="zincir-marka-ozet">
+                {combos.data ? comboSummary(combos.data.selected, combos.data.rows, money) : combos.isLoading ? "Yükleniyor…" : comboSummary({ store: it.store ?? null, brand: it.brand ?? null, key: cur }, [], money)}</span>
+              <span className="inline-flex shrink-0 items-center gap-0.5 text-sm font-medium text-blue-700 dark:text-blue-300">Değiştir<ChevronRight size={16} aria-hidden /></span>
+            </button>
+            <HiddenHint count={combos.data?.hidden?.count} className="mt-1.5" />
+          </div>
+        )}
+        {comboOpen && <ComboSheet itemId={it.id} onClose={() => setComboOpen(false)} onDone={(p) => { if (p.group_key) setSize(p.group_key); }} />}
 
         {brandOn && offKey && <OffersList group={offKey} brand={brand} sizeLabel={offSize} money={money} />}
 
