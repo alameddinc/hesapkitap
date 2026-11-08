@@ -287,8 +287,9 @@ class OfficialSource:
                     return p, by_prov[p]
         return (None, by_prov[""]) if "" in by_prov else None
 
-    def fetch(self, group_keys: list[str], brand: str | None = None) -> dict[str, list[Offer]]:
-        """brand verilirse yalnız o markanın ürünleri (zincir başına o markanın en ucuzu)."""
+    def fetch(self, group_keys: list[str], brand: str | None = None, per_brand: bool = False) -> dict[str, list[Offer]]:
+        """brand verilirse yalnız o markanın ürünleri (zincir başına o markanın en ucuzu). per_brand: zincir × marka
+        başına bir teklif (shop_combo_picker: "BİM · Torku 1 L", "BİM · Sütaş 1 L"); markasız ürünler tek satır."""
         from statistics import median
 
         from app import price_import, provinces
@@ -312,23 +313,29 @@ class OfficialSource:
             for r in rows:
                 if r["day"] == last:
                     prods.setdefault((r["title"], r["brand"]), []).append(r)
-            (t, b), price = min(((k, median(x["price"] for x in v)) for k, v in prods.items()),
-                                key=lambda x: (x[1], x[0][0]))
-            top = min(prods[(t, b)], key=lambda x: x["price"])
-            off: Offer = {"chain": ch, "price": round(price, 2), "source": self.name, "date": last,
-                          "attribution": price_import.attribution()}
-            if b:
-                off["brand"] = b
-            if label:
-                off["region"] = label
-            if any(x["discount"] for x in prods[(t, b)]):
-                off["discount"] = True
-            if top["promotion"]:
-                off["promotion"] = top["promotion"]
-            for k in ("change_7d", "change_30d"):
-                if top[k] is not None:
-                    off[k] = round(float(top[k]), 1)
-            out.setdefault(g, []).append(off)
+            buckets: dict[str, list] = {}
+            for k in prods:
+                buckets.setdefault(brand_norm(k[1]) if per_brand else "", []).append(k)
+            for ks in buckets.values():
+                (t, b), price = min(((k, median(x["price"] for x in prods[k])) for k in ks),
+                                    key=lambda x: (x[1], x[0][0]))
+                top = min(prods[(t, b)], key=lambda x: x["price"])
+                off: Offer = {"chain": ch, "price": round(price, 2), "source": self.name, "date": last,
+                              "attribution": price_import.attribution()}
+                if b:
+                    off["brand"] = b
+                if per_brand:
+                    off["product"] = t
+                if label:
+                    off["region"] = label
+                if any(x["discount"] for x in prods[(t, b)]):
+                    off["discount"] = True
+                if top["promotion"]:
+                    off["promotion"] = top["promotion"]
+                for k in ("change_7d", "change_30d"):
+                    if top[k] is not None:
+                        off[k] = round(float(top[k]), 1)
+                out.setdefault(g, []).append(off)
         return out
 
     def brands(self, group_keys: list[str]) -> dict[str, dict[str, set[str]]]:
@@ -528,3 +535,75 @@ def brands(group_keys: list[str], sources: list[PriceSource] | None = None) -> l
             "size_labels": {k: product_groups.size_label(k) for k in sorted(a["sizes"]) if product_groups.size_label(k)}}
            for a in acc.values()]
     return sorted(out, key=lambda x: (-x["chains"], x["brand"].casefold()))[:BRANDS_MAX]
+
+
+COMBOS_MAX = 200
+
+
+def combos(group_keys: list[str], sources: list[PriceSource] | None = None, hidden=None, chain: str | None = None,
+           today: date | None = None) -> list[dict]:
+    """Zincir × marka × boy seçenekleri (shop_combo_picker; "BİM · Torku 1 L ₺36,50"): [{chain, brand | null, key,
+    price, source, date?, n?, region?, discount?, product?, unit_price_per?, per_unit?}] ucuzdan.
+
+    Markalı satırlar: Market Fiyatı (zincir başına o markanın gruptaki en ucuz ürünü; OfficialSource per_brand) ve kendi
+    fişlerin (o zincirde o markanın son fiyatı); aynı (zincir, marka, boy) için kendi taze fişin (OWN_FRESH_DAYS) önce,
+    sonra Market Fiyatı, sonra eski fişin. Markasız satırlar (brand null): topluluk ortancası ve markası okunmamış kendi
+    fişlerin (merge kuralı). Kişinin kapattığı mağazalar (hidden) yok; chain verilirse yalnız o zincir. En çok
+    COMBOS_MAX satır."""
+    from app import product_groups
+
+    keys = sorted({k for k in group_keys if k})
+    if not keys:
+        return []
+    fresh = ((today or date.today()) - timedelta(days=OWN_FRESH_DAYS)).isoformat()
+    want = _chain_key(chain_name(chain)) if chain else None
+    branded: dict[tuple[str, str, str], Offer] = {}
+    plain: dict[str, list[Offer]] = {}
+
+    def keep(o: Offer, k: str) -> bool:
+        if hidden is not None and hidden.hides(o["chain"], k):
+            return False
+        return want is None or _chain_key(chain_name(o["chain"])) == want
+
+    def rank(o: Offer) -> int:
+        return 0 if o["source"] == "own" and o.get("date", "") >= fresh else 1 if o["source"] == "resmi" else 2
+
+    for src in sources if sources is not None else open_sources():
+        if isinstance(src, OfficialSource):
+            got = src.fetch(keys, per_brand=True)
+        elif isinstance(src, OwnSource):
+            got = src.fetch(keys)
+            src._build()
+            for (k, _bn), offs in src._by_brand.items():
+                if k in keys:
+                    for o in offs.values():
+                        if keep(o, k):
+                            ck = (_chain_key(chain_name(o["chain"])), brand_norm(o["brand"]), k)
+                            if ck not in branded or (rank(o), o["price"]) < (rank(branded[ck]), branded[ck]["price"]):
+                                branded[ck] = o
+            got = {k: [o for o in v if not o.get("brand")] for k, v in got.items()}
+        else:
+            got = src.fetch(keys)
+        for k, offs in got.items():
+            for o in offs:
+                if not keep(o, k):
+                    continue
+                if o.get("brand"):
+                    ck = (_chain_key(chain_name(o["chain"])), brand_norm(o["brand"]), k)
+                    if ck not in branded or (rank(o), o["price"]) < (rank(branded[ck]), branded[ck]["price"]):
+                        branded[ck] = o
+                else:
+                    plain.setdefault(k, []).append(o)
+    rows: list[dict] = []
+    for (_c, _b, k), o in branded.items():
+        rows.append({**o, "key": k, "brand": _brand_label(o["brand"])})
+    for k, offs in plain.items():
+        rows += [{**o, "key": k, "brand": None} for o in merge(offs, limit=50, today=today)]
+    out = []
+    for r in rows:
+        r = {x: v for x, v in r.items() if x not in ("attribution", "window_days", "official", "differs",
+                                                     "discounted_price", "change_7d", "change_30d")}
+        r["chain"] = chain_name(r["chain"])
+        out.append({**r, **product_groups.unit_price(r["price"], r["key"])})
+    out.sort(key=lambda r: (r["price"], r["chain"], r["brand"] or "", r["key"]))
+    return out[:COMBOS_MAX]

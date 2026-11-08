@@ -182,6 +182,10 @@ CAPABILITIES = (
     "shop_best_value",        # sizes küçükten büyüğe + size_amount, best_value ("En kârlı": birim fiyatı en düşük boy);
                               # optimize plans[].saving_vs_market, size_saving, items[].better_size (En kârlı boy önerisi),
                               # headline.profit {saving, text, basis, size_saving, size_text} | null
+    "shop_combo_picker",      # zincir × marka × boy seçicisi: GET /api/prices/combos?group&chain, GET /api/shopping-list/
+                              # {id}/combos?chain&all_sizes → {keys, rows [{chain, brand|null, key, size_label, price,
+                              # unit_price_per?, per_unit?, source, date?, n?, product?}], chains, brands, sizes, hidden,
+                              # attribution[, selected {store, brand, key}]}; seçim tek PATCH {store, brand, group_key}
     "summary_installments",   # /api/summary installments {month, current, total, count, in_spend, expected, remaining,
                               # remaining_count} — dönemin taksitleri, harcamaya EKLENMEZ (in_spend zaten totals.expense
                               # içinde; expected ekstresi beklenen); GET /api/installments?month → aynısı + items [{uid,

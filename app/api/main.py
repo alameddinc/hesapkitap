@@ -4566,6 +4566,18 @@ def price_brands(group: str = Query(min_length=1, max_length=60)):
     return {"group": base, "brands": price_sources.brands(shopping.brand_keys(base))}
 
 
+@app.get("/api/prices/combos")
+def price_combos(group: str = Query(min_length=1, max_length=60), chain: str | None = Query(None, max_length=60)):
+    """Zincir × marka × boy (shop_combo_picker): group boyluysa ("sut|1l") o boy, boysuzsa ("sut") en yaygın boylar.
+    {keys, rows [{chain, brand | null (markasız: topluluk ortancası / markası okunmamış fişin), key, size_label, price,
+    unit_price_per?, per_unit?, source own|community|resmi, date?, n?, region?, discount?, product?}] ucuzdan (en çok
+    200), chains, brands, sizes [{key, size_label}], hidden {count, chains, local}, attribution}. chain verilirse yalnız
+    o zincir ("BİM'de süt"). Kapatılan mağazalar yok."""
+    from app import shop_stores, shopping
+
+    return shopping.combos_out(shopping.combo_keys(group.strip()), chain, shop_stores.current())
+
+
 @app.get("/api/prices/offers")
 def price_offers(group: str = Query(min_length=1, max_length=60), brand: str | None = Query(None, max_length=40)):
     """Bu boy (ve marka) hangi mağazada kaça (shop_brand_size): {group, label, size_label, brand | null, offers [{chain,
@@ -4831,6 +4843,19 @@ def shopping_sizes(rid: int, brand: str | None = Query(None, max_length=40)):
     from app import shop_stores, shopping
 
     got = shopping.sizes(rid, brand, shop_stores.current())
+    if got is None:
+        raise HTTPException(404, "Satır yok")
+    return got
+
+
+@app.get("/api/shopping-list/{rid}/combos")
+def shopping_combos(rid: int, chain: str | None = Query(None, max_length=60), all_sizes: bool = True):
+    """Satırın zincir × marka × boy seçicisi (shop_combo_picker): /api/prices/combos + selected {store, brand, key}.
+    Satıra dokunulan seçim tek PATCH ile yazılır: {store, brand, group_key} (marka fark etmez: brand null; otomatik
+    mağaza: store null). Plan sonra tam o teklifi kullanır (mağazaya bağlı + markalı satır)."""
+    from app import shop_stores, shopping
+
+    got = shopping.item_combos(rid, chain, all_sizes, shop_stores.current())
     if got is None:
         raise HTTPException(404, "Satır yok")
     return got
