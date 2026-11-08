@@ -39,6 +39,11 @@ export const TERIM = {
     aciklama: "Bu dönemin geliri eksi gideri. Birikime ayırdığın gider sayılmaz. Bugün harcayabileceğin para değil; " +
       "onun için \"Harcanabilir\"e bak.",
   },
+  beklenen: {
+    ad: "Beklenen",
+    kisa: "Ekstre gelince ve bekleyenlerle",
+    aciklama: "Ekstresi gelmemiş kart taksitleri ve beklenen gelirler dahil tahmin; yeni harcamalar eklenmez.",
+  },
   eldeKalan: {
     ad: "Elde kalan",
     kisa: "Gelir − gider − birikim",

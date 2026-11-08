@@ -199,6 +199,11 @@ CAPABILITIES = (
                               # içinde; expected ekstresi beklenen); GET /api/installments?month → aynısı + items [{uid,
                               # source card|manual|projected, title, card, installment "3/6", no, of, amount, in_spend,
                               # fee, due_date, row (dokununca düzenlenecek satır), spender?, spender_name?}]
+    "summary_expected",       # /api/summary expected {month, source "plan", expense, income, net, parts {recorded_expense,
+                              # pending_installments, pending_subscriptions, pending_recurring_expense, pending_bills,
+                              # pending_expense, recorded_income, pending_income}} | null (geçmiş dönem) +
+                              # definitions.expected ((i) metni). = Planlama'nın o ayki "kesin" satırı (finance.expected);
+                              # totals/by_category/budgets/trend'e hiçbir şey eklemez
 )
 
 

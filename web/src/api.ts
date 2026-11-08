@@ -1,3 +1,4 @@
+import type { Beklenen } from "./lib/beklenen";
 import type { TaksitKalem, TaksitOzet } from "./lib/taksit";
 import { ApiError, call, send } from "./lib/apiError";
 import { bookHeaders, type BookKey } from "./lib/saveBook";
@@ -239,7 +240,7 @@ export interface Summary {
     fees_hidden?: boolean; // ortak defterde faiz gizli: Faiz kutusu gösterilmez
   };
   /** rakam tanımları (i) için: expense, income, left, left_after_savings, cash_net */
-  definitions?: Partial<Record<"expense" | "income" | "left" | "left_after_savings" | "cash_net", string>>;
+  definitions?: Partial<Record<"expense" | "income" | "left" | "left_after_savings" | "cash_net" | "expected", string>>;
   estimated_items?: EstimateItem[];
   pending: { income: number; expense: number; count: number };
   budgets: Budget[];
@@ -253,6 +254,8 @@ export interface Summary {
   insights_hidden?: number;
   /** bu dönemin taksitleri (yetenek summary_installments; eski sunucuda yok): harcamaya eklenmez, kırılımdır */
   installments?: TaksitOzet;
+  /** dönem sonu tahmini = Planlama'nın o ayki satırı (yetenek summary_expected; lib/beklenen.ts). Geçmiş dönemde null */
+  expected?: Beklenen | null;
 }
 
 /** GET /api/installments?month: Özet "Bu ay ödenecek taksitler" listesi; row dokununca düzenlenecek satır. */

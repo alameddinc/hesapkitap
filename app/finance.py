@@ -548,10 +548,12 @@ def summary(month: str, today: date | None = None) -> dict:
 
     totals["fees_hidden"] = book.hide_fees()  # ortak defterde faiz gizli: istemci faiz kutusunu göstermesin
     by_category = _group_categories(expenses)
+    exp = expected(month, today=today)
     return {
         "month": month,
         "totals": totals,
-        "definitions": TOTALS_DEFINITIONS,
+        # "expected": Beklenen'in (i) metni, yalnız beklenen varken (o dönemde hangi bekleyenler varsa onları sayar)
+        "definitions": {**TOTALS_DEFINITIONS, **({"expected": _expected_text(exp["parts"])} if exp else {})},
         # gerçek toplamlara (expense, by_category, budgets, trend.expense) GİRMEYEN tahmini kalemler: ekstre bekleniyor
         "estimated_items": [estimate_item(r) for r in sorted(est, key=lambda r: (r["date"], r["uid"]))],
         "budgets": budgets(month, by_category),
@@ -568,6 +570,9 @@ def summary(month: str, today: date | None = None) -> dict:
         "insights": insights(month, today=today),
         # bu dönemin taksitleri (yetenek "summary_installments"): harcamaya EKLENMEZ, kırılımdır — installments_due
         "installments": {k: v for k, v in installments_due(month, today=today).items() if k != "items"},
+        # dönem sonu tahmini (yetenek "summary_expected"; finance.expected = Planlama'nın bu ayki satırı). Toplamlara
+        # (totals, by_category, budgets, trend) hiçbir şey EKLEMEZ; geçmiş dönemde null
+        "expected": exp,
     }
 
 
@@ -1300,29 +1305,46 @@ def plan(months: int = 6, today: date | None = None) -> dict:
     recurring = [{**r, "amount_now": db.planned_amount(r, start)} for r in db.list_recurring()]
     entries = db.list_entries()
     cycles = open_cycles(today, proj, entries)
-    card_rows = db.card_transactions()
     bills = db.list_bills()
     goals = db.list_goals(active_only=True)
-    overrides = db.recurring_overrides()
-    # ay döngüsünde her ay tüm kayıtları taramamak için bir kez: sabit kalemin o ayki kaydı (ilk eşleşen, eskisiyle
-    # aynı) ve tek seferlik kayıtların taksit parçaları (kayıt sırası korunur → satır sırası değişmez)
+    raw_recurring = db.list_recurring()
+    # ay döngüsünde her ay tüm kayıtları taramamak için bir kez: sabit kalemin o ayki kaydı (ilk eşleşen)
     rec_entry: dict[tuple, dict] = {}
+    entries_by_m: dict[str, list] = defaultdict(list)
     for e in entries:
+        entries_by_m[e["month"]].append(e)
         if e["recurring_id"]:
             rec_entry.setdefault((e["recurring_id"], e["month"]), e)
-    one_off = [(e, db.installment_parts(e)) for e in entries
-               if not (e["recurring_id"] or e["skipped"] or e["linked_txn_id"] or e.get("debt_id"))]
 
     result = []
     cumulative = cumulative_est = 0.0
     for m in span:
         lines = []
+        # GERÇEKLEŞEN kısım Özet'in sayım kuralıyla (counts / _totals): dönemin satırlarından sayılanlar — iade gideri
+        # düşürür, birikime ayrılan (altın/döviz alımı) ve ortak harcamada başkasının payı gider değil, ekstreyle
+        # eşleşmiş elle kayıt bir kez (kart satırı) sayılır. Böylece dönemin "kesin" gelir/gideri = Özet'in gelir/gideri +
+        # bekleyenler; Özet'in "Beklenen"i (summary.expected) bu ayın satırıdır, iki ekran hiç ayrışmaz.
+        # Kart satırları kartına, sabit kaleme bağlı elle kayıtlar sabit kalemine, kalanlar tek seferlik satırlara.
+        card_got: dict[str, list] = defaultdict(list)
+        rec_got: dict[int, list] = defaultdict(list)
+        other_got: list[dict] = []
+        for r in transactions(m):
+            if r["month"] != m or not any(counts(r)):
+                continue
+            if r["source"] == "card":
+                card_got[r["account"]].append(r)
+            elif r["source"] == "manual" and r.get("recurring_id"):
+                rec_got[r["recurring_id"]].append(r)
+            else:
+                other_got.append(r)
+        # henüz girilmemiş sabit kalemler: Özet'in "bekliyor"u ile aynı kaynak (pending_recurring; ör. o ayın maaşı
+        # dökümden gelmişse maaş ikinci kez eklenmez)
+        pend = {x["recurring_id"]: x for x in pending_recurring(m, raw_recurring, entries_by_m.get(m, [])) if x.get("pending")}
         # --- kart
         for acc, p in proj.items():
             st = next((s for s in statements if s["card_no"] == acc and s["period"] == m), None)
             if st:
-                actual = sum(t["amount"] for t in card_rows
-                             if t["account"] == acc and t["period"] == m and t["txn_type"] in (*CARD_SPEND, FEE))
+                actual = sum(r["amount"] for r in card_got.pop(acc, []))
                 lines.append({"type": "kart_gercek", "kind": EXPENSE, "amount": _round(actual),
                               "description": f"{p['bank']} {acc} ekstresi (gerçek)", "due_date": st["due_date"]})
                 continue
@@ -1359,6 +1381,13 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             lines.append({"type": "tasarruf_notu", "kind": "bilgi", "amount": _round(cut),
                           "description": f"Kısma hedefleriyle {money.tl(cut, decimals=0)} daha az harcama varsayıldı"})
 
+        # ekstresi Planlama'nın kart listesinde olmayan kart satırları (ör. Excel'den gelen ekstre): yine sayılır
+        for acc, got in card_got.items():
+            st = next((s for s in statements if s["card_no"] == acc and s["period"] == m), None)
+            lines.append({"type": "kart_gercek", "kind": EXPENSE, "amount": _round(sum(r["amount"] for r in got)),
+                          "description": f"{got[0].get('bank') or 'Kart'} {acc} ekstresi (gerçek)",
+                          "due_date": st["due_date"] if st else None})
+
         # --- tekrarlayan
         for r in recurring:
             if not is_active(r, m):
@@ -1366,17 +1395,27 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             e = rec_entry.get((r["id"], m))
             if e and e["skipped"]:
                 continue
-            planned = db.planned_amount(r, m, overrides)
-            lines.append({"type": "sabit", "kind": r["kind"], "amount": e["amount"] if e else planned,
-                          "description": r["description"], "recurring_id": r["id"], "confirmed": bool(e),
-                          "custom": not e and planned != r["amount"], "template_amount": r["amount"], "month": m})
-        # --- tek seferlik elle girilenler
-        for e, parts in one_off:
-            for k, pm, amt in parts:  # taksitliyse her taksit kendi ayında
-                if pm == m:
-                    n = int(e.get("installments") or 1)
-                    lines.append({"type": "tek_seferlik", "kind": e["kind"], "amount": amt, "entry_id": e["id"],
-                                  "description": e["description"] + (f" ({k + 1}/{n} taksit)" if n > 1 else "")})
+            got = rec_got.pop(r["id"], None)
+            if e or got:  # girildi: Özet'te sayılan tutarı (kartla ödenip ekstreyle eşleştiyse kart satırında sayılır)
+                if got:
+                    lines.append({"type": "sabit", "kind": r["kind"], "amount": _round(sum(x["amount"] for x in got)),
+                                  "description": r["description"], "recurring_id": r["id"], "confirmed": True,
+                                  "custom": False, "template_amount": r["amount"], "month": m})
+                continue
+            if r["id"] not in pend:
+                continue
+            planned = pend[r["id"]]["amount"]
+            lines.append({"type": "sabit", "kind": r["kind"], "amount": planned,
+                          "description": r["description"], "recurring_id": r["id"], "confirmed": False,
+                          "custom": planned != r["amount"], "template_amount": r["amount"], "month": m})
+        # --- tek seferlik elle girilenler (taksitliyse her taksit kendi ayında; bölünmüşse her kalem ayrı) ve
+        # sayılan borç kapanışları (tahsil edilemeyen alacak gider, silinen borç gelir)
+        for x in [*other_got, *(y for ys in rec_got.values() for y in ys)]:
+            line = {"type": "tek_seferlik", "kind": INCOME if counts(x)[1] else EXPENSE, "amount": x["amount"],
+                    "description": x["description"] + (f" ({x['installment']} taksit)" if x.get("installment") else "")}
+            if x["source"] == "manual":
+                line["entry_id"] = x.get("installment_of") or x["id"]
+            lines.append(line)
 
         # --- ödenmemiş faturalar (ödenenler zaten tek seferlik gider olarak girdi)
         for b in bills:
@@ -1417,6 +1456,69 @@ def plan(months: int = 6, today: date | None = None) -> dict:
 
     return {"months": result, "dues": sorted(dues, key=lambda d: d["date"]),
             "projection": list(proj.values()), "recurring": recurring}
+
+
+EXPECTED_MAX_MONTHS = 24  # Planlama'nın en uzak ufku (/api/plan months ≤ 24): daha ilerisi için beklenen yok
+
+
+def _expected_text(parts: dict) -> str:
+    """(i) metni: yalnız o dönemde gerçekten olan bekleyenler sayılır (sahibin istediği temel cümle: taksit + gelir)."""
+    what = []
+    if parts["pending_installments"] or parts["pending_subscriptions"]:
+        what.append("ekstresi gelmemiş kart taksitleri" + (" ve abonelikleri" if parts["pending_subscriptions"] else ""))
+    if parts["pending_recurring_expense"]:
+        what.append("girilmemiş sabit giderler")
+    if parts["pending_bills"]:
+        what.append("ödenmemiş faturalar")
+    if parts["pending_income"]:
+        what.append("beklenen gelirler")
+    if not what:
+        what = ["ekstresi gelmemiş kart taksitleri", "beklenen gelirler"]
+    s = what[0] if len(what) == 1 else ", ".join(what[:-1]) + " ve " + what[-1]
+    # baştaki "Ad:" yok: mobil (i) metni olduğu gibi gösterir (web baştaki adı atar); iki istemcide aynı cümle
+    return f"{s[:1].upper()}{s[1:]} dahil tahmin; yeni harcamalar eklenmez."
+
+
+def expected(month: str, today: date | None = None) -> dict | None:
+    """Özet → "Beklenen" (yetenek summary_expected): dönem sonunda gelir/gider/artan ne olur — Planlama'nın o ayki
+    satırının ("kesin" gelir/gider; değişken kart tahmini HARİÇ) kendisi. Ayrı hesap yok: iki ekran aynı rakamı gösterir.
+
+    Planlama'nın gerçekleşen kısmı Özet'in sayım kuralıyla kurulduğu için (plan → counts) her zaman
+      expense = totals.expense + pending_installments + pending_subscriptions + pending_recurring_expense + pending_bills
+      income  = totals.income  + pending_income        (pending_income = summary.pending.income, Gelir'in "bekliyor"u)
+    pending_installments = installments.expected (ekstresi gelmemiş kartın son ekstreden bilinen taksitleri; "harcamana
+    dahil" taksitler zaten totals.expense'te — iki kez sayılmaz), pending_subscriptions = aynı kartların abonelikleri,
+    pending_recurring_expense = summary.pending.expense (girilmemiş sabit giderler), pending_bills = ödenmemiş faturalar.
+    Yeni (değişken) harcama tahmini eklenmez. Geçmiş dönem (kapandı) ve Planlama ufku dışı: None."""
+    today = today or date.today()
+    cur = current_period(today)
+    if month < cur:
+        return None
+    y0, m0 = map(int, cur.split("-"))
+    y1, m1 = map(int, month.split("-"))
+    n = (y1 - y0) * 12 + (m1 - m0) + 1
+    if n > EXPECTED_MAX_MONTHS:
+        return None
+    row = next((x for x in plan(max(6, n), today=today)["months"] if x["month"] == month), None)
+    if row is None:
+        return None
+    by: dict[str, float] = defaultdict(float)
+    for ln in row["lines"]:
+        if ln["kind"] not in (EXPENSE, INCOME) or ln["type"] == "degisken":
+            continue
+        pending = ln["type"] in ("taksit", "abonelik", "fatura") or (ln["type"] == "sabit" and not ln.get("confirmed"))
+        key = {"taksit": "pending_installments", "abonelik": "pending_subscriptions", "fatura": "pending_bills",
+               "sabit": "pending_recurring_expense"}.get(ln["type"]) if pending else "recorded_expense"
+        if ln["kind"] == INCOME:
+            key = "pending_income" if pending else "recorded_income"
+        by[key] += ln["amount"]
+    parts = {k: _round(by.get(k, 0.0)) for k in ("recorded_expense", "pending_installments", "pending_subscriptions",
+                                                  "pending_recurring_expense", "pending_bills", "recorded_income",
+                                                  "pending_income")}
+    parts["pending_expense"] = _round(parts["pending_installments"] + parts["pending_subscriptions"]
+                                      + parts["pending_recurring_expense"] + parts["pending_bills"])
+    return {"month": month, "source": "plan", "expense": row["expense"], "income": row["income"], "net": row["net"],
+            "parts": parts}
 
 
 # ---------------------------------------------------------------- ödemeler (ekstre + fatura)
