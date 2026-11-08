@@ -58,6 +58,14 @@ class PriceSource(Protocol):
     def search(self, query: str) -> dict[str, str]: ...
 
 
+# Marka süzgeci (shop_brand_size): kaynak sınıfında brand_aware = True ise fetch(keys, brand="Sütaş") yalnız o markanın
+# tekliflerini döner; marka bilmeyen kaynak (topluluk ortancası markasızdır) markalı istekte hiç sorulmaz.
+def brand_norm(brand: str | None) -> str:
+    from app import product_groups
+
+    return product_groups.slug(brand or "")
+
+
 OWN_FRESH_DAYS = 14
 DEFAULT_SOURCES = "own,community"
 _REGISTRY: dict[str, type] = {}
@@ -120,8 +128,11 @@ class OwnSource:
     """Kullanıcının kendi fişleri: zincir (bilinen zincirse görünen adı, değilse fişteki işyeri) başına son fiyat."""
     name = "own"
 
+    brand_aware = True
+
     def __init__(self):
         self._index: dict[str, dict[str, Offer]] | None = None
+        self._by_brand: dict[tuple[str, str], dict[str, Offer]] = {}
         self._labels: dict[str, str] = {}
 
     def _build(self) -> dict[str, dict[str, Offer]]:
@@ -141,14 +152,29 @@ class OwnSource:
             off: Offer = {"chain": chain, "price": it["unit_price"], "source": self.name, "date": it["purchased_at"]}
             if it.get("brand"):
                 off["brand"] = it["brand"]
+                self._by_brand.setdefault((g["key"], brand_norm(it["brand"])), {})[db._store_key(chain)] = off
             idx.setdefault(g["key"], {})[db._store_key(chain)] = off
             self._labels[g["key"]] = g["label"]
         self._index = idx
         return idx
 
-    def fetch(self, group_keys: list[str]) -> dict[str, list[Offer]]:
+    def fetch(self, group_keys: list[str], brand: str | None = None) -> dict[str, list[Offer]]:
         idx = self._build()
+        if brand:
+            bn = brand_norm(brand)
+            return {k: list(self._by_brand[(k, bn)].values()) for k in group_keys if (k, bn) in self._by_brand}
         return {k: list(idx[k].values()) for k in group_keys if k in idx}
+
+    def brands(self, group_keys: list[str]) -> dict[str, dict[str, set[str]]]:
+        """Grup → {marka adı: {zincir anahtarı}} (kişinin fişlerindeki markalar)."""
+        self._build()
+        want = set(group_keys)
+        out: dict[str, dict[str, set[str]]] = {}
+        for (k, _bn), offs in self._by_brand.items():
+            if k in want:
+                for ck, o in offs.items():
+                    out.setdefault(k, {}).setdefault(o["brand"], set()).add(ck)
+        return out
 
     def search(self, query: str) -> dict[str, str]:
         self._build()
@@ -162,7 +188,7 @@ class OwnSource:
 @register
 class CommunitySource:
     """Anonim topluluk ortancası (en az 3 kişi, son 7 gün, indirimsiz)."""
-    name = "community"
+    name = "community"  # ortanca markasızdır: markalı istekte sorulmaz (brand_aware yok)
 
     def fetch(self, group_keys: list[str]) -> dict[str, list[Offer]]:
         from app import community_prices
@@ -218,6 +244,7 @@ class OfficialSource:
     Teklif ek alanları: region, discount (yalnız true), promotion?, change_7d / change_30d (yüzde; varsa)."""
     name = "resmi"
     WINDOW_DAYS = 7
+    brand_aware = True
 
     def __init__(self, region: str | None = None):
         if region is None:
@@ -260,13 +287,17 @@ class OfficialSource:
                     return p, by_prov[p]
         return (None, by_prov[""]) if "" in by_prov else None
 
-    def fetch(self, group_keys: list[str]) -> dict[str, list[Offer]]:
+    def fetch(self, group_keys: list[str], brand: str | None = None) -> dict[str, list[Offer]]:
+        """brand verilirse yalnız o markanın ürünleri (zincir başına o markanın en ucuzu)."""
         from statistics import median
 
         from app import price_import, provinces
 
+        bn = brand_norm(brand) if brand else None
         grouped: dict[tuple[str, str], dict[str, list]] = {}
         for r in self._rows(sorted({k for k in group_keys if k})):
+            if bn and brand_norm(r["brand"]) != bn:
+                continue
             prov = provinces.province_of(r["region"]) if r["region"] else ""
             if prov is not None:
                 grouped.setdefault((r["chain"], r["group_key"]), {}).setdefault(prov, []).append(r)
@@ -298,6 +329,21 @@ class OfficialSource:
                 if top[k] is not None:
                     off[k] = round(float(top[k]), 1)
             out.setdefault(g, []).append(off)
+        return out
+
+    def brands(self, group_keys: list[str]) -> dict[str, dict[str, set[str]]]:
+        """Grup → {marka: {zincir}} (son WINDOW_DAYS gün; bölgeden bağımsız: seçilebilecek markalar)."""
+        if not group_keys:
+            return {}
+        from app import system
+
+        since = (date.today() - timedelta(days=self.WINDOW_DAYS)).isoformat()
+        out: dict[str, dict[str, set[str]]] = {}
+        with system.connect() as c:
+            for r in c.execute(f"SELECT DISTINCT group_key, brand, chain FROM official_prices WHERE group_key IN "
+                               f"({','.join('?' * len(group_keys))}) AND day >= ? AND brand IS NOT NULL AND brand != ''",
+                               [*group_keys, since]):
+                out.setdefault(r[0], {}).setdefault(r[1], set()).add(_chain_key(r[2]))
         return out
 
     def search(self, query: str) -> dict[str, str]:
@@ -415,16 +461,66 @@ def merge(offers: list[Offer], limit: int = 5, today: date | None = None) -> lis
 
 
 def best_offers(group_keys: list[str], sources: list[PriceSource] | None = None, limit: int = 5,
-                today: date | None = None) -> dict[str, list[Offer]]:
-    """Grup → birleştirilmiş en iyi teklifler (merge)."""
+                today: date | None = None, brand: str | None = None, hidden=None) -> dict[str, list[Offer]]:
+    """Grup → birleştirilmiş en iyi teklifler (merge). brand: yalnız o markanın teklifleri (marka bilen kaynaklar:
+    kendi fişlerin ve Market Fiyatı; topluluk ortancası markasızdır, sorulmaz). hidden (app/shop_stores.py Hidden):
+    kişinin kapattığı mağazaların teklifleri birleştirmeden ÖNCE atılır (gizlenen zincirler hidden.seen'e yazılır)."""
     keys = sorted({k for k in group_keys if k})
     if not keys:
         return {}
     pool: dict[str, list[Offer]] = {k: [] for k in keys}
     for src in sources if sources is not None else open_sources():
-        for k, offs in src.fetch(keys).items():
+        if brand:
+            if not getattr(src, "brand_aware", False):
+                continue
+            got = src.fetch(keys, brand=brand)
+        else:
+            got = src.fetch(keys)
+        for k, offs in got.items():
+            if hidden is not None:
+                offs = [o for o in offs if not hidden.hides(o["chain"], k)]
             pool.setdefault(k, []).extend(offs)
     from app import product_groups
 
     return {k: [{**o, **product_groups.unit_price(o["price"], k)} for o in merge(v, limit, today)]
             for k, v in pool.items()}
+
+
+def _brand_label(b: str) -> str:
+    """Kaynaktaki büyük harfli marka ("SÜTAŞ", "İÇİM") → "Sütaş", "İçim"; karışık yazılmışsa olduğu gibi."""
+    b = " ".join((b or "").split())
+    if not b or not b.isupper():
+        return b
+
+    def word(w: str) -> str:
+        low = w.replace("I", "ı").replace("İ", "i").lower()
+        first = {"i": "İ", "ı": "I"}.get(low[0], low[0].upper())
+        return first + low[1:]
+    return " ".join(word(w) for w in b.split())
+
+
+BRANDS_MAX = 30
+
+
+def brands(group_keys: list[str], sources: list[PriceSource] | None = None) -> list[dict]:
+    """Seçilebilecek markalar (shop_brand_size): kendi fişlerin + Market Fiyatı (açıksa) — [{brand, sizes [grup
+    anahtarı], chains (kaç zincirde)}], çok zincirde olan önce, en çok BRANDS_MAX. Aynı marka farklı yazılışlarda
+    (SÜTAŞ / Sütaş) tek satır; görünen ad önce kendi fişindeki yazılış."""
+    keys = sorted({k for k in group_keys if k})
+    if not keys:
+        return []
+    acc: dict[str, dict] = {}
+    for src in sources if sources is not None else open_sources():
+        fn = getattr(src, "brands", None)
+        if not fn:
+            continue
+        for k, by in fn(keys).items():
+            for b, chains in by.items():
+                bn = brand_norm(b)
+                if not bn:
+                    continue
+                a = acc.setdefault(bn, {"brand": _brand_label(b), "sizes": set(), "chains": set()})
+                a["sizes"].add(k)
+                a["chains"] |= chains
+    out = [{"brand": a["brand"], "sizes": sorted(a["sizes"]), "chains": len(a["chains"])} for a in acc.values()]
+    return sorted(out, key=lambda x: (-x["chains"], x["brand"].casefold()))[:BRANDS_MAX]

@@ -171,7 +171,8 @@ def test_sizeless_item_resolves_to_common_size(client, resmi):
     best = {i["id"]: i["best"] for i in items}
     assert (best[a["id"]]["chain"], best[a["id"]]["price"], best[a["id"]]["per_unit"]) == ("BİM", 31.5, "L")
     sizes = client.get(f"/api/shopping-list/{a['id']}/sizes").json()
-    assert [s["key"] for s in sizes] == ["sut|1l", "sut|500ml"] and sizes[1]["size_label"] == "500 ml"
+    # boy listesi küçükten büyüğe (shop_best_value; önceden en yaygın önceydi)
+    assert [s["key"] for s in sizes] == ["sut|500ml", "sut|1l"] and sizes[0]["size_label"] == "500 ml"
     p = client.patch(f"/api/shopping-list/{a['id']}", json={"group_key": "sut|500ml"}).json()
     assert p["group"]["key"] == "sut|500ml" and p["assumed"] is None and p["group"]["pinned"]
     p = client.patch(f"/api/shopping-list/{a['id']}", json={"group_key": None}).json()

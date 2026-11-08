@@ -2073,6 +2073,11 @@ def put_modules(body: ModulesIn):
         raise HTTPException(422, f"{prefs.MODULES[str(e)][0]} için açık rıza gerekli") from e
 
 
+class ShopHiddenIn(BaseModel):
+    chains: list[str] | None = Field(None, max_length=40)  # kapatılan zincirler ("CarrefourSA"); verilmezse korunur
+    local: bool | None = None                              # yerel marketler (bilinen zincir dışı) kapalı mı
+
+
 class UiIn(BaseModel):
     simple: bool | None = None
     layout: list[str] | None = None
@@ -2081,6 +2086,7 @@ class UiIn(BaseModel):
     price_share: bool | None = None  # fiyat paylaşımı (kişi başı; /api/me/price-share ile aynı tercih)
     region: str | None = Field(None, max_length=40)  # Bölgem: il adı (app/provinces.py); null / "" seçimi kaldırır
     stop_cost: float | None = Field(None, ge=0, le=10_000)  # "Nereye gideyim?": ekstra durak için en az tasarruf (₺)
+    shop_hidden: ShopHiddenIn | None = None  # mağaza süzgeci (shop_store_filter; kişi başı, app/shop_stores.py)
 
 
 @app.put("/api/me/ui")
@@ -2088,8 +2094,9 @@ def put_ui(body: UiIn):
     """Kişisel görünüm: sade mod, Özet düzeni (herkes kendi). price_share verilirse fiyat paylaşımı tercihi de yazılır
     (sistem veritabanında kişi başı; yanıtta da döner). region verilirse (gönderildiyse; null / "" kaldırır) Bölgem:
     81 ilden biri (bilinmeyen 422); resmî fiyatlar o ilden gelir. Yanıtta region döner. stop_cost (₺, 0–10000; null
-    varsayılana döner: 100): alışveriş listesi "Nereye gideyim?" ekstra durağı bu kadar ucuzlatmıyorsa önermez."""
-    data = body.model_dump(exclude_unset=True, exclude={"reset_layout", "price_share", "region"})
+    varsayılana döner: 100): alışveriş listesi "Nereye gideyim?" ekstra durağı bu kadar ucuzlatmıyorsa önermez.
+    shop_hidden {chains?, local?}: kapatılan mağazalar (kişi başı; yanıtta shop_hidden {chains, local})."""
+    data = body.model_dump(exclude_unset=True, exclude={"reset_layout", "price_share", "region", "shop_hidden"})
     if body.reset_layout:
         data["layout"] = None
     u = db.current_user()
@@ -2107,6 +2114,13 @@ def put_ui(body: UiIn):
         out["price_share"] = prefs.set_price_share(u["id"], body.price_share)
     if "region" in body.model_fields_set:
         out["region"] = prefs.set_region(u["id"], body.region)
+    if body.shop_hidden is not None:
+        from app import shop_stores
+
+        try:
+            out["shop_hidden"] = shop_stores.put(body.shop_hidden.model_dump(exclude_unset=True))
+        except ValueError as e:
+            raise HTTPException(422, errors.user_text(e, 422)) from e
     return out
 
 
@@ -2115,8 +2129,10 @@ def _ui_out() -> dict:
     uid = (db.current_user() or {}).get("id")
     from app import shopping
 
+    from app import shop_stores
+
     return {**prefs.ui(), "price_share": prefs.price_share(uid), "region": prefs.region(uid),
-            "stop_cost": shopping.stop_cost_pref()}
+            "stop_cost": shopping.stop_cost_pref(), "shop_hidden": shop_stores.get(uid)}
 
 
 def _history_gate(month: str | None) -> None:
@@ -4518,7 +4534,10 @@ def price_groups(q: str | None = None, limit: int = 30):
         word, size = product_groups.query_parts(q)
         keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word))  # sıralama kararlı
     keys = keys[:limit * 2]
-    best = price_sources.best_offers(keys, srcs)
+    from app import shop_stores
+
+    hidden = shop_stores.current()  # kişinin kapattığı mağazalar (shop_store_filter): hiç görünmez, sayısı hidden_count
+    best = price_sources.best_offers(keys, srcs, hidden=hidden)
     best = {k: [{**o, "chain": price_sources.chain_name(o["chain"])} for o in v] for k, v in best.items()}  # yalnız zincir
     keys = [k for k in keys if best.get(k)]
     if q and "|" not in q and len({k.split("|", 1)[-1] for k in keys}) > 1:
@@ -4532,7 +4551,39 @@ def price_groups(q: str | None = None, limit: int = 30):
 
     paths = product_groups.paths(keys[:limit])
     return [{"key": k, "label": labels[k], "category": (paths.get(k) or (None, None))[0],
-             "subcategory": (paths.get(k) or (None, None))[1], "best": best[k]} for k in keys[:limit]]
+             "subcategory": (paths.get(k) or (None, None))[1], "best": best[k],
+             "hidden_count": len(hidden.by_key.get(k, ()))} for k in keys[:limit]]
+
+
+@app.get("/api/prices/brands")
+def price_brands(group: str = Query(min_length=1, max_length=60)):
+    """Marka seç (shop_brand_size): ürünün (boysuz "sut" ya da boylu "sut|1l" — boylu verilse de bütün boylar) seçilebilir
+    markaları: {group (boysuz), brands [{brand, sizes [grup anahtarı], chains}]} — kendi fişlerin + Market Fiyatı (son 7
+    gün); topluluk ortancası markasızdır. Marka yoksa brands boş ("Marka fark etmez")."""
+    from app import price_sources, shopping
+
+    base = group.split("|", 1)[0].strip()
+    return {"group": base, "brands": price_sources.brands(shopping.brand_keys(base))}
+
+
+@app.get("/api/prices/offers")
+def price_offers(group: str = Query(min_length=1, max_length=60), brand: str | None = Query(None, max_length=40)):
+    """Bu boy (ve marka) hangi mağazada kaça (shop_brand_size): {group, label, size_label, brand | null, offers [{chain,
+    price, unit_price_per?, per_unit?, brand?, source, date?, n?, region?, discount?}] ucuzdan (bütün zincirler, en çok
+    20; kişinin kapattığı mağazalar yok), hidden {count, chains, local}, attribution [kaynak yazısı]}. brand boşsa
+    marka fark etmez (zincir başına gruptaki en ucuz ürün)."""
+    from app import price_sources, product_groups, shop_stores
+
+    key = group.strip()
+    hidden = shop_stores.current()
+    offs = price_sources.best_offers([key], limit=20, brand=brand or None, hidden=hidden).get(key, [])
+    keep = ("chain", "price", "unit_price_per", "per_unit", "brand", "source", "date", "n", "region", "discount",
+            "official", "differs")
+    out = [{**{k: o[k] for k in keep if k in o}, "chain": price_sources.chain_name(o["chain"])} for o in offs]
+    lab = product_groups.labels([key]).get(key) or key
+    return {"group": key, "label": lab, "size_label": product_groups.size_label(key), "brand": brand or None,
+            "offers": out, "hidden": hidden.out([key]),
+            "attribution": sorted({o["attribution"] for o in offs if o.get("attribution")})}
 
 
 # ---------------------------------------------------------------- alışveriş listesi (app/shopping.py)
@@ -4550,6 +4601,8 @@ class ShoppingPatch(BaseModel):
     unit: str | None = Field(default=None, max_length=8)
     done: bool | None = None
     group_key: str | None = Field(default=None, max_length=60)  # boy seçimi ("sut|500ml"); null: seçimi kaldır
+    store: str | None = Field(default=None, max_length=60)  # "Bu ürünü Migros'tan alacağım" (shop_store_pin); null kaldırır
+    brand: str | None = Field(default=None, max_length=40)  # marka ("Sütaş"; shop_brand_size); null: marka fark etmez
 
 
 class ShoppingBulkIn(BaseModel):
@@ -4557,7 +4610,8 @@ class ShoppingBulkIn(BaseModel):
 
 
 class ShoppingPlanIn(BaseModel):
-    k: int | None = Field(default=None, ge=1, le=3)  # durak sayısı; boşsa önerilen
+    k: int | None = Field(default=None, ge=1, le=6)  # durak sayısı; boşsa önerilen (bağlı mağazalarla 3'ü geçebilir)
+    chains: list[str] | None = Field(default=None, max_length=3)  # "Marketleri ben seçeyim" planı (shop_store_pin)
 
 
 class ShoppingCompleteIn(BaseModel):
@@ -4586,10 +4640,21 @@ def shopping_list():
     actual {unit_price, line_total, entry_id} | null (bağlanan fiş), added_by, added_by_name, created_at, done_at}],
     saved_plan {k, total, chains [{chain, total, item_ids}], items, created_at, date, source_info} | null} — önce
     işaretlenmemişler."""
-    from app import shopping, shopping_trips
+    from app import shop_stores, shopping, shopping_trips
 
-    items = shopping.list_items(with_best=True)
-    return {"items": items, "saved_plan": shopping_trips.attach_planned(items)}
+    hidden = shop_stores.current()
+    items = shopping.list_items(with_best=True, hidden=hidden)
+    return {"items": items, "saved_plan": shopping_trips.attach_planned(items), "hidden_stores": hidden.out()}
+
+
+@app.get("/api/shopping-list/stores")
+def shopping_stores():
+    """Mağazalar (shop_store_filter): {hidden {chains, local}, chains [{chain, hidden}] (fiyat verisinde ve fişlerinde
+    görülen zincirler), local {hidden, names, count} (kendi fişlerindeki yerel marketler)}. Değiştirmek: PUT /api/me/ui
+    {shop_hidden {chains?, local?}} (kişi başı; ortak defterde herkesin kendi süzgeci)."""
+    from app import shop_stores
+
+    return shop_stores.stores()
 
 
 @app.post("/api/shopping-list")
@@ -4643,7 +4708,7 @@ def shopping_plan_save(body: ShoppingPlanIn):
     from app import shopping_trips
 
     try:
-        return shopping_trips.save_plan(body.k, (db.current_user() or {}).get("id"))
+        return shopping_trips.save_plan(body.k, (db.current_user() or {}).get("id"), body.chains)
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
 
@@ -4758,19 +4823,38 @@ def shopping_plan():
 
 
 @app.get("/api/shopping-list/{rid}/sizes")
-def shopping_sizes(rid: int):
-    """Satırın boy seçenekleri: [{key, label, size_label, chain | null, price | null, unit_price_per?, per_unit?}] en
-    yaygından (resmî + topluluk satırları); seçim PATCH {group_key}."""
-    from app import shopping
+def shopping_sizes(rid: int, brand: str | None = Query(None, max_length=40)):
+    """Satırın boy seçenekleri: [{key, label, size_label, size_amount?, chain | null, price | null, unit_price_per?,
+    per_unit?, best_value, hidden_count}] küçükten büyüğe (shop_best_value; en yaygın en çok 8 boy, resmî + topluluk
+    satırları); best_value: litre / kilo fiyatı en düşük boy ("En kârlı"). brand verilirse o markanın fiyatları (boşsa
+    "" marka fark etmez; verilmezse satırın markası). Kapatılan mağazalar görünmez. Seçim PATCH {group_key, brand?}."""
+    from app import shop_stores, shopping
 
-    got = shopping.sizes(rid)
+    got = shopping.sizes(rid, brand, shop_stores.current())
     if got is None:
         raise HTTPException(404, "Satır yok")
     return got
 
 
+@app.get("/api/shopping-list/{rid}/brands")
+def shopping_brands(rid: int):
+    """Satırın ürününün markaları (shop_brand_size): {group, brands [{brand, sizes, chains}], selected | null}."""
+    from app import price_sources, shopping
+
+    with db.connect() as c:
+        r = c.execute("SELECT text, brand FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "Satır yok")
+    g = shopping._resolve([r["text"]])[0]
+    if not g or g.get("pending"):
+        return {"group": None, "brands": [], "selected": r["brand"]}
+    base = g["key"].split("|", 1)[0]
+    return {"group": base, "brands": price_sources.brands(shopping.brand_keys(base)), "selected": r["brand"]}
+
+
 @app.get("/api/shopping-list/optimize")
-def shopping_optimize(max_stops: int = Query(3, ge=1, le=3), stop_cost: float | None = Query(None, ge=0, le=10_000)):
+def shopping_optimize(max_stops: int = Query(3, ge=1, le=3), stop_cost: float | None = Query(None, ge=0, le=10_000),
+                      chains: str | None = Query(None, max_length=200)):
     """Nereye gideyim? En iyi 1 / 2 / 3 duraklı plan ve önerilen durak sayısı (app/shopping.py optimize).
     {region, date, stop_cost, max_stops, plans: [{k, stops: [{chain, total, items: [{id, text, qty, group_label, price
     (birim), line_total, unit_price_per?, per_unit?, brand?, source, date?, region?, product? (kişinin ürününün son
@@ -4781,10 +4865,22 @@ def shopping_optimize(max_stops: int = Query(3, ge=1, le=3), stop_cost: float | 
     headline {title, subtitle, cta, chains, total, saving, count} | null, unpriced_info [{id, text, reason no_size |
     no_group | no_price | pending, hint}], empty {title, text} | null, sources
     [kaynak yazısı], source_info {kinds [resmi|community|own], resmi_date, national}}. stop_cost verilmezse kişinin
-    tercihi (meta.ui.stop_cost; varsayılan 100 ₺)."""
+    tercihi (meta.ui.stop_cost; varsayılan 100 ₺).
+    shop_store_filter / shop_store_pin / shop_best_value: hidden {count, chains, local} (kişinin kapattığı mağazalar;
+    hiç önerilmez), pinned [{id, text, chain}] (mağazaya bağlı satırlar; o mağaza her planda durak, stops[].pinned,
+    fiyatı yoksa stops[].pinned_unpriced [{id, text}], satırda pinned), chains="Migros,BİM" (1–3; "Marketleri ben
+    seçeyim") → tek plan yalnız o mağazalar üzerinden, manual {chains, missing [{id, text, cheapest {chain, price}}]} |
+    null; chain_options [{chain, covered}] (seçici için, çok karşılayan önce); plans[].saving_vs_market (mağazaların
+    orta fiyatına göre), size_saving, items[].better_size {key, label, size_label, chain, packs, price, total, saving,
+    unit_price_per?, per_unit?} (En kârlı boy önerisi; yalnız öneri); headline.profit {saving, text, basis,
+    size_saving, size_text} | null; unpriced_info reason store_no_price | brand_no_price."""
     from app import shopping
 
-    return shopping.optimize(max_stops, stop_cost)
+    want = [c for c in (chains or "").split(",") if c.strip()]
+    try:
+        return shopping.optimize(max_stops, stop_cost, want or None)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
 @app.patch("/api/shopping-list/{rid}")

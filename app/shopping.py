@@ -162,6 +162,7 @@ def _out(r: dict, group: dict | None, names: dict[int, str], assumed: dict | Non
             "unit_mismatch": bool(key and "|" in key and unit != "adet" and m is None),
             "added_by": r["added_by"], "added_by_name": names.get(r["added_by"]), "created_at": r["created_at"],
             "done_at": r["done_at"], "own_product": own_product, "own_place": own_place,
+            "store": r.get("store"), "brand": r.get("brand"),
             "actual": ({"unit_price": r.get("actual_unit"), "line_total": r.get("actual_line"), "entry_id": r["entry_id"]}
                        if r.get("entry_id") else None)}
 
@@ -196,29 +197,44 @@ def own_offer(it: dict) -> dict | None:
     return {"chain": op["place"], "price": op["price"], "source": "own", "date": op.get("date"), "product": op["name"]}
 
 
-def offers_for(items: list[dict], limit: int = 5) -> dict[int, list[dict]]:
+def offers_for(items: list[dict], limit: int = 5, hidden=None) -> dict[int, list[dict]]:
     """Satır → teklifler (ucuzdan): grubun teklifleri (price_sources.best_offers); kişinin ürününe bağlanan satırda
-    gruptaki BAŞKA ürünlerin kendi fişi fiyatı yerine o ürünün son alımı ("Senin son alımın: ₺95 · Örnekbüfe")."""
+    gruptaki BAŞKA ürünlerin kendi fişi fiyatı yerine o ürünün son alımı ("Senin son alımın: ₺95 · Örnekbüfe").
+
+    brand seçili satır (shop_brand_size) yalnız o markanın tekliflerini alır (kendi fişlerin + Market Fiyatı; yoksa boş).
+    store bağlı satır (shop_store_pin) yalnız o mağazanın teklifini alır (yoksa boş) ve kişinin mağaza süzgeci
+    (hidden, app/shop_stores.py) ona uygulanmaz: açık seçim süzgeçten önce gelir. Diğer satırlarda hidden'daki mağazalar
+    hiç görünmez."""
     from app import price_sources, product_groups
 
-    pinned = any(i.get("own_product") for i in items)
-    best = price_sources.best_offers([i["group"]["key"] for i in items if i["group"]], limit=50 if pinned else limit)
+    want = [i for i in items if i["group"]]
+    calls: dict[tuple[str | None, bool], list[dict]] = {}
+    for it in want:  # (marka, mağazaya bağlı mı) başına tek toplu istek
+        calls.setdefault(((it.get("brand") or None), bool(it.get("store"))), []).append(it)
     out: dict[int, list[dict]] = {}
-    for it in items:
-        if not it["group"]:
-            continue
-        key = it["group"]["key"]
-        offs = best.get(key, [])
-        if (own := own_offer(it)):
-            offs = sorted([o for o in offs if o["source"] != "own"] + [{**own, **product_groups.unit_price(own["price"], key)}],
-                          key=lambda o: (o["price"], o["chain"]))
-        out[it["id"]] = offs[:limit]
+    for (brand, pinned_store), its in calls.items():
+        wide = pinned_store or any(i.get("own_product") for i in its)
+        best = price_sources.best_offers([i["group"]["key"] for i in its], limit=50 if wide else limit, brand=brand,
+                                         hidden=None if pinned_store else hidden)
+        for it in its:
+            key = it["group"]["key"]
+            offs = best.get(key, [])
+            if (own := own_offer(it)) and not brand:
+                offs = sorted([o for o in offs if o["source"] != "own"] +
+                              [{**own, **product_groups.unit_price(own["price"], key)}],
+                              key=lambda o: (o["price"], o["chain"]))
+            if pinned_store:
+                sk = price_sources._chain_key(price_sources.chain_name(it["store"]))
+                offs = [o for o in offs if price_sources._chain_key(price_sources.chain_name(o["chain"])) == sk][:1]
+            out[it["id"]] = offs[:limit]
     return out
 
 
-def list_items(with_best: bool = False) -> list[dict]:
+def list_items(with_best: bool = False, hidden=None) -> list[dict]:
     """Liste (önce işaretlenmemişler, eklenme sırasıyla). Geçici grubu öğrenilmiş satırın group_key'i güncellenir.
-    with_best: her satıra best (en ucuz teklif {chain, price, unit_price_per?, per_unit?, source, product?} | null)."""
+    with_best: her satıra best (en ucuz teklif {chain, price, unit_price_per?, per_unit?, source, product?, brand?} |
+    null; mağazaya bağlı satırda o mağazanın teklifi + pinned: true, yoksa null ve store_missing: true). hidden: kişinin
+    mağaza süzgeci (app/shop_stores.py)."""
     with db.connect() as c:
         rs = db.rows(c.execute("SELECT * FROM shopping_list ORDER BY done, id"))
     out = _rows_out(rs)
@@ -229,20 +245,40 @@ def list_items(with_best: bool = False) -> list[dict]:
     if with_best:
         from app import money, price_sources
 
-        best = offers_for([i for i in out if not i["done"]], limit=1)
+        best = offers_for([i for i in out if not i["done"]], limit=1, hidden=hidden)
         for i in out:
             o = (best.get(i["id"]) or [None])[0]
             i["best"] = {k: o[k] for k in ("chain", "price", "unit_price_per", "per_unit", "source", "n", "date", "product")
-                         if k in o and (k not in ("date", "product") or o["source"] == "own")} if o else None
+                         if k in o and (k not in ("date", "product") or o["source"] in ("own", "resmi"))} if o else None
             if i["best"]:
                 i["best"]["chain"] = price_sources.chain_name(i["best"]["chain"])
                 i["best"]["line_total"] = money.money(o["price"] * i["mult"]) if i["mult"] is not None else None
+                if i.get("brand") and o.get("brand"):
+                    i["best"]["brand"] = o["brand"]
+                if i.get("store"):
+                    i["best"]["pinned"] = True
+            if i.get("store") and not i["done"] and i["group"]:
+                i["store_missing"] = i["best"] is None
     return out
 
 
-def sizes(rid: int) -> list[dict] | None:
-    """Satırın boy seçenekleri (GET /api/shopping-list/{id}/sizes): [{key, label, size_label, chain, price,
-    unit_price_per?, per_unit?}] en yaygından, en çok 8. Satır yoksa None."""
+def _size_sort(k: str) -> tuple:
+    """Boy sırası: küçükten büyüğe (aynı türde; 500 ml, 750 ml, 1 L, 2 L, 5 L), türler L → kg → adet, boysuz en son."""
+    from app import product_groups
+
+    pu = product_groups.per_unit(k)
+    if not pu:
+        return (9, 0.0, k)
+    return ({"L": 0, "kg": 1, "adet": 2}.get(pu[1], 3), pu[0], k)
+
+
+def sizes(rid: int, brand: str | None = None, hidden=None) -> list[dict] | None:
+    """Satırın boy seçenekleri (GET /api/shopping-list/{id}/sizes): [{key, label, size_label, size_amount?, chain,
+    price, unit_price_per?, per_unit?, best_value, hidden_count}] küçükten büyüğe (en yaygın en çok 8 boy). chain / price:
+    o boyun en ucuzu ("En ucuz"); best_value: aynı türde (L, kg, adet) litre / kilo / adet fiyatı en düşük boy ("En
+    kârlı"; en az iki fiyatlı boy varsa). brand verilirse (yoksa satırın markası; "" marka fark etmez) yalnız o markanın
+    teklifleri ve o markanın boyları da eklenir. Kişinin kapattığı mağazalar (hidden) hiç görünmez; hidden_count o boyda
+    gizlenen mağaza sayısı. Satır yoksa None."""
     from app import price_sources, product_groups
 
     with db.connect() as c:
@@ -252,21 +288,50 @@ def sizes(rid: int) -> list[dict] | None:
     g = _resolve([r["text"]])[0]
     if not g:
         return []
+    brand = (brand if brand is not None else r["brand"]) or None
     base = g["key"].split("|", 1)[0]
     keys = common_sizes([base]).get(base, [])[:8]
     if "|" in g["key"] and g["key"] not in keys:
         keys = [g["key"], *keys][:8]
+    if r["pinned_key"] and r["pinned_key"] not in keys and r["pinned_key"].split("|", 1)[0] == base:
+        keys = [r["pinned_key"], *keys][:9]
+    if brand:
+        bn = price_sources.brand_norm(brand)
+        for b in price_sources.brands(brand_keys(base)):
+            if price_sources.brand_norm(b["brand"]) == bn:
+                keys += [k for k in b["sizes"] if k not in keys and "|" in k][:8]
+    keys = sorted(keys, key=_size_sort)
     labels = product_groups.labels(keys)
-    best = price_sources.best_offers(keys, limit=1)
+    best = price_sources.best_offers(keys, limit=1, brand=brand, hidden=hidden)
     name = g["label"].split(" · ")[0]
     out = []
     for k in keys:
         o = (best.get(k) or [None])[0]
         sl = product_groups.size_label(k)
+        pu = product_groups.per_unit(k)
         out.append({"key": k, "label": labels.get(k) or f"{name} · {sl}", "size_label": sl,
-                    "chain": o["chain"] if o else None, "price": o["price"] if o else None,
-                    **({x: o[x] for x in ("unit_price_per", "per_unit") if o and x in o})})
+                    **({"size_amount": pu[0]} if pu else {}),
+                    "chain": price_sources.chain_name(o["chain"]) if o else None, "price": o["price"] if o else None,
+                    **({x: o[x] for x in ("unit_price_per", "per_unit") if o and x in o}),
+                    "best_value": False, "hidden_count": len(hidden.by_key.get(k, ())) if hidden is not None else 0})
+    mark_best_value(out)
     return out
+
+
+def mark_best_value(rows: list[dict]) -> None:
+    """best_value: aynı türde (per_unit) en az iki fiyatlı boy varsa birim fiyatı en düşük olan ("En kârlı")."""
+    by_fam: dict[str, list[dict]] = {}
+    for x in rows:
+        if x.get("unit_price_per") is not None:
+            by_fam.setdefault(x["per_unit"], []).append(x)
+    for fam in by_fam.values():
+        if len(fam) >= 2:
+            min(fam, key=lambda x: (x["unit_price_per"], _size_sort(x["key"])))["best_value"] = True
+
+
+def brand_keys(base: str) -> list[str]:
+    """Bir ürünün (boysuz anahtar "sut") marka aranacak grupları: en yaygın boylar + boysuz anahtar."""
+    return [*common_sizes([base]).get(base, [])[:12], base]
 
 
 def _clean_text(text: str) -> str:
@@ -401,23 +466,53 @@ def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None
     return _row_out(r)  # tanınmayan ad: arka planda hemen sınıflandırılır (kick_names)
 
 
+STORE_MAX = 60
+BRAND_MAX = 40
+
+
+def _clean_store(v) -> str | None:
+    """Satırın bağlandığı mağaza ("Bu ürünü Migros'tan alacağım"): görünen zincir adı; boş / null kaldırır."""
+    from app import price_sources
+
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if not isinstance(v, str) or len(v.strip()) > STORE_MAX:
+        raise ValueError("Mağaza adı geçersiz")
+    return price_sources.chain_name(" ".join(v.split()))
+
+
+def _clean_brand(v) -> str | None:
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    if not isinstance(v, str) or len(v.strip()) > BRAND_MAX:
+        raise ValueError("Marka adı geçersiz")
+    return " ".join(v.split())
+
+
 def update(rid: int, data: dict) -> dict | None:
     """text, qty, unit, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş), group_key (boy seçimi; null kaldırır;
-    metin değişince seçim de kalkar)."""
+    metin değişince seçim de kalkar), store (shop_store_pin: "Migros" | null), brand (shop_brand_size: "Sütaş" | null;
+    metin değişince marka da kalkar, aynı istekte yeni marka verilmediyse)."""
     sets: dict = {}
+    with db.connect() as c:
+        cur = c.execute("SELECT qty, unit, text FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+    if not cur:
+        return None
     if data.get("text") is not None:
         sets["text"] = _clean_text(data["text"])
         g = _resolve([sets["text"]])[0]
         sets["group_key"] = g["key"] if g else None
         sets["pinned_key"] = None
+        if sets["text"] != cur["text"]:  # aynı metin yeniden gönderildi (düzenle → kaydet): marka kalır
+            sets["brand"] = None
+    if "store" in data:
+        sets["store"] = _clean_store(data["store"])
+    if "brand" in data:
+        sets["brand"] = _clean_brand(data["brand"])
     if "group_key" in data:
         sets["pinned_key"] = _clean_key(data["group_key"])
         if sets["pinned_key"]:
             sets["group_key"] = sets["pinned_key"]
-    with db.connect() as c:
-        cur = c.execute("SELECT qty, unit FROM shopping_list WHERE id = ?", (rid,)).fetchone()
-    if not cur:
-        return None
     if data.get("unit") is not None:
         sets["unit"] = _clean_unit(data["unit"])
     if data.get("qty") is not None or "unit" in sets:
@@ -448,13 +543,16 @@ def plan() -> dict:
     brand?). total = Σ adet × birim fiyat (o zincirde fiyatı bilinen satırlar)."""
     from app import money, price_sources
 
+    from app import shop_stores
+
     items = [i for i in list_items() if not i["done"]]
-    best = offers_for(items, limit=50)
+    best = offers_for(items, limit=50, hidden=shop_stores.current())
     rows, chains = [], {}
     for it in items:
         offers = best.get(it["id"], []) if it["group"] and it["mult"] is not None else []
         offers = [{**o, "chain": price_sources.chain_name(o["chain"])} for o in offers]
-        rows.append({**{k: it[k] for k in ("id", "text", "qty", "unit", "group", "assumed", "own_product", "own_place")},
+        rows.append({**{k: it[k] for k in ("id", "text", "qty", "unit", "group", "assumed", "own_product", "own_place",
+                                           "store", "brand")},
                      "best": offers[0] if offers else None,
                      "offers": offers[:5], "mult": it["mult"]})
         for o in offers:
@@ -501,10 +599,90 @@ def _line(it: dict, o: dict) -> dict:
         out["product"] = o["product"]
     if o.get("region"):
         out["region"] = o["region"]
+    if it.get("store"):
+        out["pinned"] = True  # kişi bu satırı bu mağazaya bağladı (shop_store_pin)
     return out
 
 
-def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict:
+def _clean_chains(chains: list[str] | None) -> list[str]:
+    """"Marketleri ben seçeyim": görünen zincir adları, tekrarsız, en çok MAX_STOPS."""
+    from app import price_sources
+
+    out: list[str] = []
+    for c in chains or []:
+        n = price_sources.chain_name(" ".join(str(c or "").split())[:60])
+        if n and all(price_sources._chain_key(n) != price_sources._chain_key(x) for x in out):
+            out.append(n)
+    if len(out) > MAX_STOPS:
+        raise ValueError(f"En çok {MAX_STOPS} market seçebilirsin")
+    return out
+
+
+SIZE_TIP_MIN = 2.0      # boy önerisi: en az bu kadar ₺ …
+SIZE_TIP_PCT = 3.0      # … ve satır tutarının en az bu kadar yüzdesi ucuz
+SIZE_TIP_MAX_RATIO = 3  # önerilen toplam miktar en çok ihtiyacın 3 katı
+
+
+def _size_alts(priced: list[dict], hidden) -> tuple[dict[str, list[str]], dict[str, list[dict]], dict[str, str]]:
+    """Boy önerisi için başka boylar: (ürün → boylu gruplar, grup → teklifler, grup → ad). Markalı, mağazaya bağlı ya
+    da kişinin ürününe bağlı satırlarda öneri yok (kişi açıkça seçti)."""
+    from app import price_sources, product_groups
+
+    bases = sorted({it["group"]["key"].split("|", 1)[0] for it in priced
+                    if product_groups.per_unit(it["group"]["key"]) and not it.get("brand") and not it.get("store")
+                    and not it.get("own_product")})
+    if not bases:
+        return {}, {}, {}
+    common = common_sizes(bases)
+    alts = {b: [k for k in common.get(b, [])[:8] if product_groups.per_unit(k)] for b in bases}
+    keys = sorted({k for v in alts.values() for k in v})
+    best = price_sources.best_offers(keys, limit=50, hidden=hidden) if keys else {}
+    return alts, best, product_groups.labels(keys)
+
+
+def _size_tip(it: dict, line: dict, chainset: set[str], alts, best, labels) -> dict | None:
+    """"En kârlı boy önerisi": aynı ihtiyacı (miktar × boy) plandaki bir mağazada başka boyla daha ucuza karşılamak
+    (2 × 1 L yerine 1 × 2 L). Yalnız öneri; satır değişmez. {key, label, size_label, chain, packs, total, saving,
+    unit_price_per, per_unit} ya da None."""
+    import math
+
+    from app import money, price_sources, product_groups
+
+    key = it["group"]["key"]
+    base = key.split("|", 1)[0]
+    pu = product_groups.per_unit(key)
+    if not pu or base not in alts or it.get("brand") or it.get("store") or it.get("own_product"):
+        return None
+    need = it["mult"] * pu[0]
+    if need <= 0:
+        return None
+    cur = line["line_total"]
+    top = None
+    for k in alts[base]:
+        if k == key:
+            continue
+        apu = product_groups.per_unit(k)
+        if not apu or apu[1] != pu[1]:
+            continue
+        packs = math.ceil(need / apu[0] - 1e-9)
+        if not 1 <= packs <= 99 or packs * apu[0] > need * SIZE_TIP_MAX_RATIO + 1e-9:
+            continue
+        for o in best.get(k, []):
+            ch = price_sources.chain_name(o["chain"])
+            if ch not in chainset:
+                continue
+            total = money.money(packs * o["price"])
+            if cur - total < max(SIZE_TIP_MIN, cur * SIZE_TIP_PCT / 100):
+                continue
+            if top is None or (total, k) < (top["total"], top["key"]):
+                top = {"key": k, "label": labels.get(k) or k, "size_label": product_groups.size_label(k),
+                       "chain": ch, "packs": packs, "price": o["price"], "total": total,
+                       "saving": money.money(cur - total), **product_groups.unit_price(o["price"], k)}
+    return top
+
+
+def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None, chains: list[str] | None = None,
+             hidden=None) -> dict:
     """Alınmamış satırlar için en iyi 1..max_stops duraklı plan (app/price_sources.py best_offers: zincir başına tek
     teklif; kişinin ili, resmî / topluluk / kendi fişin). Satır fiyatı = teklif × adet.
 
@@ -512,18 +690,28 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
     her satır birleşimde onu en ucuza satan zincire. recommended_k: 1 duraktan başla; bir sonraki durak satır
     kazandırıyorsa ya da aynı kapsamda en az stop_cost ₺ ucuzsa geç, değilse dur. saving_vs_single = 1 duraklı plan −
     bu plan; saving_vs_prev = bir önceki plan − bu plan; extra_vs_best = bu plan − önerilen plan.
-    single: zincir başına "hepsi buradan" (covered çoktan aza, sonra ucuz); vs_recommended = toplam − önerilen."""
+    single: zincir başına "hepsi buradan" (covered çoktan aza, sonra ucuz); vs_recommended = toplam − önerilen.
+
+    Kişinin mağaza süzgeci (hidden; app/shop_stores.py) kapattığı mağazaları hiç önermez. Mağazaya bağlı satır (store)
+    yalnız o mağazadan; o mağaza her planda bir duraktır (durak sayısı en az bağlı mağaza sayısı; fiyatı yoksa durağın
+    pinned_unpriced'ında). chains verilirse ("Marketleri ben seçeyim", 1–3 zincir) tek plan yalnız o mağazalar (+ bağlı
+    mağazalar) üzerinden kurulur; orada bulunmayan satırlar manual.missing'te (en ucuz başka mağazasıyla).
+    Her plan: saving_vs_market (satır başına mağazaların orta fiyatına göre tasarruf), size_saving ve satırlarda
+    better_size (En kârlı boy önerisi; _size_tip)."""
     from datetime import date
     from itertools import combinations
+    from statistics import median
 
-    from app import db, money, prefs, price_sources, provinces
+    from app import db, money, prefs, price_sources, provinces, shop_stores
 
     max_stops = max(1, min(int(max_stops or MAX_STOPS), MAX_STOPS))
+    chosen = _clean_chains(chains)
     cost = stop_cost_pref() if stop_cost is None else max(0.0, float(stop_cost))
     uid = (db.current_user() or {}).get("id")
     region = prefs.region(uid) or provinces.DEFAULT
+    hidden = shop_stores.current() if hidden is None else hidden
     items = [i for i in list_items() if not i["done"]]
-    best = offers_for(items, limit=50)
+    best = offers_for(items, limit=50, hidden=hidden)
     offers: dict[int, dict[str, dict]] = {}  # satır → zincir → teklif
     for it in items:
         offs = best.get(it["id"], []) if it["group"] and it["mult"] is not None else []
@@ -535,17 +723,21 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
                     offers[it["id"]][ch] = {**o, "chain": ch}
     priced = [it for it in items if it["id"] in offers]
     unpriced = [it["id"] for it in items if it["id"] not in offers]
+    pins = {it["id"]: price_sources.chain_name(it["store"]) for it in items if it.get("store")}
+    pinned_chains = list(dict.fromkeys(pins.values()))
+    pin_unpriced = {ch: [{"id": it["id"], "text": it["text"]} for it in items
+                         if pins.get(it["id"]) == ch and it["id"] not in offers] for ch in pinned_chains}
 
-    chains: dict[str, dict] = {}
+    chain_rows: dict[str, dict] = {}
     for it in priced:
         for ch, o in offers[it["id"]].items():
-            c = chains.setdefault(ch, {"chain": ch, "total": 0.0, "covered": 0})
+            c = chain_rows.setdefault(ch, {"chain": ch, "total": 0.0, "covered": 0})
             c["total"] += it["mult"] * o["price"]
             c["covered"] += 1
-    ranked = sorted(chains.values(), key=lambda c: (-c["covered"], c["total"], c["chain"]))
+    ranked = sorted(chain_rows.values(), key=lambda c: (-c["covered"], c["total"], c["chain"]))
     cand = [c["chain"] for c in ranked[:MAX_CHAINS]]
 
-    def evaluate(combo: tuple[str, ...]) -> dict | None:
+    def evaluate(combo: tuple[str, ...], allow_empty: bool = False) -> dict | None:
         stops: dict[str, list] = {ch: [] for ch in combo}
         missing = []
         for it in priced:
@@ -559,33 +751,68 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
             if low["chain"] != ch and low["price"] < offers[it["id"]][ch]["price"]:
                 line["cheaper_elsewhere"] = {"chain": low["chain"], "price": low["price"]}  # birleşimde olmayan zincir
             stops[ch].append(line)
-        if any(not v for v in stops.values()):
+        if not allow_empty and any(not v and not pin_unpriced.get(ch) for ch, v in stops.items()):
             return None  # boş durak: daha az duraklı planla aynı
-        out = [{"chain": ch, "total": money.money(sum(x["line_total"] for x in v)), "items": v} for ch, v in stops.items()]
+        out = [{"chain": ch, "total": money.money(sum(x["line_total"] for x in v)), "items": v,
+                **({"pinned": True} if ch in pin_unpriced else {}),
+                **({"pinned_unpriced": pin_unpriced[ch]} if pin_unpriced.get(ch) else {})} for ch, v in stops.items()]
         out.sort(key=lambda s: (-len(s["items"]), -s["total"], s["chain"]))
         total = money.money(sum(s["total"] for s in out))
         return {"k": len(combo), "stops": out, "total": total, "covered": len(priced) - len(missing), "missing": missing}
 
     plans = []
-    for k in range(1, min(max_stops, len(cand)) + 1):
-        got = [p for p in (evaluate(c) for c in combinations(cand, k)) if p]
-        if not got:
-            break
-        plans.append(min(got, key=lambda p: (-p["covered"], p["total"], [s["chain"] for s in p["stops"]])))
+    manual = None
+    if chosen:
+        combo = tuple(dict.fromkeys([*pinned_chains, *chosen]))
+        p = evaluate(combo, allow_empty=True)
+        plans = [p]
+        miss = []
+        for i in p["missing"]:
+            it = next(x for x in priced if x["id"] == i)
+            low = min(offers[i].values(), key=lambda o: (o["price"], o["chain"]))
+            miss.append({"id": i, "text": it["text"], "cheapest": {"chain": low["chain"], "price": low["price"]}})
+        manual = {"chains": list(combo), "missing": miss}
+    else:
+        others = [c for c in cand if c not in pinned_chains]
+        for k in range(max(1, len(pinned_chains)), max(max_stops, len(pinned_chains)) + 1):
+            extra = k - len(pinned_chains)
+            if extra > len(others):
+                break
+            got = [p for p in (evaluate((*pinned_chains, *c)) for c in combinations(others, extra)) if p]
+            if not got:
+                break
+            plans.append(min(got, key=lambda p: (-p["covered"], p["total"], [s["chain"] for s in p["stops"]])))
 
-    rec = 1 if plans else None
-    for i in range(1, len(plans)):
-        prev, cur = plans[i - 1], plans[i]
-        if cur["covered"] > prev["covered"] or (cur["covered"] == prev["covered"] and prev["total"] - cur["total"] >= cost):
-            rec = cur["k"]
-        else:
-            break
-    rec_total = plans[rec - 1]["total"] if rec else None
+    rec_i = 0 if plans else None
+    if not chosen:
+        for i in range(1, len(plans)):
+            prev, cur = plans[i - 1], plans[i]
+            if cur["covered"] > prev["covered"] or (cur["covered"] == prev["covered"] and prev["total"] - cur["total"] >= cost):
+                rec_i = i
+            else:
+                break
+    rec_total = plans[rec_i]["total"] if rec_i is not None else None
+    alts, alt_best, alt_labels = _size_alts(priced, hidden) if plans else ({}, {}, {})
+    by_id = {it["id"]: it for it in priced}
     for i, p in enumerate(plans):
         p["saving_vs_single"] = money.money(plans[0]["total"] - p["total"])
         p["saving_vs_prev"] = money.money(plans[i - 1]["total"] - p["total"]) if i else 0.0
         p["extra_vs_best"] = money.money(p["total"] - rec_total)
-        p["recommended"] = p["k"] == rec
+        p["recommended"] = i == rec_i
+        chainset = {s["chain"] for s in p["stops"]}
+        vs_market, size_saving = 0.0, 0.0
+        for s in p["stops"]:
+            for line in s["items"]:
+                it = by_id[line["id"]]
+                prices = [o["price"] for o in offers[it["id"]].values()]
+                if len(prices) >= 2:
+                    vs_market += (median(prices) - line["price"]) * it["mult"]
+                tip = _size_tip(it, line, chainset, alts, alt_best, alt_labels)
+                if tip:
+                    line["better_size"] = tip
+                    size_saving += tip["saving"]
+        p["saving_vs_market"] = money.money(max(0.0, vs_market))
+        p["size_saving"] = money.money(size_saving)
 
     all_priced = [it["id"] for it in priced]
     single = []
@@ -601,23 +828,29 @@ def optimize(max_stops: int = MAX_STOPS, stop_cost: float | None = None) -> dict
     srcs = sorted({x["source"] for x in used}, key=lambda x: (order.index(x) if x in order else len(order), x))
     resmi_days = [x["date"] for x in used if x["source"] == "resmi" and x.get("date")]
     attribution = sorted({o["attribution"] for v in offers.values() for o in v.values() if o.get("attribution")})
-    rec_plan = plans[rec - 1] if rec else None
+    rec_plan = plans[rec_i] if rec_i is not None else None
     return {"region": region, "date": date.today().isoformat(), "stop_cost": cost, "max_stops": max_stops,
-            "headline": headline(rec_plan, plans[0] if plans else None, len(priced)),
+            "headline": headline(rec_plan, plans[0] if plans and not chosen else None, len(priced), manual=bool(chosen)),
             "unpriced_info": [_unpriced(it) for it in items if it["id"] in unpriced],
             "empty": _empty(items, priced),
-            "plans": plans, "single": single, "recommended_k": rec,
+            "plans": plans, "single": single, "recommended_k": rec_plan["k"] if rec_plan else None,
             "one_store": single[0] if single else None,
             "priced": len(priced), "unpriced": unpriced,
             "sources": attribution,
             "source_info": {"kinds": srcs, "resmi_date": max(resmi_days) if resmi_days else None,
-                            "national": any(x["source"] == "resmi" and x.get("region") == "ulusal" for x in used)}}
+                            "national": any(x["source"] == "resmi" and x.get("region") == "ulusal" for x in used)},
+            "hidden": hidden.out(), "manual": manual,
+            "pinned": [{"id": i, "text": next(it["text"] for it in items if it["id"] == i), "chain": ch}
+                       for i, ch in pins.items()],
+            "chain_options": [{"chain": c["chain"], "covered": c["covered"]} for c in ranked]}
 
 
-def headline(p: dict | None, one: dict | None, priced: int) -> dict | None:
-    """Önerilen planın tek cümlesi (shopping_headline): {title, subtitle, cta, chains, total, saving, count}.
+def headline(p: dict | None, one: dict | None, priced: int, manual: bool = False) -> dict | None:
+    """Önerilen planın tek cümlesi (shopping_headline): {title, subtitle, cta, chains, total, saving, count, profit}.
     k=1: "Önerimiz: Hepsini BİM'den al — ₺195" / "6 ürün" / "BİM'e git"; k>1: "Önerimiz: BİM + Migros — ₺1.200" /
-    "₺340 daha ucuz" (tek mağazaya göre) / "BİM + Migros". Fiyatlı satır yoksa None."""
+    "₺340 daha ucuz" (tek mağazaya göre) / "BİM + Migros". manual (kişi marketleri seçti): "Seçtiğin marketler: Migros
+    + BİM — ₺1.250". profit (shop_best_value): {saving (ortalama fiyata göre), text "Bu planla ₺120 tasarruf", basis,
+    size_saving, size_text} | null. Fiyatlı satır yoksa None."""
     from app import money
     from app.textnorm import suffix
 
@@ -626,7 +859,10 @@ def headline(p: dict | None, one: dict | None, priced: int) -> dict | None:
     chains = [st["chain"] for st in p["stops"]]
     total, count = p["total"], p["covered"]
     saving = money.money(one["total"] - total) if one and one["covered"] == count and p["k"] > 1 else 0.0
-    if p["k"] == 1:
+    if manual:
+        title = f"Seçtiğin marketler: {' + '.join(chains)} — {money.tl(total, trim=True)}"
+        cta = " + ".join(chains) if p["k"] > 1 else f"{suffix(chains[0], 'e')} git"
+    elif p["k"] == 1:
         head = "Hepsini " if count == priced else ""
         title = f"Önerimiz: {head}{suffix(chains[0], 'den')} al — {money.tl(total, trim=True)}"
         cta = f"{suffix(chains[0], 'e')} git"
@@ -634,27 +870,41 @@ def headline(p: dict | None, one: dict | None, priced: int) -> dict | None:
         title = f"Önerimiz: {' + '.join(chains)} — {money.tl(total, trim=True)}"
         cta = " + ".join(chains)
     sub = f"{money.tl(saving, trim=True)} daha ucuz" if saving > 0 else f"{count} ürün"
+    profit = None
+    vm, ss = p.get("saving_vs_market") or 0.0, p.get("size_saving") or 0.0
+    if vm >= 1 or ss >= 1:
+        profit = {"saving": vm, "text": f"Bu planla {money.tl(vm, trim=True)} tasarruf" if vm >= 1 else None,
+                  "basis": "Ürün başına mağazaların orta fiyatına göre" if vm >= 1 else None,
+                  "size_saving": ss,
+                  "size_text": f"Boy önerileriyle {money.tl(ss, trim=True)} daha" if ss >= 1 else None}
     return {"title": title, "subtitle": sub, "cta": cta, "chains": chains, "total": total, "saving": saving,
-            "count": count}
+            "count": count, "profit": profit}
 
 
 _HINTS = {
-    "no_group": "Ürünü tanıyamadık; daha genel yaz: \u201csüt\u201d, \u201cekmek\u201d.",
+    "no_group": "Ürünü tanıyamadık; daha genel yaz: “süt”, “ekmek”.",
     "pending": "Ürün tanınıyor; fiyatı birazdan gelir.",
-    "no_size": "Ürüne boy ekle: \u201csüt 1 L\u201d.",
+    "no_size": "Ürüne boy ekle: “süt 1 L”.",
     "no_price": "Bu ürünün fiyatı henüz yok; fiş okuttukça fiyatlar gelir.",
     "unit_mismatch": "Bu ürün bu birimle satılmıyor; miktarı adet olarak seç.",
+    "store_no_price": "Seçtiğin mağazada bu ürünün fiyatı yok; mağaza seçimini kaldırabilir ya da değiştirebilirsin.",
+    "brand_no_price": "Bu markanın fiyatı yok; “Marka fark etmez” seçersen fiyat gelir.",
 }
 
 
 def _unpriced(it: dict) -> dict:
     g = it.get("group")
     reason = "no_group" if not g else "pending" if g.get("pending") else "unit_mismatch" if it.get("unit_mismatch") \
-        else "no_size" if "|" not in g["key"] and (it.get("unit") or "adet") == "adet" else "no_price"
+        else "no_size" if "|" not in g["key"] and (it.get("unit") or "adet") == "adet" \
+        else "store_no_price" if it.get("store") else "brand_no_price" if it.get("brand") else "no_price"
     hint = _HINTS[reason]
     if reason == "no_size":  # satırın kendi adıyla örnek: "Deterjan" → "deterjan 1 L" ya da "deterjan 500 g"
         t = it["text"].strip().lower()
-        hint = f"Ürüne boy ekle: \u201c{t} 1 L\u201d ya da \u201c{t} 500 g\u201d."
+        hint = f"Ürüne boy ekle: “{t} 1 L” ya da “{t} 500 g”."
+    elif reason == "store_no_price":
+        hint = f"{it['store']}: bu ürünün fiyatı yok; mağaza seçimini kaldırabilir ya da değiştirebilirsin."
+    elif reason == "brand_no_price":
+        hint = f"{it['brand']} için fiyat yok; “Marka fark etmez” seçersen fiyat gelir."
     return {"id": it["id"], "text": it["text"], "reason": reason, "hint": hint}
 
 

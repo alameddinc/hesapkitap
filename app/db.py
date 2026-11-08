@@ -538,6 +538,8 @@ MIGRATIONS = [
     ("shopping_list", "entry_id", "INTEGER"),   # bağlanan fiş kaydı
     ("shopping_list", "receipt_key", "TEXT"),   # fiş satırının grubu (piyasa karşılaştırması)
     ("shopping_list", "receipt_qty", "REAL"),   # fiş satırının miktarı
+    ("shopping_list", "store", "TEXT"),         # kişinin bağladığı mağaza ("Bu ürünü Migros'tan alacağım"; app/shopping.py)
+    ("shopping_list", "brand", "TEXT"),         # seçilen marka ("Sütaş"); boşsa marka fark etmez
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski

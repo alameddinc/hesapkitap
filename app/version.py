@@ -166,6 +166,22 @@ CAPABILITIES = (
                               # names, in_plan, confident, saving?} | null; GET /api/shopping-list/receipt-match[?entry_id]
                               # (son 2 günün bağlanmamış fişi) → aday | null; POST /link-receipt {entry_id, target?, trip_id?},
                               # POST /receipt-dismiss {entry_id}; items[].actual {unit_price, line_total, entry_id}
+    "shop_store_filter",      # mağaza süzgeci (kişi başı): meta.ui.shop_hidden {chains, local}, PUT /api/me/ui {shop_hidden
+                              # {chains?, local?}}; GET /api/shopping-list/stores {hidden, chains [{chain, hidden}], local
+                              # {hidden, names, count}}; kapatılan mağaza En ucuz / boy / plan / Nereden alınır / daha ucuz
+                              # önerisinde yok; GET /api/shopping-list hidden_stores, optimize hidden {count, chains, local},
+                              # /api/prices/groups [].hidden_count, sizes [].hidden_count
+    "shop_store_pin",         # satırı mağazaya bağla: PATCH /api/shopping-list/{id} {store | null}, items[].store,
+                              # best.pinned, store_missing; optimize pinned [{id, text, chain}], stops[].pinned,
+                              # pinned_unpriced, chains="A,B" (1–3, "Marketleri ben seçeyim") → manual {chains, missing},
+                              # chain_options; PUT saved-plan {k?, chains?}; unpriced reason store_no_price
+    "shop_brand_size",        # marka + boy: GET /api/prices/brands?group → {group, brands [{brand, sizes, chains}]},
+                              # GET /api/shopping-list/{id}/brands, GET /api/prices/offers?group&brand → {group, label,
+                              # size_label, brand, offers, hidden, attribution}; PATCH {brand | null}, items[].brand,
+                              # sizes?brand=; plan markalı satırda o markanın fiyatı (unpriced reason brand_no_price)
+    "shop_best_value",        # sizes küçükten büyüğe + size_amount, best_value ("En kârlı": birim fiyatı en düşük boy);
+                              # optimize plans[].saving_vs_market, size_saving, items[].better_size (En kârlı boy önerisi),
+                              # headline.profit {saving, text, basis, size_saving, size_text} | null
     "summary_installments",   # /api/summary installments {month, current, total, count, in_spend, expected, remaining,
                               # remaining_count} — dönemin taksitleri, harcamaya EKLENMEZ (in_spend zaten totals.expense
                               # içinde; expected ekstresi beklenen); GET /api/installments?month → aynısı + items [{uid,

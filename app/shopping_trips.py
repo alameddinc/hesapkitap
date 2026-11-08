@@ -67,11 +67,12 @@ def _raw_plan() -> dict | None:
     return {**d, "created_at": r["created_at"], "created_by": r["created_by"]}
 
 
-def save_plan(k: int | None = None, uid: int | None = None) -> dict:
-    """Nereye gideyim? planını kaydet (k: durak sayısı; boşsa önerilen). Fiyatlı satır yoksa ValueError."""
+def save_plan(k: int | None = None, uid: int | None = None, chains: list[str] | None = None) -> dict:
+    """Nereye gideyim? planını kaydet (k: durak sayısı; boşsa önerilen; chains: "Marketleri ben seçeyim" planı).
+    Fiyatlı satır yoksa ValueError."""
     from app import shopping
 
-    o = shopping.optimize()
+    o = shopping.optimize(chains=chains)
     plans = o["plans"]
     if not plans:
         raise ValueError("Planlanacak fiyatlı ürün yok")
@@ -217,7 +218,9 @@ def complete(carry_over: bool = True, uid: int | None = None) -> dict:
     with db.connect() as c:
         raw = {r["id"]: dict(r) for r in c.execute("SELECT * FROM shopping_list")}
     need = [i["group"]["key"] for i in bought if not i.get("planned") and i["group"] and i["mult"] is not None]
-    best = price_sources.best_offers(need, limit=1) if need else {}
+    from app import shop_stores
+
+    best = price_sources.best_offers(need, limit=1, hidden=shop_stores.current()) if need else {}
     kept = [i for i in items if not i["done"]] if carry_over else []
     rows = []
     for i in items:

@@ -67,7 +67,10 @@ def attach(products: list[dict], today: date | None = None) -> None:
     want = [p for p in products if p["market"] and p.get("group") and not p["group"].get("pending")
             and p.get("last_price")]
     keys = sorted({p["group"]["key"] for p in want})
-    offers = price_sources.best_offers(keys, limit=10) if keys else {}
+    from app import shop_stores
+
+    # kişinin kapattığı mağazalar (app/shop_stores.py) "daha ucuz" önerisinde görünmez
+    offers = price_sources.best_offers(keys, limit=10, hidden=shop_stores.current()) if keys else {}
     since = (today - timedelta(days=REF_DAYS)).isoformat()
     ser = market_ref.series(keys, since) if keys else {}
     for p in want:
