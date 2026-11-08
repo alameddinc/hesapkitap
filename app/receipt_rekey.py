@@ -1,7 +1,7 @@
 """Kayıtlı fiş kalemlerinin fiyat takibi anahtarını (receipt_items.product_key) bugünkü kuralla yeniden türet.
 
 Neden: kalemin adı sonradan düzeltildiğinde (istemci eski "product"ı geri yolluyordu) anahtar eski addan kalıyordu:
-"Winston …" adlı satır "TEKEL URUNLERI" anahtarıyla bakkalın departman satırıyla (birkaç paketin toplamı) aynı ürün
+"Örnekmarka …" adlı satır "TEKEL URUNLERI" anahtarıyla bakkalın departman satırıyla (birkaç paketin toplamı) aynı ürün
 sayılıp "₺655 → ₺133 (−%80)" gösteriliyordu. Yeni kayıtlar db.save_receipt_items'ta doğru yazılır; bu modül eskileri
 düzeltir: product ada ait değilse (db.item_product) atılır, anahtar db.item_key ile yeniden yazılır.
 

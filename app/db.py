@@ -4059,7 +4059,7 @@ def _tokens_related(a: str, b: str) -> bool:
 
 def product_fits(name: str | None, product: str | None) -> bool:
     """Kalemin standart ürün adı (product) fişteki adına (name) ait mi: en az bir kelimesi akraba (_tokens_related).
-    Ad sonradan düzeltildiyse (kullanıcı, öneri, birleştirme) eski product kalır: "Winston Slims Blue Sigara" adı +
+    Ad sonradan düzeltildiyse (kullanıcı, öneri, birleştirme) eski product kalır: "Örnekmarka İnce Mavi Sigara" adı +
     "tekel ürünleri" product → ait değil, ad esas alınır. Karşılaştıracak kelime yoksa (yalnız rakam) ait sayılır."""
     a, b = _fit_tokens(name or ""), _fit_tokens(product or "")
     if not a or not b:
@@ -4087,7 +4087,7 @@ def item_kind(name: str, product: str | None = None, amount: float | None = None
     """product | group (kasanın reyon/departman satırı: 'İÇECEK', 'TEKEL ÜRÜNLERİ' — içinde ne olduğu belli değil) |
     service (süreye/kullanıma göre: otopark, vale, servis ücreti) | discount (indirim satırı ya da eksi tutar).
     Grup kararı fişteki addan (department_line); product yalnız ada aitse ya da adda kelime yoksa bakılır — ad
-    düzeltilmişken eski product ("tekel ürünleri") gerçek ürünü ("Winston …") grup yapmasın."""
+    düzeltilmişken eski product ("tekel ürünleri") gerçek ürünü ("Örnekmarka …") grup yapmasın."""
     keys = [product_key(x) for x in (name, product) if x]
     bare = [re.sub(r"\b\d+\b", " ", k).split() for k in keys]
     texts = [" ".join(b) for b in bare]
