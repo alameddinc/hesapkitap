@@ -241,6 +241,7 @@ def _phrase(label: str) -> tuple[str, ...]:
 
 
 _GENERIC, _WEAK, GENERIC_PATH, GENERICS = _parse_taxonomy()
+_BY_SLUG = {slug(g): g for g in GENERIC_PATH}
 # eski adlar (geriye uyum): aynı ürünün başka yazılışı → genel ad; genel ad → ana kategori
 SYNONYMS = {" ".join(k): v for k, v in _GENERIC.items() if k != _phrase(v)}
 GENERIC_CATEGORY = {g: p[0] for g, p in GENERIC_PATH.items()}
@@ -256,6 +257,12 @@ _ADJ = re.compile(r"(LI|LU|SIZ|SUZ|MIS|MUS|LIK|LUK)$")
 _DROP = {("SEKER", "ILAVESIZ"), ("SEKER", "ILAVE"), ("ILAVE", "SEKERSIZ"), ("SEKER", "ILAVESI"), ("ILAVE", "SEKER")}
 
 
+# Adında genel ürün kelimesi geçen marka ("KAHVE DÜNYASI" çikolata, gofret de satar): marka atılınca ürün kalmasa bile
+# markanın kelimesi ürün sayılmaz (kalanla çözülür ya da katalog / yapay zekâya kalır). "ÇATAL SUCUK" gibi ürünü
+# kendi adında olan markalar burada değildir.
+_NAME_ONLY_BRANDS = {("KAHVE", "DUNYASI")}
+# renk adı (saç boyası "AÇIK KAHVE", "KOYU KAHVE"): ürün kelimesi değil
+_DROP |= {("ACIK", "KAHVE"), ("KOYU", "KAHVE"), ("KAHVE", "RENGI")}
 _NOT_ADJ = {"RAVIOLI", "BROCCOLI", "CHILLI", "CHILI", "TORTELLINI", "VERMICELLI", "PANNACOTTA"}
 
 
@@ -363,7 +370,10 @@ def _brand_marks(tokens: list[str], brand: str | None) -> tuple[set[int], set[in
             if tuple(tokens[i:i + len(ph)]) == ph:
                 full |= set(range(i, i + len(ph)))
                 break
-    partial = {i for i in full if tokens[i] not in _VOCAB}
+    stop = {i for ph in _NAME_ONLY_BRANDS for j in range(len(tokens) - len(ph) + 1)  # hep atılır
+            if tuple(tokens[j:j + len(ph)]) == ph for i in range(j, j + len(ph))}
+    full |= stop
+    partial = {i for i in full if tokens[i] not in _VOCAB} | stop
     return full, partial
 
 
@@ -372,6 +382,10 @@ def _strip(tokens: list[str], used: set[int], brand: str | None = None, partial:
     kelimesi kalır)."""
     full, part = _brand_marks(tokens, brand)
     marks = part if partial else full
+    for k, t in enumerate(tokens):  # "… 2X250 GR FİLTRE KAĞIDI HEDİYELİ": hediye ürünün kendisi değil
+        if t in ("HEDIYELI", "HEDIYE") and k:
+            n = next((n for n in range(min(k, _MAX_PHRASE), 0, -1) if tuple(tokens[k - n:k]) in _GENERIC), 0)
+            marks = marks | set(range(k - n, k))
     rest = [t for i, t in enumerate(tokens) if i not in used and i not in marks and t not in DESCRIPTORS
             and not re.fullmatch(r"[\d.,]+", t) and len(t) > 1]
     if any(tuple(rest[i:i + 2]) in _DROP for i in range(len(rest) - 1)):
@@ -380,11 +394,9 @@ def _strip(tokens: list[str], used: set[int], brand: str | None = None, partial:
     return rest
 
 
-def refine(generic: str | None, tokens: list[str]) -> str | None:
-    """Genel ad + adın kelimeleri → çeşidi de taşıyan genel ad: ("Süt", ÇİKOLATALI …) → "Çikolatalı Süt",
-    ("Süt", WHEY …) → "Protein İçeceği", ("Süt", LAKTOZSUZ YARIM YAĞLI …) → "Laktozsuz Süt". Kural, önbellek ve yapay
-    zekâ sonucuna aynı biçimde uygulanır (model "Süt" dese de aromalı süt ayrı gruba düşer). Taban VARIANT_BASES'te
-    değilse (gofret, bisküvi: aroma grubu değiştirmez) ya da çeşit kelimesi yoksa genel ad olduğu gibi."""
+def _variant(generic: str | None, tokens: list[str]) -> str | None:
+    """Süt ürününün çeşidi: ("Süt", ÇİKOLATALI …) → "Çikolatalı Süt", ("Süt", WHEY …) → "Protein İçeceği", ("Süt",
+    LAKTOZSUZ YARIM YAĞLI …) → "Laktozsuz Süt". Taban VARIANT_BASES'te değilse ya da çeşit kelimesi yoksa olduğu gibi."""
     if not generic:
         return generic
     base = {"Kakaolu Süt": "Süt", "Laktozsuz Süt": "Süt"}.get(generic, generic)
@@ -399,6 +411,189 @@ def refine(generic: str | None, tokens: list[str]) -> str | None:
     return _VARIANT_NAMES.get((adj, base)) or f"{adj} {base}"
 
 
+def refine(generic: str | None, tokens: list[str]) -> str | None:
+    """Genel ad + adın kelimeleri → çeşidi de taşıyan genel ad: süt ürününde aroma / laktozsuz / keçi / protein
+    (_variant: ("Süt", ÇİKOLATALI …) → "Çikolatalı Süt"); kahve, çay ve deterjanda ürünün biçimi (form: "ÇEKİRDEK
+    KAHVE 1 KG" → Çekirdek Kahve, "BUZLU ÇAY 330 ML" → Soğuk Çay, "TOZ DETERJAN" → Toz Deterjan). Kural, önbellek ve
+    yapay zekâ sonucuna aynı biçimde uygulanır (model "Kahve" dese de 3ü1 arada ayrı gruba düşer). Diğer genel adlar
+    (gofret, bisküvi: aroma grubu değiştirmez) olduğu gibi."""
+    return form(_variant(generic, tokens), tokens) if generic else generic
+
+
+# ---------------------------------------------------------------- ürün biçimi (kahve, çay, deterjan)
+# Aynı genel adın altında fiyatı ve boyu bambaşka ürünler: çekirdek kahve (250 g – 1 kg), 3ü1 arada (18 g, tek
+# kullanımlık), soğuk kahve (250 ml) aynı grupta olunca "en çok satılan boy" ve kilo fiyatı anlamsızlaşıyordu
+# (08.11.2026: "Çekirdek kahve" → 10 adet kabul edildi). Biçim sırayla: addaki kelime, boyun türü (ml → içecek),
+# resmî raf etiketi (shelf: Market Fiyatı main_category + categories, "Kahve|Çekirdek Kahveler"). Hiçbiri yoksa genel
+# ad kalır ("Kahve": kafe fişi, "Kahve 100 g"). Biçimin üst adı FORM_PARENT'tadır: yalnız üst adı yazan listede alt
+# biçimlerin boyları gösterilir (app/shopping.py common_sizes).
+COFFEE_FORMS = ("Türk Kahvesi", "Hazır Kahve", "Filtre Kahve", "Çekirdek Kahve", "Kahve Karışımı", "Kapsül Kahve",
+                "Soğuk Kahve", "Hazır Türk Kahvesi")
+_CAFE = {"Latte", "Americano", "Espresso", "Cappuccino"}
+_COFFEE = {"Kahve", *COFFEE_FORMS, *_CAFE}
+_K_CAPSULE = {"KAPSUL", "KAPSULU", "KAPSULLU", "CAPSULE", "CAPSULES", "NESPRESSO"}
+_K_COLD = {"SOGUK", "BUZLU", "ICEPRESSO", "XPRESS", "ICED", "FRAPPE", "COLD"}
+_K_MIX = {"ARADA", "CAPPUCCINO", "CAPPUCINO", "KAPUCINO", "KAPUCCINO", "MOCHA", "MOCHACCINO", "KOPUKLU", "KARISIM",
+          "KARISIMI", "KARISIMLI", "MACCHIATO"}
+_K_BEAN = {"CEKIRDEK", "CEKIRDEGI"}
+_K_GROUND = {"FILTRE", "OGUTULMUS", "DRIP"}
+_K_INSTANT = {"GRANUL", "INSTANT", "COZUNEBILIR", "GOLD", "KLASIK", "CLASSIC", "STICK", "KAVANOZ", "HAZIR"}
+# raf etiketi → biçim, sırayla (zincirin etiketi çoğu zaman birden çok: "Fi̇ltre Kahve|Çekirdek Kahveler" çekirdektir)
+_K_SHELF = ((("KAPSUL",), "Kapsül Kahve"), (("CEKIRDEK",), "Çekirdek Kahve"), (("SOGUK", "KAHVE"), "Soğuk Kahve"),
+            (("BUZLU", "KAHVE"), "Soğuk Kahve"), (("TURK", "KAHVE"), "Türk Kahvesi"), (("OGUTULMUS",), "Filtre Kahve"),
+            (("FILTRE", "KAHVE"), "Filtre Kahve"), (("GRANUL",), "Hazır Kahve"), (("COZUNEBILIR",), "Hazır Kahve"),
+            (("GOLD", "KAHVE"), "Hazır Kahve"), (("KLASIK", "KAHVE"), "Hazır Kahve"), (("KARISIM",), "Kahve Karışımı"),
+            (("HAZIR", "KAHVE"), "Hazır Kahve"))
+# kahveyle ilgisiz raf (etikette kahve / içecek kelimesi yoksa): kahve rengi saç boyası, kahveli çikolata, pasta süsü
+_NOT_COFFEE_SHELF = ("KOZMETIK", "SAC", "BOYA", "BISKUVI", "CIKOLATA", "GOFRET", "SEKER", "PASTA", "TATLI", "KEK",
+                     "MUTFAK", "TEMIZLIK", "KISISEL", "DRAJE", "HAMUR")
+TEA_FORMS = ("Poşet Çay", "Bitki Çayı", "Soğuk Çay")
+_T_HERBAL = {"BEYAZ", "YESIL", "FIT", "FORM", "ADA", "ADACAYI", "IHLAMUR", "KUSBURNU", "PAPATYA", "REZENE", "BITKI",
+             "BITKISEL", "ZAYIFLAMA", "MEYVE"}
+DETERGENT_FORMS = ("Toz Deterjan", "Sıvı Deterjan", "Kapsül Deterjan")
+_DISH = ("Bulaşık Deterjanı", "Bulaşık Makinesi Deterjanı", "Bulaşık Tableti")
+FORM_PARENT = {**{f: "Kahve" for f in COFFEE_FORMS}, **{f: "Çay" for f in TEA_FORMS},
+               **{f: "Deterjan" for f in DETERGENT_FORMS}}
+# Yalnız üst ad yazılınca ("kahve") gösterilecek alt biçimler, sırayla (en olağan önce)
+FORM_CHILDREN = {"Kahve": [f for f in COFFEE_FORMS if f != "Hazır Türk Kahvesi"], "Deterjan": list(DETERGENT_FORMS)}
+
+
+def _shelf_tags(shelf: str | None) -> list[tuple[str, ...]]:
+    """"Kahve|Fi̇ltre Kahve|Çekirdek Kahveler" → [("KAHVE",), ("FILTRE", "KAHVE"), ("CEKIRDEK", "KAHVELER")]."""
+    return [tuple(name_norm(t.replace("̇", "")).split()) for t in (shelf or "").split("|") if t.strip()]
+
+
+def _tag_has(tags: list[tuple[str, ...]], words: tuple[str, ...]) -> bool:
+    return any(all(any(x.startswith(w) for x in tag) for w in words) for tag in tags)
+
+
+def _size_kind(tokens) -> tuple[str | None, float]:
+    """(boyun türü ml | g | ad | None, adet): tek adet ("1 ADET") boy sayılmaz."""
+    size = parse_size(list(tokens))[0]
+    if not size:
+        return None, 0
+    n = size["value"] * (size.get("pack") or 1) if size["base"] == "ad" else size.get("pack") or 1
+    if size["base"] == "ad" and n <= 1:
+        return None, 0
+    return size["base"], n
+
+
+def _one_in_one(tokens) -> bool:
+    """"3'Ü 1 ARADA", "2Sİ1", "3IN1" (name_norm sonrası "3 U 1", "2 SI 1", "3 IN 1")."""
+    t = list(tokens)
+    return any(t[i].isdigit() and t[i + 1] in ("U", "SI", "IN", "I") and t[i + 2] == "1" for i in range(len(t) - 2))
+
+
+def coffee_form(generic: str | None, tokens, shelf: str | None = None) -> str | None:
+    """Kahvenin biçimi: Kapsül Kahve, Soğuk Kahve (ml ya da soğuk / buzlu; latte içeceği "Latte" kalır), Türk Kahvesi /
+    Hazır Türk Kahvesi, Kahve Karışımı (3ü1 / 2si1 arada, cappuccino, latte tozu), Çekirdek Kahve, Filtre Kahve
+    (öğütülmüş, espresso), Hazır Kahve (granül, gold, klasik); addan çıkmazsa raf etiketi. Boysuz kafe içeceği ("LATTE",
+    "ESPRESSO") aynen kalır. Raf etiketi verilmiş ve kahveyle ilgisi yoksa (saç boyası "AÇIK KAHVE", pasta süsü) None:
+    kural çözmez (ürün katalog / yapay zekâyla gruplanır)."""
+    if generic not in _COFFEE:
+        return generic
+    t = set(tokens)
+    kind, _n = _size_kind(tokens)
+    tags = _shelf_tags(shelf)
+    words = {w for tag in tags for w in tag}
+    if words and not any(w.startswith(("KAHV", "CAFE", "ICECEK", "SUT")) for w in words) \
+            and any(w.startswith(_NOT_COFFEE_SHELF) for w in words):
+        return None
+    latte = "LATTE" in t or generic == "Latte"
+    if generic in _CAFE and kind is None and not t & (_K_CAPSULE | _K_COLD):
+        return generic
+    if t & _K_CAPSULE:
+        return "Kapsül Kahve"
+    if kind == "ml" or t & _K_COLD:
+        return "Latte" if latte else "Soğuk Kahve"
+    if "TURK" in t or generic in ("Türk Kahvesi", "Hazır Türk Kahvesi"):
+        return "Hazır Türk Kahvesi" if "HAZIR" in t or generic == "Hazır Türk Kahvesi" else "Türk Kahvesi"
+    if latte or t & _K_MIX or generic == "Cappuccino" or _one_in_one(tokens):
+        return "Kahve Karışımı"
+    if t & _K_BEAN:
+        return "Çekirdek Kahve"
+    if t & _K_GROUND:
+        return "Filtre Kahve"
+    if t & _K_INSTANT:  # "GOLD ESPRESSO 80 G" granüldür
+        return "Hazır Kahve"
+    if "ESPRESSO" in t or generic == "Espresso":  # öğütülmüş espresso (çekirdek / kapsül yukarıda)
+        return "Filtre Kahve"
+    for words, f in _K_SHELF:
+        if _tag_has(tags, words):
+            return f
+    return "Kahve" if generic in _CAFE else generic
+
+
+def tea_form(generic: str | None, tokens) -> str | None:
+    """Çayın biçimi: Soğuk Çay (ml, buzlu), Bitki Çayı (yeşil, beyaz, ıhlamur, form), Poşet Çay (poşet; demlik ya da
+    10+ adetlik paket), yoksa (dökme) Çay. Boysuz "ÇAY" (kafe) Çay kalır."""
+    if generic not in ("Çay", "Poşet Çay"):
+        return generic
+    t = set(tokens)
+    kind, n = _size_kind(tokens)
+    if kind == "ml" or t & {"BUZLU", "SOGUK", "ICE"}:
+        return "Soğuk Çay"
+    if t & _T_HERBAL:
+        return "Bitki Çayı"
+    if t & {"POSET", "POSETLI"} or (kind == "ad" and ("DEMLIK" in t or n >= 10)) or (kind == "g" and n >= 10):
+        return "Poşet Çay"
+    return generic
+
+
+def detergent_form(generic: str | None, tokens) -> str | None:
+    """Deterjanın biçimi: bulaşıkta el / makine / tablet; çamaşırda kapsül (tablet, adetli), toz (TOZ ya da ağırlık),
+    sıvı (SIVI, JEL ya da hacim). Kelime boydan önce gelir (sıvı bulaşık deterjanı kiloyla da satılır)."""
+    if generic not in ("Deterjan", *DETERGENT_FORMS, *_DISH):
+        return generic
+    t = set(tokens)
+    kind, _n = _size_kind(tokens)
+    if "BULASIK" in t or generic in _DISH:
+        if t & {"TABLET", "TABLETI", "KAPSUL", "KAPSULU"}:
+            return "Bulaşık Tableti"
+        if t & {"MAKINESI", "MAKINE", "MAKINA", "MAKINASI"}:
+            return "Bulaşık Makinesi Deterjanı"
+        return "Bulaşık Deterjanı" if generic == "Deterjan" else generic
+    if t & {"KAPSUL", "KAPSULU", "TABLET", "TABLETI", "POD", "PODS"}:
+        return "Kapsül Deterjan"
+    if "TOZ" in t:
+        return "Toz Deterjan"
+    if t & {"SIVI", "JEL"}:
+        return "Sıvı Deterjan"
+    if generic != "Deterjan":
+        return generic
+    return {"ad": "Kapsül Deterjan", "g": "Toz Deterjan", "ml": "Sıvı Deterjan"}.get(kind or "", generic)
+
+
+def form(generic: str | None, tokens, shelf: str | None = None) -> str | None:
+    """Kahve / çay / deterjan biçimi (coffee_form, tea_form, detergent_form); diğer genel adlar olduğu gibi. None: raf
+    etiketi ürünün kahve olmadığını söylüyor."""
+    return detergent_form(tea_form(coffee_form(generic, tokens, shelf), tokens), tokens)
+
+
+# yalnız hacimle satılan içecekler: ağırlıklı boy başka üründür ("SÜT MISIR 130 G" çerez, kola şekeri)
+_VOLUME_ONLY = {"Süt", "Ayran", "Kefir", "Meyve Suyu", "Soğuk Çay", "Soğuk Kahve", "Kola", "Gazoz", "Su", "Maden Suyu",
+                "Soda", "Limonata", "Şalgam"}
+
+
+def _dimension_ok(generic: str, size: dict | None) -> bool:
+    return not (size and size["base"] == "g" and (generic in _VOLUME_ONLY or generic.endswith(" Süt")))
+
+
+def form_parent(generic: str | None) -> str | None:
+    """Biçimin üst adı ("Çekirdek Kahve" → "Kahve"); biçim değilse None."""
+    return FORM_PARENT.get(generic or "")
+
+
+def child_bases(base: str) -> list[str]:
+    """Üst adın (boysuz anahtar "kahve") alt biçimlerinin anahtarları, sırayla; üst ad değilse []."""
+    return [slug(c) for p, cs in FORM_CHILDREN.items() if slug(p) == base for c in cs]
+
+
+def generic_of_key(key: str | None) -> str | None:
+    """Grup anahtarının genel adı (sözlükten): "turk-kahvesi|100g" → "Türk Kahvesi"; bilinmiyorsa None."""
+    return _BY_SLUG.get((key or "").split("|", 1)[0])
+
+
 # genel baş ad: adda aynı alt kategoriden daha belirli bir ürün (ya da çeşit kelimesi) varsa o seçilir
 _HEADS = {"Peynir": {"SUZME": "Süzme Peynir", "EZINE": "Beyaz Peynir"}, "Yoğurt": {"SUZME": "Süzme Yoğurt"},
           "Sos": {}}
@@ -406,6 +601,7 @@ _POULTRY = {"PILIC", "TAVUK", "HINDI"}
 _POULTRY_OF = {"Döner": "Tavuk Döner", "Köfte": "Tavuk Köfte", "Pirzola": "Tavuk Pirzola", "Kebap": "Tavuk Kebap",
                "Sarma": "Tavuk Sarma", "Kuşbaşı": "Tavuk Kuşbaşı"}
 _FROZEN = {"DONDURULMUS", "DONUK"}
+_NONFOOD = {"Kişisel Bakım", "Temizlik", "Kağıt Ürünleri", "Ev ve Mutfak", "Evcil Hayvan"}
 
 
 def _generic(rest: list[str]) -> str | None:
@@ -424,7 +620,9 @@ def _generic(rest: list[str]) -> str | None:
                 cands.append(((key not in _WEAK, j, j - i), i, j, _GENERIC[key]))
     if not cands:
         return None
-    _, i, j, g = max(cands)
+    # gıda dışı ürünün adındaki gıda kelimesi kokudur, aromadır ("DUŞ JELİ VANİLYA SÜTÜ", "KEDİ MAMASI SOMON")
+    nonfood = [c for c in cands if c[0][0] and GENERIC_PATH[c[3]][0] in _NONFOOD]
+    _, i, j, g = max(nonfood or cands)
     if not all(_known(t) for t in rest[:i] + rest[j:]):
         return None
     if g in _HEADS:  # "ÇEÇİL PEY" → Çeçil Peyniri, "HARDAL SOS" → Hardal, "SÜZME … PEYNİR" → Süzme Peynir
@@ -531,18 +729,23 @@ def _override(tokens: list[str], used: set[int], brand: str | None) -> str | Non
     return refine(gen, rest)
 
 
-def rule_group(name: str, brand: str | None = None, unit: str | None = None) -> dict | None:
+def rule_group(name: str, brand: str | None = None, unit: str | None = None, shelf: str | None = None) -> dict | None:
     """Yalnız kurallarla grup ({key, label, size_value, size_unit, category, subcategory}); çözemezse None.
-    Marka → ürün düzeltmesi (BRAND_PRODUCTS) önce. Birimsiz çıplak rakam ("COLA TURKA 50") boy değildir."""
+    Marka → ürün düzeltmesi (BRAND_PRODUCTS) önce. Birimsiz çıplak rakam ("COLA TURKA 50") boy değildir. Ürünün biçimi
+    (form: kahve, çay, deterjan) adın bütün kelimeleri ve boyuyla, verilmişse resmî raf etiketiyle (shelf: Market Fiyatı
+    "main_category|categories") seçilir. Yalnız hacimle satılan içecekte ağırlıklı boy (süt 130 g) kural dışıdır."""
     tokens = _expand(name_norm(name).split())
     size, used = parse_size(tokens)
     g = _override(tokens, used, brand) or _generic(_strip(tokens, used, brand)) or \
         _generic(_strip(tokens, used, brand, partial=True))
-    return _compose(g, size, unit if unit in ("kg", "lt") else None) if g else None
+    g = form(g, tokens, shelf) if g else None
+    if not g or not _dimension_ok(g, size):
+        return None
+    return _compose(g, size, unit if unit in ("kg", "lt") else None)
 
 
 def resolve(name: str, brand: str | None = None, unit: str | None = None,
-            exclude: str | None = None) -> tuple[dict | None, str | None]:
+            exclude: str | None = None, shelf: str | None = None) -> tuple[dict | None, str | None]:
     """Ad → (grup, kaynak "rule" | "catalog" | None). Önce kurallar (marka → ürün düzeltmesi dahil; marka listesi
     katalogla büyür), çözülmezse katalog eşleşmesi (Market Fiyatı ürün listesi, app/product_catalog.py; güven ≥
     MIN_CONFIDENCE). Hiçbiri yoksa (None, None): önbellek / yapay zekâ (groups_for). Ölçüm (07.11.2026, 25 580 katalog
@@ -550,14 +753,16 @@ def resolve(name: str, brand: str | None = None, unit: str | None = None,
     farklı gruba), bu yüzden kural önce. exclude: ölçümde katalog ürününün kendisi (dışarıda bırakılır)."""
     from app import product_catalog
 
-    if (g := rule_group(name, brand, unit)):
+    if (g := rule_group(name, brand, unit, shelf)):
         return g, "rule"
     if not product_catalog.size():
         return None, None
     gen, conf = product_catalog.match(name, exclude)
     if gen and conf >= product_catalog.MIN_CONFIDENCE:
         tokens = _expand(name_norm(name).split())
-        return _compose(refine(gen, tokens), parse_size(tokens)[0], unit if unit in ("kg", "lt") else None), "catalog"
+        gen = form(_variant(gen, tokens), tokens, shelf)
+        if gen:
+            return _compose(gen, parse_size(tokens)[0], unit if unit in ("kg", "lt") else None), "catalog"
     return None, None
 
 
@@ -615,27 +820,40 @@ def groups_for(items: list[dict], learn: bool = True) -> list[dict | None]:
 
     out: list[dict | None] = [None] * len(items)
     miss: dict[str, list[int]] = {}
-    fresh: dict[str, dict] = {}
+    fresh: dict[str, tuple] = {}
+    fresh_idx: dict[str, list[int]] = {}
     for i, it in enumerate(items):
         name = (it.get("product") or it.get("name") or "").strip()
         if not name:
             continue
-        unit = it.get("unit")
-        g, src = resolve(name, it.get("brand"), unit)
+        unit, shelf = it.get("unit"), it.get("shelf")
+        g, src = resolve(name, it.get("brand"), unit, shelf=shelf)
         if g:
             out[i] = g
-            fresh.setdefault(name_norm(name), ((resolve(name, it.get("brand"))[0] if unit else None) or g, src))
+            nn = name_norm(name)
+            fresh.setdefault(nn, ((resolve(name, it.get("brand"), shelf=shelf)[0] if unit else None) or g, src,
+                                  bool(shelf)))
+            fresh_idx.setdefault(nn, []).append(i)
         else:
             miss.setdefault(name_norm(name), []).append(i)
     if not miss and not fresh:
         return [_public(g) for g in out]
     with system.connect() as c:
         if fresh:
-            have = {r[0] for r in c.execute(f"SELECT name_norm FROM product_groups WHERE name_norm IN "
-                                            f"({','.join('?' * len(fresh))})", list(fresh))}
-            for nn, (g, src) in fresh.items():
-                if nn not in have:
-                    _store(c, nn, g, src or "rule")
+            have = {r[0]: (r[1], r[2]) for r in c.execute(
+                f"SELECT name_norm, group_key, label FROM product_groups WHERE name_norm IN "
+                f"({','.join('?' * len(fresh))})", list(fresh))}
+            for nn, (g, src, shelved) in fresh.items():
+                old = have.get(nn)
+                if old is None or (shelved and old[0] and old[0] != g["key"]):
+                    _store(c, nn, g, src or "rule")  # raf etiketiyle çözülen biçim önbelleği de düzeltir
+                elif old[0] and form_parent(old[1].split(" · ")[0]) == g["label"].split(" · ")[0]:
+                    # fişteki ad biçimi söylemiyor ("JACOBS ORNEK 1 KG" → Kahve) ama aynı ad resmî kaynakta raf
+                    # etiketiyle biçime çözülmüş (Çekirdek Kahve): o biçim
+                    for i in fresh_idx[nn]:
+                        u = items[i].get("unit")
+                        out[i] = _compose(old[1].split(" · ")[0], parse_size(nn.split())[0],
+                                          u if u in ("kg", "lt") else None)
         cached = {}
         if miss:
             cached = {r["name_norm"]: dict(r) for r in c.execute(
@@ -968,10 +1186,14 @@ def _safe(fn, *a):
 
 # ---------------------------------------------------------------- yeniden gruplama (kurallar değişince, bir kez)
 
-GROUPS_VERSION = 4  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği ayrı grup (refine)
+GROUPS_VERSION = 5  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği ayrı grup (refine)
 #                    3: geniş sözlük (product_taxonomy), marka listesi, alt kategori; kural yapay zekâ sonucunun önünde
 #                    4: marka → ürün düzeltmesi (BRAND_PRODUCTS: Cola Turka → Kola, Fanta → Portakallı Gazoz …);
 #                       katalog eşleşmesi gecelik tutarlılık işinde (consistency)
+#                    5: ürün biçimi (form): kahve çekirdek / filtre / Türk / granül / karışım / kapsül / soğuk; çay
+#                       dökme / poşet / bitki / soğuk; deterjan toz / sıvı / kapsül, bulaşık makinesi; resmî satırlarda
+#                       raf etiketi (catalog_products); hacimle satılan içecekte ağırlıklı boy kural dışı; gıda dışı ad
+#                       gıda kelimesinden önce (duş jeli "vanilya sütü")
 
 
 def regroup(c) -> dict:
@@ -993,8 +1215,19 @@ def regroup(c) -> dict:
         changed += ch
         queued += q
     changed += _regroup_queue(c)
-    _regroup_official(c, [tuple(x) for x in c.execute("SELECT DISTINCT title, brand FROM official_prices").fetchall()])
+    _regroup_official(c, [tuple(x) for x in c.execute("SELECT DISTINCT title, brand FROM official_prices").fetchall()],
+                      _shelves())
     return {"changed": changed, "queued": queued}
+
+
+def _shelves() -> dict[str, str]:
+    from app import product_catalog
+
+    try:
+        return product_catalog.shelves()
+    except Exception:  # noqa: BLE001 - katalogsuz: yalnız ad
+        log.warning("raf etiketleri okunamadı", exc_info=True)
+        return {}
 
 
 def _regroup_row(c, r: dict) -> tuple[int, int]:
@@ -1005,6 +1238,8 @@ def _regroup_row(c, r: dict) -> tuple[int, int]:
     size, used = parse_size(tokens)
     old = r["label"].split(" · ")[0]
     new = rule_group(nn)
+    if new and form_parent(old) == new["label"].split(" · ")[0]:
+        new = None  # önbellekteki biçim (raf etiketiyle çözülmüş: Çekirdek Kahve) addan çıkan üst addan (Kahve) kesin
     source = "rule" if new else r["source"]
     queued = 0
     if not new:
@@ -1043,11 +1278,14 @@ def _regroup_queue(c) -> int:
     return changed
 
 
-def _regroup_official(c, titles: list[tuple]) -> None:
-    """Resmî fiyat satırları adıyla yeniden gruplanır (title indeksli; eşleme önce hesaplanır, toplu güncellenir)."""
+def _regroup_official(c, titles: list[tuple], shelves: dict[str, str] | None = None) -> None:
+    """Resmî fiyat satırları adıyla yeniden gruplanır (title indeksli; eşleme önce hesaplanır, toplu güncellenir).
+    shelves: ad → raf etiketi (product_catalog.shelves; biçimi adı söylemeyen ürün için: "JACOBS ORNEK 1 KG" çekirdek
+    mi öğütülmüş mü). Kural çözmezse katalog eşleşmesi (içe aktarımdaki gibi); o da yoksa satır grubunda kalır."""
     upd = []
+    shelves = shelves or {}
     for title, brand in titles:
-        if (new := rule_group(title, brand)):
+        if (new := resolve(title, brand, shelf=shelves.get(name_norm(title)))[0]):
             upd.append((new["key"], title, brand, new["key"]))
     if upd:
         c.executemany("UPDATE official_prices SET group_key = ? WHERE title = ? AND brand IS ? AND group_key != ?", upd)
@@ -1077,9 +1315,15 @@ def regroup_tick() -> dict | None:
     t0, done = _t.monotonic(), {"rows": 0, "titles": 0}
     phase = system.get("product_groups:regroup_phase") or "rows"
     cur = int(system.get("product_groups:regroup_cursor") or 0)
+    shelves = None
     while True:  # en az bir parça; sonra süre bütçesi dolana dek
         if done["rows"] + done["titles"] and _t.monotonic() - t0 >= REGROUP_BUDGET_S:
             break
+        if phase != "rows" and shelves is None:  # raf etiketleri ve katalog dizini yazma işleminden önce okunur
+            from app import product_catalog
+
+            shelves = _shelves()
+            product_catalog.size()
         with system.connect() as c:
             if phase == "rows":
                 rows = [dict(x) for x in c.execute("SELECT rowid AS _rid, * FROM product_groups WHERE group_key != '' "
@@ -1095,7 +1339,7 @@ def regroup_tick() -> dict | None:
             else:
                 titles = [tuple(x) for x in c.execute("SELECT DISTINCT title, brand FROM official_prices ORDER BY title, "
                                                       "brand LIMIT ? OFFSET ?", (REGROUP_TITLES, cur))]
-                _regroup_official(c, titles)
+                _regroup_official(c, titles, shelves)
                 cur += len(titles)
                 done["titles"] += len(titles)
                 if len(titles) < REGROUP_TITLES:

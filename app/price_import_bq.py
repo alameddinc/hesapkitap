@@ -138,8 +138,16 @@ def rows_for(bq_rows: list[dict], day: str, region: str) -> tuple[list[tuple], d
             stats["skipped_chain"] += 1
         elif r.get("title") and (r.get("price") or 0) > 0:
             keep.append((chain, r))
-    names = [{"name": price_import.full_title(r["title"], r.get("volume_weight")), "brand": r.get("brand") or None}
-             for _, r in keep]
+    from app import product_catalog
+    from app import product_groups as pg
+
+    shelves = product_catalog.shelves()  # raf etiketi: adın söylemediği biçim (çekirdek / öğütülmüş kahve)
+    names = []
+    for _, r in keep:
+        t = price_import.full_title(r["title"], r.get("volume_weight"))
+        names.append({"name": t, "brand": r.get("brand") or None,
+                      "shelf": shelves.get(pg.name_norm(t)) or product_catalog.shelf_text(r.get("main_category"), None)
+                      or None})
     groups = price_import.group_names(names)
     best: dict[tuple[str, str], tuple] = {}
     for (chain, r), n, g in zip(keep, names, groups):

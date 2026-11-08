@@ -212,8 +212,8 @@ def test_market_purchase_has_no_own_place(client, resmi):
 # ---------------------------------------------------------------- 5. plan satırında daha ucuz zincir
 
 def test_cheaper_elsewhere_on_plan_line(client, resmi):
-    _official([("BİM", "sut|1l", 30), ("BİM", "ekmek|250g", 10), ("BİM", "deterjan|2.5l", 44.9),
-               ("Hakmar", "deterjan|2.5l", 41.5)])
+    _official([("BİM", "sut|1l", 30), ("BİM", "ekmek|250g", 10), ("BİM", "sivi-deterjan|2.5l", 44.9),
+               ("Hakmar", "sivi-deterjan|2.5l", 41.5)])  # 2,5 L deterjan sıvıdır
     ids = {t: client.post("/api/shopping-list", json={"text": t}).json()["id"]
            for t in ("Süt 1 L", "Ekmek 250 g", "Deterjan 2,5 L")}
     opt = client.get("/api/shopping-list/optimize").json()

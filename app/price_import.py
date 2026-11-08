@@ -103,7 +103,10 @@ def rows_from(data: dict, today: date | None = None) -> tuple[list[tuple], dict]
     """Yanıt → official_prices satırları ve özet {products, matched, rows, skipped_chain, unmatched}."""
     today = today or date.today()
     products = [p for p in (data or {}).get("content") or [] if isinstance(p, dict) and p.get("title")]
-    names = [{"name": full_title(p["title"], p.get("refinedVolumeOrWeight")), "brand": p.get("brand") or None}
+    from app import product_catalog
+
+    names = [{"name": full_title(p["title"], p.get("refinedVolumeOrWeight")), "brand": p.get("brand") or None,
+              "shelf": product_catalog.shelf_text(p.get("main_category"), p.get("categories")) or None}
              for p in products]
     groups = group_names(names)
     out, stats = [], {"products": len(products), "matched": 0, "rows": 0, "skipped_chain": 0, "unmatched": 0}
