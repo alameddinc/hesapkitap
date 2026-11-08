@@ -12,6 +12,9 @@
 // - shopping_trips: "Bu planla git" → liste zincir zincir ("BİM'den al"), "Planda olmayanlar"; işaretli varsa birincil
 //   eylem "Alışverişi tamamla"; geçmiş #/alisveris/gecmis[/<id>] (components/ShopTrips.tsx); başlıkta aylık tasarruf.
 // - shopping_receipt_link: son fişin listeye ait olup olmadığını soran şerit (components/ShopReceiptLink.tsx).
+// Liste v4 (her biri ayrı yetenek): üstte "Mağazalar" düğmesi ve gizli mağaza ipucu (shop_store_filter, components/
+// ShopStores.tsx); satırda bağlı mağaza "Migros · sen seçtin" / "Migros: fiyat yok" (shop_store_pin) ve marka
+// "Süt · Sütaş" (shop_brand_size); düzenle penceresinde marka, boy, mağazalara göre, mağaza; planda manuel seçim.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CheckCheck, ChevronRight, History, Info, MapPinned, Minus, Plus, Route as RouteIcon, ShoppingCart, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -31,6 +34,8 @@ import { AddForm, DUE, FillDialog, FREQUENT, QuickAdd, type Due } from "../compo
 import { CompleteDialog, goTrips, TripDetail, TripList, useComplete } from "../components/ShopTrips";
 import { ReceiptAskBanner, SAVINGS } from "../components/ShopReceiptLink";
 import { AddedBy } from "../components/TxnList";
+import { HiddenHint, StoresButton } from "../components/ShopStores";
+import { storeLine, withBrand, type HiddenOut } from "../lib/shopStores";
 
 export interface ShopItem {
   id: number; text: string; group_key: string | null; qty: number | null; done: boolean; added_by: number | null; created_at: string;
@@ -43,20 +48,23 @@ export interface ShopItem {
   unit?: string | null; amount_label?: string | null; mult?: number | null; unit_mismatch?: boolean;
   planned?: { chain: string; unit_price: number; line_total: number } | null;
   actual?: { unit_price: number | null; line_total: number | null; entry_id: number } | null;
+  /** liste v4: bağlı mağaza (shop_store_pin; o mağazada fiyat yoksa store_missing) ve marka (shop_brand_size) */
+  store?: string | null; store_missing?: boolean; brand?: string | null;
 }
 interface SizeOpt { key: string; label: string; size_label: string; chain: string | null; price: number | null; unit_price_per?: number | null; per_unit?: string | null }
 type OptimizeV2 = Optimize & { headline?: Headline | null; unpriced_info?: UnpricedInfo[]; empty?: { title: string; text: string } | null };
 interface Best { chain: string; price: number; brand?: string | null; source: "own" | "community" | "resmi"; date?: string | null }
 interface ShopPlan { items: { id: number; best: Best | null }[]; chains: PlanChain[] }
-interface ListData { items: ShopItem[]; saved_plan: SavedPlan | null }
+interface ListData { items: ShopItem[]; saved_plan: SavedPlan | null; hidden_stores?: HiddenOut | null }
 
 const LIST = ["shopping-list"] as const;
 const PLAN = ["shopping-plan"] as const;
 const BASE = "/api/shopping-list";
 const UNIT_HINT = "Bu ürün bu birimle satılmıyor; miktarı adet olarak seç.";
 
-const fetchList = () => send<ShopItem[] | { items: ShopItem[]; saved_plan?: SavedPlan | null }>(BASE)
-  .then((d): ListData => (Array.isArray(d) ? { items: d, saved_plan: null } : { items: d.items ?? [], saved_plan: d.saved_plan ?? null }));
+const fetchList = () => send<ShopItem[] | { items: ShopItem[]; saved_plan?: SavedPlan | null; hidden_stores?: HiddenOut | null }>(BASE)
+  .then((d): ListData => (Array.isArray(d) ? { items: d, saved_plan: null }
+    : { items: d.items ?? [], saved_plan: d.saved_plan ?? null, hidden_stores: d.hidden_stores ?? null }));
 async function remove(id: number) {
   let r: Response;
   try { r = await fetch(`${BASE}/${id}`, { method: "DELETE" }); } catch { throw new ApiError("Bağlantı yok; tekrar dene.", 0); }
@@ -98,9 +106,9 @@ export default function Shopping() {
   );
 }
 
-/** Üst satır: bu ayki tasarruf (yalnız > 0) ve geçmiş alışverişler bağlantısı. */
-function ListToolbar({ money }: { money: (n: number) => string }) {
-  const s = useQuery({ queryKey: SAVINGS, retry: false, staleTime: 5 * 60_000,
+/** Üst satır: bu ayki tasarruf (yalnız > 0), "Mağazalar" (shop_store_filter) ve geçmiş alışverişler bağlantısı. */
+function ListToolbar({ money, trips }: { money: (n: number) => string; trips: boolean }) {
+  const s = useQuery({ queryKey: SAVINGS, retry: false, staleTime: 5 * 60_000, enabled: trips,
     queryFn: () => send<{ month: number; year: number; month_trips: number }>("/api/shopping-trips/savings") });
   const m = s.data?.month ?? 0;
   return (
@@ -109,8 +117,11 @@ function ListToolbar({ money }: { money: (n: number) => string }) {
         <span className="rounded-full bg-green-100 px-2.5 py-1 text-sm font-semibold text-green-800 tabular-nums dark:bg-green-950 dark:text-green-300" data-testid="ay-tasarruf"
           title="Fişle bağlanan alışverişlerde, o günün piyasa ortancasına göre">Bu ay {money(m)} tasarruf</span>
       )}
-      <button type="button" className="btn-ghost ml-auto -mr-2 text-sm" onClick={() => goTrips()} data-testid="gecmis-baglanti">
-        <History size={16} aria-hidden /> Geçmiş alışverişler</button>
+      <span className="ml-auto flex flex-wrap items-center justify-end gap-x-1">
+        <StoresButton />
+        {trips && <button type="button" className="btn-ghost -mr-2 text-sm" onClick={() => goTrips()} data-testid="gecmis-baglanti">
+          <History size={16} aria-hidden /> Geçmiş alışverişler</button>}
+      </span>
     </div>
   );
 }
@@ -129,6 +140,7 @@ function ShoppingList() {
   const autofillOn = !!caps?.includes("shopping_autofill");
   const tripsOn = !!caps?.includes("shopping_trips");
   const linkOn = !!caps?.includes("shopping_receipt_link");
+  const filterOn = !!caps?.includes("shop_store_filter");
   const today = todayISO();
   const list = useQuery({ queryKey: LIST, queryFn: fetchList });
   const items = list.data?.items ?? [];
@@ -141,7 +153,7 @@ function ShoppingList() {
   const [planOpen, setPlanOpen] = useState(false);
   const planRef = useRef<HTMLDivElement>(null);
   // çubuk: liste değişince (ekle / sil / adet / boy) yeniden hesaplanır; işaretlemek (alındı) planı değiştirmez
-  const sig = items.filter((i) => i.id > 0).map((i) => `${i.id}:${i.qty ?? 1}:${i.unit ?? ""}:${i.group_key ?? ""}:${i.text}`).join(",");
+  const sig = items.filter((i) => i.id > 0).map((i) => `${i.id}:${i.qty ?? 1}:${i.unit ?? ""}:${i.group_key ?? ""}:${i.store ?? ""}:${i.brand ?? ""}:${i.text}`).join(",");
   const opt = useQuery({
     queryKey: [...OPTIMIZE, sig], enabled: barOn && items.some((i) => !i.done && i.id > 0), retry: false, staleTime: Infinity, gcTime: 30 * 60_000,
     queryFn: () => send<OptimizeV2>("/api/shopping-list/optimize"),
@@ -172,9 +184,10 @@ function ShoppingList() {
     if ((it as ShopItem | null)?.group?.pending) setTimeout(refresh, 3000);
   } });
   const patch = useMutation(optimistic(
-    (a: { id: number; done?: boolean; qty?: number; unit?: Unit; text?: string; group_key?: string | null }) => { const { id, ...body } = a; return send<ShopItem>(`${BASE}/${id}`, { method: "PATCH", json: body }); },
+    (a: { id: number; done?: boolean; qty?: number; unit?: Unit; text?: string; group_key?: string | null; brand?: string | null; store?: string | null }) => { const { id, ...body } = a; return send<ShopItem>(`${BASE}/${id}`, { method: "PATCH", json: body }); },
     (xs, a) => xs.map((it) => (it.id === a.id ? { ...it, ...(a.done !== undefined && { done: a.done }), ...(a.qty !== undefined && { qty: a.qty }),
-      ...(a.unit !== undefined && { unit: a.unit }), ...(a.text !== undefined && { text: a.text }), ...(a.group_key !== undefined && { group_key: a.group_key }) } : it)),
+      ...(a.unit !== undefined && { unit: a.unit }), ...(a.text !== undefined && { text: a.text }), ...(a.group_key !== undefined && { group_key: a.group_key }),
+      ...(a.brand !== undefined && { brand: a.brand }), ...(a.store !== undefined && { store: a.store, store_missing: false }) } : it)),
   ));
   // "Alınanları temizle": tek tek, sırayla (biri düşerse kalanlar listede kalır, liste sunucudan tazelenir)
   const del = useMutation(optimistic(async (ids: number[]) => { for (const id of ids) await remove(id); },
@@ -187,7 +200,7 @@ function ShoppingList() {
     onSettled: refresh,
   });
   const savePlan = useMutation({
-    mutationFn: (k: number) => send<SavedPlan>(`${BASE}/saved-plan`, { method: "PUT", json: { k } }),
+    mutationFn: (a: { k: number; chains?: string[] }) => send<SavedPlan>(`${BASE}/saved-plan`, { method: "PUT", json: a.chains?.length ? { k: a.k, chains: a.chains } : { k: a.k } }),
     onSuccess: () => { setPlanOpen(false); ui.toast("Plan kaydedildi · liste markete göre sıralandı"); window.scrollTo({ top: 0, behavior: "smooth" }); },
     onError: (e: Error) => ui.error(e.message),
     onSettled: () => void qc.invalidateQueries({ queryKey: LIST }),
@@ -232,7 +245,7 @@ function ShoppingList() {
 
   return (
     <div className="space-y-3">
-      {tripsOn && <ListToolbar money={money} />}
+      {(tripsOn || filterOn) && <ListToolbar money={money} trips={tripsOn} />}
       {linkOn && !ro && <ReceiptAskBanner />}
       {saved && !planOpen && (
         <section className="card flex flex-wrap items-center gap-3 border-green-200 bg-green-50/60 p-4 dark:border-green-900 dark:bg-green-950/30" data-testid="kayitli-plan">
@@ -248,7 +261,7 @@ function ShoppingList() {
         <div ref={planRef} className="scroll-mt-16">
           <ShopOptimize items={items} ro={ro} onTick={(id, d) => patch.mutate({ id, done: d })} open={barOn ? true : undefined} data={barOn ? r : undefined}
             onClose={barOn ? () => setPlanOpen(false) : undefined} onRefetch={barOn ? () => void opt.refetch() : undefined} fetching={barOn ? opt.isFetching : undefined}
-            onSavePlan={tripsOn ? (k) => savePlan.mutate(k) : undefined} savingPlan={savePlan.isPending}
+            onSavePlan={tripsOn ? (k, chains) => savePlan.mutate({ k, chains }) : undefined} savingPlan={savePlan.isPending}
             onClearPlan={saved ? () => clearPlan.mutate() : undefined} initialK={saved?.k}
             onFix={unitsOn ? (id) => { const it = items.find((x) => x.id === id); if (it) setEdit(it); } : undefined} />
         </div>
@@ -306,6 +319,7 @@ function ShoppingList() {
           {[...open, ...done].map((it) => rowOf(it))}
         </ul>
       )}
+      {items.length > 0 && <HiddenHint count={list.data?.hidden_stores?.count} className="px-1" />}
 
       {completeBar ? (
         <div className="sticky bottom-[calc(4.75rem+var(--sab))] z-30 md:bottom-4">
@@ -370,13 +384,19 @@ function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
     // zincir başlıkta; tek paketse alt yazı yalnız varsayılan boy (boy adda zaten yazılı)
     sub = Math.abs(it.planned.line_total - it.planned.unit_price) >= 0.005 ? `Birim ${money(it.planned.unit_price)}${size ? ` · ${size}` : ""}`
       : it.assumed ? size : null;
+  } else if (it.store && !it.done && (it.store_missing || it.best)) {
+    // satır mağazaya bağlı (shop_store_pin): "Migros · sen seçtin" + fiyat / "Migros: fiyat yok"
+    const t = storeLine(it)!;
+    if (it.store_missing || !it.best) sub = t;
+    else if (it.best.line_total === null) sub = `${t} ${money(it.best.price)}`;
+    else { sub = t; right = money(it.best.line_total ?? it.best.price); }
   } else if (it.best && !it.done && it.best.product && it.own_product) {
     // kişinin kendi ürünü: "Senin son alımın: ₺95 · Örnekbüfe"
     sub = ownProductText(it.own_product, money); right = money(it.best.line_total ?? it.best.price);
   } else if (it.best && !it.done) { const p = bestParts(it.best, size, money); sub = p.sub; right = p.right; }
   const extra = !it.done && !hint ? ownExtra(it, money) : null;
 
-  const title = rowTitle(it);
+  const title = withBrand(rowTitle(it), it.brand);
   const body = (
     <>
       <span className="flex items-center gap-1.5">
@@ -384,7 +404,7 @@ function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
         {who && <AddedBy name={people.isMe(it.added_by) ? null : who.name} initial={who.name} />}
       </span>
       {hint ? (
-        <span className="block text-xs text-amber-800 dark:text-amber-300" data-testid="satir-ipucu">{hint.hint}{!ro && hint.reason !== "pending" && <> <span className="font-medium underline underline-offset-2">Düzelt</span></>}</span>
+        <span className="block text-xs text-amber-800 dark:text-amber-300" data-testid="satir-ipucu">{hint.reason === "store_no_price" && it.store ? storeLine({ store: it.store, store_missing: true }) : hint.hint}{!ro && hint.reason !== "pending" && <> <span className="font-medium underline underline-offset-2">Düzelt</span></>}</span>
       ) : sub && !it.done ? (
         <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="satir-en-ucuz">{maskText(sub ?? "")}</span>
       ) : null}

@@ -3,6 +3,8 @@
 // notu; sunucu "price_groups" verirse markası fark etmeyen grup ve "Nereden alınır" (kendi + topluluk fiyatı).
 // Yetenek price_market: grafikte piyasa bandı (GET /api/prices/market: gün gün en düşük–en yüksek, kesikli ortanca;
 // grafik o zaman takvim eksenli), alım noktası history[].vs_market'e göre yeşil / sarı / kırmızı, altında son alımın yeri.
+// Liste v4: "Nereden alınır"da gizli mağaza ipucu (shop_store_filter; hidden_count) ve marka + boy seçimiyle "Mağazalara
+// göre" listesi (shop_brand_size; GET /api/prices/brands + /api/prices/offers, components/ShopOffers.tsx).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ListPlus, ReceiptText, Store, TrendingDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -13,8 +15,11 @@ import { adviceText, communityParts, type Advice, type MarketRef } from "../lib/
 import { agoWord, ayrilma, bulunma, change7Text, changePct, dayWord, daysBetween, monthShort, niceTicks, pctWord, pricedPoints, storeSeries, type PricePoint } from "../lib/priceView";
 import { chainName, priceFootnote } from "../lib/shopList";
 import { useUI } from "../ui";
-import { useMeta, useOpenRow } from "./hooks";
+import { keySizeLabel, sizeOptions } from "../lib/shopStores";
+import { useCap, useMeta, useOpenRow } from "./hooks";
 import { RegionPrompt } from "./RegionPicker";
+import { BrandChips, OffersList, type BrandOpt } from "./ShopOffers";
+import { HiddenHint } from "./ShopStores";
 
 export interface PriceHistory {
   date: string; price: number | null; store: string; branch: string | null; qty: number; name: string;
@@ -40,7 +45,7 @@ export interface GroupBest {
   /** yetenek community_quality: aynı zincirde Market Fiyatı, fark >%10, indirimli satırların ortancası */
   official?: { price: number; date?: string | null; region?: string | null } | null; differs?: boolean; discounted_price?: number | null;
 }
-export interface PriceGroup { key: string; label: string; category?: string | null; best: GroupBest[] }
+export interface PriceGroup { key: string; label: string; category?: string | null; best: GroupBest[]; /** shop_store_filter */ hidden_count?: number }
 
 export const OFFICIAL_ATTRIBUTION = "Kaynak: Market Fiyatı (T.C. Sanayi ve Teknoloji Bakanlığı / TÜBİTAK BİLGEM)";
 /** "₺59,00/L" (birim fiyat yoksa boş) */
@@ -341,6 +346,8 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
   const best = [...sorted.filter((b) => b.source === "community"), ...sorted.filter((b) => b.source !== "community")];
   const cheapest = sorted[0];
   const newest = newestOfficial(best);
+  const brandOn = useCap("shop_brand_size");
+  if (brandOn) return <GroupBrandSize g={g} hidden={grp?.hidden_count} officialHere={best.some((b) => b.source === "resmi")} />;
   return (
     <section className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
@@ -363,8 +370,53 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
           })}
         </ul>
       )}
+      <HiddenHint count={grp?.hidden_count} />
       <RegionPrompt show={best.some((b) => b.source === "resmi")} />
       <PriceFootnote best={best} today={today} />
+    </section>
+  );
+}
+
+/** Grup ayrıntısı, marka + boy (yetenek shop_brand_size): "Marka fark etmez" + markalar, boy (grubun kendi boyu
+ *  varsayılan) → "Mağazalara göre" (Ürünü düzenle penceresiyle aynı bileşen ve metin). */
+function GroupBrandSize({ g, hidden, officialHere }: { g: PriceGroupRef; hidden?: number; officialHere: boolean }) {
+  const br = useQuery({
+    queryKey: ["price-brands", g.key], retry: false, staleTime: 10 * 60_000,
+    queryFn: () => send<{ group: string; brands: BrandOpt[] }>(`/api/prices/brands?group=${encodeURIComponent(g.key)}`),
+  });
+  const [brand, setBrand] = useState<string | null>(null);
+  const opts = sizeOptions(g.key, br.data?.brands, brand);
+  const [size, setSize] = useState<string | null>(g.key.includes("|") ? g.key : null);
+  const key = size && opts.includes(size) ? size : opts[0] ?? (g.key.includes("|") ? g.key : null);
+  const money = (n: number) => maskText(tl(n));
+  const brands = br.data?.brands ?? [];
+  return (
+    <section className="space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
+      <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
+      <h3 className="text-sm font-semibold">Nereden alınır</h3>
+      {brands.length > 0 && (
+        <div>
+          <span className="label" id={`pd-marka-${g.key}-l`}>Marka</span>
+          <BrandChips id={`pd-marka-${g.key}`} brands={brands} value={brand} onChange={setBrand} />
+        </div>
+      )}
+      {opts.length > 1 && (
+        <div>
+          <span className="label" id={`pd-boy-${g.key}`}>Boy</span>
+          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby={`pd-boy-${g.key}`} data-testid="boy-cipleri">
+            {opts.map((k) => (
+              <button key={k} type="button" role="radio" aria-checked={k === key} onClick={() => setSize(k)}
+                className={cx("rounded-full border px-3 py-1 text-sm tabular-nums",
+                  k === key ? "border-green-700 bg-green-700 text-white dark:border-green-500 dark:bg-green-600"
+                    : "border-stone-300 text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800")}>
+                {keySizeLabel(k)}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {key ? <OffersList group={key} brand={brand} sizeLabel={keySizeLabel(key)} money={money} />
+        : <HiddenHint count={hidden} />}
+      <RegionPrompt show={officialHere} />
     </section>
   );
 }

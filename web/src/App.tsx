@@ -43,6 +43,7 @@ import { inSharedBook, isViewer, routeVisible, useBook, useIsAdmin, useUiPrefs }
 import BookSwitch from "./components/BookSwitch";
 import DemoBanner from "./components/DemoBanner";
 import ConfirmHost from "./components/ConfirmHost";
+import { ShopStoresHost } from "./components/ShopStores";
 import { ReceiptLinkHost } from "./components/ShopReceiptLink";
 import PageBoundary from "./components/PageBoundary";
 import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
@@ -348,6 +349,7 @@ function Shell() {
 
       {joinCode && <JoinPreviewModal code={joinCode} onClose={() => setJoinCode(null)} />}
       <ConfirmHost />
+      <ShopStoresHost />
       <ReceiptLinkHost />
       {toast && <Toast key={toast.id} t={toast} onClose={() => setToastState(null)} />}
     </UIContext.Provider>

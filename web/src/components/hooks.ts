@@ -151,7 +151,8 @@ export function useUiPrefs() {
   const qc = useQueryClient();
   const ui = meta.data?.ui ?? { simple: false, layout: null };
   const save = useMutation({
-    mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean; price_share?: boolean; region?: string | null; stop_cost?: number | null }) =>
+    mutationFn: (body: { simple?: boolean; layout?: string[] | null; reset_layout?: boolean; price_share?: boolean; region?: string | null; stop_cost?: number | null;
+      shop_hidden?: { chains?: string[]; local?: boolean } }) =>
       send("/api/me/ui", { method: "PUT", json: body }),
     // anahtar gibi ayarlar (price_share, region) hemen değişsin; hata olursa sunucudaki hale döner
     onMutate: (body) => {

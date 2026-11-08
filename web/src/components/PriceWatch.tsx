@@ -7,6 +7,7 @@ import { useMeta } from "./hooks";
 import Segmented from "./Segmented";
 import PriceDetail, { newestOfficial, OfferBadges, perUnitText, PriceFootnote, type PriceGroup, type PriceGroupRef, type PriceHistory } from "./PriceDetail";
 import { RegionPrompt } from "./RegionPicker";
+import { HiddenHint } from "./ShopStores";
 import { agoWord, bulunma } from "../lib/priceView";
 import { chainName } from "../lib/shopList";
 import type { Advice, MarketRef } from "../lib/priceAdvice";
@@ -296,6 +297,7 @@ function WhereToBuy({ q, onOpen, canOpen }: {
                   );
                 })}
               </ul>
+              <HiddenHint count={g.hidden_count} className="border-t border-stone-100 px-3 py-1.5 dark:border-stone-800" />
             </div>
           );
         })}

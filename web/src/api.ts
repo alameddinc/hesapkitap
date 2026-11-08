@@ -423,7 +423,9 @@ export interface Meta {
   module_consent_title?: Record<string, string | null>; // o pencerenin başlığı ("Zekât hesaplamayı açalım mı?")
   // kişisel görünüm; price_share: fiyatlarımı adsız paylaş; region: Bölgem (il adı | null; anahtar yoksa eski sunucu)
   // stop_cost: "Nereye gideyim?" ekstra durak için en az tasarruf (₺; yetenek shopping_optimize, yoksa eski sunucu)
-  ui?: { simple: boolean; layout: string[] | null; price_share?: boolean; region?: string | null; stop_cost?: number };
+  ui?: { simple: boolean; layout: string[] | null; price_share?: boolean; region?: string | null; stop_cost?: number;
+    /** yetenek shop_store_filter: kişinin kapattığı mağazalar */
+    shop_hidden?: { chains: string[]; local: boolean } };
   plan?: PlanInfo; // paket (barındırılan sürüm); kendi sunucunda "self": her şey açık
   capabilities?: string[]; // sunucu el sıkışması (S17): yeni uçlar/alanlar; yoksa sunucu eski
 }

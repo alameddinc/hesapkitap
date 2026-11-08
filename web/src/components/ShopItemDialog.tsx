@@ -2,6 +2,9 @@
 // shopping_autofill: GET /api/shopping-list/suggest — seçilen öneri boyu sabitler), miktar (küçük adım düğmeleri; adet 1,
 // kg 0,5, g 100, L 0,5, ml 250; ondalık yazılabilir) ve birim (adet kg g L ml), adette boy (GET /{id}/sizes). Satır
 // tanınmadıysa / boyu yoksa / birimi uymuyorsa sunucunun ipucu en üstte. "Listeden çıkar" de burada.
+// Liste v4 (her biri ayrı yetenek; eski sunucuda görünmez): "Marka" çipleri (shop_brand_size; GET /{id}/brands, boş ise
+// bölüm yok), boy listesi küçükten büyüğe "En ucuz: … · ₺/L" + "En kârlı" rozeti (shop_best_value), seçili boyun
+// "Mağazalara göre" listesi (GET /api/prices/offers), "Mağaza" seçimi (shop_store_pin; store null = otomatik).
 import { useQuery } from "@tanstack/react-query";
 import { Check, Info, Minus, Plus, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
@@ -9,17 +12,23 @@ import { cx } from "../format";
 import { send } from "../lib/apiError";
 import type { UnpricedInfo } from "../lib/priceAdvice";
 import { chainName, convertQty, fmtQty, isUnit, parseQty, stepQty, UNITS, validQty, type Unit } from "../lib/shopList";
+import { pinnedChoiceText, sizesHidden, sizeSub, storeChoices, type SizeRow } from "../lib/shopStores";
+import { useCap } from "./hooks";
 import Modal from "./Modal";
 import { SuggestList, useSuggest, type Suggestion } from "./ShopAutofill";
+import { BrandChips, OffersList, useOffers, type BrandOpt } from "./ShopOffers";
+import { HiddenHint } from "./ShopStores";
 
 export interface EditableItem {
   id: number; text: string; qty: number | null; unit?: string | null; group_key: string | null;
   group?: { key: string; label: string; pending?: boolean } | null;
   /** yetenek shopping_assumed_size: boysuz satırın kabul edilen boyu (group_key bundan farklıysa boy elle sabitlenmiş) */
   assumed?: { key: string; label?: string; size_label?: string } | null;
+  /** yetenek shop_store_pin / shop_brand_size: bağlı mağaza ve marka (null: otomatik / marka fark etmez) */
+  store?: string | null; brand?: string | null;
 }
-interface SizeOpt { key: string; label: string; size_label: string; chain: string | null; price: number | null; unit_price_per?: number | null; per_unit?: string | null }
-export interface ItemPatch { text?: string; qty?: number; unit?: Unit; group_key?: string | null }
+type SizeOpt = SizeRow;
+export interface ItemPatch { text?: string; qty?: number; unit?: Unit; group_key?: string | null; brand?: string | null; store?: string | null }
 
 export default function ShopItemDialog({ it, hint, autofill, money, busy, onClose, onSave, onRemove }: {
   it: EditableItem; hint?: UnpricedInfo; autofill: boolean; money: (n: number) => string; busy?: boolean;
@@ -40,13 +49,32 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
   const okQty = validQty(qty, unit);
   const sug = useSuggest(text, autofill && sugOpen);
   const sugItems = (sug.data ?? []).filter((s) => !(s.text === it.text && (s.group_key ?? null) === (cur ?? null)));
+  const brandOn = useCap("shop_brand_size");
+  const pinOn = useCap("shop_store_pin");
+  const bestOn = useCap("shop_best_value");
+  const known = !!it.group && !it.group.pending;
+  const brand0 = it.brand ?? null;
+  const [brand, setBrand] = useState<string | null>(brand0);
+  const [store, setStore] = useState<string | null>(it.store ?? null);
+  const brands = useQuery({
+    queryKey: ["shopping-brands", it.id], retry: false, enabled: brandOn && known, staleTime: 5 * 60_000,
+    queryFn: () => send<{ group: string | null; brands: BrandOpt[]; selected: string | null }>(`/api/shopping-list/${it.id}/brands`),
+  });
+  // marka seçimi boy listesini o markanın fiyatlarıyla getirir ("" marka fark etmez); eski sunucuda parametresiz
   const sizes = useQuery({
-    queryKey: ["shopping-sizes", it.id], retry: false, enabled: !!it.group && !it.group.pending,
-    queryFn: () => send<SizeOpt[]>(`/api/shopping-list/${it.id}/sizes`),
+    queryKey: brandOn ? ["shopping-sizes", it.id, brand ?? ""] : ["shopping-sizes", it.id], retry: false, enabled: known,
+    placeholderData: (prev) => prev,
+    queryFn: () => send<SizeOpt[]>(`/api/shopping-list/${it.id}/sizes${brandOn ? `?brand=${encodeURIComponent(brand ?? "")}` : ""}`),
   });
   const showSizes = !renamed && unit === "adet" && (sizes.data?.length ?? 0) > 0;
   const sizeBox = !renamed && unit === "adet" && !!sizes.data; // boş listede "başka boyunu bilmiyoruz"
   const pinned = !!it.group_key && it.group_key !== it.assumed?.key; // boy elle seçilmiş: "Otomatik seç" geri alır
+  const showBrand = brandOn && !renamed && (brands.data?.brands.length ?? 0) > 0;
+  // "Mağazalara göre" ve mağaza seçenekleri: seçili (boylu) boy, yoksa kabul edilen boy
+  const offKey = !renamed && known ? (size && size.includes("|") ? size : it.assumed?.key ?? (cur && cur.includes("|") ? cur : null)) : null;
+  const offSize = sizes.data?.find((o) => o.key === offKey)?.size_label ?? it.assumed?.size_label ?? null;
+  const offers = useOffers(offKey, brand, brandOn || pinOn);
+  const choices = storeChoices(offers.data?.offers, store);
 
   const step = (dir: 1 | -1) => setQtyS(fmtQty(stepQty(qty, unit, dir)));
   const pickUnit = (u: Unit) => { setQtyS(fmtQty(convertQty(okQty ? qty : Number.NaN, unit, u))); setUnit(u); };
@@ -59,6 +87,8 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
       p.text = t;
       if (picked && picked.text === t && picked.group_key) p.group_key = picked.group_key;
     } else if (showSizes && size !== cur) p.group_key = size;
+    if (!renamed && brandOn && brand !== brand0) p.brand = brand;
+    if (!renamed && pinOn && store !== (it.store ?? null)) p.store = store;
     if (okQty && (qty !== (it.qty ?? 1) || unit !== unit0)) { p.qty = qty; p.unit = unit; }
     if (!Object.keys(p).length) return onClose();
     onSave(p);
@@ -116,13 +146,34 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
           {!okQty && <p className="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">Geçerli bir miktar yaz (ör. 2,5).</p>}
         </div>
 
+        {showBrand && (
+          <div>
+            <span className="label" id="sd-marka-l">Marka</span>
+            <BrandChips id="sd-marka" brands={brands.data!.brands} value={brand} onChange={setBrand} />
+          </div>
+        )}
+
         {sizeBox && (
           <div>
             <span className="label">Boy</span>
             {!showSizes && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700">Bu ürünün başka boyunu bilmiyoruz.</p>}
             {showSizes && (
             <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700" data-testid="boy-listesi">
-              {sizes.data!.map((o) => (
+              {sizes.data!.map((o) => bestOn ? (
+                <li key={o.key}>
+                  <button type="button" onClick={() => setSize(o.key)} aria-pressed={o.key === size} data-testid="boy-satir"
+                    className={cx("flex w-full items-start gap-3 px-3 py-2 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60", o.key === size && "bg-green-50/70 dark:bg-green-950/30")}>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-1.5 font-medium">
+                        {o.size_label}
+                        {o.best_value && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-semibold text-green-800 dark:bg-green-950 dark:text-green-300" data-testid="en-karli">En kârlı</span>}
+                        {o.key === size && <Check size={15} className="text-green-700 dark:text-green-400" aria-label="seçili" />}
+                      </span>
+                      <span className={cx("block text-xs break-words tabular-nums", o.price == null ? "text-stone-400 dark:text-stone-500" : "text-stone-500 dark:text-stone-400")}>{sizeSub(o, money)}</span>
+                    </span>
+                  </button>
+                </li>
+              ) : (
                 <li key={o.key}>
                   <button type="button" onClick={() => setSize(o.key)} aria-pressed={o.key === size}
                     className={cx("flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60", o.key === size && "bg-green-50/70 dark:bg-green-950/30")}>
@@ -134,8 +185,32 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
                 </li>
               ))}
             </ul>)}
+            {/* "Mağazalara göre" açıksa ipucu onun altında (tek yerde) */}
+            {showSizes && !(brandOn && offKey) && <HiddenHint count={sizesHidden(sizes.data, size)} className="mt-1.5" />}
             {pinned && <button type="button" className="btn-ghost mt-2 border border-stone-300 text-sm dark:border-stone-700" disabled={busy}
               onClick={() => onSave({ group_key: null })}>Otomatik seç</button>}
+          </div>
+        )}
+
+        {brandOn && offKey && <OffersList group={offKey} brand={brand} sizeLabel={offSize} money={money} />}
+
+        {pinOn && !renamed && known && (
+          <div>
+            <span className="label" id="sd-magaza-l">Mağaza</span>
+            <p className="mb-1.5 text-sm text-stone-600 dark:text-stone-300">Nereden alacağım?</p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby="sd-magaza-l" data-testid="magaza-secimi">
+              {[null, ...choices].map((c) => {
+                const on = store === c;
+                return (
+                  <button key={c ?? "_"} type="button" role="radio" aria-checked={on} onClick={() => setStore(c)}
+                    className={cx("max-w-full rounded-full border px-3 py-1 text-left text-sm break-words",
+                      on ? "border-green-700 bg-green-700 text-white dark:border-green-500 dark:bg-green-600"
+                        : "border-stone-300 text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800")}>
+                    {c ?? "En uygun yer (otomatik)"}</button>
+                );
+              })}
+            </div>
+            {store && <p className="mt-1.5 text-sm font-medium break-words text-green-800 dark:text-green-300" data-testid="magaza-secildi">{pinnedChoiceText(store)}</p>}
           </div>
         )}
       </div>
