@@ -15,8 +15,8 @@ Ne yapar (senaryo: hesapkitap-cloud docs/reklam-filmi-menu-rehberi.md 5.3 "Ay so
   bildirimleri açık, fiyat paylaşımı kapalı.
 - Sahibin (ortak) defterine: iki uydurma kart ("Örnek Bank" …0000 sahibin, "Mavi Bank" …1111 üyenin; maskeli numara,
   tam kart numarası yok), son iki dönemin ekstresi (3/6, 2/3, 4/6 taksit), taksitli buzdolabı (elle), maaşlar ve kira
-  (sabit kalem), faturalar, bütçeler, hesaplar ve kumbara; "Market A" … "Market E" fişleri (ürün ürün, iki kişi
-  dönüşümlü: Kim ne harcadı), fişe bağlı tamamlanmış alışveriş (tasarruf), etkin ortak liste ve kayıtlı plan.
+  (sabit kalem), faturalar (önceki 3 ayı ödenmiş), bütçeler, hesaplar ve kumbara; "Market A" … "Market E"
+  fişleri (ürün ürün, iki kişi dönüşümlü: Kim ne harcadı), fişe bağlı tamamlanmış alışveriş (tasarruf), etkin ortak liste ve kayıtlı plan.
   --zakat: Zekât modülü (rızası "film_seed" eylemiyle yazılır) ve birkaç varlık.
 - Uydurma piyasa verisi: yalnız community_prices, katkı kimliği "film-…" (app/film_scope.py). Bu satırları yalnız film
   hesapları görür; film hesapları da gerçek (Market Fiyatı / topluluk) veriyi görmez. official_prices'a yazılmaz.
@@ -206,6 +206,25 @@ def _months_back(today: date, n: int) -> str:
     return f"{y:04d}-{m + 1:02d}"
 
 
+def _bill_history(bills: list, today: date, months: int = 3) -> list:
+    """Her faturanın önceki aylardaki ödenmiş kopyaları (Faturalar: aylık seri, ortalama, önceki aya göre değişim).
+    Tutar mevsime göre (app/demo.BILLS tablosu, bu ayki tutara ölçekli); son ödeme günü aynı (en çok 28)."""
+    from app import demo, money
+
+    table = {p: a for p, _c, _d, a in demo.BILLS}
+    out = []
+    for b, _paid in bills:
+        due0 = date.fromisoformat(b["due_date"])
+        amounts = table.get(b["provider"])
+        for back in range(1, months + 1):
+            y, m = divmod(due0.year * 12 + due0.month - 1 - back, 12)
+            due = date(y, m + 1, min(due0.day, 28))
+            amt = (b["amount"] * amounts[m + 1] / amounts[due0.month]) if isinstance(amounts, dict) else b["amount"]
+            out.append(({**b, "amount": money.money(amt), "due_date": due.isoformat()},
+                        (due - timedelta(days=3)).isoformat()))
+    return out
+
+
 def _kesim_dates(today: date, day: int) -> list[date]:
     """Bugünden önceki son iki kesim günü (eskiden yeniye)."""
     y, m = today.year, today.month
@@ -284,6 +303,7 @@ def build(today: date, zakat: bool = False) -> dict:
                        "category": "İnternet & TV"}, None),
                      ({"provider": "Örnek Doğalgaz", "amount": 1685.00, "due_date": (today - timedelta(days=12)).isoformat(),
                        "category": "Doğalgaz"}, (today - timedelta(days=14)).isoformat())]
+    plan["bills"] += _bill_history(plan["bills"], today)
     # ekstreler: kart başına son iki dönem; taksitler dönem dönem ilerler; son dönemde bir fiş kartla ödendi (eşleşir)
     w1, w2 = _kesim_dates(today, CARDS[0][3])
     matched = next((e for e in reversed(E) if e.get("chain") == "Market B" and e["who"] == OWNER
@@ -342,7 +362,7 @@ def summary(plan: dict) -> list[str]:
            f"Sabit kalemler: {', '.join(r['data']['description'] for r in plan['recurring'])}",
            "Ekstreler: " + ", ".join(f"{s['stmt'].bank} {s['stmt'].period_end.isoformat()} "
                                      f"({len(s['stmt'].transactions)} işlem)" for s in plan["statements"]),
-           f"Faturalar: {', '.join(b['provider'] for b, _ in plan['bills'])}",
+           f"Faturalar: {', '.join(dict.fromkeys(b['provider'] for b, _ in plan['bills']))} ({len(plan['bills'])})",
            f"Bütçeler: {', '.join(f'{k} ₺{v}' for k, v in plan['budgets'].items())}",
            f"Alışveriş: tamamlanmış ({TRIP_CHAIN}, {len(TRIP)} ürün, fişe bağlı) + etkin liste {len(LIST)} satır + kayıtlı plan",
            f"Uydurma piyasa satırı (community_prices, film-…): {n_rows}",

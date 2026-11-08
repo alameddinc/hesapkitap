@@ -13,8 +13,9 @@ from app.parsers import kuveytturk, vakifbank
 FIX = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
 
-def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "kuveytturk.txt")) -> None:
-    """statements: yüklenecek örnek ekstreler (canlı demoda biri "örnek yükle" düğmesine bırakılır)."""
+def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "kuveytturk.txt"), bills: bool = True) -> None:
+    """statements: yüklenecek örnek ekstreler (canlı demoda biri "örnek yükle" düğmesine bırakılır). bills=False:
+    faturalar eklenmez (canlı demo şablonu onları tarih kaydırmasından sonra add_bills ile bugüne göre yazar)."""
     db.init_db()
     if db.list_statements():
         print("Veritabanı boş değil; demo verisi eklenmedi.")
@@ -47,9 +48,8 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
                      "kind": "gider", "category": "Elektronik", "payment": "kredi_karti", "installments": 6})
     db.create_entry({"entry_date": "2026-10-09", "description": "Örnek Gözlükçü", "amount": 4500, "kind": "gider",
                      "category": "Sağlık", "payment": "kredi_karti", "installments": 3})
-    db.create_bill({"provider": "Örnek Elektrik", "amount": 845.30, "due_date": "2026-10-28", "category": "Elektrik",
-                    "description": "Eylül 2026"})
-    db.create_bill({"provider": "Örnek İnternet", "amount": 549.90, "due_date": "2026-10-24", "category": "İnternet & TV"})
+    if bills:
+        add_bills(date(2026, 10, 20))  # app.demo_mode.ANCHOR (canlı demo: kaydırmadan sonra gerçek bugünle)
     db.set_budget("Kafe & Restoran", 2500)
     db.set_budget("Market & Gıda", 4000)
     db.set_budget("Yemek Siparişi", 1000)
@@ -66,17 +66,52 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
     print(f"Demo verisi yüklendi: {db.DB_PATH}")
 
 
+# Faturalar: bu ayınki ödenmemiş, önceki 12 ayınki ödenmiş (Faturalar sayfası: aylık seri, ortalama, en yüksek ay,
+# önceki aya göre değişim). Tutar faturanın ayına göre: elektrik yazın klimayla, doğalgaz kışın yükselir; internet sabit,
+# son 7 fatura zamlı. Ödenmiş fatura = /api/bills kaydı + gider kaydı (db.pay_bill, gerçek ödemeyle aynı yol); havaleyle
+# ödenir: kart ekstresinde satırı yok, giderde bir kez sayılır.
+BILLS = (  # (kurum, kategori, bugünden kaç gün sonra son ödeme, {ay (1–12): tutar} | (zamdan önce, son 7 fatura))
+    ("Örnek Elektrik", "Elektrik", 8, {1: 795.40, 2: 730.10, 3: 680.90, 4: 610.30, 5: 655.70, 6: 880.40, 7: 1185.60,
+                                       8: 1240.90, 9: 960.20, 10: 845.30, 11: 690.50, 12: 760.80}),
+    ("Örnek İnternet", "İnternet & TV", 4, (449.90, 549.90)),
+    ("Örnek Doğalgaz", "Doğalgaz", 7, {1: 2890.40, 2: 2610.70, 3: 1720.20, 4: 890.60, 5: 380.40, 6: 210.80, 7: 165.30,
+                                       8: 158.90, 9: 230.60, 10: 520.40, 11: 1180.30, 12: 2350.80}),
+)
+_AYLAR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
+
+
+def add_bills(today: date) -> None:
+    """Faturaları today'e göre yaz: aylar takvim ayıdır (tarih kaydırması ay sınırında iki faturayı bir aya düşürmesin)."""
+    from datetime import timedelta
+
+    for provider, cat, ahead, amounts in BILLS:
+        due0 = today + timedelta(days=ahead)
+        for back in range(13):  # 0: bu ayın (ödenmemiş) faturası, 1–12: geçmiş aylar (ödenmiş)
+            y, m = divmod(due0.year * 12 + due0.month - 1 - back, 12)
+            m += 1
+            due = due0 if not back else date(y, m, min(due0.day, 28))
+            amount = amounts[m] if isinstance(amounts, dict) else amounts[back < 7]
+            used = date(y, m, 1) - timedelta(days=1)  # fatura bir önceki ayın tüketimi
+            bid = db.create_bill({"provider": provider, "amount": amount, "due_date": due.isoformat(), "category": cat,
+                                  "description": f"{_AYLAR[used.month - 1]} {used.year}"})
+            if back:
+                db.pay_bill(bid, amount, (due - timedelta(days=3)).isoformat(), "havale")
+
+
 def _extras() -> None:
     """Yeni özellikler için uydurma veri: geçmiş aylar, hesaplar, kumbara, altın/döviz, zekât, sadaka."""
     from app import donations, zakat
 
-    # geçmiş aylar: grafik ve karşılaştırma dolsun
-    for m, (gelir, market, kafe) in {"2026-05": (185000, 5200, 1900), "2026-06": (185000, 4700, 2600),
-                                     "2026-07": (200000, 6100, 2100), "2026-08": (200000, 5300, 3100),
-                                     "2026-09": (200000, 4900, 2300)}.items():
+    # geçmiş 12 ay: grafik ve karşılaştırma dolsun (faturalar add_bills; kira Ocak'ta zamlandı)
+    for m, (gelir, market, kafe) in {"2025-10": (175000, 4600, 1700), "2025-11": (175000, 4800, 2200),
+                                     "2025-12": (175000, 5600, 2900), "2026-01": (185000, 5100, 1800),
+                                     "2026-02": (185000, 4400, 1600), "2026-03": (185000, 5300, 2400),
+                                     "2026-04": (185000, 4900, 2000), "2026-05": (185000, 5200, 1900),
+                                     "2026-06": (185000, 4700, 2600), "2026-07": (200000, 6100, 2100),
+                                     "2026-08": (200000, 5300, 3100), "2026-09": (200000, 4900, 2300)}.items():
         db.create_entry({"entry_date": f"{m}-01", "description": "Maaş", "amount": gelir, "kind": "gelir", "category": "Maaş"})
-        db.create_entry({"entry_date": f"{m}-05", "description": "Kira", "amount": 22000, "kind": "gider",
-                         "category": "Kira & Aidat", "payment": "havale"})
+        db.create_entry({"entry_date": f"{m}-05", "description": "Kira", "amount": 22000 if m >= "2026-01" else 18500,
+                         "kind": "gider", "category": "Kira & Aidat", "payment": "havale"})
         db.create_entry({"entry_date": f"{m}-14", "description": "Örnek Market", "amount": market, "kind": "gider",
                          "category": "Market & Gıda", "payment": "nakit"})
         db.create_entry({"entry_date": f"{m}-20", "description": "Örnek Kafe", "amount": kafe, "kind": "gider",

@@ -88,9 +88,10 @@ def shift_text(text: str, days: int) -> str:
     return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if days else text
 
 
-TEMPLATE_VERSION = 3  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
+TEMPLATE_VERSION = 4  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
 #                      2: fiş kalemleri, alışveriş listesi, plan ve geçmiş alışveriş (app/demo_prices.py)
 #                      3: gerçek marka / banka / zincir adları yerine kurgu adlar (app/demo_names.py)
+#                      4: geçmiş 12 ayın ödenmiş faturaları (elektrik, doğalgaz, internet), 12 aylık gelir/gider
 
 
 def template() -> str:
@@ -117,12 +118,13 @@ def template() -> str:
     templates.sync_community = lambda force=False: 0  # şablon üretirken ağa çıkma
     try:
         with db.use_space(tmp, None):
-            demo.seed(("vakifbank_a.txt", "kuveytturk.txt"))  # vakifbank_b "örnek ekstre yükle" için
+            demo.seed(("vakifbank_a.txt", "kuveytturk.txt"), bills=False)  # vakifbank_b "örnek ekstre yükle" için
     finally:
         templates.sync_community = real_sync
     shift_db(tmp, days)
     with db.use_space(tmp, None):  # kaydırmadan sonra, gerçek bugünle: liste, plan, geçmiş alışveriş
         demo_prices.shopping()
+        demo.add_bills(date.today())  # faturalar takvim ayına göre (kaydırma ay sınırını kaydırmasın)
     os.replace(tmp, path)
     return path
 

@@ -136,3 +136,46 @@ def test_demo_waitlist(demo):
     # önce haber ver demişti, sonra Android testine de katılıyor
     demo.post("/api/demo/waitlist", json={"email": "ali@ornek.com", "tester": True})
     assert demo_mode.stats(7)["testçi"] == 1
+
+
+PROVIDERS = {"Örnek Elektrik", "Örnek İnternet", "Örnek Doğalgaz"}
+
+
+def _bills_check(s: dict, bills: list[dict], today: date) -> None:
+    by = {p["name"]: p for p in s["providers"]}
+    assert PROVIDERS <= set(by)
+    for name in PROVIDERS:
+        p = by[name]
+        assert p["paid_months"] >= 11 and p["average"] > 0 and p["max"] and p["vs_prev_month"], name
+        assert all(m["count"] <= 1 for m in p["months"]), name  # her ay tek fatura (ay sınırında üst üste binmez)
+        assert p["last"]["month"] < next(b["due_date"] for b in bills if b["provider"] == name and not b["paid_at"])
+    assert by["Örnek Doğalgaz"]["max"]["month"][5:7] == "01"  # doğalgaz kışın
+    assert by["Örnek Elektrik"]["max"]["month"][5:7] == "08"  # elektrik yazın (klima)
+    assert by["Örnek İnternet"]["vs_prev_month"]["pct"] == 0 and by["Örnek İnternet"]["max"]["amount"] == 549.90
+    # her kurumun bir ödenmemiş faturası (son ödemesi önümüzde), 12 ödenmiş faturası (gider kaydına bağlı)
+    unpaid = [b for b in bills if not b["paid_at"]]
+    assert {b["provider"] for b in unpaid} == PROVIDERS and len(unpaid) == 3
+    assert all(b["due_date"] >= today.isoformat() for b in unpaid)
+    paid = [b for b in bills if b["paid_at"]]
+    assert len(paid) == 36 and all(b["entry_id"] and b["paid_at"] < today.isoformat() for b in paid)
+
+
+def test_demo_bills_have_twelve_months_of_history(demo):
+    """Faturalar: her kurumun önceki 12 ayı ödenmiş (ortalama, en yüksek ay, önceki aya göre, grafik dolu)."""
+    s = demo.get("/api/bills/summary").json()
+    _bills_check(s, demo.get("/api/bills").json(), date.today())
+    # fatura giderleri işlemlerde bir kez (kart satırı yok): kurum başı 12 gider kaydı, hepsi gidere sayılır
+    txns = demo.get("/api/transactions").json()
+    for name in PROVIDERS:
+        rows = [t for t in txns if t["description"] == name]
+        assert len(rows) == 12 and all(t["counts_as_spend"] for t in rows), name
+
+
+@pytest.mark.parametrize("today", [date(2026, 1, 31), date(2026, 2, 27), date(2026, 7, 24), date(2026, 12, 30)])
+def test_demo_bills_any_day(tmpdb, today):
+    """Ay sonuna yakın günlerde de her ay tek fatura, kış/yaz en yüksek ayı doğru."""
+    from app import bill_summary, db, demo
+
+    db.init_db()
+    demo.add_bills(today)
+    _bills_check(bill_summary.summary(24, demo_mode._shift(today.isoformat(), 8)[:7]), db.list_bills(), today)
