@@ -61,7 +61,7 @@ export const taksitSayi = (o: TaksitOzet) => (o.count > 0 ? `${o.count}\u00a0tak
 export function taksitDurum(o: TaksitOzet, para: (n: number) => string): string {
   if (o.expected === 0) return "Harcamana dahil";
   if (o.in_spend === 0) return "Ekstresi gelmedi · harcamana henüz dahil değil";
-  return `${para(o.in_spend)} harcamana dahil · ${para(o.expected)} ekstre bekliyor`;
+  return `${para(o.in_spend)} harcamana dahil · ${para(o.expected)} henüz gidere yazılmadı (ekstre bekleniyor)`;
 }
 
 /** "Kalan taksit borcu ₺18.400 · 7 alışveriş" — yalnız içinde bulunulan dönemde ve borç varsa. */

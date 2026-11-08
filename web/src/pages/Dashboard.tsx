@@ -29,6 +29,7 @@ import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } fro
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
+import { BeklenenArtan, BeklenenGider } from "../components/Beklenen";
 import { boundsOf, cx, monthLabel, signed, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
 
@@ -175,6 +176,8 @@ export default function Dashboard() {
           <div className="relative text-sm text-blue-100">Bu dönem harcadığın</div>
           <div className="relative mt-1 font-display text-[2.6rem] leading-none font-semibold tracking-tight tabular-nums">{tl(s.totals.expense)}</div>
           {s.totals.savings > 0 && <div className="relative mt-1 text-xs text-blue-100">+ birikime {tl(s.totals.savings)} (gider sayılmaz)</div>}
+          {/* ekstresi gelmemiş taksitler ve bekleyenlerle dönem sonu (summary.expected = Planlama'nın bu ayı) */}
+          <div className="relative mt-1"><BeklenenGider summary={s} hero /></div>
           <div className="relative"><EstimateNote summary={s} tone="hero" /></div>
           <div className={cx("relative mt-5 grid gap-2 border-t border-white/15 pt-3", feesHidden ? "grid-cols-2" : "grid-cols-3")}>
             <div>
@@ -185,6 +188,7 @@ export default function Dashboard() {
             <div>
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">{TERIM.artan.ad} <TerimBilgi id="artan" metin={s.definitions?.left} className="text-blue-100" /></div>
               <div className={cx("font-semibold tabular-nums", left < 0 && "text-rose-200")}>{tlCompact(left)}</div>
+              <BeklenenArtan summary={s} hero />
             </div>
             {!feesHidden && (
               <div>
@@ -198,9 +202,11 @@ export default function Dashboard() {
           <Kpi label="Gelir" value={s.totals.income} tone="green"
             sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
-            sub={`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
+            sub={`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`}
+            extra={<BeklenenGider summary={s} />} />
           <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={left} tone={left < 0 ? "red" : "green"}
-            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
+            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa}
+            extra={<BeklenenArtan summary={s} />} />
           {!feesHidden && (
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}

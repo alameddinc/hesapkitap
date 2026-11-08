@@ -22,7 +22,7 @@ test("başlık, sayı, durum ve kalan borç", () => {
   assert.equal(taksitBaslik(oz({ current: false, month: "2026-10" })), "Ekim dönemi taksitleri");
   assert.equal(taksitSayi(oz()), "6\u00a0taksit"); // bölünmeyen boşluk
   assert.equal(taksitSayi(oz({ count: 0 })), "");
-  assert.equal(taksitDurum(oz(), para), "₺3050 harcamana dahil · ₺1200 ekstre bekliyor");
+  assert.equal(taksitDurum(oz(), para), "₺3050 harcamana dahil · ₺1200 henüz gidere yazılmadı (ekstre bekleniyor)");
   assert.equal(taksitDurum(oz({ expected: 0, in_spend: 4250 }), para), "Harcamana dahil");
   assert.equal(taksitDurum(oz({ in_spend: 0, expected: 4250 }), para), "Ekstresi gelmedi · harcamana henüz dahil değil");
   assert.equal(taksitKalan(oz(), para), "Kalan taksit borcu ₺18400 · 7\u00a0alışveriş");
