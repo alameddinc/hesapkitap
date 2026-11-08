@@ -65,7 +65,7 @@ GOLDEN = [  # (ad, marka, beklenen anahtar) — fiş yazılışları uydurma
     ("SPRITE 330 ML", None, "limonlu-gazoz|330ml"),
     ("7UP 1 L", None, "limonlu-gazoz|1l"),
     ("LIPTON ICE TEA SEFTALI 1L", None, "soguk-cay|1l"),
-    ("NESCAFE GOLD 100 G", None, "kahve|100g"),
+    ("NESCAFE GOLD 100 G", None, "hazir-kahve|100g"),       # kahvenin biçimi (granül) ayrı grup
     ("NUTELLA BISKUVI 304 G", None, "biskuvi|304g"),        # markanın ürünü değil, addaki ürün
     ("TORKU SUT 1L", None, "sut|1l"),
     ("ORNEKKOY BEYAZ PEYNIR 500 G", "Örnekköy", "beyaz-peynir|500g"),

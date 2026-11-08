@@ -39,19 +39,55 @@ KEY_RE = r"^[a-z0-9-]{1,40}(\|[a-z0-9.]{1,16})?$"
 COMMON_DAYS = 14   # en yaygın boy: son bu kadar günün resmî + topluluk satırları
 
 
+OUTLIER_SIZE = 20     # varsayılan boy: türün tipik boyunun bu katından küçük / büyük boy en sona (2 g'lık stick)
+PARENT_SHARE = 0.25   # üst ad ("kahve") kendi satırı alt biçimlerinkinin bu payından azsa biçimlerin boyları gösterilir
+
+
+def _family(k: str) -> str:
+    from app import product_groups
+
+    return (product_groups.per_unit(k) or (0, "-"))[1]
+
+
+def order_sizes(keys: list[str], n: dict[str, int]) -> list[str]:
+    """Boylu anahtarlar → varsayılan sırası: önce en çok satırı olan tür (ağırlık / hacim / adet: çekirdek kahvede kg,
+    sütte L), türün içinde tipik boydan (ayrı boyların ortancası; satır sayısı değil: 2 g'lık stick çok çeşitli olsa da
+    tipik değildir) OUTLIER_SIZE kat uzak boylar sona, sonra çoktan aza. 08.11.2026: "Çekirdek kahve" grubunda 3ü1
+    arada paketleri yüzünden "10 adet" varsayılıyordu."""
+    from statistics import median
+
+    from app import product_groups
+
+    fam_n: dict[str, int] = {}
+    for k in keys:
+        fam_n[_family(k)] = fam_n.get(_family(k), 0) + n.get(k, 0)
+    typical = {f: median(product_groups.per_unit(k)[0] for k in keys if _family(k) == f)
+               for f in fam_n if f != "-"}
+
+    def far(k: str) -> bool:
+        pu, t = product_groups.per_unit(k), typical.get(_family(k))
+        return bool(pu and t and not t / OUTLIER_SIZE <= pu[0] <= t * OUTLIER_SIZE)
+
+    return sorted(keys, key=lambda k: (-fam_n[_family(k)], _family(k), far(k), -n.get(k, 0), k))
+
+
 def common_sizes(bases: list[str]) -> dict[str, list[str]]:
-    """Boysuz genel ürün → en yaygın boylu gruplar (çoktan aza): resmî fiyat (son COMMON_DAYS gün, zincir × ürün adı)
-    ve topluluk satırları (kişi × gün) sayılır. "sut" → ["sut|1l", "sut|500ml", …]; "elma" → ["elma|kg", …]."""
+    """Boysuz genel ürün → en yaygın boylu gruplar (order_sizes sırası): resmî fiyat (son COMMON_DAYS gün, zincir × ürün
+    adı) ve topluluk satırları (kişi × gün) sayılır. "sut" → ["sut|1l", "sut|500ml", …]; "elma" → ["elma|kg", …].
+    Biçimlere ayrılan ürünün üst adı ("kahve": product_groups.FORM_CHILDREN) kendi satırı azsa her alt biçimin
+    varsayılan boyu sırayla eklenir ("kahve" → ["turk-kahvesi|100g", "hazir-kahve|100g", "filtre-kahve|250g", …])."""
     from datetime import date, timedelta
 
-    from app import film_scope, system
+    from app import film_scope, product_groups, system
 
     bases = sorted({b for b in bases if b})
     if not bases:
         return {}
+    children = {b: product_groups.child_bases(b) for b in bases}
+    want = sorted({*bases, *(x for v in children.values() for x in v)})
     since = (date.today() - timedelta(days=COMMON_DAYS)).isoformat()
-    like = " OR ".join("group_key LIKE ?" for _ in bases)
-    args = [f"{b}|%" for b in bases]
+    like = " OR ".join("group_key LIKE ?" for _ in want)
+    args = [f"{b}|%" for b in want]
     with system.connect() as c:
         off = c.execute(f"SELECT group_key, COUNT(DISTINCT chain || '|' || title) FROM official_prices WHERE day >= ? "
                         f"AND ({like}) GROUP BY group_key", [since, *args]).fetchall()
@@ -60,10 +96,31 @@ def common_sizes(bases: list[str]) -> dict[str, list[str]]:
     n: dict[str, int] = {}
     for k, v in [*off, *com]:
         n[k] = n.get(k, 0) + v
+    by: dict[str, list[str]] = {}
+    for k in n:
+        by.setdefault(k.split("|", 1)[0], []).append(k)
     out: dict[str, list[str]] = {}
-    for k in sorted(n, key=lambda k: (-n[k], k)):
-        out.setdefault(k.split("|", 1)[0], []).append(k)
+    for b in bases:
+        own = order_sizes(by.get(b, []), n)
+        kids = [(cb, order_sizes(by[cb], n)) for cb in children[b] if by.get(cb)]
+        kid_n = sum(n[k] for _cb, ks in kids for k in ks)
+        if kids and sum(n[k] for k in own) < kid_n * PARENT_SHARE:
+            own = [*own, *(ks[0] for _cb, ks in kids)]
+        if own:
+            out[b] = own
     return out
+
+
+def size_text(base: str, key: str) -> str | None:
+    """Boyun görünen adı: satırın kendi ürününde yalnız boy ("100 g"); üst addan gelen alt biçimde biçim + boy
+    ("kahve" satırında "Türk Kahvesi · 100 g")."""
+    from app import product_groups
+
+    sl = product_groups.size_label(key)
+    if key.split("|", 1)[0] == base:
+        return sl
+    name = product_groups.generic_of_key(key)
+    return f"{name} · {sl}" if name and sl else sl or name
 
 
 def _resolve_known(texts: list[str], learn: bool = True) -> tuple[list[dict | None], list[dict | None]]:
@@ -107,7 +164,7 @@ def _sized(rs: list[dict], groups: list[dict | None],
     bases = [g["key"] for r, g, k in zip(rs, groups, known) if g and "|" not in g["key"] and not g.get("pending")
              and not r.get("pinned_key") and not k]
     common = common_sizes(bases)
-    want = [r["pinned_key"] for r in rs if r.get("pinned_key")] + [v[0] for v in common.values()]
+    want = [r["pinned_key"] for r in rs if r.get("pinned_key")] + [k for v in common.values() for k in v]
     labels = product_groups.labels(want)
     out = []
     for r, g, k in zip(rs, groups, known):
@@ -121,13 +178,32 @@ def _sized(rs: list[dict], groups: list[dict | None],
             out.append(({**({k: g[k] for k in ("category", "subcategory") if g and g.get(k)}), "key": pin,
                          "label": lab, "pinned": True}, None))
         elif g and "|" not in g["key"] and not g.get("pending") and common.get(g["key"]):
-            k = common[g["key"]][0]
-            sl = product_groups.size_label(k)
-            lab = labels.get(k) or f"{g['label']} · {sl}"
+            k = default_size(common[g["key"]], r.get("qty") or 1, r.get("unit"))
+            sl = size_text(g["key"], k)
+            lab = labels.get(k) or (f"{g['label']} · {sl}" if k.split("|", 1)[0] == g["key"] else
+                                    f"{product_groups.generic_of_key(k) or g['label']} · {product_groups.size_label(k)}")
             out.append(({**g, "key": k, "label": lab}, {"key": k, "label": lab, "size_label": sl}))
         else:
             out.append((g, None))
     return out
+
+
+UNIT_FAMILY = {"kg": "kg", "g": "kg", "L": "L", "ml": "L"}
+
+
+def default_size(keys: list[str], qty: float = 1, unit: str | None = None) -> str:
+    """Boysuz satırın varsayılan boyu (keys: common_sizes sırası). Adette ilk boy (en yaygın türün en yaygın boyu);
+    kg / g / L / ml'de aynı türden boy (miktarla aynı boy varsa o: "1 kg çekirdek kahve" → 1 kg'lık paket, yoksa o
+    türün en yaygını: 250 g × 4). O türde boy yoksa ilk boy (satır unit_mismatch olur: o birimde satılmıyor)."""
+    from app import product_groups
+
+    fam = UNIT_FAMILY.get(unit or "adet")
+    if not fam:
+        return keys[0]
+    amount = {"kg": qty, "g": qty / 1000, "L": qty, "ml": qty / 1000}[unit]
+    same = [k for k in keys if (product_groups.per_unit(k) or (0, ""))[1] == fam]
+    exact = [k for k in same if abs(product_groups.per_unit(k)[0] - amount) < 1e-9]
+    return (exact or same or keys)[0]
 
 
 def amount_label(qty: float, unit: str | None) -> str:
@@ -273,12 +349,15 @@ def _size_sort(k: str) -> tuple:
 
 
 def sizes(rid: int, brand: str | None = None, hidden=None) -> list[dict] | None:
-    """Satırın boy seçenekleri (GET /api/shopping-list/{id}/sizes): [{key, label, size_label, size_amount?, chain,
-    price, unit_price_per?, per_unit?, best_value, hidden_count}] küçükten büyüğe (en yaygın en çok 8 boy). chain / price:
-    o boyun en ucuzu ("En ucuz"); best_value: aynı türde (L, kg, adet) litre / kilo / adet fiyatı en düşük boy ("En
-    kârlı"; en az iki fiyatlı boy varsa). brand verilirse (yoksa satırın markası; "" marka fark etmez) yalnız o markanın
-    teklifleri ve o markanın boyları da eklenir. Kişinin kapattığı mağazalar (hidden) hiç görünmez; hidden_count o boyda
-    gizlenen mağaza sayısı. Satır yoksa None."""
+    """Satırın boy seçenekleri (GET /api/shopping-list/{id}/sizes): [{key, label, size_label, size_amount?, size_unit?,
+    chain, price, unit_price_per?, per_unit?, best_value, hidden_count}] küçükten büyüğe (en yaygın en çok 8 boy).
+    chain / price: o boyun en ucuzu ("En ucuz"); best_value: aynı türde (L, kg, adet) litre / kilo / adet fiyatı en
+    düşük boy ("En kârlı"; en az iki fiyatlı boy varsa). size_unit: boyun türü (L | kg | adet; per_unit fiyatsız boyda da).
+    Satır kg / g / L / ml ile yazıldıysa yalnız o türün boyları (miktar paket boyuna bölünür: 1 kg → 4 × 250 g). Üst ad
+    ("kahve") yazılmışsa biçimlerin boyları biçim sırasıyla, size_label biçimle ("Türk Kahvesi · 100 g"). brand
+    verilirse (yoksa satırın markası; "" marka fark etmez) yalnız o markanın teklifleri ve o markanın boyları da
+    eklenir. Kişinin kapattığı mağazalar (hidden) hiç görünmez; hidden_count o boyda gizlenen mağaza sayısı. Satır yoksa
+    None."""
     from app import price_sources, product_groups
 
     with db.connect() as c:
@@ -290,27 +369,35 @@ def sizes(rid: int, brand: str | None = None, hidden=None) -> list[dict] | None:
         return []
     brand = (brand if brand is not None else r["brand"]) or None
     base = g["key"].split("|", 1)[0]
-    keys = common_sizes([base]).get(base, [])[:8]
-    if "|" in g["key"] and g["key"] not in keys:
+    fam = UNIT_FAMILY.get(r["unit"] or "adet")
+    keys = common_sizes([base]).get(base, [])
+    if fam:  # kg / L ile yazılan satır: yalnız o türün boyları (₺/kg karşılaştırılır; "4 × 250 g")
+        keys = [k for k in keys if _family(k) == fam]
+    keys = keys[:8]
+    if "|" in g["key"] and g["key"] not in keys and (not fam or _family(g["key"]) == fam):
         keys = [g["key"], *keys][:8]
-    if r["pinned_key"] and r["pinned_key"] not in keys and r["pinned_key"].split("|", 1)[0] == base:
+    own_bases = {base, *product_groups.child_bases(base)}
+    if r["pinned_key"] and r["pinned_key"] not in keys and r["pinned_key"].split("|", 1)[0] in own_bases:
         keys = [r["pinned_key"], *keys][:9]
     if brand:
         bn = price_sources.brand_norm(brand)
         for b in price_sources.brands(brand_keys(base)):
             if price_sources.brand_norm(b["brand"]) == bn:
-                keys += [k for k in b["sizes"] if k not in keys and "|" in k][:8]
-    keys = sorted(keys, key=_size_sort)
+                keys += [k for k in b["sizes"] if k not in keys and "|" in k and (not fam or _family(k) == fam)][:8]
+    kids = product_groups.child_bases(base)  # üst adda ("kahve") biçimler kendi sırasıyla, her biri küçükten büyüğe
+    keys = sorted(keys, key=lambda k: (kids.index(k.split("|", 1)[0]) + 1 if k.split("|", 1)[0] in kids else 0,
+                                       _size_sort(k)))
     labels = product_groups.labels(keys)
     best = price_sources.best_offers(keys, limit=1, brand=brand, hidden=hidden)
     name = g["label"].split(" · ")[0]
     out = []
     for k in keys:
         o = (best.get(k) or [None])[0]
-        sl = product_groups.size_label(k)
+        sl = size_text(base, k)
         pu = product_groups.per_unit(k)
-        out.append({"key": k, "label": labels.get(k) or f"{name} · {sl}", "size_label": sl,
-                    **({"size_amount": pu[0]} if pu else {}),
+        out.append({"key": k, "label": labels.get(k) or f"{product_groups.generic_of_key(k) or name} · "
+                                                         f"{product_groups.size_label(k)}", "size_label": sl,
+                    **({"size_amount": pu[0], "size_unit": pu[1]} if pu else {}),
                     "chain": price_sources.chain_name(o["chain"]) if o else None, "price": o["price"] if o else None,
                     **({x: o[x] for x in ("unit_price_per", "per_unit") if o and x in o}),
                     "best_value": False, "hidden_count": len(hidden.by_key.get(k, ())) if hidden is not None else 0})
@@ -472,6 +559,17 @@ def parse_amount(text: str, qty: float = 1, unit: str | None = None) -> tuple[st
     return name, value, u
 
 
+def split_amount(text: str, qty: float = 1, unit: str | None = None) -> tuple[str, float, str]:
+    """parse_amount + birimi ayrıca seçilmiş satır: miktar 1 ve birim kg / g / L / ml seçiliyken adda aynı türden miktar
+    yazılıysa ("1 kg çekirdek kahve" + kg) ad yalnız ürün olur, miktar addakidir ("çekirdek kahve", 1, kg); adda boy
+    yazıp kg seçen kişi aynı kiloyu iki kez yazmış olmasın."""
+    fam = UNIT_FAMILY.get(unit or "adet")
+    if fam and qty == 1 and (got := _amount_parts(text)) and UNIT_FAMILY.get(got[2]) == fam \
+            and 0 < got[1] <= UNIT_MAX[got[2]]:
+        return got
+    return parse_amount(text, qty, unit)
+
+
 def _clean_key(key) -> str | None:
     import re
 
@@ -497,7 +595,7 @@ def _row_out(r: dict) -> dict:
 
 
 def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None, unit: str | None = None) -> dict:
-    t, q, u = parse_amount(_clean_text(text), float(qty), unit)
+    t, q, u = split_amount(_clean_text(text), float(qty), unit)
     t, q = _clean_text(t), _clean_qty(q, u)
     pin = _clean_key(group_key)
     with db.connect() as c:
@@ -540,12 +638,21 @@ def _clean_brand(v) -> str | None:
 def update(rid: int, data: dict) -> dict | None:
     """text, qty, unit, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş), group_key (boy seçimi; null kaldırır;
     metin değişince seçim de kalkar), store (shop_store_pin: "Migros" | null), brand (shop_brand_size: "Sütaş" | null;
-    metin değişince marka da kalkar, aynı istekte yeni marka verilmediyse)."""
+    metin değişince marka da kalkar, aynı istekte yeni marka verilmediyse). Değişen metinde miktar yazılıysa eklemedeki
+    gibi okunur (split_amount: "2,5 kg elma" → elma, 2,5 kg). Birim başka türe geçince (adet → kg) o türde olmayan boy
+    seçimi kalkar."""
     sets: dict = {}
     with db.connect() as c:
-        cur = c.execute("SELECT qty, unit, text FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+        cur = c.execute("SELECT qty, unit, text, pinned_key FROM shopping_list WHERE id = ?", (rid,)).fetchone()
     if not cur:
         return None
+    if data.get("text") is not None and _clean_text(data["text"]) != cur["text"]:
+        # adda miktar yazıldıysa (eklerken olduğu gibi): "1 kg çekirdek kahve" → ad "çekirdek kahve", 1 kg
+        u0 = data.get("unit") if data.get("unit") is not None else cur["unit"]
+        q0 = float(data["qty"]) if data.get("qty") is not None else float(cur["qty"])
+        t, q, u = split_amount(_clean_text(data["text"]), q0, u0)
+        if t != _clean_text(data["text"]):
+            data = {**data, "text": t, "qty": q, "unit": u}
     if data.get("text") is not None:
         sets["text"] = _clean_text(data["text"])
         g = _resolve([sets["text"]])[0]
@@ -563,6 +670,11 @@ def update(rid: int, data: dict) -> dict | None:
             sets["group_key"] = sets["pinned_key"]
     if data.get("unit") is not None:
         sets["unit"] = _clean_unit(data["unit"])
+        pin = sets.get("pinned_key", cur["pinned_key"])
+        fam = UNIT_FAMILY.get(sets["unit"])
+        if pin and fam and _family(pin) != fam:  # 10 adetlik boy seçiliyken kg'a geçildi: boy otomatiğe döner
+            g = _resolve([sets.get("text") or cur["text"]])[0]
+            sets["pinned_key"], sets["group_key"] = None, (g["key"] if g else None)
     if data.get("qty") is not None or "unit" in sets:
         sets["qty"] = _clean_qty(data["qty"] if data.get("qty") is not None else cur["qty"], sets.get("unit") or cur["unit"])
     with db.connect() as c:

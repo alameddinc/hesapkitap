@@ -190,6 +190,10 @@ CAPABILITIES = (
                               # {id}/combos?chain&all_sizes → {keys, rows [{chain, brand|null, key, size_label, price,
                               # unit_price_per?, per_unit?, source, date?, n?, product?}], chains, brands, sizes, hidden,
                               # attribution[, selected {store, brand, key}]}; seçim tek PATCH {store, brand, group_key}
+    "shop_unit_sizes",        # kg / g / L / ml satırında da boy listesi: sizes yalnız o türün boyları + size_unit
+                              # (L|kg|adet), varsayılan boy o türden (miktarla aynı boy önce); "kahve" gibi üst adda
+                              # biçimlerin boyları (size_label "Türk Kahvesi · 100 g"); PATCH text'te miktar okunur
+                              # ("1 kg çekirdek kahve" → text "çekirdek kahve", qty 1, unit kg)
     "summary_installments",   # /api/summary installments {month, current, total, count, in_spend, expected, remaining,
                               # remaining_count} — dönemin taksitleri, harcamaya EKLENMEZ (in_spend zaten totals.expense
                               # içinde; expected ekstresi beklenen); GET /api/installments?month → aynısı + items [{uid,

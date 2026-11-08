@@ -1,6 +1,6 @@
 // Alışveriş satırına dokununca: düzenle / düzelt penceresi (yetenek shopping_units). Ad (yazarken öneriler, yetenek
 // shopping_autofill: GET /api/shopping-list/suggest — seçilen öneri boyu sabitler), miktar (küçük adım düğmeleri; adet 1,
-// kg 0,5, g 100, L 0,5, ml 250; ondalık yazılabilir) ve birim (adet kg g L ml), adette boy (GET /{id}/sizes). Satır
+// kg 0,5, g 100, L 0,5, ml 250; ondalık yazılabilir) ve birim (adet kg g L ml), boy (GET /{id}/sizes; kg / L satırında shop_unit_sizes ile). Satır
 // tanınmadıysa / boyu yoksa / birimi uymuyorsa sunucunun ipucu en üstte. "Listeden çıkar" de burada.
 // Liste v4 (her biri ayrı yetenek; eski sunucuda görünmez): "Marka" çipleri (shop_brand_size; GET /{id}/brands, boş ise
 // bölüm yok), boy listesi küçükten büyüğe "En ucuz: … · ₺/L" + "En kârlı" rozeti (shop_best_value), seçili boyun
@@ -14,7 +14,7 @@ import { cx } from "../format";
 import { send } from "../lib/apiError";
 import type { UnpricedInfo } from "../lib/priceAdvice";
 import { chainName, convertQty, fmtQty, isUnit, parseQty, stepQty, UNITS, validQty, type Unit } from "../lib/shopList";
-import { pinnedChoiceText, sizesHidden, sizeSub, storeChoices, type SizeRow } from "../lib/shopStores";
+import { packsText, pinnedChoiceText, sizesForUnit, sizesHidden, sizeSub, storeChoices, type SizeRow } from "../lib/shopStores";
 import { useCap } from "./hooks";
 import Modal from "./Modal";
 import { SuggestList, useSuggest, type Suggestion } from "./ShopAutofill";
@@ -73,8 +73,14 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
     placeholderData: (prev) => prev,
     queryFn: () => send<SizeOpt[]>(`/api/shopping-list/${it.id}/sizes${brandOn ? `?brand=${encodeURIComponent(brand ?? "")}` : ""}`),
   });
-  const showSizes = !renamed && unit === "adet" && (sizes.data?.length ?? 0) > 0;
-  const sizeBox = !renamed && unit === "adet" && !!sizes.data; // boş listede "başka boyunu bilmiyoruz"
+  // kg / L satırında da boy listesi (shop_unit_sizes): yalnız o türün boyları, kilo / litre fiyatıyla ve kaç paket
+  // ettiğiyle ("1 kg için 4 paket"); eski sunucuda boy listesi yalnız adette
+  const unitSizesOn = useCap("shop_unit_sizes");
+  const sizeRows = unitSizesOn ? sizesForUnit(sizes.data, unit) : sizes.data;
+  const sizeUnitOk = unit === "adet" || unitSizesOn;
+  const showSizes = !renamed && sizeUnitOk && (sizeRows?.length ?? 0) > 0;
+  const sizeBox = !renamed && sizeUnitOk && !!sizes.data; // boş listede "başka boyunu bilmiyoruz"
+  const packs = (o: SizeOpt) => (unit !== "adet" && okQty ? packsText(qty, unit, o.size_amount) : null);
   const pinned = !!it.group_key && it.group_key !== it.assumed?.key; // boy elle seçilmiş: "Otomatik seç" geri alır
   const showBrand = brandOn && !renamed && (brands.data?.brands.length ?? 0) > 0;
   // "Mağazalara göre" ve mağaza seçenekleri: seçili (boylu) boy, yoksa kabul edilen boy
@@ -94,7 +100,7 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
     if (t && renamed) {
       p.text = t;
       if (picked && picked.text === t && picked.group_key) p.group_key = picked.group_key;
-    } else if (showSizes && size !== cur) p.group_key = size;
+    } else if (showSizes && size !== cur && sizeRows!.some((o) => o.key === size)) p.group_key = size;
     if (!renamed && brandOn && brand !== brand0) p.brand = brand;
     if (!renamed && pinOn && store !== (it.store ?? null)) p.store = store;
     if (okQty && (qty !== (it.qty ?? 1) || unit !== unit0)) { p.qty = qty; p.unit = unit; }
@@ -167,7 +173,7 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
             {!showSizes && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700">Bu ürünün başka boyunu bilmiyoruz.</p>}
             {showSizes && (
             <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700" data-testid="boy-listesi">
-              {sizes.data!.map((o) => bestOn ? (
+              {sizeRows!.map((o) => bestOn ? (
                 <li key={o.key}>
                   <button type="button" onClick={() => setSize(o.key)} aria-pressed={o.key === size} data-testid="boy-satir"
                     className={cx("flex w-full items-start gap-3 px-3 py-2 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60", o.key === size && "bg-green-50/70 dark:bg-green-950/30")}>
@@ -178,6 +184,7 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
                         {o.key === size && <Check size={15} className="text-green-700 dark:text-green-400" aria-label="seçili" />}
                       </span>
                       <span className={cx("block text-xs break-words tabular-nums", o.price == null ? "text-stone-400 dark:text-stone-500" : "text-stone-500 dark:text-stone-400")}>{sizeSub(o, money)}</span>
+                      {packs(o) && <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="boy-paket">{fmtQty(qty)} {unit} için {packs(o)}</span>}
                     </span>
                   </button>
                 </li>
@@ -194,7 +201,7 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
               ))}
             </ul>)}
             {/* "Mağazalara göre" açıksa ipucu onun altında (tek yerde) */}
-            {showSizes && !(brandOn && offKey) && !comboOn && <HiddenHint count={sizesHidden(sizes.data, size)} className="mt-1.5" />}
+            {showSizes && !(brandOn && offKey) && !comboOn && <HiddenHint count={sizesHidden(sizeRows, size)} className="mt-1.5" />}
             {pinned && <button type="button" className="btn-ghost mt-2 border border-stone-300 text-sm dark:border-stone-700" disabled={busy}
               onClick={() => onSave({ group_key: null })}>Otomatik seç</button>}
           </div>

@@ -45,6 +45,40 @@ def _clean(s) -> str:
     return str(s or "").replace("̇", "").strip()
 
 
+def shelf_text(main_category: str | None, categories) -> str:
+    """Raf etiketi (product_groups.form): "main_category|kategori1|kategori2…" ("Kahve|Çekirdek Kahveler")."""
+    cats = "|".join(categories) if isinstance(categories, list) else _clean(categories)
+    return f"{_clean(main_category)}|{cats}".strip("|")
+
+
+_shelf_memo: dict = {}
+
+
+def shelves() -> dict[str, str]:
+    """Katalog ürününün tam adı (price_import.full_title, name_norm) → raf etiketi (shelf_text). Resmî fiyat satırını
+    yeniden gruplarken (product_groups._regroup_official) ve içe aktarırken adın söylemediği biçim için ("JACOBS ORNEK
+    1 KG": çekirdek mi öğütülmüş mü). Katalog sürümü değişince yeniden kurulur; tablo yoksa boş."""
+    from app import price_import, system
+    from app import product_groups as pg
+
+    ver = (system._path(), system.get(VERSION_KEY))
+    if _shelf_memo.get("ver") == ver and "map" in _shelf_memo:
+        return _shelf_memo["map"]
+    try:
+        with system.connect() as c:
+            rows = c.execute("SELECT title, volume, main_category, categories FROM catalog_products").fetchall()
+    except Exception:  # noqa: BLE001 - eski veritabanı
+        rows = []
+    got = {}
+    for title, volume, main, cats in rows:
+        s = shelf_text(main, cats)
+        if s:
+            got[pg.name_norm(price_import.full_title(title, volume))] = s
+    _shelf_memo.clear()
+    _shelf_memo.update(ver=ver, map=got)
+    return got
+
+
 def generic_of(title: str, brand: str | None, volume: str | None, categories: str | None,
                main_category: str | None = None) -> str | None:
     """Katalog ürününün genel adı: kurallarla adından (marka bilinir); çözülmezse ana raf adı sözlükte güçlü bir adsa o
@@ -53,7 +87,7 @@ def generic_of(title: str, brand: str | None, volume: str | None, categories: st
     from app import price_import
     from app import product_groups as pg
 
-    g = pg.rule_group(price_import.full_title(title, volume), brand)
+    g = pg.rule_group(price_import.full_title(title, volume), brand, shelf=shelf_text(main_category, categories))
     if g:
         return g["label"].split(" · ")[0]
     key = tuple(pg.name_norm(_clean(main_category)).split())
@@ -152,6 +186,7 @@ def reset() -> None:
         _index = None
         _memo.clear()
         _seen.clear()
+        _shelf_memo.clear()
     from app import product_groups
 
     product_groups.add_brands([])

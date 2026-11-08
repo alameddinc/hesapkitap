@@ -51,7 +51,7 @@ TAXONOMY: dict[str, dict[str, list[str]]] = {
             "Zeytin Salatası",
         ],
         "Bal ve Reçel": [
-            "Bal=BALI,CICEK BALI", "Petek Bal=PETEK BALI", "Reçel=RECELI", "Marmelat=MARMELATI", "Haşhaş Ezmesi",
+            "Bal=BALI,CICEK BALI", "Petek Bal=PETEK BALI", "Arı Sütü=ARI SUTU", "Reçel=RECELI", "Marmelat=MARMELATI", "Haşhaş Ezmesi",
             "Hurma Ezmesi",
         ],
         "Helva Tahin ve Pekmez": [
@@ -74,7 +74,7 @@ TAXONOMY: dict[str, dict[str, list[str]]] = {
         ],
         "Diğer Süt Ürünleri": [
             "Krema=SIVI KREMA,KREMASI SIVI", "Kaymak=KAYMAGI",
-            "Bitkisel Süt=BADEM SUTU,BADEM ICECEGI,BADEMLI ICECEK,YULAF SUTU,YULAF ICECEGI,YULAFLI ICECEK,SOYA SUTU,"
+            "Bitkisel Süt=BADEM SUTU,BADEM SUT,BADEM ICECEGI,BADEMLI ICECEK,YULAF SUTU,YULAF ICECEGI,YULAFLI ICECEK,SOYA SUTU,"
             "SOYA ICECEGI,HINDISTAN CEVIZI SUTU,HINDISTAN CEVIZI ICECEGI,BITKISEL ICECEK,BITKISEL SUT,FINDIK SUTU,"
             "FINDIK ICECEGI,PIRINC SUTU,HINDI CEVIZI SUTU,HINDI CEVIZI ICECEGI,HINDISTAN CEVIZLI ICECEK",
             "Süt Reçeli=SUT RECELI", "Salep",
@@ -187,20 +187,28 @@ TAXONOMY: dict[str, dict[str, list[str]]] = {
             "Meyve Suyu=PORTAKAL SUYU,ELMA SUYU,VISNE SUYU,NEKTAR,MEYVE NEKTARI", "Şalgam=SALGAM SUYU",
         ],
         "Diğer İçecekler": [
-            "Protein İçeceği", "Soğuk Çay=ICE TEA", "Enerji İçeceği",
+            "Protein İçeceği", "Soğuk Çay=ICE TEA,BUZLU CAY", "Enerji İçeceği", "Limonata", "Şerbet=SERBETI",
+            "Soğuk Kahve=BUZLU KAHVE,SOGUK KAHVELER",
         ],
     },
     "Çay ve Kahve": {
         "Çay": [
-            "Çay", "Bitki Çayı=ADACAYI,IHLAMUR,YESIL CAY",
+            "Çay=DOKME CAY", "Poşet Çay=DEMLIK POSET,BARDAK POSET,POSET CAY,DEMLIK POSET CAY,BARDAK POSET CAY",
+            "Bitki Çayı=ADACAYI,ADA CAYI,IHLAMUR,YESIL CAY,BEYAZ CAY,FIT CAY,FORM CAYI,MEYVE CAYI,KUSBURNU CAYI",
         ],
+        # Kahve çeşidi ayrı gruptur (product_groups.coffee_form: addaki kelime, boyun türü, resmî raf etiketi): çekirdek,
+        # öğütülmüş / filtre, Türk kahvesi, granül (kavanoz), tek kullanımlık karışım (3ü1 arada, cappuccino), kapsül,
+        # soğuk / hazır kahve içeceği (ml). "Kahve" çeşidi belli olmayan addır (kafe fişi "KAHVE", "Kahve 100 g").
         "Kahve": [
-            "Kahve", "Türk Kahvesi", "Filtre Kahve", "Hazır Kahve=GRANUL KAHVE",
+            "Kahve", "Çekirdek Kahve=KAHVE CEKIRDEGI,CEKIRDEK KAHVELER", "Filtre Kahve=OGUTULMUS KAHVE,FILTRE KAHVESI",
+            "Türk Kahvesi=TURK KAHVE", "Hazır Türk Kahvesi", "Hazır Kahve=GRANUL KAHVE,INSTANT KAHVE,COZUNEBILIR KAHVE",
+            "Kahve Karışımı=KAHVE KARISIMI,KARISIM KAHVE,KARISIMLI KAHVE,?ARADA", "Kapsül Kahve=KAPSUL KAHVE,KAHVE KAPSULU",
+            "Kahve Kreması=KAHVE KREMASI,KAHVE KREMALARI",
         ],
     },
     "Kafe": {
         "Kahve İçecekleri": [
-            "Latte", "Americano", "Espresso", "Cappuccino",
+            "Latte", "Americano", "Espresso", "Cappuccino=CAPPUCINO,KAPUCINO,KAPUCCINO",
         ],
     },
     "Atıştırmalık": {
@@ -271,13 +279,21 @@ TAXONOMY: dict[str, dict[str, list[str]]] = {
     },
     "Temizlik": {
         "Çamaşır": [
-            "Deterjan", "Sıvı Deterjan", "Toz Deterjan", "Yumuşatıcı", "Çamaşır Suyu",
+            "Deterjan", "Sıvı Deterjan=JEL DETERJAN", "Toz Deterjan",
+            "Kapsül Deterjan=KAPSUL DETERJAN,TABLET DETERJAN,CAMASIR KAPSULU,DETERJAN KAPSULU", "Yumuşatıcı",
+            "Çamaşır Suyu",
         ],
         "Bulaşık": [
             "Bulaşık Deterjanı=BULASIK DETERJAN", "Bulaşık Tableti=BULASIK MAKINESI TABLETI",
+            "Bulaşık Makinesi Deterjanı=BULASIK MAKINESI DETERJANI,BULASIK MAKINESI JELI,BULASIK MAKINESI JEL DETERJAN",
         ],
         "Ev Temizliği": [
             "Yüzey Temizleyici", "Çöp Poşeti=COP TORBASI",
+        ],
+    },
+    "Ev ve Mutfak": {
+        "Mutfak Gereçleri": [
+            "Filtre Kağıdı=KAHVE FILTRE KAGIDI,FILTRE KAHVE KAGIDI,KAHVE FILTRESI,FILTRE KAGIT",
         ],
     },
     "Kağıt Ürünleri": {
@@ -353,6 +369,10 @@ QUALIFIERS = {
     "DETOX", "DETOKS", "JUMBO", "MEGA", "MAXI", "LUKS", "LUX", "FIT", "FORM", "DENGE", "NESIL", "SPECIAL", "SPECIALE",
     "CESIT", "CESITLERI", "PROFESYONEL", "BARISTA", "KIDS", "KIDZ", "VE", "ILE", "YAS", "ORMAN", "MEYVELER",
     "VANILYA", "PESTO", "SPREY", "YUMUSAK", "DOLGUN", "GUCLU", "SEF", "GIBI", "ANATOLIA", "ET", "SECME", "OMEGA",
+    # kahve, çay, deterjan çeşidi (product_groups.coffee_form / tea_form / detergent_form bunlara bakar)
+    "ARADA", "KAPSUL", "CAPSULE", "GRANUL", "COZUNEBILIR", "STICK", "LUNGO", "INTENSO", "CREMA", "BLEND", "ORIGINS",
+    "ORIGIN", "MOCHA", "MACCHIATO", "XPRESS", "ICEPRESSO", "DECAF", "ARABICA", "ROBUSTA", "CLASSIC", "BARDAK", "TABLET",
+    "MOCHACCINO", "FRAPPE", "SI", "IN",
     # yöre
     "ANTEP", "ERZINCAN", "KARS", "IZMIR", "INEGOL", "TEKIRDAG", "AKCAABAT", "MARDIN", "URFA", "MARAS", "KAYSERI",
     "TRAKYA", "ANTAKYA", "BURSA", "ADANA", "ISTANBUL", "KARADENIZ", "EGE", "NORVEC",
