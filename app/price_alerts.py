@@ -41,7 +41,7 @@ def receipt_alerts(items: list[dict], merchant: str | None, exclude_entry: int |
 
     if not items or not merchant or not allowed():
         return []
-    names = [it.get("product") or it.get("name") or "" for it in items]
+    names = [db.item_product(it.get("name"), it.get("product")) or it.get("name") or "" for it in items]
     last = db.last_unit_prices(names, merchant, LOOKBACK_DAYS, exclude_entry, today)
     chain = chain_of(merchant) or merchant.strip()
     out = []

@@ -3976,25 +3976,141 @@ _GROUP_LINES = {"ICECEK", "ICECEKLER", "SICAK ICECEK", "SICAK ICECEKLER", "SOGUK
                 "YIYECEK", "YIYECEKLER", "GIDA", "TEMEL GIDA", "GIDA URUNLERI", "TATLI", "TATLILAR", "YEMEK", "YEMEKLER",
                 "MUHTELIF", "CESITLI", "DIGER", "URUN", "URUNLER", "MAL", "HIZMET", "REYON", "KDV", "TOPLAM", "ARA TOPLAM",
                 "SATIS", "SARKUTERI", "MANAV", "KASAP", "FIRIN", "UNLU MAMUL", "UNLU MAMULLER", "TEMIZLIK", "KOZMETIK"}
+# Kasanın departman / reyon / KDV grubu satırı (bakkal yazar kasası: "TEKEL ÜRÜNLERİ ₺655" birkaç paketin toplamı):
+# adın BÜTÜN kelimeleri bu sözlükten olmalı ("TEKEL 2000 RAKI" ürün; "TEKEL", "TEKEL ÜRÜNLERİ", "MAL BEDELİ" değil).
+_DEPT_WORDS = {"TEKEL", "SIGARA", "TUTUN", "ALKOL", "ALKOLLU", "ICKI", "URUN", "URUNU", "URUNLER", "URUNLERI", "GIDA",
+               "GIDALAR", "TEMEL", "MADDE", "MADDESI", "MADDELERI", "MUHTELIF", "CESITLI", "CESIT", "DIGER", "GENEL",
+               "REYON", "REYONU", "DEPARTMAN", "DEPARTMANI", "DEPT", "DPT", "DEP", "BOLUM", "BOLUMU", "KISIM", "GRUP",
+               "GRUBU", "KDV", "KDVLI", "MAL", "MALI", "MALLAR", "MALLARI", "BEDEL", "BEDELI", "SATIS", "SARKUTERI",
+               "MANAV", "KASAP", "FIRIN", "UNLU", "MAMUL", "MAMULU", "MAMULLER", "MAMULLERI", "ICECEK", "ICECEKLER",
+               "YIYECEK", "YIYECEKLER", "MESRUBAT", "TEMIZLIK", "KOZMETIK", "PLU", "OKUNAMAYAN", "HIZMET", "PCT"}
+# Rakamla birlikte de departman: "REYON 3", "DEPARTMAN 2", "KDV %10", "ÜRÜN 5" (rakam başka adla ürünün parçası olabilir)
+_DEPT_NUMBERED = {"REYON", "REYONU", "DEPARTMAN", "DEPARTMANI", "DEPT", "DPT", "DEP", "BOLUM", "BOLUMU", "KISIM",
+                  "GRUP", "GRUBU", "KDV", "KDVLI", "URUN", "URUNU", "URUNLER", "PLU", "PCT"}
+# "SÜT ÜRÜNLERİ", "TEMİZLİK MALZEMELERİ": çoğul bölüm adıyla biten kısa satır (rakamsız) da departmandır
+_DEPT_TAIL = {"URUNLERI", "URUNLER", "MAMULLERI", "MAMULLER", "MADDELERI", "MALZEMELERI", "GRUBU", "REYONU", "BOLUMU",
+              "DEPARTMANI"}
 _SERVICE = r"OTOPARK|\bPARK\b|PARKING|\bVALE\b|SERVIS UCRETI|HIZMET BEDELI|\bKUVER\b|GARSONIYE|TESLIMAT|KARGO"
 _DISCOUNT = r"INDIRIM|ISKONTO|KAMPANYA|KUPON|PUAN KULLAN|HEDIYE CEK|\bPROMOSYON\b"
+_FIT_SKIP = {"GR", "GRAM", "KG", "ML", "CL", "LT", "LITRE", "ADET", "ADT", "LI", "LU", "PAKET", "PK", "X", "VE", "ILE"}
+
+
+def department_line(text: str | None) -> bool:
+    """Kasanın departman / reyon / KDV grubu satırı mı (içinde ne olduğu belli değil, ürün değil): "TEKEL ÜRÜNLERİ",
+    "TEKEL", "GIDA", "MUHTELİF", "REYON 3", "DEPARTMAN 2", "KDV %10 ÜRÜN", "%20", "MAL BEDELİ", "ŞARKÜTERİ", "MANAV",
+    "SÜT ÜRÜNLERİ". Bütün kelimeler departman sözlüğünden olmalı: "TEKEL 2000 RAKI", "KASAP SUCUK" ürün."""
+    from app.textnorm import normalize
+
+    n = normalize(text or "")
+    n = re.sub(r"%\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*%", " PCT ", n)
+    n = re.sub(r"[^A-Z0-9 ]", " ", n)
+    n = re.sub(r"([A-Z])(\d)", r"\1 \2", re.sub(r"(\d)([A-Z])", r"\1 \2", n))
+    toks = n.split()
+    words = [t for t in toks if not t.isdigit()]
+    if not words:
+        return False
+    nums = len(words) < len(toks)
+    if all(t in _DEPT_WORDS for t in words):
+        return not nums or any(t in _DEPT_NUMBERED for t in words)
+    return not nums and len(words) <= 3 and words[-1] in _DEPT_TAIL
+
+
+# Fişin tek satırı fişin tamamıysa (zincir değil) bu kelimelerden biri yeter: "TEKEL ÜRN.", "REYON-A", "MUHTELİF SATIŞ"
+_DEPT_LOOSE = re.compile(r"^(?:TEKEL|REYON\w*|DEPART\w*|DEPT|DPT|MUHTEL\w*|CESIT\w*|KDV\w*|PLU|GIDA)$")
+
+
+def whole_receipt_department(name: str | None, amount, entry: dict | None, n_lines: int) -> bool:
+    """Zincir olmayan işyerinde fişin TEK satırı fişin tamamına eşit ve adı departmana benziyor (kısaltılmış yazılış
+    dahil): kasanın departman tuşudur, birim fiyat değil — "₺655 → ₺133 (−%80)" karşılaştırması doğmasın."""
+    from app import money
+    from app.receipt_templates import chain_of
+    from app.textnorm import normalize
+
+    if n_lines != 1 or not entry or not isinstance(amount, (int, float)) or not entry.get("amount"):
+        return False
+    if not money.within(abs(entry["amount"]), amount) or chain_of(entry.get("description"), entry.get("legal_name")):
+        return False
+    if department_line(name):
+        return True
+    return any(_DEPT_LOOSE.match(t) for t in re.sub(r"[^A-Z0-9 ]", " ", normalize(name or "")).split())
+
+
+def _fit_tokens(s: str) -> list[str]:
+    return [t for t in product_key(s).split() if len(t) >= 2 and not t.isdigit() and t not in _FIT_SKIP]
+
+
+def _tokens_related(a: str, b: str) -> bool:
+    """Aynı kelimenin yazılışı / kısaltması mı: ortak önek (3 harf), kısaltma (PNR ⊂ PEYNIR, ilk harf aynı) ya da tek
+    harf farkı (KOLA ~ COLA)."""
+    if a[:3] == b[:3]:
+        return True
+    s, l = sorted((a, b), key=len)
+    if len(s) <= 5 and s[0] == l[0]:
+        it = iter(l)
+        if all(ch in it for ch in s):
+            return True
+    return len(s) >= 4 and _edit_distance(a, b, cap=2) <= 1
+
+
+def product_fits(name: str | None, product: str | None) -> bool:
+    """Kalemin standart ürün adı (product) fişteki adına (name) ait mi: en az bir kelimesi akraba (_tokens_related).
+    Ad sonradan düzeltildiyse (kullanıcı, öneri, birleştirme) eski product kalır: "Winston Slims Blue Sigara" adı +
+    "tekel ürünleri" product → ait değil, ad esas alınır. Karşılaştıracak kelime yoksa (yalnız rakam) ait sayılır."""
+    a, b = _fit_tokens(name or ""), _fit_tokens(product or "")
+    if not a or not b:
+        return True
+    return any(_tokens_related(x, y) for x in a for y in b)
+
+
+def item_product(name: str | None, product: str | None) -> str | None:
+    """Fiyat takibinde kullanılacak standart ad: product ada aitse ve (ad departman değilken) bir departman adı
+    değilse product, yoksa None (ad esas). Anahtar her zaman product_key(item_product(...) or name)."""
+    p = (product or "").strip() or None
+    if not p or not product_fits(name, p):
+        return None
+    if department_line(p) and not department_line(name) and _fit_tokens(name or ""):
+        return None  # "PINAR SÜT" kalemine "Süt Ürünleri" denmiş: ürün adı değil bölüm adı
+    return p
+
+
+def item_key(name: str | None, product: str | None) -> str:
+    """Kalemin fiyat takibi anahtarı: product ada aitse ondan, değilse addan (save_receipt_items, receipt_rekey)."""
+    return product_key(item_product(name, product) or name or "")
 
 
 def item_kind(name: str, product: str | None = None, amount: float | None = None) -> str:
-    """product | group (kasanın reyon/grup satırı: 'İÇECEK' — içinde ne olduğu belli değil) |
-    service (süreye/kullanıma göre: otopark, vale, servis ücreti) | discount (indirim satırı ya da eksi tutar)."""
-    import re as _re
-
+    """product | group (kasanın reyon/departman satırı: 'İÇECEK', 'TEKEL ÜRÜNLERİ' — içinde ne olduğu belli değil) |
+    service (süreye/kullanıma göre: otopark, vale, servis ücreti) | discount (indirim satırı ya da eksi tutar).
+    Grup kararı fişteki addan (department_line); product yalnız ada aitse ya da adda kelime yoksa bakılır — ad
+    düzeltilmişken eski product ("tekel ürünleri") gerçek ürünü ("Winston …") grup yapmasın."""
     keys = [product_key(x) for x in (name, product) if x]
-    bare = [_re.sub(r"\b\d+\b", " ", k).split() for k in keys]
+    bare = [re.sub(r"\b\d+\b", " ", k).split() for k in keys]
     texts = [" ".join(b) for b in bare]
-    if (isinstance(amount, (int, float)) and amount < 0) or any(_re.search(_DISCOUNT, t) for t in texts):
+    if (isinstance(amount, (int, float)) and amount < 0) or any(re.search(_DISCOUNT, t) for t in texts):
         return "discount"
-    if any(_re.search(_SERVICE, t) for t in texts):
+    if any(re.search(_SERVICE, t) for t in texts):
         return "service"
-    if any(t in _GROUP_LINES for t in texts if t):
+    own = " ".join(bare[0]) if name and bare else ""
+    if own in _GROUP_LINES or department_line(name):
         return "group"
+    if product and not _fit_tokens(name or ""):  # adda kelime yok (yalnız rakam/kod): standart ada bakılır
+        pk = " ".join(re.sub(r"\b\d+\b", " ", product_key(product)).split())
+        if pk in _GROUP_LINES or department_line(product):
+            return "group"
     return "product"
+
+
+def _edited_product(name: str, product: str | None, old: list) -> str | None:
+    """Kaydedilecek product: istemci adı düzeltirken eski product'ı geri yollar ({...kalem, name: yeni}). Bu fişin
+    önceki satırlarında aynı product başka bir adla duruyorsa ve yeni ad önceki adlardan biri değilse ad değişmiştir:
+    product atılır, anahtar yeni addan. Ayrıca ada ait olmayan / bölüm adı product (item_product) atılır."""
+    p = (product or "").strip() or None
+    if p and old:
+        names = {product_key(r[0] or "") for r in old}
+        was = {product_key(r[0] or "") for r in old if r[1] and product_key(r[1]) == product_key(p)}
+        if was and product_key(name) not in names:
+            return None
+    return item_product(name, p)
 
 
 def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str, total: float | None = None,
@@ -4014,13 +4130,14 @@ def save_receipt_items(entry_id: int, items: list[dict], merchant: str, on: str,
         inferred = round(total - known_sum, 2)
     n = 0
     with connect() as c:
+        old = c.execute("SELECT name, product FROM receipt_items WHERE entry_id = ?", (entry_id,)).fetchall()
         c.execute("DELETE FROM receipt_items WHERE entry_id = ?", (entry_id,))
         for it in good:
             qty = it.get("qty") or 1
             amt, known = it.get("amount"), 1
             if it in missing:
                 amt, known = (inferred, 2) if inferred else (0.0, 0)
-            product = (it.get("product") or "").strip() or None
+            product = _edited_product(it["name"], it.get("product"), old)
             c.execute("INSERT INTO receipt_items (entry_id, purchased_at, merchant, branch, name, product, brand, product_key, qty, "
                       "unit, amount, unit_price, price_known) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                       (entry_id, on, (merchant or "").strip()[:60], (branch or "").strip()[:60] or None, it["name"].strip()[:60],
@@ -4048,7 +4165,7 @@ def recent_unit_prices(names: list[str], merchant: str | None = None, days: int 
 
     from app import book
 
-    keys = sorted({k for k in (product_key(n) for n in names if n) if k})
+    keys = sorted({k for k in (product_key(n) for n in names if n and item_kind(n) == "product") if k})  # bölüm satırı karşılaştırılmaz
     if not keys:
         return {}
     since = (_date.today() - timedelta(days=days)).isoformat()
@@ -4086,7 +4203,7 @@ def last_unit_prices(names: list[str], merchant: str | None, days: int = 60, exc
     yalnız görebildiği kayıtlar; exclude_entry (düzenlenen fişin kendisi) hariç."""
     from app import book
 
-    keys = sorted({k for k in (product_key(n) for n in names if n) if k})
+    keys = sorted({k for k in (product_key(n) for n in names if n and item_kind(n) == "product") if k})  # bölüm satırı karşılaştırılmaz
     if not keys or not merchant:
         return {}
     upto = today or date.today()
@@ -4189,7 +4306,8 @@ def priced_items(visible_only: bool = True) -> list[dict]:
     out = []
     for it in items:
         e = ents.get(it["entry_id"])
-        if not price_eligible(e, per_entry[it["entry_id"]]):
+        if not price_eligible(e, per_entry[it["entry_id"]]) or \
+                whole_receipt_department(it["name"], it["amount"], e, per_entry[it["entry_id"]]):
             continue
         if e and (same_as_merchant(it["name"], e["description"], e["legal_name"], it["merchant"]) or
                   (it["product"] and same_as_merchant(it["product"], e["description"], e["legal_name"]))):

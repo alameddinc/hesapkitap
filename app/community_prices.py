@@ -128,6 +128,7 @@ def contribute(uid: int | None, merchant: str | None, legal_name: str | None, it
             continue
         if db.item_kind(name, it.get("product"), amt) != "product" or db.same_as_merchant(name, merchant, legal_name):
             continue
+        it = {**it, "product": db.item_product(name, it.get("product"))}  # ad düzeltildiyse eski standart ad değil
         up = round((amt - disc.get(i, 0.0)) / qty, 2)
         if _MIN_PRICE <= up <= _MAX_PRICE:
             rows.append((it, up, int(i in disc)))
