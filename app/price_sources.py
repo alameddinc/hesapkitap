@@ -504,8 +504,8 @@ BRANDS_MAX = 30
 
 def brands(group_keys: list[str], sources: list[PriceSource] | None = None) -> list[dict]:
     """Seçilebilecek markalar (shop_brand_size): kendi fişlerin + Market Fiyatı (açıksa) — [{brand, sizes [grup
-    anahtarı], chains (kaç zincirde)}], çok zincirde olan önce, en çok BRANDS_MAX. Aynı marka farklı yazılışlarda
-    (SÜTAŞ / Sütaş) tek satır; görünen ad önce kendi fişindeki yazılış."""
+    anahtarı], size_labels {anahtar: "1 L"}, chains (kaç zincirde)}], çok zincirde olan önce, en çok BRANDS_MAX.
+    Aynı marka farklı yazılışlarda (SÜTAŞ / Sütaş) tek satır; görünen ad önce kendi fişindeki yazılış."""
     keys = sorted({k for k in group_keys if k})
     if not keys:
         return []
@@ -522,5 +522,9 @@ def brands(group_keys: list[str], sources: list[PriceSource] | None = None) -> l
                 a = acc.setdefault(bn, {"brand": _brand_label(b), "sizes": set(), "chains": set()})
                 a["sizes"].add(k)
                 a["chains"] |= chains
-    out = [{"brand": a["brand"], "sizes": sorted(a["sizes"]), "chains": len(a["chains"])} for a in acc.values()]
+    from app import product_groups
+
+    out = [{"brand": a["brand"], "sizes": sorted(a["sizes"]), "chains": len(a["chains"]),
+            "size_labels": {k: product_groups.size_label(k) for k in sorted(a["sizes"]) if product_groups.size_label(k)}}
+           for a in acc.values()]
     return sorted(out, key=lambda x: (-x["chains"], x["brand"].casefold()))[:BRANDS_MAX]
