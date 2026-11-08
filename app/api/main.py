@@ -7016,7 +7016,7 @@ def _digit_evidence(chk: dict | None, items: list[dict], text: str | None = None
             vat_lines = finance._vat_lines(_json.loads(vat_lines))
         except ValueError:
             vat_lines = None
-    names = [it.get("product") or it.get("name") or "" for it in items]
+    names = [db.item_product(it.get("name"), it.get("product")) or it.get("name") or "" for it in items]
     prices = db.recent_unit_prices(names, merchant, exclude_entry=exclude_entry)
     history = {i: prices[k] for i, n in enumerate(names) if (k := db.product_key(n)) in prices}
     receipt_check.add_evidence(chk, items, text, vat_lines or None, history or None, _community_evidence(items, merchant))

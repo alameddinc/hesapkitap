@@ -282,7 +282,9 @@ function ItemForm({ k, index, count, check, onClose, onSave, onDelete, onShift, 
   const save = () => {
     const changed = a !== k.amount || q !== (k.qty ?? 1);
     // tutar ya da adet elle değiştiyse okunan birim fiyat artık denetlenmesin
-    onSave({ ...k, name: name.trim(), qty: q, amount: a,
+    // ad değiştiyse okunan standart ad (product) eski satırındır: sunucu anahtarı yeni addan türetsin
+    const renamed = name.trim() !== k.name.trim();
+    onSave({ ...k, name: name.trim(), qty: q, amount: a, ...(renamed ? { product: null } : {}),
       unit_price: changed ? (a != null && q ? Math.round((a / q) * 100) / 100 : null) : k.unit_price ?? null });
   };
   const row = "flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-stone-50 dark:hover:bg-stone-800";

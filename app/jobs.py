@@ -300,6 +300,13 @@ async def scheduler() -> None:
                 log.info("ürün grupları yeniden gruplama: %s", got)
         except Exception:  # noqa: BLE001
             log.exception("regroup tick failed")
+        try:  # fiş kalemi anahtarları (ad düzeltilmiş eski satırlar) arka planda parça parça (app/receipt_rekey.py)
+            from app import receipt_rekey
+
+            if receipt_rekey.pending() and (got := await asyncio.to_thread(receipt_rekey.tick)):
+                log.info("fiş kalemi anahtarları: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("receipt rekey tick failed")
         try:  # resmî fiyatlar: BigQuery → official_prices (UTC 05:00 sonrası, yarım saatte bir bakar; app/price_import_bq.py)
             from app import price_import_bq
 

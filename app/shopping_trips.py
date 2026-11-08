@@ -364,6 +364,7 @@ def _receipt(entry_id: int) -> dict | None:
             return None
         its = db.rows(c.execute("SELECT id, name, product, brand, unit, qty, amount, unit_price FROM receipt_items "
                                 "WHERE entry_id = ? AND price_known > 0 AND amount > 0 ORDER BY id", (entry_id,)))
+    its = [i for i in its if db.item_kind(i["name"], i["product"], i["amount"]) == "product"]  # bölüm satırı eşleşmez
     if not its:
         return None
     db.attach_groups(its, learn=False)
