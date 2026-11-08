@@ -190,6 +190,18 @@ class CommunitySource:
 NATIONAL_CHAINS = {"BİM", "A101", "ŞOK", "Migros"}
 
 
+def national_chains() -> frozenset[str]:
+    """Ulusal fiyatlı zincirler; canlı demoda kurgu zincirler de (app/demo_prices.py NATIONAL: "Market A" … — demoda
+    gerçek zincir adı yok). Demo dışında yalnız NATIONAL_CHAINS."""
+    from app import demo_mode
+
+    if demo_mode.enabled():
+        from app import demo_prices
+
+        return frozenset(NATIONAL_CHAINS) | demo_prices.NATIONAL
+    return frozenset(NATIONAL_CHAINS)
+
+
 @register
 class OfficialSource:
     """Resmî kaynak (official_prices; app/price_import.py dosyadan, app/price_import_bq.py BigQuery'den): zincir başına
@@ -231,7 +243,7 @@ class OfficialSource:
         """(etiket, satırlar): hangi ilin satırları kullanılacak."""
         from app import provinces
 
-        if chain in NATIONAL_CHAINS:
+        if chain in national_chains():
             if self.region in by_prov:
                 return "ulusal", by_prov[self.region]
             named = [p for p in by_prov if p]

@@ -207,7 +207,7 @@ def receipt_notes(items: list[dict], chk: dict | None, merchant: str | None, day
     """check.market_notes: fişte piyasadan pahalı kalemler, en pahalı önce, en çok NOTE_MAX —
     [{index, name, group, label, paid_unit, market_median, market_min, cheapest_chain, pct, day, source resmi|community,
     region (il | "ulusal" | null)}]. Piyasa: alım günü ±NEAR_DAYS içindeki referans (series; kişinin Bölgem'i →
-    yakın büyük şehir → İstanbul). Fişin zinciri ulusal fiyatlı (price_sources.NATIONAL_CHAINS: BİM, A101, ŞOK, Migros)
+    yakın büyük şehir → İstanbul). Fişin zinciri ulusal fiyatlı (price_sources.national_chains(): BİM, A101, ŞOK, Migros; demoda kurgu zincirler)
     ise region "ulusal" (o zincirin fiyatı ilden bağımsız). Okuma hatası olabilecek kalemler atlanır (_skipped).
     Fiyat takibi paketi / sayfası kapalıysa []. Yapay zekâ ve ağ çağrısı yok."""
     from app import db, money, price_alerts, product_groups, price_sources
@@ -234,7 +234,7 @@ def receipt_notes(items: list[dict], chk: dict | None, merchant: str | None, day
         return []
     used: dict[str, str] = {}
     ser = series([g["key"] for _, _, g, _ in want], (d0 - timedelta(days=NEAR_DAYS)).isoformat(), used=used)
-    national = chain_of(merchant, legal_name) in price_sources.NATIONAL_CHAINS
+    national = chain_of(merchant, legal_name) in price_sources.national_chains()
     out = []
     for i, it, g, paid in want:
         ref = nearest(ser.get(g["key"]) or {}, d0.isoformat())

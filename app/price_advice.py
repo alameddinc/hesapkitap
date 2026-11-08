@@ -25,10 +25,11 @@ NON_MARKET_CATEGORIES = {"Kafe & Restoran", "Yemek Siparişi"}
 
 
 def _market_chain(merchant: str | None, legal_name: str | None = None) -> bool:
-    from app.receipt_templates import CHAINS, chain_of
+    from app.receipt_templates import CHAINS, _demo_chains, chain_of
 
     ch = chain_of(merchant, legal_name)
-    return bool(ch) and any(b == ch and cat == "Market & Gıda" for b, _, cat in CHAINS)
+    return bool(ch) and (any(b == ch and cat == "Market & Gıda" for b, _, cat in CHAINS)
+                         or ch in _demo_chains().values())  # canlı demoda kurgu zincirler ("Market A" …) de market
 
 
 def is_market(p: dict) -> bool:

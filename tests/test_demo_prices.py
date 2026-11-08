@@ -46,7 +46,8 @@ def test_demo_prices_advice_and_market(demo):
     assert sut["count"] >= 3 and len({h["store"] for h in sut["history"]}) >= 2
     assert sut["market"] and sut["market_ref"]["median"] > 0
     adv = sut["advice"]
-    assert adv["kind"] == "cheaper_at" and adv["chain"] != "Migros" and adv["saving"] > 0
+    assert adv["kind"] == "cheaper_at" and adv["chain"] in demo_prices.CHAINS and adv["chain"] != "Market D"
+    assert adv["saving"] > 0
     assert any(h.get("vs_market") for h in sut["history"])
     assert any(p["advice"] and p["advice"]["kind"] == "good_price" for p in out["products"])
     mk = demo.get("/api/prices/market", params={"group": "sut|1l", "days": 90}).json()
@@ -77,7 +78,8 @@ def test_demo_shopping_list_plan_and_trip_savings(demo):
     assert opt["recommended_k"] == sp["k"] and not opt["unpriced"] and opt["headline"]["saving"] > 0
     assert "resmi" in opt["source_info"]["kinds"]
     trips = demo.get("/api/shopping-trips").json()["trips"]
-    assert len(trips) == 1 and trips[0]["linked"] and trips[0]["saving"] > 0 and trips[0]["chains"] == ["BİM"]
+    assert len(trips) == 1 and trips[0]["linked"] and trips[0]["saving"] > 0 and len(trips[0]["chains"]) == 1
+    assert trips[0]["chains"][0] in demo_prices.CHAINS
     assert trips[0]["day"][:7] == date.today().isoformat()[:7]
     sv = demo.get("/api/shopping-trips/savings").json()
     assert sv["month"] == trips[0]["saving"] and sv["month_trips"] == 1
@@ -86,7 +88,7 @@ def test_demo_shopping_list_plan_and_trip_savings(demo):
 
 
 def test_demo_receipt_market_note(demo):
-    ents = [e for e in demo.get("/api/transactions").json() if e.get("description") == "Migros"]
+    ents = [e for e in demo.get("/api/transactions").json() if e.get("description") == "Market D"]
     last = max(ents, key=lambda e: e["date"])
     notes = demo.get(f"/api/entries/{last['id']}/receipt-items").json()["check"]["market_notes"]
     assert any(n["group"] == "yumurta|30ad" and n["pct"] >= 10 for n in notes)

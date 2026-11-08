@@ -27,9 +27,9 @@ def test_shift_helpers():
 def test_visitor_gets_private_copy_with_current_dates(demo):
     assert demo.get("/api/auth/status").json()["demo"] is True
     r = demo.get("/api/statements")
-    assert r.status_code == 200 and len(r.json()) == 2  # VakıfBank + Kuveyt; diğer VakıfBank örnek yükleme için
+    assert r.status_code == 200 and len(r.json()) == 2  # Örnek Bank + Mavi Bank; ek kartlı Örnek Bank örnek yükleme için
     days = demo_mode.days_since_anchor()
-    assert max(s["period_end"] for s in r.json()) == demo_mode._shift("2026-10-15", days)  # Kuveyt kesimi
+    assert max(s["period_end"] for s in r.json()) == demo_mode._shift("2026-10-15", days)  # Mavi Bank kesimi
     sid = demo.cookies.get(demo_mode.COOKIE)
     assert sid and demo.get("/api/demo").json()["expires_at"] == demo_mode.expires_at(sid)
     # başka ziyaretçi: ayrı kopya
@@ -51,7 +51,7 @@ def test_closed_endpoints_and_samples(demo):
     assert r["status"] == "saved" and r["reconciliation_diff"] == 0 and r["txn_count"] > 10
     assert demo.post("/api/demo/sample/vakifbank").json()[0]["status"] == "duplicate"
     g = demo.post("/api/demo/sample/genel").json()[0]
-    assert g["status"] == "saved" and g["bank"] == "Garanti" and g["reconciliation_diff"] == 0
+    assert g["status"] == "saved" and g["bank"] == "Yeşil Bank" and g["reconciliation_diff"] == 0
     assert len(demo.get("/api/statements").json()) == 4
     assert demo.get("/api/imports").json()[0]["label"].startswith("Ekstre: Örnek")  # geri alınabilir
     assert demo.post("/api/demo/sample/yok").status_code == 404

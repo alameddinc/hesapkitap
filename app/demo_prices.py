@@ -1,17 +1,20 @@
 """Canlı demo (HESAPKITAP_DEMO=1) için uydurma fiyat verisi: Fiyat takibi, Nereden alınır, Alışveriş listesi canlı dursun.
 
 Demo sunucusunda BigQuery yoktur; "piyasa" verisi buradan gelir. Bütün fiyatlar UYDURMADIR (gerçek bir zincirin gerçek
-fiyatı değildir; marka yok, genel ürün adları). Üç parça:
+fiyatı değildir; marka yok, genel ürün adları). Zincirler de kurgudur ("Market A" … "Market E"): uydurma fiyatın yanında
+gerçek bir zincirin adı görünmez. Gerçek ulusal zincirlerin (price_sources.NATIONAL_CHAINS) davranışı demoda NATIONAL ile
+sürer (price_sources.national_chains; receipt_templates.chain_of demoda bu adları tanır). Üç parça:
 
 1. seed_system(today) — system.db (bütün ziyaretçilerin ortak verisi), günde bir kez (işaret: sys_settings
-   MARKER_KEY): ~30 ürün grubu × BİM / A101 / ŞOK / Migros / CarrefourSA için
+   MARKER_KEY): ~30 ürün grubu × Market A … Market E için
    - official_prices: son LIVE_DAYS gün (Nereden alınır, Nereye gideyim? tekliflerinin "resmi" kaynağı; depot_id 'demo');
    - official_daily: önceki BAND_DAYS gün (ürün grafiğindeki piyasa bandı, fişin piyasa notu, tasarruf ölçüsü);
    - community_prices: birkaç grup için son günlerde 3 ya da 5 uydurma katkı (contributor 'demo-…'; ≥3 kişi eşiği geçer).
    Tarihler bugüne göredir; eski demo satırları silinip yeniden yazılır.
 2. receipts() — app.demo seed'inde (şablon, ANCHOR'a göre tarihli; demo_mode.shift_db bugüne kaydırır): farklı
    zincirlerde, farklı günlerde market fişleri (receipt_items). Kalem fiyatları aynı fiyat işlevinden (price) türetilir:
-   süt hep Migros'ta alınır → "BİM'de daha ucuz" önerisi; son Migros fişinde yumurta piyasadan pahalı → fiş piyasa notu.
+   süt hep Market D'de alınır → "Market B'de daha ucuz" önerisi; son Market D fişinde yumurta piyasadan pahalı → fiş
+   piyasa notu.
 3. shopping(today) — şablon kaydırıldıktan SONRA (gerçek bugünle): bir geçmiş alışveriş (plan → tamamla → fiş bağlandı,
    tasarruf), etkin liste ("2,5 kg elma", "6x süt" …) ve kaydedilmiş plan ("Bu planla git").
 Gruplar yalnız kurallarla çözülür (yapay zekâ yok); hepsi birkaç yüz ms.
@@ -19,11 +22,14 @@ Gruplar yalnız kurallarla çözülür (yapay zekâ yok); hepsi birkaç yüz ms.
 import hashlib
 from datetime import date, timedelta
 
-VERSION = 1
+VERSION = 2  # 2: kurgu zincir adları
 MARKER_KEY = "demo:prices_seeded"
 REGION = "İstanbul"
-CHAINS = ("BİM", "A101", "ŞOK", "Migros", "CarrefourSA")
-FACTOR = {"BİM": 0.93, "A101": 0.95, "ŞOK": 0.97, "CarrefourSA": 1.03, "Migros": 1.06}
+CHAINS = ("Market A", "Market B", "Market C", "Market D", "Market E")
+FACTOR = {"Market A": 0.93, "Market B": 0.95, "Market C": 0.97, "Market E": 1.03, "Market D": 1.06}
+# fiyatı ülke genelinde aynı sayılan kurgu zincirler (gerçekteki BİM / A101 / ŞOK / Migros gibi); Market E il bazlı
+# (CarrefourSA gibi: teklifi "İstanbul" etiketli). Yalnız demoda: price_sources.national_chains()
+NATIONAL = frozenset({"Market A", "Market B", "Market C", "Market D"})
 LIVE_DAYS = 3     # official_prices: bugün ve önceki 2 gün
 BAND_DAYS = 120   # official_daily: grafiğin 90 günü ve en eski fiş rahat sığsın
 DRIFT = 0.0006    # günlük fiyat artışı (geçmiş günler biraz ucuz: grafik düz olmasın)
@@ -54,16 +60,16 @@ PRODUCTS: list[tuple[str, str | None, float, tuple[str, ...]]] = [
     ("ZEYTİN 500 G", None, 118.0, ()),
     ("BULAŞIK DETERJANI 1,5 L", None, 88.0, ()),
     ("TUVALET KAĞIDI 32Lİ", None, 298.0, ()),
-    ("KAHVE 100 G", None, 158.0, ("BİM", "A101")),
+    ("KAHVE 100 G", None, 158.0, ("Market A", "Market B")),
     ("SALÇA 830 G", None, 78.0, ()),
     ("MERCİMEK 1 KG", None, 64.0, ()),
     ("AYRAN 1 L", None, 38.0, ()),
-    ("TAVUK BUT", "kg", 148.0, ("ŞOK",)),
+    ("TAVUK BUT", "kg", 148.0, ("Market C",)),
     ("SALATALIK", "kg", 35.0, ()),
 ]
 # topluluk satırı olan gruplar (başlık): zincir başına 3 ya da 5 uydurma kişi, son 1–5 gün
 COMMUNITY = ("SÜT 1 L", "YUMURTA 30LU", "EKMEK 250 G", "DOMATES", "AYÇİÇEK YAĞI 5 L", "BEYAZ PEYNİR 500 G")
-COMMUNITY_CHAINS = ("BİM", "A101", "ŞOK", "Migros")
+COMMUNITY_CHAINS = ("Market A", "Market B", "Market C", "Market D")
 _BY_TITLE = {t: (u, m, miss) for t, u, m, miss in PRODUCTS}
 _keys: dict[str, str] = {}
 
@@ -191,17 +197,18 @@ def _labels(keys: dict[str, str]) -> None:
 
 # (kaç gün önce, zincir, [(başlık, adet / kilo)], fiyat oynaması {başlık: çarpan})
 RECEIPTS: list[tuple[int, str, list[tuple[str, float]], dict[str, float]]] = [
-    (55, "Migros", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("BEYAZ PEYNİR 500 G", 1), ("EKMEK 250 G", 2),
-                    ("DOMATES", 1.25), ("ÇAY 1 KG", 1)], {}),
-    (41, "A101", [("SÜT 1 L", 2), ("MAKARNA 500 G", 3), ("AYÇİÇEK YAĞI 5 L", 1), ("KOLA 2,5 L", 1),
-                  ("PİRİNÇ 1 KG", 1)], {}),
-    (27, "Migros", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("TEREYAĞI 500 G", 1), ("ELMA", 1.6),
-                    ("KAŞAR PEYNİR 400 G", 1)], {}),
-    (16, "ŞOK", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("EKMEK 250 G", 2), ("ZEYTİN 500 G", 1), ("SALÇA 830 G", 1)], {}),
-    (9, "CarrefourSA", [("SÜT 1 L", 2), ("TOZ DETERJAN 6 KG", 1), ("BULAŞIK DETERJANI 1,5 L", 1),
-                        ("TUVALET KAĞIDI 32Lİ", 1), ("MUZ", 1.1)], {}),
-    (3, "Migros", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("BEYAZ PEYNİR 500 G", 1), ("DOMATES", 1.4),
-                   ("EKMEK 250 G", 1)], {"YUMURTA 30LU": 1.12}),  # yumurta piyasadan pahalı: fişte piyasa notu
+    (55, "Market D", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("BEYAZ PEYNİR 500 G", 1), ("EKMEK 250 G", 2),
+                      ("DOMATES", 1.25), ("ÇAY 1 KG", 1)], {}),
+    (41, "Market B", [("SÜT 1 L", 2), ("MAKARNA 500 G", 3), ("AYÇİÇEK YAĞI 5 L", 1), ("KOLA 2,5 L", 1),
+                      ("PİRİNÇ 1 KG", 1)], {}),
+    (27, "Market D", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("TEREYAĞI 500 G", 1), ("ELMA", 1.6),
+                      ("KAŞAR PEYNİR 400 G", 1)], {}),
+    (16, "Market C", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("EKMEK 250 G", 2), ("ZEYTİN 500 G", 1),
+                      ("SALÇA 830 G", 1)], {}),
+    (9, "Market E", [("SÜT 1 L", 2), ("TOZ DETERJAN 6 KG", 1), ("BULAŞIK DETERJANI 1,5 L", 1),
+                     ("TUVALET KAĞIDI 32Lİ", 1), ("MUZ", 1.1)], {}),
+    (3, "Market D", [("SÜT 1 L", 2), ("YUMURTA 30LU", 1), ("BEYAZ PEYNİR 500 G", 1), ("DOMATES", 1.4),
+                     ("EKMEK 250 G", 1)], {"YUMURTA 30LU": 1.12}),  # yumurta piyasadan pahalı: fişte piyasa notu
 ]
 
 
@@ -233,7 +240,7 @@ def receipts(anchor: date) -> list[int]:
 TRIP = [("Ayçiçek yağı 5 L", "AYÇİÇEK YAĞI 5 L", 1), ("4x Makarna 500 g", "MAKARNA 500 G", 4),
         ("Pirinç 1 kg", "PİRİNÇ 1 KG", 1), ("Toz şeker 1 kg", "TOZ ŞEKER 1 KG", 1),
         ("Mercimek 1 kg", "MERCİMEK 1 KG", 1), ("Un 5 kg", "UN 5 KG", 1)]
-TRIP_CHAIN = "BİM"
+TRIP_CHAIN = "Market A"  # planda zincir yoksa (olmamalı)
 LIST = ["6x Süt", "2,5 kg Elma", "Yumurta 30'lu", "Beyaz peynir 500 g", "2x Kola 2,5 L", "Kahve 100 g",
         "1,5 kg Domates", "1 kg Tavuk but"]
 
@@ -247,7 +254,8 @@ def shopping(today: date | None = None) -> dict:
     back = min(3, today.day - 1)  # bu ayın içinde kalsın: "Bu ay ₺X tasarruf"
     tday = today - timedelta(days=back)
     ids = [sl.add(text)["id"] for text, _t, _q in TRIP]
-    shopping_trips.save_plan()
+    planned = shopping_trips.save_plan(k=1) or {}
+    chain = next((c["chain"] for c in planned.get("chains") or []), TRIP_CHAIN)  # planın dediği markete gidildi
     for i in ids:
         sl.update(i, {"done": True})
     trip = shopping_trips.complete(carry_over=False)
@@ -255,7 +263,7 @@ def shopping(today: date | None = None) -> dict:
         with db.connect() as c:
             c.execute("UPDATE shopping_trips SET day = ?, completed_at = ? WHERE id = ?",
                       (tday.isoformat(), f"{tday.isoformat()} 15:40:00", trip["id"]))
-    eid = _save_receipt(tday.isoformat(), TRIP_CHAIN, [(t, q) for _x, t, q in TRIP], {}, back)
+    eid = _save_receipt(tday.isoformat(), chain, [(t, q) for _x, t, q in TRIP], {}, back)
     shopping_trips.link_receipt(eid, "trip", trip["id"])
     for text in LIST:
         sl.add(text)

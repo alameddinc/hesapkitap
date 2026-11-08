@@ -1,12 +1,13 @@
 """Uydurma verilerle demo veritabanı: arayüzü denemek ve ekran görüntüsü için.
 
 Kullanım: EKSTRE_DB=/tmp/demo.db python -m app.demo
-Gerçek kişi/kart bilgisi içermez; ekstreler tests/fixtures altındaki sahte metinlerdir.
+Gerçek kişi/kart bilgisi içermez; ekstreler tests/fixtures altındaki sahte metinlerdir. Gerçek banka, zincir, işyeri ya
+da kurum adı da yoktur: okunan ekstrelerdeki adlar kurgu adlarla değiştirilir (app/demo_names.py).
 """
 from datetime import date
 from pathlib import Path
 
-from app import db
+from app import db, demo_names
 from app.parsers import kuveytturk, vakifbank
 
 FIX = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
@@ -18,10 +19,12 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
     if db.list_statements():
         print("Veritabanı boş değil; demo verisi eklenmedi.")
         return
+    demo_names.add_rules()  # kurgu işyeri adlarının kategorisi (ekstrelerden önce)
     mods = {"vakifbank_a.txt": vakifbank, "vakifbank_b.txt": vakifbank, "kuveytturk.txt": kuveytturk}
     for name, mod in ((n, mods[n]) for n in statements):
         text = (FIX / name).read_text(encoding="utf-8")
-        db.save_statement(f"demo:{name}".encode(), name.replace(".txt", ".pdf"), mod.parse_text(text))
+        st = demo_names.scrub_statement(mod.parse_text(text))
+        db.save_statement(f"demo:{name}".encode(), demo_names.FILES[name], st)
     db.auto_link()
 
     maas = db.create_recurring({"description": "Maaş", "amount": 200000, "kind": "gelir", "category": "Maaş",
@@ -55,7 +58,10 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
             db.add_subcategory(cat, n)
     db.create_goal({"kind": "category", "name": "AI & Yazılım Abonelik", "baseline": 4794.67, "target": 1500,
                     "start_month": "2026-11", "note": "kullanmadıklarımı kapat"})
-    db.set_subscription_state("SCRIBD", "iptal", date(2026, 10, 15).isoformat())
+    from app.textnorm import merchant_name
+
+    db.set_subscription_state(merchant_name("ÖRNEK E-KİTAP ABONELİĞİ"), "iptal",
+                              date(2026, 10, 15).isoformat())
     _extras()
     print(f"Demo verisi yüklendi: {db.DB_PATH}")
 
@@ -98,7 +104,7 @@ def _extras() -> None:
     zakat.update_person(es, {"hawl_start": "2025-11-19"})
     # sadaka
     donations.add("sadaka", 200, "2026-10-03")
-    donations.add("bagis", 500, "2026-09-12", "Kızılay")
+    donations.add("bagis", 500, "2026-09-12", "Örnek Vakıf")
     donations.add("fitre", 600, "2026-03-18")
     # market fişleri (fiyat takibi, öneri, piyasa notu; app/demo_prices.py)
     from app import demo_mode, demo_prices

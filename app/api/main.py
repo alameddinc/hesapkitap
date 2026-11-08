@@ -5789,6 +5789,9 @@ def demo_sample(key: str):
     st = parse_text(demo_mode.sample_text(key))
     if not st:
         raise HTTPException(422, "Örnek okunamadı")
+    from app import demo_names
+
+    demo_names.scrub_statement(st)  # gerçek banka / işyeri adı görünmez
     data = f"demo-sample:{key}".encode()
     res = {"filename": s["label"], "bank": st.bank, "card_no": st.card_no, "period_end": st.period_end.isoformat(),
            "total_debt": st.total_debt, "txn_count": len(st.transactions), "reconciliation_diff": st.reconciliation_diff(),

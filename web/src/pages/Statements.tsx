@@ -88,7 +88,7 @@ export default function Statements() {
               </button>
             ))}
           </div>
-          <p className="text-xs text-stone-500">Gerçek yükleme yolundan geçer: okunur, rakamlar ekstreyle karşılaştırılır, işlemler kategorilenir; Garanti örneği hazır
+          <p className="text-xs text-stone-500">Gerçek yükleme yolundan geçer: okunur, rakamlar ekstreyle karşılaştırılır, işlemler kategorilenir; Yeşil Bank örneği hazır
             okuyucusu olmayan bankalar için genel okuyucuyu gösterir.</p>
         </div>
       ) : (
