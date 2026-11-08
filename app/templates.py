@@ -199,13 +199,14 @@ _IBAN = re.compile(r"TR\s?\d{2}\s?(\d{4})\s?(\d)")
 
 def bank_of(text: str) -> str:
     """Hesabın bankası: ilk IBAN'ın banka kodu; yoksa başlıktaki banka adı; bilinmiyorsa boş."""
-    from app.bank_import import short_bank
+    from app.bank_import import _SHORT_BANKS, short_bank
 
     m = _IBAN.search(text[:6000].upper())
     if m and (code := m.group(1) + m.group(2)) in IBAN_BANKS:
         return IBAN_BANKS[code]
+    # short_bank tanımadığı adı aynen döndürür: başlığın 600 karakteri banka adı (ve dekontta hesap adı) olmasın
     b = short_bank(text[:600])
-    return "" if b == "Banka hesabı" else b
+    return b if b in {short for _, short in _SHORT_BANKS} else ""
 
 
 def _keywords(text: str) -> list[str]:
