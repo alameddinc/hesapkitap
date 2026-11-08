@@ -28,7 +28,11 @@ def _market_chain(merchant: str | None, legal_name: str | None = None) -> bool:
     from app.receipt_templates import CHAINS, chain_of
 
     ch = chain_of(merchant, legal_name)
-    return bool(ch) and any(b == ch and cat == "Market & Gıda" for b, _, cat in CHAINS)
+    if not ch:
+        from app import film_scope
+
+        return bool(film_scope.market_chain(merchant, legal_name))  # yalnız reklam filmi hesabında (app/film_scope.py)
+    return any(b == ch and cat == "Market & Gıda" for b, _, cat in CHAINS)
 
 
 def is_market(p: dict) -> bool:
