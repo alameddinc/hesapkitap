@@ -11,11 +11,14 @@ import IntegrityDialog, { type IntegrityDetail } from "./Integrity";
 import { bodyOf, call } from "../lib/apiError";
 import { PairCards } from "./MatchInfo";
 import { DUP_TEXT, useDupActions } from "./RecurringDupes";
+import { grupBaslik, grupla, grupOzet } from "../lib/belgeGrubu";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
   id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi" | "dogruluk" | "sabit_tekrar";
   title: string; text: string; cta: string; route: Route | "gelen";
+  /** ekstre/dokum: "N belge bekleniyor" grubundaki kısa ad (yetenek reminders_doc_group) */
+  short?: string;
   action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm" | "integrity" | "recurring_merge";
   // S6: belge_onay (Gelen kutusu'nda bekleyen belge), belge_dogrulanamadi (yüklenen döküm/ekstre kontrol bekliyor)
   inbox_id?: number; document_id?: number;
@@ -345,6 +348,30 @@ function DocCheck({ r }: { r: Reminder }) {
   );
 }
 
+/** Yükleme / ödeme satırı: başlık, etiket, metin, ana düğme ve ⋯ (Yarın hatırlat / Bu ay gösterme). */
+function Row({ r, onRun }: { r: Reminder; onRun: () => void }) {
+  const ui = useUI();
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3">
+      <Badge r={r} />
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="flex items-center gap-2">
+          <span className="break-words text-sm font-semibold">{r.title}</span>
+          {r.tag && <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium", TAG[r.severity])}>{r.tag}</span>}
+        </div>
+        <p className="break-words text-xs text-stone-500 dark:text-stone-400" title={r.text}>{r.text}</p>
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <button className="btn-primary shrink-0 px-3" onClick={onRun}>
+          {r.action === "upload" ? <><FileText size={14} />{r.cta || "Yükle"}</> : r.cta || (r.action === "inbox_review" ? "Gelen kutusu" : "Bak")}</button>
+        <Menu r={r} onDone={ui.toast} />
+      </div>
+    </li>
+  );
+}
+
+/** Özet "Yapılacaklar". İki ve daha çok bekleyen belge (ekstre / döküm) tek "N belge bekleniyor" grubunda; her biri
+ * kendi satırında (lib/belgeGrubu, mobille aynı). Boşsa hiç görünmez. */
 export default function Reminders() {
   const ui = useUI();
   const q = useQuery({
@@ -358,7 +385,8 @@ export default function Reminders() {
   const [integrity, setIntegrity] = useState<Reminder | null>(null);
   const items = q.data ?? [];
   if (!items.length) return null;
-  const shown = all ? items : items.slice(0, 3);
+  const units = grupla(items);
+  const shown = all ? units : units.slice(0, 3);
   const run = (r: Reminder) => {
     const p = r.action === "pay" ? pay.data?.find((x) => x.type === "statement" && x.id === r.statement_id) : undefined;
     if (p) return ui.openPay(p);
@@ -368,36 +396,35 @@ export default function Reminders() {
     if (r.route === "gelen" || r.action === "inbox_review") return scrollTo("gelen-kutusu", ui);
     ui.go(r.action === "upload" ? "ekstreler" : r.route);
   };
+  const one = (r: Reminder) => r.kind === "esles" || r.kind === "hesap" ? <Question key={r.id} r={r} a={answers} />
+    : r.kind === "kart_eslesmedi" ? <CardUnmatched key={r.id} r={r} />
+    : r.kind === "borc_odeme" ? <DebtQuestion key={r.id} r={r} />
+    : r.kind === "sabit_tekrar" ? <DupQuestion key={r.id} r={r} />
+    : r.kind === "belge_dogrulanamadi" ? <DocCheck key={r.id} r={r} /> : <Row key={r.id} r={r} onRun={() => run(r)} />;
   return (
     <section className="card overflow-visible">
       <div className="flex items-baseline justify-between gap-2 px-3 pt-3 sm:px-4">
         <h2 className="font-display text-lg font-semibold tracking-tight">Yapılacaklar
           <span className="ml-1.5 align-middle text-xs font-medium text-stone-400 tabular-nums">{items.length}</span></h2>
-        {items.length > 3 && (
+        {units.length > 3 && (
           <button className="text-sm text-blue-600 hover:underline dark:text-blue-400" onClick={() => setAll(!all)}>
             {all ? "Daha az" : "Tümü"}</button>
         )}
       </div>
       <ul className="divide-y divide-stone-100 px-1 pb-1 dark:divide-stone-800">
-        {shown.map((r) => r.kind === "esles" || r.kind === "hesap" ? <Question key={r.id} r={r} a={answers} />
-          : r.kind === "kart_eslesmedi" ? <CardUnmatched key={r.id} r={r} />
-          : r.kind === "borc_odeme" ? <DebtQuestion key={r.id} r={r} />
-          : r.kind === "sabit_tekrar" ? <DupQuestion key={r.id} r={r} />
-          : r.kind === "belge_dogrulanamadi" ? <DocCheck key={r.id} r={r} /> : (
-          <li key={r.id} className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3">
-            <Badge r={r} />
-            <div className="min-w-0 flex-1 basis-48">
-              <div className="flex items-center gap-2">
-                <span className="break-words text-sm font-semibold">{r.title}</span>
-                {r.tag && <span className={cx("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium", TAG[r.severity])}>{r.tag}</span>}
+        {shown.map((u) => u.tip === "tek" ? one(u.r) : (
+          <li key="belge-grubu" className="px-1 py-2.5 sm:px-2" aria-labelledby="belge-grubu">
+            <div className="flex items-start gap-3 px-1 pb-2">
+              <span className="flex h-11 w-[52px] shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" aria-hidden="true">
+                <FileText size={18} /></span>
+              <div className="min-w-0 flex-1">
+                <h3 id="belge-grubu" className="text-sm font-semibold">{grupBaslik(u.items.length)}</h3>
+                <p className="break-words text-xs text-stone-500 dark:text-stone-400">{grupOzet(u.items)}</p>
               </div>
-              <p className="break-words text-xs text-stone-500 dark:text-stone-400" title={r.text}>{r.text}</p>
             </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              <button className="btn-primary shrink-0 px-3" onClick={() => run(r)}>
-                {r.action === "upload" ? <><FileText size={14} />{r.cta || "Yükle"}</> : r.cta || (r.action === "inbox_review" ? "Gelen kutusu" : "Bak")}</button>
-              <Menu r={r} onDone={ui.toast} />
-            </div>
+            <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 sm:ml-[60px] dark:divide-stone-800 dark:border-stone-700">
+              {u.items.map((r) => <Row key={r.id} r={r} onRun={() => run(r)} />)}
+            </ul>
           </li>
         ))}
       </ul>

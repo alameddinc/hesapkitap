@@ -6,8 +6,13 @@ Her hatırlatmanın kimliği kararlıdır ve döneme bağlıdır: "ekstre:<kart 
 "hesap:<hesap id>:<hesap id>", aynı olabilecek sabit kalemler "sabit:<silinecek>:<kalacak>"; cevaplanınca kendiliğinden düşer. Kapatma (dismiss) ve erteleme (snooze) bu kimlikle saklanır; sonraki dönemin
 hatırlatması yeni kimlikle yeniden çıkar. Durum kişiye özeldir (ortak defterde üyenin kapattığı sahibinkini kapatmaz).
 
+Kart başına beklenen kesim (card_cuts): ekstredeki "sonraki kesim", yoksa son ekstrelerden öğrenilen kesim günü (ay
+sonu kesimi kısa ayda ayın son günü). Bir ay yüklenmediyse en son geçen kesim sorulur. Döküm: ay dönümü ayarına göre
+(takvim ayı ya da ör. 17'si). ekstre/dokum maddelerinde "short": Özet'teki "N belge bekleniyor" grubunun kısa adı.
+
 Dönem ve gün hesapları Europe/Istanbul saatine göre yapılır.
 """
+import calendar
 import json
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -19,7 +24,7 @@ AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağusto
 GUN = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
 EKSTRE_GRACE = 1       # kesimden sonra bu kadar gün bekle: banka PDF'i hemen göndermeyebilir
-EKSTRE_WINDOW = 45     # kesimin üstünden bu kadar gün geçtiyse kart muhtemelen kullanılmıyor: ısrar etme
+EKSTRE_STALE = 100     # son ekstrenin üstünden bu kadar gün geçtiyse kart muhtemelen kullanılmıyor: ısrar etme
 DOKUM_WARN_DAY = 10    # ayın bu gününden sonra döküm hatırlatması "warn"
 DOKUM_STALE = 100      # son dökümün üstünden bu kadar gün geçtiyse kişi dökümü bırakmış: hatırlatma
 ODEME_DAYS = 3         # son ödemeye bu kadar gün kala
@@ -128,25 +133,77 @@ def _page_hidden(page: str) -> bool:
     return bool(r and page in r["hidden_pages"])
 
 
-def _ekstre(now: date, posta: bool) -> list[dict]:
-    from app.finance import _latest_statement_per_account, _next_cut
+def _add_month(d: date, day: int, month_end: bool) -> date:
+    """Bir sonraki ayın aynı kesim günü; ay kısaysa ayın son günü (31'i kesimli kart Şubat'ta 28'i)."""
+    y, m = divmod(d.year * 12 + d.month, 12)  # d.month 1..12 → sonraki ay (0-tabanlı m)
+    last = calendar.monthrange(y, m + 1)[1]
+    return date(y, m + 1, last if month_end else min(day, last))
 
+
+def _cut_rule(sts: list[dict]) -> tuple[int, bool]:
+    """Kartın kesim günü, son ekstrelerden öğrenilir: en son ekstrenin günü; son iki ekstre de ay sonundaysa "ay sonu"
+    (30 Nisan ve 31 Mayıs kesimli kart Haziran'da 30'unda kesilir, 28'inde değil)."""
+    ends = sorted(date.fromisoformat(s["period_end"]) for s in sts)[-3:]
+
+    def eom(d: date) -> bool:
+        return d.day == calendar.monthrange(d.year, d.month)[1]
+
+    tail = ends[-2:]
+    return ends[-1].day, len(tail) == 2 and all(eom(d) and d.day >= 28 for d in tail)
+
+
+def card_cuts(now: date) -> list[dict]:
+    """Kart başına beklenen son kesim (bugüne kadar geçmiş olan) ve son ödeme günü. Ekstrede "sonraki kesim" yazıyorsa o,
+    yoksa öğrenilen kesim günüyle ay ay ilerlenir; bir ay atlanmışsa hatırlatma en son geçen kesime kayar (eski ayda
+    takılıp kalmaz). Dönen: [{card_no, statement (son ekstre), cut, due, missed (yüklenmeyen kesim sayısı)}]."""
+    by_card: dict[str, list[dict]] = {}
+    for s in db.list_statements():  # ortak defterde gizli kart burada süzülü
+        by_card.setdefault(s["card_no"], []).append(s)
     out = []
-    for card_no, st in _latest_statement_per_account().items():
-        cut, due = _next_cut(st)
+    for card_no, sts in by_card.items():
+        st = max(sts, key=lambda s: s["period_end"])
+        pe = date.fromisoformat(st["period_end"])
+        day, month_end = _cut_rule(sts)
+        cut = date.fromisoformat(st["next_period_end"]) if st.get("next_period_end") else _add_month(pe, day, month_end)
+        if cut <= pe:  # bozuk okuma: sonraki kesim öncekinden önce
+            cut = _add_month(pe, day, month_end)
+        # son ödeme: ekstrede yazan "sonraki son ödeme" ya da son ekstredeki kesim → son ödeme aralığı
+        gap = (date.fromisoformat(st["due_date"]) - pe) if st.get("due_date") else None
+        due = date.fromisoformat(st["next_due_date"]) if st.get("next_due_date") else (cut + gap if gap else None)
+        missed = 1
+        while True:
+            nxt = _add_month(cut, day, month_end)
+            if (now - nxt).days < EKSTRE_GRACE + 1:
+                break
+            cut, missed = nxt, missed + 1
+            due = cut + gap if gap else None
+        out.append({"card_no": card_no, "statement": st, "cut": cut, "due": due, "missed": missed})
+    return out
+
+
+def _ekstre(now: date, posta: bool) -> list[dict]:
+    """Her kart için ayrı: beklenen kesimin üstünden EKSTRE_GRACE gün geçti, o kesimin ekstresi yok. Ekstre yüklenince
+    (elle, posta, Paylaş) son ekstre ilerler ve madde kendiliğinden düşer."""
+    out = []
+    for k in card_cuts(now):
+        card_no, st, cut, due = k["card_no"], k["statement"], k["cut"], k["due"]
         since = (now - cut).days
-        if since < EKSTRE_GRACE + 1 or since > EKSTRE_WINDOW:
+        if since < EKSTRE_GRACE + 1:
             continue
+        if (now - date.fromisoformat(st["period_end"])).days > EKSTRE_STALE:
+            continue  # aylardır ekstre gelmiyor: kart muhtemelen kullanılmıyor, ısrar etme
         ay = AY[cut.month - 1]
-        text = f"Kesim tarihi {_d(cut)}'di. Ekstreyi yükle ki harcamaların ve son ödeme tarihin güncellensin."
+        once = f" Önceki {k['missed'] - 1} ekstre de yüklenmemiş." if k["missed"] > 1 else ""
+        text = f"Kesim tarihi {_d(cut)}'di. Ekstreyi yükle ki harcamaların ve son ödeme tarihin güncellensin.{once}"
         if posta:
             text = (f"Kesim tarihi {_d(cut)}'di. Ekstreyi yükle ya da bankanın mailini posta adresine ilet; "
-                    "harcamaların ve son ödeme tarihin güncellensin.")
-        sev = "warn" if since > 7 or (due and (due - now).days <= 5) else "info"
+                    f"harcamaların ve son ödeme tarihin güncellensin.{once}")
+        sev = "warn" if since > 7 or k["missed"] > 1 or (due and (due - now).days <= 5) else "info"
         out.append({"id": f"ekstre:{_cid(card_no)}:{_month(cut)}", "kind": "ekstre", "severity": sev,
                     "title": f"{st['bank']} ••{_last4(card_no)} · {ay} ekstren hazır", "text": text,
                     "cta": "Ekstreyi yükle", "route": "ekstreler", "action": "upload", "due": cut.isoformat(),
                     "tag": "Yeni" if since <= 3 else _ago(since), "period": _month(cut),
+                    "short": f"{st['bank']} ••{_last4(card_no)} (ekstre {cut.day} {AY[cut.month - 1][:3]})",
                     "bank": st["bank"], "last4": _last4(card_no), "card_no": card_no})
     return out
 
@@ -213,6 +270,7 @@ def _dokum(now: date) -> list[dict]:
                         "cta": "Dökümü yükle", "route": "ekstreler", "action": "upload", "due": m_end.isoformat(),
                         "tag": kapandi if since <= DOKUM_WARN_DAY else _ago(since),
                         "period": period if cycle else _month(m_end),
+                        "short": f"{a['name']} (döküm)",
                         "bank": a["name"], "account_id": a["id"]})
     return out
 

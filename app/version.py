@@ -220,6 +220,10 @@ CAPABILITIES = (
                               # advance_text}; GET /api/recurring/drift?salary=1 → maaş kalemleri type "maas" (title,
                               # text, old, new, pct, expected_pct, actual_pct, advance, month, accept_label,
                               # dismiss_label); POST /api/recurring/salary-drift/accept|dismiss {recurring_id, month}
+    "reminders_doc_group",    # /api/reminders ekstre/dokum maddelerinde short ("Örnek Bank ••1234 (ekstre 14 Kas)",
+                              # "Örnek Bank Vadesiz (döküm)"): Özet'te iki ve daha çok bekleyen belge tek "N belge
+                              # bekleniyor" grubunda, her biri kendi satırı ve Yükle'siyle. Kesim günü son ekstrelerden
+                              # öğrenilir (ay sonu kırpılmaz); atlanan ay varsa en son geçen kesim sorulur
 )
 
 

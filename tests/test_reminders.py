@@ -162,3 +162,64 @@ def test_onboarding_v2_order_and_member(client, tmpdb):
     o = client.get("/api/onboarding", params={"v": 2}).json()
     assert {s["key"] for s in o["steps"] if s["done"]} == {"hesap", "sabit"} and o["done"] == 2
     assert client.get("/api/onboarding").json()["steps"][0]["key"] == "ekstre"  # web (v1) değişmedi
+
+
+def test_each_card_and_account_separately_with_short_label(client, tmpdb, at):
+    """Tek tek: her kart kendi kesiminden sonra, her döküm hesabı dönem dönümünde ayrı madde; Özet grubu için kısa ad."""
+    _statement(tmpdb, card="5400******1111", bank="Örnek Bank", end="2026-10-14", nxt="2026-11-14", due="2026-10-24")
+    _statement(tmpdb, card="4000******2222", bank="Mavi Bank", end="2026-10-03", nxt="2026-11-03", due="2026-10-13")
+    acc = tmpdb.ensure_account("Örnek Bank Vadesiz")
+    _imported(tmpdb, acc, "2026-10-10")
+    at("2026-11-02")
+    assert {x["kind"] for x in client.get("/api/reminders").json()} == {"dokum"}  # kartların kesimi henüz gelmedi
+    at("2026-11-05")
+    assert sorted(x["id"] for x in client.get("/api/reminders").json()) == sorted(
+        ["ekstre:4000******2222:2026-11", f"dokum:{acc}:2026-10"])
+    at("2026-11-16")
+    r = {x["id"]: x for x in client.get("/api/reminders").json()}
+    assert set(r) == {"ekstre:5400******1111:2026-11", "ekstre:4000******2222:2026-11", f"dokum:{acc}:2026-10"}
+    assert r["ekstre:5400******1111:2026-11"]["short"] == "Örnek Bank ••1111 (ekstre 14 Kas)"
+    assert r[f"dokum:{acc}:2026-10"]["short"] == "Örnek Bank Vadesiz (döküm)"
+    # yalnız yüklenenin maddesi düşer (posta ile gelen ekstre de aynı tabloya yazılır)
+    _statement(tmpdb, card="4000******2222", bank="Mavi Bank", end="2026-11-03", nxt="2026-12-03", due="2026-11-13")
+    assert sorted(_ids(client)) == sorted(["ekstre:5400******1111:2026-11", f"dokum:{acc}:2026-10"])
+
+
+def test_skipped_month_moves_to_latest_cut(client, tmpdb, at):
+    """Ekim ekstresi yüklenmediyse Kasım kesiminden sonra Kasım sorulur (eski ayda takılıp 45 günde kaybolmaz)."""
+    _statement(tmpdb, end="2026-09-26", nxt="2026-10-26", due="2026-10-06")
+    at("2026-11-28")
+    r = client.get("/api/reminders").json()
+    assert [x["id"] for x in r] == ["ekstre:5400******9602:2026-11"]
+    assert r[0]["severity"] == "warn" and "Önceki 1 ekstre de yüklenmemiş" in r[0]["text"]
+    assert r[0]["due"] == "2026-11-26"
+    at("2027-01-10")
+    assert _ids(client) == []  # 100 günden fazladır ekstre yok: kart kullanılmıyor, ısrar yok
+
+
+def test_cut_day_learned_month_end(client, tmpdb, at):
+    """Ekstrede sonraki kesim yazmıyorsa kesim günü önceki ekstrelerden öğrenilir; ay sonu kesimi 28'e kırpılmaz."""
+    from app import reminders
+
+    for end in ("2026-08-31", "2026-09-30"):
+        _statement(tmpdb, card="4000******3333", bank="Mavi Bank", end=end, nxt=None, due=None)
+    cuts = reminders.card_cuts(date(2026, 11, 1))
+    assert cuts[0]["cut"] == date(2026, 10, 31) and cuts[0]["due"] is None
+    at("2026-11-01")
+    assert _ids(client) == []  # 31 Ekim kesimi: bir gün bekler
+    at("2026-11-02")
+    assert _ids(client) == ["ekstre:4000******3333:2026-10"]
+    # tek ekstre, 31'i kesim: Kasım'da 30'u, Aralık'ta yine 31'i
+    assert reminders._add_month(date(2026, 10, 31), 31, False) == date(2026, 11, 30)
+    assert reminders._add_month(date(2026, 11, 30), 31, False) == date(2026, 12, 31)
+    assert reminders._add_month(date(2026, 12, 15), 15, False) == date(2027, 1, 15)
+
+
+def test_snoozed_card_does_not_hide_other_cards(client, tmpdb, at):
+    _statement(tmpdb)
+    _statement(tmpdb, card="4000******1234", bank="Mavi Bank")
+    at("2026-10-29")
+    client.post("/api/reminders/ekstre:5400******9602:2026-10/snooze", json={"days": 3})
+    assert _ids(client) == ["ekstre:4000******1234:2026-10"]
+    at("2026-11-01")
+    assert len(_ids(client)) == 2
