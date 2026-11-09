@@ -1,7 +1,9 @@
 // Özet → "Dönem sonu" kartı ve Planlama ayının dökümü (mobil components/ozet/Beklenen.tsx ile aynı metinler;
 // lib/beklenen.ts). Rakamlar sunucudan (summary.expected = Planlama'nın o ayki satırı); geçmiş dönemde expected null,
 // eski sunucuda forecast_net yok → kart görünmez.
+import { useQuery } from "@tanstack/react-query";
 import { CalendarRange, ChevronRight } from "lucide-react";
+import { call } from "../lib/apiError";
 import type { Summary } from "../api";
 import { areAmountsHidden, cx, tl } from "../format";
 import { DONEM_SONU, donemSonuAlt, donemSonuDokum, donemSonuVar, eksiMi, isaret, isaretli, tamTl, type DonemSonu } from "../lib/beklenen";
@@ -23,6 +25,9 @@ export function DonemSonuKarti({ summary }: { summary: Summary }) {
   const e = summary.expected;
   if (!donemSonuVar(e)) return null;
   const plan = routeVisible(book, "plan", meta?.modules);
+  // Harcanabilir (bugün) eksi, Dönem sonu artıysa ikisinin ilişkisi tek cümle (NetWorth ile aynı önbellek)
+  const nw = useQuery({ queryKey: ["net-worth"], queryFn: () => call<{ spendable?: number }>("GET", "/api/net-worth") });
+  const iliski = (nw.data?.spendable ?? 0) < 0 && !eksiMi(e.forecast_net);
   const body = (
     <>
       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
@@ -35,6 +40,7 @@ export function DonemSonuKarti({ summary }: { summary: Summary }) {
             <span className="whitespace-nowrap text-stone-500"> · {DONEM_SONU.her.toLocaleLowerCase("tr")}</span></span>
         </span>
         <span className="block text-xs text-stone-500 tabular-nums" data-testid="donem-sonu-alt">{donemSonuAlt(e, para)}</span>
+        {iliski && <span className="block text-xs text-stone-500" data-testid="donem-sonu-iliski">{DONEM_SONU.iliski}</span>}
       </span>
     </>
   );

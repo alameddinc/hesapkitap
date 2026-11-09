@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { cx, monthLabel, tl } from "../format";
+import { cx, tl, periodLabel } from "../format";
 
 const SHORT = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
 const short = (ym: string) => SHORT[Number(ym.slice(5, 7)) - 1];
-const full = (ym: string) => `${monthLabel(ym)}`;
+const full = (ym: string) => `${periodLabel(ym)}`;
 
 /**
  * Tek seri aylık çubuk grafik (son 12 ay): her çubuk bir düğme — üzerine gelince / odaklanınca / dokununca o ayın tutarı

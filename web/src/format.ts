@@ -48,6 +48,24 @@ export function monthLabel(ym: string, short = false) {
   return short ? `${name.slice(0, 3)} ${String(y).slice(2)}` : `${name} ${y}`;
 }
 
+// ---------------------------------------------------------------- dönem adı
+// Dönem anahtarı (YYYY-MM) dönemin BİTTİĞİ aydır ve değişmez; ADI dönemin BAŞLADIĞI aydan verilir (sunucu
+// db.period_name_month, meta.period_naming "start"): ay dönümü 5 → 2026-12 = 5 Kas – 4 Ara = "Kasım dönemi".
+// Ay dönümü genelde maaş/kesim günü: "maaş yattı → bu ayın dönemi". Gün meta gelince (api.meta) ayarlanır.
+let cycleStartDay = 1;
+export const setCycleStartDay = (d: number | null | undefined) => { cycleStartDay = d && d > 1 ? d : 1; };
+/** Dönem anahtarının adının ayı (YYYY-MM): ay dönümü 1 ise aynı, değilse bir önceki ay. */
+export const periodNameMonth = (ym: string, startDay = cycleStartDay) =>
+  (startDay > 1 && /^\d{4}-\d{2}$/.test(ym) ? addMonths(ym, -1) : ym);
+/** Tersi: ay seçicide seçilen ay (dönemin adı) → dönem anahtarı. <input type="month"> anahtarı periodNameMonth ile
+ *  gösterir, seçileni bununla saklar: seçilen ay ile listede görünen ad aynı olur. */
+export const periodKeyOfName = (ym: string, startDay = cycleStartDay) =>
+  (startDay > 1 && /^\d{4}-\d{2}$/.test(ym) ? addMonths(ym, 1) : ym);
+/** Dönem anahtarının adı: "Kasım 2026" (short: "Kas 26"). Takvim ayı (monthLabel) için değil. */
+export const periodLabel = (ym: string, short = false, startDay = cycleStartDay) => monthLabel(periodNameMonth(ym, startDay), short);
+/** Yalnız ay adı: "Kasım". */
+export const periodName = (ym: string, startDay = cycleStartDay) => MONTHS[Number(periodNameMonth(ym, startDay).slice(5, 7)) - 1];
+
 export function dateTR(iso: string) {
   const [y, m, d] = iso.slice(0, 10).split("-");
   return `${d}.${m}.${y}`;

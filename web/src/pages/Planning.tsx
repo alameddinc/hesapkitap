@@ -9,7 +9,7 @@ import { useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type PlanLineType, type PlanMonth } from "../api";
 import Segmented from "../components/Segmented";
-import { addMonths, cx, dateTR, maskText, monthLabel, PLAN_LABEL, tl, tlCompact } from "../format";
+import { addMonths, cx, dateTR, maskText, PLAN_LABEL, tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { DonemSonuDokum } from "../components/Beklenen";
 import { donemSonuPlandan } from "../lib/beklenen";
@@ -32,7 +32,7 @@ function MonthCard({ m, open, onToggle }: { m: PlanMonth; open: boolean; onToggl
     <li className="card overflow-hidden">
       <button className="flex w-full items-center gap-3 px-3 py-3 text-left sm:px-4" onClick={onToggle} aria-expanded={open}>
         <div className="flex-1">
-          <div className="font-semibold">{monthLabel(m.month)}</div>
+          <div className="font-semibold">{periodLabel(m.month)}</div>
           <div className="text-xs text-stone-500">
             Gelir {tlCompact(m.income)} · Kesin gider {tlCompact(m.expense)}
             {m.estimated > 0 && <> · <span className="italic">tahmini {tlCompact(m.estimated)}</span></>}
@@ -140,11 +140,11 @@ export default function Planning() {
                 if (m) setOpen(String(m));
               }}>
                 <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-                <XAxis dataKey="month" tickFormatter={(m: string) => monthLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
+                <XAxis dataKey="month" tickFormatter={(m: string) => periodLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
                   axisLine={false} tickLine={false} />
                 <YAxis tickFormatter={(v: number) => tlCompact(v)} tick={{ fill: "var(--chart-text)", fontSize: 11 }}
                   axisLine={false} tickLine={false} width={64} />
-                <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => monthLabel(String(m))}
+                <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => periodLabel(String(m))}
                   cursor={{ fill: "var(--chart-grid)", opacity: 0.5 }}
                   contentStyle={{ background: "var(--chart-surface)", border: "1px solid var(--chart-grid)", borderRadius: 8 }} />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }}
@@ -208,8 +208,8 @@ export default function Planning() {
                   <span>
                     <span className="font-medium">{r.description}</span>
                     <span className="block text-xs text-stone-500">
-                      Her ay {r.day_of_month}. gün · {r.category ?? "—"} · {monthLabel(r.start_month, true)}
-                      {r.end_month ? ` → ${monthLabel(r.end_month, true)}` : " → süresiz"}
+                      Her ay {r.day_of_month}. gün · {r.category ?? "—"} · {periodLabel(r.start_month, true)}
+                      {r.end_month ? ` → ${periodLabel(r.end_month, true)}` : " → süresiz"}
                     </span>
                   </span>
                   <span className={cx("shrink-0 whitespace-nowrap tabular-nums", r.kind === "gelir" && "text-green-700 dark:text-green-400")}>

@@ -80,6 +80,8 @@ export const DONEM_SONU = {
   her: "Her zamanki harcamanla",
   yapmazsan: "Yeni harcama yapmazsan",
   planlama: "Planlamada gör",
+  // Harcanabilir (bugün) eksi, Dönem sonu artıyken: ikisi neden ters (denetim: rakamlar birbirini tutmuyor)
+  iliski: "Harcanabilir bugünün rakamı; beklenen gelirler (maaş gibi) gelince dönem artıda kapanır.",
 } as const;
 
 /** Kartın ikinci satırı: "Yeni harcama yapmazsan +₺70.804". */

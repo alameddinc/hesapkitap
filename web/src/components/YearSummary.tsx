@@ -4,7 +4,7 @@ import { send } from "../lib/apiError";
 import { CalendarRange } from "lucide-react";
 import { useState } from "react";
 import type { Group } from "../api";
-import { maskText, monthLabel, tl } from "../format";
+import { maskText, tl, periodLabel } from "../format";
 import BarList from "./BarList";
 import { openTxns, type TxnFilter } from "../lib/txnFilter";
 import Kpi from "./Kpi";
@@ -51,7 +51,7 @@ export default function YearSummary() {
         </div>
         <ul className="space-y-1 text-sm">
           {y.highest && y.lowest && y.highest.month !== y.lowest.month && (
-            <li>En çok harcanan ay <b>{monthLabel(y.highest.month)}</b> ({tl(y.highest.expense)}), en az <b>{monthLabel(y.lowest.month)}</b> ({tl(y.lowest.expense)})</li>
+            <li>En çok harcanan ay <b>{periodLabel(y.highest.month)}</b> ({tl(y.highest.expense)}), en az <b>{periodLabel(y.lowest.month)}</b> ({tl(y.lowest.expense)})</li>
           )}
           <li>{y.fees ? <span className="text-red-600">Faiz ve ücretlere <b>{tl(y.fees)}</b> gitti</span> : <span className="text-green-700 dark:text-green-400">Bu yıl faiz ödemedin ✓</span>}</li>
           {(y.zakat > 0 || y.sadaka > 0) && <li>Zekât {tl(y.zakat)} · sadaka {tl(y.sadaka)}</li>}

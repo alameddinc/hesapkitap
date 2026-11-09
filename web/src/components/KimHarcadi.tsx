@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type Budget } from "../api";
 import { call } from "../lib/apiError";
 import { openTxns } from "../lib/txnFilter";
-import { ek, monthLabel, tl } from "../format";
+import { ek, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { useBook, usePeople } from "./hooks";
 import { LockBadge, usePlan, useLock } from "./Plan";
@@ -74,7 +74,7 @@ export function KimHarcadi({ month }: { month: string }) {
   const go = (key: string, category?: string) => { ui.setMonth(month); openPerson(key, category); };
   return (
     <section className="card space-y-2 p-3 sm:p-4" data-testid="kim-harcadi">
-      <h2 className="font-semibold">Kim ne harcadı · {monthLabel(month)}</h2>
+      <h2 className="font-semibold">Kim ne harcadı · {periodLabel(month)}</h2>
       {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
       {q.error && <p className="text-sm text-red-600" role="alert">{(q.error as Error).message}</p>}
       {d && <p className="text-sm text-stone-600 dark:text-stone-400">{say}</p>}

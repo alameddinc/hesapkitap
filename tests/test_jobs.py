@@ -57,7 +57,8 @@ def test_period_report_on_cycle_day(tmpdb):
     tmpdb.create_entry({"entry_date": "2026-10-06", "description": "Market", "amount": 300, "kind": "gider", "category": "Market"})
     assert not any("dönemi bitti" in m for m in jobs.reminders(date(2026, 10, 19)))
     msg = next(m for m in jobs.reminders(date(2026, 10, 20)) if "dönemi bitti" in m)
-    assert "Ekim 2026" in msg and "Market" in msg and "Bu ay plan" in msg
+    assert "Eylül 2026 dönemi bitti" in msg and "(20 Eyl – 19 Eki)" in msg  # ad: başladığı ay
+    assert "Market" in msg and "Bu ay plan" in msg
     assert finance.period_report("2026-10").count("\n") >= 3
 
 

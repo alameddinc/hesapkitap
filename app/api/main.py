@@ -2023,8 +2023,11 @@ def meta():
         "receipt_enabled": receipt.enabled() or ocr.available(),
         "receipt_engine": "gemini" if receipt.enabled() else "yerel" if ocr.available() else None,
         "current_month": finance.current_period(),
-        "period": dict(zip(("month", "start", "end"), (finance.current_period(),
-                                                     *(d.isoformat() for d in finance.period_bounds(finance.current_period()))))),
+        "period": {**dict(zip(("month", "start", "end"), (finance.current_period(),
+                                                        *(d.isoformat() for d in finance.period_bounds(finance.current_period()))))),
+                   # dönemin adı: başladığı ay (anahtar month dönemin bittiği ay; db.period_name_month)
+                   "name": finance.period_name(finance.current_period(), year=False), "label": finance.period_name(finance.current_period())},
+        "period_naming": "start",  # istemci: ay dönümü > 1 ise ad = anahtarın bir önceki ayı
         "cycle_start_day": db.cycle_start_day(),
         "cycle_mode": db.cycle_mode(),
         "suggested_cycle_day": db.suggested_cycle_day(),
@@ -2247,7 +2250,7 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
                  totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),
                  before: str | None = Query(None, max_length=80), card: str | None = Query(None, max_length=40),
                  category: str | None = Query(None, max_length=60), subcategory: str | None = Query(None, max_length=40),
-                 who: str | None = Query(None, pattern=r"^(u\d+|ortak)$")):
+                 who: str | None = Query(None, pattern=r"^(u\d+|ortak)$"), q: str | None = Query(None, max_length=80)):
     """Gerçek işlemler. Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş; estimated: true) varsayılan listede yok:
     include_estimates=1 ile aynı diziye eklenir — istemci `estimated` ile ayırır, hiçbir toplama katmaz.
     Her satırda counts_as_spend / counts_as_income: gider/gelir toplamına girer mi (sunucu kuralı, finance.counts);
@@ -2256,7 +2259,10 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     "subcategories"; subcategory tek başına verilirse her ana kategorideki bu ad). who=u<id>|ortak: ortak defterde o
     kişinin harcamaları ("Kim ne harcadı" raporunun satırları; yalnız gider satırları, aynı harcayan kuralı:
     kayıtta elle seçilen → ekleyen → kart işleminde eşleşen kaydı ekleyen → kartın kişisi → Ortak; finance.Spenders).
-    Ortak defterde her satırda spender ("u<id>"|"ortak") ve spender_set (kayıtta elle seçilmiş mi; PUT /api/spender)."""
+    Ortak defterde her satırda spender ("u<id>"|"ortak") ve spender_set (kayıtta elle seçilmiş mi; PUT /api/spender).
+    q: metin araması (yetenek "txn_search"): işyeri, açıklama, kategori, alt kategori, not, kişi ve tutar içinde; büyük/küçük
+    harf ve Türkçe harf farkı gözetmez. month verilmezse TÜM dönemlerde arar (ücretsizde açık pencerede); her satırda
+    month (dönem anahtarı) var, istemci döneme göre gruplar."""
     _history_gate(month)
     rows = finance.transactions(month, include_deleted, include_estimates)
     ppl = _shared_people()
@@ -2272,6 +2278,8 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
         rows = [r for r in rows if r["category"] == category]
     if subcategory:
         rows = [r for r in rows if r.get("subcategory") == subcategory]
+    if q and q.strip():
+        rows = [r for r in rows if _txn_matches(r, q)]
     for r in rows:  # her satırda: raw (banka açıklaması, yoksa null), note_user (kullanıcının kendi notu)
         r.setdefault("raw", None)
         r.setdefault("note_user", r.get("note"))
@@ -2291,6 +2299,25 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     else:
         out["rows"] = rows
     return FastJSON(out)
+
+
+def _search_fold(s: str) -> str:
+    """Arama karşılaştırması (web format.fold ile aynı): Türkçe küçük harf, aksansız, ı → i."""
+    import unicodedata
+
+    s = (s or "").replace("I", "ı").replace("İ", "i").lower()
+    s = "".join(ch for ch in unicodedata.normalize("NFD", s) if not unicodedata.combining(ch))
+    return s.replace("ı", "i")
+
+
+def _txn_matches(r: dict, q: str) -> bool:
+    """İşlem araması: her kelime satırın metninde geçmeli. Tutar hem "1231.5" hem "1.231,50" biçiminde aranır."""
+    a = float(r.get("amount") or 0)
+    nums = f"{int(a)}" if a == int(a) else f"{a}"
+    tr = f"{a:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    hay = _search_fold(" ".join(str(r.get(k) or "") for k in ("merchant", "description", "category", "subcategory",
+                                                                 "note", "counterparty", "card")) + f" {nums} {tr}")
+    return all(w in hay for w in _search_fold(q).split())
 
 
 def _cursor(r: dict) -> str:

@@ -551,7 +551,11 @@ def summary(month: str, today: date | None = None) -> dict:
     exp = expected(month, today=today)
     return {
         "month": month,
+        # dönemin adı (başladığı ay; anahtar değil) ve aralığı: istemciler aynı kuralı kullanır (db.period_name_month)
+        "period": {"name": period_name(month, year=False), "label": period_name(month), "span": period_span(month),
+                   "start": period_bounds(month)[0].isoformat(), "end": period_bounds(month)[1].isoformat()},
         "totals": totals,
+        "vs_prev": _vs_prev(month, totals, by_month, today or date.today()),
         # "expected": Beklenen'in (i) metni, yalnız beklenen varken (o dönemde hangi bekleyenler varsa onları sayar)
         "definitions": {**TOTALS_DEFINITIONS, **({"expected": _expected_text(exp["parts"])} if exp else {})},
         # gerçek toplamlara (expense, by_category, budgets, trend.expense) GİRMEYEN tahmini kalemler: ekstre bekleniyor
@@ -574,6 +578,32 @@ def summary(month: str, today: date | None = None) -> dict:
         # (totals, by_category, budgets, trend) hiçbir şey EKLEMEZ; geçmiş dönemde null
         "expected": exp,
     }
+
+
+def _vs_prev(month: str, totals: dict, by_month: dict, today: date) -> dict | None:
+    """Özet'teki "geçen döneme göre": başlıktaki gider (totals.expense) ile AYNI sayım kuralı (_totals) ve aynı dönem
+    tanımı. İçinde bulunulan dönemde geçen dönemin AYNI GÜNÜNE kadarki gider (ör. 5. gün ↔ geçen dönemin 5. günü);
+    biten dönemde iki dönemin tamamı. Geçen dönemin satırı tarihine göre süzülür (taksit dilimi gibi eski tarihli satır
+    dönemin başında sayılır). incomplete: geçen dönemde kart ekstresi vardı, bu dönemde henüz yok (rakam ekstreyle artar)."""
+    prev = add_months(month, -1)
+    a, b = period_bounds(month)
+    pa, pb = period_bounds(prev)
+    if today < a:
+        return None  # gelecek dönem
+    rows = by_month.get(prev, [])
+    if today <= b:
+        day = (today - a).days  # 0 = dönemin ilk günü
+        cut = min(pb, pa + timedelta(days=day))
+        rows = [r for r in rows if str(r["date"])[:10] <= cut.isoformat()]
+        basis = "same_day"
+    else:
+        day, basis = (b - a).days, "full"
+    before = _totals(rows)["expense"]
+    now = totals["expense"]
+    card = lambda rs: any(r.get("source") == "card" for r in rs)  # noqa: E731
+    return {"basis": basis, "day": day + 1, "prev_month": prev, "prev_name": period_name(prev, year=False),
+            "current": now, "prev": _round(before), "diff": _round(now - before), "change": _change(now, before),
+            "incomplete": basis == "same_day" and card(by_month.get(prev, [])) and not card(by_month.get(month, []))}
 
 
 # ---------------------------------------------------------------- tasarruf: abonelikler + kısma hedefleri
@@ -2056,7 +2086,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             m = add_months(m, 1)
         if gaps:
             out.append({"level": "uyari", "title": f"{len(gaps)} ayda maaş dökümü yok",
-                        "detail": f"{_AY[int(gaps[0][5:]) - 1]} {gaps[0][:4]} – {_AY[int(gaps[-1][5:]) - 1]} {gaps[-1][:4]} arasında dökümde maaş yok. "
+                        "detail": f"{period_name(gaps[0])} – {period_name(gaps[-1])} dönemleri arasında dökümde maaş yok. "
                                   "Maaş kalemin varsa o aylarda tahmini tutar gelire yazılır; kesin tutar için maaşın yattığı hesabın bu aylara "
                                   "ait dökümünü yükle.",
                         "link": "ekstreler", "key": f"maas_yok:{gaps[0]}:{gaps[-1]}:{len(gaps)}", "target": {"screen": "ekstreler"}})
@@ -2475,7 +2505,8 @@ def net_worth(today: date | None = None) -> dict:
 
 SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − ödenecek kart ekstresi − TL borçların − kumbaraya ayrılan − "
                      "ödenmemiş zekât. Altın/döviz, alacakların ve yemek/hediye kartları dahil değil; eksiye düştüyse "
-                     "ödenecekler eldeki parayı aşıyor demektir.")
+                     "ödenecekler eldeki parayı aşıyor demektir. Bugünün rakamıdır: Dönem sonu ise dönem bitene kadar "
+                     "beklenen gelirleri (maaş gibi) de katar; bu yüzden Harcanabilir eksiyken Dönem sonu artı olabilir.")
 
 
 def net_worth_at(day: date) -> dict:
@@ -2634,9 +2665,11 @@ def month_digest(month: str, today: date | None = None) -> dict:
         sug = len(recurring_suggestions(today)) + len(recurring_drift(today, salary=True))
     except Exception:  # noqa: BLE001
         sug = 0
-    y, m = map(int, month.split("-"))
+    a, b = period_bounds(month)
     return {
-        "month": month, "label": f"{_AY[m - 1]} {y}",
+        # label: dönemin ADI (başladığı ay, db.period_name_month); anahtar month değişmez. start/end/span: tarih aralığı
+        "month": month, "label": period_name(month), "start": a.isoformat(), "end": b.isoformat(), "span": period_span(month),
+        "prev_label": period_name(add_months(month, -1)),
         "income": _round(t["income"]), "expense": _round(t["expense"]), "net": _round(t["net"]),
         # gider gerçek harcama; ekstresi beklenen kart ödemeleri ayrı (giderde değil)
         "estimated_expense": t["estimated_expense"], "estimated_count": sum(1 for i in s["estimated_items"] if i["kind"] == EXPENSE),
@@ -2659,8 +2692,7 @@ def period_report(month: str) -> str:
     s = summary(month)
     prev = summary(add_months(month, -1))
     t, pt = s["totals"], prev["totals"]
-    y, m = map(int, month.split("-"))
-    lines = [f"📊 <b>{_AY[m - 1]} {y} dönemi bitti</b>",
+    lines = [f"📊 <b>{period_name(month)} dönemi bitti</b>" + (f" ({period_span(month)})" if db.cycle_start_day() > 1 else ""),
              f"Gelir {_tl(t['income'])} · Gider {_tl(t['expense'])}{_pct(t['expense'], pt['expense'])}",
              f"Net <b>{_tl(t['net'])}</b>" + (f" · borç hareketi {_tl(t['debt_flow'])}" if t.get("debt_flow") else "")]
     if t.get("estimated_expense"):
@@ -2739,6 +2771,25 @@ def targets(today: date | None = None) -> list[dict]:
 _WD = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 _FIXED_CATEGORIES = {"Kira & Aidat", "Faturalar", "Elektrik", "Su", "Doğalgaz", "İnternet & TV", "Telefon", "Vergi & Harç",
                      "Sigorta", "Banka Faiz & Ücret"}
+
+
+def period_name(month: str, year: bool = True) -> str:
+    """Dönemin adı (anahtar değil): dönemin başladığı ay — db.period_name_month. "Kasım 2026" / year=False: "Kasım"."""
+    ym_ = db.period_name_month(month)
+    y, m = map(int, ym_.split("-"))
+    return f"{_AY[m - 1]} {y}" if year else _AY[m - 1]
+
+
+def period_span(month: str) -> str:
+    """Dönemin tarih aralığı: "17 Kas – 16 Ara" (takvim ayında "1 Kas – 30 Kas")."""
+    a, b = period_bounds(month)
+    return f"{a.day} {_AY[a.month - 1][:3]} – {b.day} {_AY[b.month - 1][:3]}"
+
+
+def period_title(month: str, rest: str = "") -> str:
+    """Bildirim/mesaj başlığı: "Kasım 2026" + rest + ay dönümü varsa aralık " (17 Kas – 16 Ara)" (takvim ayında gereksiz).
+    period_title(m, " dönemi bitti") → "Kasım 2026 dönemi bitti (17 Kas – 16 Ara)"."""
+    return period_name(month) + rest + (f" ({period_span(month)})" if db.cycle_start_day() > 1 else "")
 
 
 def period_bounds(month: str) -> tuple[date, date]:

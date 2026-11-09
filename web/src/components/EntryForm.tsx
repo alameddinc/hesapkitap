@@ -4,7 +4,7 @@ import { send } from "../lib/apiError";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
-import { cx, dateTR, fold, parseAmount, tl } from "../format";
+import { cx, dateTR, fold, parseAmount, tl, periodNameMonth, periodKeyOfName } from "../format";
 import type { EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
 import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
@@ -432,7 +432,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
             )}
             <div>
               <label className="label" htmlFor="e-end">Bitiş ayı (opsiyonel)</label>
-              <input id="e-end" type="month" className="input" value={endMonth} onChange={(e) => setEndMonth(e.target.value)} />
+              <input id="e-end" type="month" className="input" value={periodNameMonth(endMonth)} onChange={(e) => setEndMonth(periodKeyOfName(e.target.value))} />
             </div>
           </div>
         )}

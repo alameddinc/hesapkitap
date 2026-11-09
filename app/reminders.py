@@ -226,16 +226,16 @@ def _uploaded_dates(c, acc: dict) -> list[date]:
 
 def _dokum(now: date) -> list[dict]:
     """Dönem kapanınca: döküm kullanan her banka hesabı için o dönemin dökümü yoksa ayrı hatırlatma. Takvim ayı
-    kullananda ay sonu; ay dönümü ayarlıysa (ör. 17'si) dönem sonu (16'sı): 'Kasım dönemi 17 Eki – 16 Kas' görünen
-    kullanıcıya 1 Kasım'da 'Ekim dökümü' sorulmaz."""
-    from app.finance import add_months, period_bounds
+    kullananda ay sonu; ay dönümü ayarlıysa (ör. 17'si) dönem sonu (16'sı): 'Ekim dönemi 17 Eki – 16 Kas' görünen
+    kullanıcıya 1 Kasım'da takvimin 'Ekim dökümü' sorulmaz."""
+    from app.finance import add_months, period_bounds, period_name, period_span
 
     cycle = db.cycle_start_day() > 1
     if cycle:
         period = add_months(db.period_of(now), -1)
         m_start, m_end = period_bounds(period)
-        ay = f"{AY[int(period[5:]) - 1]} dönemi"
-        span = f" ({m_start.day} {AY[m_start.month - 1][:3]} – {m_end.day} {AY[m_end.month - 1][:3]})"
+        ay = f"{period_name(period, year=False)} dönemi"  # ad dönemin başladığı aydan (db.period_name_month)
+        span = f" ({period_span(period)})"
     else:
         m_end = now.replace(day=1) - timedelta(days=1)
         m_start = m_end.replace(day=1)

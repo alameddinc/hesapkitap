@@ -1431,7 +1431,8 @@ def list_entries(month: str | None = None) -> list[dict]:
 
 
 def cycle_start_day() -> int:
-    """Ay dönümü günü: 1 = takvim ayı. Ör. 17 → "Kasım dönemi" 17 Ekim – 16 Kasım (kart kesimlerine hizalı)."""
+    """Ay dönümü günü: 1 = takvim ayı. Ör. 17 → anahtar 2026-11 = 17 Ekim – 16 Kasım, adı "Ekim dönemi"
+    (period_name_month; kart kesimlerine hizalı)."""
     v = get_setting("cycle_start_day")
     return int(v) if v and v.isdigit() and 1 <= int(v) <= 28 else 1
 
@@ -1445,6 +1446,18 @@ def period_of(d, start_day: int | None = None) -> str:
     y, m = d.year, d.month
     if start > 1 and d.day >= start:
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return f"{y:04d}-{m:02d}"
+
+
+def period_name_month(month: str, start_day: int | None = None) -> str:
+    """Dönem anahtarının ADI hangi ayınki (YYYY-MM). Anahtar (entries.month, kart dönemi) dönemin BİTTİĞİ aydır ve
+    değişmez; ad ise dönemin BAŞLADIĞI aydan verilir: ay dönümü 17 → anahtar 2026-12 = 17 Kas – 16 Ara = "Kasım dönemi".
+    Ay dönümü genelde maaş/kesim günüdür: "maaş yattı → bu ayın dönemi". Takvim ayında (1) ad = anahtar."""
+    start = start_day or cycle_start_day()
+    if start <= 1:
+        return month
+    y, m = map(int, month.split("-"))
+    y, m = (y - 1, 12) if m == 1 else (y, m - 1)
     return f"{y:04d}-{m:02d}"
 
 

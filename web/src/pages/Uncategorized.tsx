@@ -8,7 +8,7 @@ import Segmented from "../components/Segmented";
 import { useMeta } from "../components/hooks";
 import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
-import { cx, dayMonthTR, monthLabel, tl } from "../format";
+import { cx, dayMonthTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 
 // Kategorisizleri düzenle (sunucu app/uncategorized.py; mobil src/screens/Kategorisiz.tsx ile aynı akış).
@@ -172,7 +172,7 @@ export default function Uncategorized() {
           <div role="group" aria-label="Dönem" className="flex gap-1">
             <button aria-pressed={!all} onClick={() => setAll(false)}
               className={cx("rounded-full border px-3 py-1 text-sm", !all ? "border-blue-600 bg-blue-600 text-white" : "border-stone-300 dark:border-stone-700")}>
-              {monthLabel(ui.month)} dönemi</button>
+              {periodLabel(ui.month)} dönemi</button>
             <button aria-pressed={all} onClick={() => setAll(true)}
               className={cx("rounded-full border px-3 py-1 text-sm", all ? "border-blue-600 bg-blue-600 text-white" : "border-stone-300 dark:border-stone-700")}>
               Tüm zaman</button>
@@ -187,7 +187,7 @@ export default function Uncategorized() {
         <section className="card flex flex-col items-center gap-2 p-6 text-center">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"><Check size={22} aria-hidden /></span>
           <h2 className="font-semibold">Hepsi kategorili</h2>
-          <p className="text-sm text-stone-600 dark:text-stone-400">{all ? "Hiçbir dönemde kategorisiz işlem yok." : `${monthLabel(ui.month)} döneminde kategorisiz işlem yok.`}</p>
+          <p className="text-sm text-stone-600 dark:text-stone-400">{all ? "Hiçbir dönemde kategorisiz işlem yok." : `${periodLabel(ui.month)} döneminde kategorisiz işlem yok.`}</p>
           {!all && <button className="btn border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-700" onClick={() => setAll(true)}>Tüm zamana bak</button>}
         </section>
       )}

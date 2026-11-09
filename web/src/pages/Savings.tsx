@@ -8,7 +8,7 @@ import Jars from "../components/Jars";
 import { useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
-import { addMonths, cx, dateTR, monthLabel, parseAmount, tl } from "../format";
+import { addMonths, cx, dateTR, parseAmount, tl, periodLabel, periodNameMonth, periodKeyOfName } from "../format";
 import { useUI } from "../ui";
 
 interface Sub {
@@ -85,7 +85,7 @@ function GoalForm({ data, onClose }: { data: SavingsData; onClose: () => void })
           <label className="label" htmlFor="g-name">{kind === "category" ? "Kategori" : "İşyeri"}</label>
           <CategoryPicker id="g-name" value={name} onChange={setName} options={options}
             placeholder={kind === "category" ? "ör. Yemek Siparişi" : "ör. UBER EATS YEMEK"} />
-          {name && <p className="mt-1 text-xs text-stone-500">{monthLabel(data.reference_month)}: <b>{tl(baseline)}</b></p>}
+          {name && <p className="mt-1 text-xs text-stone-500">{periodLabel(data.reference_month)}: <b>{tl(baseline)}</b></p>}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -95,7 +95,7 @@ function GoalForm({ data, onClose }: { data: SavingsData; onClose: () => void })
           </div>
           <div>
             <label className="label" htmlFor="g-start">Başlangıç</label>
-            <input id="g-start" type="month" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
+            <input id="g-start" type="month" className="input" value={periodNameMonth(start)} onChange={(e) => setStart(periodKeyOfName(e.target.value))} />
           </div>
         </div>
         {name && t >= 0 && baseline > t && (
@@ -234,7 +234,7 @@ export default function Savings() {
                 <div className="min-w-0">
                   <div className="font-medium">{g.kind === "merchant" ? title(g.name) : g.name}</div>
                   <div className="text-xs text-stone-500">
-                    {tl(g.baseline)} → <b>{tl(g.target)}</b> · başlangıç {monthLabel(g.start_month, true)}{g.note && ` · ${g.note}`}
+                    {tl(g.baseline)} → <b>{tl(g.target)}</b> · başlangıç {periodLabel(g.start_month, true)}{g.note && ` · ${g.note}`}
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-1">
@@ -253,10 +253,10 @@ export default function Savings() {
                       m.status === "tuttu" && "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
                       m.status === "tutmadi" && "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
                       m.status === "devam" && "bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300")}>
-                    {m.status === "tuttu" ? "✓" : m.status === "tutmadi" ? "✗" : "…"} {monthLabel(m.month, true)} · {tl(m.spent)}
+                    {m.status === "tuttu" ? "✓" : m.status === "tutmadi" ? "✗" : "…"} {periodLabel(m.month, true)} · {tl(m.spent)}
                   </span>
                 ))}
-                {!g.months.length && <span className="text-xs text-stone-500">{monthLabel(g.start_month)} başlayınca takip edilecek</span>}
+                {!g.months.length && <span className="text-xs text-stone-500">{periodLabel(g.start_month)} başlayınca takip edilecek</span>}
               </div>
             </li>
           ))}

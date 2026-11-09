@@ -747,8 +747,7 @@ def _ozet(today: date) -> list[dict]:
         return []
     prev = finance.add_months(finance.current_period(today), -1)
     t = finance.summary(prev)["totals"]
-    y, mo = map(int, prev.split("-"))
-    return [item("ozet", f"ozet:{prev}", f"{AY[mo - 1]} {y} dönemi bitti",
+    return [item("ozet", f"ozet:{prev}", finance.period_title(prev, " dönemi bitti"),
                  f"Gelir {money.tl(t['income'], trim=True)} · Gider {money.tl(t['expense'], trim=True)} · "
                  f"Net {money.tl(t['net'], trim=True)}", R_OZET)]
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import { monthLabel, parseAmount, tl } from "../format";
+import { parseAmount, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 import Modal from "./Modal";
@@ -21,7 +21,7 @@ export default function RecurringMonthForm({ r, onClose }: { r: RecurringMonth; 
   const [amount, setAmount] = useState(String(r.amount));
   const n = parseAmount(amount);
   const confirm = useSave(() => api.confirmRecurring(r.rid, r.month, n), () => {
-    ui.toast(`${r.description} ${monthLabel(r.month)} için ${tl(n)} olarak onaylandı`);
+    ui.toast(`${r.description} ${periodLabel(r.month)} için ${tl(n)} olarak onaylandı`);
     onClose();
   });
   const plan = useSave((v: number | null) => fetch(`/api/recurring/${r.rid}/months/${r.month}`, {
@@ -31,7 +31,7 @@ export default function RecurringMonthForm({ r, onClose }: { r: RecurringMonth; 
   const valid = Number.isFinite(n) && n >= 0;
 
   return (
-    <Modal title={`${r.description} · ${monthLabel(r.month)}`} onClose={onClose} footer={
+    <Modal title={`${r.description} · ${periodLabel(r.month)}`} onClose={onClose} footer={
       <>
         {r.mode === "confirm"
           ? <button className="btn-ghost" onClick={() => skip.mutate(undefined)}>Bu ay yok</button>
