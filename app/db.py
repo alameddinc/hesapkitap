@@ -540,6 +540,8 @@ MIGRATIONS = [
     ("shopping_list", "receipt_qty", "REAL"),   # fiş satırının miktarı
     ("shopping_list", "store", "TEXT"),         # kişinin bağladığı mağaza ("Bu ürünü Migros'tan alacağım"; app/shopping.py)
     ("shopping_list", "brand", "TEXT"),         # seçilen marka ("Sütaş"); boşsa marka fark etmez
+    ("shopping_list", "brand_line", "TEXT"),    # adda yazılan ürün serisi ("Turist": "Çaykur Turist çay"); markayla gelir
+    ("shopping_list", "brand_auto", "INTEGER"),  # marka addan mı (1), kişi mi seçti / yok (0), henüz bakılmadı (NULL)
     ("salary_changes", "pct", "REAL"),          # "%15 zam" diye girildiyse yüzde (gösterim ve beklenen/gelen karşılaştırması)
     ("salary_changes", "pct_basis", "TEXT"),    # yüzde neye göre: brut | net
 ]

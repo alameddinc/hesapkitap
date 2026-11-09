@@ -229,6 +229,8 @@ def mult(qty: float, unit: str | None, key: str | None) -> float | None:
 
 def _out(r: dict, group: dict | None, names: dict[int, str], assumed: dict | None = None,
          own_product: dict | None = None, own_place: dict | None = None) -> dict:
+    from app import shop_brand
+
     unit = r.get("unit") or "adet"
     key = group["key"] if group else None
     m = mult(r["qty"], unit, key) if key else None
@@ -239,6 +241,9 @@ def _out(r: dict, group: dict | None, names: dict[int, str], assumed: dict | Non
             "added_by": r["added_by"], "added_by_name": names.get(r["added_by"]), "created_at": r["created_at"],
             "done_at": r["done_at"], "own_product": own_product, "own_place": own_place,
             "store": r.get("store"), "brand": r.get("brand"),
+            "brand_line": r.get("brand_line") if r.get("brand") else None,
+            "brand_auto": bool(r.get("brand") and r.get("brand_auto")),
+            "brand_label": shop_brand.label(r.get("brand"), r.get("brand_line")),
             "actual": ({"unit_price": r.get("actual_unit"), "line_total": r.get("actual_line"), "entry_id": r["entry_id"]}
                        if r.get("entry_id") else None)}
 
@@ -277,21 +282,23 @@ def offers_for(items: list[dict], limit: int = 5, hidden=None) -> dict[int, list
     """Satır → teklifler (ucuzdan): grubun teklifleri (price_sources.best_offers); kişinin ürününe bağlanan satırda
     gruptaki BAŞKA ürünlerin kendi fişi fiyatı yerine o ürünün son alımı ("Senin son alımın: ₺95 · Örnekbüfe").
 
-    brand seçili satır (shop_brand_size) yalnız o markanın tekliflerini alır (kendi fişlerin + Market Fiyatı; yoksa boş).
+    brand seçili satır (shop_brand_size) yalnız o markanın tekliflerini alır (kendi fişlerin + Market Fiyatı; yoksa boş);
+    addan okunan seri (brand_line, shop_brand_auto: "Turist") varsa yalnız adında o kelimeler geçen ürünler.
     store bağlı satır (shop_store_pin) yalnız o mağazanın teklifini alır (yoksa boş) ve kişinin mağaza süzgeci
     (hidden, app/shop_stores.py) ona uygulanmaz: açık seçim süzgeçten önce gelir. Diğer satırlarda hidden'daki mağazalar
     hiç görünmez."""
     from app import price_sources, product_groups
 
     want = [i for i in items if i["group"]]
-    calls: dict[tuple[str | None, bool], list[dict]] = {}
-    for it in want:  # (marka, mağazaya bağlı mı) başına tek toplu istek
-        calls.setdefault(((it.get("brand") or None), bool(it.get("store"))), []).append(it)
+    calls: dict[tuple[str | None, str | None, bool], list[dict]] = {}
+    for it in want:  # (marka, seri, mağazaya bağlı mı) başına tek toplu istek
+        b = it.get("brand") or None
+        calls.setdefault((b, (it.get("brand_line") or None) if b else None, bool(it.get("store"))), []).append(it)
     out: dict[int, list[dict]] = {}
-    for (brand, pinned_store), its in calls.items():
+    for (brand, line, pinned_store), its in calls.items():
         wide = pinned_store or any(i.get("own_product") for i in its)
         best = price_sources.best_offers([i["group"]["key"] for i in its], limit=50 if wide else limit, brand=brand,
-                                         hidden=None if pinned_store else hidden)
+                                         hidden=None if pinned_store else hidden, line=line)
         for it in its:
             key = it["group"]["key"]
             offs = best.get(key, [])
@@ -318,10 +325,14 @@ def list_items(with_best: bool = False, hidden=None) -> list[dict]:
     if stale:
         with db.connect() as c:
             c.executemany("UPDATE shopping_list SET group_key = ? WHERE id = ?", stale)
+    _auto_brands(rs, out)
     if with_best:
         from app import money, price_sources
 
         best = offers_for([i for i in out if not i["done"]], limit=1, hidden=hidden)
+        # markalı satır: "Marka fark etmez" olsaydı en ucuzu (ipucu: "Marka fark etmez: en ucuz ₺200 (Efor)")
+        free = offers_for([{**i, "brand": None, "brand_line": None, "store": None, "own_product": None}
+                           for i in out if not i["done"] and i.get("brand")], limit=1, hidden=hidden)
         for i in out:
             o = (best.get(i["id"]) or [None])[0]
             i["best"] = {k: o[k] for k in ("chain", "price", "unit_price_per", "per_unit", "source", "n", "date", "product")
@@ -335,7 +346,86 @@ def list_items(with_best: bool = False, hidden=None) -> list[dict]:
                     i["best"]["pinned"] = True
             if i.get("store") and not i["done"] and i["group"]:
                 i["store_missing"] = i["best"] is None
+            if i.get("brand") and not i["done"] and i["group"]:
+                i["brand_missing"] = i["best"] is None
+                i["any_brand"] = _any_brand((free.get(i["id"]) or [None])[0], i["mult"])
     return out
+
+
+def _auto_brands(rs: list[dict], out: list[dict]) -> None:
+    """Henüz bakılmamış satırlarda (brand_auto NULL: eski satır ya da grubu sonradan öğrenilen) addaki markayı yaz
+    (app/shop_brand.py detect). Geçici gruptaki satır sonraya kalır; kişinin ürününe bağlanan ya da markası seçili
+    satırda bakılmaz."""
+    from app import shop_brand
+
+    writes = []
+    for r, i in zip(rs, out):
+        if r.get("brand_auto") is not None or r["done"]:
+            continue
+        if r.get("brand") or i.get("own_product"):
+            writes.append((r.get("brand"), r.get("brand_line"), 0, r["id"]))
+            continue
+        g = i.get("group")
+        if not g or g.get("pending"):
+            continue
+        got = shop_brand.detect(r["text"], g)
+        writes.append((got["brand"], got["line"], 1, r["id"]) if got else (None, None, 0, r["id"]))
+        if got:
+            r.update(brand=got["brand"], brand_line=got["line"], brand_auto=1)
+            i.update(brand=got["brand"], brand_line=got["line"], brand_auto=True,
+                     brand_label=shop_brand.label(got["brand"], got["line"]))
+    if writes:
+        with db.connect() as c:
+            c.executemany("UPDATE shopping_list SET brand = ?, brand_line = ?, brand_auto = ? WHERE id = ? "
+                          "AND brand_auto IS NULL", writes)
+
+
+def _any_brand(o: dict | None, m: float | None = None) -> dict | None:
+    """"Marka fark etmez" olsaydı en ucuz teklif (markalı satırın ipucu): {chain, price, brand?, line_total?, …}."""
+    from app import money, price_sources
+
+    if not o:
+        return None
+    out = {"chain": price_sources.chain_name(o["chain"]), "price": o["price"],
+           "brand": price_sources._brand_label(o["brand"]) if o.get("brand") else None,
+           **{k: o[k] for k in ("unit_price_per", "per_unit") if k in o}}
+    if m is not None:
+        out["line_total"] = money.money(o["price"] * m)
+    return out
+
+
+def brand_search(q: str, limit: int = 30, hidden=None) -> list[dict] | None:
+    """Fiyatlar araması (GET /api/prices/groups?q) adda marka yazılınca ("çaykur turist çay 1 kg"; shop_brand_auto):
+    ürünün grubu (boy yazılmışsa o boy, değilse en yaygın boylar) o markanın ve serinin teklifleriyle — [{key, label
+    ("Çaykur Turist Çay · 1 kg"), category, subcategory, best [teklif], hidden_count, brand, brand_line, brand_label,
+    any_brand (marka fark etmez en ucuz) | null}]; markanın teklifi olmayan boy best boş gelir (any_brand varsa).
+    Adda marka yoksa ya da ürün tanınmıyorsa None (olağan arama). Ad öğrenme kuyruğuna girmez."""
+    from app import price_sources, product_groups, shop_brand
+
+    g = _resolve_known([q], learn=False)[0][0]
+    got = shop_brand.detect(q, g)
+    if not got:
+        return None
+    key = g["key"]
+    base = key.split("|", 1)[0]
+    keys = [key] if "|" in key else (common_sizes([base]).get(base) or [base])[:max(1, min(limit, 8))]
+    best = price_sources.best_offers(keys, brand=got["brand"], line=got["line"], hidden=hidden)
+    free = price_sources.best_offers(keys, limit=1, hidden=hidden)
+    labels = product_groups.labels(keys)
+    paths = product_groups.paths(keys)
+    bl = shop_brand.label(got["brand"], got["line"])
+    out = []
+    for k in keys:
+        offs = [{**o, "chain": price_sources.chain_name(o["chain"])} for o in best.get(k, [])]
+        f = _any_brand((free.get(k) or [None])[0])
+        if not offs and not f:
+            continue
+        out.append({"key": k, "label": f"{bl} {labels.get(k) or g['label']}", "category": (paths.get(k) or (None, None))[0],
+                    "subcategory": (paths.get(k) or (None, None))[1], "best": offs,
+                    "hidden_count": len(hidden.by_key.get(k, ())) if hidden is not None else 0,
+                    "brand": got["brand"], "brand_line": got["line"], "brand_label": bl, "any_brand": f})
+    out.sort(key=lambda r: not r["best"])  # fiyatlı boylar önce
+    return out[:limit]
 
 
 def _size_sort(k: str) -> tuple:
@@ -367,7 +457,10 @@ def sizes(rid: int, brand: str | None = None, hidden=None) -> list[dict] | None:
     g = _resolve([r["text"]])[0]
     if not g:
         return []
+    line = r["brand_line"] if brand is None or (r["brand"] and price_sources.brand_norm(brand) ==
+                                                price_sources.brand_norm(r["brand"])) else None
     brand = (brand if brand is not None else r["brand"]) or None
+    line = line if brand else None
     base = g["key"].split("|", 1)[0]
     fam = UNIT_FAMILY.get(r["unit"] or "adet")
     keys = common_sizes([base]).get(base, [])
@@ -388,7 +481,7 @@ def sizes(rid: int, brand: str | None = None, hidden=None) -> list[dict] | None:
     keys = sorted(keys, key=lambda k: (kids.index(k.split("|", 1)[0]) + 1 if k.split("|", 1)[0] in kids else 0,
                                        _size_sort(k)))
     labels = product_groups.labels(keys)
-    best = price_sources.best_offers(keys, limit=1, brand=brand, hidden=hidden)
+    best = price_sources.best_offers(keys, limit=1, brand=brand, hidden=hidden, line=line)
     name = g["label"].split(" · ")[0]
     out = []
     for k in keys:
@@ -594,6 +687,19 @@ def _row_out(r: dict) -> dict:
     return _rows_out([r])[0]
 
 
+def _detect_brand(text: str, g: dict | None, known: dict | None) -> tuple[str | None, str | None, int | None]:
+    """(brand, brand_line, brand_auto) yeni / adı değişen satır için (shop_brand_auto): addaki marka ve seri; kişinin
+    ürününe bağlanan satırda yok (0); grup henüz geçiciyse sonraya (NULL: list_items okurken bakar)."""
+    from app import shop_brand
+
+    if known:
+        return None, None, 0
+    if not g or g.get("pending"):
+        return None, None, None if g else 0
+    got = shop_brand.detect(text, g)
+    return (got["brand"], got["line"], 1) if got else (None, None, 0)
+
+
 def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None, unit: str | None = None) -> dict:
     t, q, u = split_amount(_clean_text(text), float(qty), unit)
     t, q = _clean_text(t), _clean_qty(q, u)
@@ -601,10 +707,13 @@ def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None
     with db.connect() as c:
         if c.execute("SELECT COUNT(*) FROM shopping_list").fetchone()[0] >= MAX_ITEMS:
             raise ValueError(f"Listede en fazla {MAX_ITEMS} satır olabilir")
-    g = _resolve([t])[0]
+    gs, known = _resolve_known([t])
+    g = gs[0]
+    b, line, auto = _detect_brand(t, g, known[0])
     with db.connect() as c:
-        rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, unit, added_by, pinned_key) VALUES (?, ?, ?, ?, ?, ?)",
-                        (t, pin or (g["key"] if g else None), q, u, uid, pin)).lastrowid
+        rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, unit, added_by, pinned_key, brand, brand_line, "
+                        "brand_auto) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (t, pin or (g["key"] if g else None), q, u, uid, pin, b, line, auto)).lastrowid
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
     from app import push
 
@@ -638,12 +747,13 @@ def _clean_brand(v) -> str | None:
 def update(rid: int, data: dict) -> dict | None:
     """text, qty, unit, done (işaretlenince done_at bugünün zamanı, kaldırılınca boş), group_key (boy seçimi; null kaldırır;
     metin değişince seçim de kalkar), store (shop_store_pin: "Migros" | null), brand (shop_brand_size: "Sütaş" | null;
-    metin değişince marka da kalkar, aynı istekte yeni marka verilmediyse). Değişen metinde miktar yazılıysa eklemedeki
+    metin değişince marka yeni addan okunur (shop_brand_auto; aynı istekte marka verilmediyse); kişinin verdiği
+    marka addaki seriyi düşürür ve brand_auto 0 olur — aynı marka yeniden gönderilirse seri kalır). Değişen metinde miktar yazılıysa eklemedeki
     gibi okunur (split_amount: "2,5 kg elma" → elma, 2,5 kg). Birim başka türe geçince (adet → kg) o türde olmayan boy
     seçimi kalkar."""
     sets: dict = {}
     with db.connect() as c:
-        cur = c.execute("SELECT qty, unit, text, pinned_key FROM shopping_list WHERE id = ?", (rid,)).fetchone()
+        cur = c.execute("SELECT qty, unit, text, pinned_key, brand FROM shopping_list WHERE id = ?", (rid,)).fetchone()
     if not cur:
         return None
     if data.get("text") is not None and _clean_text(data["text"]) != cur["text"]:
@@ -655,15 +765,23 @@ def update(rid: int, data: dict) -> dict | None:
             data = {**data, "text": t, "qty": q, "unit": u}
     if data.get("text") is not None:
         sets["text"] = _clean_text(data["text"])
-        g = _resolve([sets["text"]])[0]
+        gs, known = _resolve_known([sets["text"]])
+        g = gs[0]
         sets["group_key"] = g["key"] if g else None
         sets["pinned_key"] = None
         if sets["text"] != cur["text"]:  # aynı metin yeniden gönderildi (düzenle → kaydet): marka kalır
-            sets["brand"] = None
+            # yeni addaki marka (shop_brand_auto: "çaykur turist çay" → Çaykur Turist); yoksa marka fark etmez
+            sets["brand"], sets["brand_line"], sets["brand_auto"] = _detect_brand(sets["text"], g, known[0])
     if "store" in data:
         sets["store"] = _clean_store(data["store"])
     if "brand" in data:
-        sets["brand"] = _clean_brand(data["brand"])
+        from app import price_sources
+
+        b = _clean_brand(data["brand"])
+        old = sets["brand"] if "brand" in sets else cur["brand"]
+        if not (b and old and price_sources.brand_norm(b) == price_sources.brand_norm(old)):
+            # kişinin seçimi (marka fark etmez ya da başka marka): addaki seri düşer, ad yeniden okunmaz
+            sets["brand"], sets["brand_line"], sets["brand_auto"] = b, None, 0
     if "group_key" in data:
         sets["pinned_key"] = _clean_key(data["group_key"])
         if sets["pinned_key"]:
@@ -1063,8 +1181,11 @@ def _unpriced(it: dict) -> dict:
         hint = f"Ürüne boy ekle: “{t} 1 L” ya da “{t} 500 g”."
     elif reason == "store_no_price":
         hint = f"{it['store']}: bu ürünün fiyatı yok; mağaza seçimini kaldırabilir ya da değiştirebilirsin."
-    elif reason == "brand_no_price":
-        hint = f"{it['brand']} için fiyat yok; “Marka fark etmez” seçersen fiyat gelir."
+    elif reason == "brand_no_price":  # "Çaykur Turist 1 kg için fiyat yok" (seri ve boy da)
+        from app import product_groups
+
+        name = " ".join(x for x in (it.get("brand_label") or it["brand"], product_groups.size_label(g["key"])) if x)
+        hint = f"{name} için fiyat yok; “Marka fark etmez” seçersen fiyat gelir."
     return {"id": it["id"], "text": it["text"], "reason": reason, "hint": hint}
 
 
