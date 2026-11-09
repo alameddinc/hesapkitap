@@ -45,11 +45,15 @@ export const acikPencere = () => yigin.size > 0;
  *  dirty: kaydedilmemiş değişiklik var; her kapatma yolu (×, arka plan, Esc, geri) "Değişiklikler kaydedilmedi" sorar.
  *  onSave: o sorudaki "Kaydet" (verilmezse soru yalnız Kaydetmeden çık / Vazgeç'e iner — Kaydet yine formu kaydetmeyi dener).
  *  noBack: geri satırı çizilmez (onay pencereleri: kendi Vazgeç düğmeleri var). */
-export default function Modal({ title, onClose, children, footer, dirty = false, onSave, noBack = false }: {
+export default function Modal({ title, onClose, children, footer, dirty = false, onSave, noBack = false, hidden = false, back }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** (uyumluluk, 4120ce0 adım modu) üstte bu pencerenin bir adımı açık: elle gizle. Yığın bunu zaten kendisi yapar. */
+  hidden?: boolean;
+  /** (uyumluluk) adım penceresi: kendi geri satırı ("‹ <önceki>", onClick); verilirse yığının geri satırı yerine bu çizilir */
+  back?: { label: string; onClick: () => void };
   dirty?: boolean;
   onSave?: () => unknown;
   noBack?: boolean;
@@ -83,7 +87,7 @@ export default function Modal({ title, onClose, children, footer, dirty = false,
 
   const liste = sirali();
   const sira = liste.findIndex(([k]) => k === me);
-  const ustte = sira === -1 ? true : sira === liste.length - 1;
+  const ustte = !hidden && (sira === -1 ? true : sira === liste.length - 1);
   const alttaki = sira > 0 ? liste[sira - 1]![1] : null;
 
   useEffect(() => {
@@ -103,14 +107,21 @@ export default function Modal({ title, onClose, children, footer, dirty = false,
 
   // gövdeye taşınır: iç içe pencerede alttaki gizlenince üstteki de gizlenmesin (DOM'da onun içinde değil)
   return createPortal(
-    <div className={cx("fixed inset-0 z-50 flex items-end justify-center text-left text-base font-normal tracking-normal text-stone-900 normal-case sm:items-center dark:text-stone-100", !ustte && "hidden")}
+    // alttaki pencere görünmez ve dokunulmaz (visibility + inert): DOM'da kalır, yazılanlar ve kaydırma korunur
+    <div className="fixed inset-0 z-50 flex items-end justify-center text-left text-base font-normal tracking-normal text-stone-900 normal-case sm:items-center dark:text-stone-100"
+      style={ustte ? undefined : { visibility: "hidden", pointerEvents: "none" }} inert={!ustte || undefined}
       role="dialog" aria-modal="true" aria-label={title} aria-hidden={!ustte || undefined} data-modal-ustte={ustte ? "1" : "0"}>
       <div className="absolute inset-0 bg-black/40" role="presentation" onClick={() => void kapat()} /* Esc ile de kapanır */ />
       <div className="relative flex max-h-[calc(100dvh-var(--sat)-0.5rem)] w-full flex-col rounded-t-2xl bg-white shadow-xl sm:max-w-lg sm:rounded-2xl dark:bg-stone-900">
         <div className="border-b border-stone-200 px-4 py-2 dark:border-stone-800">
-          {alttaki && !noBack && (
-            <button className="-ml-2 flex min-h-11 items-center gap-0.5 rounded-lg px-2 text-sm font-medium text-blue-700 hover:bg-stone-100 dark:text-blue-400 dark:hover:bg-stone-800"
-              onClick={() => void kapat()} aria-label={`Geri: ${alttaki.title}`}>
+          {back ? (
+            <button type="button" className="-ml-2 flex min-h-11 items-center gap-0.5 rounded-lg px-2 text-sm font-medium text-blue-700 hover:bg-stone-100 dark:text-blue-400 dark:hover:bg-stone-800"
+              onClick={back.onClick} aria-label={`Geri: ${back.label}`} data-testid="pencere-geri">
+              <ChevronLeft size={18} aria-hidden /><span className="truncate">{back.label}</span>
+            </button>
+          ) : alttaki && !noBack && (
+            <button type="button" className="-ml-2 flex min-h-11 items-center gap-0.5 rounded-lg px-2 text-sm font-medium text-blue-700 hover:bg-stone-100 dark:text-blue-400 dark:hover:bg-stone-800"
+              onClick={() => void kapat()} aria-label={`Geri: ${alttaki.title}`} data-testid="sayfa-geri">
               <ChevronLeft size={18} aria-hidden /><span className="truncate">{alttaki.title}</span>
             </button>
           )}

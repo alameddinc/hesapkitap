@@ -540,6 +540,8 @@ MIGRATIONS = [
     ("shopping_list", "receipt_qty", "REAL"),   # fiş satırının miktarı
     ("shopping_list", "store", "TEXT"),         # kişinin bağladığı mağaza ("Bu ürünü Migros'tan alacağım"; app/shopping.py)
     ("shopping_list", "brand", "TEXT"),         # seçilen marka ("Sütaş"); boşsa marka fark etmez
+    ("shopping_list", "brand_line", "TEXT"),    # adda yazılan ürün serisi ("Turist": "Çaykur Turist çay"); markayla gelir
+    ("shopping_list", "brand_auto", "INTEGER"),  # marka addan mı (1), kişi mi seçti / yok (0), henüz bakılmadı (NULL)
     ("salary_changes", "pct", "REAL"),          # "%15 zam" diye girildiyse yüzde (gösterim ve beklenen/gelen karşılaştırması)
     ("salary_changes", "pct_basis", "TEXT"),    # yüzde neye göre: brut | net
 ]
@@ -1083,6 +1085,11 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
 
 MATCH_DAYS = 3        # otomatik eşleşmede tarih toleransı
 CANDIDATE_DAYS = 15   # elle eşleştirme adaylarında tarih toleransı
+# Harcama ekstreye geç düşebilir: provizyonda kalan (kesimden 1-2 gün önceki alışveriş o ekstreye girmez, bir sonrakine
+# devreder) ya da banka işlem tarihi yerine işleme (posting) tarihini yazar. Bu kadar gün SONRAKİ tek ve tutarı birebir
+# satır da kendiliğinden eşleşir; kesimden bu kadar gün önceki eşleşmemiş harcama sonraki ekstreye devretmiş sayılır
+# (Kartlar'da açık döneme girer, "ekstrede bulunamadı" sonraki ekstre gelince sorulur: app/reminders.py).
+POSTING_DAYS = 7
 
 
 def _days(a: str, b: str) -> int:
@@ -1206,7 +1213,8 @@ def card_aliases() -> dict[str, str]:
 
 def auto_link() -> int:
     """Kredi kartıyla ödenmiş, henüz eşleşmemiş elle girilen giderleri ekstre satırlarıyla eşleştir.
-    Kural: tutar birebir (±0,05), tarih ±MATCH_DAYS gün; birden fazla aday varsa en yakın tarih + isim benzerliği."""
+    Kural: tutar birebir (±0,05), tarih ±MATCH_DAYS gün; birden fazla aday varsa en yakın tarih + isim benzerliği.
+    Yoksa: harcamadan sonraki POSTING_DAYS gün içinde tutarı kuruşu kuruşuna tutan tek satır (provizyon / işleme tarihi)."""
     linked = 0
     with connect() as c:
         pending = rows(c.execute(
@@ -1219,13 +1227,20 @@ def auto_link() -> int:
             n = int(e.get("installments") or 1)
             target = e["amount"] / n  # taksitli: ekstreye ilk taksit yansır
             tol = max(0.05 if n == 1 else 0.02 * n, target * 0.10 if e.get("category") == JAR_BUY_CATEGORY else 0)
-            cands = [t for t in free if abs(t["amount"] - target) <= tol
-                     and (n == 1 or (t.get("installment_no") or 1) == 1)
-                     and _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS
-                     and (e["id"], f"t:{t['id']}") not in rejected]  # "farklı" denmiş / eşleşmesi geri alınmış
+            same = [t for t in free if abs(t["amount"] - target) <= tol
+                    and (n == 1 or (t.get("installment_no") or 1) == 1)
+                    and (e["id"], f"t:{t['id']}") not in rejected]  # "farklı" denmiş / eşleşmesi geri alınmış
+            last4 = e.get("card_last4")
+            cands = [t for t in same if _days(t["txn_date"], e["entry_date"]) <= MATCH_DAYS]
+            if not cands:
+                # geç düşen satır (provizyon / işleme tarihi): harcamadan SONRA, POSTING_DAYS içinde, tutarı birebir, kartı
+                # tutan TEK satır. Birden çoksa sorulur (app/sync.py muhtemel eşleşme) ya da elle eşleştirilir.
+                late = [t for t in same if money.eq(t["amount"], target) and t["txn_date"][:10] > e["entry_date"][:10]
+                        and _days(t["txn_date"], e["entry_date"]) <= POSTING_DAYS
+                        and (not last4 or last4 in (t["account"][-4:], (t["card"] or "")[-4:]))]
+                cands = late if len(late) == 1 else []
             if not cands:
                 continue
-            last4 = e.get("card_last4")
             best = min(cands, key=lambda t: (bool(last4) and last4 not in (t["account"][-4:], (t["card"] or "")[-4:]),
                                              _days(t["txn_date"], e["entry_date"]),
                                              -_name_score(t["description"], e["description"])))
@@ -4273,7 +4288,10 @@ def same_as_merchant(name: str | None, *merchants: str | None) -> bool:
         b = _letters(m)
         if not b:
             continue
-        if a == b or (len(a) >= 4 and a in b) or SequenceMatcher(None, a, b).ratio() >= 0.8:
+        if a == b or (len(a) >= 4 and a in b):
+            return True
+        sm = SequenceMatcher(None, a, b)  # hızlı üst sınırlar önce (aynı sonuç; fiş kalemi başına iki kez çağrılır)
+        if sm.real_quick_ratio() >= 0.8 and sm.quick_ratio() >= 0.8 and sm.ratio() >= 0.8:
             return True
         mw = set(re.sub(r"[^A-Z0-9]", " ", normalize(m or "")).split())
         if words and words <= mw:

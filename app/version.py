@@ -190,6 +190,12 @@ CAPABILITIES = (
                               # {id}/combos?chain&all_sizes → {keys, rows [{chain, brand|null, key, size_label, price,
                               # unit_price_per?, per_unit?, source, date?, n?, product?}], chains, brands, sizes, hidden,
                               # attribution[, selected {store, brand, key}]}; seçim tek PATCH {store, brand, group_key}
+    "shop_brand_auto",        # addaki marka (app/shop_brand.py): "çaykur turist çay 1 kg" → items[].brand "Çaykur",
+                              # brand_line "Turist" (adında bu kelimeler geçen ürünler), brand_label "Çaykur Turist",
+                              # brand_auto true; brand_missing (o marka + boyda fiyat yok), any_brand {chain, price,
+                              # brand?, line_total, unit_price_per?, per_unit?} | null (marka fark etmez olsaydı en
+                              # ucuzu); PATCH {brand: null} "Marka fark etmez" (bir daha addan okunmaz); /api/prices/
+                              # groups?q="çaykur çay" → satırlarda brand / brand_label / any_brand
     "shop_unit_sizes",        # kg / g / L / ml satırında da boy listesi: sizes yalnız o türün boyları + size_unit
                               # (L|kg|adet), varsayılan boy o türden (miktarla aynı boy önce); "kahve" gibi üst adda
                               # biçimlerin boyları (size_label "Türk Kahvesi · 100 g"); PATCH text'te miktar okunur
@@ -224,6 +230,14 @@ CAPABILITIES = (
                               # "Örnek Bank Vadesiz (döküm)"): Özet'te iki ve daha çok bekleyen belge tek "N belge
                               # bekleniyor" grubunda, her biri kendi satırı ve Yükle'siyle. Kesim günü son ekstrelerden
                               # öğrenilir (ay sonu kırpılmaz); atlanan ay varsa en son geçen kesim sorulur
+    "donation_payment",       # zekât ödemesi / bağış nasıl verildi: POST /api/zakat/people/{id}/payments ve POST
+                              # /api/donations gövdesinde payment nakit|havale|kredi_karti (+ account_id, card_last4) →
+                              # gider olarak da yazılır (Bağış & Sadaka; kredi kartı: "ekstre bekleniyor", ekstreyle
+                              # eşleşince tek sayım), havalede recipient (kime). Ödeme silinir/düzeltilirse açtığı gider
+                              # de. payment yoksa eski davranış (gider yok). GET /api/zakat unexpensed [{id, person_id,
+                              # person, amount, pay_date, year_start}]: ödenmiş ama gider olarak görünmeyen zekât → POST
+                              # /api/zakat/payments/{id}/expense {payment, account_id?, card_last4?, recipient?, pay_date?}
+                              # → {entry_id, created} ya da POST .../no-expense ("gerek yok", bir daha sorulmaz)
 )
 
 

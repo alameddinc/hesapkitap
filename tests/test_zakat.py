@@ -78,6 +78,7 @@ def test_acquired_date_suggest_and_safii(client, tmpdb, monkeypatch):
     from app import zakat as _z
 
     monkeypatch.setattr(_z, "_roll_years", lambda today: None)  # geçmiş bir yılı sınıyor: yeni yıla geçmesin
+    monkeypatch.setattr(_z, "_rolled_start", lambda start, today: start)  # okumada (bellekte) de ilerlemesin
     me = _person(client.get("/api/zakat").json(), "Ben")["id"]
     client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 20, "acquired": "2025-03-01"})
     client.post("/api/zakat/assets", json={"person_id": me, "kind": "CEYREK", "quantity": 40, "acquired": "2025-09-01"})
@@ -293,10 +294,15 @@ def test_new_zakat_year_starts_automatically(tmpdb):
     start = date(2025, 1, 10)
     zakat.update_person(pid, {"hawl_start": start.isoformat()})
     due = start + timedelta(days=zakat.LUNAR_YEAR_DAYS)
-    zakat.compute(today=due - timedelta(days=1))
-    assert next(p for p in zakat.people() if p["id"] == pid)["hawl_start"] == start.isoformat()  # henüz dolmadı
-    zakat.compute(today=due)
-    assert next(p for p in zakat.people() if p["id"] == pid)["hawl_start"] == due.isoformat()  # yeni yıl başladı
+    before = due - timedelta(days=1)
+    assert next(p for p in zakat.compute(today=before)["people"] if p["id"] == pid)["hawl"]["start"] == start.isoformat()  # henüz dolmadı
+    assert next(p for p in zakat.compute(today=due)["people"] if p["id"] == pid)["hawl"]["start"] == due.isoformat()  # yeni yıl başladı
+    # okuma kalıcı yazmaz; kalıcı ilerletme gece işinde (ya da bir yazma eyleminde)
+    with tmpdb.connect() as c:
+        assert c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()[0] == start.isoformat()
+    zakat.nightly(due)
+    with tmpdb.connect() as c:
+        assert c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()[0] == due.isoformat()
 
 
 def test_wipe_removes_zakat_data_keeps_own_assets(client, tmpdb):
@@ -407,3 +413,52 @@ def test_correcting_hawl_start_keeps_payments_in_their_year(client, tmpdb):
     client.patch(f"/api/zakat/people/{me}", json={"hawl_start": "2025-01-15"})  # tam bir yıl geri: kaydırma yok
     assert sorted(p["year_start"] for p in zakat.people() if p["id"] == me for p in p["payments"]) == starts
     assert zakat._chain_shift("2026-01-01", "2026-12-21") == 0 and zakat._chain_shift("2026-01-10", "2026-01-01") == -9
+
+
+def test_reading_zakat_never_changes_balances(client, tmpdb, monkeypatch):
+    """Denetim: sunucu açılışında Harcanabilir / Net durum ile Zekât sayfası açıldıktan sonraki aynı olmalı. Eskiden
+    Net durum'daki ödenmemiş zekât geçmiş fiyat ÖNBELLEĞİYLE hesaplanıyordu (önbellek geçmiş yıllar açılınca doluyordu)
+    ve GET /api/zakat dolan yılı kalıcı ilerletiyordu: sayfayı açmak bakiyeyi ~₺13 bin değiştiriyordu."""
+    from app import finance, system, zakat
+
+    cache: dict = {}  # geçmiş fiyat önbelleği: yalnız çevrimiçi istek doldurur (gerçekteki gibi)
+
+    def hp(day, offline=False):
+        if day.isoformat() in cache:
+            return cache[day.isoformat()]
+        if offline:
+            raise LookupError("önbellekte yok")
+        cache[day.isoformat()] = {"GRA": 5000.0, "USD": 40.0}
+        return cache[day.isoformat()]
+
+    monkeypatch.setattr(zakat, "historical_prices", hp)
+    monkeypatch.setattr(system, "put", lambda *a, **k: None)
+    me = _person(client.get("/api/zakat").json(), "Ben")["id"]
+    client.post("/api/zakat/assets", json={"person_id": me, "kind": "ALTIN_22", "quantity": 100, "acquired": "2023-06-01"})
+    with tmpdb.connect() as c:  # eski yıl başlangıcı (yıl dolmuş, ilerletilmemiş) — yazma yolunu atlayarak
+        c.execute("UPDATE zakat_people SET hawl_start = '2024-10-01' WHERE id = ?", (me,))
+    cache.clear()
+
+    def snap():
+        nw = client.get("/api/net-worth").json()
+        s = client.get("/api/summary").json()["totals"]
+        return nw["net"], nw["spendable"], nw["zakat_due"], s["expense"]
+
+    before = snap()
+    for url in ("/api/zakat", f"/api/zakat/people/{me}/history", "/api/zakat/holy", "/api/donations", "/api/holdings"):
+        assert client.get(url).status_code == 200
+    assert snap() == before                                   # okuma hiçbir rakamı değiştirmedi
+    with tmpdb.connect() as c:                                # ve yılı kalıcı ilerletmedi
+        assert c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (me,)).fetchone()[0] == "2024-10-01"
+    # sayfada görünen yıl yine de güncel (bellekte ilerletilmiş)
+    h = _person(client.get("/api/zakat").json(), "Ben")["hawl"]
+    assert h["start"] > "2025-09-01"
+    # açık eylem (gece işi) borcu hesaplar: o andan sonra yine okumalar değiştirmez
+    from app import jobs
+
+    jobs.run_zakat(date.today())
+    after_job = snap()
+    assert after_job[2] > 0 and after_job[0] == round(before[0] - after_job[2], 2)
+    client.get(f"/api/zakat/people/{me}/history")
+    client.get("/api/zakat")
+    assert snap() == after_job

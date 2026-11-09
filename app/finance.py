@@ -949,13 +949,19 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         acc = aliases.get(last4) if last4 else None
         acc = acc if acc in out else None
         c = out.get(acc or main)
-        if not c or not (c["start"] < e["entry_date"] <= today.isoformat()):
+        if not c or e["entry_date"] > today.isoformat():
+            continue
+        # son kesimden önceki ama o ekstreye girmemiş (eşleşmemiş) harcama: kesimden en çok POSTING_DAYS gün önceyse
+        # provizyonda kalıp bu ekstreye devretmiştir (carried); daha eskisi "ekstrede bulunamadı" diye sorulur
+        carried = e["entry_date"] <= c["start"]
+        if carried and e["entry_date"] <= (date.fromisoformat(c["start"]) - timedelta(days=db.POSTING_DAYS)).isoformat():
             continue
         amt = e["amount"] / max(1, int(e.get("installments") or 1))  # taksitliyse bu ekstreye ilk taksit düşer
         c["spent"] += amt
         c["entries"] += 1
         c["items"].append({"type": "harcama", "uid": f"m{e['id']}", "txn_id": None, "description": e["description"],
-                           "amount": _round(amt), "date": e["entry_date"], "entry_id": e["id"], "unassigned": not acc})
+                           "amount": _round(amt), "date": e["entry_date"], "entry_id": e["id"], "unassigned": not acc,
+                           **({"carried": True} if carried else {})})
         if not acc:
             c["unassigned"] += amt
     for c in out.values():

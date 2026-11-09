@@ -58,6 +58,17 @@ class PriceSource(Protocol):
     def search(self, query: str) -> dict[str, str]: ...
 
 
+def _line_tokens(line: str | None) -> tuple[str, ...]:
+    from app import product_groups
+
+    return tuple(product_groups.name_norm(line or "").split())
+
+
+def _has_line(words, tokens: tuple[str, ...]) -> bool:
+    """Ürün adının kelimeleri serinin her kelimesini taşıyor mu (yazılan kelime adın bir kelimesinin başı)."""
+    return all(any(w.startswith(t) for w in words) for t in tokens)
+
+
 # Marka süzgeci (shop_brand_size): kaynak sınıfında brand_aware = True ise fetch(keys, brand="Sütaş") yalnız o markanın
 # tekliflerini döner; marka bilmeyen kaynak (topluluk ortancası markasızdır) markalı istekte hiç sorulmaz.
 def brand_norm(brand: str | None) -> str:
@@ -123,6 +134,9 @@ def _match(q: str, key: str, label: str) -> bool:
     return s in key.split("|")[0] or s in product_groups.slug(label.split(" · ")[0])
 
 
+OWN_TTL = 300  # kendi fişlerinden teklif dizini en çok bu kadar saniye saklanır (yeni öğrenilen gruplar için)
+
+
 @register
 class OwnSource:
     """Kullanıcının kendi fişleri: zincir (bilinen zincirse görünen adı, değilse fişteki işyeri) başına son fiyat."""
@@ -133,14 +147,31 @@ class OwnSource:
     def __init__(self):
         self._index: dict[str, dict[str, Offer]] | None = None
         self._by_brand: dict[tuple[str, str], dict[str, Offer]] = {}
+        self._brand_rows: dict[tuple[str, str], list[tuple[str, Offer, frozenset]]] = {}  # seri süzgeci için adlar
         self._labels: dict[str, str] = {}
 
     def _build(self) -> dict[str, dict[str, Offer]]:
+        """Fişlerden teklif dizini. Defter dosyası değişmedikçe (db._cached damgası) ve en çok OWN_TTL saniye süreç
+        içinde saklanır: zincir × marka seçicisi, boylar ve liste her istekte bütün fiş kalemlerini yeniden okuyordu
+        (binlerce kalemde ~0,5 sn). Dönen teklifler paylaşılır: çağıran kopyalar (best_offers, combos)."""
         if self._index is not None:
             return self._index
+        import time
+
         from app import db
+
+        self._index, self._by_brand, self._brand_rows, self._labels = db._cached(
+            "own_offers", self._compute, db._viewer(), int(time.time() // OWN_TTL))
+        return self._index
+
+    @staticmethod
+    def _compute() -> tuple:
+        from app import db, product_groups
         from app.receipt_templates import chain_of
 
+        by_brand: dict[tuple[str, str], dict[str, Offer]] = {}
+        brand_rows: dict[tuple[str, str], list[tuple[str, Offer, frozenset]]] = {}
+        labels: dict[str, str] = {}
         items = [it for it in db.priced_items() if it["price_known"] == 1 and it["unit_price"] > 0]
         db.attach_groups(items)
         idx: dict[str, dict[str, Offer]] = {}
@@ -149,19 +180,34 @@ class OwnSource:
             if not g:
                 continue
             chain = chain_of(it["merchant"], it.get("legal_name")) or (it["merchant"] or "?").strip()
-            off: Offer = {"chain": chain, "price": it["unit_price"], "source": self.name, "date": it["purchased_at"]}
+            off: Offer = {"chain": chain, "price": it["unit_price"], "source": OwnSource.name, "date": it["purchased_at"]}
             if it.get("brand"):
                 off["brand"] = it["brand"]
-                self._by_brand.setdefault((g["key"], brand_norm(it["brand"])), {})[db._store_key(chain)] = off
+                by_brand.setdefault((g["key"], brand_norm(it["brand"])), {})[db._store_key(chain)] = off
+                words = frozenset(f"{product_groups.name_norm(it.get('name'))} "
+                                  f"{product_groups.name_norm(it.get('product'))}".split())
+                brand_rows.setdefault((g["key"], brand_norm(it["brand"])), []).append(
+                    (db._store_key(chain), off, words))
             idx.setdefault(g["key"], {})[db._store_key(chain)] = off
-            self._labels[g["key"]] = g["label"]
-        self._index = idx
-        return idx
+            labels[g["key"]] = g["label"]
+        return idx, by_brand, brand_rows, labels
 
-    def fetch(self, group_keys: list[str], brand: str | None = None) -> dict[str, list[Offer]]:
+    def fetch(self, group_keys: list[str], brand: str | None = None, line: str | None = None) -> dict[str, list[Offer]]:
+        """line (shop_brand_auto; yalnız markayla): fiş satırının adında serinin kelimeleri geçen alımlar ("Turist")."""
         idx = self._build()
         if brand:
             bn = brand_norm(brand)
+            lt = _line_tokens(line)
+            if lt:
+                out: dict[str, list[Offer]] = {}
+                for k in group_keys:
+                    last: dict[str, Offer] = {}
+                    for ck, off, words in self._brand_rows.get((k, bn), ()):
+                        if _has_line(words, lt):
+                            last[ck] = off
+                    if last:
+                        out[k] = list(last.values())
+                return out
             return {k: list(self._by_brand[(k, bn)].values()) for k in group_keys if (k, bn) in self._by_brand}
         return {k: list(idx[k].values()) for k in group_keys if k in idx}
 
@@ -287,17 +333,22 @@ class OfficialSource:
                     return p, by_prov[p]
         return (None, by_prov[""]) if "" in by_prov else None
 
-    def fetch(self, group_keys: list[str], brand: str | None = None, per_brand: bool = False) -> dict[str, list[Offer]]:
+    def fetch(self, group_keys: list[str], brand: str | None = None, per_brand: bool = False,
+              line: str | None = None) -> dict[str, list[Offer]]:
         """brand verilirse yalnız o markanın ürünleri (zincir başına o markanın en ucuzu). per_brand: zincir × marka
-        başına bir teklif (shop_combo_picker: "BİM · Torku 1 L", "BİM · Sütaş 1 L"); markasız ürünler tek satır."""
+        başına bir teklif (shop_combo_picker: "BİM · Torku 1 L", "BİM · Sütaş 1 L"); markasız ürünler tek satır.
+        line (shop_brand_auto; yalnız markayla): adında serinin kelimeleri geçen ürünler ("Çaykur Turist")."""
         from statistics import median
 
-        from app import price_import, provinces
+        from app import price_import, product_groups, provinces
 
         bn = brand_norm(brand) if brand else None
+        lt = _line_tokens(line) if bn else ()
         grouped: dict[tuple[str, str], dict[str, list]] = {}
         for r in self._rows(sorted({k for k in group_keys if k})):
             if bn and brand_norm(r["brand"]) != bn:
+                continue
+            if lt and not _has_line(product_groups.name_norm(r["title"]).split(), lt):
                 continue
             prov = provinces.province_of(r["region"]) if r["region"] else ""
             if prov is not None:
@@ -374,7 +425,7 @@ def _official_stamp() -> str:
     with system.connect() as c:
         r = c.execute("SELECT MAX(imported_at) FROM official_imports").fetchone() if c.execute(
             "SELECT 1 FROM sqlite_master WHERE name = 'official_imports'").fetchone() else None
-        return str((r or [None])[0])
+        return f"{system._path()}|{(r or [None])[0]}"  # başka veritabanı (testler, defter değişimi): başka önbellek
 
 
 def _official_keys() -> set[str]:
@@ -468,9 +519,11 @@ def merge(offers: list[Offer], limit: int = 5, today: date | None = None) -> lis
 
 
 def best_offers(group_keys: list[str], sources: list[PriceSource] | None = None, limit: int = 5,
-                today: date | None = None, brand: str | None = None, hidden=None) -> dict[str, list[Offer]]:
+                today: date | None = None, brand: str | None = None, hidden=None,
+                line: str | None = None) -> dict[str, list[Offer]]:
     """Grup → birleştirilmiş en iyi teklifler (merge). brand: yalnız o markanın teklifleri (marka bilen kaynaklar:
-    kendi fişlerin ve Market Fiyatı; topluluk ortancası markasızdır, sorulmaz). hidden (app/shop_stores.py Hidden):
+    kendi fişlerin ve Market Fiyatı; topluluk ortancası markasızdır, sorulmaz). line: markanın serisi ("Turist";
+    shop_brand_auto) — yalnız adında o kelimeler geçen ürünler. hidden (app/shop_stores.py Hidden):
     kişinin kapattığı mağazaların teklifleri birleştirmeden ÖNCE atılır (gizlenen zincirler hidden.seen'e yazılır)."""
     keys = sorted({k for k in group_keys if k})
     if not keys:
@@ -480,7 +533,7 @@ def best_offers(group_keys: list[str], sources: list[PriceSource] | None = None,
         if brand:
             if not getattr(src, "brand_aware", False):
                 continue
-            got = src.fetch(keys, brand=brand)
+            got = src.fetch(keys, brand=brand, line=line) if line else src.fetch(keys, brand=brand)
         else:
             got = src.fetch(keys)
         for k, offs in got.items():

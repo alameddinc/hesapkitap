@@ -48,7 +48,9 @@ export interface GroupBest {
   /** yetenek community_quality: aynı zincirde Market Fiyatı, fark >%10, indirimli satırların ortancası */
   official?: { price: number; date?: string | null; region?: string | null } | null; differs?: boolean; discounted_price?: number | null;
 }
-export interface PriceGroup { key: string; label: string; category?: string | null; best: GroupBest[]; /** shop_store_filter */ hidden_count?: number }
+export interface PriceGroup { key: string; label: string; category?: string | null; best: GroupBest[]; /** shop_store_filter */ hidden_count?: number;
+  /** shop_brand_auto: aramada marka yazıldı ("çaykur turist çay 1 kg"); best o markanın teklifleri */
+  brand?: string | null; brand_label?: string | null; any_brand?: { chain: string; price: number; brand?: string | null } | null }
 
 export const OFFICIAL_ATTRIBUTION = "Kaynak: Market Fiyatı (T.C. Sanayi ve Teknoloji Bakanlığı / TÜBİTAK BİLGEM)";
 /** "₺59,00/L" (birim fiyat yoksa boş) */

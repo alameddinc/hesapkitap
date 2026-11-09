@@ -3937,8 +3937,11 @@ class DonationIn(BaseModel):
     given_date: date | None = None
     recipient: str | None = Field(None, max_length=80)
     note: str | None = Field(None, max_length=200)
-    as_expense: bool = False   # nakitten/hesaptan verdim, dökümde görünmeyecek → gider olarak da yaz
+    as_expense: bool = False   # eski istemci: nakitten verdim → gider olarak da yaz (payment = nakit)
     account_id: int | None = None
+    # nasıl verdin: gider olarak da yazılır. kredi_karti → hemen "ekstre bekleniyor" gider, ekstre gelince eşleşir
+    payment: Literal["nakit", "havale", "kredi_karti"] | None = None
+    card_last4: str | None = Field(None, pattern=r"^\d{4}$")
 
 
 class DonationMarkIn(BaseModel):
@@ -3960,7 +3963,7 @@ def donations_add(body: DonationIn):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     try:
         return {"id": donations.add(body.kind, body.amount, (body.given_date or date.today()).isoformat(), body.recipient,
-                                    body.note, body.account_id, body.as_expense)}
+                                    body.note, body.account_id, body.as_expense, body.payment, body.card_last4)}
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
 
@@ -4037,6 +4040,21 @@ class ZakatPaymentIn(BaseModel):
     pay_date: date | None = None
     note: str | None = None
     year_start: date | None = None  # geçmiş bir yılın ödemesi
+    # nasıl ödendi (ops.): verilirse gider olarak da yazılır (Bağış & Sadaka). kredi_karti → hemen "ekstre bekleniyor"
+    # gider, ekstre gelince kart satırıyla eşleşir (tek sayım). Yoksa (eski istemci) yalnız zekât ödemesi.
+    payment: Literal["nakit", "havale", "kredi_karti"] | None = None
+    account_id: int | None = None   # havale/nakit: hangi hesaptan
+    card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # kredi kartı: hangisi (ops.)
+    recipient: str | None = Field(None, max_length=80)  # havale: kime (dökümdeki havaleyle eşleşir)
+
+
+class ZakatExpenseIn(BaseModel):
+    """Gider olarak görünmeyen zekât ödemesine gider aç: nasıl ödendi."""
+    payment: Literal["nakit", "havale", "kredi_karti"]
+    account_id: int | None = None
+    card_last4: str | None = Field(None, pattern=r"^\d{4}$")
+    recipient: str | None = Field(None, max_length=80)
+    pay_date: date | None = None  # verilmezse ödemenin tarihi
 
 
 class ZakatSettingsIn(BaseModel):
@@ -4109,6 +4127,7 @@ def zakat_settings(body: ZakatSettingsIn):
     for k in ("fitre_amount", "fitre_people"):
         if k in d:
             db.set_setting(f"zakat:{k}", str(d[k]) if d[k] else None)
+    zakat.refresh_self_due()  # mezhep / dahil edilenler ödenmemiş zekâtı değiştirir (Net durum)
     return {"ok": True}
 
 
@@ -4178,9 +4197,11 @@ def zakat_next_year(pid: int):
 
 @app.post("/api/zakat/people/{pid}/payments")
 def zakat_add_payment(pid: int, body: ZakatPaymentIn):
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba gider yazamaz
     try:
         return {"id": zakat.add_payment(pid, body.amount, (body.pay_date or date.today()).isoformat(), body.note,
-                                        body.year_start.isoformat() if body.year_start else None)}
+                                        body.year_start.isoformat() if body.year_start else None,
+                                        body.payment, body.account_id, body.card_last4, body.recipient)}
     except LookupError as e:
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
@@ -4208,6 +4229,27 @@ def zakat_update_payment(pay_id: int, body: ZakatPaymentPatch):
     if r is None:
         raise HTTPException(404, "Ödeme yok")
     return r
+
+
+@app.post("/api/zakat/payments/{pay_id}/expense")
+def zakat_payment_expense(pay_id: int, body: ZakatExpenseIn):
+    """Zekât ekranındaki "Ödediğin ₺X zekât gider olarak görünmüyor · Gider olarak ekle" (GET /api/zakat unexpensed)."""
+    _visible_or_404("account", body.account_id)
+    try:
+        return zakat.add_expense(pay_id, body.payment, body.account_id, body.card_last4, body.recipient,
+                                 body.pay_date.isoformat() if body.pay_date else None)
+    except LookupError as e:
+        raise HTTPException(404, errors.user_text(e, 404)) from e
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+@app.post("/api/zakat/payments/{pay_id}/no-expense")
+def zakat_payment_no_expense(pay_id: int):
+    """"Gerek yok": bu ödeme için gider bir daha sorulmaz."""
+    if not zakat.dismiss_expense(pay_id):
+        raise HTTPException(404, "Ödeme yok")
+    return {"ok": True}
 
 
 @app.delete("/api/zakat/payments/{pay_id}")
@@ -4541,7 +4583,9 @@ def price_groups(q: str | None = None, limit: int = 30):
     subcategory (alt kategori, app/product_taxonomy.py; bilinmiyorsa null);
     teklif: unit_price_per, per_unit ("L" | "kg" | "adet"; boysuz grupta yok). source "resmi" (sunucu açtıysa):
     attribution, region (kişinin ili ya da yedek il; BİM/A101/ŞOK "ulusal"), discount?, promotion?, change_7d?,
-    change_30d? (yüzde) — il meta.ui.region'dan (seçilmemişse İstanbul)."""
+    change_30d? (yüzde) — il meta.ui.region'dan (seçilmemişse İstanbul).
+    shop_brand_auto: aramada marka yazılıysa ("çaykur turist çay 1 kg") ve adı başka sonuç vermiyorsa ürünün grubu o
+    markanın (ve serinin) teklifleriyle: satırda brand, brand_line, brand_label, any_brand (marka fark etmez en ucuz)."""
     from app import price_sources
 
     q = (q or "").strip()[:60]
@@ -4553,6 +4597,12 @@ def price_groups(q: str | None = None, limit: int = 30):
             labels.setdefault(k, v)
     if q in labels:  # istemci grup anahtarını gönderdi ("ekmek", "sut|1l"): yalnız o grup
         labels = {q: labels[q]}
+    if q and "|" not in q and not labels:  # "çaykur turist çay 1 kg": adda marka (shop_brand_auto)
+        from app import shop_stores, shopping
+
+        got = shopping.brand_search(q, limit, shop_stores.current())
+        if got is not None:
+            return got
     own = next((s for s in srcs if isinstance(s, price_sources.OwnSource)), None)
     last = own.last_dates() if own else {}
     mine = sorted((k for k in labels if k in last), key=lambda k: (last[k], k), reverse=True)

@@ -7,7 +7,7 @@
 // "Mağazalara göre" listesi (GET /api/prices/offers), "Mağaza" seçimi (shop_store_pin; store null = otomatik).
 // Liste v5 (shop_combo_picker): bu üç bölümün yerine tek "Zincir ve marka" bölümü — seçim özeti + "Değiştir" → seçici
 // (components/ShopCombos.tsx; dokununca tek PATCH). Boy listesi aynen kalır.
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, Info, Minus, Plus, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 import { cx } from "../format";
@@ -20,7 +20,7 @@ import Modal from "./Modal";
 import { SuggestList, useSuggest, type Suggestion } from "./ShopAutofill";
 import { BrandChips, OffersList, useOffers, type BrandOpt } from "./ShopOffers";
 import { HiddenHint } from "./ShopStores";
-import { ComboSheet, useItemCombos } from "./ShopCombos";
+import { ComboSheet, PriceError, PriceLoading, retry, useItemCombos } from "./ShopCombos";
 import { comboSummary } from "../lib/combos";
 
 export interface EditableItem {
@@ -30,14 +30,22 @@ export interface EditableItem {
   assumed?: { key: string; label?: string; size_label?: string } | null;
   /** yetenek shop_store_pin / shop_brand_size: bağlı mağaza ve marka (null: otomatik / marka fark etmez) */
   store?: string | null; brand?: string | null;
+  /** shop_brand_auto: addan okunan marka + seri ("Çaykur Turist") */
+  brand_label?: string | null;
 }
 type SizeOpt = SizeRow;
 export interface ItemPatch { text?: string; qty?: number; unit?: Unit; group_key?: string | null; brand?: string | null; store?: string | null }
+
+/** seçim özetinde addan okunan seri de: "Çaykur Turist 1 kg" */
+function withLine<T extends { brand: string | null } | null | undefined>(sel: T, it: EditableItem): T {
+  return sel && sel.brand && it.brand_label && sel.brand === it.brand ? { ...sel, brand: it.brand_label } : sel;
+}
 
 export default function ShopItemDialog({ it, hint, autofill, money, busy, onClose, onSave, onRemove }: {
   it: EditableItem; hint?: UnpricedInfo; autofill: boolean; money: (n: number) => string; busy?: boolean;
   onClose: () => void; onSave: (p: ItemPatch) => void; onRemove: () => void;
 }) {
+  const qc = useQueryClient();
   const unit0: Unit = isUnit(it.unit) ? it.unit : "adet";
   const [text, setText] = useState(it.text);
   const [unit, setUnit] = useState<Unit>(unit0);
@@ -90,6 +98,8 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
   const choices = storeChoices(offers.data?.offers, store);
   const combos = useItemCombos(it.id, comboOn && known && !renamed);
 
+  const title = hint && hint.reason !== "pending" ? "Ürünü düzelt" : "Ürünü düzenle";
+  const sizesKey = brandOn ? ["shopping-sizes", it.id, brand ?? ""] : ["shopping-sizes", it.id];
   const step = (dir: 1 | -1) => setQtyS(fmtQty(stepQty(qty, unit, dir)));
   const pickUnit = (u: Unit) => { setQtyS(fmtQty(convertQty(okQty ? qty : Number.NaN, unit, u))); setUnit(u); };
   const pickSug = (s: Suggestion) => { setText(s.text); setPicked(s); setSugOpen(false); setActive(-1); };
@@ -115,7 +125,8 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
   };
 
   return (
-    <Modal title={hint && hint.reason !== "pending" ? "Ürünü düzelt" : "Ürünü düzenle"} onClose={onClose} footer={<>
+    <>
+    <Modal title={title} onClose={onClose} hidden={comboOpen} footer={<>
       <button type="button" className="btn-danger" onClick={onRemove} disabled={busy} data-testid="listeden-cikar"><Trash2 size={16} aria-hidden /> Listeden çıkar</button>
       <div className="flex-1" />
       <button type="button" className="btn-ghost hidden sm:inline-flex" onClick={onClose}>Vazgeç</button>
@@ -167,6 +178,13 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
           </div>
         )}
 
+        {!renamed && sizeUnitOk && known && !sizes.data && (sizes.isLoading || sizes.error) && (
+          <div data-testid="boy-durum">
+            <span className="label">Boy</span>
+            {sizes.isLoading ? <PriceLoading rows={3} testId="boy-yukleniyor" onRetry={() => retry(qc, sizesKey)} />
+              : <PriceError error={sizes.error as Error} onRetry={() => retry(qc, sizesKey)} />}
+          </div>
+        )}
         {sizeBox && (
           <div>
             <span className="label">Boy</span>
@@ -213,13 +231,12 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
             <button type="button" onClick={() => setComboOpen(true)} disabled={busy}
               className="flex w-full items-center gap-3 rounded-lg border border-stone-200 px-3 py-2.5 text-left hover:bg-stone-50 dark:border-stone-700 dark:hover:bg-stone-800/60">
               <span className="min-w-0 flex-1 font-medium break-words tabular-nums" data-testid="zincir-marka-ozet">
-                {combos.data ? comboSummary(combos.data.selected, combos.data.rows, money) : combos.isLoading ? "Yükleniyor…" : comboSummary({ store: it.store ?? null, brand: it.brand ?? null, key: cur }, [], money)}</span>
+                {combos.data ? comboSummary(withLine(combos.data.selected, it), combos.data.rows, money) : combos.isLoading ? "Fiyatlar getiriliyor…" : comboSummary({ store: it.store ?? null, brand: it.brand ?? null, key: cur }, [], money)}</span>
               <span className="inline-flex shrink-0 items-center gap-0.5 text-sm font-medium text-blue-700 dark:text-blue-300">Değiştir<ChevronRight size={16} aria-hidden /></span>
             </button>
             <HiddenHint count={combos.data?.hidden?.count} className="mt-1.5" />
           </div>
         )}
-        {comboOpen && <ComboSheet itemId={it.id} onClose={() => setComboOpen(false)} onDone={(p) => { if (p.group_key) setSize(p.group_key); }} />}
 
         {brandOn && offKey && <OffersList group={offKey} brand={brand} sizeLabel={offSize} money={money} />}
 
@@ -244,5 +261,8 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
         )}
       </div>
     </Modal>
+    {/* seçici bu pencerenin ADIMI: düzenle gizlenir (yazılanlar kalır), "← Ürünü düzenle" geri getirir */}
+    {comboOpen && <ComboSheet itemId={it.id} back={title} onClose={() => setComboOpen(false)} onDone={(p) => { if (p.group_key) setSize(p.group_key); }} />}
+    </>
   );
 }

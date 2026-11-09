@@ -5,10 +5,11 @@ import { Eye, EyeOff, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { dateTR, parseAmount, tlShown } from "../format";
 import { useUI } from "../ui";
-import AccountSelect from "./AccountSelect";
+import PaidWith, { PAID_WITH_START, paidWithBody, type PaidWithState } from "./PaidWith";
 import { useSave } from "./hooks";
 import { DONATION_KINDS } from "./MarkDonation";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import HolyDays from "./HolyDays";
 
 interface Item { id: number; kind: string; label: string; amount: number; given_date: string; recipient: string | null; note: string | null }
@@ -28,14 +29,17 @@ function AddForm({ onClose }: { onClose: () => void }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today());
   const [recipient, setRecipient] = useState("");
-  const [asExpense, setAsExpense] = useState(true);
-  const [account, setAccount] = useState<number | null>(null);
+  const [paid, setPaid] = useState<PaidWithState>(PAID_WITH_START);
   const save = useSave(() => call("POST", "/api/donations", { kind, amount: parseAmount(amount), given_date: date, recipient: recipient || null,
-    as_expense: asExpense, account_id: asExpense ? account : null }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
+    ...paidWithBody(paid) }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
+  const kaydet = () => { if (parseAmount(amount) > 0 && !save.isPending) save.mutate(undefined, { onError: (e) => ui.fail(e) }); };
+  // kaydedilmemiş değişiklik (UX denetimi 09.11): kapatırken sorulur
+  const dirty = amount !== "" || recipient !== "" || kind !== "sadaka" || JSON.stringify(paid) !== JSON.stringify(PAID_WITH_START);
   return (
-    <Modal title="Sadaka / bağış ekle" onClose={onClose} footer={
-      <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
+    <Modal title="Sadaka / bağış ekle" onClose={onClose} dirty={dirty && !save.isPending} onSave={kaydet} footer={<>
+      <button className="btn-ghost" onClick={() => void kirliyseSor(dirty && !save.isPending, onClose, kaydet)}>Vazgeç</button>
+      <button className="btn-primary flex-1 justify-center" disabled={!(parseAmount(amount) > 0) || save.isPending}
+        onClick={kaydet}>Kaydet</button></>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -59,13 +63,7 @@ function AddForm({ onClose }: { onClose: () => void }) {
             <input id="d-to" className="input" placeholder="kişi ya da kurum" value={recipient} onChange={(e) => setRecipient(e.target.value)} />
           </div>
         </div>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input type="checkbox" className="mt-1" checked={asExpense} onChange={(e) => setAsExpense(e.target.checked)} />
-          <span>Nakit verdim, gider olarak da yaz
-            <span className="block text-xs text-stone-500">Havale/kartla verdiysen işaretleme: döküm gelince o hareketi "sadaka" diye işaretlersin, iki kez sayılmaz.</span>
-          </span>
-        </label>
-        {asExpense && <AccountSelect id="d-acc" label="Hangi hesaptan / cüzdandan (ops.)" value={account} onChange={setAccount} />}
+        <PaidWith id="d-paid" value={paid} onChange={setPaid} noRecipient />
       </div>
     </Modal>
   );
@@ -82,7 +80,7 @@ export default function Sadaka() {
   const del = useSave((id: number) => call("DELETE", `/api/donations/${id}`));
   const d = q.data;
   const m = (x: number) => (show ? tlShown(x) : MASK); // bu sayfanın gözü genel gizlemeden bağımsız
-  if (!d) return null;
+  if (!d) return <SorguDurumu q={q} etiket="Sadaka ve bağışlar yükleniyor"><SatirIskelet n={3} /></SorguDurumu>;
 
   return (
     <div className="space-y-4">

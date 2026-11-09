@@ -258,7 +258,8 @@ function WhereToBuy({ q, onOpen, canOpen }: {
   const r = useQuery({
     queryKey: ["price-groups-search", q], retry: false, staleTime: 60_000,
     queryFn: () => send<PriceGroup[] | { groups: PriceGroup[] }>(`/api/prices/groups?q=${encodeURIComponent(q)}&limit=3`),
-    select: (d) => (Array.isArray(d) ? d : d.groups ?? []).filter((g) => g.best.length).slice(0, 3),
+    // aramada marka (shop_brand_auto): markanın fiyatı yoksa kart yine görünür ("… için fiyat yok · Marka fark etmez")
+    select: (d) => (Array.isArray(d) ? d : d.groups ?? []).filter((g) => g.best.length || (g.brand_label && g.any_brand)).slice(0, 3),
   });
   if (!r.data) return <SorguDurumu q={r} kompakt etiket="Nereden alınır aranıyor" />;
   if (!r.data.length) return null;
@@ -274,6 +275,11 @@ function WhereToBuy({ q, onOpen, canOpen }: {
           return (
             <div key={g.key} className="rounded-lg border border-stone-200 dark:border-stone-700" data-testid="nereden-grup">
               <div className="border-b border-stone-100 px-3 py-2 text-sm font-semibold dark:border-stone-800">{g.label}</div>
+              {g.brand_label && g.any_brand && (!best.length || g.any_brand.price < best[0]!.price - 0.005) && (
+                <p className={cx("px-3 py-1.5 text-xs break-words", best.length ? "text-stone-500 dark:text-stone-400" : "text-amber-800 dark:text-amber-300")} data-testid="nereden-marka">
+                  {best.length ? "" : `${[g.brand_label, g.label.split(" · ")[1]].filter(Boolean).join(" ")} için fiyat yok · `}Marka fark etmez: en ucuz {maskText(chainName(g.any_brand.chain))} {tl(g.any_brand.price)}{g.any_brand.brand ? ` (${g.any_brand.brand})` : ""}
+                </p>
+              )}
               <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
                 {best.map((b, i) => {
                   const cheap = i === 0 && best.length > 1;
