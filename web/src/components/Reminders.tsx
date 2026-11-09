@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { METIN, TERIM } from "../lib/terimler";
-import { BellOff, Check, Clock, CreditCard, FileText, GitMerge, HandCoins, Inbox, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
+import { BellOff, Check, Clock, Copy, CreditCard, FileText, GitMerge, HandCoins, Inbox, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
 import { ask } from "../lib/ask";
 import { useEffect, useRef, useState } from "react";
 import { api, errStatus, movedCount } from "../api";
@@ -10,12 +10,13 @@ import { isViewer, useBook, useOpenRow, useSave } from "./hooks";
 import IntegrityDialog, { type IntegrityDetail } from "./Integrity";
 import { bodyOf, call } from "../lib/apiError";
 import { PairCards } from "./MatchInfo";
+import { DUP_TEXT, useDupActions } from "./RecurringDupes";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
-  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi" | "dogruluk";
+  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi" | "dogruluk" | "sabit_tekrar";
   title: string; text: string; cta: string; route: Route | "gelen";
-  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm" | "integrity";
+  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm" | "integrity" | "recurring_merge";
   // S6: belge_onay (Gelen kutusu'nda bekleyen belge), belge_dogrulanamadi (yüklenen döküm/ekstre kontrol bekliyor)
   inbox_id?: number; document_id?: number;
   /** sunucu 8a38d60: onay düğmesinin adı (sözlük: "Rakamlar doğru"); cta: ana düğme ("Bak", "Yükle"…) */
@@ -34,6 +35,8 @@ export interface Reminder {
   account_id?: number; into?: number; into_name?: string;
   // borc_odeme: "Bu havale borçtan mı?" — evet: POST /api/debts/{debt_id}/pay {pay}
   debt_id?: number; pay?: { amount: number; paid_at: string; entry_id: number };
+  // sabit_tekrar: "İki sabit kalem aynı olabilir" — Birleştir: POST /api/recurring/duplicates/merge {keep, drop}
+  keep_id?: number; drop_id?: number; keep_name?: string; drop_name?: string; keep_linked?: number;
 }
 
 const post = (id: string, what: "snooze" | "dismiss", body?: object) =>
@@ -57,7 +60,7 @@ const TAG = {
 
 function Badge({ r }: { r: Reminder }) {
   const bank = r.bank ?? r.pair?.other.account ?? "";
-  const Ic = r.kind === "esles" ? Link2 : r.kind === "hesap" ? GitMerge : r.kind === "dokum" || r.action === "document_confirm" ? Landmark
+  const Ic = r.kind === "esles" ? Link2 : r.kind === "hesap" ? GitMerge : r.kind === "sabit_tekrar" ? Copy : r.kind === "dokum" || r.action === "document_confirm" ? Landmark
     : r.kind === "belge_onay" ? Inbox : r.kind === "odeme" ? Clock
     : r.kind === "borc_odeme" ? HandCoins : CreditCard;
   return (
@@ -69,7 +72,7 @@ function Badge({ r }: { r: Reminder }) {
         </> : <Ic size={15} className="opacity-80" />}
       </span>
       <span className="text-[10px] leading-none font-semibold tracking-wider tabular-nums opacity-80">{r.last4 ? `••${r.last4}` : r.kind === "esles" ? (r.source === "ekstre" ? "Ekstre" : "Döküm")
-        : r.kind === "kart_eslesmedi" ? "Kart" : r.kind === "borc_odeme" ? "Borç" : r.kind === "belge_onay" ? "Gelen"
+        : r.kind === "kart_eslesmedi" ? "Kart" : r.kind === "borc_odeme" ? "Borç" : r.kind === "sabit_tekrar" ? "Sabit" : r.kind === "belge_onay" ? "Gelen"
         : r.action === "statement_confirm" ? "Ekstre" : r.action === "document_confirm" ? "Döküm" : "Hesap"}</span>
     </span>
   );
@@ -277,6 +280,32 @@ function DebtQuestion({ r }: { r: Reminder }) {
   );
 }
 
+/** "İki sabit kalem aynı olabilir": Birleştir (geri alınabilir) / Ayrı kalsın (bir daha sorulmaz) / Planlama'ya bak. */
+function DupQuestion({ r }: { r: Reminder }) {
+  const ui = useUI();
+  const fail = useAnswerError();
+  const a = useDupActions();
+  const ok = r.keep_id != null && r.drop_id != null;
+  return (
+    <li className="px-2 py-3 sm:px-3">
+      <div className="flex items-start gap-3">
+        <Badge r={r} />
+        <div className="min-w-0 flex-1">
+          <Head r={r} />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button className="btn-primary px-3" disabled={a.busy || !ok}
+              onClick={() => a.merge(r.keep_id!, r.drop_id!, r.keep_name ?? "", r.drop_name ?? "", fail)}><GitMerge size={14} />{r.cta || DUP_TEXT.merge}</button>
+            <button className="btn-ghost border border-stone-200 px-3 dark:border-stone-700" disabled={a.busy || !ok}
+              onClick={() => a.separate(r.drop_id!, r.keep_id!, fail)}>{DUP_TEXT.separate}</button>
+            <button className="text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={() => ui.go("plan")}>Planlama'ya bak</button>
+          </div>
+        </div>
+        <Menu r={r} onDone={ui.toast} />
+      </div>
+    </li>
+  );
+}
+
 /** Özet'te "Yapılacaklar": kesilen ekstre, ayı kapanan hesap dökümü, yaklaşan son ödeme. Boşsa hiç görünmez. */
 const TERIM_OK = "Rakamlar doğru"; // eski sunucu confirm_label vermezse
 
@@ -353,6 +382,7 @@ export default function Reminders() {
         {shown.map((r) => r.kind === "esles" || r.kind === "hesap" ? <Question key={r.id} r={r} a={answers} />
           : r.kind === "kart_eslesmedi" ? <CardUnmatched key={r.id} r={r} />
           : r.kind === "borc_odeme" ? <DebtQuestion key={r.id} r={r} />
+          : r.kind === "sabit_tekrar" ? <DupQuestion key={r.id} r={r} />
           : r.kind === "belge_dogrulanamadi" ? <DocCheck key={r.id} r={r} /> : (
           <li key={r.id} className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3">
             <Badge r={r} />

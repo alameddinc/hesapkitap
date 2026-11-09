@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, Calculator, ChevronDown, Coins, Plus, Repeat } from "lucide-react";
 import Simulator from "../components/Simulator";
 import RecurringSuggestions from "../components/RecurringSuggestions";
+import RecurringDupBanner from "../components/RecurringDupes";
 import Modal from "../components/Modal";
 import { LockBadge, LockCard, PlanGate, useLock } from "../components/Plan";
 import { useState } from "react";
@@ -188,6 +189,7 @@ export default function Planning() {
       {p && (
         <section className="card p-3 sm:p-4">
           <h2 className="mb-2 font-semibold">Sabit kalemler</h2>
+          <RecurringDupBanner />
           {!p.recurring.length && (
             <p className="text-sm text-stone-500">Henüz yok. Maaşını ve kiranı ekle; her ay planlamaya otomatik girer.</p>
           )}

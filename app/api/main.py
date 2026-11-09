@@ -3607,7 +3607,7 @@ def onboarding_dismiss():
 # ---------------------------------------------------------------- hatırlatmalar (Yapılacaklar; ileride push)
 
 REMINDER_ID = (r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|"
-               r"(hesap|borc):\d{1,12}:\d{1,12}|kart:\d{1,12}|dogruluk:[0-9a-f]{10}|"
+               r"(hesap|borc|sabit):\d{1,12}:\d{1,12}|kart:\d{1,12}|dogruluk:[0-9a-f]{10}|"
                r"(gelen|dokum_kontrol|ekstre_kontrol):\d{1,12})$")
 
 
@@ -5478,6 +5478,53 @@ def accept_recurring_suggestion(body: SuggestionAccept):
 @app.post("/api/recurring/suggestions/dismiss")
 def dismiss_recurring_suggestion(body: SuggestionAccept):
     finance.dismiss_recurring_suggestion(body.key)
+    return {"ok": True}
+
+
+# Aynı olabilecek iki sabit kalem (app/recurring_dupes.py): yalnız öneri; birleştirme kullanıcının onayıyla
+@app.get("/api/recurring/duplicates")
+def recurring_duplicates():
+    from app import recurring_dupes
+
+    return recurring_dupes.find()
+
+
+class DuplicateMergeIn(BaseModel):
+    keep: int  # kalacak (ödemelere bağlı olan)
+    drop: int  # silinecek
+
+
+@app.post("/api/recurring/duplicates/merge")
+def merge_recurring_duplicates(body: DuplicateMergeIn):
+    """Öneriyi uygula: drop'un bağlı kayıtları ve aya özel tutarları keep'e geçer, drop silinir. Yalnız şu an önerilen
+    çift birleşir (409). Geri alınabilir: undo_id → POST /api/imports/{id}/undo."""
+    from app import recurring_dupes, undo
+
+    if not any(p["keep"]["id"] == body.keep and p["drop"]["id"] == body.drop for p in recurring_dupes.find()):
+        raise HTTPException(409, "Bu öneri artık geçerli değil")
+    try:
+        with undo.batch(f"Sabit kalem birleştirme: #{body.drop} → #{body.keep}") as b:
+            res = recurring_dupes.merge(body.keep, body.drop)
+            b["summary"] = res
+    except recurring_dupes.DupError as e:
+        raise HTTPException(409, str(e)) from e
+    return {**res, "undo_id": b["id"]}
+
+
+class DuplicateSeparateIn(BaseModel):
+    a: int
+    b: int
+
+
+@app.post("/api/recurring/duplicates/separate")
+def separate_recurring_duplicates(body: DuplicateSeparateIn):
+    """"Ayrı kalsın": bu iki sabit kalem bir daha aynı diye önerilmez."""
+    from app import recurring_dupes
+
+    ids = {r["id"] for r in db.list_recurring()}
+    if body.a not in ids or body.b not in ids or body.a == body.b:
+        raise HTTPException(404, "Sabit kalem bulunamadı")
+    recurring_dupes.keep_separate(body.a, body.b)
     return {"ok": True}
 
 

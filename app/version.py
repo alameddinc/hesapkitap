@@ -204,6 +204,12 @@ CAPABILITIES = (
                               # pending_expense, recorded_income, pending_income}} | null (geçmiş dönem) +
                               # definitions.expected ((i) metni). = Planlama'nın o ayki "kesin" satırı (finance.expected);
                               # totals/by_category/budgets/trend'e hiçbir şey eklemez
+    "recurring_duplicates",   # aynı olabilecek iki sabit kalem (yalnız öneri): GET /api/recurring/duplicates → [{id
+                              # "sabit:<drop>:<keep>", reason bagli_degil|ayni_odeme, title, text, kind, months, keep {id,
+                              # description, category, amount, linked}, drop {...}}]; POST .../merge {keep, drop} → {kept,
+                              # removed, moved, unlinked, undo_id} (409 öneri yok; geri al POST /api/imports/{id}/undo);
+                              # POST .../separate {a, b} ("Ayrı kalsın", bir daha önerilmez); /api/reminders kind
+                              # "sabit_tekrar" (action recurring_merge, keep_id, drop_id, keep_name, drop_name, amount)
 )
 
 

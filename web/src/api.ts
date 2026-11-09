@@ -554,6 +554,13 @@ export interface BankDocument {
 export { ApiError };
 export const errStatus = (e: unknown) => (e instanceof ApiError ? e.status : 0);
 
+/** GET /api/recurring/duplicates: "İki sabit kalem aynı olabilir" (title/text sunucudan; web ve mobil aynı metin). */
+export interface RecurringDupSide { id: number; description: string; category: string | null; amount: number; linked: number }
+export interface RecurringDup {
+  id: string; reason: "bagli_degil" | "ayni_odeme"; title: string; text: string; kind: "gelir" | "gider"; months: string[];
+  keep: RecurringDupSide; drop: RecurringDupSide;
+}
+
 function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   return call<T>(method, url, body);
 }
@@ -616,6 +623,11 @@ export const api = {
   confirmRecurring: (id: number, month: string, amount?: number) =>
     req("POST", `/api/recurring/${id}/confirm`, { month, amount }),
   skipRecurring: (id: number, month: string) => req("POST", `/api/recurring/${id}/skip`, { month }),
+  /** aynı olabilecek iki sabit kalem (yetenek recurring_duplicates): yalnız öneri, birleştirme onayla */
+  recurringDuplicates: () => req<RecurringDup[]>("GET", "/api/recurring/duplicates"),
+  mergeRecurringDup: (keep: number, drop: number) =>
+    req<{ ok: boolean; kept: number; removed: number; moved: number; undo_id: string | null }>("POST", "/api/recurring/duplicates/merge", { keep, drop }),
+  separateRecurringDup: (a: number, b: number) => req<{ ok: boolean }>("POST", "/api/recurring/duplicates/separate", { a, b }),
 
   payables: () => req<Payable[]>("GET", "/api/payables"),
   /** days: başlık toplamı penceresi (totals.window: vadesi N gün içinde ya da geçmiş) — web ve mobil aynı tanım */

@@ -3,7 +3,7 @@ yaklaşan son ödeme. Özet'teki "Yapılacaklar" kartı (mobil + web) ve ileride
 
 Her hatırlatmanın kimliği kararlıdır ve döneme bağlıdır: "ekstre:<kart no>:<YYYY-MM>", "dokum:<hesap id>:<YYYY-MM>",
 "odeme:<kart no>:<YYYY-MM-DD>". Eşitleme soruları (app/sync.py) kayda bağlıdır: "esles:<kayıt id>:<e|t><id>",
-"hesap:<hesap id>:<hesap id>"; cevaplanınca kendiliğinden düşer. Kapatma (dismiss) ve erteleme (snooze) bu kimlikle saklanır; sonraki dönemin
+"hesap:<hesap id>:<hesap id>", aynı olabilecek sabit kalemler "sabit:<silinecek>:<kalacak>"; cevaplanınca kendiliğinden düşer. Kapatma (dismiss) ve erteleme (snooze) bu kimlikle saklanır; sonraki dönemin
 hatırlatması yeni kimlikle yeniden çıkar. Durum kişiye özeldir (ortak defterde üyenin kapattığı sahibinkini kapatmaz).
 
 Dönem ve gün hesapları Europe/Istanbul saatine göre yapılır.
@@ -357,6 +357,24 @@ def _dogruluk() -> list[dict]:
     return [t] if t else []
 
 
+def _sabit_tekrar(now: date) -> list[dict]:
+    """"İki sabit kalem aynı olabilir" (app/recurring_dupes.py): sabit kalemleri değiştirebilene (sahip, tam yetkili
+    üye), Planlama açıksa. Kimlik: sabit:<silinecek>:<kalacak>; birleşince ya da "Ayrı kalsın" denince düşer."""
+    from app import book, recurring_dupes
+
+    m = book.member()
+    if (m and book.role(m) != "full") or _page_hidden("plan"):
+        return []
+    out = []
+    for p in recurring_dupes.find(now):
+        out.append({"id": p["id"], "kind": "sabit_tekrar", "severity": "warn", "title": p["title"], "text": p["text"],
+                    "cta": "Birleştir", "route": "plan", "action": "recurring_merge", "due": now.isoformat(),
+                    "keep_id": p["keep"]["id"], "drop_id": p["drop"]["id"], "keep_name": p["keep"]["description"],
+                    "drop_name": p["drop"]["description"], "amount": p["keep"]["amount"], "reason": p["reason"],
+                    "keep_linked": p["keep"]["linked"]})
+    return out
+
+
 def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
     """Bugün gösterilecek hatırlatmalar (önce acil olanlar)."""
     now = now or today()
@@ -369,6 +387,12 @@ def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
     if not _page_hidden("ekstreler"):
         items += _odeme(now)
     items += _esitleme(upload)
+    try:
+        items += _sabit_tekrar(now)
+    except Exception:  # noqa: BLE001 - öneri hesabı Yapılacaklar'ı bozmasın
+        import logging
+
+        logging.getLogger(__name__).exception("sabit kalem tekrarı hesaplanamadı")
     items += _dogruluk()
     items += _belge(upload)
     st = _state()

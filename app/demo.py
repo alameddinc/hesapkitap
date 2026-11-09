@@ -35,6 +35,10 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
     for rid, desc, amt, kind, cat, day in ((maas, "Maaş", 200000, "gelir", "Maaş", 1), (kira, "Kira", 22000, "gider", "Kira & Aidat", 5)):
         db.create_entry({"entry_date": f"2026-10-{day:02d}", "description": desc, "amount": amt, "kind": kind,
                          "category": cat, "recurring_id": rid, "payment": "havale" if kind == "gider" else None})
+    # aynı kiranın kategorisiz ikinci kaydı: hiçbir ödemeye bağlanmaz → Yapılacaklar / Planlama "İki sabit kalem aynı
+    # olabilir" önerisi (app/recurring_dupes.py; Birleştir ya da Ayrı kalsın)
+    db.create_recurring({"description": "Ev kirası", "amount": 22000, "kind": "gider", "day_of_month": 5,
+                         "start_month": "2026-03"})
     db.create_recurring({"description": "Spor salonu", "amount": 1500, "kind": "gider", "category": "Sağlık",
                          "day_of_month": 10, "start_month": "2026-01"})
     db.create_entry({"entry_date": "2026-10-08", "description": "Diş hekimi", "amount": 2400, "kind": "gider",
