@@ -23,10 +23,12 @@ export function DonemSonuKarti({ summary }: { summary: Summary }) {
   const meta = useMeta().data;
   const book = useBook().data;
   const e = summary.expected;
+  // Harcanabilir (bugün) eksi, Dönem sonu artıysa ikisinin ilişkisi tek cümle (NetWorth ile aynı önbellek); hook erken
+  // dönüşten önce (kural: hook'lar koşulsuz)
+  const nw = useQuery({ queryKey: ["net-worth"], queryFn: () => call<{ spendable?: number }>("GET", "/api/net-worth"),
+    enabled: donemSonuVar(e) });
   if (!donemSonuVar(e)) return null;
   const plan = routeVisible(book, "plan", meta?.modules);
-  // Harcanabilir (bugün) eksi, Dönem sonu artıysa ikisinin ilişkisi tek cümle (NetWorth ile aynı önbellek)
-  const nw = useQuery({ queryKey: ["net-worth"], queryFn: () => call<{ spendable?: number }>("GET", "/api/net-worth") });
   const iliski = (nw.data?.spendable ?? 0) < 0 && !eksiMi(e.forecast_net);
   const body = (
     <>

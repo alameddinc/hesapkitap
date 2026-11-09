@@ -70,12 +70,11 @@ export default function Transactions() {
   const active = TABS.find((x) => x.key === tab)!;
   const rows = real.filter((r) => active.test(r) && match(r));
   // tüm dönemlerde arama: sunucu süzdü; sekme ve tahmini satır kuralı aynı. Dönem → satırlar (yeniden eskiye)
-  const wideRows = useMemo(() => (search.data?.rows ?? []).filter((r) => !isEstimateRow(r) && active.test(r)), [search.data, active]);
-  const groups = useMemo(() => {
-    const by = new Map<string, Row[]>();
-    for (const r of wideRows) by.set(r.month, [...(by.get(r.month) ?? []), r]);
-    return [...by.entries()].sort(([a], [b]) => b.localeCompare(a));
-  }, [wideRows]);
+  // React Compiler belleğe alır; elle useMemo burada derleyiciyle çakışıyordu (preserve-manual-memoization)
+  const wideRows = (search.data?.rows ?? []).filter((r) => !isEstimateRow(r) && active.test(r));
+  const by = new Map<string, Row[]>();
+  for (const r of wideRows) by.set(r.month, [...(by.get(r.month) ?? []), r]);
+  const groups = [...by.entries()].sort(([a], [b]) => b.localeCompare(a));
   const uncat = real.filter(TABS.find((x) => x.key === "uncat")!.test).length;
   const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
