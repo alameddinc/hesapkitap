@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { addMonths, monthLabel } from "../format";
+import { addMonths, periodLabel } from "../format";
 import { useMeta } from "./hooks";
 
 const SHORT = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
@@ -23,7 +23,7 @@ export default function MonthPicker({ value, onChange }: { value: string; onChan
         <ChevronLeft size={18} />
       </button>
       <div className="min-w-28 text-center leading-tight">
-        <div className="text-sm font-semibold">{monthLabel(value)}</div>
+        <div className="text-sm font-semibold">{periodLabel(value)}</div>
         {(range || !current) && (
           <div className="text-[11px] text-stone-500">
             {range}

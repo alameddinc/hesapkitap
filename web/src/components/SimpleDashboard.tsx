@@ -3,7 +3,7 @@ import { TERIM } from "../lib/terimler";
 import TerimBilgi from "./TerimBilgi";
 import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
-import { addMonths, dateTR, monthLabel, tl } from "../format";
+import { addMonths, dateTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { EstimateNote } from "./Estimates";
 import { isViewer, useBook, useUiPrefs } from "./hooks";
@@ -22,9 +22,9 @@ export default function SimpleDashboard() {
   return (
     <div className="space-y-5">
       <section className="card p-6 text-center">
-        <div className="text-lg text-stone-500">{monthLabel(ui.month)} · bu ay harcadığın</div>
+        <div className="text-lg text-stone-500">{periodLabel(ui.month)} · bu ay harcadığın</div>
         <div className="mt-1 text-[min(3rem,12vw)] font-bold whitespace-nowrap tabular-nums tracking-tight">{t ? tl(t.expense) : "…"}</div>
-        {prev.data && <div className="mt-1 text-base text-stone-500">Geçen ay ({monthLabel(prevMonth)}): {tl(prev.data.totals.expense)}</div>}
+        {prev.data && <div className="mt-1 text-base text-stone-500">Geçen ay ({periodLabel(prevMonth)}): {tl(prev.data.totals.expense)}</div>}
         {summary.data && <div className="text-left"><EstimateNote summary={summary.data} /></div>}
         {t && (
           <div className="mt-4 grid grid-cols-1 gap-3 text-left min-[440px]:grid-cols-2">

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { Repeat, X } from "lucide-react";
-import { cx, maskText, monthLabel, tl } from "../format";
+import { cx, maskText, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 import { SalaryDriftCard, useSalaryDrift, type SalaryDrift } from "./SalaryChanges";
@@ -44,7 +44,7 @@ export default function RecurringSuggestions() {
           <li key={`d${d.recurring_id}`} className="flex flex-wrap items-center gap-2 py-2">
             <div className="min-w-0 flex-1">
               <div className="font-medium">{maskText(d.description)}: {tl(d.old)} → <b>{tl(d.new)}</b> olmuş</div>
-              <div className="text-xs text-stone-500">Son iki ay yeni tutarla geldi. {monthLabel(d.from_month, true)}’den itibaren güncelleyeyim mi? Geçmiş aylar değişmez.</div>
+              <div className="text-xs text-stone-500">Son iki ay yeni tutarla geldi. {periodLabel(d.from_month, true)}’den itibaren güncelleyeyim mi? Geçmiş aylar değişmez.</div>
             </div>
             <button className="btn-primary px-2.5 py-1 text-xs" disabled={applyDrift.isPending} onClick={() => applyDrift.mutate(d)}>Güncelle</button>
           </li>
@@ -54,7 +54,7 @@ export default function RecurringSuggestions() {
             <div className="min-w-0 flex-1">
               <div className="font-medium">{maskText(s.description)}</div>
               <div className="text-xs text-stone-500">
-                Her ay ~{s.day_of_month}. gün · {s.months} aydır ({monthLabel(s.first_month, true)}’den beri)
+                Her ay ~{s.day_of_month}. gün · {s.months} aydır ({periodLabel(s.first_month, true)}’den beri)
                 {s.category ? ` · ${s.category}` : ""}
                 <span className="block">Son aylar: {s.history.slice(-4).map((h) => tl(h.amount)).join(" · ")}</span>
               </div>

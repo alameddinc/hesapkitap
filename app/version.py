@@ -219,6 +219,13 @@ CAPABILITIES = (
     "summary_forecast",       # Özet "Dönem sonu": /api/summary expected'a variable_estimate (= Planlama months[].estimated)
                               # ve forecast_net (= months[].net_with_estimate, "her zamanki harcamanla"); /api/plan
                               # months[].parts (expected.parts ile aynı döküm). Eski alanlar aynen durur
+    "period_naming",          # dönem ADI başladığı aydan (anahtar YYYY-MM dönemin bittiği ay, değişmez): ay dönümü 5 →
+                              # 2026-12 = 5 Kas – 4 Ara = "Kasım dönemi". /api/meta period {name, label} + period_naming
+                              # "start"; /api/summary period {name, label, span, start, end} ve vs_prev {basis same_day|
+                              # full, day, prev_month, prev_name, current, prev, diff, change, incomplete} (başlıktaki
+                              # giderle aynı sayım); /api/digest label (yeni ad), start, end, span, prev_label
+    "txn_search",             # GET /api/transactions?q=… metin araması (işyeri/açıklama/kategori/not/kişi/tutar; month
+                              # yoksa tüm dönemler, satırda month)
     "salary_raise",           # maaş zammı yüzdeyle + yatan maaşa göre öneri (app/salary.py): SalaryChangeIn gross |
                               # net | pct+basis (brut|net) → sunucu brüte çevirir, pct/pct_basis saklanır; POST
                               # /api/recurring/{id}/payroll draft_resolved {gross, prev_gross, old_net, new_net,

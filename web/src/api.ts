@@ -2,6 +2,7 @@ import type { Beklenen, BeklenenParcalar } from "./lib/beklenen";
 import type { TaksitKalem, TaksitOzet } from "./lib/taksit";
 import { ApiError, call, send } from "./lib/apiError";
 import { bookHeaders, type BookKey } from "./lib/saveBook";
+import { setCycleStartDay } from "./format";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
@@ -256,6 +257,15 @@ export interface Summary {
   installments?: TaksitOzet;
   /** dönem sonu tahmini = Planlama'nın o ayki satırı (yetenek summary_expected; lib/beklenen.ts). Geçmiş dönemde null */
   expected?: Beklenen | null;
+  /** dönemin adı (başladığı ay) ve aralığı (yetenek period_naming) */
+  period?: { name: string; label: string; span: string; start: string; end: string };
+  /** "geçen döneme göre": başlıktaki giderle aynı sayım; içinde bulunulan dönemde geçen dönemin aynı günü (yetenek period_naming) */
+  vs_prev?: VsPrev | null;
+}
+
+export interface VsPrev {
+  basis: "same_day" | "full"; day: number; prev_month: string; prev_name: string;
+  current: number; prev: number; diff: number; change: number | null; incomplete: boolean;
 }
 
 /** GET /api/installments?month: Özet "Bu ay ödenecek taksitler" listesi; row dokununca düzenlenecek satır. */
@@ -582,7 +592,8 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
   ).toString();
 
 export const api = {
-  meta: () => req<Meta>("GET", "/api/meta"),
+  // dönem adları (periodLabel) ay dönümüne göre: meta her geldiğinde gün güncellenir (defter değişince de)
+  meta: () => req<Meta>("GET", "/api/meta").then((m) => { setCycleStartDay(m.cycle_start_day); return m; }),
   summary: (month: string) => req<Summary>("GET", `/api/summary${q({ month })}`),
   installments: (month: string) => req<TaksitListesi>("GET", `/api/installments${q({ month })}`),
   /** Özet uyarısını kişi başına gizle / gizlemeyi geri al (summary.insights[].key) */
@@ -591,6 +602,11 @@ export const api = {
   hiddenInsights: (month?: string) => req<HiddenInsight[]>("GET", `/api/insights/hidden${q({ month })}`),
   transactions: (month?: string, includeDeleted = false, includeEstimates = false) =>
     req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted, include_estimates: includeEstimates || undefined })}`),
+  /** Metin araması (yetenek txn_search): month yoksa tüm dönemler; her satırda month (dönem anahtarı). İlk 500 sonuç. */
+  searchTransactions: async (text: string, month?: string) => {
+    const r = await req<Row[] | TxnPage>("GET", `/api/transactions${q({ q: text, month, include_deleted: true, limit: 500 })}`);
+    return Array.isArray(r) ? { rows: r, next: null } : { rows: r.rows, next: r.next };
+  },
   /** Sayfalı (sunucu b185e16): yeniden eskiye limit kadar satır; before = önceki sayfanın next'i; totals=1 → kümenin
    *  tamamının toplamı (sayfanın değil). Eski sunucu limit'i tanımaz ve düz dizi döner: tek sayfa sayılır. */
   transactionsPage: async (o: { month?: string; includeDeleted?: boolean; includeEstimates?: boolean; limit: number; before?: string | null; totals?: boolean }) => {

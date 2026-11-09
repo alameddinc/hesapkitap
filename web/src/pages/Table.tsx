@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Row } from "../api";
 import MultiSelect from "../components/MultiSelect";
 import Segmented from "../components/Segmented";
-import { catLabel, cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
+import { catLabel, cx, dateTR, fold, KIND_LABEL, parseAmount, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { isEstimate } from "../components/Estimates";
 import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
@@ -122,7 +122,7 @@ export default function Table() {
 
   const exportCsv = () => {
     if (view === "pivot") {
-      downloadCsv("pivot.csv", [["", ...pivot.months.map((m) => monthLabel(m)), "Toplam"],
+      downloadCsv("pivot.csv", [["", ...pivot.months.map((m) => periodLabel(m)), "Toplam"],
         ...pivot.rows.map((r) => [r.name, ...pivot.months.map((m) => r.cells.get(m) ?? 0), r.total]),
         ["Toplam", ...pivot.colTotals, pivot.grand]]);
     } else {
@@ -155,12 +155,12 @@ export default function Table() {
       <div className="card flex flex-wrap items-center gap-2 p-2.5">
         <select className="input w-auto py-1.5" value={f.from} onChange={(e) => set({ from: e.target.value })} aria-label="Başlangıç ayı">
           <option value="">İlk ay</option>
-          {months.map((m) => <option key={m} value={m}>{monthLabel(m, true)}</option>)}
+          {months.map((m) => <option key={m} value={m}>{periodLabel(m, true)}</option>)}
         </select>
         <span className="text-stone-400">→</span>
         <select className="input w-auto py-1.5" value={f.to} onChange={(e) => set({ to: e.target.value })} aria-label="Bitiş ayı">
           <option value="">Son ay</option>
-          {months.map((m) => <option key={m} value={m}>{monthLabel(m, true)}</option>)}
+          {months.map((m) => <option key={m} value={m}>{periodLabel(m, true)}</option>)}
         </select>
         <MultiSelect label="Kategori" options={categories} value={f.categories} onChange={(v) => set({ categories: v })} />
         <MultiSelect label="Kart" options={cards} value={f.cards} onChange={(v) => set({ cards: v })} />
@@ -195,7 +195,7 @@ export default function Table() {
                 <th className="sticky top-0 left-0 z-10 bg-stone-100 px-2 py-2 text-left font-medium dark:bg-stone-800">
                   {pivotBy === "category" ? "Kategori" : pivotBy === "merchant" ? "İşyeri" : "Kart"}
                 </th>
-                {pivot.months.map((m) => <th key={m} className="sticky top-0 bg-stone-100 px-2 py-2 text-right font-medium whitespace-nowrap dark:bg-stone-800">{monthLabel(m, true)}</th>)}
+                {pivot.months.map((m) => <th key={m} className="sticky top-0 bg-stone-100 px-2 py-2 text-right font-medium whitespace-nowrap dark:bg-stone-800">{periodLabel(m, true)}</th>)}
                 <th className="sticky top-0 bg-stone-200 px-2 py-2 text-right font-semibold dark:bg-stone-700">Toplam</th>
               </tr>
             </thead>
@@ -241,7 +241,7 @@ export default function Table() {
         <div className="card overflow-hidden">
           <div className="flex items-center justify-between border-b border-stone-100 px-3 py-2 text-xs text-stone-500 dark:border-stone-800">
             <span>
-              {drill && <b className="text-stone-800 dark:text-stone-200">{drill.name}{drill.month && ` · ${monthLabel(drill.month)}`} — </b>}
+              {drill && <b className="text-stone-800 dark:text-stone-200">{drill.name}{drill.month && ` · ${periodLabel(drill.month)}`} — </b>}
               {listRows.length} kayıt · toplam <b>{tl(total)}</b>{!all.complete && " (yükleniyor)"} · satıra tıkla → düzenle
             </span>
             {drill && <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => setDrill(null)}><X size={12} /> Kapat</button>}
@@ -259,7 +259,7 @@ export default function Table() {
                   <tr key={r.uid} className="cursor-pointer border-t border-stone-100 hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-800/50"
                     onClick={() => (r.source === "card" ? ui.openCardTxn(r) : r.source === "estimate" ? ui.go("ekstreler") : ui.openEntry(r))}>
                     <td className="px-2 py-1.5 whitespace-nowrap">{dateTR(r.date)}</td>
-                    <td className="px-2 py-1.5 whitespace-nowrap text-stone-500">{monthLabel(r.month, true)}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap text-stone-500">{periodLabel(r.month, true)}</td>
                     <td className="max-w-72 px-2 py-1.5">
                       <div className="break-words">{r.description}</div>
                       {(r.installment || r.fx || r.note) && (

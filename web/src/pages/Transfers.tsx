@@ -10,7 +10,7 @@ import Kpi from "../components/Kpi";
 import Modal from "../components/Modal";
 import MonthPicker from "../components/MonthPicker";
 import Segmented from "../components/Segmented";
-import { boundsOf, cx, dateTR, maskText, monthLabel, periodOf, tl } from "../format";
+import { boundsOf, cx, dateTR, maskText, periodOf, tl, periodLabel } from "../format";
 import { userNote } from "../components/BankText";
 import { useUI } from "../ui";
 import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
@@ -133,7 +133,7 @@ export default function Transfers() {
           {people.length === 0 && (
             <div className="space-y-2 p-4 text-sm text-stone-500 dark:text-stone-400">
               {mode === "ay" ? <>
-                <p>{monthLabel(ui.month)} döneminde kişilere giden ya da gelen para yok.</p>
+                <p>{periodLabel(ui.month)} döneminde kişilere giden ya da gelen para yok.</p>
                 <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => setMode("tumu")}>Tüm zamanları göster</button>
               </> : <p>Henüz transfer yok. Ekstreler sayfasından banka dökümü (PDF/Excel) yükle.</p>}
             </div>
@@ -272,11 +272,11 @@ function PersonDetail({ name, moves, grouped, startDay, debts, category, canEdit
   return (
     <div className="space-y-3 px-4 pb-4">
       {shown.map(([ym, list]) => (
-        <section key={ym || "hepsi"} aria-label={ym ? monthLabel(ym) : `${name} hareketleri`}
+        <section key={ym || "hepsi"} aria-label={ym ? periodLabel(ym) : `${name} hareketleri`}
           className="overflow-hidden rounded-lg border border-stone-200 dark:border-stone-700">
           {grouped && (
             <div className="flex flex-wrap justify-between gap-x-3 bg-stone-50 px-3 py-1.5 text-xs font-semibold text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
-              <span>{monthLabel(ym)}</span>
+              <span>{periodLabel(ym)}</span>
               <span className="tabular-nums">
                 {[sumKind(list, "gider") ? `↑ gönderdin ${tl(sumKind(list, "gider"))}` : null, sumKind(list, "gelir") ? `↓ geldi ${tl(sumKind(list, "gelir"))}` : null].filter(Boolean).join(" · ")}
               </span>

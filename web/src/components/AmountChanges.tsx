@@ -3,7 +3,7 @@ import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
 import { Plus, Trash2, TrendingUp } from "lucide-react";
 import { useState } from "react";
-import { monthLabel, parseAmount, tl } from "../format";
+import { parseAmount, tl, periodLabel, periodNameMonth, periodKeyOfName } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 
@@ -37,7 +37,7 @@ export default function AmountChanges({ rid, base }: { rid: number; base: number
           <li className="flex justify-between py-0.5 text-stone-500"><span>Başlangıç</span><span className="tabular-nums">{tl(base)}</span></li>
           {items.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-2 py-0.5">
-              <span>{monthLabel(c.from_month, true)}’den itibaren</span>
+              <span>{periodLabel(c.from_month, true)}’den itibaren</span>
               <span className="flex items-center gap-1 tabular-nums">{tl(c.amount)}
                 <button type="button" className="btn-ghost p-1" aria-label="Sil" disabled={del.isPending}
                   onClick={() => void ask("Tutar değişikliği silinsin mi?\n\nO aydan sonraki aylar önceki tutarla planlanır.").then((ok) => { if (ok) del.mutate(c.id); })}><Trash2 size={13} /></button>
@@ -49,7 +49,7 @@ export default function AmountChanges({ rid, base }: { rid: number; base: number
       {open && (
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-xs">Hangi aydan
-            <input type="month" className="input mt-1 w-40" value={month} onChange={(e) => setMonth(e.target.value)} />
+            <input type="month" className="input mt-1 w-40" value={periodNameMonth(month)} onChange={(e) => setMonth(periodKeyOfName(e.target.value))} />
           </label>
           <label className="text-xs">Yeni tutar
             <input className="input mt-1 w-32 text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />

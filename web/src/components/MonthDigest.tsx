@@ -9,6 +9,7 @@ import { useSave } from "./hooks";
 
 interface Digest {
   month: string; label: string; income: number; expense: number; net: number; expense_change: number | null;
+  span?: string; prev_label?: string; // dönemin tarih aralığı ve bir önceki dönemin adı (yetenek period_naming)
   savings_rate: number | null; fees: number; top: { name: string; amount: number; change: number | null }[]; rising: string[];
   budgets_over: { category: string; spent: number; limit: number }[];
   upcoming: { count: number; total: number; items: { title: string; amount: number; due_date: string; estimated: boolean }[] };
@@ -30,10 +31,14 @@ export default function MonthDigest() {
   return (
     <section className="card relative space-y-3 border-blue-200 p-4 pb-2 dark:border-blue-900">
       <button className="btn-ghost absolute right-2 top-2 p-1.5" aria-label="Kapat" onClick={() => dismiss.mutate(undefined)}><X size={16} /></button>
-      <h2 className="flex items-center gap-2 font-semibold"><CalendarCheck size={18} className="text-blue-600" /> {d.label} özeti</h2>
+      {/* biten dönem: adı + aralığı; yüzde, bir önceki dönemin TAMAMINA göre (Özet'teki "geçen dönemin aynı günü" değil) */}
+      <h2 className="flex flex-wrap items-baseline gap-x-2 pr-8 font-semibold"><CalendarCheck size={18} className="shrink-0 self-center text-blue-600" />
+        <span>Biten dönem: {d.label.split(" ")[0]} dönemi</span>
+        {d.span && <span className="text-xs font-normal text-stone-500">{d.span}</span>}</h2>
       <div className="grid grid-cols-3 gap-2 text-sm">
         <div><div className="text-xs text-stone-500">Gelir</div><div className="font-semibold tabular-nums text-green-700 dark:text-green-400">{tl(d.income)}</div></div>
-        <div><div className="text-xs text-stone-500">Gider{pct(d.expense_change)}</div><div className="font-semibold tabular-nums">{tl(d.expense)}</div></div>
+        <div><div className="text-xs text-stone-500">Gider</div><div className="font-semibold tabular-nums">{tl(d.expense)}</div>
+          {d.expense_change != null && <div className="text-[11px] text-stone-500">{d.prev_label ? `${d.prev_label.split(" ")[0]} dönemine` : "önceki döneme"} göre{pct(d.expense_change).replace(" ·", "")}</div>}</div>
         <div><div className="text-xs text-stone-500">{TERIM.artan.ad}</div>
           <div className={cx("font-semibold tabular-nums", d.net < 0 && "text-red-600")}>{tl(d.net)}{d.savings_rate != null && d.savings_rate > 0 && <span className="text-xs font-normal text-stone-500"> · %{d.savings_rate}</span>}</div></div>
       </div>

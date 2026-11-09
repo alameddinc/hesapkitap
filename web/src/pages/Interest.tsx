@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, ChevronRight, CreditCard, Info, Lock, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { ApiError, send } from "../lib/apiError";
-import { cx, dateTR, monthLabel, tl } from "../format";
+import { cx, dateTR, tl, periodLabel } from "../format";
 import { useBook, useCap, useOpenRow } from "../components/hooks";
 import Segmented from "../components/Segmented";
 import { useUI } from "../ui";
@@ -115,7 +115,7 @@ export default function Interest() {
           </div>
           {vals.length > 1 && (
             <>
-              <div role="img" aria-label={paid.length ? `Faiz ödenen aylar: ${paid.map((x) => `${monthLabel(x.month)} ${tl(x.total)}`).join(", ")}` : "Faiz ödenen ay yok"}>
+              <div role="img" aria-label={paid.length ? `Faiz ödenen aylar: ${paid.map((x) => `${periodLabel(x.month)} ${tl(x.total)}`).join(", ")}` : "Faiz ödenen ay yok"}>
                 <div className="flex h-16 items-end gap-1 border-b border-stone-200 dark:border-stone-700">
                   {vals.map((x) => (
                     <span key={x.month} className={cx("min-w-0 flex-1 rounded-t", x.total > 0 ? "bg-red-500" : "bg-stone-200 dark:bg-stone-700", pick && pick !== x.month && "opacity-35")}
@@ -123,14 +123,14 @@ export default function Interest() {
                   ))}
                 </div>
                 <div aria-hidden className="mt-1 flex gap-1">
-                  {vals.map((x) => <span key={x.month} className="min-w-0 flex-1 overflow-hidden text-center text-[10px] text-stone-400">{monthLabel(x.month).slice(0, 1)}</span>)}
+                  {vals.map((x) => <span key={x.month} className="min-w-0 flex-1 overflow-hidden text-center text-[10px] text-stone-400">{periodLabel(x.month).slice(0, 1)}</span>)}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2" role="group" aria-label="Aya göre süz">
                 {paid.map((x) => (
                   <button key={x.month} aria-pressed={pick === x.month} onClick={() => setPick(pick === x.month ? null : x.month)}
                     className={cx("rounded-full border px-3 py-1 text-xs", pick === x.month ? "border-blue-500 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200" : "border-stone-300 dark:border-stone-700")}>
-                    {monthLabel(x.month, true)} <span className="tabular-nums">{tl(x.total)}</span></button>
+                    {periodLabel(x.month, true)} <span className="tabular-nums">{tl(x.total)}</span></button>
                 ))}
               </div>
             </>
@@ -172,7 +172,7 @@ export default function Interest() {
           </section>
         )}
 
-        {renderItems({ r, items: shown, title: pick ? `${monthLabel(pick)} kalemleri` : "Kalemler" })}
+        {renderItems({ r, items: shown, title: pick ? `${periodLabel(pick)} kalemleri` : "Kalemler" })}
         {renderIncome({ r })}
       </>
     );

@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, CreditCard, Repeat, Upload } from "lucide-react";
 import { useState } from "react";
 import type { EstimateItem, Row, Summary } from "../api";
-import { cx, dateTR, monthLabel, tl } from "../format";
+import { cx, dateTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 
 // Tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş) gerçek değildir: hiçbir toplama girmez, ayrı gösterilir.
@@ -17,7 +17,7 @@ export function splitEstimates(rows: Row[]): [Row[], Row[]] {
   return [real, est];
 }
 
-const monthName = (ym: string) => monthLabel(ym).split(" ")[0];
+const monthName = (ym: string) => periodLabel(ym).split(" ")[0];
 
 /** "3 kartın Ekim ekstresi yok" — tek beklenen dönem varsa ay adıyla, değilse sade. */
 export function missingCardsText(items: EstimateItem[]): string | null {

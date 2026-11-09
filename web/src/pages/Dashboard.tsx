@@ -4,7 +4,7 @@ import { TERIM } from "../lib/terimler";
 import TerimBilgi from "../components/TerimBilgi";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { api, type Insight, type Row } from "../api";
+import { api, type Insight, type Row, type VsPrev } from "../api";
 import BarList from "../components/BarList";
 import { BudgetForm, BudgetList } from "../components/Budgets";
 import Insights, { HiddenInsights } from "../components/Insights";
@@ -31,7 +31,7 @@ import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
 import { DonemSonuKarti } from "../components/Beklenen";
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
-import { boundsOf, cx, monthLabel, signed, tl, tlCompact } from "../format";
+import { boundsOf, cx, signed, tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
@@ -59,11 +59,19 @@ function BillsLine({ month }: { month: string }) {
         else ui.toast("Ödemeler Özet'te kapalı; Düzenle'den ekleyebilirsin");
       }}>
       <Receipt size={16} className="shrink-0 text-stone-500" />
-      <span className="min-w-0 flex-1">{current ? "Bu ay gelen faturalar" : `${monthLabel(month)} faturaları`}:{" "}
+      <span className="min-w-0 flex-1">{current ? "Bu ay gelen faturalar" : `${periodLabel(month)} faturaları`}:{" "}
         <b className="tabular-nums">{tl(total)}</b> <span className="text-stone-500">({items.length})</span></span>
       <ChevronRight size={16} className="text-stone-400" />
     </button>
   );
+}
+
+/** "Geçen dönemin aynı gününe göre ₺812 az": sunucu vs_prev (başlıktaki giderle aynı sayım ve aynı dönem tanımı);
+ *  biten dönemde "Ekim dönemine göre". Karşılaştırılacak harcama yoksa satır yok. */
+export function kiyasMetni(v: VsPrev | null | undefined): { text: string; up: boolean } | null {
+  if (!v || v.prev <= 0 || Math.abs(v.diff) < 1) return v && v.prev > 0 ? { text: v.basis === "same_day" ? "Geçen dönemin aynı günüyle aynı" : `${v.prev_name} dönemiyle aynı`, up: false } : null;
+  const ne = `${tl(Math.abs(v.diff)).replace(/,\d\d(?=\D*$)/, "")} ${v.diff > 0 ? "fazla" : "az"}`;
+  return { text: `${v.basis === "same_day" ? "Geçen dönemin aynı gününe" : `${v.prev_name} dönemine`} göre ${ne}${v.incomplete ? " · kart ekstresi gelince değişir" : ""}`, up: v.diff > 0 };
 }
 
 type Sel = { by: "category" | "merchant" | "card"; name: string } | null;
@@ -169,6 +177,7 @@ export default function Dashboard() {
 
   // sunucu tek tanım (a18ac2a): Artan = totals.left; ortak defterde faiz gizliyse kutu yok (eski sunucu: defter ayarı)
   const left = s ? s.totals.left ?? s.totals.net : 0;
+  const kiyas = kiyasMetni(s?.vs_prev);
   const feesHidden = s?.totals.fees_hidden ?? !!book?.hide_fees;
   const render = (id: string): React.ReactNode => {
     if (!s) return null;
@@ -178,8 +187,9 @@ export default function Dashboard() {
         <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 p-5 text-white shadow-lg shadow-blue-600/20 sm:hidden">
           <div aria-hidden className="pointer-events-none absolute -top-16 -right-10 size-48 rounded-full bg-white/10 blur-2xl" />
           <div aria-hidden className="pointer-events-none absolute -bottom-20 -left-10 size-40 rounded-full bg-emerald-300/20 blur-2xl" />
-          <div className="relative text-sm text-blue-100">Bu dönem harcadığın</div>
+          <div className="relative text-sm text-blue-100">{month === meta?.current_month ? "Bu dönem harcadığın" : `${periodLabel(month)} döneminde harcadığın`}</div>
           <div className="relative mt-1 font-display text-[2.6rem] leading-none font-semibold tracking-tight tabular-nums">{tl(s.totals.expense)}</div>
+          {kiyas && <div className="relative mt-1.5 text-sm text-blue-50" data-testid="kiyas">{kiyas.up ? "↑" : "↓"} {kiyas.text}</div>}
           {s.totals.savings > 0 && <div className="relative mt-1 text-xs text-blue-100">+ birikime {tl(s.totals.savings)} (gider sayılmaz)</div>}
           <div className="relative"><EstimateNote summary={s} tone="hero" /></div>
           <div className={cx("relative mt-5 grid gap-2 border-t border-white/15 pt-3", feesHidden ? "grid-cols-2" : "grid-cols-3")}>
@@ -204,7 +214,8 @@ export default function Dashboard() {
           <Kpi label="Gelir" value={s.totals.income} tone="green"
             sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
-            sub={`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
+            sub={<>{`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`}
+              {kiyas && <span className={cx("block", kiyas.up ? "text-amber-700 dark:text-amber-400" : "text-green-700 dark:text-green-400")}>{kiyas.text}</span>}</>} />
           <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={left} tone={left < 0 ? "red" : "green"}
             sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
           {!feesHidden && (

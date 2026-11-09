@@ -103,17 +103,18 @@ def test_dokum_uploaded_after_month_end_counts(client, tmpdb, at):
 
 
 def test_dokum_follows_cycle_day(client, tmpdb, at):
-    """Ay dönümü 17'si: 1 Kasım'da 'Ekim dökümü' sorulmaz; Kasım dönemi (17 Eki – 16 Kas) bitince sorulur."""
+    """Ay dönümü 17'si: 1 Kasım'da takvimin 'Ekim dökümü' sorulmaz; Ekim dönemi (17 Eki – 16 Kas; anahtar 2026-11) bitince
+    sorulur. Dönemin adı başladığı aydan."""
     tmpdb.set_setting("cycle_start_day", "17")
     acc = tmpdb.ensure_account("Halkbank")
     _imported(tmpdb, acc, "2026-09-20")
     _imported(tmpdb, acc, "2026-10-18")  # döküm 18 Ekim'de alınmış
     at("2026-11-01")
-    assert _ids(client) == []  # Ekim dönemi (17 Eyl – 16 Eki) dökümle kapanmış
+    assert _ids(client) == []  # Eylül dönemi (17 Eyl – 16 Eki) dökümle kapanmış
     at("2026-11-18")
     r = client.get("/api/reminders").json()
     assert [x["id"] for x in r] == [f"dokum:{acc}:2026-11"]
-    assert r[0]["title"] == "Halkbank · Kasım dönemi dökümü" and r[0]["tag"] == "Dönem kapandı"
+    assert r[0]["title"] == "Halkbank · Ekim dönemi dökümü" and r[0]["tag"] == "Dönem kapandı"
     assert "(17 Eki – 16 Kas)" in r[0]["text"] and r[0]["severity"] == "info"
     at("2026-11-28")
     assert client.get("/api/reminders").json()[0]["severity"] == "warn"

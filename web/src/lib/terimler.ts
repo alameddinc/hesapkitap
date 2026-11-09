@@ -25,7 +25,9 @@ export const TERIM = {
     ad: "Harcanabilir",
     kisa: "Eldeki para − ödeyeceklerin",
     aciklama: "Bankadaki ve nakit paran − ödenecek kart ekstresi − TL borçların − kumbaraya ayırdığın − ödenmemiş zekât. " +
-      "Altın/döviz, alacakların ve yemek kartları dahil değil. Eksiyse ödeyeceklerin eldeki paranı aşıyor.",
+      "Altın/döviz, alacakların ve yemek kartları dahil değil. Eksiyse ödeyeceklerin eldeki paranı aşıyor. " +
+      "Bugünün rakamıdır: \"Dönem sonu\" ise dönem bitene kadar beklenen gelirleri (maaş gibi) de katar; bu yüzden " +
+      "Harcanabilir eksiyken Dönem sonu artı olabilir.",
   },
   netDurum: {
     ad: "Net durum",
@@ -45,7 +47,9 @@ export const TERIM = {
     // iki rakam, birer cümle (Özet "Dönem sonu" kartı; lib/beklenen.ts)
     aciklama: "Her zamanki harcamanla: kayıtlı gelir ve giderine bekleyen taksit, abonelik, sabit kalem, fatura ve " +
       "gelirler ile son dönemlerdeki kadar kart harcaması eklenir (Planlama'daki rakam). " +
-      "Yeni harcama yapmazsan: aynı hesap, yeni kart harcaması eklenmeden.",
+      "Yeni harcama yapmazsan: aynı hesap, yeni kart harcaması eklenmeden. " +
+      "\"Harcanabilir\" bugünkü durumdur (eldeki para − ödeyeceklerin); Dönem sonu, beklenen gelirler de gelince nerede " +
+      "kapatacağını gösterir.",
   },
   eldeKalan: {
     ad: "Elde kalan",

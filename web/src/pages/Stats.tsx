@@ -10,7 +10,7 @@ import Compare from "../components/Compare";
 import { KimHarcadi } from "../components/KimHarcadi";
 import MonthPicker from "../components/MonthPicker";
 import YearSummary from "../components/YearSummary";
-import { monthLabel, tl, tlCompact } from "../format";
+import { tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
 import SorguDurumu from "../components/SorguDurumu";
 
@@ -40,7 +40,7 @@ export function InterestHistory() {
           <ul className="mt-2 space-y-2">
             {d.months.map((m) => (
               <li key={m.month} className="rounded-lg border border-red-200 bg-red-50/50 p-2 text-sm dark:border-red-900 dark:bg-red-950/20">
-                <div className="flex justify-between font-medium"><span>{monthLabel(m.month)}</span><span className="tabular-nums text-red-600">{tl(m.total)}</span></div>
+                <div className="flex justify-between font-medium"><span>{periodLabel(m.month)}</span><span className="tabular-nums text-red-600">{tl(m.total)}</span></div>
                 {m.alarms.map((a, i) => (
                   <p key={i} className="mt-1 text-xs text-stone-600 dark:text-stone-400"><b>{a.title.replace("Faiz alarmı: ", "")}</b> — {a.detail}</p>
                 ))}
@@ -91,11 +91,11 @@ export function TrendChart({ trend, onPick }: { trend: TrendPoint[]; onPick: (m:
           if (m) onPick(String(m));
         }}>
           <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-          <XAxis dataKey="month" tickFormatter={(m: string) => monthLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
+          <XAxis dataKey="month" tickFormatter={(m: string) => periodLabel(m, true)} tick={{ fill: "var(--chart-text)", fontSize: 12 }}
             axisLine={false} tickLine={false} />
           <YAxis tickFormatter={(v: number) => tlCompact(v)} tick={{ fill: "var(--chart-text)", fontSize: 11 }}
             axisLine={false} tickLine={false} width={64} />
-          <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => monthLabel(String(m))}
+          <Tooltip formatter={(v) => tl(Number(v))} labelFormatter={(m) => periodLabel(String(m))}
             cursor={{ fill: "var(--chart-grid)", opacity: 0.5 }}
             wrapperStyle={{ maxWidth: "75%", zIndex: 5 }}
             contentStyle={{ background: "var(--chart-surface)", border: "1px solid var(--chart-grid)", borderRadius: 8, fontSize: 12,

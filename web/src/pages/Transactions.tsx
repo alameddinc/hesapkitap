@@ -7,9 +7,9 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type Row } from "../api";
 import MonthPicker from "../components/MonthPicker";
 import TxnList from "../components/TxnList";
-import { EstimateSection, splitEstimates } from "../components/Estimates";
-import { cx, fold, maskText, tl } from "../format";
-import { useMeta } from "../components/hooks";
+import { EstimateSection, isEstimate as isEstimateRow, splitEstimates } from "../components/Estimates";
+import { boundsOf, cx, dayMonthTR, fold, maskText, periodLabel, periodName, tl } from "../format";
+import { useCap, useMeta } from "../components/hooks";
 import { useSpenders } from "../components/Spender";
 import { hasTxnFilter, matchTxnFilter, parseTxnFilter, txnFilterLabel } from "../lib/txnFilter";
 import { useUI } from "../ui";
@@ -49,10 +49,19 @@ export default function Transactions() {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
   const needle = fold(q.trim());
+  // arama varsayılan olarak TÜM dönemlerde (sunucu ?q=; yetenek txn_search): seçili dönemde yoksa "Bu filtrede işlem yok"
+  // denip kalınmasın. "Sadece X dönemi" çipiyle eski davranış. Sonuçlar döneme göre gruplu.
+  const canSearch = useCap("txn_search");
+  const [scope, setScope] = useState<"all" | "period">("all");
+  const [debounced, setDebounced] = useState("");
+  useEffect(() => { const t = setTimeout(() => setDebounced(q.trim()), 250); return () => clearTimeout(t); }, [q]);
+  const wide = canSearch && !!needle && scope === "all" && !sfOn;
+  const search = useQuery({ queryKey: ["txn-search", debounced], queryFn: () => api.searchTransactions(debounced),
+    enabled: wide && debounced.length > 0 });
   // sayfa sayfa (200): kaydırdıkça sıradaki; sekme ya da arama tüm dönemi gerektirir → kalanlar kendiliğinden gelir
   // yıl süzgecinde tüm geçmiş istenir (sunucu ay ya da hepsi verir), yıl istemcide süzülür; süzgeçte kalanlar kendiliğinden
   const txns = usePagedTxns({ month: sf.yil ? undefined : ui.month, includeDeleted: true, includeEstimates: true, pageSize: 200,
-    auto: tab !== "all" || !!needle || sfOn });
+    auto: tab !== "all" || (!!needle && !wide) || sfOn });
   // tahmini satırlar ana listede ve sekme sayılarında yok; başta ayrı, katlanır bölümde
   const scoped = useMemo(() => (sfOn ? txns.rows.filter((r) => matchTxnFilter(r, sf, meta?.current_month)) : txns.rows),
     [txns.rows, sf, sfOn, meta?.current_month]);
@@ -60,6 +69,13 @@ export default function Transactions() {
   const match = (r: Row) => !needle || fold(`${r.description} ${r.category} ${r.subcategory ?? ""} ${r.note ?? ""}`).includes(needle);
   const active = TABS.find((x) => x.key === tab)!;
   const rows = real.filter((r) => active.test(r) && match(r));
+  // tüm dönemlerde arama: sunucu süzdü; sekme ve tahmini satır kuralı aynı. Dönem → satırlar (yeniden eskiye)
+  const wideRows = useMemo(() => (search.data?.rows ?? []).filter((r) => !isEstimateRow(r) && active.test(r)), [search.data, active]);
+  const groups = useMemo(() => {
+    const by = new Map<string, Row[]>();
+    for (const r of wideRows) by.set(r.month, [...(by.get(r.month) ?? []), r]);
+    return [...by.entries()].sort(([a], [b]) => b.localeCompare(a));
+  }, [wideRows]);
   const uncat = real.filter(TABS.find((x) => x.key === "uncat")!.test).length;
   const estShown = tab === "all" || tab === "awaiting" ? estimates.filter(match) : [];
 
@@ -90,8 +106,16 @@ export default function Transactions() {
 
       <div className="relative">
         <Search size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-stone-400" />
-        <input className="input pl-9" placeholder="Ara: uber, kira, psikolog…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input pl-9" type="search" aria-label="İşlemlerde ara" placeholder="Ara: uber, kira, psikolog…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+      {canSearch && !!needle && !sfOn && (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Arama kapsamı" data-testid="arama-kapsami">
+          {([["all", "Tüm dönemler"], ["period", `Sadece ${periodName(ui.month)} dönemi`]] as const).map(([k, l]) => (
+            <button key={k} aria-pressed={scope === k} onClick={() => setScope(k)}
+              className={cx("rounded-full border px-3 py-1 text-sm", scope === k ? "border-blue-600 bg-blue-50 text-blue-800 dark:bg-blue-950 dark:text-blue-200" : "border-stone-300 dark:border-stone-700")}>{l}</button>
+          ))}
+        </div>
+      )}
 
       <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:px-0">
         {TABS.map((t) => {
@@ -120,15 +144,45 @@ export default function Transactions() {
 
       <EstimateSection rows={estShown} summary={!needle ? summary.data : undefined} />
 
+      {wide ? (
+        <div className="space-y-3" data-testid="arama-sonuclari">
+          {debounced !== q.trim() && !search.data && <p className="text-sm text-stone-500">Aranıyor…</p>}
+          <SorguDurumu q={search} etiket="Tüm dönemlerde aranıyor"><SatirIskelet n={3} /></SorguDurumu>
+          {search.data && !groups.length && (
+            <p className="card p-4 text-sm text-stone-600 dark:text-stone-400">“{q.trim()}” hiçbir dönemde yok.</p>
+          )}
+          {groups.length > 0 && (
+            <p className="text-xs text-stone-500">{wideRows.length} kayıt · {groups.length} dönem{search.data?.next ? " · ilk 500 sonuç" : ""}</p>
+          )}
+          {groups.map(([m, rs]) => {
+            const [a, b] = boundsOf(m, meta);
+            return (
+              <section key={m} className="card overflow-hidden" aria-label={`${periodLabel(m)} dönemi`}>
+                <div className="flex items-baseline justify-between gap-2 border-b border-stone-100 px-3 py-2 dark:border-stone-800">
+                  <h2 className="text-sm font-semibold">{periodLabel(m)} dönemi <span className="font-normal text-stone-500">· {dayMonthTR(a)} – {dayMonthTR(b)}</span></h2>
+                  <span className="shrink-0 text-xs text-stone-500">{rs.length} kayıt</span>
+                </div>
+                <TxnList rows={rs} />
+              </section>
+            );
+          })}
+        </div>
+      ) : (
       <div className="card overflow-hidden">
         <div className="border-b border-stone-100 px-3 py-2 text-xs text-stone-500 dark:border-stone-800">
           {txns.complete ? `${rows.length} kayıt` : `İlk ${rows.length} kayıt`} · gider toplamı {spend == null ? "…" : tl(spend)}
           {!filtered && !txns.complete && " (dönemin tamamı)"} · düzenlemek için dokun
         </div>
         <SorguDurumu q={txns} etiket="İşlemler yükleniyor" className="p-3"><SatirIskelet n={6} kart={false} /></SorguDurumu>
-        {txns.data && <TxnList rows={rows} />}
+        {txns.data && (needle && txns.complete && !rows.length ? (
+          <div className="p-4 text-sm text-stone-600 dark:text-stone-400">
+            {periodName(ui.month)} döneminde “{q.trim()}” yok.{" "}
+            {canSearch && !sfOn && <button className="font-medium text-blue-700 underline dark:text-blue-400" onClick={() => setScope("all")}>Tüm dönemlerde ara</button>}
+          </div>
+        ) : <TxnList rows={rows} />)}
         {!txns.isLoading && !txns.complete && !txns.error && <LoadMore onMore={txns.loadMore} busy={txns.loadingMore} label="Daha eski işlemler" />}
       </div>
+      )}
     </div>
   );
 }

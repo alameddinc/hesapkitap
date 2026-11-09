@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
-import { cx, monthLabel, parseAmount, tl } from "../format";
+import { cx, parseAmount, tl, periodLabel } from "../format";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
 
@@ -102,13 +102,13 @@ export default function Simulator({ onClose }: { onClose: () => void }) {
             {d.negative_months.length > 0 && (
               <p className="flex gap-2 rounded-lg bg-red-50 p-2 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                {d.negative_months.map((m) => monthLabel(m, true)).join(", ")}: kesin giderler gelirini aşar.
+                {d.negative_months.map((m) => periodLabel(m, true)).join(", ")}: kesin giderler gelirini aşar.
               </p>
             )}
             {!d.negative_months.length && d.tight_with_estimate.length > 0 && (
               <p className="flex gap-2 rounded-lg bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                Harcamaların son aylardaki gibi giderse {d.tight_with_estimate.map((m) => monthLabel(m, true)).join(", ")} sıkışık.
+                Harcamaların son aylardaki gibi giderse {d.tight_with_estimate.map((m) => periodLabel(m, true)).join(", ")} sıkışık.
               </p>
             )}
             <table className="w-full text-sm tabular-nums whitespace-nowrap [overflow-wrap:normal]">
@@ -122,7 +122,7 @@ export default function Simulator({ onClose }: { onClose: () => void }) {
               <tbody>
                 {d.months.map((m) => (
                   <tr key={m.month} className="border-t border-stone-100 dark:border-stone-800">
-                    <td className="py-1">{monthLabel(m.month, true)}</td>
+                    <td className="py-1">{periodLabel(m.month, true)}</td>
                     <td className="py-1 text-right">{m.payment ? tl(m.payment) : "—"}</td>
                     <td className="py-1 text-right">
                       <span className="text-stone-400">{tl(m.net_before)}</span> →{" "}

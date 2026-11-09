@@ -3,7 +3,7 @@ import { ask as askConfirm } from "../lib/ask";
 import { call } from "../lib/apiError";
 import { ChevronDown, CreditCard, Gift, Plus, Shirt, Trash2, Utensils } from "lucide-react";
 import { useState } from "react";
-import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
+import { cx, dateTR, parseAmount, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
@@ -36,7 +36,7 @@ function WalletRow({ w }: { w: Wallet }) {
         <span className="text-stone-400"><Icon t={w.card_type} /></span>
         <button className="min-w-0 flex-1 text-left" onClick={() => setOpen(!open)}>
           {w.name} <span className="text-xs text-stone-500">· {TYPES[w.card_type]}
-            {s && (active ? ` · her ay ${s.day_of_month}. gün ${tl(s.amount)}` : ` · yükleme durdu (son: ${monthLabel(s.end_month!)})`)}
+            {s && (active ? ` · her ay ${s.day_of_month}. gün ${tl(s.amount)}` : ` · yükleme durdu (son: ${periodLabel(s.end_month!)})`)}
             {w.expires_at && ` · son kullanma ${dateTR(w.expires_at)}`}</span>
         </button>
         <button className="tabular-nums underline decoration-dotted" title="Bakiyeyi düzelt"
