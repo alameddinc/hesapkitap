@@ -436,7 +436,7 @@ function GroupCombos({ g, officialHere }: { g: PriceGroupRef; officialHere: bool
     <section className="space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
       <h3 className="text-sm font-semibold">Zincir ve marka</h3>
-      <ComboList data={q.data} loading={q.isLoading} error={q.error as Error | null} bleed="-mx-3 px-3" />
+      <ComboList q={q} bleed="-mx-3 px-3" />
       <RegionPrompt show={officialHere || !!q.data?.rows.some((r) => r.source === "resmi")} />
     </section>
   );

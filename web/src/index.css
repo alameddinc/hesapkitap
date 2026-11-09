@@ -97,3 +97,19 @@ h1 {
 @utility label {
   @apply mb-1 block text-xs font-medium text-stone-500 dark:text-stone-400;
 }
+/* dokunma alanı en az 44×44 (dokunmatik ekranda; WCAG 2.5.5, mobil theme.css .hit ile aynı): görünen boyut aynı kalır,
+   görünmez ::before alanı yalnız eksik olan yöne büyür. Küçük çipler ve satır içi küçük düğmeler (alışveriş, fiyatlar). */
+@utility hit {
+  position: relative;
+  @media (pointer: coarse) {
+    &::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
+}

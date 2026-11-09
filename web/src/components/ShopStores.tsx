@@ -13,6 +13,7 @@ import { applyHidden, hiddenText, localSub, storesButtonText, storesSettingValue
 import { useUI } from "../ui";
 import { useCap, useMeta } from "./hooks";
 import Modal from "./Modal";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 export const STORES = ["shop-stores"] as const;
 /** Süzgeç değişince tazelenecek her şey (teklif gösterilen yerler). */
@@ -83,8 +84,7 @@ export function ShopStoresSheet({ onClose }: { onClose: () => void }) {
     <Modal title="Mağazalar" onClose={onClose}>
       <div className="space-y-4" data-testid="magazalar">
         <p className="text-sm text-stone-600 dark:text-stone-300">Girmek istemediğin mağazaları kapat; fiyatlarda ve planlarda hiç görünmez.</p>
-        {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-        {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+        <SorguDurumu q={q} etiket="Mağazalar yükleniyor"><SatirIskelet n={4} ikon={false} /></SorguDurumu>
         {d && (
           <>
             {!d.chains.length ? (

@@ -19,6 +19,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CheckCheck, ChevronRight, History, Info, MapPinned, Minus, Plus, Route as RouteIcon, ShoppingCart, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Modal from "../components/Modal";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
+import { PriceStatus } from "../components/ShopCombos";
 import { assumedText, barMain, bestInline, sizeOf, type Assumed, type Headline, type ShopBest, type UnpricedInfo } from "../lib/priceAdvice";
 import type { Optimize } from "../lib/optimize";
 import { cx, maskText, tl, todayISO } from "../format";
@@ -199,13 +201,13 @@ function ShoppingList() {
   const bulk = useMutation({
     mutationFn: (sel: Due[]) => send<{ added: number; skipped: number }>(`${BASE}/bulk`, { method: "POST",
       json: { items: sel.map((x) => ({ text: x.text, qty: x.qty, unit: x.unit, ...(x.group_key && { group_key: x.group_key }) })) } }),
-    onSuccess: (r) => { setFill(null); ui.toast(`${r.added} ürün listeye eklendi`); },
+    onSuccess: (r) => { setFill(null); ui.toast(r.added ? `${r.added} ürün listeye eklendi` : "Hepsi zaten listede"); }, // mobil Doldur ile aynı
     onError: (e: Error) => ui.error(e.message),
     onSettled: refresh,
   });
   const savePlan = useMutation({
     mutationFn: (a: { k: number; chains?: string[] }) => send<SavedPlan>(`${BASE}/saved-plan`, { method: "PUT", json: a.chains?.length ? { k: a.k, chains: a.chains } : { k: a.k } }),
-    onSuccess: () => { setPlanOpen(false); ui.toast("Plan kaydedildi · liste markete göre sıralandı"); window.scrollTo({ top: 0, behavior: "smooth" }); },
+    onSuccess: (p) => { setPlanOpen(false); ui.toast(`Plan kaydedildi · ${p.chains.map((c) => chainName(c.chain)).join(" + ")}`); window.scrollTo({ top: 0, behavior: "smooth" }); },
     onError: (e: Error) => ui.error(e.message),
     onSettled: () => void qc.invalidateQueries({ queryKey: LIST }),
   });
@@ -219,6 +221,12 @@ function ShoppingList() {
 
   const now = () => { const d = new Date(); return { tmp: -d.getTime(), at: d.toISOString() }; };
   const addOne = (a: { text: string; qty?: number; group_key?: string | null }) => add.mutate({ ...a, ...now() });
+  // silme ve kayıt bildirimleri mobil ile aynı metinle ("Süt silindi" + Geri al, "Süt kaydedildi")
+  const removeItem = (it: ShopItem) => {
+    del.mutate([it.id]);
+    ui.toast(`${it.text} silindi`, { undo: () => send(BASE, { method: "POST", json: { text: it.text, qty: it.qty ?? 1,
+      ...(it.unit && it.unit !== "adet" && { unit: it.unit }), ...(it.group_key?.includes("|") && { group_key: it.group_key }) } }).finally(refresh) });
+  };
 
   const open = items.filter((i) => !i.done), done = items.filter((i) => i.done);
   const bestOf = new Map((plan.data?.items ?? []).map((x) => [x.id, x.best]));
@@ -245,7 +253,7 @@ function ShoppingList() {
       onAnyBrand={() => { patch.mutate({ id: it.id, brand: null }); ui.toast("Marka fark etmez seçildi"); }} />
   ) : (
     <LegacyRow key={it.id} it={it} best={bestOf.get(it.id)} hint={hints.get(it.id)} ro={ro} money={money} people={people} today={today} sizesOn={sizesOn}
-      onTick={(d) => patch.mutate({ id: it.id, done: d })} onQty={(q) => patch.mutate({ id: it.id, qty: q })} onDel={() => del.mutate([it.id])} onSize={() => setSizeFor(it)} />
+      onTick={(d) => patch.mutate({ id: it.id, done: d })} onQty={(q) => patch.mutate({ id: it.id, qty: q })} onDel={() => removeItem(it)} onSize={() => setSizeFor(it)} />
   );
 
   return (
@@ -290,8 +298,7 @@ function ShoppingList() {
         </>
       )}
 
-      {list.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {list.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(list.error as Error).message}</p>}
+      <SorguDurumu q={list} etiket="Alışveriş listesi yükleniyor"><SatirIskelet n={4} ikon={false} /></SorguDurumu>
       {list.data && !items.length && (
         <section className="card space-y-1 p-6 text-center">
           <ShoppingCart size={28} className="mx-auto text-stone-400" aria-hidden />
@@ -360,8 +367,8 @@ function ShoppingList() {
       {sizeFor && <SizePicker it={sizeFor} money={money} onClose={() => setSizeFor(null)}
         onPick={(key) => { patch.mutate({ id: sizeFor.id, group_key: key }); setSizeFor(null); }} />}
       {edit && <ShopItemDialog it={edit} hint={!edit.done ? hintOf(edit) : undefined} autofill={autofillOn} money={money} onClose={() => setEdit(null)}
-        onSave={(p: ItemPatch) => { patch.mutate({ id: edit.id, ...p }); setEdit(null); }}
-        onRemove={() => { del.mutate([edit.id]); setEdit(null); }} />}
+        onSave={(p: ItemPatch) => { patch.mutate({ id: edit.id, ...p }); setEdit(null); ui.toast(`${p.text ?? edit.text} kaydedildi`); }}
+        onRemove={() => { removeItem(edit); setEdit(null); }} />}
       {fill && <FillDialog items={fill} busy={bulk.isPending} onClose={() => setFill(null)} onConfirm={(sel) => bulk.mutate(sel)} />}
       {completing && <CompleteDialog done={done.length} total={items.length} busy={complete.isPending} onClose={() => setCompleting(false)} onConfirm={(c) => complete.mutate(c)} />}
       {!tripsOn && !ro && done.length > 0 && (
@@ -507,7 +514,7 @@ function ItemPrice({ it, hint, ro, money, onSize }: { it: ShopItem; hint?: Unpri
       ) : hint ? <span className="text-stone-500" data-testid="satir-ipucu">{hint.hint}</span> : null}
       {it.assumed && (ro ? <span className="text-stone-500">{assumedText(it.assumed)}</span> : (
         <button type="button" onClick={onSize} data-testid="boy-sec"
-          className="rounded-full border border-stone-200 px-2 py-0.5 text-stone-600 hover:bg-stone-100 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800"
+          className="hit inline-flex min-h-7 items-center rounded-full border border-stone-200 px-2.5 text-stone-600 hover:bg-stone-100 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800"
           aria-label={`${it.text}: ${assumedText(it.assumed)}, boyu değiştir`}>{assumedText(it.assumed)} · değiştir</button>
       ))}
     </div>
@@ -522,8 +529,7 @@ function SizePicker({ it, money, onClose, onPick }: { it: ShopItem; money: (n: n
     <Modal title={`${it.text}: boy seç`} onClose={onClose}>
       <div className="space-y-2">
         <p className="text-sm text-stone-500">Fiyatı bu boya göre karşılaştırırız.</p>
-        {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-        {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+        <PriceStatus q={q} rows={3} testId="boy-yukleniyor" />
         {q.data && !q.data.length && <p className="text-sm text-stone-500">Bu ürünün başka boyu yok.</p>}
         <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700">
           {q.data?.map((o) => (
