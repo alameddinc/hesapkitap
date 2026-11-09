@@ -346,6 +346,16 @@ CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 DEFAULT_AI_QUOTA = 100
 
 
+
+def _alter(c, sql: str) -> None:
+    """ALTER TABLE … ADD COLUMN; aynı anda açılan iki bağlantıdan biri sütunu önce eklediyse ("duplicate column")
+    sessizce geçer (göç yarışı: ilk istekler eşzamanlı gelince 500 veriyordu)."""
+    try:
+        c.execute(sql)
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            raise
+
 def _path() -> str:
     return SYSTEM_DB
 
@@ -376,16 +386,16 @@ def _migrate(c) -> None:
     # ortak defter: üye kendi kullanıcısıyla girer ama sahibin defterini açar
     for table in ("users", "invites"):
         if "member_of" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
-            c.execute(f"ALTER TABLE {table} ADD COLUMN member_of INTEGER")
+            _alter(c, f"ALTER TABLE {table} ADD COLUMN member_of INTEGER")
     # paket (barındırılan sürüm): free / premium / aile, bitiş (ISO, UTC), kaynak (revenuecat / elle)
     have = {r[1] for r in c.execute("PRAGMA table_info(users)")}
     for col in ("plan", "plan_until", "plan_source"):
         if col not in have:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+            _alter(c, f"ALTER TABLE users ADD COLUMN {col} TEXT")
     # ortak defter v2: üyenin yetkisi (viewer | editor | full); davette seçilir
     for table in ("users", "invites"):
         if "book_role" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
-            c.execute(f"ALTER TABLE {table} ADD COLUMN book_role TEXT")
+            _alter(c, f"ALTER TABLE {table} ADD COLUMN book_role TEXT")
     # yumuşak silme (app/deletion.py): istek zamanı, kalıcı silinme zamanı, ortak defter sahibiyle birlikte silinen üye
     # abonelik: mağaza yenilemesi açık mı (CANCELLATION → 0), hangi mağaza (APP_STORE / PLAY_STORE)
     have = {r[1] for r in c.execute("PRAGMA table_info(users)")}
@@ -395,17 +405,17 @@ def _migrate(c) -> None:
                      ("plan_renews", "INTEGER"), ("plan_store", "TEXT"), ("plan_trial", "INTEGER"),
                      ("plan_product", "TEXT"), ("plan_env", "TEXT")):
         if col not in have:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+            _alter(c, f"ALTER TABLE users ADD COLUMN {col} {typ}")
     # sayılmış belgenin türü (belge | fis); eski kayıtlarda NULL
     if "kind" not in {r[1] for r in c.execute("PRAGMA table_info(doc_reads)")}:
-        c.execute("ALTER TABLE doc_reads ADD COLUMN kind TEXT")
+        _alter(c, "ALTER TABLE doc_reads ADD COLUMN kind TEXT")
     # yapay zekâ maliyet kaydı: önbellekli girdi token'ı (app/ai_costs.py)
     if "cached" not in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}:
-        c.execute("ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
+        _alter(c, "ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
     have = {r[1] for r in c.execute("PRAGMA table_info(product_groups)")}
     for col in ("category", "subcategory"):
         if col not in have:
-            c.execute(f"ALTER TABLE product_groups ADD COLUMN {col} TEXT")
+            _alter(c, f"ALTER TABLE product_groups ADD COLUMN {col} TEXT")
     sql = (c.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'product_groups'").fetchone() or [""])[0]
     if "'catalog'" not in (sql or ""):  # kaynak listesi genişledi (katalog, tutarlılık işi): CHECK değişmez → yeniden kur
         c.execute("ALTER TABLE product_groups RENAME TO product_groups_old")
@@ -429,13 +439,13 @@ def _migrate(c) -> None:
         c.execute("DROP TABLE official_prices_old")
     c.execute("CREATE INDEX IF NOT EXISTS official_prices_region ON official_prices(region, day)")
     if "region" not in {r[1] for r in c.execute("PRAGMA table_info(community_prices)")}:  # fişin şubesindeki il
-        c.execute("ALTER TABLE community_prices ADD COLUMN region TEXT")
+        _alter(c, "ALTER TABLE community_prices ADD COLUMN region TEXT")
     if "discounted" not in {r[1] for r in c.execute("PRAGMA table_info(community_prices)")}:  # indirimli kalem ayrı
-        c.execute("ALTER TABLE community_prices ADD COLUMN discounted INTEGER NOT NULL DEFAULT 0")
+        _alter(c, "ALTER TABLE community_prices ADD COLUMN discounted INTEGER NOT NULL DEFAULT 0")
     have = {r[1] for r in c.execute("PRAGMA table_info(official_imports)")}  # veri kalite denetimi (price_import_bq)
     for col, ddl in (("status", "TEXT NOT NULL DEFAULT 'ok'"), ("note", "TEXT"), ("outliers", "INTEGER NOT NULL DEFAULT 0")):
         if col not in have:
-            c.execute(f"ALTER TABLE official_imports ADD COLUMN {col} {ddl}")
+            _alter(c, f"ALTER TABLE official_imports ADD COLUMN {col} {ddl}")
     if "mode" not in have:  # run_log.mode (full | regional_chains): tekillik kipi de içermeli → tablo yeniden kurulur
         c.execute("ALTER TABLE official_imports RENAME TO official_imports_old")
         start = SCHEMA.index("CREATE TABLE IF NOT EXISTS official_imports (")
