@@ -14,6 +14,9 @@ export interface AskOptions {
 }
 export interface AskRequest extends Required<Pick<AskOptions, "confirm" | "cancel" | "danger" | "irreversible">> {
   title: string; body: string; resolve: (ok: boolean) => void;
+  /** üçüncü seçenek (kaydedilmemiş değişiklik: "Kaydetmeden çık"); seçilirse resolveAlt */
+  alt?: string;
+  resolveAlt?: () => void;
 }
 
 let listener: ((r: AskRequest | null) => void) | null = null;
@@ -52,5 +55,24 @@ export function ask(message: string, opts: AskOptions = {}): Promise<boolean> {
     queue.push(req);
     if (queue.length === 1) listener?.(req);
     // çizen henüz yoksa istek kuyrukta bekler; ConfirmHost bağlanınca gösterilir
+  });
+}
+
+/** Kaydedilmemiş değişiklik (UX denetimi 09.11, Bulgu 5; mobil ConfirmSheet kirliSor ile aynı metin):
+ *  "Değişiklikler kaydedilmedi" → Kaydet / Kaydetmeden çık / Vazgeç. */
+export function askKirli(t: { baslik: string; metin: string; kaydet: string; cik: string; vazgec: string }): Promise<"kaydet" | "cik" | "vazgec"> {
+  return new Promise((resolve) => {
+    const done = (v: "kaydet" | "cik" | "vazgec") => {
+      queue.shift();
+      listener?.(queue[0] ?? null);
+      resolve(v);
+    };
+    const req: AskRequest = {
+      title: t.baslik, body: t.metin, confirm: t.kaydet, cancel: t.vazgec, danger: false, irreversible: false, alt: t.cik,
+      resolve: (ok) => done(ok ? "kaydet" : "vazgec"),
+      resolveAlt: () => done("cik"),
+    };
+    queue.push(req);
+    if (queue.length === 1) listener?.(req);
   });
 }

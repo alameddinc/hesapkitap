@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type Budget } from "../api";
 import { cx, parseAmount, tl } from "../format";
 import { useMeta, useSave } from "./hooks";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
 import { BudgetPeople, useBudgetPeople } from "./KimHarcadi";
 
 function state(b: Budget) {
@@ -73,12 +73,14 @@ export function BudgetForm({ month, onClose, onSaved }: { month: string; onClose
     }
     return changed.length;
   }, (n) => { onSaved?.(`${n} bütçe güncellendi`); onClose(); });
+  // kaydedilmemiş değişiklik: kapatırken sorulur (UX denetimi 09.11)
+  const dirty = Object.keys(values).length > 0;
 
   return (
-    <Modal title="Aylık bütçeler" onClose={onClose} footer={
+    <Modal title="Aylık bütçeler" onClose={onClose} dirty={dirty && !save.isPending} onSave={() => save.mutate(undefined)} footer={
       <>
         <div className="flex-1 text-xs text-stone-500">Boş bırak = limit yok</div>
-        <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+        <button className="btn-ghost" onClick={() => void kirliyseSor(dirty, onClose, () => save.mutate(undefined))}>Vazgeç</button>
         <button className="btn-primary" disabled={save.isPending} onClick={() => save.mutate(undefined)}>Kaydet</button>
       </>
     }>

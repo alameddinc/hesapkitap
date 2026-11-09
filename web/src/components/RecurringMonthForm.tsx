@@ -3,7 +3,7 @@ import { api } from "../api";
 import { monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
 
 export interface RecurringMonth {
   rid: number;
@@ -29,17 +29,24 @@ export default function RecurringMonthForm({ r, onClose }: { r: RecurringMonth; 
   }).then((x) => { if (!x.ok) throw new Error("Kaydedilemedi"); }), () => { ui.toast("Planlama güncellendi"); onClose(); });
   const skip = useSave(() => api.skipRecurring(r.rid, r.month), () => { ui.toast(`${r.description} bu ay atlandı`); onClose(); });
   const valid = Number.isFinite(n) && n >= 0;
+  // kaydedilmemiş değişiklik: tutar değiştiyse kapatırken sorulur (UX denetimi 09.11)
+  const dirty = amount !== String(r.amount);
+  const kaydet = () => {
+    if (!valid) return;
+    if (r.mode === "confirm") confirm.mutate(undefined);
+    else plan.mutate(n);
+  };
 
   return (
-    <Modal title={`${r.description} · ${monthLabel(r.month)}`} onClose={onClose} footer={
+    <Modal title={`${r.description} · ${monthLabel(r.month)}`} onClose={onClose} dirty={dirty && !confirm.isPending && !plan.isPending} onSave={kaydet} footer={
       <>
         {r.mode === "confirm"
           ? <button className="btn-ghost" onClick={() => skip.mutate(undefined)}>Bu ay yok</button>
           : r.amount !== r.template && <button className="btn-ghost" onClick={() => plan.mutate(null)}>Şablona dön</button>}
         <div className="flex-1" />
-        <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+        <button className="btn-ghost" onClick={() => void kirliyseSor(dirty, onClose, kaydet)}>Vazgeç</button>
         <button className="btn-primary" disabled={!valid}
-          onClick={() => (r.mode === "confirm" ? confirm.mutate(undefined) : plan.mutate(n))}>
+          onClick={kaydet}>
           {r.mode === "confirm" ? "Onayla" : "Kaydet"}
         </button>
       </>

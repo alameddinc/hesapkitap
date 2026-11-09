@@ -5,7 +5,7 @@ import { parseAmount } from "../format";
 import { api, type BillDraft } from "../api";
 import CategoryPicker from "./CategoryPicker";
 import { useMeta, useSave } from "./hooks";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
 import { BookChoice, SaveSpender, useSaveTarget } from "./SaveTarget";
 import { CACHED_NOTE } from "../lib/saveBook";
 
@@ -24,6 +24,10 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
   const isNew = !draft.id;
   const [err, setErr] = useState<string | null>(draft.error ? `Otomatik okunamadı: ${draft.error}. Elle doldur.` : null);
 
+  // kaydedilmemiş değişiklik: okunan ya da yazılan fatura kaydedilmeden kapanırken sorulur (UX denetimi 09.11)
+  const [ilk] = useState(() => JSON.stringify([provider, amount, due, category, description, note]));
+  const dirty = (isNew && !!draft.file_name) || JSON.stringify([provider, amount, due, category, description, note]) !== ilk;
+  const saveNow = () => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); };
   const save = useSave(async () => {
     const amt = parseAmount(amount);
     if (!provider.trim() || !(amt >= 0) || !amount || !due) throw new Error("Kurum, tutar ve son ödeme tarihi gerekli");
@@ -36,13 +40,13 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
   const cats = [...BILL_CATS, ...(meta.data?.categories ?? []).filter((c) => !BILL_CATS.includes(c))];
 
   return (
-    <Modal title={draft.id ? "Faturayı düzenle" : "Fatura ekle"} onClose={onClose} footer={
+    <Modal title={draft.id ? "Faturayı düzenle" : "Fatura ekle"} onClose={onClose} dirty={dirty && !save.isPending && !(isNew && st.viewer)} onSave={saveNow} footer={
       <>
         {draft.id && <button className="btn-danger" disabled={del.isPending} onClick={() => void ask("Fatura silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}><Trash2 size={16} /> Sil</button>}
         <div className="flex-1" />
-        <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+        <button className="btn-ghost" onClick={() => void kirliyseSor(dirty && !(isNew && st.viewer), onClose, saveNow)}>Vazgeç</button>
         <button className="btn-primary" disabled={save.isPending || (isNew && st.viewer)} title={isNew && st.viewer ? "Sadece görme yetkin var" : undefined}
-          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>Kaydet</button>
+          onClick={saveNow}>Kaydet</button>
       </>
     }>
       <div className="space-y-3">

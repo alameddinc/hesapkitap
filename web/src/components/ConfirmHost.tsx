@@ -12,10 +12,11 @@ export default function ConfirmHost() {
   useEffect(() => { if (req) cancelRef.current?.focus(); }, [req]);
   if (!req) return null;
   return (
-    <Modal title={req.title} onClose={() => req.resolve(false)} footer={<>
+    <Modal title={req.title} onClose={() => req.resolve(false)} noBack footer={<>
       <div className="flex-1" />
-      <button ref={cancelRef} className="btn-ghost" onClick={() => req.resolve(false)}>{req.cancel}</button>
-      <button className={cx("btn text-white", req.danger ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700")}
+      <button ref={cancelRef} className="btn-ghost min-h-11" onClick={() => req.resolve(false)}>{req.cancel}</button>
+      {req.alt && <button className="btn-danger min-h-11" onClick={() => req.resolveAlt?.()}>{req.alt}</button>}
+      <button className={cx("btn min-h-11 text-white", req.danger ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700")}
         onClick={() => req.resolve(true)}>{req.confirm}</button>
     </>}>
       <div className="space-y-2 text-sm">
