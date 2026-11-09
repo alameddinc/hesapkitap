@@ -61,7 +61,7 @@ def test_trial_has_normal_limits_and_is_reported(hosted):
     assert _rc({"type": "INITIAL_PURCHASE", "app_user_id": str(u["id"]), "entitlement_ids": ["premium"],
                 "product_id": "premium_monthly", "period_type": "TRIAL", "expiration_at_ms": exp}).status_code == 200
     p = c.get("/api/meta").json()["plan"]
-    assert p["plan"] == "premium" and p["trial"] is True and p["trial_days_left"] in (6, 7)
+    assert p["plan"] == "premium" and p["trial"] is True and p["trial_days_left"] in (6, 7, 8)  # gece yarısına yakın yerel ve UTC gün farkı
     assert p["reads"]["limit"] == 30 and p["reads"]["monthly_cap"] is None
     _set_reads(u["id"], day=30)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
