@@ -251,6 +251,8 @@ def _stats_db() -> sqlite3.Connection:
                  platform TEXT, note TEXT)""")
     if "tester" not in {r[1] for r in c.execute("PRAGMA table_info(waitlist)")}:  # Android kapalı testine gönüllü
         c.execute("ALTER TABLE waitlist ADD COLUMN tester INTEGER NOT NULL DEFAULT 0")
+    if "platform" not in {r[1] for r in c.execute("PRAGMA table_info(sessions)")}:  # web | ios | android (Ölçüm)
+        c.execute("ALTER TABLE sessions ADD COLUMN platform TEXT")
     return c
 
 
@@ -294,15 +296,23 @@ def _visitor(ip: str, ua: str) -> str:
     return hashlib.sha256(f"{salt}|{ip}|{ua}".encode()).hexdigest()[:12]
 
 
-def track(sid: str, path: str, method: str, ip: str, ua: str) -> None:
+def _platform(ua: str, client: str) -> str:
+    """Demo oturumunun platformu: mobil uygulama (X-HK-Client: mobile) iOS / Android, yoksa web (telefon tarayıcısı da)."""
+    if client == "mobile" or "HesapKitapApp/" in ua:
+        return "ios" if re.search(r"iPhone|iPad|iPod|iOS", ua) else "android" if "Android" in ua else "web"
+    return "web"
+
+
+def track(sid: str, path: str, method: str, ip: str, ua: str, client: str = "") -> None:
     """Her demo isteğinde: oturumun son görülme zamanı, gezdiği bölümler, örnek/yazma sayısı."""
     try:
         now = int(time.time())
         area = next((a for p, a in AREAS.items() if path.startswith(p)), None)
         c = _stats_db()
-        c.execute("INSERT OR IGNORE INTO sessions (sid, created, last_seen, visitor, mobile, bot) VALUES (?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT OR IGNORE INTO sessions (sid, created, last_seen, visitor, mobile, bot, platform) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?)",
                   (sid, int(sid.split("-")[0]), now, _visitor(ip, ua), int(bool(re.search(r"Mobi|Android|iPhone", ua))),
-                   int(bool(BOT.search(ua)))))
+                   int(bool(BOT.search(ua))), _platform(ua, (client or "").lower())))
         c.execute("UPDATE sessions SET last_seen = ?, requests = requests + 1, "
                   "areas = CASE WHEN ? IS NULL OR instr(',' || areas || ',', ',' || ? || ',') > 0 THEN areas "
                   "ELSE trim(areas || ',' || ?, ',') END, samples = samples + ?, writes = writes + ? WHERE sid = ?",
@@ -317,8 +327,8 @@ def track(sid: str, path: str, method: str, ip: str, ua: str) -> None:
 def stats(days: int = 7) -> dict:
     since = int(time.time()) - days * 86400
     c = _stats_db()
-    rows = c.execute("SELECT created, last_seen, requests, visitor, mobile, bot, areas, samples, writes FROM sessions "
-                     "WHERE created >= ?", (since,)).fetchall()
+    rows = c.execute("SELECT created, last_seen, requests, visitor, mobile, bot, areas, samples, writes, platform "
+                     "FROM sessions WHERE created >= ?", (since,)).fetchall()
     wl = c.execute("SELECT email, created, platform, note, tester FROM waitlist ORDER BY created DESC, rowid DESC").fetchall()
     c.close()
     human = [r for r in rows if not r[5]]
@@ -330,6 +340,10 @@ def stats(days: int = 7) -> dict:
     visitors_by_day = Counter()
     for d in by_day:
         visitors_by_day[d] = len({r[3] for r in human if time.strftime("%Y-%m-%d", time.localtime(r[0])) == d})
+    plat_by_day: dict = {}  # gün → {web, ios, android}: Ölçüm sayfasının platform ayrımı (eski oturumlar platformsuz: web)
+    for r in human:
+        p = plat_by_day.setdefault(time.strftime("%Y-%m-%d", time.localtime(r[0])), {"web": 0, "ios": 0, "android": 0})
+        p[r[9] if r[9] in p else "web"] += 1
     med = durs[len(durs) // 2] if durs else 0
     return {
         "gün": days, "oturum": len(human), "bot_oturum": len(rows) - len(human),
@@ -339,7 +353,8 @@ def stats(days: int = 7) -> dict:
         "1dk+_kalan": sum(d >= 60 for d in durs), "5dk+_kalan": sum(d >= 300 for d in durs),
         "örnek_deneyen": sum(1 for r in human if r[7]), "kayıt_ekleyen": sum(1 for r in human if r[8]),
         "bölümler": dict(areas.most_common()),
-        "günlük": {d: {"oturum": by_day[d], "ziyaretçi": visitors_by_day[d]} for d in sorted(by_day)},
+        "günlük": {d: {"oturum": by_day[d], "ziyaretçi": visitors_by_day[d], "platform": plat_by_day[d]}
+                   for d in sorted(by_day)},
         "son_oturumlar": [{"başlangıç": time.strftime("%Y-%m-%d %H:%M", time.localtime(r[0])), "süre_sn": max(0, r[1] - r[0]),
                            "istek": r[2], "mobil": bool(r[4]), "bölümler": [a for a in (r[6] or "").split(",") if a],
                            "örnek": r[7], "kayıt": r[8]} for r in sorted(human, key=lambda r: -r[0])[:25]],

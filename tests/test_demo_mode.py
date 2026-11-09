@@ -107,6 +107,15 @@ def test_stats_track_sessions_without_storing_ip(demo):
     assert "203.0.113.7" not in str(raw)  # IP saklanmaz
 
 
+def test_stats_daily_platform_split(demo):
+    """Ölçüm sayfası için günlük oturumlar platforma göre: mobil uygulama (X-HK-Client) iOS / Android, gerisi web."""
+    TestClient(demo.app).get("/api/summary", headers={"x-hk-client": "mobile", "user-agent": "Mozilla/5.0 (iPhone) Mobile"})
+    TestClient(demo.app).get("/api/summary", headers={"x-hk-client": "mobile", "user-agent": "Mozilla/5.0 (Android 15)"})
+    TestClient(demo.app).get("/api/summary", headers={"user-agent": "Mozilla/5.0 (iPhone) Safari"})  # telefon tarayıcısı
+    day = next(iter(demo_mode.stats(1)["günlük"].values()))
+    assert day["oturum"] == 3 and day["platform"] == {"web": 1, "ios": 1, "android": 1}
+
+
 def test_stats_endpoint_needs_key_and_does_not_create_sandbox(demo, monkeypatch):
     import os
 

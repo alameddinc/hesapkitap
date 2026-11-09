@@ -595,7 +595,9 @@ def apply_revenuecat(event: dict) -> dict:
         # deneme bilgisi ve ürün: PRODUCT_CHANGE yalnız bilgi amaçlıdır (yeni ürün yenilemede RENEWAL/INITIAL_PURCHASE ile
         # gelir), ürünü ve deneme durumunu o olay değiştirmez
         extra = {} if kind == "PRODUCT_CHANGE" else {"plan_trial": 1 if event.get("period_type") == "TRIAL" else 0,
-                                                    **({"plan_product": product} if product else {})}
+                                                    **({"plan_product": product} if product else {}),
+                                                    **({"plan_env": str(event["environment"]).upper()}
+                                                       if event.get("environment") else {})}
         system.update_user(u["id"], plan=plan, plan_until=until, plan_source="revenuecat", plan_store=store,
                            plan_renews=0 if kind in NO_RENEW_EVENTS else 1, **extra)
         return {"user": u["id"], "plan": plan, "until": until}

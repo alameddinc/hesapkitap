@@ -210,7 +210,7 @@ async def _demo_request(request: Request, call_next):
         response = await _run(request, call_next, db_file, path)
     response.headers["X-Demo-Sid"] = sid
     demo_mode.track(sid, path, request.method, request.headers.get("x-real-ip") or (request.client.host if request.client else ""),
-                    request.headers.get("user-agent", ""))
+                    request.headers.get("user-agent", ""), request.headers.get("x-hk-client", ""))
     if new:
         https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
         response.set_cookie(demo_mode.COOKIE, sid, max_age=demo_mode.TTL, httponly=True, secure=https, samesite="lax", path="/")
@@ -460,6 +460,10 @@ async def _require_login(request: Request, call_next):
             response = await _run(request, call_next, db_file, path)
     else:
         response = await _run(request, call_next, None, path)
+    if user:  # Ölçüm (app/funnel.py): kişinin bugünü bir kez, kayıt sayısı en çok 5; hata isteği bozmaz
+        from app import funnel
+
+        funnel.touch(user, request.method, path, response.status_code, request.headers)
     if request.method in _UNSAFE and response.status_code < 400 and path.startswith(_INTEGRITY_WRITES):
         from app import integrity  # düzeltilen sorunun Yapılacaklar maddesi hemen düşsün (arka planda, gecikmeli)
 
@@ -1924,6 +1928,10 @@ async def revenuecat_webhook(request: Request):
         raise HTTPException(404, errors.GENERIC[404])
     body = await request.json()
     res = await asyncio.to_thread(plans.apply_revenuecat, body.get("event") or {})  # SQLite yazma: döngü beklemesin
+    if res.get("ignored") != "app_user_id":  # Ölçüm: yalnız toplam (app/funnel.py), kişi yazılmaz; anonim kimlik sayılmaz
+        from app import funnel
+
+        await asyncio.to_thread(funnel.record_store_event, body.get("event") or {})
     import logging
 
     logging.getLogger("ekstre").info("revenuecat %s %s", (body.get("event") or {}).get("type"), res)
@@ -6030,21 +6038,66 @@ def demo_stats(request: Request, days: int = 7):
     return demo_mode.stats(max(1, min(days, 365)))
 
 
+def _demo_stats_fetch(days: int) -> dict | None:
+    """Demo container'ının istatistiği (sunucu içinden, DEMO_STATS_KEY ile). Yapılandırılmamışsa None; ulaşılamazsa hata."""
+    import httpx
+
+    url, key = os.environ.get("DEMO_STATS_URL"), os.environ.get("DEMO_STATS_KEY")
+    if not url or not key:
+        return None
+    r = httpx.get(url, params={"days": days}, headers={"x-stats-key": key}, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
 @app.get("/api/admin/demo-stats")
 def admin_demo_stats(days: int = 7):
     """Yönetici: canlı demonun istatistikleri (demo container'ından, sunucu içinden çekilir)."""
-    import httpx
-
     _require_admin()
-    url, key = os.environ.get("DEMO_STATS_URL"), os.environ.get("DEMO_STATS_KEY")
-    if not url or not key:
-        return {"configured": False}
     try:
-        r = httpx.get(url, params={"days": days}, headers={"x-stats-key": key}, timeout=10)
-        r.raise_for_status()
+        s = _demo_stats_fetch(days)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, errors.user_text(e, 502, "Demoya ulaşılamadı; biraz sonra tekrar dene.")) from e
-    return {"configured": True, **r.json()}
+    return {"configured": False} if s is None else {"configured": True, **s}
+
+
+# ---------------------------------------------------------------- Ölçüm (dönüşüm hunisi; app/funnel.py)
+
+class EventIn(BaseModel):
+    name: str
+
+
+@app.post("/api/events")
+def track_event(body: EventIn, request: Request):
+    """Uygulama olayı (beyaz liste: funnel.EVENTS). Yalnız günlük toplam yazılır; kişi, IP, cihaz kimliği yok.
+    Kişi başı saatte funnel.EVENT_HOURLY (429). Demoda ve ölçümün kapalı olduğu sunucuda sayılmaz (counted: false)."""
+    from app import funnel
+
+    try:
+        counted = funnel.record_event(db.current_user(), body.name, funnel.platform_of(request.headers))
+    except ValueError as e:
+        raise HTTPException(422, "Bilinmeyen olay") from e
+    except funnel.RateLimited as e:
+        raise HTTPException(429, "Çok fazla olay; biraz sonra.", headers={"Retry-After": "600"}) from e
+    return {"ok": True, "counted": counted}
+
+
+@app.get("/api/admin/funnel")
+def admin_funnel(platform: str | None = None, weeks: int = 12):
+    """Yönetici "Ölçüm": son haftalar ve toplam; platform web | ios | android (boş: hepsi). Demo sunucusu
+    yapılandırılmışsa haftalık demo oturumları da (ulaşılamazsa demo_error, sayfa yine açılır)."""
+    from app import funnel
+
+    _require_admin()
+    weeks = max(1, min(weeks, 52))
+    demo, demo_error, configured = None, None, bool(os.environ.get("DEMO_STATS_URL") and os.environ.get("DEMO_STATS_KEY"))
+    if configured:
+        try:
+            demo = (_demo_stats_fetch(weeks * 7) or {}).get("günlük") or {}
+        except Exception as e:  # noqa: BLE001
+            demo_error = errors.user_text(e, 502, "Demoya ulaşılamadı.")
+    out = funnel.report(weeks=weeks, platform=platform, demo=demo)
+    return {**out, "enabled": funnel.enabled(), "demo_configured": configured, "demo_error": demo_error}
 
 
 @app.post("/api/demo/reset")

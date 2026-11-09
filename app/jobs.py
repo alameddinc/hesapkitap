@@ -228,6 +228,9 @@ def run_global(now: datetime) -> list[str] | None:
     from app import ai_costs
 
     ai_costs.prune()  # 13 aydan eski yapay zekâ maliyet kayıtları
+    from app import funnel
+
+    funnel.prune()  # Ölçüm: 400 günden eski kişi başı gün satırları, 3 yıldan eski toplamlar
     from app import doc_cache
 
     doc_cache.prune(now.timestamp())  # 30 günü dolan okuma sonuçları (app/doc_cache.py)

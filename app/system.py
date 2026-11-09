@@ -309,6 +309,36 @@ CREATE TABLE IF NOT EXISTS official_daily (  -- resmî fiyatın günlük özeti 
     chains INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (group_key, region, day)
 );
+CREATE TABLE IF NOT EXISTS user_activity (  -- Ölçüm (app/funnel.py): kişi başı yalnız GÜN; saat/sayfa/IP yok; 400 gün
+    user_id INTEGER NOT NULL,
+    day TEXT NOT NULL,                   -- YYYY-MM-DD (Türkiye günü)
+    platform TEXT NOT NULL,              -- web | ios | android | mobil (günün ilk isteği)
+    writes INTEGER NOT NULL DEFAULT 0,   -- o gün eklenen kayıt, en çok funnel.WRITE_CAP (5)
+    PRIMARY KEY (user_id, day)
+);
+CREATE INDEX IF NOT EXISTS user_activity_day ON user_activity(day);
+CREATE TABLE IF NOT EXISTS funnel_events (  -- istemci olayı (paket ekranı, satın alma), yalnız TOPLAM; kişi yazılmaz
+    day TEXT NOT NULL,
+    event TEXT NOT NULL,                 -- funnel.EVENTS
+    platform TEXT NOT NULL,              -- web | ios | android | mobil
+    plan_state TEXT NOT NULL,            -- free | trial | premium | aile | self
+    n INTEGER NOT NULL DEFAULT 0,        -- olay sayısı (kişi/gün başı en çok funnel.EVENT_DAILY_CAP)
+    users INTEGER NOT NULL DEFAULT 0,    -- o gün olayı yapan kişi (süreç belleğinde tekilleştirilir)
+    PRIMARY KEY (day, event, platform, plan_state)
+);
+CREATE TABLE IF NOT EXISTS store_events (   -- mağaza (RevenueCat) olay toplamı; kişi yok (app/funnel.py)
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,                  -- trial_start | purchase | trial_convert | renewal | cancel | refund | expire …
+    plan TEXT NOT NULL,                  -- premium | aile | okuma_100 …
+    period TEXT NOT NULL,                -- monthly | yearly | tek
+    store TEXT NOT NULL,                 -- app_store | play_store | sandbox
+    n INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, kind, plan, period, store)
+);
+CREATE TABLE IF NOT EXISTS store_event_seen (  -- webhook tekrarı iki kez sayılmasın: RevenueCat olay kimliği; 45 gün
+    id TEXT PRIMARY KEY,
+    at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
@@ -359,10 +389,11 @@ def _migrate(c) -> None:
     # yumuşak silme (app/deletion.py): istek zamanı, kalıcı silinme zamanı, ortak defter sahibiyle birlikte silinen üye
     # abonelik: mağaza yenilemesi açık mı (CANCELLATION → 0), hangi mağaza (APP_STORE / PLAY_STORE)
     have = {r[1] for r in c.execute("PRAGMA table_info(users)")}
-    # deneme süresi (RevenueCat period_type TRIAL) ve mağaza ürünü (premium_monthly...): hak doldu yanıtı için
+    # deneme süresi (RevenueCat period_type TRIAL) ve mağaza ürünü (premium_monthly...): hak doldu yanıtı için;
+    # plan_env: RevenueCat environment (PRODUCTION | SANDBOX) — Ölçüm'de test abonelikleri gelire sayılmasın
     for col, typ in (("deleted_at", "TEXT"), ("delete_after", "TEXT"), ("deleted_with", "INTEGER"),
                      ("plan_renews", "INTEGER"), ("plan_store", "TEXT"), ("plan_trial", "INTEGER"),
-                     ("plan_product", "TEXT")):
+                     ("plan_product", "TEXT"), ("plan_env", "TEXT")):
         if col not in have:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
     # sayılmış belgenin türü (belge | fis); eski kayıtlarda NULL
@@ -542,7 +573,7 @@ def members(owner_id: int) -> list[dict]:
 def update_user(uid: int, **fields) -> None:
     allowed = {"username", "password_hash", "disabled", "last_login", "must_change_password", "ai_quota", "role",
                "plan", "plan_until", "plan_source", "book_role", "deleted_at", "delete_after", "deleted_with",
-               "plan_renews", "plan_store", "plan_trial", "plan_product"}
+               "plan_renews", "plan_store", "plan_trial", "plan_product", "plan_env"}
     data = {k: v for k, v in fields.items() if k in allowed}
     if not data:
         return
@@ -562,7 +593,8 @@ def delete_user(uid: int) -> None:
         if gone:
             c.execute("DELETE FROM ai_usage WHERE user_id = ?", (uid,))
             for t in ("read_usage", "read_daily", "read_split", "read_credits", "read_unreadable", "ai_restrictions",
-                      "ai_restriction_log", "ai_restriction_days", "push_devices", "push_prefs", "push_sent", "push_queue"):
+                      "ai_restriction_log", "ai_restriction_days", "push_devices", "push_prefs", "push_sent", "push_queue",
+                      "user_activity"):
                 c.execute(f"DELETE FROM {t} WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             for t in ("doc_cache", "read_book_daily"):  # defterin okuma önbelleği ve aile günlük toplamı
