@@ -29,7 +29,8 @@ import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } fro
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
-import { BeklenenArtan, BeklenenGider } from "../components/Beklenen";
+import { DonemSonuKarti } from "../components/Beklenen";
+import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { boundsOf, cx, monthLabel, signed, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
 
@@ -80,6 +81,7 @@ function Section({ title, children, right }: { title: string; children: React.Re
 // Özet bileşenleri: sırası ve hangilerinin görüneceği kişiye özel (Düzenle). module: ait olduğu özellik/sayfa.
 const WIDGETS: Record<string, { title: string; module?: string }> = {
   kartlar: { title: "Gelir · gider · net · faiz" },
+  "donem-sonu": { title: "Dönem sonu", module: "plan" },
   gelenler: { title: "Telefondan gelenler" },
   baslarken: { title: "Başlarken" },
   uyarilar: { title: "Dikkat etmen gerekenler" },
@@ -98,7 +100,7 @@ const WIDGETS: Record<string, { title: string; module?: string }> = {
   altin: { title: "Altın ve döviz", module: "hesaplar" },
   "son-islemler": { title: "Son işlemler" },
 };
-const DEFAULT_LAYOUT = ["kartlar", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
+const DEFAULT_LAYOUT = ["kartlar", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
   "istatistik-link", "odemeler"];
 
 export default function Dashboard() {
@@ -138,8 +140,9 @@ export default function Dashboard() {
   const detailTitle = sel ? sel.name : insightFilter?.title;
 
   const [editing, setEditing] = useState(false);
-  const layout = (prefs.layout ?? DEFAULT_LAYOUT).filter((id) => WIDGETS[id]);
-  const setLayout = (next: string[]) => savePrefs.mutate({ layout: next });
+  // sonradan eklenen bileşen (Dönem sonu) kayıtlı düzende de görünür; kaldırılınca işaretiyle saklanır (lib/ozetDuzen)
+  const layout = ozetDuzeni(prefs.layout, (id) => !!WIDGETS[id], DEFAULT_LAYOUT);
+  const setLayout = (next: string[]) => savePrefs.mutate({ layout: kayitDuzeni(next) });
   const move = (id: string, d: number) => {
     const next = [...layout];
     const i = next.indexOf(id);
@@ -176,8 +179,6 @@ export default function Dashboard() {
           <div className="relative text-sm text-blue-100">Bu dönem harcadığın</div>
           <div className="relative mt-1 font-display text-[2.6rem] leading-none font-semibold tracking-tight tabular-nums">{tl(s.totals.expense)}</div>
           {s.totals.savings > 0 && <div className="relative mt-1 text-xs text-blue-100">+ birikime {tl(s.totals.savings)} (gider sayılmaz)</div>}
-          {/* ekstresi gelmemiş taksitler ve bekleyenlerle dönem sonu (summary.expected = Planlama'nın bu ayı) */}
-          <div className="relative mt-1"><BeklenenGider summary={s} hero /></div>
           <div className="relative"><EstimateNote summary={s} tone="hero" /></div>
           <div className={cx("relative mt-5 grid gap-2 border-t border-white/15 pt-3", feesHidden ? "grid-cols-2" : "grid-cols-3")}>
             <div>
@@ -188,7 +189,6 @@ export default function Dashboard() {
             <div>
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">{TERIM.artan.ad} <TerimBilgi id="artan" metin={s.definitions?.left} className="text-blue-100" /></div>
               <div className={cx("font-semibold tabular-nums", left < 0 && "text-rose-200")}>{tlCompact(left)}</div>
-              <BeklenenArtan summary={s} hero />
             </div>
             {!feesHidden && (
               <div>
@@ -202,11 +202,9 @@ export default function Dashboard() {
           <Kpi label="Gelir" value={s.totals.income} tone="green"
             sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
-            sub={`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`}
-            extra={<BeklenenGider summary={s} />} />
+            sub={`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`} />
           <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={left} tone={left < 0 ? "red" : "green"}
-            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa}
-            extra={<BeklenenArtan summary={s} />} />
+            sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
           {!feesHidden && (
             <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
               sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
@@ -217,6 +215,8 @@ export default function Dashboard() {
         {/* Aralık sonu / Ocak başı: "2026 yılın nasıl geçti?" → yıl özeti (yalnız içinde bulunulan dönemde) */}
         {month === meta?.current_month && <YearShortcut />}
       </>);
+      // dönem sonu tahmini (Planlama'nın bu ayı): yalnız bu ve ileri dönemde (geçmişte expected null → kart yok)
+      case "donem-sonu": return <DonemSonuKarti summary={s} />;
       case "gelenler": return <SharedInbox />;
       // Başlarken (sahibin kurulumu) ve altında Yapılacaklar (belge hatırlatmaları; üyede görebildikleri)
       case "baslarken": return <>{!inSharedBook(book) && <Onboarding />}<Reminders /></>;

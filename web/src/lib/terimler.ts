@@ -39,10 +39,13 @@ export const TERIM = {
     aciklama: "Bu dönemin geliri eksi gideri. Birikime ayırdığın gider sayılmaz. Bugün harcayabileceğin para değil; " +
       "onun için \"Harcanabilir\"e bak.",
   },
-  beklenen: {
-    ad: "Beklenen",
-    kisa: "Ekstre gelince ve bekleyenlerle",
-    aciklama: "Ekstresi gelmemiş kart taksitleri ve beklenen gelirler dahil tahmin; yeni harcamalar eklenmez.",
+  donemSonu: {
+    ad: "Dönem sonu",
+    kisa: "Her zamanki harcamanla",
+    // iki rakam, birer cümle (Özet "Dönem sonu" kartı; lib/beklenen.ts)
+    aciklama: "Her zamanki harcamanla: kayıtlı gelir ve giderine bekleyen taksit, abonelik, sabit kalem, fatura ve " +
+      "gelirler ile son dönemlerdeki kadar kart harcaması eklenir (Planlama'daki rakam). " +
+      "Yeni harcama yapmazsan: aynı hesap, yeni kart harcaması eklenmeden.",
   },
   eldeKalan: {
     ad: "Elde kalan",

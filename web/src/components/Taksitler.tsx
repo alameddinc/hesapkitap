@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type Summary } from "../api";
 import { cx, tl } from "../format";
 import {
-  TAKSIT_NOT, taksitBaslik, taksitDurum, taksitGoster, taksitKalan, taksitKalemAlt, taksitSayi,
+  TAKSIT_NOT, taksitBaslik, taksitDurum, taksitGoster, taksitKalan, taksitKalemAlt, taksitKisaAlt, taksitSayi,
 } from "../lib/taksit";
 import { useUI } from "../ui";
 import Modal from "./Modal";
@@ -15,7 +15,6 @@ export default function TaksitSatiri({ summary }: { summary: Summary }) {
   const o = summary.installments;
   const [open, setOpen] = useState(false);
   if (!taksitGoster(o)) return null;
-  const kalan = taksitKalan(o, tl);
   const sayi = taksitSayi(o);
   return (
     <>
@@ -29,8 +28,8 @@ export default function TaksitSatiri({ summary }: { summary: Summary }) {
             <span className="font-medium">{taksitBaslik(o)}</span>
             <span className="tabular-nums"><b>{tl(o.total)}</b>{sayi && <span className="text-stone-500"> · {sayi}</span>}</span>
           </span>
-          <span className="block text-xs text-stone-500">{taksitDurum(o, tl)}</span>
-          {kalan && <span className="block text-xs text-stone-500 tabular-nums">{kalan}</span>}
+          {/* kısa: "₺35.487 ekstre bekleniyor"; uzun açıklama ve kalan taksit borcu listede */}
+          <span className="block text-xs text-stone-500 tabular-nums">{taksitKisaAlt(o, tl)}</span>
         </span>
         <ChevronRight size={16} className="shrink-0 text-stone-400" />
       </button>

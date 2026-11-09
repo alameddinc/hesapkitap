@@ -1295,6 +1295,28 @@ def _json_setting(key: str, default):
     return json.loads(v) if v else default
 
 
+def _plan_parts(lines: list[dict]) -> dict:
+    """Planlama ayının dökümü (months[].parts = Özet summary.expected.parts): gerçekleşen gelir/gider ve bekleyenler
+    (ekstresi gelmemiş taksit ve abonelik, girilmemiş sabit kalem, ödenmemiş fatura, bekleyen gelir). Değişken kart
+    tahmini burada yok (satırın "estimated" alanı)."""
+    by: dict[str, float] = defaultdict(float)
+    for ln in lines:
+        if ln["kind"] not in (EXPENSE, INCOME) or ln["type"] == "degisken":
+            continue
+        pending = ln["type"] in ("taksit", "abonelik", "fatura") or (ln["type"] == "sabit" and not ln.get("confirmed"))
+        key = {"taksit": "pending_installments", "abonelik": "pending_subscriptions", "fatura": "pending_bills",
+               "sabit": "pending_recurring_expense"}.get(ln["type"]) if pending else "recorded_expense"
+        if ln["kind"] == INCOME:
+            key = "pending_income" if pending else "recorded_income"
+        by[key] += ln["amount"]
+    parts = {k: _round(by.get(k, 0.0)) for k in ("recorded_expense", "pending_installments", "pending_subscriptions",
+                                                  "pending_recurring_expense", "pending_bills", "recorded_income",
+                                                  "pending_income")}
+    parts["pending_expense"] = _round(parts["pending_installments"] + parts["pending_subscriptions"]
+                                      + parts["pending_recurring_expense"] + parts["pending_bills"])
+    return parts
+
+
 @_memo  # yalnız defter verisine ve güne bağlı; Planlama, Özet (summary/insights) ve hatırlatmalar aynı sonucu paylaşır
 def plan(months: int = 6, today: date | None = None) -> dict:
     today = today or date.today()
@@ -1438,6 +1460,8 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             "net": _round(income - expense), "net_with_estimate": _round(income - expense - estimated),
             "cumulative": _round(cumulative), "cumulative_with_estimate": _round(cumulative_est),
             "groups": {k: _round(v) for k, v in groups.items()},
+            # gerçekleşen / bekleyen dökümü (yetenek summary_forecast): Özet "Dönem sonu" ile Planlama ayı aynı kaynak
+            "parts": _plan_parts(lines),
             "lines": sorted(lines, key=lambda l: (l["kind"] != INCOME, l["kind"] == "bilgi", -l["amount"])),
         })
 
@@ -1502,23 +1526,10 @@ def expected(month: str, today: date | None = None) -> dict | None:
     row = next((x for x in plan(max(6, n), today=today)["months"] if x["month"] == month), None)
     if row is None:
         return None
-    by: dict[str, float] = defaultdict(float)
-    for ln in row["lines"]:
-        if ln["kind"] not in (EXPENSE, INCOME) or ln["type"] == "degisken":
-            continue
-        pending = ln["type"] in ("taksit", "abonelik", "fatura") or (ln["type"] == "sabit" and not ln.get("confirmed"))
-        key = {"taksit": "pending_installments", "abonelik": "pending_subscriptions", "fatura": "pending_bills",
-               "sabit": "pending_recurring_expense"}.get(ln["type"]) if pending else "recorded_expense"
-        if ln["kind"] == INCOME:
-            key = "pending_income" if pending else "recorded_income"
-        by[key] += ln["amount"]
-    parts = {k: _round(by.get(k, 0.0)) for k in ("recorded_expense", "pending_installments", "pending_subscriptions",
-                                                  "pending_recurring_expense", "pending_bills", "recorded_income",
-                                                  "pending_income")}
-    parts["pending_expense"] = _round(parts["pending_installments"] + parts["pending_subscriptions"]
-                                      + parts["pending_recurring_expense"] + parts["pending_bills"])
+    # variable_estimate / forecast_net (yetenek summary_forecast): Planlama'nın "her zamanki harcamanla" rakamı (değişken
+    # kart tahmini dahil = months[].net_with_estimate). Satırın kendisinden; ayrı hesap yok
     return {"month": month, "source": "plan", "expense": row["expense"], "income": row["income"], "net": row["net"],
-            "parts": parts}
+            "variable_estimate": row["estimated"], "forecast_net": row["net_with_estimate"], "parts": row["parts"]}
 
 
 # ---------------------------------------------------------------- ödemeler (ekstre + fatura)

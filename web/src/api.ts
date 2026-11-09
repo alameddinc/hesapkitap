@@ -1,4 +1,4 @@
-import type { Beklenen } from "./lib/beklenen";
+import type { Beklenen, BeklenenParcalar } from "./lib/beklenen";
 import type { TaksitKalem, TaksitOzet } from "./lib/taksit";
 import { ApiError, call, send } from "./lib/apiError";
 import { bookHeaders, type BookKey } from "./lib/saveBook";
@@ -377,6 +377,8 @@ export interface PlanMonth {
   cumulative: number;
   cumulative_with_estimate: number;
   groups: Partial<Record<PlanLineType | "gelir", number>>;
+  /** gerçekleşen / bekleyen dökümü (yetenek summary_forecast; eski sunucuda yok) = summary.expected.parts */
+  parts?: BeklenenParcalar;
   lines: PlanLine[];
 }
 

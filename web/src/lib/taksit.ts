@@ -64,6 +64,11 @@ export function taksitDurum(o: TaksitOzet, para: (n: number) => string): string 
   return `${para(o.in_spend)} harcamana dahil · ${para(o.expected)} henüz gidere yazılmadı (ekstre bekleniyor)`;
 }
 
+/** Özet satırının kısa alt yazısı: "₺35.487 ekstre bekleniyor" (hepsi harcamadaysa "Harcamana dahil"). Uzun metin
+ *  (taksitDurum) ve kalan taksit borcu listede. */
+export const taksitKisaAlt = (o: TaksitOzet, para: (n: number) => string) =>
+  o.expected === 0 ? "Harcamana dahil" : `${para(o.expected)} ekstre bekleniyor`;
+
 /** "Kalan taksit borcu ₺18.400 · 7 alışveriş" — yalnız içinde bulunulan dönemde ve borç varsa. */
 export function taksitKalan(o: TaksitOzet, para: (n: number) => string): string | null {
   if (!o.current || o.remaining <= 0) return null;

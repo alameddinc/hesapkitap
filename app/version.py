@@ -210,6 +210,9 @@ CAPABILITIES = (
                               # removed, moved, unlinked, undo_id} (409 öneri yok; geri al POST /api/imports/{id}/undo);
                               # POST .../separate {a, b} ("Ayrı kalsın", bir daha önerilmez); /api/reminders kind
                               # "sabit_tekrar" (action recurring_merge, keep_id, drop_id, keep_name, drop_name, amount)
+    "summary_forecast",       # Özet "Dönem sonu": /api/summary expected'a variable_estimate (= Planlama months[].estimated)
+                              # ve forecast_net (= months[].net_with_estimate, "her zamanki harcamanla"); /api/plan
+                              # months[].parts (expected.parts ile aynı döküm). Eski alanlar aynen durur
 )
 
 
