@@ -204,6 +204,9 @@ CAPABILITIES = (
                               # pending_expense, recorded_income, pending_income}} | null (geçmiş dönem) +
                               # definitions.expected ((i) metni). = Planlama'nın o ayki "kesin" satırı (finance.expected);
                               # totals/by_category/budgets/trend'e hiçbir şey eklemez
+    "summary_forecast",       # Özet "Dönem sonu": /api/summary expected'a variable_estimate (= Planlama months[].estimated)
+                              # ve forecast_net (= months[].net_with_estimate, "her zamanki harcamanla"); /api/plan
+                              # months[].parts (expected.parts ile aynı döküm). Eski alanlar aynen durur
 )
 
 

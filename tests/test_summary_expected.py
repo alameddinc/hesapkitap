@@ -96,6 +96,38 @@ def test_capability_and_api_shape(client, seeded):
     assert client.get("/api/summary", params={"month": finance.add_months(cur, -1)}).json()["expected"] is None
 
 
+# ---------------------------------------------------------------- "Dönem sonu" kartı (yetenek summary_forecast)
+
+@pytest.mark.parametrize("month", [NOV, DEC])
+def test_forecast_is_planlama_month_row(seeded, month):
+    """Her zamanki harcamanla (forecast_net) = Planlama'nın o ayki "tahminle" rakamı; yeni harcama yapmazsan = net.
+    Döküm (parts) Planlama satırının parts'ı; ayrı hesap yok."""
+    e = finance.summary(month, today=TODAY)["expected"]
+    p = _plan_row(month)
+    assert e["forecast_net"] == p["net_with_estimate"]
+    assert e["variable_estimate"] == p["estimated"] > 0
+    assert e["parts"] == p["parts"]
+    assert money.eq(e["forecast_net"], e["net"] - e["variable_estimate"])
+    assert e["forecast_net"] < e["net"]  # her zamanki harcama düşülür
+
+
+def test_plan_month_parts_reconcile(seeded):
+    for p in finance.plan(6, today=TODAY)["months"]:
+        parts = p["parts"]
+        assert money.eq(p["expense"], parts["recorded_expense"] + parts["pending_expense"])
+        assert money.eq(p["income"], parts["recorded_income"] + parts["pending_income"])
+
+
+def test_forecast_api_shape(client, seeded):
+    assert "summary_forecast" in client.get("/api/meta").json()["capabilities"]
+    cur = finance.current_period()
+    e = client.get("/api/summary", params={"month": cur}).json()["expected"]
+    p = next(m for m in client.get("/api/plan").json()["months"] if m["month"] == cur)
+    assert (e["forecast_net"], e["variable_estimate"], e["parts"]) == (p["net_with_estimate"], p["estimated"], p["parts"])
+    # eski istemci alanları aynen
+    assert {"month", "source", "expense", "income", "net", "parts"} <= set(e)
+
+
 # ---------------------------------------------------------------- toplamlar değişmedi (önce/sonra)
 
 def _xlsx(client):
