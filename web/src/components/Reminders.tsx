@@ -13,14 +13,16 @@ import { PairCards } from "./MatchInfo";
 import { DUP_TEXT, useDupActions } from "./RecurringDupes";
 import { grupBaslik, grupla, grupOzet } from "../lib/belgeGrubu";
 import SorguDurumu from "./SorguDurumu";
+import { RereadSheet, rereadDismiss } from "./StatementReread";
+import { OKU } from "../lib/yenidenOku";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
-  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi" | "dogruluk" | "sabit_tekrar";
+  id: string; kind: "ekstre" | "dokum" | "odeme" | "esles" | "hesap" | "kart_eslesmedi" | "borc_odeme" | "belge_onay" | "belge_dogrulanamadi" | "dogruluk" | "sabit_tekrar" | "ekstre_oku";
   title: string; text: string; cta: string; route: Route | "gelen";
   /** ekstre/dokum: "N belge bekleniyor" grubundaki kısa ad (yetenek reminders_doc_group) */
   short?: string;
-  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm" | "integrity" | "recurring_merge";
+  action?: "upload" | "pay" | "match" | "account" | "card_match" | "debt_pay" | "inbox_review" | "document_confirm" | "statement_confirm" | "integrity" | "recurring_merge" | "statement_reread";
   // S6: belge_onay (Gelen kutusu'nda bekleyen belge), belge_dogrulanamadi (yüklenen döküm/ekstre kontrol bekliyor)
   inbox_id?: number; document_id?: number;
   /** sunucu 8a38d60: onay düğmesinin adı (sözlük: "Rakamlar doğru"); cta: ana düğme ("Bak", "Yükle"…) */
@@ -41,6 +43,8 @@ export interface Reminder {
   debt_id?: number; pay?: { amount: number; paid_at: string; entry_id: number };
   // sabit_tekrar: "İki sabit kalem aynı olabilir" — Birleştir: POST /api/recurring/duplicates/merge {keep, drop}
   keep_id?: number; drop_id?: number; keep_name?: string; drop_name?: string; keep_linked?: number;
+  // ekstre_oku (yetenek statement_reread): "Ekstre yeniden okunabilir" — Farkı gör (statement_id), rows satır farklı
+  rows?: number;
 }
 
 const post = (id: string, what: "snooze" | "dismiss", body?: object) =>
@@ -309,6 +313,26 @@ function DupQuestion({ r }: { r: Reminder }) {
   );
 }
 
+/** "Ekstre yeniden okunabilir: <Banka> ••1234 · N satır farklı": Farkı gör (pencere: Uygula / Şimdi değil) ve Şimdi değil. */
+function RereadRow({ r }: { r: Reminder }) {
+  const ui = useUI();
+  const fail = useAnswerError();
+  const [open, setOpen] = useState(false);
+  const later = useSave(() => rereadDismiss(r.statement_id!), () => ui.toast(OKU.gizlendi));
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3" data-testid="yeniden-oku-madde">
+      <Badge r={r} />
+      <div className="min-w-0 flex-1 basis-48"><Head r={r} /></div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <button className="btn-ghost border border-stone-200 px-3 dark:border-stone-700" disabled={later.isPending || r.statement_id == null}
+          onClick={() => later.mutate(undefined, { onError: fail })}>{OKU.simdiDegil}</button>
+        <button className="btn-primary px-3" disabled={r.statement_id == null} onClick={() => setOpen(true)}>{r.cta || OKU.farkiGor}</button>
+      </div>
+      {open && r.statement_id != null && <RereadSheet sid={r.statement_id} onClose={() => setOpen(false)} />}
+    </li>
+  );
+}
+
 /** Özet'te "Yapılacaklar": kesilen ekstre, ayı kapanan hesap dökümü, yaklaşan son ödeme. Boşsa hiç görünmez. */
 const TERIM_OK = "Rakamlar doğru"; // eski sunucu confirm_label vermezse
 
@@ -400,6 +424,7 @@ export default function Reminders() {
     : r.kind === "kart_eslesmedi" ? <CardUnmatched key={r.id} r={r} />
     : r.kind === "borc_odeme" ? <DebtQuestion key={r.id} r={r} />
     : r.kind === "sabit_tekrar" ? <DupQuestion key={r.id} r={r} />
+    : r.kind === "ekstre_oku" ? <RereadRow key={r.id} r={r} />
     : r.kind === "belge_dogrulanamadi" ? <DocCheck key={r.id} r={r} /> : <Row key={r.id} r={r} onRun={() => run(r)} />;
   return (
     <section className="card overflow-visible">

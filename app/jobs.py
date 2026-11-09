@@ -311,6 +311,13 @@ async def scheduler() -> None:
                 log.info("ürün grupları yeniden gruplama: %s", got)
         except Exception:  # noqa: BLE001
             log.exception("regroup tick failed")
+        try:  # yapay zekâ okuması tutmayan ekstreler: şablonla yeniden okunabilir mi (app/statement_reread.py; önbellek)
+            from app import statement_reread
+
+            if got := await asyncio.to_thread(statement_reread.tick):
+                log.info("ekstre yeniden okuma taraması: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("statement reread tick failed")
         try:  # fiş kalemi anahtarları (ad düzeltilmiş eski satırlar) arka planda parça parça (app/receipt_rekey.py)
             from app import receipt_rekey
 

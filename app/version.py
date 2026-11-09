@@ -249,6 +249,12 @@ CAPABILITIES = (
                               # person, amount, pay_date, year_start}]: ödenmiş ama gider olarak görünmeyen zekât → POST
                               # /api/zakat/payments/{id}/expense {payment, account_id?, card_last4?, recipient?, pay_date?}
                               # → {entry_id, created} ya da POST .../no-expense ("gerek yok", bir daha sorulmaz)
+    "statement_reread",       # yapay zekâ okuması tutmayan ekstre şablonla yeniden okunabilir: GET /api/statements
+                              # [].reread_rows (N | null), /api/reminders kind "ekstre_oku" (action statement_reread,
+                              # statement_id, rows; "Şimdi değil" = POST /api/reminders/ekstre_oku:<id>/dismiss), GET
+                              # /api/statements/{id}/reread-preview → {available, rows, sig, items [{kind added|removed|
+                              # changed, label, text, note?}], diff, totals_before/after, equation_ok_after}, POST
+                              # .../reread-apply {sig?} → {ok, undo_id, added, changed, removed} (409: değişti / yok)
 )
 
 

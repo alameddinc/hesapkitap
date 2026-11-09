@@ -5315,7 +5315,9 @@ def rename_person(name: str, body: PersonRename):
 
 @app.get("/api/statements")
 def list_statements():
-    return db.list_statements()
+    from app import statement_reread
+
+    return statement_reread.annotate(db.list_statements())  # reread_rows: şablonla yeniden okunabilir (önbellekten)
 
 
 class _Kind(str):
@@ -5516,6 +5518,46 @@ def unconfirm_statement(sid: int):
         raise HTTPException(404, "Ekstre bulunamadı")
     db.confirm_statement(sid, False)
     return {"ok": True, "confirmed_at": None}
+
+
+class RereadApplyIn(BaseModel):
+    sig: str | None = Field(None, max_length=40)  # önizlemedeki imza: arada satırlar değiştiyse 409
+
+
+def _reread_guard() -> None:
+    from app import statement_reread
+
+    if not statement_reread._can_apply():
+        raise HTTPException(403, "Bu işlemi defter sahibi yapabilir")
+
+
+@app.get("/api/statements/{sid}/reread-preview")
+def statement_reread_preview(sid: int):
+    """Yapay zekânın okuduğu ekstre ile aynı belgenin şablon (yapay zekâsız) okuması arasındaki fark: {available, rows,
+    sig, diff {added, removed, changed [{before, after}]}, items [{kind, label, text, note?}], totals_before/after,
+    equation_ok_after}. Yapay zekâ çağrılmaz, okuma hakkı düşmez (app/statement_reread.py)."""
+    from app import statement_reread
+
+    _reread_guard()
+    try:
+        return statement_reread.preview(sid)
+    except KeyError:
+        raise HTTPException(404, "Ekstre bulunamadı") from None
+
+
+@app.post("/api/statements/{sid}/reread-apply")
+def statement_reread_apply(sid: int, body: RereadApplyIn | None = None):
+    """Farkı uygula: eşleşen satırlar (kategori, not, eşleşme, bölme, kim harcadı) korunur, eksik eklenir, fazla
+    silinir, ters işaret düzelir; kaynak 'sablon'. Geri al: undo_id → POST /api/imports/{id}/undo."""
+    from app import statement_reread
+
+    _reread_guard()
+    try:
+        return statement_reread.apply(sid, body.sig if body else None)
+    except KeyError:
+        raise HTTPException(404, "Ekstre bulunamadı") from None
+    except statement_reread.RereadError as e:
+        raise HTTPException(409, str(e)) from None
 
 
 @app.delete("/api/statements/{sid}")

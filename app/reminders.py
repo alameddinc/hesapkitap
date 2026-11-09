@@ -435,6 +435,20 @@ def _sabit_tekrar(now: date) -> list[dict]:
     return out
 
 
+def _ekstre_oku() -> list[dict]:
+    """"Ekstre yeniden okunabilir" (app/statement_reread.py; yalnız önbellekten, ekstreyi değiştirebilene). Kimlik:
+    ekstre_oku:<ekstre id>; "Şimdi değil" = dismiss; uygulanınca (kaynak 'sablon') kendiliğinden düşer."""
+    from app import statement_reread
+
+    try:
+        return statement_reread.todos()
+    except Exception:  # noqa: BLE001 - öneri hesabı Yapılacaklar'ı bozmasın
+        import logging
+
+        logging.getLogger(__name__).exception("ekstre yeniden okuma maddesi hesaplanamadı")
+        return []
+
+
 def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
     """Bugün gösterilecek hatırlatmalar (önce acil olanlar)."""
     now = now or today()
@@ -454,7 +468,10 @@ def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
 
         logging.getLogger(__name__).exception("sabit kalem tekrarı hesaplanamadı")
     items += _dogruluk()
-    items += _belge(upload)
+    oku = _ekstre_oku()
+    fix = {i["statement_id"] for i in oku}  # düzeltmesi hazır ekstrede "kontrol et" ayrıca sorulmaz
+    items += [i for i in _belge(upload) if not (i.get("action") == "statement_confirm" and i.get("statement_id") in fix)]
+    items += oku
     st = _state()
     if not include_hidden:
         items = [i for i in items if not _hidden(i["id"], st, now)]

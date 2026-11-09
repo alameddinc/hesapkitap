@@ -6,6 +6,7 @@ import { api, type Payable, type Statement } from "../api";
 import { cx, dateTR, tl, todayISO, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import { RereadBanner, RereadSheet } from "./StatementReread";
 
 /** Ekstredeki faiz ve ücret (sunucunun fees alanı; eski sunucuda interest_fees). */
 export const feesOf = (s: Statement) => s.fees ?? s.interest_fees ?? 0;
@@ -38,7 +39,8 @@ export default function StatementCard({ s }: { s: Statement }) {
   const status = statementStatus(s);
   // #/ekstreler?ekstre=<id> (Yapılacaklar → doğruluk ayrıntısı): o ekstre açık gelir ve görünür yere kayar
   const focused = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("ekstre") === String(s.id);
-  const [open, setOpen] = useState(status === "check" || focused);
+  const [open, setOpen] = useState(status === "check" || focused || !!s.reread_rows);
+  const [reread, setReread] = useState(false); // şablonla yeniden okuma farkı penceresi
   const liRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (focused) liRef.current?.scrollIntoView({ block: "start" });
@@ -84,6 +86,10 @@ export default function StatementCard({ s }: { s: Statement }) {
 
       {open && (
         <div id={id} className="space-y-3 border-t border-stone-100 px-3 pt-3 pb-3 text-sm dark:border-stone-800">
+          {!!s.reread_rows && (
+            <RereadBanner sid={s.id} bank={s.bank} last4={(s.card_no.replace(/\D/g, "") || s.card_no).slice(-4)} rows={s.reread_rows}
+              onOpen={() => setReread(true)} />
+          )}
           {eq.ok != null && (
             <div className="space-y-1.5 rounded-lg bg-stone-50 p-3 text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
               <Line l="Önceki borç" v={tl(s.previous_balance!)} />
@@ -150,6 +156,7 @@ export default function StatementCard({ s }: { s: Statement }) {
           )}
         </div>
       )}
+      {reread && <RereadSheet sid={s.id} onClose={() => setReread(false)} />}
     </li>
   );
 }

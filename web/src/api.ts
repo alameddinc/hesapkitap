@@ -211,6 +211,26 @@ export interface Statement {
   fees_included?: boolean | null;
   /** denklem farkı: yeni borç − (önceki − ödemeler + harcamalar [+ faiz]); null hesaplanamaz */
   equation_diff?: number | null;
+  /** yetenek statement_reread: şablonla yeniden okunabilir, N satır farklı (önbellekten); null/yok: öneri yok */
+  reread_rows?: number | null;
+}
+
+/** GET /api/statements/{id}/reread-preview: kayıtlı (yapay zekâ) okuma ile şablon okuması arasındaki fark. Metinler
+ * (label, text, note) sunucudan: web ve mobil aynı cümleyi gösterir. */
+export interface RereadItem {
+  kind: "added" | "removed" | "changed";
+  label: string;
+  text: string;
+  note?: string;
+  txn_date?: string; description?: string; amount?: number; txn_type?: string;
+}
+export interface RereadTotals { spend: number; refunds: number; payments: number; fees: number; count: number; equation_diff: number }
+export interface RereadPreview {
+  statement_id: number; bank: string; card_no: string; last4: string; period_end: string; total_debt: number;
+  available: boolean; reason: string; rows: number; sig?: string;
+  items: RereadItem[];
+  diff: { added: unknown[]; removed: unknown[]; changed: { before: unknown; after: unknown }[] };
+  totals_before: RereadTotals; totals_after: RereadTotals | null; equation_ok_after: boolean;
 }
 
 export interface Summary {
@@ -710,6 +730,10 @@ export const api = {
     req<{ ok: boolean; kind: "dokum" | "ekstre"; message: string; statement_id?: number }>("POST", `/api/inbox/${id}/import`),
   confirmStatement: (id: number) => req<{ ok: boolean; confirmed_at: string | null }>("POST", `/api/statements/${id}/confirm`),
   unconfirmStatement: (id: number) => req<{ ok: boolean }>("DELETE", `/api/statements/${id}/confirm`),
+  rereadPreview: (id: number) => req<RereadPreview>("GET", `/api/statements/${id}/reread-preview`),
+  rereadApply: (id: number, sig?: string) =>
+    req<{ ok: boolean; undo_id: string | null; added: number; changed: number; removed: number; rows: number }>(
+      "POST", `/api/statements/${id}/reread-apply`, { sig }),
 
   rules: () => req<Rule[]>("GET", "/api/rules"),
   createRule: (body: Omit<Rule, "id">) => req("POST", "/api/rules", body),
