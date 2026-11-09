@@ -310,6 +310,62 @@ def _revive(spec: dict) -> bool:
                          (_key(spec),)).rowcount > 0
 
 
+# ---------------------------------------------------------------- kart şablonu öğrenme denemeleri (gözlem)
+# Yapay zekâ okumasından kart şablonu öğrenme her denemede (app/card_reader.py learn_from_ai) gün / banka / sonuç /
+# neden kodu sayılır. Belgeden içerik yok: banka yalnız bilinen banka listesinden, neden sabit bir kod.
+
+ATTEMPTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS template_learn_attempts (
+    day TEXT NOT NULL,          -- YYYY-MM-DD
+    bank TEXT NOT NULL,         -- bilinen banka adı ya da "?"
+    ok INTEGER NOT NULL,        -- 1: şablon öğrenildi / doğrulandı
+    reason TEXT NOT NULL,       -- learned | revived | known | ai_equation | lines | ... (card_reader.explain_from_ai)
+    n INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, bank, reason)
+);
+"""
+_REASON = re.compile(r"[a-z_]{1,24}")
+
+
+def record_attempt(bank: str, ok: bool, reason: str) -> None:
+    from datetime import date
+
+    known = set(IBAN_BANKS.values())
+    bank = bank if bank in known else "?"
+    reason = reason if _REASON.fullmatch(reason or "") else "error"
+    with system.connect() as c:
+        c.executescript(ATTEMPTS_SCHEMA)
+        c.execute("INSERT INTO template_learn_attempts (day, bank, ok, reason, n) VALUES (?, ?, ?, ?, 1) "
+                  "ON CONFLICT (day, bank, reason) DO UPDATE SET n = n + 1",
+                  (date.today().isoformat(), bank, int(bool(ok)), reason))
+
+
+def card_overview(days: int = 30) -> dict:
+    """Yönetici görünümü: kart şablonları (banka başına) ve son `days` gündeki öğrenme denemeleri (banka başına
+    başarılı / başarısız ve neden kodları). Kişisel veri yok."""
+    from datetime import date, timedelta
+
+    since = (date.today() - timedelta(days=days)).isoformat()
+    with system.connect() as c:
+        _init(c)
+        c.executescript(ATTEMPTS_SCHEMA)
+        rows = [dict(r) for r in c.execute("SELECT day, bank, ok, reason, n FROM template_learn_attempts WHERE day >= ? "
+                                           "ORDER BY day DESC", (since,))]
+        tpls = [{**dict(r), "spec": json.loads(r["spec"])} for r in c.execute(
+            "SELECT id, bank, spec, source, uses, fails, disabled, created_at FROM bank_templates ORDER BY bank, id")]
+    banks: dict[str, dict] = {}
+    for r in rows:
+        b = banks.setdefault(r["bank"], {"bank": r["bank"], "ok": 0, "failed": 0, "last_day": r["day"], "reasons": {}})
+        b["ok" if r["ok"] else "failed"] += r["n"]
+        b["reasons"][r["reason"]] = b["reasons"].get(r["reason"], 0) + r["n"]
+        b["last_day"] = max(b["last_day"], r["day"])
+    cards = [{"id": t["id"], "bank": t["bank"], "source": t["source"], "uses": t["uses"], "fails": t["fails"],
+              "disabled": bool(t["disabled"]), "created_at": t["created_at"]}
+             for t in tpls if t["spec"].get("kind") == "card"]
+    return {"days": days, "attempts": sorted(banks.values(), key=lambda b: (-b["failed"] - b["ok"], b["bank"])),
+            "templates": cards}
+
+
 def read(text: str) -> dict | None:
     """Kayıtlı şablonlardan biri bu belgeyi zinciri tutturarak okuyorsa sonucu; yoksa yeni kural öğrenmeyi dene."""
     sync_community()

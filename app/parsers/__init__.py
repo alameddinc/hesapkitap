@@ -153,9 +153,16 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
         cache = doc_cache.current()
         if cache is not None and (hit := cache.get()) is not None:  # aynı ekstre bu defterde yapay zekâyla okunmuştu
             try:
-                return Statement.from_dict(hit)
+                st = Statement.from_dict(hit)
             except (TypeError, ValueError):
-                pass
+                st = None
+            if st is not None:
+                st.ai_parsed, st.source = True, "yapay_zeka"
+                from app import card_reader
+
+                # ilk okumada öğrenilemediyse (eski sürüm) şimdi dene: yapay zekâ çağrısı yok, kayıtlı kural varsa no-op
+                card_reader.learn_from_ai(text, st)
+                return st
         try:
             # şifreli PDF'i model okuyamaz: çözülmüş metni gönder
             st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")

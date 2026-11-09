@@ -51,20 +51,24 @@ _EQUATION = {"tr": r"(\d[\d.]*,\d{2})\s*\+\s*(\d[\d.]*,\d{2})\s*-\s*(\d[\d.]*,\d
 LABELS = {
     "period_end": r"hesap kesim tarihi|ekstre kesim tarihi|hesap ozeti tarihi|ekstre tarihi|kesim tarihi",
     "due": r"son odeme tarihi",
-    "total": r"donem borcu|toplam borc|ekstre borcu|hesap ozeti borcu|guncel donem borcu|odenecek toplam",
+    # "Önceki dönem borcu" / "Önceki hesap özeti borcu" dönem borcu sayılmasın (önceki borç satırı çoğu zaman üstte)
+    "total": r"(?<!onceki )(?<!gecen )(?:donem borcu|toplam borc|ekstre borcu|hesap ozeti borcu|guncel donem borcu"
+             r"|odenecek toplam)",
     "min": r"asgari odeme",
     # "Kullanılabilir kart limiti" toplam limit sayılmasın (kendi etiketi: available)
     "limit": r"(?<!kullanilabilir )(?<!kalan )(?:kart limiti|kredi limiti|toplam limit)",
     "available": r"kullanilabilir (?:kart |kredi )?limit|kalan (?:kart |kredi )?limit",
-    "prev": r"onceki donem (?:borcu|bakiye)|onceki ekstre borcu|gecen donem(?:den)? (?:devreden )?borc|devreden borc",
+    "prev": r"onceki donem (?:borcu|bakiye)|onceki ekstre (?:borcu|bakiye)|onceki hesap ozeti (?:borcu|bakiye)"
+            r"|gecen donem(?:den)? (?:devreden )?borc|devreden borc|donem basi (?:borcu|bakiye)",
     "next_cut": r"sonraki hesap kesim|sonraki kesim",
     "next_due": r"sonraki son odeme",
 }
 _DATE_KEYS = ("period_end", "due", "next_cut", "next_due")
-_PREV_LINE = re.compile(r"onceki donem|onceki ekstre|devreden bakiye|devreden borc")
+_PREV_LINE = re.compile(r"onceki donem|onceki ekstre|onceki hesap ozeti|devreden bakiye|devreden borc|gecen donem"
+                        r"|donem basi bakiye")
 _PAY_WORDS = re.compile(r"odeme|tesekkur|payment|tahsilat")
 _REFUND_WORDS = re.compile(r"iade|iptal|refund")
-_FEE_WORDS = re.compile(r"faiz|bsmv|kkdf|ucret|aidat|vade fark|gecikme")
+_FEE_WORDS = re.compile(r"faiz|bsmv|kkdf|ucret|aidat|vade fark|gecikme|kar payi")  # kâr payı: katılım bankası faizi
 _FOLD = str.maketrans("çğıöşüâîû", "cgiosuaiu")
 
 # öğrenilen etiketlerde izin verilen kelimeler (katlanmış). Şablona bunların dışında belgeden kelime girmez.
@@ -73,7 +77,18 @@ hesap hesabi hesabinizin kesim tarihi tarih tarihiniz tarihli ekstre ekstrenin e
 ozetinin ozetiniz bildirim bildirimi duzenleme duzenlenme son odeme odemesi odenecek odenmesi gereken donem donemi
 donemin donemine borcu borcunuz borc borcun toplam toplami genel guncel asgari minimum en az tutari tutar tutariniz
 kart karti kartinizin kartiniz kredi limiti limit limitiniz kullanilabilir kalan nakit onceki gecen devreden bakiye
-bakiyesi bakiyeniz yeni bu ay ayin icin olan ve ile itibariyla itibari tl try vade vadesi gunu
+bakiyesi bakiyeniz yeni bu ay ayin icin olan ve ile itibariyla itibari tl try vade vadesi gunu sonu donemden basi
+odemeniz
+""".split())
+# öğrenilen bölüm sonu başlığında ("Gelecek Dönem Taksitleriniz"): bu satırdan sonra tarihli satırlar işlem değildir.
+# Yalnız bu sabit kelimelerden oluşabilir (belgeden metin taşımaz).
+SECTION_WORDS = frozenset("""
+gelecek sonraki donem donemler donemlerde donemde donemine donemlere taksit taksitler taksitleri taksitleriniz taksitli
+taksitlendirilmis kalan islem islemler islemleri islemleriniz plan plani odeme odemeler odemeleri yansiyacak
+yansiyacak yansiyacaktir tutar tutari tutarlari toplam bilgi bilgileri bilgilendirme detay detayi detaylari ozet ozeti
+puan puanlari puaniniz maxipuan bonus chip para chippara worldpuan mil kazanilan kazandiginiz kullanilan harcanan ve
+ile ay aylik aylara kampanya kampanyalar hareket hareketleri ileri tarihli vadeli bakiye bakiyesi borclari borc
+hesap kart karti kartiniz kredi ek
 """.split())
 # öğrenilebilen başlık alanı → (her kümeden en az bir kelime, olmaması gereken kelimeler); yapay zekâ alanı
 _NEED = {
@@ -82,12 +97,12 @@ _NEED = {
     "due": ([{"son", "vade", "vadesi"}, {"odeme", "odemesi", "tarihi", "tarih", "gunu", "vade", "vadesi"}],
             {"asgari", "minimum", "tutar", "tutari", "kesim"}),
     "total": ([{"borcu", "borcunuz", "borc", "borcun", "toplam", "toplami", "odenecek", "bakiye", "bakiyesi",
-                "bakiyeniz"}], {"onceki", "gecen", "devreden", "asgari", "minimum", "limit", "limiti", "limitiniz",
-                                "nakit"}),
+                "bakiyeniz"}], {"onceki", "gecen", "devreden", "basi", "asgari", "minimum", "limit", "limiti",
+                                "limitiniz", "nakit"}),
     "min": ([{"asgari", "minimum"}], set()),
     "limit": ([{"limit", "limiti", "limitiniz"}], {"kullanilabilir", "kalan", "nakit"}),
     "available": ([{"kullanilabilir", "kalan"}, {"limit", "limiti", "limitiniz"}], {"nakit"}),
-    "prev": ([{"onceki", "gecen", "devreden"}], set()),
+    "prev": ([{"onceki", "gecen", "devreden", "basi"}], set()),
 }
 _AI_FIELD = {"period_end": "period_end", "due": "due_date", "total": "total_debt", "min": "min_payment",
              "limit": "credit_limit", "available": "available_limit", "prev": "previous_balance"}
@@ -160,8 +175,16 @@ def _anchor_value(lines: list[str], a: dict, kind: str, fmt: str):
     pat = _ANY_DATE if kind == "date" else _MONEY[fmt]
     if a["off"] == 0:
         lre = _label_re(a["label"])
+        whole = len(a["label"].split()) < 8  # öğrenilen etiket önündeki sözlük kelimelerinin hepsini içerir (en çok 8)
         for ln in lines:
-            for lm in lre.finditer(_fold(ln)):
+            low = _fold(ln)
+            for lm in lre.finditer(low):
+                # etiket başka bir etiketin parçası olmasın: "dönem borcu" ≠ "Önceki Dönem Borcu", "son ödeme tarihi" ≠
+                # "Sonraki Son Ödeme Tarihi" (önündeki kelime sözlükte ya da "sonraki" ise başka alan)
+                prev_word = re.search(r"([a-z]+)[^a-z0-9]{1,3}$", low[max(0, lm.start() - 40):lm.start()])
+                if whole and prev_word and (prev_word.group(1) in LABEL_WORDS
+                                            or prev_word.group(1) in ("sonraki", "gelecek", "next")):
+                    continue
                 rest = ln[lm.end():]
                 m = pat.search(rest)
                 # değer etiketten sonraki İLK sayı olmalı (arada başka sayı varsa başka alanın değeri)
@@ -179,11 +202,15 @@ def _anchor_value(lines: list[str], a: dict, kind: str, fmt: str):
     return None
 
 
-def header(text: str, fmt: str, labels: dict | None = None) -> dict:
-    """Başlık alanları: önce şablonun öğrenilmiş etiketleri, bulunamazsa ortak etiket sözlüğü (LABELS)."""
+def header(text: str, fmt: str, labels: dict | None = None, skip=()) -> dict:
+    """Başlık alanları: önce şablonun öğrenilmiş etiketleri, bulunamazsa ortak etiket sözlüğü (LABELS). skip: şablonun
+    okumadığı (yapay zekâyla doğrulanamamış) isteğe bağlı alanlar — boş kalır."""
     lines = text.splitlines()
     out = {}
     for k in LABELS:
+        if k in skip:
+            out[k] = None
+            continue
         kind = "date" if k in _DATE_KEYS else "money"
         v = None
         for a in (labels or {}).get(k, []):
@@ -235,24 +262,63 @@ def _is_credit(mode: str, v: re.Match, rest: str, low: str) -> bool:
         return v.group(1) == "+"
     if mode == "trail":
         return bool(re.match(r"\s?-(?!\s?\d)", rest[v.end():]))
+    if mode == "trailplus":  # "2.150,00 +" / "2.150,00+"
+        return bool(re.match(r"\s?\+(?!\s?\d)", rest[v.end():]))
     return bool(_PAY_WORDS.search(low) or _REFUND_WORDS.search(low))  # words
 
 
-def apply(text: str, spec: dict, bank: str = "") -> tuple[Statement, bool] | None:
-    """Şablonla oku → (Statement, denklem tuttu mu) ya da None."""
+def _desc(rest: str, fmt: str, fx: bool, credit: str) -> str:
+    desc = _MONEY[fmt].sub(" ", rest)
+    if fx:
+        desc = _CUR.sub(" ", desc)
+    if credit == "trail":
+        desc = re.sub(r"(?<=\s)-(?=\s|$)", " ", desc)
+    if credit == "trailplus":
+        desc = re.sub(r"(?<=\s)\+(?=\s|$)", " ", desc)
+    return re.sub(r"\s+", " ", desc).strip()[:120] or "?"
+
+
+def _looks_installment(desc: str) -> bool:
+    """Taksit satırı mı (tutar sütunu taksitsiz satırdan farklı olabilir: işlem toplamı + bu ayki taksit)."""
+    return _installment(desc)[0] is not None or "taksit" in _fold(desc)
+
+
+def _pick(vals: list, at: dict, inst_at: dict, idx: int, inst: bool):
+    n = str(len(vals))
+    try:
+        return vals[inst_at[n] if inst and n in inst_at else at.get(n, idx)]
+    except IndexError:
+        return None
+
+
+def _stop_words(spec: dict) -> list[list[str]]:
+    return [s.split() for s in spec.get("stop") or []]
+
+
+def apply(text: str, spec: dict, bank: str = "", trace: list | None = None) -> tuple[Statement, bool] | None:
+    """Şablonla oku → (Statement, denklem tuttu mu) ya da None. trace verilirse işlemlerin satır numaraları eklenir.
+    İsteğe bağlı kurallar (yapay zekâ okumasından öğrenilir): cards "section" — ek kart bölümü başlığındaki kart
+    numarası sonraki işlemlerin kartı; stop — bu başlıktan sonraki tarihli satırlar işlem değil (gelecek taksit tablosu);
+    inst_at — taksit satırında tutarın sırası; prev0 — önceki borç yazmıyorsa 0; skip — okunmayan isteğe bağlı alanlar."""
     fmt = spec["num"]
-    h = header(text, fmt, spec.get("labels"))
+    h = header(text, fmt, spec.get("labels"), spec.get("skip") or ())
     if not h["period_end"] or h["total"] is None:
         return None
     dre = _date_re(spec["date"])
     fx = bool(spec.get("fx"))
-    at = spec.get("amount_at") or {}
+    at, inst_at = spec.get("amount_at") or {}, spec.get("inst_at") or {}
+    sections = spec.get("cards") == "section"
+    stops = _stop_words(spec)
     card = h["card_no"] or "****"
     prev = h["prev"]
     txns = []
-    for ln in text.splitlines():
+    for i, ln in enumerate(text.splitlines()):
         m = dre.match(ln)
         if not m or not (d := _date(m)):
+            if stops and not re.search(r"\d", ln) and _words(_fold(ln)) in stops:
+                break
+            if sections and (c := _CARD.search(ln)):
+                card = f"{c.group(1)}***{c.group(2)}"
             continue
         rest = ln[m.end():]
         toks = _tokens(rest, fmt, fx)
@@ -263,18 +329,14 @@ def apply(text: str, spec: dict, bank: str = "") -> tuple[Statement, bool] | Non
         if _PREV_LINE.search(low):  # "önceki dönem hesap özeti bakiyeniz": işlem değil, devreden borç
             prev = _num(vals[-1].group(2), fmt) if prev is None else prev
             continue
-        try:
-            v = vals[at.get(str(len(vals)), spec["amount_idx"])]
-        except IndexError:
+        desc = _desc(rest, fmt, fx, spec["credit"])
+        if not re.search(r"[a-z]", re.sub(r"\b(?:tl|try)\b", " ", _ANY_DATE.sub(" ", _fold(desc)))):
+            continue  # açıklamasız tarih satırı (sütunlu başlığın değer satırı: "12.10.2026 22.10.2026 3.923,90 TL")
+        v = _pick(vals, at, inst_at, spec["amount_idx"], bool(inst_at) and _looks_installment(desc))
+        if v is None:
             continue
         amount = _num(v.group(2), fmt)
         credit = _is_credit(spec["credit"], v, rest, low)
-        desc = _MONEY[fmt].sub(" ", rest)
-        if fx:
-            desc = _CUR.sub(" ", desc)
-        if spec["credit"] == "trail":
-            desc = re.sub(r"(?<=\s)-(?=\s|$)", " ", desc)
-        desc = re.sub(r"\s+", " ", desc).strip()[:120] or "?"
         if credit:
             kind = PAYMENT if _PAY_WORDS.search(low) else REFUND
             amount = -amount
@@ -287,11 +349,15 @@ def apply(text: str, spec: dict, bank: str = "") -> tuple[Statement, bool] | Non
                                 orig_currency=orig[1] if orig else None,
                                 installment_no=n, installments_left=left,
                                 installment_left_amount=amount if left else None))
+        if trace is not None:
+            trace.append(i)
     if len(txns) < 2:
         return None
     eq = h.get("equation")
     if prev is None and eq:
         prev = eq[0]
+    if prev is None and spec.get("prev0"):
+        prev = 0.0
     charges = round(sum(t.amount for t in txns if t.txn_type != PAYMENT), 2)
     fees = round(sum(t.amount for t in txns if t.txn_type == FEE), 2)
     paid = round(-sum(t.amount for t in txns if t.txn_type == PAYMENT), 2)
@@ -301,7 +367,8 @@ def apply(text: str, spec: dict, bank: str = "") -> tuple[Statement, bool] | Non
         ok = abs(charges - eq[1]) <= 0.05 and abs(paid - eq[2]) <= 0.05
     else:
         ok = False
-    st = Statement(bank=bank or spec.get("bank") or "Kredi kartı", card_no=card, period_end=h["period_end"],
+    st = Statement(bank=bank or spec.get("bank") or "Kredi kartı", card_no=h["card_no"] or "****",
+                   period_end=h["period_end"],
                    due_date=h["due"], total_debt=h["total"], min_payment=h["min"], credit_limit=h["limit"],
                    available_limit=h["available"],
                    previous_balance=prev or 0.0, period_activity=round(charges - fees, 2), interest_fees=fees,
@@ -318,21 +385,38 @@ def plausible(st: Statement) -> bool:
     for t in st.transactions:
         if t.txn_date > st.period_end + timedelta(days=2):
             return False
-        if t.installment_no is None and "taksit" not in _fold(t.description) \
+        if t.installment_no is None and not _looks_installment(t.description) \
                 and t.txn_date < st.period_end - timedelta(days=_PERIOD_DAYS):
             return False
     return True
 
 
-def trustworthy(st: Statement) -> bool:
-    """Yapay zekâ okuması şablon öğretecek kadar güvenilir mi: ekstre denklemi ve işlemler toplamı kuruşu kuruşuna,
-    ödemeler özetle aynı, tarihler tutarlı."""
-    if len(st.transactions) < 2 or not st.total_debt:
-        return False
-    eq = equation(st.previous_balance, st.payments, st.period_activity, st.fees(), st.total_debt)
+def _txn_equation_diff(st: Statement) -> float | None:
+    """önceki borç − ödemeler + harcamalar (iade eksi, faiz dahil) − dönem borcu; işlemlerin kendisinden."""
+    if st.total_debt is None:
+        return None
+    charges = sum(t.amount for t in st.transactions if t.txn_type != PAYMENT)
     paid = -sum(t.amount for t in st.transactions if t.txn_type == PAYMENT)
-    return eq["ok"] is True and abs(eq["diff"]) <= 0.05 and abs(st.reconciliation_diff()) <= 0.05 \
-        and abs(paid - (st.payments or 0)) <= 0.05 and plausible(st)
+    return round((st.previous_balance or 0.0) - paid + charges - st.total_debt, 2)
+
+
+def ai_check(st: Statement) -> str | None:
+    """Yapay zekâ okuması şablon öğretecek kadar güvenilir mi; değilse neden kodu. Ölçüt ŞABLONUN kendi ölçütüyle
+    aynı: işlemlerden kurulan ekstre denklemi (önceki − ödemeler + harcamalar = dönem borcu) kuruşu kuruşuna ve tarihler
+    tutarlı. Modelin özet alanları (period_activity, payments) burada aranmaz: model onları işlemlerden ayrı okur ve
+    sık sık faizi dahil/hariç yazar — işlemler denklemi tutuyorsa özet alanı yanlış olsa da işlem listesi doğrudur."""
+    if len(st.transactions) < 2 or not st.total_debt:
+        return "ai_few_txns"
+    d = _txn_equation_diff(st)
+    if d is None or abs(d) > 0.05:
+        return "ai_equation"
+    if not plausible(st):
+        return "ai_dates"
+    return None
+
+
+def trustworthy(st: Statement) -> bool:
+    return ai_check(st) is None
 
 
 def _keywords(text: str) -> list[str]:
@@ -383,7 +467,7 @@ def _learn_anchor(lines: list[str], key: str, target, fmt: str) -> dict | None:
             cands = []
             if label and all(s & set(label) for s in need) and not avoid & set(label):
                 cands.append({"label": " ".join(label), "off": 0, "nth": 0})
-            elif not label and j <= 5:
+            elif set(label) <= {"tl", "try"} and j <= 5:  # değer satırında yalnız para birimi: "… 3.923,90 TL 1.569,56"
                 for off in (1, 2):
                     if i - off < 0:
                         break
@@ -399,14 +483,30 @@ def _learn_anchor(lines: list[str], key: str, target, fmt: str) -> dict | None:
     return None
 
 
+def _hint_bank(name: str) -> str:
+    low = _low(name or "")
+    return next((bank for pat, bank in BANK_HINTS if re.search(pat, low)), "")
+
+
 def _ai_bank(text: str, ai_bank: str) -> str:
+    return _bank_check(text, ai_bank)[0]
+
+
+def _bank_check(text: str, ai_bank: str) -> tuple[str, str | None]:
+    """(banka, neden kodu). Şablon yalnız metinden tanınan bankayla kaydedilir: sonraki ekstre matches() ile aynı
+    yoldan (bank_of) eşleşmeli — banka adı yalnız logoda olan belgede yapay zekânın yazdığı adla kaydedilen şablon hiç
+    kullanılamazdı. Metindeki banka yapay zekânınkiyle çelişirse (işyeri adında başka bankanın adı) öğrenilmez."""
     from app.templates import IBAN_BANKS
 
-    b = bank_of(text)
+    known = set(IBAN_BANKS.values())
+    b, ai_b = bank_of(text), _hint_bank(ai_bank)
     if not b:
-        low = _low(ai_bank or "")
-        b = next((bank for pat, bank in BANK_HINTS if re.search(pat, low)), "")
-    return b if b in set(IBAN_BANKS.values()) else ""
+        return "", "bank_not_in_text"
+    if b not in known:
+        return "", "bank_unknown"
+    if ai_b and ai_b != b:
+        return "", "bank_mismatch"
+    return b, None
 
 
 def _date_formats(text: str, ai_dates: set[date]) -> list[dict]:
@@ -422,28 +522,37 @@ def _date_formats(text: str, ai_dates: set[date]) -> list[dict]:
     return out
 
 
-def _amount_at(text: str, d: dict, fmt: str, fx: bool, ai: Statement) -> tuple[int, dict]:
-    """Satırdaki değer sayısına göre tutarın sırası: yapay zekânın işlemleri satırlarda aranır."""
+def _rel(p: int, n: int) -> int:
+    return p if p <= 3 else p - n
+
+
+def _amount_at(text: str, d: dict, fmt: str, fx: bool, ai: Statement) -> tuple[int, dict, dict]:
+    """Satırdaki değer sayısına göre tutarın sırası: yapay zekânın işlemleri satırlarda aranır. (amount_idx, amount_at,
+    inst_at): taksit satırlarında tutar başka sütunda olabilir (işlem toplamı + bu ayki taksit + puan; taksitsiz satırda
+    tutar + puan — değer sayısı aynı, sıra farklı)."""
     want: dict[date, list[float]] = {}
     for t in ai.transactions:
         want.setdefault(t.txn_date, []).append(round(abs(t.amount), 2))
     dre = _date_re(d)
-    pos: dict[int, Counter] = {}
+    pos: dict[bool, dict[int, Counter]] = {False: {}, True: {}}
     for ln in text.splitlines():
         m = dre.match(ln)
         if not m or (dt := _date(m)) not in want:
             continue
-        vals = [t for t, code in _tokens(ln[m.end():], fmt, fx) if not code]
+        rest = ln[m.end():]
+        vals = [t for t, code in _tokens(rest, fmt, fx) if not code]
+        inst = _looks_installment(_desc(rest, fmt, fx, ""))
         for i, v in enumerate(vals):
             x = round(_num(v.group(2), fmt), 2)
             if x in want[dt]:
                 want[dt].remove(x)
-                pos.setdefault(len(vals), Counter())[i] += 1
+                pos[inst].setdefault(len(vals), Counter())[i] += 1
                 break
-    if not pos:
-        return -1, {}
-    best = {n: c.most_common(1)[0][0] for n, c in pos.items()}
-    common = max(pos, key=lambda n: sum(pos[n].values()))
+    base = pos[False] or pos[True]
+    if not base:
+        return -1, {}, {}
+    best = {n: c.most_common(1)[0][0] for n, c in base.items()}
+    common = max(base, key=lambda n: sum(base[n].values()))
     p = best[common]
     idx = -1 if p == common - 1 else p
     if not -3 <= idx <= 3:
@@ -452,41 +561,114 @@ def _amount_at(text: str, d: dict, fmt: str, fx: bool, ai: Statement) -> tuple[i
     for n, p in best.items():
         here = idx if idx >= 0 else n + idx
         if p != here and 1 <= n <= 8:
-            at[str(n)] = p if p <= 3 else p - n
-    return idx, at
+            at[str(n)] = _rel(p, n)
+    inst_at = {}
+    if pos[False]:
+        for n, c in pos[True].items():
+            p = c.most_common(1)[0][0]
+            rule = at.get(str(n), idx)
+            if p != (rule if rule >= 0 else n + rule) and 1 <= n <= 8:
+                # bu değer sayısında taksitsiz satır yoksa genel kural yeter; çakışıyorsa taksit satırına ayrı kural
+                (inst_at if n in pos[False] else at)[str(n)] = _rel(p, n)
+    return idx, at, inst_at
 
 
-def _same(st: Statement, ai: Statement) -> bool:
-    """Şablonun sonucu yapay zekânınkiyle aynı mı (işlem sayısı ve toplamı, dönem borcu, tarihler, kart)."""
-    if len(st.transactions) != len(ai.transactions):
-        return False
-    if money.ne(sum(t.amount for t in st.transactions), sum(t.amount for t in ai.transactions)):
-        return False
+def _card_key(card: str | None) -> str | None:
+    return card if re.fullmatch(r"\d{4}\*\*\*\d{4}", card or "") else None
+
+
+def _txn_keys(txns, with_card: bool) -> Counter:
+    return Counter((t.txn_date, money.kurus(t.amount), t.card if with_card else None) for t in txns)
+
+
+def _mismatch(res: tuple[Statement, bool] | None, ai: Statement) -> str | None:
+    """Şablon sonucu yapay zekânınkini AYNEN veriyor mu; vermiyorsa ilk fark (neden kodu). İşlemler tek tek (tarih,
+    kuruş, ek kart varsa kart) karşılaştırılır; başlık alanları; ekstre denklemi; tarih tutarlılığı."""
+    if not res:
+        return "header"
+    st, ok = res
     if money.ne(st.total_debt, ai.total_debt) or st.due_date != ai.due_date or st.period_end != ai.period_end:
-        return False
-    if re.fullmatch(r"\d{4}\*\*\*\d{4}", ai.card_no or "") and st.card_no != ai.card_no:
-        return False
+        return "header_values"
+    if len(st.transactions) != len(ai.transactions):
+        return "lines"
+    if _txn_keys(st.transactions, False) != _txn_keys(ai.transactions, False):
+        return "amounts"
+    cards = all(_card_key(t.card) for t in ai.transactions)
+    if (_card_key(ai.card_no) and st.card_no != ai.card_no) or (cards and _txn_keys(st.transactions, True)
+                                                                 != _txn_keys(ai.transactions, True)):
+        return "card"
+    if not ok:
+        return "equation"
+    if not plausible(st):
+        return "dates"
     for a, b in ((st.min_payment, ai.min_payment), (st.credit_limit, ai.credit_limit),
                  (st.available_limit, ai.available_limit)):  # yanlış değer yazmaktansa boş kalsın
         if a is not None and (b is None or money.ne(a, b)):
-            return False
-    return True
+            return "fields"
+    return None
 
 
-def build_from_ai(text: str, ai: Statement) -> tuple[dict, Statement] | None:
-    """Yapay zekâ okumasından şablon (kaydetmeden): değerler metinde aranır, satır deseni ve etiketler çıkarılır;
-    aynı metne uygulanınca yapay zekânın sonucunu aynen vermeli."""
-    if not text or len(text) > 400_000 or not trustworthy(ai):
+def _same(st: Statement, ai: Statement) -> bool:
+    return _mismatch((st, True), ai) is None
+
+
+_STAGES = ("header", "header_values", "lines", "amounts", "card", "equation", "dates", "fields")
+
+
+def _extra_stop(text: str, spec: dict, bank: str, ai: Statement) -> list[str] | None:
+    """Şablon yapay zekânın işlem saymadığı tarihli satırlar okuyorsa (gelecek dönem taksit tablosu, puan tablosu) ve
+    bunların hepsi listenin SONUNDAYSA: hemen üstlerindeki başlık (yalnız SECTION_WORDS kelimeleri) bölüm sonu olur."""
+    trace: list[int] = []
+    res = apply(text, spec, bank, trace)
+    if not res:
         return None
-    if len({t.card for t in ai.transactions}) > 1:
-        return None  # ek kartlı ekstre: şablon işlemleri kartlara ayıramaz
-    bank = _ai_bank(text, ai.bank)
-    if not bank:
+    want = _txn_keys(ai.transactions, False)
+    extra = []
+    for t, i in zip(res[0].transactions, trace):
+        k = (t.txn_date, money.kurus(t.amount), None)
+        if want[k] > 0:
+            want[k] -= 1
+            if extra:
+                return None  # yapay zekânın işlemi fazlalıklardan sonra: bölüm sonu değil
+        else:
+            extra.append(i)
+    if not extra:
         return None
     lines = text.splitlines()
+    last_txn = max((i for i in trace if i < extra[0]), default=-1)
+    for i in range(extra[0] - 1, last_txn, -1):
+        low = _fold(lines[i])
+        ws = _words(low)
+        if not ws or re.search(r"\d", low):
+            continue
+        if len(ws) <= 8 and all(w in SECTION_WORDS for w in ws):
+            return [" ".join(ws)]
+    return None
+
+
+def explain_from_ai(text: str, ai: Statement) -> tuple[tuple[dict, Statement] | None, str]:
+    """Yapay zekâ okumasından şablon (kaydetmeden) ve neden kodu: değerler metinde aranır, satır deseni ve etiketler
+    çıkarılır; aynı metne uygulanınca yapay zekânın sonucunu aynen vermeli ve ekstre denklemi tutmalı.
+    Kodlar: ok | no_text | too_long | ai_few_txns | ai_equation | ai_dates | bank_not_in_text | bank_unknown |
+    bank_mismatch | date_format | header | header_values | lines | amounts | card | equation | dates | fields."""
+    if not text:
+        return None, "no_text"
+    if len(text) > 400_000:
+        return None, "too_long"
+    if reason := ai_check(ai):
+        return None, reason
+    bank, reason = _bank_check(text, ai.bank)
+    if reason:
+        return None, reason
     dates = _date_formats(text, {t.txn_date for t in ai.transactions})
+    if not dates:
+        return None, "date_format"
+    lines = text.splitlines()
+    # ek kartlı ekstre: işlemler bölüm başlığındaki kart numarasıyla kartlara ayrılır (kart no metinde yoksa olmaz)
+    multi = len({_card_key(t.card) or t.card for t in ai.transactions}) > 1
     # dövizli işlem varsa önce döviz sütununu ayıran kural denenir (orig_amount da okunsun)
     fx_opts = (True, False) if any(t.orig_currency for t in ai.transactions) or _CUR.search(text) else (False,)
+    worst = -1
     for fmt in ("tr", "us"):
         h = header(text, fmt)
         labels = {}
@@ -498,39 +680,67 @@ def build_from_ai(text: str, ai: Statement) -> tuple[dict, Statement] | None:
                 continue
             if a := _learn_anchor(lines, key, target, fmt):
                 labels[key] = [a]
+        # isteğe bağlı alan (asgari, limitler) şablonla yapay zekânınkinden farklı / yapay zekâda yoksa okunmaz
+        h2 = header(text, fmt, labels)
+        skip = [k for k in ("min", "limit", "available") if h2[k] is not None
+                and (getattr(ai, _AI_FIELD[k]) is None or money.ne(h2[k], getattr(ai, _AI_FIELD[k])))]
+        prev0 = not ai.previous_balance and h2["prev"] is None and "equation" not in h2
         for d in dates:
             for fx in fx_opts:
-                idx, at = _amount_at(text, d, fmt, fx, ai)
-                for credit in ("minus", "plus", "trail", "words"):
+                idx, at, inst_at = _amount_at(text, d, fmt, fx, ai)
+                for credit in ("minus", "plus", "trail", "trailplus", "words"):
                     spec = {"v": 1, "kind": "card", "bank": bank, "keywords": _keywords(text), "date": d, "num": fmt,
                             "amount_idx": idx, "credit": credit}
-                    spec.update({k: v for k, v in (("amount_at", at), ("fx", fx), ("labels", labels)) if v})
+                    spec.update({k: v for k, v in (("amount_at", at), ("inst_at", inst_at), ("fx", fx),
+                                                   ("labels", labels), ("skip", skip), ("prev0", prev0),
+                                                   ("cards", "section" if multi else None)) if v})
                     if not is_safe(spec):
                         continue
                     res = apply(text, spec, bank)
-                    if res and res[1] and plausible(res[0]) and _same(res[0], ai):
-                        return spec, res[0]
-    return None
+                    why = _mismatch(res, ai)
+                    if why in ("lines", "dates") and (stop := _extra_stop(text, spec, bank, ai)):
+                        spec = {**spec, "stop": stop}
+                        res = apply(text, spec, bank)
+                        why = _mismatch(res, ai)
+                    if why is None and is_safe(spec):
+                        return (spec, res[0]), "ok"
+                    worst = max(worst, _STAGES.index(why))
+    return None, _STAGES[worst] if worst >= 0 else "header"
 
 
-def learn_from_ai(text: str | None, ai: Statement) -> dict | None:
+def build_from_ai(text: str, ai: Statement) -> tuple[dict, Statement] | None:
+    return explain_from_ai(text, ai)[0]
+
+
+def learn_from_ai(text: str | None, ai: Statement, record: bool = True) -> dict | None:
     """Yapay zekâ okumasından kart şablonu öğren (ya da devre dışı kalmış aynı kuralı yeniden aç) ve paylaş.
-    Hata okumayı bozmaz. Öğrenilen şablonu döndürür."""
+    Hata okumayı bozmaz. Öğrenilen şablonu döndürür. Her deneme (banka, sonuç, neden kodu) sunucu geneli sayaca ve
+    günlüğe yazılır — belgeden içerik yazılmaz (app/templates.py record_attempt)."""
     from app import templates
 
+    bank = _hint_bank(ai.bank) or bank_of(text or "") or "?"
     try:
-        built = build_from_ai(text or "", ai)
-        if not built:
-            return None
-        spec = built[0]
-        if templates.save(spec):
-            templates.share_async(spec)
-        else:
-            templates._revive(spec)
-        return spec
+        built, reason = explain_from_ai(text or "", ai)
+        spec = None
+        if built:
+            spec = built[0]
+            if templates.save(spec):
+                templates.share_async(spec)
+                reason = "learned"
+            elif templates._revive(spec):
+                reason = "revived"
+            else:
+                reason = "known"
     except Exception:  # noqa: BLE001
         log.warning("kart şablonu öğrenilemedi", exc_info=True)
-        return None
+        spec, reason = None, "error"
+    log.info("kart şablonu öğrenme: banka=%s sonuç=%s", bank, reason)
+    if record:
+        try:
+            templates.record_attempt(bank, spec is not None, reason)
+        except Exception:  # noqa: BLE001 - sayaç okumayı bozmaz
+            log.warning("öğrenme sayacı yazılamadı", exc_info=True)
+    return spec
 
 
 # banka adı ya da kart markası → banka (ekstrede ilk geçen kazanır; kart ekstresinde IBAN çoğu zaman yok)
@@ -584,9 +794,13 @@ def is_safe(spec: dict) -> bool:
     metin (isim, kart no, tutar, tarih) taşıyamaz, kod çalıştıramaz."""
     from app.templates import IBAN_BANKS
 
+    def small_map(at) -> bool:
+        return isinstance(at, dict) and 0 < len(at) <= 8 and all(
+            k in {str(n) for n in range(1, 9)} and type(v) is int and -3 <= v <= 3 for k, v in at.items())
+
     try:
         if set(spec) - {"v", "kind", "bank", "keywords", "date", "num", "amount_idx", "credit", "amount_at", "fx",
-                        "labels"}:
+                        "labels", "inst_at", "skip", "prev0", "cards", "stop"}:
             return False
         if spec.get("kind") != "card" or spec.get("bank") not in set(IBAN_BANKS.values()) | {""}:
             return False
@@ -595,17 +809,25 @@ def is_safe(spec: dict) -> bool:
         d = spec["date"]
         if (d["order"], d["sep"]) not in _DATES or set(d) - {"order", "sep", "year"} or d.get("year", 4) not in (2, 4):
             return False
-        if "amount_at" in spec:
-            at = spec["amount_at"]
-            if not isinstance(at, dict) or not at or len(at) > 8 or not all(
-                    k in {str(n) for n in range(1, 9)} and type(v) is int and -3 <= v <= 3 for k, v in at.items()):
-                return False
-        if "fx" in spec and spec["fx"] is not True:
+        if any(k in spec and not small_map(spec[k]) for k in ("amount_at", "inst_at")):
             return False
+        if any(k in spec and spec[k] is not True for k in ("fx", "prev0")):
+            return False
+        if "cards" in spec and spec["cards"] != "section":
+            return False
+        if "skip" in spec and not (isinstance(spec["skip"], list) and 0 < len(spec["skip"]) <= 3
+                                   and all(k in ("min", "limit", "available") for k in spec["skip"])):
+            return False
+        if "stop" in spec:
+            st = spec["stop"]
+            if not isinstance(st, list) or not 1 <= len(st) <= 2 or not all(
+                    isinstance(x, str) and x == " ".join(x.split()) and 1 <= len(x.split()) <= 8
+                    and all(w in SECTION_WORDS for w in x.split()) for x in st):
+                return False
         if "labels" in spec and not _safe_labels(spec["labels"]):
             return False
-        return spec["num"] in ("tr", "us") and spec["credit"] in ("minus", "plus", "trail", "words") \
-            and isinstance(spec["amount_idx"], int) and -3 <= spec["amount_idx"] <= 3
+        return spec["num"] in ("tr", "us") and spec["credit"] in ("minus", "plus", "trail", "trailplus", "words") \
+            and type(spec["amount_idx"]) is int and -3 <= spec["amount_idx"] <= 3
     except (KeyError, TypeError, AttributeError):
         return False
 

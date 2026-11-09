@@ -513,7 +513,7 @@ MIGRATIONS = [
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
     ("own_transfers", "note", "TEXT"),          # kullanıcının notu
     ("own_transfers", "account_id", "INTEGER"),
-    ("statements", "source", "TEXT"),           # 'excel': kart işlem dökümünden üretilmiş (borç alanı kurgu; borca girmez)  # dökümün hesabı: e-postadan gelen virman çapadan sonra bakiyeye girer
+    ("statements", "source", "TEXT"),           # 'excel': kart işlem dökümünden üretilmiş (borç alanı kurgu; borca girmez); PDF: parser | sablon | yapay_zeka (nasıl okundu)
     ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
     ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)
     ("card_payments", "statement_id", "INTEGER"), # elle "ödendi" denen ekstre (POST /api/statements/{id}/pay)
@@ -1043,8 +1043,15 @@ def _iso(d):
     return d.isoformat() if d else None
 
 
+def _read_source(stmt: Statement) -> str | None:
+    """Ekstrenin nasıl okunduğu (statements.source): parser | sablon | yapay_zeka. Bilinmeyen değer yazılmaz."""
+    src = getattr(stmt, "source", None)
+    return src if src in ("parser", "sablon", "yapay_zeka") else None
+
+
 def save_statement(data: bytes, filename: str, stmt: Statement, source: str | None = None) -> int:
     """source='excel': kart işlem dökümünden üretilmiş ekstre (borç alanı kurgu: borç ve ödendi eşleşmesine girmez).
+    Verilmezse okumanın kaynağı yazılır (stmt.source: parser | sablon | yapay_zeka).
     PDF ekstresi kaydedilince aynı kartın aynı dönemindeki (±5 gün) Excel ekstresi silinir: harcamalar bir kez sayılır."""
     with connect() as c:
         rules = load_rules_sub(c)
@@ -1061,7 +1068,7 @@ def save_statement(data: bytes, filename: str, stmt: Statement, source: str | No
             (file_hash(data), filename, stmt.bank, stmt.card_no, stmt.period_end.isoformat(),
              _iso(stmt.due_date), stmt.total_debt, stmt.min_payment, stmt.credit_limit, stmt.previous_balance,
              stmt.period_activity, stmt.interest_fees, stmt.payments,
-             _iso(stmt.next_period_end), _iso(stmt.next_due_date), source, stmt.available_limit),
+             _iso(stmt.next_period_end), _iso(stmt.next_due_date), source or _read_source(stmt), stmt.available_limit),
         )
         sid = cur.lastrowid
         for t in stmt.transactions:
