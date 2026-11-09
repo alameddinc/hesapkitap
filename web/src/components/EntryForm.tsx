@@ -413,7 +413,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
             )}
           </div>
         )}
-        {rec && rec.kind === "gelir" && !!rec.gross_amount && <SalaryChanges rid={rec.id} />}
+        {rec && rec.kind === "gelir" && !!rec.gross_amount && <SalaryChanges rid={rec.id} advance={!!rec.advance_pay} />}
         {rec && !rec.gross_amount && <AmountChanges rid={rec.id} base={rec.amount} />}
         {isRecurring && !isGross && (
           <p className="rounded-lg bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">

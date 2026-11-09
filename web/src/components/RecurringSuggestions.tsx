@@ -4,8 +4,9 @@ import { Repeat, X } from "lucide-react";
 import { cx, maskText, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import { SalaryDriftCard, useSalaryDrift, type SalaryDrift } from "./SalaryChanges";
 
-interface Drift { recurring_id: number; description: string; kind: string; old: number; new: number; from_month: string }
+interface Drift { type?: "maas"; recurring_id: number; description: string; kind: string; old: number; new: number; from_month: string }
 
 interface Suggestion {
   key: string; kind: "gelir" | "gider"; description: string; category: string | null; amount: number;
@@ -22,12 +23,14 @@ export default function RecurringSuggestions() {
   const accept = useSave((s: Suggestion) => post("/api/recurring/suggestions/accept", { key: s.key }),
     () => ui.toast("Sabit kalem eklendi; geçmiş ödemeler bağlandı"));
   const dismiss = useSave((s: Suggestion) => post("/api/recurring/suggestions/dismiss", { key: s.key }));
-  const drift = useQuery({ queryKey: ["recurring-drift"], queryFn: () => send<Drift[]>("/api/recurring/drift") });
+  // salary=1: maaş kalemleri yatan maaşa göre (zam ayı, ikramiye, peşin maaş farkı; metin sunucudan)
+  const drift = useSalaryDrift() as { data?: Drift[] };
   const applyDrift = useSave((d: Drift) => post(`/api/recurring/${d.recurring_id}/changes`, { from_month: d.from_month, amount: d.new }),
     () => ui.toast("Sabit kalemin tutarı güncellendi"));
   const items = q.data ?? [];
-  const drifts = drift.data ?? [];
-  if (!items.length && !drifts.length) return null;
+  const drifts = (drift.data ?? []).filter((d) => d.type !== "maas");
+  const salaries = (drift.data ?? []).filter((d) => d.type === "maas") as unknown as SalaryDrift[];
+  if (!items.length && !drifts.length && !salaries.length) return null;
   return (
     <section className="card border-blue-200 p-3 sm:p-4 dark:border-blue-900">
       <h2 className="mb-1 flex items-center gap-2 font-semibold"><Repeat size={18} className="text-blue-600" /> Her ay tekrarlayanlar</h2>
@@ -35,6 +38,7 @@ export default function RecurringSuggestions() {
         Hareketlerinde her ay gördüğüm ödemeler. Sabit kalem yaparsan gelecek aylar planlamaya girer, geçmiş ve sonraki
         hareketler bu kaleme bağlanır (iki kez sayılmaz).
       </p>
+      {salaries.length > 0 && <div className="mb-2 space-y-2">{salaries.map((d) => <SalaryDriftCard key={d.id} d={d} />)}</div>}
       <ul className="divide-y divide-stone-100 text-sm dark:divide-stone-800">
         {drifts.map((d) => (
           <li key={`d${d.recurring_id}`} className="flex flex-wrap items-center gap-2 py-2">
