@@ -711,7 +711,11 @@ def init_db() -> None:
         for table, col, ddl in MIGRATIONS:
             cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
             if col not in cols:
-                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                try:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                except sqlite3.OperationalError as e:  # aynı yeni defteri iki istek aynı anda açtı: öteki ekledi
+                    if "duplicate column name" not in str(e):
+                        raise
         for sql in INDEXES:
             c.execute(sql)
         _migrate_subscription_state(c)
