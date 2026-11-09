@@ -172,7 +172,8 @@ def test_ai_null_optional_field_is_skipped_not_fatal():
 def test_untrustworthy_ai_reasons():
     lay = L.isbank()
     reply = lay.reply()
-    reply["transactions"].pop()
+    # eksik iade satırı: farkı özet açıklamaz (son satır KKDF düşseydi "faiz yalnız özette" sayılır: test_card_ai_fix)
+    assert reply["transactions"].pop(3)["type"] == "iade"
     from app import receipt
     from app.parsers import ai
 

@@ -150,6 +150,68 @@ def albaraka(cut="08/10/2026", due="18/10/2026") -> Layout:
     return lay
 
 
+# ---------------------------------------------------------------- İş Bankası benzeri, PDF metninde tarih bitişik
+# tarih açıklamaya bitişik ("12/09/2026ORNEK MARKET"), ödeme satırında tarihten sonra referans numarası bitişik
+# ("08/09/20261234-567890 …"), taksit satırında "3/6 taksidi (işlem toplamı)", puan sütunu. Önceki borç satırı tarihsiz.
+
+def isbank_glued(cut="05.10.2026", due="15.10.2026", prev=2150.00) -> Layout:
+    rows = [Row("08/09/2026", "HESAPTAN ODEME", prev, "odeme"),
+            Row("12/09/2026", "ORNEK MARKET", 312.40),
+            Row("14/09/2026", "ORNEK KAFE", 85.00),
+            Row("15/07/2026", "ORNEK MOBILYA", 500.00, inst=(3, 6)),
+            Row("19/09/2026", "ORNEK SINEMA IADE", 90.00, "iade"),
+            Row("24/09/2026", "ORNEK RESTORAN", 640.00, points=6.40)]
+    lay = Layout("Türkiye İş Bankası", "4506********2290", cut, due, prev, rows, limit=25000.0)
+    t = lay.total
+    lines = ["KREDİ KARTI HESAP ÖZETİ", "TÜRKİYE İŞ BANKASI A.Ş.", "Kart No: 4506 34** **** 2290",
+             f"Hesap Kesim Tarihi: {cut}", f"Son Ödeme Tarihi: {due}", f"Hesap Özeti Borcu: {m(t)} TL",
+             f"Ödenmesi Gereken Asgari Tutar: {m(round(t * 0.4, 2))} TL", "İşlem", "Tarihi Açıklama Tutar Taksit MaxiPuan",
+             f"******** DÖNEM ÖNCEKİ HESAP ÖZETİ BAKİYENİZ *** {m(prev)}",
+             f"08/09/20261234-567890 HESAPTAN ODEME -{m(prev)}",
+             "12/09/2026ORNEK MARKET 312,40", "14/09/2026ORNEK KAFE 85,00",
+             "15/07/2026ORNEK MOBILYA 500,00 3/6 taksidi (3.000,00)", "19/09/2026ORNEK SINEMA IADE -90,00",
+             "24/09/2026ORNEK RESTORAN 640,00 6,40", "Toplam Kart Limiti: 25.000,00 TL"]
+    lay.text = "\n".join(lines)
+    return lay
+
+
+# ---------------------------------------------------------------- Albaraka benzeri, PDF metninde kelime arası boşluk yok
+# etiketler bitişik ("HesapKesimTarihi :08Ekim2026"), işlem tarihi ay adıyla bitişik ("16Eylül2026"), ödeme ve iade
+# "+" önekli, taksitli iade "+137,40 2/+687,00", ek kart bölümü başlığı bitişik, sonda ekstre denklemi satırı.
+
+def albaraka_glued(cut="08/10/2026", due="18/10/2026", prev=1000.00) -> Layout:
+    ek = "5258***7720"
+    rows = [Row("15/09/2026", "ODEMENIZICINTESEKKURLER", prev, "odeme"),
+            Row("16/09/2026", "ORNEKMARKET", 450.00),
+            Row("20/09/2026", "ORNEKONLINE", 120.00),
+            Row("22/07/2026", "ORNEKMOBILYATAKSIT", 300.00, inst=(3, 6)),
+            Row("25/08/2026", "ORNEKELEKTRONIKTAKSITLIIADE", 137.40, "iade"),
+            Row("18/09/2026", "ORNEKKAFE", 80.00, card=ek),
+            Row("21/09/2026", "ORNEKKITAPCIIADE", 25.50, "iade", card=ek)]
+    lay = Layout("Albaraka Türk", "5258********6631", cut, due, prev, rows, limit=20000.0)
+    t = lay.total
+    act = round(sum(_sign(r.kind) * r.amount for r in rows if r.kind != "odeme"), 2)
+    ay = {"07": "Temmuz", "08": "Ağustos", "09": "Eylül", "10": "Ekim", "11": "Kasım"}
+
+    def d(s: str) -> str:
+        dd, mm, yy = s.split("/")
+        return f"{dd}{ay[mm]}{yy}"
+
+    lines = ["ALBARAKA TÜRK KATILIM BANKASI A.Ş.", "KREDİKARTIEKSTRENİZ", "KartNumarası :5258********6631",
+             "KartLimiti(TL) :20.000,00", f"HesapKesimTarihi :{d(cut)}", f"SonÖdemeTarihi :{d(due)}",
+             f"DönemBorcu(TL) :{m(t)}", f"AsgariÖdemeTutarı(TL) :{m(round(t * 0.4, 2))}",
+             "İşlemTarihi Açıklama Tutar(TL) KalanTaksit/Tutar", f"ÖncekiDönemBorcu {m(prev)}",
+             f"{d('15/09/2026')} ODEMENIZICINTESEKKURLER +{m(prev)}", f"{d('16/09/2026')} ORNEKMARKET 450,00",
+             f"{d('20/09/2026')} ORNEKONLINE 120,00", f"{d('22/07/2026')} ORNEKMOBILYATAKSIT 300,00 3/1.200,00",
+             "1.800,00TL'nin3/6'sı", f"{d('25/08/2026')} ORNEKELEKTRONIKTAKSITLIIADE +137,40 2/+687,00",
+             f"HarcamaToplamı {m(450 + 120 + 300 - 137.40)}", "5258********7720DENEMEEKKART",
+             f"{d('18/09/2026')} ORNEKKAFE 80,00", f"{d('21/09/2026')} ORNEKKITAPCIIADE +25,50",
+             f"HarcamaToplamı {m(80 - 25.5)}", "DevredenBakiye DönemHareketleri Ödemeler DönemBorcunuz",
+             f"{m(prev)} + {m(act)} - {m(prev).replace('.', '')} = {m(t)}"]
+    lay.text = "\n".join(lines)
+    return lay
+
+
 def _line(r: Row, credit: str) -> str:
     cols = [r.date, r.desc]
     if r.fx:

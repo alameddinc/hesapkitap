@@ -35,9 +35,17 @@ log = logging.getLogger("hesapkitap.card_reader")
 
 KEYWORDS = ("hesap kesim tarihi", "son ödeme tarihi", "dönem borcu", "asgari ödeme", "kart limiti", "hesap özeti",
             "ekstre", "kredi kartı")
+# ay adı (Türkçe, büyük/küçük, Türkçe karaktersiz ya da üç harf kısaltma): "15 Ağustos 2026"; kelime arası boşluğu metne
+# çıkmayan PDF'te "15Ağustos2026"
+_MONTH_NAMES = (r"(?i:ocak|[şs]ubat|mart|n[ıiİ]san|may[ıiİ]s|haz[ıiİ]ran|temmuz|a[ğg]ustos|eyl[üu]l|ek[ıiİ]m|kas[ıiİ]m"
+                r"|aral[ıiİ]k|oca|[şs]ub|mar|n[ıiİ]s|may|haz|tem|a[ğg]u|eyl|ek[ıiİ]|kas|ara)")
+_MONTH = {k: i for i, k in enumerate(("oca", "sub", "mar", "nis", "may", "haz", "tem", "agu", "eyl", "eki", "kas", "ara"),
+                                     1)}
 _DATES = {("dmy", "."): r"(\d{2})\.(\d{2})\.(\d{4})", ("dmy", "/"): r"(\d{2})/(\d{2})/(\d{4})",
-          ("dmy", "-"): r"(\d{2})-(\d{2})-(\d{4})"}
-_ANY_DATE = re.compile(r"(?<!\d)(\d{2})[./-](\d{2})[./-](\d{4}|\d{2})(?!\d)")
+          ("dmy", "-"): r"(\d{2})-(\d{2})-(\d{4})",
+          ("dmy", "ay"): r"(\d{1,2})\s?(" + _MONTH_NAMES + r")\.?\s?(\d{4})"}
+_ANY_DATE = re.compile(r"(?<!\d)(\d{2})[./-](\d{2})[./-](\d{4}|\d{2})(?!\d)"
+                       r"|(?<!\d)(\d{1,2})\s?(" + _MONTH_NAMES + r")\.?\s?(\d{4})(?!\d)")
 # para: isteğe bağlı işaret + değer; önünde rakam/ayraç/"x" (5x1.315,40 taksit gösterimi) olmasın
 _MONEY = {"tr": re.compile(r"(?<![\d.,x×])([+-]?)\s?(\d{1,3}(?:\.\d{3})*,\d{2})(?![\d,%]|\.\d)"),
           "us": re.compile(r"(?<![\d.,x×])([+-]?)\s?(\d{1,3}(?:,\d{3})*\.\d{2})(?![\d.%]|,\d)")}
@@ -64,6 +72,22 @@ LABELS = {
     "next_due": r"sonraki son odeme",
 }
 _DATE_KEYS = ("period_end", "due", "next_cut", "next_due")
+
+
+def _loose(pat: str) -> str:
+    """Etiket deseni boşluksuz metinde de tutsun ("HesapKesimTarihi", "DönemBorcu(TL)"): kelime arası boşluk isteğe
+    bağlı; "(?<!onceki )" gibi geriye bakışlar bitişik biçim için de eklenir."""
+    out = []
+    for part in re.split(r"(\(\?<![^)]*\))", pat):
+        if part.startswith("(?<!"):
+            body = part[4:-1]
+            out.append(part + (f"(?<!{body.replace(' ', '')})" if " " in body else ""))
+        else:
+            out.append(part.replace(" ", " ?"))
+    return "".join(out)
+
+
+_LABEL_RES = {k: re.compile(_loose(v)) for k, v in LABELS.items()}
 _PREV_LINE = re.compile(r"onceki donem|onceki ekstre|onceki hesap ozeti|devreden bakiye|devreden borc|gecen donem"
                         r"|donem basi bakiye")
 _PAY_WORDS = re.compile(r"odeme|tesekkur|payment|tahsilat")
@@ -128,24 +152,28 @@ def _num(v: str, fmt: str) -> float:
 
 
 def _date(m) -> date | None:
+    """Gün, ay (sayı ya da ay adı), yıl gruplarından tarih (_ANY_DATE'in hangi seçeneği eşleştiyse)."""
     try:
-        y = int(m.group(3))
-        return date(y + 2000 if y < 100 else y, int(m.group(2)), int(m.group(1)))
-    except ValueError:
+        d, mo, y = [g for g in m.groups() if g is not None][:3]
+        mo = int(mo) if mo.isdigit() else _MONTH.get(_fold(mo)[:3])
+        y = int(y)
+        return date(y + 2000 if y < 100 else y, mo, int(d)) if mo else None
+    except (ValueError, TypeError):
         return None
 
 
 def _date_re(d: dict) -> re.Pattern:
-    """İşlem satırının başındaki tarih ("year": 2 → iki haneli yıl, 14.10.26)."""
+    """İşlem satırının başındaki tarih ("year": 2 → iki haneli yıl, 14.10.26). Dört haneli yıldan sonra sınır aranmaz:
+    bazı PDF'lerde tarih açıklamaya ya da referans numarasına bitişik çıkar ("01/10/2026MARKET", "01/10/20261234-…")."""
     pat = _DATES[(d["order"], d["sep"])]
     if d.get("year") == 2:
-        pat = pat.replace(r"(\d{4})", r"(\d{2})(?!\d)")
-    return re.compile(r"^\s*" + pat + r"\b")
+        return re.compile(r"^\s*" + pat.replace(r"(\d{4})", r"(\d{2})(?!\d)"))
+    return re.compile(r"^\s*" + pat)
 
 
 def _field(lines: list[str], key: str, kind: str, fmt: str):
     """Etiketin aynı satırındaki (yoksa sonraki satırdaki) ilk tarih/para. "Sonraki …" etiketleri karışmasın."""
-    pat = re.compile(LABELS[key])
+    pat = _LABEL_RES[key]
     for i, ln in enumerate(lines):
         low = _fold(ln)
         m = pat.search(low)
@@ -400,19 +428,91 @@ def _txn_equation_diff(st: Statement) -> float | None:
     return round((st.previous_balance or 0.0) - paid + charges - st.total_debt, 2)
 
 
+def _summary_only(st: Statement) -> dict[str, float]:
+    """Yapay zekânın özete yazıp işlem listesine koymadığı kalemler → {işlem türü: listede eksik toplam (ödeme eksi)}.
+    Bilinen alışkanlıklar: ödeme satırı yok ama özetteki "ödemeler" dolu (önceki borç kapatılmış); faiz/BSMV/KKDF
+    satırları yok ama özetteki dönem içi tutar onları içeriyor. Yalnız iki açık da ≥ 0 ve işlem denkleminin farkını
+    KURUŞU KURUŞUNA açıklıyorsa; değilse {} (yapay zekânın fazladan / ters işaretli satırı tolere edilmez)."""
+    d = _txn_equation_diff(st)
+    if d is None or abs(d) <= 0.05:
+        return {}
+    paid = -sum(t.amount for t in st.transactions if t.txn_type == PAYMENT)
+    charges = sum(t.amount for t in st.transactions if t.txn_type != PAYMENT)
+    pay_gap = round((st.payments or 0.0) - paid, 2)
+    fee_gap = round((st.period_activity or 0.0) + (st.interest_fees or 0.0) - charges, 2)
+    pay_gap = pay_gap if pay_gap > 0.05 else 0.0
+    fee_gap = fee_gap if fee_gap > 0.05 else 0.0
+    # eksik ödeme işlem farkını artırır (önceki − 0 + harcama > borç), eksik faiz azaltır
+    if not (pay_gap or fee_gap) or abs(d - pay_gap + fee_gap) > 0.05:
+        return {}
+    return {k: v for k, v in ((PAYMENT, -pay_gap), (FEE, fee_gap)) if v}
+
+
 def ai_check(st: Statement) -> str | None:
     """Yapay zekâ okuması şablon öğretecek kadar güvenilir mi; değilse neden kodu. Ölçüt ŞABLONUN kendi ölçütüyle
     aynı: işlemlerden kurulan ekstre denklemi (önceki − ödemeler + harcamalar = dönem borcu) kuruşu kuruşuna ve tarihler
     tutarlı. Modelin özet alanları (period_activity, payments) burada aranmaz: model onları işlemlerden ayrı okur ve
-    sık sık faizi dahil/hariç yazar — işlemler denklemi tutuyorsa özet alanı yanlış olsa da işlem listesi doğrudur."""
+    sık sık faizi dahil/hariç yazar — işlemler denklemi tutuyorsa özet alanı yanlış olsa da işlem listesi doğrudur.
+    İstisna (_summary_only): ödeme / faiz satırı listede hiç yok ama özetteki tutarı farkı aynen açıklıyor — okuma
+    kabul edilir; şablon o satırları da okumalı ve kendi denklemini tutturmalı (_mismatch)."""
     if len(st.transactions) < 2 or not st.total_debt:
         return "ai_few_txns"
     d = _txn_equation_diff(st)
-    if d is None or abs(d) > 0.05:
+    if d is None or (abs(d) > 0.05 and not _summary_only(st)):
         return "ai_equation"
     if not plausible(st):
         return "ai_dates"
     return None
+
+
+def _abs_keys(txns) -> Counter:
+    return Counter((t.txn_date, money.kurus(abs(t.amount))) for t in txns)
+
+
+def merge_fix(ai: Statement, tmpl: Statement) -> Statement:
+    """Yapay zekâ okuması + aynı belgenin şablon okuması (denklemi tutan): satırlar şablondan (sıra, tutar, işaret);
+    şablonla aynı (tarih, tutar) satır yapay zekâda varsa açıklama, kart, taksit, döviz bilgisi yapay zekâdan — işareti
+    terse okunmuşsa (iade harcama yazılmış) tutar ve tür şablondan. Başlık ve özet alanları yapay zekânın."""
+    from dataclasses import replace
+
+    pool: dict[tuple, list[Transaction]] = {}
+    for t in ai.transactions:
+        pool.setdefault((t.txn_date, money.kurus(abs(t.amount))), []).append(t)
+    out = []
+    for t in tmpl.transactions:
+        same = pool.get((t.txn_date, money.kurus(abs(t.amount))))
+        if not same:
+            out.append(replace(t, card=ai.card_no if _card_key(ai.card_no) else t.card))
+            continue
+        a = next((x for x in same if (x.amount < 0) == (t.amount < 0)), same[0])
+        same.remove(a)
+        out.append(a if (a.amount < 0) == (t.amount < 0) else replace(a, amount=t.amount, txn_type=t.txn_type))
+    return replace(ai, transactions=out)
+
+
+def _text_fix(text: str, ai: Statement, bank: str) -> tuple[Statement, tuple[dict, Statement]] | None:
+    """Yapay zekânın işlemleri denklemi tutmuyor: metinden (yapay zekâsız, learn) denklemi tutan okuma varsa ve AYNI
+    belgeyi okuduğu belliyse (dönem borcu, kesim, son ödeme aynı; satırların en az %80'i tarih + tutarla — işaretsiz —
+    eşleşiyor) → (düzeltilmiş okuma (merge_fix), learn sonucu). Yapay zekâ birkaç satırı atlamış, işaretini ters
+    okumuş (taksitli iade harcama yazılmış) ya da fazladan satır eklemiş olabilir; şablonun kendi denklemi tutar."""
+    got = learn(text, bank)
+    if not got:
+        return None
+    st = got[1]
+    if money.ne(st.total_debt, ai.total_debt) or st.period_end != ai.period_end or st.due_date != ai.due_date:
+        return None
+    common = sum((_abs_keys(ai.transactions) & _abs_keys(st.transactions)).values())
+    if common < 0.8 * max(len(ai.transactions), len(st.transactions)):
+        return None
+    fixed = merge_fix(ai, st)
+    d = _txn_equation_diff(fixed)
+    return (fixed, got) if d is not None and abs(d) <= 0.05 and plausible(fixed) else None
+
+
+def _cid_text(text: str) -> bool:
+    """PDF yazı tipinde karakter eşlemesi yok: metin "(cid:123)" glif kodlarından ibaret — şablon öğrenilemez."""
+    n = text.count("(cid:")
+    return n >= 20 and n * 7 > len(text) * 0.2
 
 
 def trustworthy(st: Statement) -> bool:
@@ -581,6 +681,31 @@ def _txn_keys(txns, with_card: bool) -> Counter:
     return Counter((t.txn_date, money.kurus(t.amount), t.card if with_card else None) for t in txns)
 
 
+def _without_summary_lines(txns: list[Transaction], ai: Statement) -> list[Transaction]:
+    """Yapay zekâ ödeme / faiz satırını yalnız özete yazdıysa (_summary_only): şablonun yapay zekâda olmayan satırları
+    TAM O kalemler mi (alacak satırları toplamı = eksik ödeme, borç satırları faiz/ücret ve toplamı = eksik faiz,
+    kuruşu kuruşuna) — öyleyse karşılaştırmada onlar çıkarılır (şablon onları da okur, kendi denklemi tutmalı).
+    Değilse liste olduğu gibi (fark "lines" olarak görünür)."""
+    extra = _summary_only(ai)
+    if not extra:
+        return txns
+    want = _txn_keys(ai.transactions, False)
+    keep, rest = [], []
+    for t in txns:
+        k = (t.txn_date, money.kurus(t.amount), None)
+        if want[k] > 0:
+            want[k] -= 1
+            keep.append(t)
+        else:
+            rest.append(t)
+    credit = sum(t.amount for t in rest if t.amount < 0)
+    debit = sum(t.amount for t in rest if t.amount > 0)
+    if rest and not +want and abs(credit - extra.get(PAYMENT, 0.0)) <= 0.05 \
+            and abs(debit - extra.get(FEE, 0.0)) <= 0.05 and all(t.txn_type == FEE for t in rest if t.amount > 0):
+        return keep
+    return txns
+
+
 def _mismatch(res: tuple[Statement, bool] | None, ai: Statement) -> str | None:
     """Şablon sonucu yapay zekânınkini AYNEN veriyor mu; vermiyorsa ilk fark (neden kodu). İşlemler tek tek (tarih,
     kuruş, ek kart varsa kart) karşılaştırılır; başlık alanları; ekstre denklemi; tarih tutarlılığı."""
@@ -589,12 +714,13 @@ def _mismatch(res: tuple[Statement, bool] | None, ai: Statement) -> str | None:
     st, ok = res
     if money.ne(st.total_debt, ai.total_debt) or st.due_date != ai.due_date or st.period_end != ai.period_end:
         return "header_values"
-    if len(st.transactions) != len(ai.transactions):
+    txns = _without_summary_lines(st.transactions, ai)
+    if len(txns) != len(ai.transactions):
         return "lines"
-    if _txn_keys(st.transactions, False) != _txn_keys(ai.transactions, False):
+    if _txn_keys(txns, False) != _txn_keys(ai.transactions, False):
         return "amounts"
     cards = all(_card_key(t.card) for t in ai.transactions)
-    if (_card_key(ai.card_no) and st.card_no != ai.card_no) or (cards and _txn_keys(st.transactions, True)
+    if (_card_key(ai.card_no) and st.card_no != ai.card_no) or (cards and _txn_keys(txns, True)
                                                                  != _txn_keys(ai.transactions, True)):
         return "card"
     if not ok:
@@ -623,6 +749,7 @@ def _extra_stop(text: str, spec: dict, bank: str, ai: Statement) -> list[str] | 
     if not res:
         return None
     want = _txn_keys(ai.transactions, False)
+    gaps = _summary_only(ai)  # yapay zekânın yalnız özete yazdığı ödeme / faiz satırları fazlalık sayılmaz
     extra = []
     for t, i in zip(res[0].transactions, trace):
         k = (t.txn_date, money.kurus(t.amount), None)
@@ -630,6 +757,8 @@ def _extra_stop(text: str, spec: dict, bank: str, ai: Statement) -> list[str] | 
             want[k] -= 1
             if extra:
                 return None  # yapay zekânın işlemi fazlalıklardan sonra: bölüm sonu değil
+        elif (t.amount < 0 and PAYMENT in gaps) or (t.txn_type == FEE and FEE in gaps):
+            continue
         else:
             extra.append(i)
     if not extra:
@@ -649,13 +778,27 @@ def _extra_stop(text: str, spec: dict, bank: str, ai: Statement) -> list[str] | 
 def explain_from_ai(text: str, ai: Statement) -> tuple[tuple[dict, Statement] | None, str]:
     """Yapay zekâ okumasından şablon (kaydetmeden) ve neden kodu: değerler metinde aranır, satır deseni ve etiketler
     çıkarılır; aynı metne uygulanınca yapay zekânın sonucunu aynen vermeli ve ekstre denklemi tutmalı.
-    Kodlar: ok | no_text | too_long | ai_few_txns | ai_equation | ai_dates | bank_not_in_text | bank_unknown |
-    bank_mismatch | date_format | header | header_values | lines | amounts | card | equation | dates | fields."""
+    Yapay zekânın işlemleri denklemi tutmuyorsa metinden denklemi tutan okuma aranır (_text_fix): bulunursa şablon
+    düzeltilmiş okumaya göre öğrenilir (kod ok_fixed; döndürülen Statement şablonun okuması).
+    Kodlar: ok | ok_fixed | no_text | text_cid | too_long | ai_few_txns | ai_equation | ai_dates | bank_not_in_text |
+    bank_unknown | bank_mismatch | date_format | header | header_values | lines | amounts | card | equation | dates |
+    fields."""
     if not text:
         return None, "no_text"
     if len(text) > 400_000:
         return None, "too_long"
+    if _cid_text(text):
+        return None, "text_cid"
     if reason := ai_check(ai):
+        if reason == "ai_equation":
+            bank, why = _bank_check(text, ai.bank)
+            if not why and (fix := _text_fix(text, ai, bank)):
+                built, _ = explain_from_ai(text, fix[0])  # düzeltilmiş okuma denklemi tutar: özyineleme bir kez
+                if built:
+                    return built, "ok_fixed"
+                spec, st = fix[1]  # etiketsiz kural (canlı okumada read() de bunu kaydeder)
+                if spec.get("bank") and is_safe(spec):
+                    return (spec, st), "ok_fixed"
         return None, reason
     bank, reason = _bank_check(text, ai.bank)
     if reason:
@@ -706,6 +849,36 @@ def explain_from_ai(text: str, ai: Statement) -> tuple[tuple[dict, Statement] | 
                         return (spec, res[0]), "ok"
                     worst = max(worst, _STAGES.index(why))
     return None, _STAGES[worst] if worst >= 0 else "header"
+
+
+def fixed_read(text: str | None, ai: Statement, spec: dict | None) -> Statement | None:
+    """Yapay zekânın işlemleri ekstre denklemini kuruşu kuruşuna tutmuyor ama aynı belgeye uygulanan şablon (spec:
+    learn_from_ai'nin öğrendiği / bildiği) tutuyorsa düzeltilmiş okuma (merge_fix: eksik ödeme / faiz satırı eklenir,
+    ters işaret düzelir); yoksa None. Yalnız yeni yüklemede kullanılır — kayıtlı ekstre kendiliğinden değişmez. Hata
+    okumayı bozmaz (None)."""
+    try:
+        return _fixed_read(text, ai, spec)
+    except Exception:  # noqa: BLE001
+        log.warning("şablonla düzeltme denenemedi", exc_info=True)
+        return None
+
+
+def _fixed_read(text: str | None, ai: Statement, spec: dict | None) -> Statement | None:
+    d = _txn_equation_diff(ai)
+    if not text or not spec or d is None or abs(d) <= 0.05:
+        return None
+    res = apply(text, spec, spec.get("bank") or bank_of(text))
+    if not res or not res[1] or not plausible(res[0]):
+        return None
+    st = res[0]
+    if money.ne(st.total_debt, ai.total_debt) or st.period_end != ai.period_end or st.due_date != ai.due_date:
+        return None
+    if sum((_abs_keys(ai.transactions) & _abs_keys(st.transactions)).values()) \
+            < 0.8 * max(len(ai.transactions), len(st.transactions)):
+        return None
+    fixed = merge_fix(ai, st)
+    d = _txn_equation_diff(fixed)
+    return fixed if d is not None and abs(d) <= 0.05 else None
 
 
 def build_from_ai(text: str, ai: Statement) -> tuple[dict, Statement] | None:
