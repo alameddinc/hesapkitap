@@ -4275,7 +4275,10 @@ def same_as_merchant(name: str | None, *merchants: str | None) -> bool:
         b = _letters(m)
         if not b:
             continue
-        if a == b or (len(a) >= 4 and a in b) or SequenceMatcher(None, a, b).ratio() >= 0.8:
+        if a == b or (len(a) >= 4 and a in b):
+            return True
+        sm = SequenceMatcher(None, a, b)  # hızlı üst sınırlar önce (aynı sonuç; fiş kalemi başına iki kez çağrılır)
+        if sm.real_quick_ratio() >= 0.8 and sm.quick_ratio() >= 0.8 and sm.ratio() >= 0.8:
             return True
         mw = set(re.sub(r"[^A-Z0-9]", " ", normalize(m or "")).split())
         if words and words <= mw:

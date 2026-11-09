@@ -134,6 +134,9 @@ def _match(q: str, key: str, label: str) -> bool:
     return s in key.split("|")[0] or s in product_groups.slug(label.split(" · ")[0])
 
 
+OWN_TTL = 300  # kendi fişlerinden teklif dizini en çok bu kadar saniye saklanır (yeni öğrenilen gruplar için)
+
+
 @register
 class OwnSource:
     """Kullanıcının kendi fişleri: zincir (bilinen zincirse görünen adı, değilse fişteki işyeri) başına son fiyat."""
@@ -148,11 +151,27 @@ class OwnSource:
         self._labels: dict[str, str] = {}
 
     def _build(self) -> dict[str, dict[str, Offer]]:
+        """Fişlerden teklif dizini. Defter dosyası değişmedikçe (db._cached damgası) ve en çok OWN_TTL saniye süreç
+        içinde saklanır: zincir × marka seçicisi, boylar ve liste her istekte bütün fiş kalemlerini yeniden okuyordu
+        (binlerce kalemde ~0,5 sn). Dönen teklifler paylaşılır: çağıran kopyalar (best_offers, combos)."""
         if self._index is not None:
             return self._index
+        import time
+
+        from app import db
+
+        self._index, self._by_brand, self._brand_rows, self._labels = db._cached(
+            "own_offers", self._compute, db._viewer(), int(time.time() // OWN_TTL))
+        return self._index
+
+    @staticmethod
+    def _compute() -> tuple:
         from app import db, product_groups
         from app.receipt_templates import chain_of
 
+        by_brand: dict[tuple[str, str], dict[str, Offer]] = {}
+        brand_rows: dict[tuple[str, str], list[tuple[str, Offer, frozenset]]] = {}
+        labels: dict[str, str] = {}
         items = [it for it in db.priced_items() if it["price_known"] == 1 and it["unit_price"] > 0]
         db.attach_groups(items)
         idx: dict[str, dict[str, Offer]] = {}
@@ -161,18 +180,17 @@ class OwnSource:
             if not g:
                 continue
             chain = chain_of(it["merchant"], it.get("legal_name")) or (it["merchant"] or "?").strip()
-            off: Offer = {"chain": chain, "price": it["unit_price"], "source": self.name, "date": it["purchased_at"]}
+            off: Offer = {"chain": chain, "price": it["unit_price"], "source": OwnSource.name, "date": it["purchased_at"]}
             if it.get("brand"):
                 off["brand"] = it["brand"]
-                self._by_brand.setdefault((g["key"], brand_norm(it["brand"])), {})[db._store_key(chain)] = off
+                by_brand.setdefault((g["key"], brand_norm(it["brand"])), {})[db._store_key(chain)] = off
                 words = frozenset(f"{product_groups.name_norm(it.get('name'))} "
                                   f"{product_groups.name_norm(it.get('product'))}".split())
-                self._brand_rows.setdefault((g["key"], brand_norm(it["brand"])), []).append(
+                brand_rows.setdefault((g["key"], brand_norm(it["brand"])), []).append(
                     (db._store_key(chain), off, words))
             idx.setdefault(g["key"], {})[db._store_key(chain)] = off
-            self._labels[g["key"]] = g["label"]
-        self._index = idx
-        return idx
+            labels[g["key"]] = g["label"]
+        return idx, by_brand, brand_rows, labels
 
     def fetch(self, group_keys: list[str], brand: str | None = None, line: str | None = None) -> dict[str, list[Offer]]:
         """line (shop_brand_auto; yalnız markayla): fiş satırının adında serinin kelimeleri geçen alımlar ("Turist")."""
