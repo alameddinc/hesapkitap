@@ -220,6 +220,14 @@ CAPABILITIES = (
                               # advance_text}; GET /api/recurring/drift?salary=1 → maaş kalemleri type "maas" (title,
                               # text, old, new, pct, expected_pct, actual_pct, advance, month, accept_label,
                               # dismiss_label); POST /api/recurring/salary-drift/accept|dismiss {recurring_id, month}
+    "donation_payment",       # zekât ödemesi / bağış nasıl verildi: POST /api/zakat/people/{id}/payments ve POST
+                              # /api/donations gövdesinde payment nakit|havale|kredi_karti (+ account_id, card_last4) →
+                              # gider olarak da yazılır (Bağış & Sadaka; kredi kartı: "ekstre bekleniyor", ekstreyle
+                              # eşleşince tek sayım), havalede recipient (kime). Ödeme silinir/düzeltilirse açtığı gider
+                              # de. payment yoksa eski davranış (gider yok). GET /api/zakat unexpensed [{id, person_id,
+                              # person, amount, pay_date, year_start}]: ödenmiş ama gider olarak görünmeyen zekât → POST
+                              # /api/zakat/payments/{id}/expense {payment, account_id?, card_last4?, recipient?, pay_date?}
+                              # → {entry_id, created} ya da POST .../no-expense ("gerek yok", bir daha sorulmaz)
 )
 
 

@@ -5,7 +5,7 @@ import { Eye, EyeOff, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { dateTR, parseAmount, tlShown } from "../format";
 import { useUI } from "../ui";
-import AccountSelect from "./AccountSelect";
+import PaidWith, { PAID_WITH_START, paidWithBody, type PaidWithState } from "./PaidWith";
 import { useSave } from "./hooks";
 import { DONATION_KINDS } from "./MarkDonation";
 import Modal from "./Modal";
@@ -28,10 +28,9 @@ function AddForm({ onClose }: { onClose: () => void }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(today());
   const [recipient, setRecipient] = useState("");
-  const [asExpense, setAsExpense] = useState(true);
-  const [account, setAccount] = useState<number | null>(null);
+  const [paid, setPaid] = useState<PaidWithState>(PAID_WITH_START);
   const save = useSave(() => call("POST", "/api/donations", { kind, amount: parseAmount(amount), given_date: date, recipient: recipient || null,
-    as_expense: asExpense, account_id: asExpense ? account : null }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
+    ...paidWithBody(paid) }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
   return (
     <Modal title="Sadaka / bağış ekle" onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || save.isPending}
@@ -59,13 +58,7 @@ function AddForm({ onClose }: { onClose: () => void }) {
             <input id="d-to" className="input" placeholder="kişi ya da kurum" value={recipient} onChange={(e) => setRecipient(e.target.value)} />
           </div>
         </div>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input type="checkbox" className="mt-1" checked={asExpense} onChange={(e) => setAsExpense(e.target.checked)} />
-          <span>Nakit verdim, gider olarak da yaz
-            <span className="block text-xs text-stone-500">Havale/kartla verdiysen işaretleme: döküm gelince o hareketi "sadaka" diye işaretlersin, iki kez sayılmaz.</span>
-          </span>
-        </label>
-        {asExpense && <AccountSelect id="d-acc" label="Hangi hesaptan / cüzdandan (ops.)" value={account} onChange={setAccount} />}
+        <PaidWith id="d-paid" value={paid} onChange={setPaid} noRecipient />
       </div>
     </Modal>
   );
