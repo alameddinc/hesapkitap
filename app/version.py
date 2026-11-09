@@ -190,6 +190,12 @@ CAPABILITIES = (
                               # {id}/combos?chain&all_sizes → {keys, rows [{chain, brand|null, key, size_label, price,
                               # unit_price_per?, per_unit?, source, date?, n?, product?}], chains, brands, sizes, hidden,
                               # attribution[, selected {store, brand, key}]}; seçim tek PATCH {store, brand, group_key}
+    "shop_brand_auto",        # addaki marka (app/shop_brand.py): "çaykur turist çay 1 kg" → items[].brand "Çaykur",
+                              # brand_line "Turist" (adında bu kelimeler geçen ürünler), brand_label "Çaykur Turist",
+                              # brand_auto true; brand_missing (o marka + boyda fiyat yok), any_brand {chain, price,
+                              # brand?, line_total, unit_price_per?, per_unit?} | null (marka fark etmez olsaydı en
+                              # ucuzu); PATCH {brand: null} "Marka fark etmez" (bir daha addan okunmaz); /api/prices/
+                              # groups?q="çaykur çay" → satırlarda brand / brand_label / any_brand
     "shop_unit_sizes",        # kg / g / L / ml satırında da boy listesi: sizes yalnız o türün boyları + size_unit
                               # (L|kg|adet), varsayılan boy o türden (miktarla aynı boy önce); "kahve" gibi üst adda
                               # biçimlerin boyları (size_label "Türk Kahvesi · 100 g"); PATCH text'te miktar okunur

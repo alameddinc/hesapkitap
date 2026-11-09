@@ -4583,7 +4583,9 @@ def price_groups(q: str | None = None, limit: int = 30):
     subcategory (alt kategori, app/product_taxonomy.py; bilinmiyorsa null);
     teklif: unit_price_per, per_unit ("L" | "kg" | "adet"; boysuz grupta yok). source "resmi" (sunucu açtıysa):
     attribution, region (kişinin ili ya da yedek il; BİM/A101/ŞOK "ulusal"), discount?, promotion?, change_7d?,
-    change_30d? (yüzde) — il meta.ui.region'dan (seçilmemişse İstanbul)."""
+    change_30d? (yüzde) — il meta.ui.region'dan (seçilmemişse İstanbul).
+    shop_brand_auto: aramada marka yazılıysa ("çaykur turist çay 1 kg") ve adı başka sonuç vermiyorsa ürünün grubu o
+    markanın (ve serinin) teklifleriyle: satırda brand, brand_line, brand_label, any_brand (marka fark etmez en ucuz)."""
     from app import price_sources
 
     q = (q or "").strip()[:60]
@@ -4595,6 +4597,12 @@ def price_groups(q: str | None = None, limit: int = 30):
             labels.setdefault(k, v)
     if q in labels:  # istemci grup anahtarını gönderdi ("ekmek", "sut|1l"): yalnız o grup
         labels = {q: labels[q]}
+    if q and "|" not in q and not labels:  # "çaykur turist çay 1 kg": adda marka (shop_brand_auto)
+        from app import shop_stores, shopping
+
+        got = shopping.brand_search(q, limit, shop_stores.current())
+        if got is not None:
+            return got
     own = next((s for s in srcs if isinstance(s, price_sources.OwnSource)), None)
     last = own.last_dates() if own else {}
     mine = sorted((k for k in labels if k in last), key=lambda k: (last[k], k), reverse=True)

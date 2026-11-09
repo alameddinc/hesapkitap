@@ -187,6 +187,7 @@ def reset() -> None:
         _memo.clear()
         _seen.clear()
         _shelf_memo.clear()
+        _brand_memo.clear()
     from app import product_groups
 
     product_groups.add_brands([])
@@ -360,6 +361,43 @@ def brands() -> list[str]:
             return [r[0] for r in c.execute("SELECT brand FROM catalog_brands")]
     except Exception:  # noqa: BLE001
         return []
+
+
+_brand_memo: dict = {}
+
+
+def brand_index() -> dict[str, dict]:
+    """Marka (price_sources.brand_norm: "caykur") → {name (katalogdaki yazılış), generics {genel adın slug'ı},
+    titles [ad kelimeleri (name_norm, boy dahil) kümesi]}: alışveriş listesinde yazılan markanın o ürünü satıp
+    satmadığı ve ürün serisinin ("Turist") adlarda geçip geçmediği (app/shop_brand.py). Katalog sürümü değişince
+    yeniden kurulur; tablo yoksa boş."""
+    from app import product_groups as pg
+    from app import system
+
+    try:
+        ver = (system._path(), system.get(VERSION_KEY))
+    except Exception:  # noqa: BLE001
+        return {}
+    if _brand_memo.get("ver") == ver and "map" in _brand_memo:
+        return _brand_memo["map"]
+    try:
+        with system.connect() as c:
+            rows = c.execute("SELECT title, brand, generic FROM catalog_products WHERE brand IS NOT NULL "
+                             "AND brand != ''").fetchall()
+    except Exception:  # noqa: BLE001 - eski veritabanı
+        rows = []
+    out: dict[str, dict] = {}
+    for title, brand, generic in rows:
+        bn = pg.slug(_clean(brand))
+        if not bn:
+            continue
+        a = out.setdefault(bn, {"name": _clean(brand), "generics": set(), "titles": []})
+        if generic:
+            a["generics"].add(pg.slug(generic))
+        a["titles"].append(frozenset(pg.name_norm(_clean(title)).split()))
+    _brand_memo.clear()
+    _brand_memo.update(ver=ver, map=out)
+    return out
 
 
 def _refresh_brands() -> None:
