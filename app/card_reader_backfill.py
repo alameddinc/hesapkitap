@@ -7,7 +7,8 @@ ekstreleri için: saklı PDF uygulamanın depolama katmanından okunur (yerel / 
 işlemleri yapay zekâ sonucu yerine geçer ve kart_reader.explain_from_ai çalışır. Şablon YALNIZ aynı metne
 uygulandığında kayıtlı sonucu aynen veriyor ve ekstre denklemi tutuyorsa kaydedilir (canlı yüklemeyle aynı kural).
 
-Yan etkiler: yalnız sistem veritabanındaki bank_templates (--dry-run'da hiçbiri). Kullanıcı defterlerine yazılmaz
+Yan etkiler: yalnız sistem veritabanındaki bank_templates ve glyph_votes (yazı tipi kodlu PDF'in glif oyları;
+app/glyphs.py) — --dry-run'da hiçbiri. Kullanıcı defterlerine yazılmaz
 (salt okunur kopyadan okunur), yapay zekâya gidilmez, okuma hakkı / kota sayılmaz, topluluğa gönderilmez.
 
 Çıktı ekstre başına tek satır: kullanıcı id, banka (bilinen banka adı ya da "?"), sonuç ve neden kodu. Belge metni,
@@ -15,7 +16,9 @@ isim, kart numarası ya da tutar yazılmaz. Kodlar: learned / revived / known / 
 (bankaya özel okuyucu ya da kayıtlı şablon yapay zekâsız zaten okuyor) / no_file / password / unreadable / ve
 card_reader.explain_from_ai kodları. Yapay zekâ okuması denklemi tutmuyor ama aynı belgeden şablon tutuyorsa şablon
 yine öğrenilir (card_reader._text_fix) ve "ai_fix=N" eklenir: kayıtlı okumada N satır eksik / fazla / işareti ters.
-Kayıtlı ekstre değiştirilmez — kullanıcıya düzeltme önerilecek.
+Kayıtlı ekstre değiştirilmez — kullanıcıya düzeltme önerilecek. Yazı tipi kodlu PDF'in (Akbank) metni glif
+eşlemesiyle kurtarıldıysa "text=glyph" (bilinen glifler) ya da "text=glyph_ocr" (yerel OCR'la öğrenildi) eklenir
+(app/glyphs.py); kurtarılamadıysa neden text_cid / text_cid_no_ocr (sunucuda Tesseract yok) / text_glyphs.
 """
 import contextlib
 import os
@@ -105,6 +108,15 @@ def _locally_readable(text: str) -> bool:
             return False
 
 
+def _via(text: str | None) -> str | None:
+    """Metin yazı tipi kodlu PDF'ten glif eşlemesiyle kurtarıldıysa nasıl: glyph (bilinen glifler) | glyph_ocr (yerel
+    OCR'la öğrenildi); normal PDF'te None (app/glyphs.py)."""
+    from app.parsers import recovery_of
+
+    info = recovery_of(text) if text else None
+    return info["via"] if info else None
+
+
 def _fix_count(ai: Statement, fixed: Statement | None) -> int:
     """Kayıtlı (yapay zekâ) okumada şablonun düzelttiği satır sayısı: eksik / fazla / işareti ters (yalnız sayı)."""
     if fixed is None:
@@ -180,7 +192,7 @@ def _book(u: dict, live_path: str, dry_run: bool, emit) -> list[dict]:
                         reason = "error"
                 rec = {"user": u["id"], "bank": _bank(st, text), "ok": reason in ("learned", "revived", "known",
                                                                                     "would_learn", "already_local"),
-                       "reason": reason, "fix": fix}
+                       "reason": reason, "fix": fix, "via": _via(text)}
                 out.append(rec)
                 emit(rec)
     finally:
@@ -190,10 +202,14 @@ def _book(u: dict, live_path: str, dry_run: bool, emit) -> list[dict]:
 
 def run(dry_run: bool = False, username: str | None = None, emit=None) -> list[dict]:
     emit = emit or (lambda rec: print(f"user={rec['user']} bank={rec['bank']} ok={int(rec['ok'])} reason={rec['reason']}"
-                                      + (f" ai_fix={rec['fix']}" if rec.get("fix") else ""), flush=True))
+                                      + (f" ai_fix={rec['fix']}" if rec.get("fix") else "")
+                                      + (f" text={rec['via']}" if rec.get("via") else ""), flush=True))
+    from app import glyphs
+
     out = []
-    for u, path in books(username):
-        out += _book(u, path, dry_run, emit)
+    with glyphs.dry_run() if dry_run else contextlib.nullcontext():
+        for u, path in books(username):
+            out += _book(u, path, dry_run, emit)
     return out
 
 

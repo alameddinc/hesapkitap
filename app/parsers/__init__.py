@@ -74,7 +74,27 @@ def _extract(data: bytes, password: str | None) -> tuple[str, list[str]]:
         if e.args and isinstance(e.args[0], PDFPasswordIncorrect):
             raise PasswordRequired("PDF şifreli") from e
         raise
-    return "\n".join(pages), pages
+    text = "\n".join(pages)
+    from app import glyphs
+
+    # yazı tipi kodlu metin ("(cid:N)", Type3 yazı tipi): glif şekli → karakter eşlemesiyle (gerekirse yerel OCR) kurtar
+    if got := glyphs.recover(data, password, text):
+        text, pages, info = got
+        with _PAGES_LOCK:
+            _RECOVERED[hash(text)] = info
+            while len(_RECOVERED) > 8:
+                _RECOVERED.pop(next(iter(_RECOVERED)))
+    return text, pages
+
+
+# Glif eşlemesiyle kurtarılmış metnin bilgisi (app/glyphs.py recover: via, unknown, ocr_pages); geriye dönük öğrenme
+# raporu için. Metin özetiyle, küçük.
+_RECOVERED: dict[int, dict] = {}
+
+
+def recovery_of(text: str) -> dict | None:
+    with _PAGES_LOCK:
+        return _RECOVERED.get(hash(text))
 
 
 # Sayfa sınırları: metin tek parça döner (tüm okuyucular onu bekler); sayfa başlığı/altlığını ayıklamak isteyen

@@ -103,6 +103,43 @@ def akbank(cut="12.10.2026", due="22.10.2026", prev=4200.00, ek=True, future=Tru
     return lay
 
 
+# ---------------------------------------------------------------- Akbank PDF (yazı tipi kodlu) benzeri
+# Gerçek Akbank PDF'inin metni Type3 yazı tipiyle çizilir (tests/type3_pdf.py); düzen: İngiliz sayı biçimi (1,250.00),
+# eğik çizgili tarih, ödeme / iade sondaki "(-)" ile, taksit satırı "(6,000.00 TL) 2/6.Taksit 1,000.00 1,000.00x4",
+# "Önceki Dönem Hesap Özeti Bakiyesi", "En Az Ödeme Tutarı", faiz "Toplam Dönem Faizi" tarihli satırı
+
+def us(x: float) -> str:
+    return f"{x:,.2f}"
+
+
+def akbank_pdf(cut="12/10/2026", due="22/10/2026", prev=4200.00, month=9, year=2026) -> Layout:
+    mm = f"{month:02d}"
+    rows = [Row(f"15/{mm}/{year}", "Odemeniz icin tesekkurler", prev, "odeme"),
+            Row(f"16/{mm}/{year}", "ORNEK MARKET ISTANBUL", 450.00),
+            Row(f"20/{month - 1:02d}/{year}", "ORNEK ELEKTRONIK", 1000.00, inst=(2, 6), inst_total=6000.00),
+            Row(f"22/{mm}/{year}", "ORNEK KAFE", 180.00),
+            Row(f"25/{mm}/{year}", "ORNEK GIYIM", 120.00, "iade"),
+            Row(f"28/{mm}/{year}", "ORNEK AKARYAKIT", 1500.00),
+            Row(f"02/{int(mm) + 1:02d}/{year}", "ORNEK ECZANE", 236.40),
+            Row(cut, "Toplam Donem Faizi", 37.25, "faiz_ucret")]
+    lay = Layout("Akbank T.A.Ş.", "557123******4410", cut, due, prev, rows, limit=30000.0, available=True)
+    t = lay.total
+    lines = ["AKBANK T.A.S.", "Kart No 5571 23** **** 4410", f"Donem Borcu {us(t)} TL", f"Son Odeme Tarihi {due}",
+             f"En Az Odeme Tutari {us(round(t * 0.4, 2))} TL", f"Hesap Kesim Tarihi {cut}",
+             "Kart Limiti 30,000.00 TL", f"Kullanilabilir Kart Limiti {us(30000 - t)} TL",
+             f"Onceki Donem Hesap Ozeti Bakiyesi {us(prev)}", "Islem Tarihi Aciklama Tutar"]
+    for r in rows:
+        v = us(r.amount) + ("(-)" if r.kind in ("odeme", "iade") else "")
+        if r.inst:
+            lines.append(f"{r.date} {r.desc} ({us(r.inst_total)} TL) {r.inst[0]}/{r.inst[1]}.Taksit {v} "
+                         f"{us(r.amount)}x{r.inst[1] - r.inst[0]}")
+        else:
+            lines.append(f"{r.date} {r.desc} {v}")
+    lines += [f"Genel Toplam {us(t)}", "Akdi faiz orani aylik %3,50"]
+    lay.text = "\n".join(lines)
+    return lay
+
+
 # ---------------------------------------------------------------- İş Bankası (Maximum) benzeri
 # "Etiket : değer" başlık, "Önceki Hesap Özeti Borcu" dönem borcundan ÖNCE, ödeme/iade sondaki "+" ile, MaxiPuan sütunu,
 # eski tarihli taksit satırı "3. Taksit", faiz/BSMV/KKDF satırları

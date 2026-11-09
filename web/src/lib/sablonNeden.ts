@@ -5,6 +5,8 @@ export const NEDEN: Record<string, string> = {
   ok: "öğrenildi",
   ok_fixed: "öğrenildi (yapay zekâ okuması metinden düzeltildi)",
   text_cid: "PDF metni okunamıyor (yazı tipi kodlu)",
+  text_cid_no_ocr: "PDF metni yazı tipi kodlu; sunucuda yerel OCR (Tesseract) yok",
+  text_glyphs: "yazı tipi kodlu metin kısmen çözüldü (tanınmayan karakter çok)",
   revived: "yeniden açıldı",
   known: "zaten vardı",
   would_learn: "öğrenilecek",

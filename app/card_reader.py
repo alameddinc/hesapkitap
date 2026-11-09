@@ -62,11 +62,11 @@ LABELS = {
     # "Önceki dönem borcu" / "Önceki hesap özeti borcu" dönem borcu sayılmasın (önceki borç satırı çoğu zaman üstte)
     "total": r"(?<!onceki )(?<!gecen )(?:donem borcu|toplam borc|ekstre borcu|hesap ozeti borcu|guncel donem borcu"
              r"|odenecek toplam)",
-    "min": r"asgari odeme",
+    "min": r"asgari odeme|en az odeme",
     # "Kullanılabilir kart limiti" toplam limit sayılmasın (kendi etiketi: available)
     "limit": r"(?<!kullanilabilir )(?<!kalan )(?:kart limiti|kredi limiti|toplam limit)",
     "available": r"kullanilabilir (?:kart |kredi )?limit|kalan (?:kart |kredi )?limit",
-    "prev": r"onceki donem (?:borcu|bakiye)|onceki ekstre (?:borcu|bakiye)|onceki hesap ozeti (?:borcu|bakiye)"
+    "prev": r"onceki donem (?:hesap ozeti )?(?:borcu|bakiye)|onceki ekstre (?:borcu|bakiye)|onceki hesap ozeti (?:borcu|bakiye)"
             r"|gecen donem(?:den)? (?:devreden )?borc|devreden borc|donem basi (?:borcu|bakiye)",
     "next_cut": r"sonraki hesap kesim|sonraki kesim",
     "next_due": r"sonraki son odeme",
@@ -123,7 +123,7 @@ _NEED = {
     "total": ([{"borcu", "borcunuz", "borc", "borcun", "toplam", "toplami", "odenecek", "bakiye", "bakiyesi",
                 "bakiyeniz"}], {"onceki", "gecen", "devreden", "basi", "asgari", "minimum", "limit", "limiti",
                                 "limitiniz", "nakit"}),
-    "min": ([{"asgari", "minimum"}], set()),
+    "min": ([{"asgari", "minimum", "az"}], set()),
     "limit": ([{"limit", "limiti", "limitiniz"}], {"kullanilabilir", "kalan", "nakit"}),
     "available": ([{"kullanilabilir", "kalan"}, {"limit", "limiti", "limitiniz"}], {"nakit"}),
     "prev": ([{"onceki", "gecen", "devreden", "basi"}], set()),
@@ -256,7 +256,7 @@ def _installment(desc: str) -> tuple[int | None, int | None]:
     """(kaçıncı taksit, kalan taksit). "İşlemin 3 / 9 Taksidi" → (3, 6); "1. Taksit … 5x6.240,00" (kalan 5) → (1, 5);
     "4. Taksit … Son Taksit" → (4, 0); taksitli iade "2. İade … 4x…" → (2, 4). Tarih parçaları (29/03/2025) sayılmaz."""
     low = _fold(desc)
-    if m := re.search(r"(?<![\d/.])(\d{1,2})\s*/\s*(\d{1,2})(?![\d/.])", low):
+    if m := re.search(r"(?<![\d/.])(\d{1,2})\s*/\s*(\d{1,2})(?![\d/]|\.\d)", low):  # "2/6.Taksit" (Akbank)
         n, total = int(m.group(1)), int(m.group(2))
         return (n, total - n) if 0 < n <= total <= 48 else (None, None)
     m = re.search(r"(?<![\d.])(\d{1,2})\.\s*(?:taksit|iade)", low)
@@ -292,7 +292,13 @@ def _is_credit(mode: str, v: re.Match, rest: str, low: str) -> bool:
         return bool(re.match(r"\s?-(?!\s?\d)", rest[v.end():]))
     if mode == "trailplus":  # "2.150,00 +" / "2.150,00+"
         return bool(re.match(r"\s?\+(?!\s?\d)", rest[v.end():]))
+    if mode == "paren":  # Akbank: "1,250.00(-)" / "1,250.00 (-)"
+        return bool(_PAREN_MINUS.match(rest[v.end():]))
     return bool(_PAY_WORDS.search(low) or _REFUND_WORDS.search(low))  # words
+
+
+# Akbank: "1,250.00(-)"; taksit satırında kalan taksit sayısı arada olabilir: "250.00x4(-)"
+_PAREN_MINUS = re.compile(r"(?:[x×]\d{1,2})?\s?\(\s?-\s?\)")
 
 
 def _desc(rest: str, fmt: str, fx: bool, credit: str) -> str:
@@ -303,6 +309,8 @@ def _desc(rest: str, fmt: str, fx: bool, credit: str) -> str:
         desc = re.sub(r"(?<=\s)-(?=\s|$)", " ", desc)
     if credit == "trailplus":
         desc = re.sub(r"(?<=\s)\+(?=\s|$)", " ", desc)
+    if credit == "paren":
+        desc = _PAREN_MINUS.sub(" ", desc)
     return re.sub(r"\s+", " ", desc).strip()[:120] or "?"
 
 
@@ -515,6 +523,12 @@ def _cid_text(text: str) -> bool:
     return n >= 20 and n * 7 > len(text) * 0.2
 
 
+def _glyph_gaps(text: str) -> bool:
+    """Glif eşlemesiyle kurtarılan metinde (app/glyphs.py) tanınmayan karakter çok: şablon güvenle öğrenilemez."""
+    n = text.count("\ufffd")
+    return n >= 20 and n > 0.05 * sum(not c.isspace() for c in text)
+
+
 def trustworthy(st: Statement) -> bool:
     return ai_check(st) is None
 
@@ -522,6 +536,12 @@ def trustworthy(st: Statement) -> bool:
 def _keywords(text: str) -> list[str]:
     head = _low(text[:4000])
     return [k for k in KEYWORDS if k in head][:4]
+
+
+def _credit_modes(text: str, all_modes: bool = False) -> tuple[str, ...]:
+    """Denenecek alacak (ödeme / iade) işareti biçimleri; "(-)" yalnız metinde geçiyorsa (deneme sayısı artmasın)."""
+    modes = ("minus", "plus", "trail", "trailplus", "words") if all_modes else ("minus", "plus")
+    return modes + ("paren",) if "(-)" in text or "( - )" in text else modes
 
 
 def learn(text: str, bank: str) -> tuple[dict, Statement] | None:
@@ -532,7 +552,7 @@ def learn(text: str, bank: str) -> tuple[dict, Statement] | None:
             continue
         for fmt in ("tr", "us"):
             for idx in (-1, 0, -2, 1):
-                for credit in ("minus", "plus"):
+                for credit in _credit_modes(text):
                     spec = {"v": 1, "kind": "card", "bank": bank, "keywords": _keywords(text),
                             "date": {"sep": sep, "order": order}, "num": fmt, "amount_idx": idx, "credit": credit}
                     res = apply(text, spec, bank)
@@ -780,15 +800,20 @@ def explain_from_ai(text: str, ai: Statement) -> tuple[tuple[dict, Statement] | 
     çıkarılır; aynı metne uygulanınca yapay zekânın sonucunu aynen vermeli ve ekstre denklemi tutmalı.
     Yapay zekânın işlemleri denklemi tutmuyorsa metinden denklemi tutan okuma aranır (_text_fix): bulunursa şablon
     düzeltilmiş okumaya göre öğrenilir (kod ok_fixed; döndürülen Statement şablonun okuması).
-    Kodlar: ok | ok_fixed | no_text | text_cid | too_long | ai_few_txns | ai_equation | ai_dates | bank_not_in_text |
-    bank_unknown | bank_mismatch | date_format | header | header_values | lines | amounts | card | equation | dates |
-    fields."""
+    Kodlar: ok | ok_fixed | no_text | text_cid | text_cid_no_ocr | text_glyphs | too_long | ai_few_txns | ai_equation |
+    ai_dates | bank_not_in_text | bank_unknown | bank_mismatch | date_format | header | header_values | lines | amounts |
+    card | equation | dates | fields."""
     if not text:
         return None, "no_text"
     if len(text) > 400_000:
         return None, "too_long"
     if _cid_text(text):
-        return None, "text_cid"
+        # app/glyphs.py kurtaramadı: Type3 değil / OCR'la da olmadı (text_cid) ya da sunucuda Tesseract yok
+        from app import glyphs
+
+        return None, "text_cid" if glyphs.ocr_available() else "text_cid_no_ocr"
+    if _glyph_gaps(text):
+        return None, "text_glyphs"
     if reason := ai_check(ai):
         if reason == "ai_equation":
             bank, why = _bank_check(text, ai.bank)
@@ -831,7 +856,7 @@ def explain_from_ai(text: str, ai: Statement) -> tuple[tuple[dict, Statement] | 
         for d in dates:
             for fx in fx_opts:
                 idx, at, inst_at = _amount_at(text, d, fmt, fx, ai)
-                for credit in ("minus", "plus", "trail", "trailplus", "words"):
+                for credit in _credit_modes(text, all_modes=True):
                     spec = {"v": 1, "kind": "card", "bank": bank, "keywords": _keywords(text), "date": d, "num": fmt,
                             "amount_idx": idx, "credit": credit}
                     spec.update({k: v for k, v in (("amount_at", at), ("inst_at", inst_at), ("fx", fx),
@@ -999,7 +1024,7 @@ def is_safe(spec: dict) -> bool:
                 return False
         if "labels" in spec and not _safe_labels(spec["labels"]):
             return False
-        return spec["num"] in ("tr", "us") and spec["credit"] in ("minus", "plus", "trail", "trailplus", "words") \
+        return spec["num"] in ("tr", "us") and spec["credit"] in ("minus", "plus", "trail", "trailplus", "words", "paren") \
             and type(spec["amount_idx"]) is int and -3 <= spec["amount_idx"] <= 3
     except (KeyError, TypeError, AttributeError):
         return False
