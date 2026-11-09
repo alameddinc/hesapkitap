@@ -16,12 +16,14 @@ import type { UnpricedInfo } from "../lib/priceAdvice";
 import { chainName, convertQty, fmtQty, isUnit, parseQty, stepQty, UNITS, validQty, type Unit } from "../lib/shopList";
 import { packsText, pinnedChoiceText, sizesForUnit, sizesHidden, sizeSub, storeChoices, type SizeRow } from "../lib/shopStores";
 import { useCap } from "./hooks";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
 import { SuggestList, useSuggest, type Suggestion } from "./ShopAutofill";
 import { BrandChips, OffersList, useOffers, type BrandOpt } from "./ShopOffers";
 import { HiddenHint } from "./ShopStores";
-import { ComboSheet, PriceError, PriceLoading, retry, useItemCombos } from "./ShopCombos";
+import { ComboSheet, PriceStatus, retry, useItemCombos } from "./ShopCombos";
+import { bekliyor } from "./SorguDurumu";
 import { comboSummary } from "../lib/combos";
+import { DURUM } from "../lib/durum";
 
 export interface EditableItem {
   id: number; text: string; qty: number | null; unit?: string | null; group_key: string | null;
@@ -104,7 +106,8 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
   const pickUnit = (u: Unit) => { setQtyS(fmtQty(convertQty(okQty ? qty : Number.NaN, unit, u))); setUnit(u); };
   const pickSug = (s: Suggestion) => { setText(s.text); setPicked(s); setSugOpen(false); setActive(-1); };
 
-  const save = () => {
+  /** yalnız değişen alanlar */
+  const patchOf = (): ItemPatch => {
     const p: ItemPatch = {};
     const t = text.trim();
     if (t && renamed) {
@@ -114,9 +117,17 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
     if (!renamed && brandOn && brand !== brand0) p.brand = brand;
     if (!renamed && pinOn && store !== (it.store ?? null)) p.store = store;
     if (okQty && (qty !== (it.qty ?? 1) || unit !== unit0)) { p.qty = qty; p.unit = unit; }
+    return p;
+  };
+  const save = () => {
+    if (!text.trim() || !okQty) return; // Kaydet düğmesi de kapalı; "Değişiklikler kaydedilmedi" sorusundan gelince pencere açık kalır
+    const p = patchOf();
     if (!Object.keys(p).length) return onClose();
     onSave(p);
   };
+  // kaydedilmemiş değişiklik (Bulgu 5; mobil alisveris/Duzenle ile aynı): ad, miktar, birim, boy, marka, mağaza. "Zincir ve
+  // marka seç" seçimi orada hemen kaydedilir (kirli sayılmaz). Kapatınca "Değişiklikler kaydedilmedi · Kaydet / Kaydetmeden çık / Vazgeç".
+  const dirty = renamed || !okQty || Object.keys(patchOf()).length > 0;
   const onKey = (e: React.KeyboardEvent) => {
     if (!sugOpen || !sugItems.length) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (a + 1) % sugItems.length); }
@@ -126,10 +137,10 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
 
   return (
     <>
-    <Modal title={title} onClose={onClose} hidden={comboOpen} footer={<>
+    <Modal title={title} onClose={onClose} hidden={comboOpen} dirty={dirty && !busy} onSave={save} footer={<>
       <button type="button" className="btn-danger" onClick={onRemove} disabled={busy} data-testid="listeden-cikar"><Trash2 size={16} aria-hidden /> Listeden çıkar</button>
       <div className="flex-1" />
-      <button type="button" className="btn-ghost hidden sm:inline-flex" onClick={onClose}>Vazgeç</button>
+      <button type="button" className="btn-ghost hidden sm:inline-flex" onClick={() => void kirliyseSor(dirty && !busy, onClose, save)}>Vazgeç</button>
       <button type="button" className="btn-primary" disabled={busy || !text.trim() || !okQty} onClick={save}>Kaydet</button>
     </>}>
       <div className="space-y-4">
@@ -178,11 +189,10 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
           </div>
         )}
 
-        {!renamed && sizeUnitOk && known && !sizes.data && (sizes.isLoading || sizes.error) && (
+        {!renamed && sizeUnitOk && known && !sizes.data && (bekliyor(sizes) || sizes.error) && (
           <div data-testid="boy-durum">
             <span className="label">Boy</span>
-            {sizes.isLoading ? <PriceLoading rows={3} testId="boy-yukleniyor" onRetry={() => retry(qc, sizesKey)} />
-              : <PriceError error={sizes.error as Error} onRetry={() => retry(qc, sizesKey)} />}
+            <PriceStatus q={sizes} rows={3} testId="boy-yukleniyor" onRetry={() => retry(qc, sizesKey)} />
           </div>
         )}
         {sizeBox && (
@@ -231,7 +241,7 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
             <button type="button" onClick={() => setComboOpen(true)} disabled={busy}
               className="flex w-full items-center gap-3 rounded-lg border border-stone-200 px-3 py-2.5 text-left hover:bg-stone-50 dark:border-stone-700 dark:hover:bg-stone-800/60">
               <span className="min-w-0 flex-1 font-medium break-words tabular-nums" data-testid="zincir-marka-ozet">
-                {combos.data ? comboSummary(withLine(combos.data.selected, it), combos.data.rows, money) : combos.isLoading ? "Fiyatlar getiriliyor…" : comboSummary({ store: it.store ?? null, brand: it.brand ?? null, key: cur }, [], money)}</span>
+                {combos.data ? comboSummary(withLine(combos.data.selected, it), combos.data.rows, money) : combos.isLoading ? DURUM.fiyatYukleniyor : comboSummary({ store: it.store ?? null, brand: it.brand ?? null, key: cur }, [], money)}</span>
               <span className="inline-flex shrink-0 items-center gap-0.5 text-sm font-medium text-blue-700 dark:text-blue-300">Değiştir<ChevronRight size={16} aria-hidden /></span>
             </button>
             <HiddenHint count={combos.data?.hidden?.count} className="mt-1.5" />
@@ -244,12 +254,12 @@ export default function ShopItemDialog({ it, hint, autofill, money, busy, onClos
           <div>
             <span className="label" id="sd-magaza-l">Mağaza</span>
             <p className="mb-1.5 text-sm text-stone-600 dark:text-stone-300">Nereden alacağım?</p>
-            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby="sd-magaza-l" data-testid="magaza-secimi">
+            <div className="flex flex-wrap gap-2" role="radiogroup" aria-labelledby="sd-magaza-l" data-testid="magaza-secimi">
               {[null, ...choices].map((c) => {
                 const on = store === c;
                 return (
                   <button key={c ?? "_"} type="button" role="radio" aria-checked={on} onClick={() => setStore(c)}
-                    className={cx("max-w-full rounded-full border px-3 py-1 text-left text-sm break-words",
+                    className={cx("hit inline-flex min-h-9 max-w-full items-center rounded-full border px-3 py-1 text-left text-sm break-words",
                       on ? "border-green-700 bg-green-700 text-white dark:border-green-500 dark:bg-green-600"
                         : "border-stone-300 text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800")}>
                     {c ?? "En uygun yer (otomatik)"}</button>

@@ -8,7 +8,7 @@
 // Mobil karşılığı: hesapkitap-mobile.
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
 import { ANY_PATCH, ANY_TOAST, comboBadges, comboPatch, comboTitle, comboToast, filterCombos, isAnySel, isSelected, sortCombos,
@@ -20,6 +20,8 @@ import Modal from "./Modal";
 import { OfferBadges, PriceFootnote, type GroupBest } from "./PriceDetail";
 import Segmented from "./Segmented";
 import { HiddenHint } from "./ShopStores";
+import { bekliyor, Cevrimdisi, Donen, HataNotu, type SorguBenzeri } from "./SorguDurumu";
+import { cevrimdisiHata, DURUM, useBekleme, useCevrimici } from "../lib/durum";
 
 export const COMBOS = "shop-combos";
 export const itemCombosKey = (id: number) => [COMBOS, "item", id] as const;
@@ -42,12 +44,12 @@ function Chips<T extends string | null>({ label, all, items, value, onChange, te
   label: string; all: string; items: T[]; value: T | null; onChange: (v: T | null) => void; text?: (v: T) => string; bleed: string;
 }) {
   return (
-    <div className={cx("flex gap-1.5 overflow-x-auto pb-0.5", bleed)} role="radiogroup" aria-label={label}>
+    <div className={cx("flex gap-1.5 overflow-x-auto py-1.5", bleed)} role="radiogroup" aria-label={label}>
       {[null, ...items].map((v) => {
         const on = (value ?? null) === v;
         return (
           <button key={v ?? "_"} type="button" role="radio" aria-checked={on} onClick={() => onChange(v as T | null)}
-            className={cx("shrink-0 rounded-full border px-2.5 py-1 text-xs whitespace-nowrap",
+            className={cx("hit inline-flex min-h-8 shrink-0 items-center rounded-full border px-3 text-xs whitespace-nowrap",
               on ? "border-green-700 bg-green-700 text-white dark:border-green-500 dark:bg-green-600"
                 : "border-stone-200 text-stone-600 hover:bg-stone-100 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800")}>
             {v === null ? all : text ? text(v as T) : v}</button>
@@ -62,51 +64,62 @@ const Badge = ({ children, tone }: { children: string; tone: "green" | "blue" })
     tone === "green" ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300" : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200")}>{children}</span>
 );
 
-export const SLOW_MS = 4000;
+/** Fiyat listelerinin durumu (Zincir ve marka seç, Boy, Mağazalara göre, Fiyatlar grup ayrıntısı). SorguDurumu ile aynı kurallar
+ *  ve metinler (lib/durum.ts; mobil alisveris/ZincirMarka FiyatDurumu ile aynı): yükleniyor → satır iskeleti + "Fiyatlar
+ *  getiriliyor…"; 5 sn sonra "Bağlantı yavaş · Bekliyoruz · Tekrar dene"; bağlantı yok → çevrimdışı kutusu; hata → sunucunun
+ *  metni + "Tekrar dene" (bölüm sessizce gizlenmez). Veri geldiyse hiçbir şey çizmez. */
+export function PriceStatus({ q, rows = 4, onRetry, testId = "fiyat-yukleniyor", className }: {
+  q: SorguBenzeri; rows?: number; onRetry?: () => void; testId?: string; className?: string;
+}) {
+  const online = useCevrimici();
+  const again = onRetry ?? (() => void q.refetch());
+  if (q.error && q.data === undefined) return cevrimdisiHata(q.error) ? <Cevrimdisi retry={again} className={className} /> : <HataNotu error={q.error} retry={again} className={className} />;
+  if (!bekliyor(q)) return null;
+  if (!online) return <Cevrimdisi retry={again} className={className} />;
+  return <PriceLoading rows={rows} onRetry={again} testId={testId} className={className} />;
+}
 
-/** Yükleniyor: liste satırına benzeyen iskeletler + "Fiyatlar getiriliyor…"; SLOW_MS sonra "Biraz uzun sürdü · Tekrar dene". */
-export function PriceLoading({ rows = 4, onRetry, testId = "fiyat-yukleniyor" }: { rows?: number; onRetry?: () => void; testId?: string }) {
-  const [slow, setSlow] = useState(false);
+/** Yükleniyor: liste satırına benzeyen iskeletler + "Fiyatlar getiriliyor…"; 5 sn sonra "Bağlantı yavaş · Bekliyoruz · Tekrar dene"
+ *  (dokununca istek yeniden atılır, süre baştan). */
+export function PriceLoading({ rows = 4, onRetry, testId = "fiyat-yukleniyor", className }: { rows?: number; onRetry?: () => void; testId?: string; className?: string }) {
   const [round, setRound] = useState(0);
-  useEffect(() => { setSlow(false); const t = setTimeout(() => setSlow(true), SLOW_MS); return () => clearTimeout(t); }, [round]);
+  return <PriceWaiting key={round} rows={rows} testId={testId} className={className} onRetry={onRetry && (() => { setRound((n) => n + 1); onRetry(); })} />;
+}
+
+function PriceWaiting({ rows, onRetry, testId, className }: { rows: number; onRetry?: () => void; testId: string; className?: string }) {
+  const evre = useBekleme(true);
   return (
-    <div className="space-y-2" data-testid={testId} aria-busy="true">
-      <p className="text-sm text-stone-500 dark:text-stone-400" role="status">
-        {slow ? <>Biraz uzun sürdü{onRetry && <> · <button type="button" className="font-medium text-blue-700 hover:underline dark:text-blue-300"
-          onClick={() => { setRound((n) => n + 1); onRetry(); }} data-testid="fiyat-tekrar">Tekrar dene</button></>}</> : "Fiyatlar getiriliyor…"}
-      </p>
+    <div className={cx("space-y-2", className)} data-testid={testId} aria-busy="true">
       <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700" aria-hidden="true">
         {Array.from({ length: rows }, (_, i) => (
           <li key={i} className="flex items-center gap-3 px-3 py-3">
             <span className="min-w-0 flex-1 space-y-1.5">
-              <span className="block h-3.5 animate-pulse rounded bg-stone-200 dark:bg-stone-700" style={{ width: `${70 - (i % 3) * 12}%` }} />
-              <span className="block h-2.5 animate-pulse rounded bg-stone-100 dark:bg-stone-800" style={{ width: `${42 - (i % 2) * 10}%` }} />
+              <span className="block h-3.5 animate-pulse rounded bg-stone-200 motion-reduce:animate-none dark:bg-stone-700" style={{ width: `${70 - (i % 3) * 12}%` }} />
+              <span className="block h-2.5 animate-pulse rounded bg-stone-100 motion-reduce:animate-none dark:bg-stone-800" style={{ width: `${42 - (i % 2) * 10}%` }} />
             </span>
-            <span className="h-3.5 w-14 shrink-0 animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
+            <span className="h-3.5 w-14 shrink-0 animate-pulse rounded bg-stone-200 motion-reduce:animate-none dark:bg-stone-700" />
           </li>
         ))}
       </ul>
+      <p className="flex min-h-5 flex-wrap items-center gap-x-1.5 text-sm text-stone-500 dark:text-stone-400" role="status" aria-live="polite" data-evre={evre}>
+        <Donen />
+        {evre === 2 ? <><span>{DURUM.yavas}{onRetry ? " ·" : ""}</span>{onRetry && (
+          <button type="button" className="inline-flex min-h-11 items-center font-semibold text-blue-700 hover:underline dark:text-blue-300"
+            onClick={onRetry} data-testid="fiyat-tekrar">{DURUM.tekrar}</button>)}</> : <span>{DURUM.fiyatYukleniyor}</span>}
+      </p>
     </div>
   );
 }
 
-/** Hata: mesaj + Tekrar dene. */
-export function PriceError({ error, onRetry }: { error: Error; onRetry?: () => void }) {
-  return (
-    <p className="flex flex-wrap items-center gap-x-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300" role="alert">
-      <span className="min-w-0 break-words">{error.message || "Fiyatlar alınamadı"}</span>
-      {onRetry && <button type="button" className="font-medium underline underline-offset-2" onClick={onRetry}>Tekrar dene</button>}
-    </p>
-  );
-}
-
 /** Seçici listesi (süzgeç, sıralama, satırlar, ipucu, dipnot). onPick verilmezse salt görüntü. */
-export function ComboList({ data, loading, error, selected, onPick, onAny, busy, initialChain, bleed = "-mx-4 px-4", onRetry }: {
-  data?: CombosData; loading?: boolean; error?: Error | null; selected?: ComboSel | null; onRetry?: () => void;
+export function ComboList({ q, selected, onPick, onAny, busy, initialChain, bleed = "-mx-4 px-4", onRetry }: {
+  /** seçici sorgusu (useItemCombos / useGroupCombos): veri, yükleniyor, hata */
+  q: SorguBenzeri & { data?: CombosData }; selected?: ComboSel | null; onRetry?: () => void;
   onPick?: (r: ComboRow) => void; onAny?: () => void; busy?: boolean; initialChain?: string | null;
   /** çip satırının kaydırma payı: kabın iç boşluğu kadar (pencerede px-4, kartta px-3) */
   bleed?: string;
 }) {
+  const data = q.data;
   const [chain, setChain] = useState<string | null>(initialChain ? chainName(initialChain) : null);
   const [brand, setBrand] = useState<string | null>(null);
   const [size, setSize] = useState<string | null>(null);
@@ -132,8 +145,7 @@ export function ComboList({ data, loading, error, selected, onPick, onAny, busy,
           {data && isAnySel(selected) && <Check size={18} className="shrink-0 text-green-700 dark:text-green-400" aria-label="seçili" />}
         </button>
       )}
-      {loading && <PriceLoading onRetry={onRetry} />}
-      {error && !data && <PriceError error={error} onRetry={onRetry} />}
+      <PriceStatus q={q} onRetry={onRetry} />
       {data && all.length > 0 && (
         <div className="space-y-1.5">
           <Chips bleed={bleed} label="Zincir" all="Tüm zincirler" items={chainItems} value={chain} onChange={setChain} />
@@ -214,7 +226,7 @@ export function ComboSheet({ itemId, chain, onClose, onDone, back }: {
   };
   return (
     <Modal title="Zincir ve marka seç" onClose={onClose} back={back ? { label: back, onClick: onClose } : undefined}>
-      <ComboList data={q.data} loading={q.isLoading} error={q.error as Error | null} selected={q.data?.selected} busy={busy} initialChain={chain}
+      <ComboList q={q} selected={q.data?.selected} busy={busy} initialChain={chain}
         onRetry={() => retry(qc, itemCombosKey(itemId))}
         onAny={() => void apply({ ...ANY_PATCH }, ANY_TOAST)}
         onPick={(r) => { const p = comboPatch(r); void apply(p, comboToast(r)); }} />

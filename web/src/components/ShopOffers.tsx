@@ -10,6 +10,7 @@ import { chainName } from "../lib/shopList";
 import { offerSub, offersTitle, type OffersData } from "../lib/shopStores";
 import { OfferBadges, PriceFootnote, type GroupBest } from "./PriceDetail";
 import { HiddenHint } from "./ShopStores";
+import { PriceStatus } from "./ShopCombos";
 
 export interface BrandOpt { brand: string; sizes: string[]; chains: number; /** yeni sunucu: {anahtar: "1 L"} */ size_labels?: Record<string, string> }
 
@@ -18,12 +19,12 @@ export function BrandChips({ brands, value, onChange, id = "marka" }: {
   brands: BrandOpt[]; value: string | null; onChange: (b: string | null) => void; id?: string;
 }) {
   return (
-    <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby={`${id}-l`} data-testid="marka-cipleri">
+    <div className="flex flex-wrap gap-2" role="radiogroup" aria-labelledby={`${id}-l`} data-testid="marka-cipleri">
       {[null, ...brands.map((b) => b.brand)].map((b) => {
         const on = (value ?? null) === b;
         return (
           <button key={b ?? "_"} type="button" role="radio" aria-checked={on} onClick={() => onChange(b)}
-            className={cx("max-w-full rounded-full border px-3 py-1 text-left text-sm break-words",
+            className={cx("hit inline-flex min-h-9 max-w-full items-center rounded-full border px-3 py-1 text-left text-sm break-words",
               on ? "border-green-700 bg-green-700 text-white dark:border-green-500 dark:bg-green-600"
                 : "border-stone-300 text-stone-700 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800")}>
             {b ?? "Marka fark etmez"}</button>
@@ -58,8 +59,7 @@ export function OffersList({ group, brand, sizeLabel, money }: { group: string; 
         <h3 className="label mb-0">Mağazalara göre</h3>
         <span className="text-sm font-medium break-words text-stone-700 dark:text-stone-200" data-testid="magazalara-baslik">{offersTitle(d?.brand ?? brand, d?.size_label ?? sizeLabel)}</span>
       </div>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-stone-500">Şu an karşılaştırılamadı.</p>}
+      <PriceStatus q={q} rows={3} testId="mg-yukleniyor" />
       {d && !offers.length && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700">Bu marka ve boy için fiyat yok.</p>}
       {offers.length > 0 && (
         <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700">

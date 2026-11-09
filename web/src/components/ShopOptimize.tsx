@@ -21,6 +21,7 @@ import { useCap } from "./hooks";
 import Segmented from "./Segmented";
 import { HiddenHint } from "./ShopStores";
 import { ComboSheet } from "./ShopCombos";
+import SorguDurumu, { Sk } from "./SorguDurumu";
 
 export const OPTIMIZE = ["shopping-optimize"] as const;
 /** "₺1.200" (tam lirada kuruşsuz), "₺59,90" */
@@ -101,8 +102,7 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
 
   return (
     <section className="card space-y-3 p-4" data-testid="optimum" aria-busy={q.isFetching}>
-      {q.isLoading && <p className="text-sm text-stone-500">Hesaplanıyor…</p>}
-      {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Plan hesaplanıyor"><Sk className="h-40 w-full rounded-xl" /></SorguDurumu>
       {r && !plan && (r.empty ? <div><p className="font-semibold">{r.empty.title}</p><p className="text-sm text-stone-500">{r.empty.text}</p></div>
         : <p className="text-sm text-stone-500">Listede fiyatını bildiğimiz ürün yok.</p>)}
       {r && plan && (
@@ -158,11 +158,11 @@ export default function ShopOptimize({ items, ro, onTick, open: openP, data, onC
                           {l.own_place && <div className="text-xs break-words text-stone-500 tabular-nums">{maskText(ownPlaceText(l.own_place, money))}</div>}
                           {l.cheaper_elsewhere && <div className="text-xs break-words text-stone-400 tabular-nums dark:text-stone-500" data-testid="plan-disi">{maskText(cheaperElsewhereText(l.cheaper_elsewhere, money))}</div>}
                           {bs && (onFix && !ro ? (
-                            <button type="button" className="mt-0.5 block text-left text-xs font-medium break-words text-green-700 tabular-nums underline-offset-2 hover:underline dark:text-green-400"
+                            <button type="button" className="hit mt-0.5 block min-h-8 text-left text-xs font-medium break-words text-green-700 tabular-nums underline-offset-2 hover:underline dark:text-green-400"
                               onClick={() => onFix(l.id)} data-testid="karli-boy">{maskText(betterSizeText(bs, money))}</button>
                           ) : <div className="mt-0.5 text-xs font-medium break-words text-green-700 tabular-nums dark:text-green-400" data-testid="karli-boy">{maskText(betterSizeText(bs, money))}</div>)}
                           {comboOn && !ro && (
-                            <button type="button" className="mt-0.5 text-xs font-medium text-blue-700 underline-offset-2 hover:underline dark:text-blue-300"
+                            <button type="button" className="hit -my-1 inline-flex min-h-8 items-center pr-2 text-xs font-medium text-blue-700 underline-offset-2 hover:underline dark:text-blue-300"
                               onClick={() => setComboFor({ id: l.id, chain: s.chain })} aria-label={`${l.text}: markayı seç`} data-testid="markayi-sec">Markayı seç</button>
                           )}
                         </div>

@@ -13,6 +13,7 @@ import { amountText, chainName, savingCopy, tripChains, tripTotals, type TripSum
 import { useUI } from "../ui";
 import { isViewer, useBook } from "./hooks";
 import Modal from "./Modal";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "./SorguDurumu";
 import { SAVINGS, TRIPS } from "./ShopReceiptLink";
 
 const money = (n: number) => maskText(tl(n).replace(/,00(?=\s|$)/, ""));
@@ -65,7 +66,7 @@ export function useComplete(onDone: () => void) {
     onSuccess: (t) => {
       onDone();
       ui.toast(`Alışveriş kaydedildi · ${t.bought_count} ürün${t.carried ? ` · ${t.carried} ürün listede kaldı` : ""}`,
-        { action: { label: "Geçmişe bak", run: () => goTrips(t.id) } });
+        { action: { label: "Gör", run: () => goTrips(t.id) } }); // mobil Tamamla ile aynı
     },
     onError: (e: Error) => ui.error(e.message),
     onSettled: () => { for (const k of [["shopping-list"], ["shopping-plan"], ["shopping-optimize"], TRIPS, SAVINGS, ["shopping-frequent"], ["shopping-due"]]) void qc.invalidateQueries({ queryKey: k }); },
@@ -85,8 +86,7 @@ export function TripList() {
         <Back to={goList} label="Alışveriş listesi" />
       </div>
       <h2 className="text-lg font-semibold">Geçmiş alışverişler</h2>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Geçmiş alışverişler yükleniyor"><SatirIskelet n={4} ikon={false} /></SorguDurumu>
       {q.data && !q.data.length && (
         <section className="card space-y-1 p-6 text-center">
           <History size={28} className="mx-auto text-stone-400" aria-hidden />
@@ -132,7 +132,8 @@ export function TripDetail({ id }: { id: number }) {
     mutationFn: () => send<{ added: number; skipped: number }>(`/api/shopping-trips/${id}/reuse`, { method: "POST", json: {} }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["shopping-list"] });
-      ui.toast(r.added ? `${r.added} ürün listeye eklendi${r.skipped ? ` · ${r.skipped} ürün zaten listedeydi` : ""}` : "Hepsi zaten listende");
+      // metinler mobil ile aynı (alisveris/Gecmis)
+      ui.toast(r.added ? `${r.added} ürün listeye eklendi${r.skipped ? ` · ${r.skipped} ürün zaten listede` : ""}` : "Hepsi zaten listede");
       goList();
     },
     onError: (e: Error) => ui.error(e.message),
@@ -149,8 +150,7 @@ export function TripDetail({ id }: { id: number }) {
   return (
     <div className="space-y-3">
       <Back to={() => goTrips()} label="Geçmiş alışverişler" />
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Alışveriş yükleniyor"><KartIskelet satir={2} /><SatirIskelet n={3} ikon={false} /></SorguDurumu>
       {t && copy && (
         <>
           <section className="card space-y-2 p-4" data-testid="alisveris-ozet">

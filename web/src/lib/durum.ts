@@ -6,6 +6,8 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 export const DURUM = {
   yukleniyor: "Yükleniyor…",
   yavas: "Bağlantı yavaş · Bekliyoruz",
+  // fiyat/zincir/boy listeleri (alışveriş, Fiyatlar): "Yükleniyor…" yerine bu; yavaş ve çevrimdışı ortak metinle
+  fiyatYukleniyor: "Fiyatlar getiriliyor…",
   cevrimdisi: "İnternet bağlantısı yok · Bağlanınca kendiliğinden yenilenir",
   tekrar: "Tekrar dene",
   kaydedilemedi: "Bağlantı yok, kaydedilemedi",
