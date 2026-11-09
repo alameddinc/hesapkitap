@@ -6,6 +6,7 @@ import { cx, dateTimeTR, parseTs } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 import Modal from "./Modal";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 // Yönetici: kullanıcıların "Sorun bildir" mesajları (GET /api/admin/feedback?status, PATCH /api/admin/feedback/{id},
 // GET /api/admin/feedback/{id}/screenshot/{n} — n 0'dan başlar). Durum: yeni → okundu → çözüldü; yöneticinin notu.
@@ -53,8 +54,7 @@ export default function AdminFeedback() {
           </button>
         ))}
       </div>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-red-600" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Geri bildirimler yükleniyor"><SatirIskelet n={3} /></SorguDurumu>
       {q.data && !q.data.items.length && (
         <p className="py-6 text-center text-sm text-stone-500">{status === "yeni" ? "Yeni geri bildirim yok." : "Bu durumda kayıt yok."}</p>
       )}

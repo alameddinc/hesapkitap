@@ -6,6 +6,7 @@ import { cx, dateTR, monthLabel, tl } from "../format";
 import { useBook, useCap, useOpenRow } from "../components/hooks";
 import Segmented from "../components/Segmented";
 import { useUI } from "../ui";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
 /** GET /api/interest?months=N (yetenek interest_page): months 0 = tüm geçmiş. Ortak defterde faiz gizliyse hidden. */
 type InterestType = "gecikme" | "akdi" | "vade_farki" | "vergi" | "nakit_avans" | "kar_payi" | "ucret" | "faiz";
@@ -73,9 +74,7 @@ export default function Interest() {
         <>
           {!card && <div className="max-w-xs"><Segmented label="Dönem" value={months} onChange={(v) => { setMonths(v); setPick(null); }}
             options={[{ value: "12", label: "Son 12 ay" }, { value: "0", label: "Tüm geçmiş" }]} /></div>}
-          {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}
-            <button className="btn-ghost ml-2 px-2 py-0.5 text-xs" onClick={() => void q.refetch()}>Tekrar dene</button></p>}
-          {q.isLoading && <div className="card h-40 animate-pulse" aria-busy="true" />}
+          <SorguDurumu q={q} etiket="Faiz ve ücretler yükleniyor"><div className="space-y-3"><KartIskelet satir={3} /><SatirIskelet n={3} /></div></SorguDurumu>
           {r && (card ? renderCard({ r, card }) : renderMain({ r }))}
         </>
       )}

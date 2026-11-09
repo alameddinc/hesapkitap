@@ -12,6 +12,7 @@ import MonthPicker from "../components/MonthPicker";
 import YearSummary from "../components/YearSummary";
 import { monthLabel, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
+import SorguDurumu from "../components/SorguDurumu";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -27,7 +28,7 @@ export function InterestHistory() {
   const q = useQuery({ queryKey: ["interest-history"], queryFn: () => send<{
     months: { month: string; total: number; alarms: Insight[] }[]; total: number; checked: number }>("/api/interest-history") });
   const d = q.data;
-  if (!d) return null;
+  if (!d) return <SorguDurumu q={q} kompakt etiket="Faiz geçmişi yükleniyor" />;
   return (
     <section className="card p-3 sm:p-4">
       <h2 className="mb-1 flex items-center gap-2 font-semibold"><Percent size={18} /> Faiz alarmı</h2>

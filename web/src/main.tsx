@@ -1,4 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cevrimdisiHata, tekrarBagla } from "./lib/durum";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./components/InstallApp"; // beforeinstallprompt erken yakalansın
@@ -30,8 +31,19 @@ if (/HesapKitapApp\//.test(navigator.userAgent)) {
 const davet = window.location.pathname.match(/^\/davet\/([A-Za-z0-9-]{4,64})\/?$/);
 if (davet) window.history.replaceState(null, "", `/${window.location.search}#/kayit?kod=${encodeURIComponent(davet[1])}`);
 
+// networkMode "always" (UX denetimi 09.11, Bulgu 2; mobil main.tsx ile aynı): varsayılan "online"da bağlantı yokken sorgu
+// "paused" kalıyor, ekran boş görünüyordu. Şimdi istek hemen düşer, ortak <SorguDurumu> "İnternet bağlantısı yok" der;
+// bağlanınca refetchOnReconnect veriyi kendiliğinden getirir. Çevrimdışı hatada yeniden denenmez (retry boşuna bekletir).
+// Mutasyonlar da askıda beklemez: "Bağlantı yok, kaydedilemedi" + Tekrar dene (lib/durum.ts tekrarBagla).
 const qc = new QueryClient({
-  defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: false, retry: 1 } },
+  defaultOptions: {
+    queries: { staleTime: 10_000, refetchOnWindowFocus: false, refetchOnReconnect: true, networkMode: "always",
+      retry: (n, e) => n < 1 && !cevrimdisiHata(e) },
+    mutations: { networkMode: "always" },
+  },
+  mutationCache: new MutationCache({
+    onError: (e, vars, _ctx, m) => { if (cevrimdisiHata(e)) tekrarBagla(e, () => m.execute(vars)); },
+  }),
 });
 // 404 + refresh: true (kayıt başka cihazda silinmiş/değişmiş): ekrandaki listeler tazelensin
 setRefreshHandler(() => void qc.invalidateQueries());

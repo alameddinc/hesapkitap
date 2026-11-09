@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Smartphone, Users2, XCircle } from "lucide-react";
 import { send } from "../lib/apiError";
 import { dateTR } from "../format";
+import SorguDurumu from "./SorguDurumu";
 
 /** GET /api/auth/invite/{kod} (sunucu 81844c5). */
 interface InviteCheck {
@@ -53,8 +54,7 @@ export default function InvitePreview({ code }: { code: string }) {
           </div>
         </div>
       )}
-      {q.isLoading && <p className="text-xs text-stone-500">Davet kontrol ediliyor…</p>}
-      {q.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} kompakt etiket="Davet kontrol ediliyor" />
       {d && !d.valid && (
         <p className="flex gap-2 rounded-lg bg-red-50 p-2 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300" role="alert">
           <XCircle size={16} className="mt-0.5 shrink-0" aria-hidden />{d.message || "Bu davet geçerli değil"}</p>

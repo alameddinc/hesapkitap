@@ -7,6 +7,7 @@ import { api } from "../../api";
 import { useMeta } from "../hooks";
 import type { ReceiptItem } from "./check";
 import ReceiptItems from "./ReceiptItems";
+import SorguDurumu from "../SorguDurumu";
 
 export default function SavedReceiptItems({ entryId, total, receiptFile, readOnly, onToast }: {
   entryId: number; total: number; receiptFile?: string | null; readOnly?: boolean; onToast?: (m: string) => void;
@@ -21,9 +22,9 @@ export default function SavedReceiptItems({ entryId, total, receiptFile, readOnl
   const dirty = !!items && !!q.data && JSON.stringify(items) !== JSON.stringify(q.data.items);
   const photo = receiptFile ? `/api/entries/${entryId}/receipt` : null;
 
-  if (q.isLoading) return <p className="text-xs text-stone-500">Fiş kalemleri yükleniyor…</p>;
+  if (!q.data && !items) return <SorguDurumu q={q} kompakt etiket="Fiş kalemleri yükleniyor" />;
   // kalem yok ve fotoğraf yok: bölüm gösterilmez; kalem yok ama fotoğraf varsa yeniden okunabilir
-  if (q.error || !cur || (!cur.length && !receiptFile)) return null;
+  if (!cur || (!cur.length && !receiptFile)) return null;
 
   async function save() {
     setBusy(true);

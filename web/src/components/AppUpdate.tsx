@@ -5,6 +5,7 @@ import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import SorguDurumu from "./SorguDurumu";
 
 type Platform = "ios" | "android";
 type Field = "latest" | "min" | "store_url";
@@ -45,8 +46,7 @@ export default function AppUpdate() {
         Son sürümden eski uygulamada Özet'te kapatılabilir "Yeni sürüm var" kartı çıkar. En düşük sürümden eski uygulama
         açılmaz, mağazaya yönlendirir. Boş bırakılan platformda hiçbir şey gösterilmez.
       </p>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.isError && <p className="text-sm text-red-600">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} kompakt />
       {d && (
         <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); save.mutate(undefined); }}>
           {PLATFORMS.map(([p, label]) => {

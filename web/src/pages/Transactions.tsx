@@ -13,6 +13,7 @@ import { useMeta } from "../components/hooks";
 import { useSpenders } from "../components/Spender";
 import { hasTxnFilter, matchTxnFilter, parseTxnFilter, txnFilterLabel } from "../lib/txnFilter";
 import { useUI } from "../ui";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 const TABS = [
   { key: "all", label: "Tümü", test: (r: Row) => !r.deleted },
@@ -97,7 +98,7 @@ export default function Transactions() {
           const n = txns.complete ? real.filter(t.test).length : null; // sayılar dönemin tamamı gelince
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
-              className={cx("shrink-0 rounded-full border px-3 py-1 text-sm",
+              className={cx("shrink-0 rounded-full border px-3 py-1 text-sm pointer-coarse:min-h-11",
                 tab === t.key ? "border-blue-600 bg-blue-600 text-white" : "border-stone-300 dark:border-stone-700")}>
               {t.label}{n != null && <span className="opacity-70"> {n}</span>}
             </button>
@@ -124,8 +125,8 @@ export default function Transactions() {
           {txns.complete ? `${rows.length} kayıt` : `İlk ${rows.length} kayıt`} · gider toplamı {spend == null ? "…" : tl(spend)}
           {!filtered && !txns.complete && " (dönemin tamamı)"} · düzenlemek için dokun
         </div>
-        {txns.isLoading ? <p className="p-4 text-sm text-stone-500">Yükleniyor…</p> : <TxnList rows={rows} />}
-        {txns.error && <p className="p-3 text-sm text-red-600 dark:text-red-400" role="alert">{(txns.error as Error).message}</p>}
+        <SorguDurumu q={txns} etiket="İşlemler yükleniyor" className="p-3"><SatirIskelet n={6} kart={false} /></SorguDurumu>
+        {txns.data && <TxnList rows={rows} />}
         {!txns.isLoading && !txns.complete && !txns.error && <LoadMore onMore={txns.loadMore} busy={txns.loadingMore} label="Daha eski işlemler" />}
       </div>
     </div>

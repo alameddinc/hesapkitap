@@ -3,6 +3,7 @@ import { send } from "../lib/apiError";
 import { FlaskConical, Smartphone } from "lucide-react";
 import { useState } from "react";
 import Segmented from "./Segmented";
+import SorguDurumu, { KartIskelet } from "./SorguDurumu";
 
 interface Session { "başlangıç": string; "süre_sn": number; istek: number; mobil: boolean; "bölümler": string[]; "örnek": number; "kayıt": number }
 interface Stats {
@@ -28,8 +29,8 @@ export default function DemoStats() {
   const q = useQuery({ queryKey: ["demo-stats", days], retry: false,
     queryFn: () => send<Stats>(`/api/admin/demo-stats?days=${days}`) });
   const s = q.data;
-  if (q.error) return <section className="card p-4 text-sm text-red-600">Demo istatistikleri: {(q.error as Error).message}</section>;
-  if (!s?.configured) return null;
+  if (!s) return <SorguDurumu q={q} etiket="Demo istatistikleri yükleniyor"><KartIskelet satir={2} /></SorguDurumu>;
+  if (!s.configured) return null;
   const tiles: [string, string][] = [
     ["Oturum", String(s.oturum ?? 0)], ["Ziyaretçi (günlük tekil)", String(s["tekil_ziyaretçi_günlük_toplam"] ?? 0)],
     ["Ortanca süre", dur(s["süre_medyan_sn"] ?? 0)], ["1 dk+ kalan", String(s["1dk+_kalan"] ?? 0)],

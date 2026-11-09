@@ -5,6 +5,7 @@ import type { AiCosts as Costs, AiCostUser, AiCostUsers } from "../api";
 import { call } from "../lib/apiError";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 const KEY = ["admin-ai-costs"];
 const UKEY = ["admin-ai-cost-users"];
@@ -53,8 +54,7 @@ export default function AiCosts() {
           </label>
         )}
       </div>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.isError && <p className="text-sm text-red-600">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Yapay zekâ maliyetleri yükleniyor"><SatirIskelet n={3} ikon={false} kart={false} /></SorguDurumu>
       {d && f && <>
         {d.over_alert > 0 && (
           <p role="alert" className="flex items-start gap-2 rounded-lg bg-red-50 p-2 text-sm text-red-800 dark:bg-red-950/50 dark:text-red-200">

@@ -12,6 +12,7 @@ import { bodyOf, call } from "../lib/apiError";
 import { PairCards } from "./MatchInfo";
 import { DUP_TEXT, useDupActions } from "./RecurringDupes";
 import { grupBaslik, grupla, grupOzet } from "../lib/belgeGrubu";
+import SorguDurumu from "./SorguDurumu";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
@@ -225,8 +226,7 @@ function CardUnmatched({ r }: { r: Reminder }) {
           </div>
           {cands && (
             <div className="mt-2 rounded-lg border border-stone-200 dark:border-stone-700">
-              {q.isLoading && <p className="p-2 text-xs text-stone-500">Ekstrede adaylar aranıyor…</p>}
-              {q.error && <p className="p-2 text-xs text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+              <SorguDurumu q={q} kompakt etiket="Ekstrede adaylar aranıyor" className="p-2" />
               {q.data && !q.data.length && (
                 <p className="p-2 text-xs text-stone-500 dark:text-stone-400">Ekstrede tutarı ya da tarihi yakın satır yok. Kaydı açıp ödeme şeklini düzelt
                   (kartla ödenmediyse) ya da ekstresini yükle.</p>

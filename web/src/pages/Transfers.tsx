@@ -13,6 +13,7 @@ import Segmented from "../components/Segmented";
 import { boundsOf, cx, dateTR, maskText, monthLabel, periodOf, tl } from "../format";
 import { userNote } from "../components/BankText";
 import { useUI } from "../ui";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 interface Person {
   name: string;
@@ -125,8 +126,7 @@ export default function Transfers() {
         </button>
       )}
 
-      {q.isLoading && <div className="text-sm text-stone-500">Yükleniyor…</div>}
-      {q.error && <p className="text-sm text-red-600">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Transferler yükleniyor"><SatirIskelet n={4} /></SorguDurumu>
 
       {data && (
         <section className="card divide-y divide-stone-100 dark:divide-stone-800">

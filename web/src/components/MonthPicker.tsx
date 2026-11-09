@@ -19,7 +19,7 @@ export default function MonthPicker({ value, onChange }: { value: string; onChan
   const current = meta.data?.current_month === value;
   return (
     <div className="flex items-center gap-1">
-      <button className="btn-ghost p-1.5" onClick={() => onChange(addMonths(value, -1))} aria-label="Önceki ay">
+      <button className="btn-ghost size-11 justify-center p-0" onClick={() => onChange(addMonths(value, -1))} aria-label="Önceki ay">
         <ChevronLeft size={18} />
       </button>
       <div className="min-w-28 text-center leading-tight">
@@ -33,7 +33,7 @@ export default function MonthPicker({ value, onChange }: { value: string; onChan
           </div>
         )}
       </div>
-      <button className="btn-ghost p-1.5" onClick={() => onChange(addMonths(value, 1))} aria-label="Sonraki ay">
+      <button className="btn-ghost size-11 justify-center p-0" onClick={() => onChange(addMonths(value, 1))} aria-label="Sonraki ay">
         <ChevronRight size={18} />
       </button>
     </div>

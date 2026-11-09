@@ -9,6 +9,7 @@ import { useUI } from "../ui";
 import { useBook, usePeople } from "./hooks";
 import { LockBadge, usePlan, useLock } from "./Plan";
 import { barOf, KisiNokta, ORTAK, useSpenders } from "./Spender";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 // Aile: "Kim ne harcadı" (İstatistik) ve ortak bütçede kişi başı kırılım (Özet → Bütçeler). Veri sunucudan:
 // GET /api/book/member-spend?month (402 aile_rapor), /api/budgets status[].by_person. İstemci toplamaz, harcayanı kendisi
@@ -75,8 +76,7 @@ export function KimHarcadi({ month }: { month: string }) {
   return (
     <section className="card space-y-2 p-3 sm:p-4" data-testid="kim-harcadi">
       <h2 className="font-semibold">Kim ne harcadı · {monthLabel(month)}</h2>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-red-600" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Kim harcadı yükleniyor"><SatirIskelet n={3} kart={false} /></SorguDurumu>
       {d && <p className="text-sm text-stone-600 dark:text-stone-400">{say}</p>}
       <ul className="divide-y divide-stone-100 dark:divide-stone-800">
         {list.map((p) => (

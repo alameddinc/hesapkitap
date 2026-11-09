@@ -33,6 +33,7 @@ import { DonemSonuKarti } from "../components/Beklenen";
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { boundsOf, cx, monthLabel, signed, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
 /** Seçili işlemlerin toplamı: gider ve gelir sunucu bayrağıyla (gider satırları toplamı; yalnız gelirse gelir toplamı). */
 const detailTotal = (rows: Row[]) => { const t = rowTotals(rows); return t.spend || t.income; };
@@ -43,7 +44,8 @@ function BillsLine({ month }: { month: string }) {
   const meta = useMeta().data;
   const on = !!meta?.plan?.hosted && meta.plan.features.posta !== false;
   const q = useQuery({ queryKey: ["bills"], queryFn: api.bills, enabled: on });
-  if (!on || !q.data) return null;
+  if (!on) return null;
+  if (!q.data) return <SorguDurumu q={q} kompakt etiket="Faturalar yükleniyor" />;
   const [from, to] = boundsOf(month, meta);
   const items = q.data.filter((b) => b.due_date >= from && b.due_date <= to);
   if (!items.length) return null;
@@ -296,8 +298,9 @@ export default function Dashboard() {
 
       <BillsLine month={month} />
 
-      {summary.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {summary.error && <p className="text-sm text-red-600">{(summary.error as Error).message}</p>}
+      <SorguDurumu q={summary} etiket="Özet yükleniyor">
+        <div className="space-y-3"><KartIskelet satir={2} /><div className="grid grid-cols-2 gap-3"><KartIskelet satir={0} /><KartIskelet satir={0} /></div><SatirIskelet n={3} /></div>
+      </SorguDurumu>
 
       {s && (
         <>

@@ -8,6 +8,7 @@ import Modal from "../components/Modal";
 import MonthBars from "../components/MonthBars";
 import { addMonths, cx, dateTR, maskText, monthLabel, pctTR, tl, todayISO } from "../format";
 import { useUI } from "../ui";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 /** sunucu df7a018: bill_month faturanın ait olduğu ay (dönem > son ödeme > ödeme günü; month_source), paid_date ödeme günü */
 interface BillItem { id: number; source: "entry" | "card"; date: string; amount: number; description: string; invoice: string | null; due: string | null;
@@ -106,8 +107,7 @@ export default function Bills() {
         {!viewer && <button className="btn-ghost border border-stone-300 dark:border-stone-700" onClick={() => ui.openBill()}><Plus size={15} aria-hidden /> Fatura ekle</button>}
       </div>
 
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Faturalar yükleniyor"><SatirIskelet n={4} /></SorguDurumu>
 
       {d && lastMonth && (
         <div className="grid gap-3 sm:grid-cols-3">

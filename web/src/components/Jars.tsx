@@ -10,6 +10,7 @@ import { usePeople, useSave } from "./hooks";
 import Modal from "./Modal";
 import { fullTexts, isQuotaFull, renewDate, useDocQuota } from "./DocQuota";
 import { KIND_LABEL } from "./Plan";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
 interface Jar {
@@ -273,6 +274,7 @@ export default function Jars() {
         </div>
         <button className="btn-ghost px-2 py-1 text-sm" onClick={() => setForm({})}><Plus size={16} /> Kumbara</button>
       </div>
+      <SorguDurumu q={q} etiket="Kumbaralar yükleniyor"><SatirIskelet n={2} kart={false} /></SorguDurumu>
       {!all.length && (
         <p className="text-sm text-stone-500">Tatil, telefon, acil durum… ya da her ay 1 gram altın, 1 çeyrek, 100 dolar. Bir şey için para ayır: hedef ve son tarih koyarsan ayda ne kadar ayırman gerektiğini ve bu hızla ne zaman ulaşacağını gösterir. Ayrılan para harcanabilir bakiyenden düşer.</p>
       )}

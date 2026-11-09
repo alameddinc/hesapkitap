@@ -10,6 +10,7 @@ import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
 import { addMonths, cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
 interface Sub {
   merchant: string;
@@ -158,6 +159,7 @@ export default function Savings() {
 
       <Jars />
 
+      <SorguDurumu q={q} etiket="Tasarruf yükleniyor"><div className="space-y-3"><KartIskelet satir={1} /><SatirIskelet n={3} /></div></SorguDurumu>
       {d && (
         <div className="card flex items-center gap-4 p-4">
           <Target className="shrink-0 text-green-600" />

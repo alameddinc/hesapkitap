@@ -5,6 +5,7 @@ import { ask } from "../lib/ask";
 import { send } from "../lib/apiError";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 interface Sess { id: string; kind: "web" | "mobile" | "eski"; device: string; created_at: string; last_seen: string; current: boolean }
 
@@ -42,7 +43,7 @@ export default function Sessions() {
         <h2 className="flex items-center gap-2 font-semibold"><Monitor size={18} aria-hidden /> Açık oturumlar</h2>
         <p className="text-xs text-stone-500 dark:text-stone-400">Hesabına giriş yapılmış cihazlar. Tanımadığın bir cihaz görürsen kapat ve şifreni değiştir.</p>
       </div>
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
+      <SorguDurumu q={q} etiket="Oturumlar yükleniyor"><SatirIskelet n={2} kart={false} /></SorguDurumu>
       {!!list.length && (
         <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700">
           {list.map((s) => {

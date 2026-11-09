@@ -14,6 +14,7 @@ import { useUI } from "../ui";
 import { DonemSonuDokum } from "../components/Beklenen";
 import { donemSonuPlandan } from "../lib/beklenen";
 import { planOdagi } from "../lib/planOdak";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
 // Yığılmış gider serileri: doğrulanmış kategorik sıra (komşu çiftler CVD-güvenli)
 const SERIES: { key: PlanLineType; color: string }[] = [
@@ -185,7 +186,7 @@ export default function Planning() {
         </button>
       </div>
 
-      {plan.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
+      <SorguDurumu q={plan} etiket="Planlama yükleniyor"><div className="space-y-3"><KartIskelet satir={3} /><SatirIskelet n={4} /></div></SorguDurumu>
       <ul className="space-y-2">
         {p?.months.map((m) => (
           <MonthCard key={m.month} m={m} open={open === m.month} onToggle={() => setOpen(open === m.month ? null : m.month)} />

@@ -31,6 +31,7 @@ import Features from "../components/Features";
 import { DocQuotaNote, useDocQuota } from "../components/DocQuota";
 import { useBook, useDemo, useUiPrefs } from "../components/hooks";
 import { LogoutButton } from "./More";
+import SorguDurumu, { KartIskelet } from "../components/SorguDurumu";
 
 interface ConfigItem {
   name: string;
@@ -252,7 +253,7 @@ function Step({ n, done, children }: { n: number; done: boolean; children: React
 export default function Settings() {
   const book = useBook();
   const demo = useDemo();
-  if (book.isLoading || demo.isLoading) return <></>;
+  if (book.isLoading || demo.isLoading) return <SorguDurumu q={[book, demo]} etiket="Ayarlar yükleniyor"><div className="space-y-3"><KartIskelet satir={2} /><KartIskelet satir={3} /></div></SorguDurumu>;
   if (demo.data) return <DemoSettings />;
   const b = book.data;
   if (b?.member && b.book !== "kendi") return <MemberSettings owner={b.owner ?? ""} role={b.role} roleLabel={b.role_label} seat={b.seat} />;

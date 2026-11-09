@@ -11,6 +11,7 @@ import { HiddenHint } from "./ShopStores";
 import { agoWord, bulunma } from "../lib/priceView";
 import { chainName } from "../lib/shopList";
 import type { Advice, MarketRef } from "../lib/priceAdvice";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 interface StorePrice {
   store: string; branch: string | null; price: number; date: string; estimated: boolean; cheapest?: boolean;
@@ -185,7 +186,7 @@ export default function PriceWatch() {
           <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-0.5" role="group" aria-label="Kategori">
             {[null, ...cats].map((c) => (
               <button key={c ?? "_"} type="button" aria-pressed={cat === c} onClick={() => setCat(c)}
-                className={cx("shrink-0 rounded-full border px-2.5 py-1 text-xs whitespace-nowrap",
+                className={cx("shrink-0 rounded-full border px-2.5 py-1 text-xs whitespace-nowrap pointer-coarse:min-h-11",
                   cat === c ? "border-blue-600 bg-blue-600 text-white dark:border-blue-400 dark:bg-blue-400 dark:text-stone-900"
                     : "border-stone-200 text-stone-600 hover:bg-stone-100 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800")}>
                 {c ?? "Tümü"}</button>
@@ -213,6 +214,7 @@ export default function PriceWatch() {
       </div>
 
       <ul className="divide-y divide-stone-100 border-t border-stone-100 dark:divide-stone-800 dark:border-stone-800">
+        {!d && <li className="p-3"><SorguDurumu q={q} etiket="Fiyatlar yükleniyor"><SatirIskelet n={5} kart={false} /></SorguDurumu></li>}
         {view === "urun" && prods.map((p) => <ProductRow key={focus === p.key ? `${p.key}:odak` : p.key} p={p} onGroup={onGroup} focus={focus === p.key}
           onChain={caps?.includes("price_advice") ? (ch) => { setChainF(ch); setGroupF(null); setTerm(""); setFocus(null); window.scrollTo?.({ top: 0, behavior: "smooth" }); } : undefined} />)}
         {view === "magaza" && d?.stores.map((st) => {
@@ -258,8 +260,8 @@ function WhereToBuy({ q, onOpen, canOpen }: {
     queryFn: () => send<PriceGroup[] | { groups: PriceGroup[] }>(`/api/prices/groups?q=${encodeURIComponent(q)}&limit=3`),
     select: (d) => (Array.isArray(d) ? d : d.groups ?? []).filter((g) => g.best.length).slice(0, 3),
   });
-  if (r.isLoading) return <p className="text-xs text-stone-500" aria-busy="true">Nereden alınır aranıyor…</p>;
-  if (r.error || !r.data?.length) return null;
+  if (!r.data) return <SorguDurumu q={r} kompakt etiket="Nereden alınır aranıyor" />;
+  if (!r.data.length) return null;
   const today = todayISO();
   const all = r.data.flatMap((g) => g.best);
   const newest = newestOfficial(all);

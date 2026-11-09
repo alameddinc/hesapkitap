@@ -9,6 +9,7 @@ import Segmented from "../components/Segmented";
 import { catLabel, cx, dateTR, fold, KIND_LABEL, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { isEstimate } from "../components/Estimates";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 type View = "liste" | "pivot";
 type PivotBy = "category" | "merchant" | "card";
@@ -180,8 +181,7 @@ export default function Table() {
         </div>
       )}
 
-      {all.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {all.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(all.error as Error).message}</p>}
+      <SorguDurumu q={all} etiket="Tablo yükleniyor"><SatirIskelet n={6} ikon={false} /></SorguDurumu>
       {!all.isLoading && !all.complete && !all.error && (
         <p className="text-xs text-stone-500" role="status">
           {all.rows.length}{all.totals ? ` / ${all.totals.count}` : ""} işlem yüklendi; kalanı geliyor, toplamlar tamamlanınca kesinleşir…</p>

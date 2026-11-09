@@ -7,6 +7,7 @@ import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import AssetForm from "./AssetForm";
 import { useSave } from "./hooks";
+import SorguDurumu, { KartIskelet } from "./SorguDurumu";
 
 interface Item {
   id: number; label: string; unit: string; quantity: number; value: number | null; person: string; is_self: boolean;
@@ -28,7 +29,7 @@ export default function Holdings() {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quantity: a.quantity, estimated: false }),
   }), () => ui.toast("Miktar güncellendi"));
   const d = q.data;
-  if (!d) return null;
+  if (!d) return <SorguDurumu q={q} etiket="Varlıklar yükleniyor"><KartIskelet satir={2} /></SorguDurumu>;
   // alıştan beri: sunucu totals.self (cost ve gain aynı kümeden: alış bedeli ve bugünkü değeri bilinen kalemler); eski sunucuda satırlar
   const ts = d.totals?.self;
   const cost = ts ? ts.cost : d.items.filter((i) => i.is_self && i.cost).reduce((s, i) => s + (i.cost ?? 0), 0);

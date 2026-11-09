@@ -9,6 +9,7 @@ import { useUI } from "../ui";
 import { useMeta, useSave } from "./hooks";
 import { TIER_LABEL, TIERS } from "./Plan";
 import Segmented from "./Segmented";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 const KEY = ["admin-plan-table"];
 const KIND_TEXT = { sayfa: "sayfa", ozellik: "özellik" } as const;
@@ -53,8 +54,7 @@ export default function PlanTable() {
           Her satır seçtiğin paketten itibaren açık. "Özellik" satırlarını sunucu da uygular; "sayfa" satırları menüde kilit
           ve açıklama olarak görünür. Kaydedince birkaç saniye içinde herkese geçer. Kayıt ekleme hiçbir pakette kilitlenmez.
         </p>
-        {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-        {q.isError && <p className="text-sm text-red-600">{(q.error as Error).message}</p>}
+        <SorguDurumu q={q} etiket="Plan tablosu yükleniyor"><SatirIskelet n={5} ikon={false} kart={false} /></SorguDurumu>
         {d && <>
           <p className="rounded-lg bg-stone-50 p-2 text-xs text-stone-600 dark:bg-stone-800/60 dark:text-stone-400">
             Aylık okuma hakları (koddan): {d.tiers.map((t) => `${d.labels[t] ?? TIER_LABEL[t]} ${d.reads[t].belge} belge / ${d.reads[t].fis} fiş${t === "aile" ? " (kişi başı)" : ""}`).join(" · ")}

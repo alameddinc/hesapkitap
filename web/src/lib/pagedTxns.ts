@@ -21,7 +21,7 @@ export function usePagedTxns(o: { month?: string; includeDeleted?: boolean; incl
   const rows = useMemo(() => q.data?.pages.flatMap((p) => p.rows) ?? [], [q.data]);
   const totals = q.data?.pages[0]?.totals;
   return {
-    rows, totals, isLoading: q.isLoading, error: q.error,
+    rows, totals, isLoading: q.isLoading, error: q.error, data: q.data, fetchStatus: q.fetchStatus, refetch: q.refetch,
     complete: !!q.data && !hasNextPage,
     loadingMore: isFetchingNextPage,
     loadMore: () => { if (hasNextPage && !isFetchingNextPage) void fetchNextPage(); },

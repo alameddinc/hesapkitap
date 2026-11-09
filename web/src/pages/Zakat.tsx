@@ -10,6 +10,7 @@ import { ZakatOff } from "../components/ZakatConsent";
 import Segmented from "../components/Segmented";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
 interface Line { id?: number; acquired?: string | null; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
 interface Payment { id: number; year_start: string; pay_date: string; amount: number; note: string | null }
@@ -44,8 +45,7 @@ function History({ p }: { p: Person }) {
   const pay = useSave((a: { y: HistYear; amount: number }) => json("POST", `/api/zakat/people/${p.id}/payments`,
     { amount: a.amount, year_start: a.y.start, note: "Geçmiş yıl" }), () => ui.toast("Ödeme o yıla kaydedildi"));
   const d = q.data;
-  if (q.isLoading) return <p className="text-xs text-stone-500">Geçmiş fiyatlar alınıyor…</p>;
-  if (!d) return null;
+  if (!d) return <SorguDurumu q={q} kompakt etiket="Geçmiş fiyatlar alınıyor" />;
   if (d.need_start) return <p className="text-xs text-stone-500">Önce zekât yılının başladığı günü gir.</p>;
   return (
     <div className="space-y-2">
@@ -314,7 +314,7 @@ function ZakatTab() {
   const settings = useSave((b: object) => json("PUT", "/api/zakat/settings", b));
   const refresh = useSave(() => json("POST", "/api/zakat/prices/refresh"), () => ui.toast("Fiyatlar güncellendi"));
   const d = q.data;
-  if (!d) return <p className="text-sm text-stone-500">{q.isError ? "Zekât bilgisi alınamadı" : "Yükleniyor…"}</p>;
+  if (!d) return <SorguDurumu q={q} etiket="Zekât yükleniyor"><div className="space-y-3"><KartIskelet satir={3} /><SatirIskelet n={2} /></div></SorguDurumu>;
   const pl = d.prices.list;
 
   return (

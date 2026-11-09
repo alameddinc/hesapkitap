@@ -8,6 +8,7 @@ import {
 } from "../lib/taksit";
 import { useUI } from "../ui";
 import Modal from "./Modal";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 /** Özet → harcamanın altında "Bu ay ödenecek taksitler · ₺4.250 · 6 taksit" (mobil Ozet.tsx TaksitSatiri ile aynı).
  *  Rakam harcamaya EKLENMEZ (in_spend zaten harcamanın içinde); dokununca dönemin taksit listesi açılır. */
@@ -46,8 +47,7 @@ function TaksitListe({ month, onClose }: { month: string; onClose: () => void })
   const kalan = d ? taksitKalan(d, tl) : null;
   return (
     <Modal title={d ? taksitBaslik(d) : "Taksitler"} onClose={onClose}>
-      {q.isLoading && <p className="py-6 text-center text-sm text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-sm text-red-600">{(q.error as Error).message}</p>}
+      <SorguDurumu q={q} etiket="Taksitler yükleniyor"><SatirIskelet n={3} kart={false} /></SorguDurumu>
       {d && (
         <div className="space-y-3">
           <p className="text-sm text-stone-600 dark:text-stone-400">

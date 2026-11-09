@@ -6,6 +6,7 @@ import { useState } from "react";
 import { cx, dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
+import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
 interface Wallet {
   id: number; name: string; card_type: "yemek" | "hediye" | "giyim" | "diger"; current: number; expires_at: string | null;
@@ -104,6 +105,7 @@ export default function Wallets() {
   return (
     <div>
       <div className="text-xs font-medium text-stone-500">Yemek / hediye / giyim kartları</div>
+      <SorguDurumu q={q} etiket="Kartlar yükleniyor"><SatirIskelet n={2} kart={false} /></SorguDurumu>
       <ul className="divide-y divide-stone-100 dark:divide-stone-800">{q.data?.map((w) => <WalletRow key={w.id} w={w} />)}</ul>
       {adding ? (
         <div className="mt-2 space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">

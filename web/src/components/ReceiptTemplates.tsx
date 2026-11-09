@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Receipt } from "lucide-react";
 import { send } from "../lib/apiError";
+import SorguDurumu, { KartIskelet } from "./SorguDurumu";
 
 /** GET /api/admin/receipt-templates: zincir / akaryakıt fişi şablonları. Kişisel veri yok: ad yalnız bilinen zincirse. */
 interface Tpl {
@@ -15,9 +16,8 @@ const day = (s: string | null) => (s ? s.slice(0, 16).replace("T", " ") : "—")
 export default function ReceiptTemplates() {
   const q = useQuery({ queryKey: ["admin-receipt-templates"], retry: false,
     queryFn: () => send<Overview>("/api/admin/receipt-templates") });
-  if (q.error) return <section className="card p-4 text-sm text-red-600">Fiş şablonları: {(q.error as Error).message}</section>;
   const s = q.data;
-  if (!s) return null;
+  if (!s) return <SorguDurumu q={q} etiket="Fiş şablonları yükleniyor"><KartIskelet satir={2} /></SorguDurumu>;
   return (
     <section className="card space-y-3 p-4">
       <h2 className="flex items-center gap-2 font-semibold"><Receipt size={18} /> Fiş şablonları</h2>

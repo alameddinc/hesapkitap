@@ -11,6 +11,7 @@ import InviteCard, { type Invite } from "./InviteCard";
 import { JoinWithCode, seatLabel, seatText } from "./JoinBook";
 import Modal from "./Modal";
 import type { Seat } from "./hooks";
+import SorguDurumu, { KartIskelet } from "./SorguDurumu";
 
 interface Rules { hidden_cards: string[]; hidden_accounts: number[]; hide_fees: boolean; hidden_pages: string[] }
 interface Member { id: number; username: string; last_login: string | null; disabled: boolean; role: BookRole; own_rules: boolean; rules: Rules;
@@ -223,7 +224,9 @@ export default function BookSettings() {
   const setRules = useSave((r: Partial<Rules>) => call("/api/book/rules", "PUT", r));
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => ui.toast("Kopyalandı"), () => {});
   const d = q.data;
-  if (!d) return null;
+  // yetkisi yok (üye) / eski sunucu: bölüm yok; başka hata ve yükleme görünür
+  if (!d) return [403, 404].includes((q.error as { status?: number } | null)?.status ?? 0) ? null
+    : <SorguDurumu q={q} etiket="Ortak defter yükleniyor"><KartIskelet satir={3} /></SorguDurumu>;
   const joinable = d.members.length === 0; // kendi üyesi olmayan: başkasının defterine katılabilir (book_join)
   const roleLabel = (r?: string | null) => (r ? d.roles?.[r] ?? ROLES.find((x) => x.value === r)?.label : undefined);
   return (

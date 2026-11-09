@@ -14,6 +14,7 @@ import Wallets from "./Wallets";
 import CycleLine from "./CardCycle";
 import CardLimit, { useCardLimits } from "./CardLimit";
 import { CardSpender } from "./Spender";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "./SorguDurumu";
 
 interface Account { id: number; name: string; kind: "banka" | "nakit" | "diger"; balance: number; as_of: string | null; source: "dokum" | "elle" }
 interface NW {
@@ -157,7 +158,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
   const del = useSave((id: number) => json("DELETE", `/api/accounts/${id}`), () => ui.toast("Silindi"));
   const d = q.data;
   if (compact && month && meta.data?.current_month && month < meta.data.current_month) return <NetWorthAt month={month} />;
-  if (!d) return null;
+  if (!d) return <SorguDurumu q={q} etiket="Hesaplar yükleniyor">{compact ? <KartIskelet satir={2} /> : <SatirIskelet n={4} />}</SorguDurumu>;
   const empty = !d.accounts.length && !d.holdings && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
   if (compact) {
     return (

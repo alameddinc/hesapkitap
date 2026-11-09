@@ -10,6 +10,7 @@ import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { cx, dayMonthTR, monthLabel, tl } from "../format";
 import { useUI } from "../ui";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 // Kategorisizleri düzenle (sunucu app/uncategorized.py; mobil src/screens/Kategorisiz.tsx ile aynı akış).
 // Küme Özet'teki "N işlem kategorisiz" uyarısıyla aynı; işyeri/kişi grupları, ücretsiz öneri, Uygula + Geri al,
@@ -180,8 +181,7 @@ export default function Uncategorized() {
         </div>
       </header>
 
-      {q.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(q.error as Error).message}</p>}
-      {q.isLoading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
+      <SorguDurumu q={q} etiket="Kategorisiz işlemler yükleniyor"><SatirIskelet n={4} /></SorguDurumu>
 
       {q.data && groups.length === 0 && (
         <section className="card flex flex-col items-center gap-2 p-6 text-center">

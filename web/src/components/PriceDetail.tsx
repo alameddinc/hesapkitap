@@ -22,6 +22,7 @@ import { RegionPrompt } from "./RegionPicker";
 import { BrandChips, OffersList, type BrandOpt } from "./ShopOffers";
 import { HiddenHint } from "./ShopStores";
 import { ComboList, useGroupCombos } from "./ShopCombos";
+import SorguDurumu from "./SorguDurumu";
 
 export interface PriceHistory {
   date: string; price: number | null; store: string; branch: string | null; qty: number; name: string;
@@ -356,8 +357,7 @@ function GroupCard({ g, today }: { g: PriceGroupRef; today: string }) {
     <section className="space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="nereden-alinir">
       <p className="text-xs text-stone-500">Aynı ürün (marka fark etmez): <b className="text-stone-800 dark:text-stone-100">{g.label}</b></p>
       <h3 className="text-sm font-semibold">Nereden alınır</h3>
-      {q.isLoading && <p className="text-xs text-stone-500">Yükleniyor…</p>}
-      {q.error && <p className="text-xs text-stone-500">Şu an karşılaştırılamadı.</p>}
+      <SorguDurumu q={q} kompakt etiket="Nereden alınır yükleniyor" />
       {grp && !best.length && <p className="text-xs text-stone-500">Bu ürün için henüz başka fiyat yok.</p>}
       {best.length > 0 && (
         <ul className="space-y-1 text-sm">

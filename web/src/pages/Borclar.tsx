@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import Debts, { type Debt } from "../components/Debts";
 import Kpi from "../components/Kpi";
+import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
 /** Borç / alacak defteri: kim kime ne (TL, döviz, altın) borçlu. Gelir/gider değil, eldeki parayı etkiler. */
 export default function Borclar() {
@@ -12,7 +13,7 @@ export default function Borclar() {
   });
   // açık TL alacak/borç toplamı sunucudan (net-worth: Özet ve Hesaplar ile aynı rakam); eski sunucuda satırlardan
   const nw = useQuery({ queryKey: ["net-worth"], queryFn: () => send<{ receivable?: number; payable?: number }>("/api/net-worth") });
-  if (!debts.data) return <div className="text-sm text-stone-500">Yükleniyor…</div>;
+  if (!debts.data) return <SorguDurumu q={debts} etiket="Borç ve alacaklar yükleniyor"><div className="space-y-3"><KartIskelet satir={1} /><SatirIskelet n={4} /></div></SorguDurumu>;
   const openTry = debts.data.filter((d) => !d.settled_at && d.asset === "TRY");
   const sum = (dir: Debt["direction"]) => (dir === "alacak" ? nw.data?.receivable : nw.data?.payable)
     ?? openTry.filter((d) => d.direction === dir).reduce((a, d) => a + d.remaining, 0);

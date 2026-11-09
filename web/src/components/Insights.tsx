@@ -5,6 +5,7 @@ import { api, type Insight } from "../api";
 import { cx, maskText } from "../format";
 import { useUI, type Route } from "../ui";
 import { routeVisible, useBook, useMeta } from "./hooks";
+import SorguDurumu from "./SorguDurumu";
 
 const STYLE = {
   kritik: { icon: AlertOctagon, cls: "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40", ic: "text-red-600 dark:text-red-400", label: "Kritik" },
@@ -155,8 +156,7 @@ export function HiddenInsights({ count, month }: { count: number; month?: string
       </button>
       {open && (
         <ul className="mt-1 grid gap-2 md:grid-cols-2" aria-label="Gizlenen uyarılar">
-          {q.isLoading && <li className="text-sm text-stone-500 dark:text-stone-400">Yükleniyor…</li>}
-          {q.error && <li className="text-sm text-red-600 dark:text-red-400">{(q.error as Error).message}</li>}
+          {(q.isLoading || q.error) && <li><SorguDurumu q={q} kompakt etiket="Uyarılar yükleniyor" /></li>}
           {q.data?.length === 0 && <li className="text-sm text-stone-500 dark:text-stone-400">Gizli uyarı kalmadı.</li>}
           {q.data?.map((i) => {
             const s = STYLE[i.level] ?? STYLE.bilgi;
