@@ -5,6 +5,7 @@ import type { AiCosts as Costs } from "../api";
 import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
 import AiCosts from "../components/AiCosts";
 import AppUpdate from "../components/AppUpdate";
+import CardTemplates from "../components/CardTemplates";
 import DemoStats from "../components/DemoStats";
 import Olcum from "../components/Olcum";
 import PlanTable from "../components/PlanTable";
@@ -88,7 +89,7 @@ export default function Admin() {
           {sub === "geri-bildirim" && <AdminFeedback />}
           {sub === "yapay-zeka" && <AiCosts />}
           {sub === "paket-tablosu" && <PlanTable />}
-          {sub === "sablonlar" && <ReceiptTemplates />}
+          {sub === "sablonlar" && <><ReceiptTemplates /><CardTemplates /></>}
           {sub === "mobil" && <AppUpdate />}
           {sub === "demo" && <Demo />}
         </div>
