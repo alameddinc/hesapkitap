@@ -6,9 +6,9 @@
 // - GET /api/prices/combos?group=… (Fiyatlar grup ayrıntısı; salt görüntü).
 // Plan durağından açılınca zincir süzgeci o zincirle önceden seçili (değiştirilebilir: liste bütün zincirlerle gelir).
 // Mobil karşılığı: hesapkitap-mobile.
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cx, maskText, tl, todayISO } from "../format";
 import { send } from "../lib/apiError";
 import { ANY_PATCH, ANY_TOAST, comboBadges, comboPatch, comboTitle, comboToast, filterCombos, isAnySel, isSelected, sortCombos,
@@ -34,6 +34,10 @@ export const useGroupCombos = (group: string, enabled = true) => useQuery({
 
 const money = (n: number) => maskText(tl(n));
 
+/** "Tekrar dene": bekleyen isteği bırak, yenisini at. */
+export const retry = (qc: QueryClient, queryKey: readonly unknown[]) =>
+  void qc.cancelQueries({ queryKey, exact: true }).then(() => qc.refetchQueries({ queryKey, exact: true }));
+
 function Chips<T extends string | null>({ label, all, items, value, onChange, text, bleed }: {
   label: string; all: string; items: T[]; value: T | null; onChange: (v: T | null) => void; text?: (v: T) => string; bleed: string;
 }) {
@@ -58,9 +62,47 @@ const Badge = ({ children, tone }: { children: string; tone: "green" | "blue" })
     tone === "green" ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300" : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200")}>{children}</span>
 );
 
+export const SLOW_MS = 4000;
+
+/** Yükleniyor: liste satırına benzeyen iskeletler + "Fiyatlar getiriliyor…"; SLOW_MS sonra "Biraz uzun sürdü · Tekrar dene". */
+export function PriceLoading({ rows = 4, onRetry, testId = "fiyat-yukleniyor" }: { rows?: number; onRetry?: () => void; testId?: string }) {
+  const [slow, setSlow] = useState(false);
+  const [round, setRound] = useState(0);
+  useEffect(() => { setSlow(false); const t = setTimeout(() => setSlow(true), SLOW_MS); return () => clearTimeout(t); }, [round]);
+  return (
+    <div className="space-y-2" data-testid={testId} aria-busy="true">
+      <p className="text-sm text-stone-500 dark:text-stone-400" role="status">
+        {slow ? <>Biraz uzun sürdü{onRetry && <> · <button type="button" className="font-medium text-blue-700 hover:underline dark:text-blue-300"
+          onClick={() => { setRound((n) => n + 1); onRetry(); }} data-testid="fiyat-tekrar">Tekrar dene</button></>}</> : "Fiyatlar getiriliyor…"}
+      </p>
+      <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700" aria-hidden="true">
+        {Array.from({ length: rows }, (_, i) => (
+          <li key={i} className="flex items-center gap-3 px-3 py-3">
+            <span className="min-w-0 flex-1 space-y-1.5">
+              <span className="block h-3.5 animate-pulse rounded bg-stone-200 dark:bg-stone-700" style={{ width: `${70 - (i % 3) * 12}%` }} />
+              <span className="block h-2.5 animate-pulse rounded bg-stone-100 dark:bg-stone-800" style={{ width: `${42 - (i % 2) * 10}%` }} />
+            </span>
+            <span className="h-3.5 w-14 shrink-0 animate-pulse rounded bg-stone-200 dark:bg-stone-700" />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Hata: mesaj + Tekrar dene. */
+export function PriceError({ error, onRetry }: { error: Error; onRetry?: () => void }) {
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300" role="alert">
+      <span className="min-w-0 break-words">{error.message || "Fiyatlar alınamadı"}</span>
+      {onRetry && <button type="button" className="font-medium underline underline-offset-2" onClick={onRetry}>Tekrar dene</button>}
+    </p>
+  );
+}
+
 /** Seçici listesi (süzgeç, sıralama, satırlar, ipucu, dipnot). onPick verilmezse salt görüntü. */
-export function ComboList({ data, loading, error, selected, onPick, onAny, busy, initialChain, bleed = "-mx-4 px-4" }: {
-  data?: CombosData; loading?: boolean; error?: Error | null; selected?: ComboSel | null;
+export function ComboList({ data, loading, error, selected, onPick, onAny, busy, initialChain, bleed = "-mx-4 px-4", onRetry }: {
+  data?: CombosData; loading?: boolean; error?: Error | null; selected?: ComboSel | null; onRetry?: () => void;
   onPick?: (r: ComboRow) => void; onAny?: () => void; busy?: boolean; initialChain?: string | null;
   /** çip satırının kaydırma payı: kabın iç boşluğu kadar (pencerede px-4, kartta px-3) */
   bleed?: string;
@@ -81,17 +123,17 @@ export function ComboList({ data, loading, error, selected, onPick, onAny, busy,
     attribution: r.source === "resmi" ? data?.attribution?.[0] ?? null : null }));
   return (
     <div className="space-y-3" data-testid="secici">
-      {loading && <p className="text-sm text-stone-500">Yükleniyor…</p>}
-      {error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{error.message}</p>}
       {sel && onAny && (
-        <button type="button" onClick={onAny} disabled={busy} aria-pressed={isAnySel(selected)} data-testid="marka-fark-etmez"
+        <button type="button" onClick={onAny} disabled={busy} aria-pressed={!!data && isAnySel(selected)} data-testid="marka-fark-etmez"
           className={cx("flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60",
-            isAnySel(selected) ? "border-green-300 bg-green-50/70 dark:border-green-800 dark:bg-green-950/30" : "border-stone-200 dark:border-stone-700")}>
+            data && isAnySel(selected) ? "border-green-300 bg-green-50/70 dark:border-green-800 dark:bg-green-950/30" : "border-stone-200 dark:border-stone-700")}>
           <span className="min-w-0 flex-1"><span className="block font-medium">Marka fark etmez</span>
             <span className="block text-xs text-stone-500 dark:text-stone-400">En uygun yeri plan seçer</span></span>
-          {isAnySel(selected) && <Check size={18} className="shrink-0 text-green-700 dark:text-green-400" aria-label="seçili" />}
+          {data && isAnySel(selected) && <Check size={18} className="shrink-0 text-green-700 dark:text-green-400" aria-label="seçili" />}
         </button>
       )}
+      {loading && <PriceLoading onRetry={onRetry} />}
+      {error && !data && <PriceError error={error} onRetry={onRetry} />}
       {data && all.length > 0 && (
         <div className="space-y-1.5">
           <Chips bleed={bleed} label="Zincir" all="Tüm zincirler" items={chainItems} value={chain} onChange={setChain} />
@@ -101,7 +143,8 @@ export function ComboList({ data, loading, error, selected, onPick, onAny, busy,
           <Segmented label="Sıralama" value={by} onChange={setBy} options={[{ value: "price", label: "Fiyat" }, { value: "unit", label: "Birim fiyat" }]} />
         </div>
       )}
-      {data && !all.length && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700">Bu ürün için fiyatı görülen zincir yok.</p>}
+      {data && !all.length && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700" data-testid="secici-bos">
+        Bu ürün için zincir/marka fiyatı yok{sel && onAny && <> · <button type="button" className="font-medium text-blue-700 hover:underline dark:text-blue-300" onClick={onAny} disabled={busy}>Marka fark etmez</button></>}</p>}
       {data && all.length > 0 && !rows.length && <p className="rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-500 dark:border-stone-700">Bu süzgeçle sonuç yok.</p>}
       {rows.length > 0 && (
         <ul className="divide-y divide-stone-100 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700" aria-label="Zincir ve marka">
@@ -144,8 +187,10 @@ export function ComboList({ data, loading, error, selected, onPick, onAny, busy,
 }
 
 /** "Zincir ve marka seç" penceresi (satır bağlamı): dokununca tek PATCH, bildirim, kapanır. */
-export function ComboSheet({ itemId, chain, onClose, onDone }: {
+export function ComboSheet({ itemId, chain, onClose, onDone, back }: {
   itemId: number; chain?: string | null; onClose: () => void;
+  /** açıldığı pencerenin adımı: "← Ürünü düzenle" (o pencere bu sırada gizli) */
+  back?: string;
   /** PATCH'ten sonra (düzenle penceresi seçili boyu günceller) */
   onDone?: (p: { store: string | null; brand: string | null; group_key?: string }) => void;
 }) {
@@ -168,8 +213,9 @@ export function ComboSheet({ itemId, chain, onClose, onDone }: {
     }
   };
   return (
-    <Modal title="Zincir ve marka seç" onClose={onClose}>
+    <Modal title="Zincir ve marka seç" onClose={onClose} back={back ? { label: back, onClick: onClose } : undefined}>
       <ComboList data={q.data} loading={q.isLoading} error={q.error as Error | null} selected={q.data?.selected} busy={busy} initialChain={chain}
+        onRetry={() => retry(qc, itemCombosKey(itemId))}
         onAny={() => void apply({ ...ANY_PATCH }, ANY_TOAST)}
         onPick={(r) => { const p = comboPatch(r); void apply(p, comboToast(r)); }} />
     </Modal>

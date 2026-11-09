@@ -50,6 +50,10 @@ export interface ShopItem {
   actual?: { unit_price: number | null; line_total: number | null; entry_id: number } | null;
   /** liste v4: bağlı mağaza (shop_store_pin; o mağazada fiyat yoksa store_missing) ve marka (shop_brand_size) */
   store?: string | null; store_missing?: boolean; brand?: string | null;
+  /** shop_brand_auto: addan okunan marka + seri ("Çaykur Turist"); brand_missing: o marka + boyda fiyat yok; any_brand:
+   *  marka fark etmez olsaydı en ucuzu */
+  brand_line?: string | null; brand_label?: string | null; brand_auto?: boolean; brand_missing?: boolean;
+  any_brand?: { chain: string; price: number; brand?: string | null; line_total?: number | null } | null;
 }
 interface SizeOpt { key: string; label: string; size_label: string; chain: string | null; price: number | null; unit_price_per?: number | null; per_unit?: string | null }
 type OptimizeV2 = Optimize & { headline?: Headline | null; unpriced_info?: UnpricedInfo[]; empty?: { title: string; text: string } | null };
@@ -237,7 +241,8 @@ function ShoppingList() {
 
   const rowOf = (it: ShopItem, inPlan = false) => unitsOn ? (
     <UnitRow key={it.id} it={it} inPlan={inPlan} hint={!it.done ? hintOf(it) : undefined} ro={ro} money={money} people={people}
-      onTick={(d) => patch.mutate({ id: it.id, done: d })} onEdit={() => setEdit(it)} />
+      onTick={(d) => patch.mutate({ id: it.id, done: d })} onEdit={() => setEdit(it)}
+      onAnyBrand={() => { patch.mutate({ id: it.id, brand: null }); ui.toast("Marka fark etmez seçildi"); }} />
   ) : (
     <LegacyRow key={it.id} it={it} best={bestOf.get(it.id)} hint={hints.get(it.id)} ro={ro} money={money} people={people} today={today} sizesOn={sizesOn}
       onTick={(d) => patch.mutate({ id: it.id, done: d })} onQty={(q) => patch.mutate({ id: it.id, qty: q })} onDel={() => del.mutate([it.id])} onSize={() => setSizeFor(it)} />
@@ -370,9 +375,11 @@ function ShoppingList() {
 type People = ReturnType<typeof usePeople>;
 
 /** v3 satırı: işaret, miktarlı ad (dokun → düzenle / düzelt), alt yazı (en ucuz / plan / fiş / ipucu), sağda tutar. */
-function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
+function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit, onAnyBrand }: {
   it: ShopItem; inPlan: boolean; hint?: UnpricedInfo; ro: boolean; money: (n: number) => string; people: People;
   onTick: (done: boolean) => void; onEdit: () => void;
+  /** shop_brand_auto: addan okunan markayı bırak */
+  onAnyBrand?: () => void;
 }) {
   const who = people.multi ? people.person(it.added_by) : undefined;
   // varsayılan boy varsa boy bir kez yazılır ("1 L kabul edildi")
@@ -395,6 +402,8 @@ function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
     sub = ownProductText(it.own_product, money); right = money(it.best.line_total ?? it.best.price);
   } else if (it.best && !it.done) { const p = bestParts(it.best, size, money); sub = p.sub; right = p.right; }
   const extra = !it.done && !hint ? ownExtra(it, money) : null;
+  // addan okunan marka (shop_brand_auto): fiyatı yoksa söylenir, marka fark etmez daha ucuzsa ipucu, altta çip
+  const auto = brandAuto(it, money);
 
   const title = withBrand(rowTitle(it), it.brand);
   const body = (
@@ -403,25 +412,52 @@ function UnitRow({ it, inPlan, hint, ro, money, people, onTick, onEdit }: {
         <span className={cx("min-w-0 break-words", it.done && "text-stone-400 line-through dark:text-stone-500")}>{title}</span>
         {who && <AddedBy name={people.isMe(it.added_by) ? null : who.name} initial={who.name} />}
       </span>
-      {hint ? (
+      {auto?.missing ? (
+        <span className="block text-xs text-amber-800 dark:text-amber-300" data-testid="satir-marka-yok">{auto.missing}</span>
+      ) : hint ? (
         <span className="block text-xs text-amber-800 dark:text-amber-300" data-testid="satir-ipucu">{hint.reason === "store_no_price" && it.store ? storeLine({ store: it.store, store_missing: true }) : hint.hint}{!ro && hint.reason !== "pending" && <> <span className="font-medium underline underline-offset-2">Düzelt</span></>}</span>
       ) : sub && !it.done ? (
         <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="satir-en-ucuz">{maskText(sub ?? "")}</span>
       ) : null}
       {extra && <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="satir-kendi">{maskText(extra)}</span>}
+      {auto?.hint && <span className="block text-xs text-stone-500 tabular-nums dark:text-stone-400" data-testid="satir-marka-ipucu">{maskText(auto.hint)}</span>}
     </>
   );
+  const chip = auto && !ro && it.id > 0 && onAnyBrand ? (
+    <button type="button" onClick={onAnyBrand} data-testid="marka-fark-etmez-cip"
+      className="mt-1 inline-block max-w-full rounded-lg border border-stone-200 px-2.5 py-1 text-left text-xs leading-snug hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800"
+      aria-label={`${it.text}: ${auto.label} fiyatı gösteriliyor, marka fark etmez'e çevir`}>
+      <span className="font-medium text-stone-700 dark:text-stone-200">{auto.label}</span>
+      {" "}<span className="text-blue-700 dark:text-blue-300">· Marka fark etmez'e çevir</span>
+    </button>
+  ) : null;
   return (
     <li className="flex items-center gap-3 px-4 py-2.5" data-testid="satir">
       <input type="checkbox" className="size-5 shrink-0" checked={it.done} disabled={ro || it.id < 0}
         aria-label={`${it.text}: ${it.done ? "alınmadı say" : "alındı"}`} onChange={(e) => onTick(e.target.checked)} />
       {ro || it.id < 0 ? <div className="min-w-0 flex-1">{body}</div> : (
-        <button type="button" className="-my-1 min-w-0 flex-1 rounded-md py-1 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" onClick={onEdit}
-          aria-label={`${title}: ${hint && hint.reason !== "pending" ? "düzelt" : "düzenle"}`}>{body}</button>
+        <div className="min-w-0 flex-1">
+          <button type="button" className="-my-1 w-full rounded-md py-1 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" onClick={onEdit}
+            aria-label={`${title}: ${hint && hint.reason !== "pending" ? "düzelt" : "düzenle"}`}>{body}</button>
+          {chip}
+        </div>
       )}
       {right && <span className={cx("shrink-0 text-sm tabular-nums", it.done ? "text-stone-400 dark:text-stone-500" : "font-medium")}>{right}</span>}
     </li>
   );
+}
+
+/** Addan okunan marka (shop_brand_auto): {label "Çaykur Turist", missing "Çaykur Turist 1 kg için fiyat yok" | null,
+ *  hint "Marka fark etmez: en ucuz ₺199,90 (Efor)" | null}; marka addan değilse null. */
+export function brandAuto(it: Pick<ShopItem, "brand" | "brand_auto" | "brand_label" | "brand_missing" | "any_brand" | "best" | "done" | "assumed" | "group">,
+  money: (n: number) => string) {
+  if (!it.brand || !it.brand_auto || it.done) return null;
+  const label = it.brand_label ?? it.brand;
+  const size = it.assumed?.size_label ?? sizeOf(it.group?.label);
+  const a = it.any_brand;
+  const cheaper = a && (!it.best || a.price < it.best.price - 0.005);
+  return { label, missing: it.brand_missing ? `${label}${size ? ` ${size}` : ""} için fiyat yok` : null,
+    hint: cheaper ? `Marka fark etmez: en ucuz ${money(a.line_total ?? a.price)}${a.brand ? ` (${a.brand})` : ""}` : null };
 }
 
 /** Eski sunucu (shopping_units yok): adet düğmeleri ve silme satırda. */
