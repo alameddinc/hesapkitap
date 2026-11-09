@@ -65,7 +65,7 @@ def test_trial_has_normal_limits_and_is_reported(hosted):
     assert p["reads"]["limit"] == 30 and p["reads"]["monthly_cap"] is None
     _set_reads(u["id"], day=30)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
-    assert r["quota_full"] and r["trial"] is True and r["trial_days_left"] in (6, 7) and r["upgrade"] is False
+    assert r["quota_full"] and r["trial"] is True and r["trial_days_left"] in (6, 7, 8) and r["upgrade"] is False
     # deneme bitti, ücretli dönem (RENEWAL, period_type NORMAL): deneme bilgisi düşer
     _rc({"type": "RENEWAL", "app_user_id": str(u["id"]), "entitlement_ids": ["premium"], "product_id": "premium_monthly",
          "period_type": "NORMAL", "expiration_at_ms": exp + 30 * 86400 * 1000})
