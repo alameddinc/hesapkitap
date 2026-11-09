@@ -26,6 +26,7 @@ CAPABILITIES = (
     "transactions_totals",    # /api/transactions satır bayrakları counts_as_* ve ?totals=1
     "transactions_paging",    # /api/transactions?limit&before → {rows, next}
     "payables_totals",        # /api/payables?totals=1 (window ?days, paid_this_month)
+    "payables_key",           # /api/payables kalemlerinde key: kararlı, benzersiz kimlik (liste anahtarı; tahminin id'si yok)
     "networth_explain",       # /api/net-worth spendable_parts / spendable_explain
     "transfer_totals",        # /api/transfers totals
     "bills_overall",          # /api/bills/summary overall, average_12

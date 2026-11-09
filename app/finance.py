@@ -1514,8 +1514,13 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             continue
         if s["due_date"] and s["due_date"] >= today.isoformat() and not (
                 s["paid_amount"] is not None and money.diff_k(s["paid_amount"], s["total_debt"]) >= -1):
+            # kısmi ödenmiş ekstre: takvimde kalanı (ödenen düşülür); total_debt ve paid_amount bilgi
+            paid = s["paid_amount"] or 0
             dues.append({"date": s["due_date"], "account": s["card_no"], "bank": s["bank"],
-                         "amount": s["total_debt"], "min_payment": s["min_payment"], "estimated": False})
+                         "amount": _round(max(0.0, (s["total_debt"] or 0) - paid)) if paid else s["total_debt"],
+                         "total_debt": s["total_debt"], "paid_amount": s["paid_amount"],
+                         "min_payment": s["min_payment"] if not paid or (s["min_payment"] or 0) > paid else None,
+                         "estimated": False})
     for acc, c in cycles.items():
         if c["due"] and c["due"] >= today.isoformat():
             dues.append({"date": c["due"], "account": acc, "bank": c["bank"], "amount": c["at_cut"],
@@ -1650,8 +1655,18 @@ def payables(today: date | None = None) -> list[dict]:
                         "due_date": d["date"], "days_left": (date.fromisoformat(d["date"]) - today).days,
                         "paid_amount": None, "paid_at": None, "status": "tahmini", "cycle": d.get("cycle"),
                         "in_total": False})
+    # key: kalemin kararlı, benzersiz kimliği (yetenek payables_key). Tahminin id'si yok (None): iki kartın tahmini aynı
+    # günde düşünce istemcinin "tür-id-tarih" anahtarı çakışıyordu ve React çakışan satırı silmeden bırakıp her yeniden
+    # sıralamada (Ödendi / Geri al) bir kopya biriktiriyordu. Aynı anahtar ikinci kez gelirse (olmamalı) ilki kalır.
+    seen: set[str] = set()
+    uniq = []
+    for x in out:
+        x["key"] = f"{x['type']}:{x['id']}" if x["id"] is not None else f"{x['type']}:{x['title']}:{x['due_date']}"
+        if x["key"] not in seen:
+            seen.add(x["key"])
+            uniq.append(x)
     order = {"gecikti": 0, "kismi": 1, "bekliyor": 2, "tahmini": 3, "odendi": 4}
-    return sorted(out, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
+    return sorted(uniq, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
 
 
 def payables_totals(today: date | None = None, items: list[dict] | None = None, days: int | None = None) -> dict:
