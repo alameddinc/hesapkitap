@@ -165,8 +165,16 @@ def run_integrity(today: date) -> dict:
     return integrity.run(today)
 
 
+def run_zakat(today: date) -> float:
+    """Zekât: dolan kameri yılı kalıcı ilerlet, ödenmemiş geçmiş yıl zekâtını (Net durum borcu) yeniden hesapla. Okuma
+    yolları bunu yapmaz (sayfa açmak bakiye değiştirmesin); sunucu açılınca ilk turda da çalışır (saat 1 geçtiyse)."""
+    from app import zakat
+
+    return zakat.nightly(today)
+
+
 INTEGRITY_HOUR = 4
-JOBS = [("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads),
+JOBS = [("zakat", 1, run_zakat), ("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads),
         ("sessions", 3, run_session_cleanup), ("integrity", INTEGRITY_HOUR, run_integrity)]
 MAIN_ONLY = {"remind", "sessions"}  # Telegram'a yazan ve sistem veritabanına bakan işler yalnız yöneticinin alanında
 

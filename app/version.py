@@ -224,6 +224,14 @@ CAPABILITIES = (
                               # "Örnek Bank Vadesiz (döküm)"): Özet'te iki ve daha çok bekleyen belge tek "N belge
                               # bekleniyor" grubunda, her biri kendi satırı ve Yükle'siyle. Kesim günü son ekstrelerden
                               # öğrenilir (ay sonu kırpılmaz); atlanan ay varsa en son geçen kesim sorulur
+    "donation_payment",       # zekât ödemesi / bağış nasıl verildi: POST /api/zakat/people/{id}/payments ve POST
+                              # /api/donations gövdesinde payment nakit|havale|kredi_karti (+ account_id, card_last4) →
+                              # gider olarak da yazılır (Bağış & Sadaka; kredi kartı: "ekstre bekleniyor", ekstreyle
+                              # eşleşince tek sayım), havalede recipient (kime). Ödeme silinir/düzeltilirse açtığı gider
+                              # de. payment yoksa eski davranış (gider yok). GET /api/zakat unexpensed [{id, person_id,
+                              # person, amount, pay_date, year_start}]: ödenmiş ama gider olarak görünmeyen zekât → POST
+                              # /api/zakat/payments/{id}/expense {payment, account_id?, card_last4?, recipient?, pay_date?}
+                              # → {entry_id, created} ya da POST .../no-expense ("gerek yok", bir daha sorulmaz)
 )
 
 

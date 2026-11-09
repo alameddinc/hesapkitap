@@ -8,6 +8,7 @@ import AssetForm from "../components/AssetForm";
 import Sadaka from "../components/Sadaka";
 import { ZakatOff } from "../components/ZakatConsent";
 import Segmented from "../components/Segmented";
+import ZakatPay, { type ZakatPayBody } from "../components/ZakatPay";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 
@@ -26,6 +27,8 @@ interface ZakatData {
   prices: { updated: string | null; source: string | null; manual_gram: number | null; list: Record<string, number> };
   kinds: Record<string, { label: string; unit: string }>;
   people: Person[];
+  /** ödenmiş ama gider olarak görünmeyen zekât (sunucu donation_payment; eski sunucuda yok) */
+  unexpensed?: { id: number; person_id: number; person: string; amount: number; pay_date: string }[];
 }
 
 const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
@@ -41,8 +44,9 @@ function History({ p }: { p: Person }) {
   const ui = useUI();
   const q = useQuery({ queryKey: ["zakat-history", p.id, p.hawl?.start],
     queryFn: () => json<{ years: HistYear[]; need_start: boolean; total_due: number; notes: string[] }>("GET", `/api/zakat/people/${p.id}/history`) });
-  const pay = useSave((a: { y: HistYear; amount: number }) => json("POST", `/api/zakat/people/${p.id}/payments`,
-    { amount: a.amount, year_start: a.y.start, note: "Geçmiş yıl" }), () => ui.toast("Ödeme o yıla kaydedildi"));
+  const [payY, setPayY] = useState<HistYear | null>(null);
+  const pay = useSave((a: { y: HistYear; b: ZakatPayBody }) => json("POST", `/api/zakat/people/${p.id}/payments`,
+    { ...a.b, year_start: a.y.start, note: "Geçmiş yıl" }), () => { setPayY(null); ui.toast("Ödeme o yıla kaydedildi"); });
   const d = q.data;
   if (q.isLoading) return <p className="text-xs text-stone-500">Geçmiş fiyatlar alınıyor…</p>;
   if (!d) return null;
@@ -76,14 +80,15 @@ function History({ p }: { p: Person }) {
               </div>
             )}
             {!y.error && (y.remaining ?? 0) > 0 && (
-              <button className="btn-ghost mt-1 border border-stone-300 px-2 py-0.5 text-xs dark:border-stone-700" onClick={() => {
-                const v = window.prompt(`${dateTR(y.end)}'de biten yıl için ödediğin tutar:`, String(y.remaining).replace(".", ","));
-                if (v && parseAmount(v) > 0) pay.mutate({ y, amount: parseAmount(v) }, { onError: (e) => ui.error(e.message) });
-              }}>Ödedim</button>
+              <button className="btn-ghost mt-1 border border-stone-300 px-2 py-0.5 text-xs dark:border-stone-700"
+                onClick={() => setPayY(y)}>Ödedim</button>
             )}
           </li>
         ))}
       </ul>
+      {payY && <ZakatPay title="Geçmiş yılın zekâtını ödedim" note={`${dateTR(payY.end)}'de biten yıl için.`}
+        amount={payY.remaining ?? 0} date={today()} busy={pay.isPending} onClose={() => setPayY(null)}
+        onSave={(b) => pay.mutate({ y: payY, b }, { onError: (e) => ui.error(e.message) })} />}
       {d.notes.map((n) => <p key={n} className="text-xs text-stone-500">• {n}</p>)}
       <p className="text-xs text-stone-500">• Ödenmeyen zekât, Hanefî'ye göre borç olarak kalır ve sonraki yılın hesabından düşülür. Kesin karar için müftülüğe danış.</p>
     </div>
@@ -95,15 +100,14 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [paying, setPaying] = useState(false);
-  const [payAmt, setPayAmt] = useState("");
   const [hist, setHist] = useState(false);
   const onErr = { onError: (e: Error) => ui.error(e.message) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
   const setMinor = useSave((v: boolean) => json("PATCH", `/api/zakat/people/${p.id}`, { is_minor: v }));
   const setCheck = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { check_date: v }));
   const nextYear = useSave(() => json("POST", `/api/zakat/people/${p.id}/next-year`), () => ui.toast("Yeni zekât yılı başladı"));
-  const pay = useSave(() => json("POST", `/api/zakat/people/${p.id}/payments`, { amount: parseAmount(payAmt), pay_date: today() }),
-    () => { setPaying(false); setPayAmt(""); ui.toast("Ödeme kaydedildi. Allah kabul etsin."); });
+  const pay = useSave((b: ZakatPayBody) => json("POST", `/api/zakat/people/${p.id}/payments`, b),
+    () => { setPaying(false); ui.toast("Ödeme kaydedildi. Allah kabul etsin."); });
   const delPay = useSave((id: number) => json("DELETE", `/api/zakat/payments/${id}`));
   const delAsset = useSave((id: number) => json("DELETE", `/api/zakat/assets/${id}`));
   const delPerson = useSave(() => json("DELETE", `/api/zakat/people/${p.id}`));
@@ -160,16 +164,11 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                 : "Şu an nisabın altındasın; yıl sonunda da altındaysan zekât düşmez."}
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
-              {paying ? (
-                <>
-                  <input className="input w-36 text-right" inputMode="decimal" placeholder="Tutar" autoFocus value={payAmt} onChange={(e) => setPayAmt(e.target.value)} />
-                  <button className="btn-primary px-3 py-1" disabled={!(parseAmount(payAmt) > 0)} onClick={() => pay.mutate(undefined, onErr)}>Kaydet</button>
-                  <button className="btn-ghost px-2 py-1" onClick={() => setPaying(false)}>Vazgeç</button>
-                </>
-              ) : (
-                <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
-                  onClick={() => { setPayAmt(h.remaining > 0 ? String(h.remaining) : ""); setPaying(true); }}>Ödeme ekle</button>
-              )}
+              <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
+                onClick={() => setPaying(true)}>Ödeme ekle</button>
+              {paying && <ZakatPay title="Zekâtı ödedim" note={`${p.name} için bu kameri yılın zekâtı. Bir kısmını verdiysen tutarı değiştir.`}
+                amount={h.remaining} date={today()} busy={pay.isPending} onClose={() => setPaying(false)}
+                onSave={(b) => pay.mutate(b, onErr)} />}
               {h.days_left <= 0 && (
                 <button className="btn-primary px-2 py-1 text-xs"
                   onClick={() => void ask("Yeni zekât yılı başlasın mı?\n\nBu yılın ödemeleri geçmişte kalır.", { confirm: "Yeni yıl başlat" }).then((ok) => { if (ok) nextYear.mutate(undefined, onErr); })}>
@@ -353,6 +352,8 @@ function ZakatTab() {
         </div>
       </section>
 
+      {!!d.unexpensed?.length && <Unexpensed items={d.unexpensed} />}
+
       {d.people.map((p) => <PersonCard key={p.id} p={p} d={d} />)}
 
       <section className="card flex flex-wrap items-center gap-2 p-4">
@@ -388,5 +389,36 @@ function ZakatTab() {
       </p>
       {closing && <ZakatOff onClose={() => setClosing(false)} />}
     </div>
+  );
+}
+
+/** Ödenmiş ama gider olarak görünmeyen zekât (eski sürümde ödeme şekli sorulmadan kaydedilmiş, gideri silinmiş ya da
+ *  "sayılmasın" yapılmış): bir kez sorulur, veri kendiliğinden taşınmaz. Mobil Zekat.tsx GiderEksik ile aynı. */
+function Unexpensed({ items }: { items: NonNullable<ZakatData["unexpensed"]> }) {
+  const ui = useUI();
+  const [open, setOpen] = useState<(typeof items)[number] | null>(null);
+  const add = useSave((a: { id: number; b: ZakatPayBody }) => json("POST", `/api/zakat/payments/${a.id}/expense`,
+    { ...a.b, amount: undefined }), () => { setOpen(null); ui.toast("Gider olarak eklendi"); });
+  const skip = useSave((id: number) => json("POST", `/api/zakat/payments/${id}/no-expense`));
+  const total = items.reduce((s, x) => s + x.amount, 0); // parity-ok: SUNUM (sunucunun listelediği kalemlerin başlık toplamı)
+  return (
+    <section className="card space-y-2 border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-800 dark:bg-amber-950/40" data-testid="zekat-gider-eksik">
+      <p className="font-medium text-amber-900 dark:text-amber-200">Ödediğin {tl(total)} zekât gider olarak görünmüyor</p>
+      <p className="text-xs text-amber-900/80 dark:text-amber-200/80">Para çıktı ama harcamalarında yok. Nasıl ödediğini seç; gider olarak eklensin.</p>
+      <ul className="divide-y divide-amber-200 dark:divide-amber-900">
+        {items.map((x) => (
+          <li key={x.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+            <span>{dateTR(x.pay_date)} · {x.person} · <b className="tabular-nums">{tl(x.amount)}</b></span>
+            <span className="flex gap-2">
+              <button className="btn-primary px-2 py-1 text-xs" onClick={() => setOpen(x)}>Gider olarak ekle</button>
+              <button className="btn-ghost px-2 py-1 text-xs" onClick={() => skip.mutate(x.id, { onError: (e) => ui.error(e.message) })}>Gerek yok</button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {open && <ZakatPay title="Gider olarak ekle" note={`${open.person} · ${dateTR(open.pay_date)} tarihli zekât ödemesi.`}
+        amount={open.amount} date={open.pay_date} fixedAmount busy={add.isPending} onClose={() => setOpen(null)}
+        onSave={(b) => add.mutate({ id: open.id, b }, { onError: (e) => ui.error(e.message) })} />}
+    </section>
   );
 }

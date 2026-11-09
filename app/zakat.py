@@ -463,11 +463,25 @@ def _settings() -> dict:
             "include_receivables": db.get_setting("zakat:include_receivables") != "0"}
 
 
-def people() -> list[dict]:
+def _rolled_start(start: str | None, today: date) -> str | None:
+    """Kameri yıl dolduysa geçerli yılın başlangıcı (bellekte; yazmaz). Okuma yolları bunu kullanır; kalıcı ilerletme
+    yalnız yazma işlemlerinde ve gece işinde (_roll_years): sayfayı açmak veriyi değiştirmez."""
+    if not start:
+        return start
+    s = date.fromisoformat(start)
+    while s + timedelta(days=LUNAR_YEAR_DAYS) <= today:
+        s += timedelta(days=LUNAR_YEAR_DAYS)
+    return s.isoformat()
+
+
+def people(today: date | None = None) -> list[dict]:
+    """Kişiler, varlıkları, ödemeleri. hawl_start dolmuş yıl ilerletilmiş hâliyle (bellekte, _rolled_start)."""
+    today = today or date.today()
     with db.connect() as c:
         _init(c)
         ps = db.rows(c.execute("SELECT * FROM zakat_people ORDER BY is_self DESC, id"))
         for p in ps:
+            p["hawl_start"] = _rolled_start(p["hawl_start"], today)
             p["assets"] = db.rows(c.execute("SELECT * FROM zakat_assets WHERE person_id = ? ORDER BY id", (p["id"],)))
             p["payments"] = db.rows(c.execute("SELECT * FROM zakat_payments WHERE person_id = ? ORDER BY pay_date DESC",
                                               (p["id"],)))
@@ -519,15 +533,15 @@ def _roll_years(today: date) -> None:
 
 
 def compute(today: date | None = None) -> dict:
+    """Zekât sayfası (GET /api/zakat). Salt okuma: yıl ilerletme bellekte (people), hiçbir şey yazılmaz."""
     today = today or date.today()
-    _roll_years(today)
     st = _settings()
     pd = prices()
     pr = pd["prices"]
     gram = pr.get("GRA")
     nisab = round(NISAB_GRAMS * gram, 2) if gram else None
     out = []
-    for p in people():
+    for p in people(today):
         plus, minus = [], []
         # yılın bittiği gün: Şâfiî'de o güne kadar bir yılını doldurmamış varlık bu yıl sayılmaz
         year_end = (date.fromisoformat(p["hawl_start"]) + timedelta(days=LUNAR_YEAR_DAYS)) if p["hawl_start"] else today
@@ -596,7 +610,9 @@ def compute(today: date | None = None) -> dict:
                        "manual_gram": pd.get("manual_gram"),
                        "list": {k: pr[v[1]] for k, v in KINDS.items() if v[1] and v[1] in pr}},
             "kinds": {k: {"label": v[0], "unit": v[2]} for k, v in KINDS.items()},
-            "people": out, "today_hijri": to_hijri(today)}
+            "people": out, "today_hijri": to_hijri(today),
+            # ödenmiş ama gider olarak görünmeyen zekât (yetenek donation_payment): bir kez sorulur
+            "unexpensed": unexpensed()}
 
 
 # ---------------------------------------------------------------- varlıklar (Net durum)
@@ -713,7 +729,7 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
     başlangıcından geriye 354'er gün; verinin başladığı yere kadar."""
     today = today or date.today()
     st = _settings()
-    p = next((x for x in people() if x["id"] == pid), None)
+    p = next((x for x in people(today) if x["id"] == pid), None)
     if not p:
         raise LookupError("Kişi yok")
     if p.get("is_minor"):
@@ -801,17 +817,40 @@ def history(pid: int, today: date | None = None, max_years: int = 6, offline: bo
             "total_due": round(sum(y.get("remaining", 0) for y in years), 2)}
 
 
+DUE_KEY = "zakat:self_due"
+
+
 def self_due() -> float:
-    """Kullanıcının ("Ben") ödenmemiş geçmiş yıl zekâtı; Net durum'da borç olarak. Sadece önbellekteki fiyatlarla
-    (Zekât sayfası açılınca dolar), ağ beklenmez."""
+    """Kullanıcının ("Ben") ödenmemiş geçmiş yıl zekâtı; Net durum ve Harcanabilir'de borç. SALT OKUMA: kayıtlı son
+    hesap (refresh_self_due). Eskiden her okumada geçmiş fiyat ÖNBELLEĞİYLE hesaplanıyordu; önbellek Zekât sayfası
+    (geçmiş yıllar) açılınca dolduğu ve GET /api/zakat yılı kalıcı ilerlettiği için sunucu açılışında görünmeyen borç
+    sayfa açılınca birden çıkıyordu (okuma bakiye değiştiriyordu). Artık yalnız açık bir eylemle (zekât ödemesi, kişi,
+    varlık, ayar değişikliği) ya da gece işinde (nightly) değişir."""
     try:
-        me = next((p for p in people() if p["is_self"]), None)
-        if not me or not me["hawl_start"]:
-            return 0.0
-        return history(me["id"], offline=True)["total_due"]
+        return float(db.get_setting(DUE_KEY) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def refresh_self_due(offline: bool = True, today: date | None = None) -> float:
+    """Ödenmemiş geçmiş yıl zekâtını yeniden hesapla ve kaydet. offline: yalnız önbellekteki geçmiş fiyatlar (kullanıcı
+    eylemi sonrası; ağ beklenmez). Gece işi offline=False ile eksik fiyatları çeker. Hata olursa eski değer kalır."""
+    try:
+        me = next((p for p in people(today) if p["is_self"]), None)
+        due = 0.0
+        if me and me["hawl_start"] and not me.get("is_minor"):
+            due = history(me["id"], today=today, offline=offline)["total_due"]
+        db.set_setting(DUE_KEY, str(round(due, 2)) if due else None)
+        return due
     except Exception:  # noqa: BLE001 - Net durum zekât yüzünden bozulmasın
         log.exception("zekât borcu")
-        return 0.0
+        return self_due()
+
+
+def nightly(today: date) -> float:
+    """Gece işi (app/jobs.py): dolan yılları kalıcı ilerlet, eksik geçmiş fiyatları çekip borcu yeniden hesapla."""
+    _roll_years(today)
+    return refresh_self_due(offline=False, today=today)
 
 
 # ---------------------------------------------------------------- değişiklikler
@@ -836,6 +875,14 @@ def update_person(pid: int, data: dict) -> bool:
     data = {k: v for k, v in data.items() if k in ("name", "hawl_start", "note", "is_minor", "check_date")}
     if not data:
         return False
+    _roll_years(date.today())
+    try:
+        return _update_person(pid, data)
+    finally:
+        refresh_self_due()
+
+
+def _update_person(pid: int, data: dict) -> bool:
     with db.connect() as c:
         _init(c)
         prev = c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()
@@ -889,17 +936,91 @@ def delete_asset(aid: int) -> bool:
         return c.execute("DELETE FROM zakat_assets WHERE id = ?", (aid,)).rowcount > 0
 
 
-def add_payment(pid: int, amount: float, pay_date: str, note: str | None, year_start: str | None = None) -> int:
-    """year_start verilmezse içinde bulunulan zekât yılı (geçmiş yıl için o yılın başlangıcı)."""
+def add_payment(pid: int, amount: float, pay_date: str, note: str | None, year_start: str | None = None,
+                payment: str | None = None, account_id: int | None = None, card_last4: str | None = None,
+                recipient: str | None = None) -> int:
+    """year_start verilmezse içinde bulunulan zekât yılı (geçmiş yıl için o yılın başlangıcı).
+    payment (nakit | havale | kredi_karti): nasıl ödendi → gider olarak da yazılır (Bağış & Sadaka, own_entry). Kredi
+    kartıyla verilen zekât hemen "ekstre bekleniyor" gider olur, ekstre gelince kart satırıyla eşleşip bir kez sayılır.
+    payment yoksa (eski istemci) yalnız zekât ödemesi; Zekât ekranı "gider olarak görünmüyor" diye sorar (unexpensed)."""
+    from app import donations
+
+    if payment and payment not in donations.PAYMENTS:
+        raise ValueError("Ödeme şekli nakit, havale ya da kredi kartı olmalı")
+    _roll_years(date.today())
     with db.connect() as c:
         _init(c)
-        p = c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()
+        donations._init(c)  # entry_id / own_entry sütunları
+        p = c.execute("SELECT name, is_self, hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()
         if not p:
             raise LookupError("Kişi yok")
         if not (year_start or p["hawl_start"]):
             raise ValueError("Önce zekât yılının başladığı günü gir")
-        return c.execute("INSERT INTO zakat_payments (person_id, year_start, pay_date, amount, note) VALUES (?, ?, ?, ?, ?)",
-                         (pid, year_start or p["hawl_start"], pay_date, amount, (note or "").strip() or None)).lastrowid
+    label = "Zekât" if p["is_self"] else f"Zekât · {p['name']}"
+    entry_id = donations.create_expense(label, amount, pay_date, payment, account_id, card_last4,
+                                        (note or "").strip() or None, recipient) if payment else None
+    with db.connect() as c:
+        pay_id = c.execute("INSERT INTO zakat_payments (person_id, year_start, pay_date, amount, note, entry_id, own_entry) "
+                           "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (pid, year_start or p["hawl_start"], pay_date, amount, (note or "").strip() or None, entry_id,
+                            int(bool(entry_id)))).lastrowid
+    refresh_self_due()
+    return pay_id
+
+
+def unexpensed() -> list[dict]:
+    """Ödenmiş ama gider olarak görünmeyen zekât: ödeme şekli sorulmadan kaydedilmiş (eski sürüm), gider kaydı silinmiş ya
+    da "gider sayılmasın" (skipped) yapılmış; ekstre/döküm satırından işaretlenenler (txn_id / entry_id) zaten giderdir.
+    Zekât ekranı bir kez sorar: "Gider olarak ekle" (add_expense) ya da "Gerek yok" (dismiss_expense). Veri kendiliğinden
+    taşınmaz. Salt okuma."""
+    from app import donations
+
+    with db.connect() as c:
+        _init(c)
+        donations._init(c)
+        return db.rows(c.execute(
+            """SELECT zp.id, zp.person_id, p.name AS person, zp.amount, zp.pay_date, zp.year_start
+               FROM zakat_payments zp JOIN zakat_people p ON p.id = zp.person_id
+               LEFT JOIN entries e ON e.id = zp.entry_id
+               WHERE zp.no_expense = 0 AND zp.txn_id IS NULL AND (e.id IS NULL OR e.skipped = 1)
+               ORDER BY zp.pay_date DESC, zp.id DESC"""))
+
+
+def add_expense(pay_id: int, payment: str, account_id: int | None = None, card_last4: str | None = None,
+                recipient: str | None = None, day: str | None = None) -> dict:
+    """Gider olarak görünmeyen ödemeye gider kaydı aç (nasıl ödendi sorusunun cevabıyla). Gider kaydı vardı ama "gider
+    sayılmasın" yapılmışsa yeniden sayılır (yeni kayıt açılmaz)."""
+    from app import donations
+
+    with db.connect() as c:
+        _init(c)
+        donations._init(c)
+        r = c.execute("SELECT zp.*, p.name, p.is_self FROM zakat_payments zp JOIN zakat_people p ON p.id = zp.person_id "
+                      "WHERE zp.id = ?", (pay_id,)).fetchone()
+        if not r:
+            raise LookupError("Ödeme yok")
+        e = c.execute("SELECT id, skipped FROM entries WHERE id = ?", (r["entry_id"],)).fetchone() if r["entry_id"] else None
+    if r["txn_id"] or (e and not e["skipped"]):
+        return {"entry_id": r["entry_id"], "created": False}  # zaten gider
+    if e:
+        db.update_entry(e["id"], {"skipped": 0})
+        return {"entry_id": e["id"], "created": False}
+    label = "Zekât" if r["is_self"] else f"Zekât · {r['name']}"
+    eid = donations.create_expense(label, r["amount"], day or r["pay_date"], payment, account_id, card_last4, r["note"],
+                                   recipient)
+    with db.connect() as c:
+        c.execute("UPDATE zakat_payments SET entry_id = ?, own_entry = 1 WHERE id = ?", (eid, pay_id))
+    return {"entry_id": eid, "created": True}
+
+
+def dismiss_expense(pay_id: int) -> bool:
+    """"Gerek yok": bu ödeme için bir daha gider sorulmaz (ör. gider zaten başka bir kayıtta)."""
+    from app import donations
+
+    with db.connect() as c:
+        _init(c)
+        donations._init(c)
+        return c.execute("UPDATE zakat_payments SET no_expense = 1 WHERE id = ?", (pay_id,)).rowcount > 0
 
 
 def update_payment(pay_id: int, data: dict) -> dict | None:
@@ -921,17 +1042,42 @@ def update_payment(pay_id: int, data: dict) -> dict | None:
         if fields:
             c.execute(f"UPDATE zakat_payments SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                       (*fields.values(), pay_id))
-        return dict(c.execute("SELECT * FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone())
+        out = dict(c.execute("SELECT * FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone())
+    if out.get("own_entry") and ("amount" in fields or "pay_date" in fields):  # açtığı gider kaydı da düzelir
+        from app import donations
+
+        donations.sync_own_entry(out.get("entry_id"), fields.get("amount"), fields.get("pay_date"))
+    refresh_self_due()
+    return out
 
 
 def delete_payment(pay_id: int) -> bool:
+    """Ödemeyi sil; ödemeyle açılan gider kaydı da silinir (own_entry)."""
+    from app import donations
+
     with db.connect() as c:
         _init(c)
-        return c.execute("DELETE FROM zakat_payments WHERE id = ?", (pay_id,)).rowcount > 0
+        donations._init(c)
+        r = c.execute("SELECT entry_id, own_entry FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone()
+        if not r:
+            return False
+        c.execute("DELETE FROM zakat_payments WHERE id = ?", (pay_id,))
+    if r["own_entry"]:
+        donations.drop_own_entry(r["entry_id"])
+    refresh_self_due()
+    return True
 
 
 def next_year(pid: int) -> str:
     """Yıl doldu: yeni zekât yılı bir öncekinin bittiği gün başlar."""
+    _roll_years(date.today())
+    try:
+        return _next_year(pid)
+    finally:
+        refresh_self_due()
+
+
+def _next_year(pid: int) -> str:
     with db.connect() as c:
         _init(c)
         p = c.execute("SELECT hawl_start FROM zakat_people WHERE id = ?", (pid,)).fetchone()
@@ -1019,3 +1165,18 @@ def upcoming_checks(today: date | None = None, window: int = 7) -> list[dict]:
             out.append({"name": p["name"], "kind": "zekat", "date": h["due"], "hijri": h["due_hijri"],
                         "days_left": h["days_left"], "amount": h["remaining"]})
     return out
+
+
+def _due_after(fn):
+    """Borcu etkileyen yazma: sonunda ödenmemiş zekât yeniden hesaplanır (self_due salt okuma kalır)."""
+    def wrap(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        finally:
+            refresh_self_due()
+    wrap.__name__, wrap.__doc__, wrap.__wrapped__ = fn.__name__, fn.__doc__, fn
+    return wrap
+
+
+add_asset, update_asset, delete_asset, delete_person, wipe = (
+    _due_after(f) for f in (add_asset, update_asset, delete_asset, delete_person, wipe))
