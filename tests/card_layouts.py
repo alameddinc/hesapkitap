@@ -249,6 +249,66 @@ def albaraka_glued(cut="08/10/2026", due="18/10/2026", prev=1000.00) -> Layout:
     return lay
 
 
+# ---------------------------------------------------------------- Halkbank (Paraf) kart ekstresi benzeri
+# PDF metninde hücre içinde kaydırılmış açıklama: uzun açıklama tarih + tutar satırının ÜSTÜNE ve ALTINA taşar, tarih
+# satırında açıklama kalmaz ("05/10/2026 1,234.50 12.35"). İngiliz sayı biçimi, eğik çizgili tarih, ödeme / iade "+"
+# önekli, ParafPara sütunu. Kart no "5571-23##-" / "####-4410/ AD" iki satıra bölünmüş (ek kart bölümü de). Taksit
+# satırı ilk alışveriş tarihini taşır; "3600.00/9-" üstte, "09.Taksit" altta. "Önceki Dönem Devreden" etiketinin değeri
+# alt satırda; dönem borcu "Hesap Bakiyesi" ("Ekstre Borcu" etiketinin yanındaki değer dönem içi tutar). Aynı adlı
+# bankanın hesap dökümü şablonuyla (kind "account") karışmamalı.
+
+def halkbank(cut="01/11/2026", due="11/11/2026", prev=4200.00, month=10, year=2026, ek=True) -> Layout:
+    mm = f"{month:02d}"
+    ek_card = "5571***8812"
+    # (Row, biçim): wrap = açıklama üst / alt satırda; inline = açıklama tarih satırında
+    main = [(Row(f"03/{mm}/{year}", "OTOMATIK ODEME - TESEKKUR EDERIZ", round(prev - 1200, 2), "odeme"), "wrap"),
+            (Row(f"05/{mm}/{year}", "ORNEK MARKET", 312.40, points=3.12), "inline"),
+            (Row(f"07/{mm}/{year}", "ORNEK MAGAZACILIK ANONIM SIRKETI", 1234.50, points=12.35), "wrap"),
+            (Row(f"09/{mm}/{year}", "ORNEK GIYIM IADE", 120.00, "iade"), "wrap"),
+            (Row(f"14/02/{year}", "ORNEK ELEKTRONIK", 400.00, inst=(9, 9), inst_total=3600.00), "inst"),
+            (Row(f"12/{mm}/{year}", "ORNEK ULASIM HIZMETLERI VE TICARET", 85.75, points=0.86), "wrap"),
+            (Row(f"20/06/{year}", "ORNEK MOBILYA", 150.00, inst=(5, 9), inst_total=1350.00), "inst"),
+            (Row(f"21/{mm}/{year}", "ORNEK KAFE", 64.90, points=0.65), "inline"),
+            (Row(f"25/{mm}/{year}", "ORNEK SAGLIK URUNLERI DAGITIM", 450.00, points=4.50), "wrap")]
+    ek_rows = [(Row(f"18/{mm}/{year}", "ORNEK KITAPCILIK YAYINCILIK", 210.00, card=ek_card, points=2.10), "wrap"),
+               (Row(f"02/09/{year}", "ORNEK SPOR", 300.00, card=ek_card, inst=(2, 3), inst_total=900.00), "inst")] \
+        if ek else []
+    rows = [r for r, _ in main + ek_rows]
+    lay = Layout("Türkiye Halk Bankası", "557123******4410", cut, due, prev, rows, limit=60000.0, available=True)
+    t = lay.total
+    act = round(sum(_sign(r.kind) * r.amount for r in rows if r.kind != "odeme"), 2)
+
+    def block(r: Row, how: str) -> list[str]:
+        v = ("+ " if r.kind in ("odeme", "iade") else "") + us(r.amount)
+        pts = us(r.points or 0)
+        if how == "inline":
+            return [f"{r.date} {r.desc} {v} {pts}"]
+        if how == "inst":
+            return [f"{r.inst_total:.2f}/{r.inst[1]}-", f"{r.date} {r.desc} {v} {pts}", f"{r.inst[0]:02d}.Taksit"]
+        ws = r.desc.split()
+        return [" ".join(ws[:-1]), f"{r.date} {v} {pts}", ws[-1]]
+
+    dd, mo, yy = cut.split("/")
+    lines = ["T. HALKBANKASI A.Ş.", "Paraf Kredi Kartı Hesap Özeti", "Sayın DENEME KİŞİ",
+             "Deneme Mah. Örnek Sok. No:7 Test/Ankara",
+             f"Hesap Kesim Tarihi : {cut}", f"Son Ödeme Tarihi : {due}", f"Hesap Bakiyesi : {us(t)} TL",
+             f"Asgari Ödeme Tutarı : {us(round(t * 0.4, 2))} TL", "Toplam Kredi Limiti : 60,000.00 TL",
+             "Nakit Avans Limiti : 12,000.00 TL", f"Kullanılabilir Limit : {us(60000 - t)} TL",
+             "ParafPara Önceki Dönem Devreden", f": {us(prev)} TL : 0.00",
+             f"Ekstre Borcu Dönem İçi Borç Tutarı : {us(act)} TL Kazanılan ParafPara",
+             "İşlem Tarihi Açıklama Tutar ParafPara", "Kart No :5571-23##-", "####-4410/ DENEME KİŞİ"]
+    for r, how in main:
+        lines += block(r, how)
+    if ek:
+        lines += ["Kart No :5571-23##-", "####-8812/ DENEME EKKART",
+                  f"Toplam Harcama : {us(sum(r.amount for r, _ in ek_rows))}"]
+        for r, how in ek_rows:
+            lines += block(r, how)
+    lines += ["Sonraki Hesap Kesim Tarihi", f"{int(dd):02d}/{int(mo) % 12 + 1:02d}/{yy} -", "Bilgilendirme"]
+    lay.text = "\n".join(lines)
+    return lay
+
+
 def _line(r: Row, credit: str) -> str:
     cols = [r.date, r.desc]
     if r.fx:

@@ -72,6 +72,72 @@ def test_albaraka_like_layout_learns_and_next_month_reads_without_ai(tmpdb, gemi
     assert {x.description: x.txn_type for x in st.transactions}["KAR PAYI"] == "faiz_ucret"  # katılım bankası faizi
 
 
+_HALK_ACCOUNT = {"v": 1, "kind": "account", "bank": "Halkbank", "keywords": ["hesap hareket"],
+                 "date": {"sep": "-", "order": "dmy"}, "amount_idx": 0, "balance_idx": 1}
+
+
+def test_halkbank_like_wrapped_descriptions_learn_card_template_beside_account_template(tmpdb, gemini, pdf):  # noqa: F811
+    """Halkbank kart ekstresi: açıklaması tarih satırının üstüne / altına taşan satırlar okunmuyordu ("lines"). Aynı
+    adlı bankanın hesap dökümü şablonu (topluluktan, kind "account") kart okumasına karışmaz; ayrı kart şablonu öğrenilir."""
+    assert templates.save(_HALK_ACCOUNT, source="community")
+    nxt = L.halkbank(cut="01/12/2026", due="11/12/2026", prev=3100.00, month=11)
+    st = _upload_pair(gemini, pdf, L.halkbank(), nxt)
+    kinds = sorted(t["spec"].get("kind", "account") for t in templates.all_templates() if t["bank"] == "Halkbank")
+    assert kinds == ["account", "card"]
+    spec = _cards()[0]["spec"]
+    assert spec["wrap"] is True and spec["cards"] == "section" and spec["num"] == "us" and spec["credit"] == "plus"
+    assert (st.total_debt, st.previous_balance, st.card_no) == (nxt.total, 3100.00, "5571***4410")
+    assert len(st.transactions) == len(nxt.rows) and st.reconciliation_diff() == 0
+    by = {x.description: x for x in st.transactions}
+    assert "ORNEK MAGAZACILIK ANONIM SIRKETI" in by and by["ORNEK MAGAZACILIK ANONIM SIRKETI"].amount == 1234.50
+    assert by["OTOMATIK ODEME - TESEKKUR EDERIZ"].txn_type == "odeme" and by["ORNEK GIYIM IADE"].txn_type == "iade"
+    assert not any("DENEME" in x.description for x in st.transactions)  # kart no satırı (ad soyad) açıklamaya girmez
+    elek = next(x for x in st.transactions if "ELEKTRONIK" in x.description)
+    assert (elek.amount, elek.installment_no) == (400.00, 9)  # üst / alt parça ("3600.00/9-", "09.Taksit") eklenir
+    assert by["ORNEK KAFE"].installment_no is None  # komşu taksit satırının parçası almaz
+    ek = sorted(x.description for x in st.transactions if x.card == "5571***8812")
+    assert ek == ["900.00/3- ORNEK SPOR 02.Taksit", "ORNEK KITAPCILIK YAYINCILIK"]
+
+
+def test_wrapped_description_is_learned_only_when_needed():
+    lay = L.halkbank()
+    built, why = card_reader.explain_from_ai(lay.text, _ai(lay))
+    assert why == "ok" and built[0]["wrap"] is True and card_reader.is_safe(built[0])
+    no_wrap = {k: v for k, v in built[0].items() if k != "wrap"}
+    res = card_reader.apply(lay.text, no_wrap, "Halkbank")
+    assert len(res[0].transactions) < len(lay.rows)  # eski davranış: açıklamasız tarih satırı atlanır → "lines"
+    # açıklaması tarih satırında olan düzende wrap öğrenilmez; açılsa da sütunlu başlık değer satırı işlem sayılmaz
+    akb = L.akbank(ek=False, future=False)
+    built, why = card_reader.explain_from_ai(akb.text, _ai(akb))
+    assert why == "ok" and "wrap" not in built[0]
+    res = card_reader.apply(akb.text, {**built[0], "wrap": True}, "Akbank")
+    assert res[1] and len(res[0].transactions) == len(akb.rows)
+
+
+def test_ai_date_of_installment_line_differs_from_document():
+    """Yapay zekâ taksit satırına belgedeki ilk alışveriş tarihi yerine kesimden sonraki bir günü yazmış: tutar, kart,
+    satır sayısı birebir; şablon belgeyi okur (ok_fixed). Taksit olmayan satırda tarih farkı yine reddedilir."""
+    lay = L.halkbank()
+    reply = lay.reply()
+    tx = [dict(x) for x in reply["transactions"]]
+    i = next(k for k, x in enumerate(tx) if x["description"] == "ORNEK ELEKTRONIK")
+    tx[i]["date"] = "2026-11-02"
+    built, why = card_reader.explain_from_ai(lay.text, _ai(lay, transactions=tx))
+    assert why == "ok_fixed"
+    assert next(x for x in built[1].transactions if "ELEKTRONIK" in x.description).txn_date.isoformat() == "2026-02-14"
+    tx = [dict(x) for x in reply["transactions"]]
+    j = next(k for k, x in enumerate(tx) if x["description"] == "ORNEK KAFE")
+    tx[j]["date"] = "2026-10-22"
+    assert card_reader.explain_from_ai(lay.text, _ai(lay, transactions=tx))[1] == "amounts"
+
+
+def test_masked_card_number_with_hash_split_over_two_lines():
+    h = card_reader.header("Kart No :5571-23##-\n####-4410/ DENEME KİŞİ", "us")
+    assert h["card_no"] == "5571***4410"
+    assert card_reader._card_at(["Kart No :5571-23##-", "####-8812/ DENEME"], 0).groups() == ("5571", "8812")
+    assert card_reader._card_at(["####-8812/ DENEME"], 0) is None
+
+
 # ---------------------------------------------------------------- her düşme nedeni ayrı ayrı
 
 def test_columnar_header_value_row_is_not_a_transaction():
@@ -204,7 +270,7 @@ def test_bank_name_only_in_logo_or_conflicting():
 
 
 def test_learned_specs_are_safe_and_carry_no_document_values():
-    for lay in (L.akbank(), L.isbank(), L.albaraka()):
+    for lay in (L.akbank(), L.isbank(), L.albaraka(), L.halkbank()):
         built, why = card_reader.explain_from_ai(lay.text, _ai(lay))
         assert why == "ok" and card_reader.is_safe(built[0]) and templates.is_safe(built[0])
         raw = json.dumps(built[0], ensure_ascii=False)
@@ -215,11 +281,12 @@ def test_learned_specs_are_safe_and_carry_no_document_values():
 def test_is_safe_rejects_bad_new_fields():
     ok = {"v": 1, "kind": "card", "bank": "Akbank", "keywords": [], "date": {"sep": ".", "order": "dmy"},
           "num": "tr", "amount_idx": 0, "credit": "trailplus", "inst_at": {"3": 1}, "skip": ["min"], "prev0": True,
-          "cards": "section", "stop": ["gelecek donem taksitleriniz"]}
+          "cards": "section", "stop": ["gelecek donem taksitleriniz"], "wrap": True}
     assert card_reader.is_safe(ok)
     for bad in ({**ok, "stop": ["ayse yilmaz"]}, {**ok, "stop": ["gelecek  donem"]}, {**ok, "stop": "gelecek"},
                 {**ok, "skip": ["total"]}, {**ok, "skip": []}, {**ok, "prev0": 1}, {**ok, "cards": "4410"},
-                {**ok, "inst_at": {"3": 9}}, {**ok, "credit": "trailx"}, {**ok, "amount_idx": True}):
+                {**ok, "inst_at": {"3": 9}}, {**ok, "credit": "trailx"}, {**ok, "amount_idx": True},
+                {**ok, "wrap": 1}, {**ok, "wrap": "evet"}):
         assert not card_reader.is_safe(bad), bad
 
 
