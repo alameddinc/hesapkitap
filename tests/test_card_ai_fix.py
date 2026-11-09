@@ -130,7 +130,8 @@ def test_cid_text_is_reported():
     lay = L.albaraka_glued()
     ai = _ai(lay, **_wrong_sign_reply(lay))
     garbled = "\n".join("".join(f"(cid:{(i * 7 + j) % 200})" for j in range(30)) for i in range(40))
-    assert card_reader.explain_from_ai(garbled, ai) == (None, "text_cid")
+    # sunucuda Tesseract yoksa (CI) text_cid_no_ocr; varsa glif kurtarma denenir, düz çöp metinde yine text_cid
+    assert card_reader.explain_from_ai(garbled, ai) in ((None, "text_cid"), (None, "text_cid_no_ocr"))
 
 
 # ---------------------------------------------------------------- canlı yükleme
