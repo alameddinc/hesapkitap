@@ -10,6 +10,9 @@ import { api, type PlanLineType, type PlanMonth } from "../api";
 import Segmented from "../components/Segmented";
 import { addMonths, cx, dateTR, maskText, monthLabel, PLAN_LABEL, tl, tlCompact } from "../format";
 import { useUI } from "../ui";
+import { DonemSonuDokum } from "../components/Beklenen";
+import { donemSonuPlandan } from "../lib/beklenen";
+import { planOdagi } from "../lib/planOdak";
 
 // Yığılmış gider serileri: doğrulanmış kategorik sıra (komşu çiftler CVD-güvenli)
 const SERIES: { key: PlanLineType; color: string }[] = [
@@ -44,6 +47,10 @@ function MonthCard({ m, open, onToggle }: { m: PlanMonth; open: boolean; onToggl
         </div>
         <ChevronDown size={18} className={cx("text-stone-400 transition-transform", open && "rotate-180")} />
       </button>
+      {open && (() => { const d = donemSonuPlandan(m); return d && (
+        // ayın dökümü: kayıtlı → bekleyenler → yeni harcama yapmazsan → tahmini kart → her zamanki harcamanla
+        <DonemSonuDokum d={d} className="border-t border-stone-100 bg-stone-50 px-3 py-3 sm:px-4 dark:border-stone-800 dark:bg-stone-900/40" />
+      ); })()}
       {open && (
         <ul className="divide-y divide-stone-100 border-t border-stone-100 text-sm dark:divide-stone-800 dark:border-stone-800">
           {m.lines.map((l, i) => (
@@ -79,7 +86,8 @@ export default function Planning() {
   const ui = useUI();
   const [horizon, setHorizon] = useState<"3" | "6" | "12">("6");
   const plan = useQuery({ queryKey: ["plan", horizon], queryFn: () => api.plan(Number(horizon)) });
-  const [open, setOpen] = useState<string | null>(null);
+  // Özet "Dönem sonu"ndan gelince o ay açık
+  const [open, setOpen] = useState<string | null>(planOdagi);
   const [simOpen, setSimOpen] = useState(false);
   const simLock = useLock("alsam_mi"); // Alsam mı? paketinde kapalı: açıklama penceresi
   const p = plan.data;

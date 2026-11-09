@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { taksitBaslik, taksitDurum, taksitGoster, taksitKalan, taksitKalemAlt, taksitSayi, type TaksitKalem, type TaksitOzet } from "./taksit.ts";
+import { taksitBaslik, taksitDurum, taksitGoster, taksitKalan, taksitKalemAlt, taksitKisaAlt, taksitSayi, type TaksitKalem, type TaksitOzet } from "./taksit.ts";
 
 const para = (n: number) => `₺${n}`;
 const oz = (o: Partial<TaksitOzet> = {}): TaksitOzet => ({
@@ -25,6 +25,9 @@ test("başlık, sayı, durum ve kalan borç", () => {
   assert.equal(taksitDurum(oz(), para), "₺3050 harcamana dahil · ₺1200 henüz gidere yazılmadı (ekstre bekleniyor)");
   assert.equal(taksitDurum(oz({ expected: 0, in_spend: 4250 }), para), "Harcamana dahil");
   assert.equal(taksitDurum(oz({ in_spend: 0, expected: 4250 }), para), "Ekstresi gelmedi · harcamana henüz dahil değil");
+  assert.equal(taksitKisaAlt(oz(), para), "₺1200 ekstre bekleniyor");
+  assert.equal(taksitKisaAlt(oz({ in_spend: 0, expected: 4250 }), para), "₺4250 ekstre bekleniyor");
+  assert.equal(taksitKisaAlt(oz({ expected: 0, in_spend: 4250 }), para), "Harcamana dahil");
   assert.equal(taksitKalan(oz(), para), "Kalan taksit borcu ₺18400 · 7\u00a0alışveriş");
   assert.equal(taksitKalan(oz({ current: false }), para), null);
   assert.equal(taksitKalan(oz({ remaining: 0 }), para), null);
