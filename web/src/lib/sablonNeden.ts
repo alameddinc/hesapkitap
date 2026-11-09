@@ -2,6 +2,9 @@
 // app/card_reader_backfill.py). Yönetici panelinde Şablonlar → Kart ekstresi şablonları tablosunda gösterilir.
 export const NEDEN: Record<string, string> = {
   learned: "öğrenildi",
+  ok: "öğrenildi",
+  ok_fixed: "öğrenildi (yapay zekâ okuması metinden düzeltildi)",
+  text_cid: "PDF metni okunamıyor (yazı tipi kodlu)",
   revived: "yeniden açıldı",
   known: "zaten vardı",
   would_learn: "öğrenilecek",
@@ -34,6 +37,6 @@ export const nedenMetni = (kod: string) => NEDEN[kod] ?? kod;
 
 /** Neden kodları sayıya göre azalan: [[kod, sayı], …] — başarılılar (öğrenildi vb.) sona. */
 export function nedenSirasi(reasons: Record<string, number>): [string, number][] {
-  const iyi = new Set(["learned", "revived", "known", "would_learn", "already_local"]);
+  const iyi = new Set(["learned", "ok", "ok_fixed", "revived", "known", "would_learn", "already_local"]);
   return Object.entries(reasons).sort((a, b) => Number(iyi.has(a[0])) - Number(iyi.has(b[0])) || b[1] - a[1] || a[0].localeCompare(b[0]));
 }
