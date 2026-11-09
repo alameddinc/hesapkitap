@@ -980,7 +980,7 @@ def _backfill_statements(c) -> None:
             data = storage.book_get("uploads", name)
             if data is None:
                 continue
-            st = parse_statement(data)
+            st = parse_statement(data, allow_ai=False)  # yalnız tarih alanları: yapay zekâya gitmez (maliyet)
         except Exception:  # noqa: BLE001 - backfill best effort
             continue
         c.execute("UPDATE statements SET next_period_end = ?, next_due_date = ? WHERE id = ?",
