@@ -294,6 +294,8 @@ export interface CardCycle {
 export interface Payable {
   type: "statement" | "bill" | "estimate" | "debt";
   id: number | null;
+  /** sunucu payables_key: kararlı, benzersiz liste anahtarı (eski sunucuda yok → lib/odeme payableKey) */
+  key?: string;
   title: string;
   subtitle: string;
   amount: number;
@@ -410,7 +412,9 @@ export interface Recurring {
 
 export interface Plan {
   months: PlanMonth[];
-  dues: { date: string; account: string; bank: string; amount: number | null; min_payment: number | null; estimated: boolean }[];
+  /** amount: ödenecek (kısmi ödenmiş ekstrede kalan), total_debt / paid_amount bilgi */
+  dues: { date: string; account: string; bank: string; amount: number | null; min_payment: number | null; estimated: boolean;
+    total_debt?: number | null; paid_amount?: number | null }[];
   recurring: Recurring[];
 }
 

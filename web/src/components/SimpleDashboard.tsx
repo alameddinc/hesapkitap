@@ -5,6 +5,7 @@ import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
 import { addMonths, dateTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
+import { payableKey } from "../lib/odeme";
 import { EstimateNote } from "./Estimates";
 import { isViewer, useBook, useUiPrefs } from "./hooks";
 
@@ -53,7 +54,7 @@ export default function SimpleDashboard() {
           <h2 className="mb-2 text-xl font-semibold">Yaklaşan ödemeler</h2>
           <ul className="divide-y divide-stone-100 dark:divide-stone-800">
             {due.map((p) => (
-              <li key={`${p.type}-${p.id ?? p.title}`} className="flex items-center justify-between gap-3 py-3 text-lg">
+              <li key={payableKey(p)} className="flex items-center justify-between gap-3 py-3 text-lg">
                 <span className="min-w-0">
                   <span className="block break-words font-medium">{p.title}</span>
                   <span className={`text-base ${p.status === "gecikti" ? "text-red-600" : "text-stone-500"}`}>

@@ -118,6 +118,7 @@ export default function Planning() {
                   {d.estimated && <span className="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-xs dark:bg-stone-800">tahmini</span>}
                 </span>
                 <span className="shrink-0 text-right whitespace-nowrap tabular-nums">
+                  {d.paid_amount ? <span className="mr-1 text-xs text-amber-700 dark:text-amber-300">kalan</span> : null}
                   {d.amount != null ? tl(d.amount) : "—"}
                   {d.min_payment != null && <span className="block text-xs text-stone-500">asgari {tl(d.min_payment)}</span>}
                 </span>
