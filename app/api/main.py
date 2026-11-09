@@ -2830,13 +2830,36 @@ def payroll_net(gross: float, year: int | None = None, start_month: int = 1):
 
 
 class SalaryChangeIn(BaseModel):
+    """Yeni maaş üç biçimde: gross (brüt) | net (o ayın neti) | pct + basis ("%15 zam", brüte ya da nete göre).
+    Sunucu hepsini brüte çevirip kaydeder (app/salary.py resolve_draft; yetenek salary_raise)."""
     from_month: str = Field(pattern=r"^\d{4}-\d{2}$")
-    gross: Money = Field(gt=0)
+    gross: Money | None = Field(default=None, gt=0)
+    net: Money | None = Field(default=None, gt=0)
+    pct: float | None = Field(default=None, gt=-50, le=300)
+    basis: Literal["brut", "net"] = "brut"
     reason: Literal["zam", "is_degisikligi"] = "zam"
     reset_cum: bool = False
     pay_day: int | None = Field(default=None, ge=1, le=31)
     employer: str | None = None
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _one_amount(self):
+        if self.gross is None and self.net is None and not self.pct:
+            raise ValueError("Yeni brüt, net ya da zam yüzdesi gerekli")
+        return self
+
+
+def _resolve_salary(rid: int, draft: SalaryChangeIn, changes: list[dict] | None = None) -> dict:
+    from app import salary
+
+    r = next((x for x in db.list_recurring() if x["id"] == rid), None)
+    if not r:
+        raise HTTPException(404, "Sabit kalem yok")
+    try:
+        return salary.resolve_draft(r, db.salary_changes(rid) if changes is None else changes, draft.model_dump())
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 class PayrollPlanIn(BaseModel):
@@ -2851,8 +2874,10 @@ def list_salary_changes(rid: int):
 
 @app.post("/api/recurring/{rid}/salary-changes")
 def add_salary_change(rid: int, body: SalaryChangeIn):
+    res = _resolve_salary(rid, body)
+    data = {**body.model_dump(), "gross": res["gross"], "pct_basis": body.basis}
     try:
-        return {"id": db.add_salary_change(rid, body.model_dump())}
+        return {"id": db.add_salary_change(rid, data), "gross": res["gross"]}
     except KeyError as e:
         raise HTTPException(404, "Sabit kalem yok") from e
 
@@ -2872,13 +2897,17 @@ def recurring_payroll(rid: int, body: PayrollPlanIn):
     r = next((x for x in db.list_recurring() if x["id"] == rid), None)
     if not r:
         raise HTTPException(404, "Sabit kalem yok")
-    changes = [c for c in db.salary_changes(rid) if not body.draft or c["from_month"] != body.draft.from_month]
+    saved = db.salary_changes(rid)
+    changes = [c for c in saved if not body.draft or c["from_month"] != body.draft.from_month]
+    resolved = None
     if body.draft:
-        changes = sorted([*changes, {**body.draft.model_dump(), "id": None}], key=lambda c: c["from_month"])
+        resolved = _resolve_salary(rid, body.draft, saved)  # yüzde / net → brüt (+ peşin maaş farkı metni)
+        changes = sorted([*changes, {**body.draft.model_dump(), "gross": resolved["gross"], "id": None}],
+                         key=lambda c: c["from_month"])
     if not (r.get("gross_amount") or changes):
         raise HTTPException(422, "Brüt maaş tanımlı değil")
     grosses, resets = db.gross_schedule(r, body.year, changes)
-    return {**net_schedule(body.year, grosses, resets), "resets": sorted(resets)}
+    return {**net_schedule(body.year, grosses, resets), "resets": sorted(resets), "draft_resolved": resolved}
 
 
 @app.get("/api/recurring")
@@ -5432,8 +5461,38 @@ def delete_amount_change(cid: int):
 
 
 @app.get("/api/recurring/drift")
-def recurring_drift():
-    return finance.recurring_drift()
+def recurring_drift(salary: bool = False):
+    """Tutarı değişen sabit kalemler. salary=1 (yetenek salary_raise): maaş kalemleri yatan maaşa göre ayrı kuralla
+    (app/salary.py; type "maas", title/text sunucudan, Güncelle → .../salary-drift/accept). Parametresiz eski davranış."""
+    return finance.recurring_drift(salary=salary)
+
+
+class SalaryDriftIn(BaseModel):
+    recurring_id: int
+    month: str = Field(pattern=r"^\d{4}-\d{2}$")  # önerinin dayandığı son yatan ay (drift[].month)
+
+
+@app.post("/api/recurring/salary-drift/accept")
+def accept_salary_drift(body: SalaryDriftIn):
+    """"Güncelle": önerideki brüt from_month'tan itibaren maaş değişikliği olur (aynı aya girilen beklenen zamın
+    yerine geçer). Öneri artık yoksa 409."""
+    from app import salary
+
+    try:
+        return {"id": salary.accept(body.recurring_id, body.month)}
+    except KeyError as e:
+        raise HTTPException(409, "Bu öneri artık geçerli değil") from e
+
+
+@app.post("/api/recurring/salary-drift/dismiss")
+def dismiss_salary_drift(body: SalaryDriftIn):
+    """"Bu ay farklıydı": o ay öneriden ve taban hesabından çıkar (ikramiye, eksik gün)."""
+    from app import salary
+
+    if not any(r["id"] == body.recurring_id for r in db.list_recurring()):
+        raise HTTPException(404, "Sabit kalem bulunamadı")
+    salary.dismiss(body.recurring_id, body.month)
+    return {"ok": True}
 
 
 @app.get("/api/year-summary")

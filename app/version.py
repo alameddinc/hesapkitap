@@ -213,6 +213,13 @@ CAPABILITIES = (
     "summary_forecast",       # Özet "Dönem sonu": /api/summary expected'a variable_estimate (= Planlama months[].estimated)
                               # ve forecast_net (= months[].net_with_estimate, "her zamanki harcamanla"); /api/plan
                               # months[].parts (expected.parts ile aynı döküm). Eski alanlar aynen durur
+    "salary_raise",           # maaş zammı yüzdeyle + yatan maaşa göre öneri (app/salary.py): SalaryChangeIn gross |
+                              # net | pct+basis (brut|net) → sunucu brüte çevirir, pct/pct_basis saklanır; POST
+                              # /api/recurring/{id}/payroll draft_resolved {gross, prev_gross, old_net, new_net,
+                              # gross_pct, net_pct, normal_month, text, advance {first, base, diff, days, next},
+                              # advance_text}; GET /api/recurring/drift?salary=1 → maaş kalemleri type "maas" (title,
+                              # text, old, new, pct, expected_pct, actual_pct, advance, month, accept_label,
+                              # dismiss_label); POST /api/recurring/salary-drift/accept|dismiss {recurring_id, month}
 )
 
 

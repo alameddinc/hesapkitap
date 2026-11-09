@@ -540,6 +540,8 @@ MIGRATIONS = [
     ("shopping_list", "receipt_qty", "REAL"),   # fiş satırının miktarı
     ("shopping_list", "store", "TEXT"),         # kişinin bağladığı mağaza ("Bu ürünü Migros'tan alacağım"; app/shopping.py)
     ("shopping_list", "brand", "TEXT"),         # seçilen marka ("Sütaş"); boşsa marka fark etmez
+    ("salary_changes", "pct", "REAL"),          # "%15 zam" diye girildiyse yüzde (gösterim ve beklenen/gelen karşılaştırması)
+    ("salary_changes", "pct_basis", "TEXT"),    # yüzde neye göre: brut | net
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -2433,10 +2435,11 @@ def add_salary_change(recurring_id: int, data: dict) -> int:
         # aynı döneme ikinci değişiklik: öncekinin yerine geçer
         c.execute("DELETE FROM salary_changes WHERE recurring_id = ? AND from_month = ?", (recurring_id, data["from_month"]))
         return c.execute(
-            "INSERT INTO salary_changes (recurring_id, from_month, gross, reason, reset_cum, pay_day, employer, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO salary_changes (recurring_id, from_month, gross, reason, reset_cum, pay_day, employer, note, pct, "
+            "pct_basis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (recurring_id, data["from_month"], data["gross"], data.get("reason") or "zam", int(bool(data.get("reset_cum"))),
-             data.get("pay_day"), (data.get("employer") or "").strip() or None, data.get("note"))).lastrowid
+             data.get("pay_day"), (data.get("employer") or "").strip() or None, data.get("note"),
+             data.get("pct"), data.get("pct_basis") if data.get("pct") is not None else None)).lastrowid
 
 
 def delete_salary_change(change_id: int) -> bool:

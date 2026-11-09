@@ -1229,13 +1229,18 @@ def recurring_suggestions(today: date | None = None) -> list[dict]:
     return sorted(out, key=lambda x: -x["amount"])
 
 
-def recurring_drift(today: date | None = None) -> list[dict]:
-    """Sabit kalemin son iki gerçekleşen ayı aynı yeni tutarla geldiyse (kira artışı): "güncelleyeyim mi?" önerisi."""
+def recurring_drift(today: date | None = None, salary: bool = False) -> list[dict]:
+    """Sabit kalemin son iki gerçekleşen ayı aynı yeni tutarla geldiyse (kira artışı): "güncelleyeyim mi?" önerisi.
+    salary=True: maaş kalemleri app/salary.py kuralıyla (yatan maaş, zam ayı, ikramiye, peşin maaş farkı) eklenir."""
+    from app import salary as sal
+
     today = today or date.today()
     entries = db.list_entries()
     out = []
     for r in db.list_recurring():
         if r.get("gross_amount") or (r["end_month"] and r["end_month"] < ym(today)):
+            continue
+        if salary and sal.is_salary(r):
             continue
         by_month: dict[str, float] = defaultdict(float)
         for e in entries:
@@ -1254,6 +1259,8 @@ def recurring_drift(today: date | None = None) -> list[dict]:
         start = next((m for m in sorted(by_month) if m > (prev[-1] if prev else "")), last2[0])
         out.append({"recurring_id": r["id"], "description": r["description"], "kind": r["kind"], "old": _round(planned),
                     "new": _round(b), "from_month": start})
+    if salary:
+        out += sal.drift(today)
     return out
 
 
@@ -2618,7 +2625,7 @@ def month_digest(month: str, today: date | None = None) -> dict:
     except Exception:  # noqa: BLE001 - fiyat servisine ulaşılamazsa özet yine çıksın
         zk = []
     try:
-        sug = len(recurring_suggestions(today)) + len(recurring_drift(today))
+        sug = len(recurring_suggestions(today)) + len(recurring_drift(today, salary=True))
     except Exception:  # noqa: BLE001
         sug = 0
     y, m = map(int, month.split("-"))
