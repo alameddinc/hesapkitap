@@ -248,7 +248,9 @@ def _tl(x: float) -> str:
     return money.tl(abs(x), trim=True)
 
 
-CARD_POST_DAYS = 5  # harcama ekstreye birkaç gün geç düşebilir: kesimden bu kadar önceki harcama sonraki ekstrede
+# harcama ekstreye birkaç gün geç düşebilir (provizyon): kesimden bu kadar gün önceki harcama sonraki ekstreye devreder;
+# o ekstre de gelip yine bulunamazsa sorulur. Eşleşme penceresiyle aynı (db.POSTING_DAYS)
+CARD_POST_DAYS = db.POSTING_DAYS
 
 
 def _kart_eslesmedi() -> list[dict]:

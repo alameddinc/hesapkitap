@@ -23,7 +23,7 @@ def test_open_cycle_counts_receipts_since_last_cut(client, upload):
 
     _entry(client, "2026-10-20", 600, last4=acc[-4:])
     _entry(client, "2026-10-21", 900, n=3)              # kartı belirtilmemiş, 3 taksit: bu ekstreye 300
-    _entry(client, "2026-10-10", 5000)                  # son kesimden önce: sayılmaz
+    _entry(client, "2026-10-05", 5000)                  # son kesimden 8 gün önce, ekstrede yok: sayılmaz (sorulur)
     _entry(client, "2026-10-22", 400, payment="nakit")  # nakit: sayılmaz
     c = finance.open_cycles(TODAY)[acc]
     assert c["spent"] == 900 and c["unassigned"] == 300 and c["entries"] == 2
