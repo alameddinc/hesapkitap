@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Coins, FlaskConical, LayoutDashboard, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
+import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AiCosts as Costs } from "../api";
 import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
 import AiCosts from "../components/AiCosts";
 import AppUpdate from "../components/AppUpdate";
 import DemoStats from "../components/DemoStats";
+import Olcum from "../components/Olcum";
 import PlanTable from "../components/PlanTable";
 import ReceiptTemplates from "../components/ReceiptTemplates";
 import UpdateNotice from "../components/UpdateNotice";
@@ -17,10 +18,11 @@ import { cx } from "../format";
 // Yönetici paneli (#/yonetici/<alt sayfa>): eskiden Ayarlar'ın altındaki yönetici bölümleri burada, her biri kendi
 // sayfasında. Adres alt sayfayı tutar: yenileyince aynı sayfa açılır. Bölümlerin kendisi (bileşenler) değişmedi.
 
-type Sub = "genel" | "kullanicilar" | "geri-bildirim" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
+type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
 
 const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "genel", label: "Genel", icon: LayoutDashboard, hint: "Özet ve sürüm" },
+  { key: "olcum", label: "Ölçüm", icon: Activity, hint: "Demo → hesap → aktivasyon → tutunma → abonelik" },
   { key: "kullanicilar", label: "Kullanıcılar", icon: UsersIcon, hint: "Hesaplar, davetler, paketler, silinenler" },
   { key: "geri-bildirim", label: "Geri bildirim", icon: MessageSquareWarning, hint: "Sorun bildir mesajları" },
   { key: "yapay-zeka", label: "Yapay zekâ maliyeti", icon: Coins, hint: "Aylık maliyet, kullanıcı başı, sınırla" },
@@ -81,6 +83,7 @@ export default function Admin() {
         <div className="min-w-0 flex-1 space-y-4">
           <h2 className="sr-only">{cur.label}</h2>
           {sub === "genel" && <Overview />}
+          {sub === "olcum" && <Olcum />}
           {sub === "kullanicilar" && <Users />}
           {sub === "geri-bildirim" && <AdminFeedback />}
           {sub === "yapay-zeka" && <AiCosts />}

@@ -1,11 +1,12 @@
 import { Check, Crown, Lock, Minus, Sparkles } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type { PlanInfo, PlanTableRow, ReadKind, ReadStatus, Tier } from "../api";
 import { cx, dateTR } from "../format";
 import type { Route } from "../ui";
 import { inApp } from "./AppServer";
 import { useMeta } from "./hooks";
 import { familyReadsText } from "../lib/saveBook";
+import { olcumGonder } from "../lib/olcum";
 
 export const usePlan = () => useMeta().data?.plan;
 
@@ -98,6 +99,7 @@ export function PlanGate({ feature, title, children, preview, compact }: {
   if (!lock) return <>{children}</>;
   return (
     <div className="space-y-3">
+      <KilitGoruldu key={feature} />
       <LockCard lock={lock} title={title} compact={compact} />
       {preview && (
         <div aria-hidden="true" inert
@@ -107,6 +109,15 @@ export function PlanGate({ feature, title, children, preview, compact }: {
       )}
     </div>
   );
+}
+
+/** Ölçüm: kilitli sayfa/bölüm görüldü (sunucu yalnız günlük toplam tutar; yetenek yoksa gönderilmez). Çağıran
+ *  key={feature} verir: başka kilit ayrı görüntüleme sayılır. */
+function KilitGoruldu() {
+  const caps = useMeta().data?.capabilities;
+  const on = !!caps?.includes("funnel_events");
+  useEffect(() => { if (on) olcumGonder("paywall_view", ["funnel_events"]); }, [on]);
+  return null;
 }
 
 /** Menüden açılan sayfa paketinde kapalıysa: açıklama + bulanık önizleme (sayfa satırları sunucuda açık). Fiyatlar ve

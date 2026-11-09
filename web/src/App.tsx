@@ -7,6 +7,7 @@ import BillForm from "./components/BillForm";
 import PayForm from "./components/PayForm";
 import RecurringMonthForm, { type RecurringMonth } from "./components/RecurringMonthForm";
 import { useMeta } from "./components/hooks";
+import { demoKaydiniGonder } from "./lib/olcum";
 import CardTxnForm from "./components/CardTxnForm";
 import EntryForm from "./components/EntryForm";
 import TransferForm, { type DekontResult } from "./components/TransferForm";
@@ -193,6 +194,8 @@ function Shell() {
   const [route, setRoute] = useState<Route>(readRoute);
   const [joinCode, setJoinCode] = useState<string | null>(inviteCode);
   const meta = useMeta();
+  const caps = meta.data?.capabilities;
+  useEffect(() => { demoKaydiniGonder(caps); }, [caps]); // demodan gelip hesap açtıysa bir kez (lib/olcum.ts)
   const book = useBook();
   const { ui: prefs } = useUiPrefs();
   // sade görünüm: her şey orantılı büyür (rem), menüde sadece temel sayfalar

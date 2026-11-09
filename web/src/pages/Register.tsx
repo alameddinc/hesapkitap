@@ -6,6 +6,7 @@ import DataPrivacy from "../components/DataPrivacy";
 import VerifyEmail from "../components/VerifyEmail";
 import InvitePreview from "../components/InvitePreview";
 import { isEmail, loginKind } from "../components/hooks";
+import { demoKaydiniIsaretle } from "../lib/olcum";
 
 const codeFromHash = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("kod") ?? "";
 
@@ -46,6 +47,7 @@ export default function Register() {
       const r = await send<{ ok: boolean; verify_required?: boolean; email?: string }>("/api/auth/register",
         { method: "POST", json: { code: askCode ? code.trim() : null, username: user.trim(), password: pw, ...(needAgree ? { consent } : {}) } });
       try { localStorage.setItem("hk-username", user.trim()); } catch { /* özel mod */ }
+      demoKaydiniIsaretle(); // demodan gelen bağlantı (?k=demo): oturum açılınca bir kez toplam sayaca
       // hazır sürüm: e-posta doğrulanana kadar oturum açılmaz → kod adımı
       if (r?.verify_required) { setVerify(r.email || user.trim()); return; }
       // yanıt nötr (e-posta kayıtlıysa oturum açılmaz, adrese bilgi gider): oturum açıldı mı bak
