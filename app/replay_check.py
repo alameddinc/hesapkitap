@@ -33,13 +33,15 @@ def _isolated(no_ai: bool):
     """Yan etkisiz okuma: topluluk şablonu kaydı/paylaşımı/sayacı yok, yapay zekâ isteğe bağlı kapalı."""
     from app import receipt, templates
 
-    saved = {k: getattr(templates, k) for k in ("save", "_used", "_failed", "_revive", "share_async", "sync_community")}
+    saved = {k: getattr(templates, k) for k in ("save", "_used", "_failed", "_revive", "share_async", "sync_community",
+                                                "record_attempt")}
     templates.save = lambda spec, source="learned": False
     templates._used = lambda tid: None
     templates._failed = lambda tids: None
     templates._revive = lambda spec: False
     templates.share_async = lambda spec: None
     templates.sync_community = lambda force=False: 0
+    templates.record_attempt = lambda bank, ok, reason: None  # öğrenme gözlemi canlı yüklemeleri sayar
     enabled = receipt.enabled
     if no_ai:
         receipt.enabled = lambda: False

@@ -1,0 +1,351 @@
+"""Yapay zekâ okumasından kart şablonu öğrenmenin sessizce düştüğü durumlar (app/card_reader.py explain_from_ai) ve
+gözlem (template_learn_attempts, /api/admin/card-templates), statements.source, saklı ekstrelerden geriye dönük öğrenme
+(app/card_reader_backfill.py). Düzenler tests/card_layouts.py: banka adları gerçek, düzen taklit, değerler uydurma."""
+import json
+
+import pytest
+
+from app import card_reader, parsers, templates
+from tests import card_layouts as L
+from tests.test_card_templates import _cards, gemini, pdf  # noqa: F401 - fixture
+from tests.test_plans import _user, hosted  # noqa: F401 - fixture
+
+
+def _ai(lay: L.Layout, **kw):
+    """Yanıtı parse_pdf_with_ai'den geçir (maskeleme, işaretler canlıdaki gibi)."""
+    from app import receipt
+    from app.parsers import ai
+
+    reply = lay.reply(**kw)
+    orig = receipt._gemini_json
+    receipt._gemini_json = lambda *a, **k: (reply, {})
+    try:
+        return ai.parse_pdf_with_ai(b"x")
+    finally:
+        receipt._gemini_json = orig
+
+
+def _why(lay: L.Layout, **kw) -> str:
+    return card_reader.explain_from_ai(lay.text, _ai(lay, **kw))[1]
+
+
+def _upload_pair(gemini, pdf, first: L.Layout, second: L.Layout):  # noqa: F811
+    """İlki yapay zekâyla okunur ve şablon öğretir; ikincisi yapay zekâsız okunmalı."""
+    pdf["a"], pdf["b"] = first.text, second.text
+    gemini["replies"].append(first.reply())
+    st = parsers.parse_statement(b"STMT:a")
+    assert st.source == "yapay_zeka" and gemini["calls"] == 1
+    st2 = parsers.parse_statement(b"STMT:b")
+    assert st2.source == "sablon" and gemini["calls"] == 1, "ikinci ekstre şablonla okunmalıydı"
+    return st2
+
+
+# ---------------------------------------------------------------- bankaya özgü düzenler: öğren, sonraki ay yapay zekâsız
+
+def test_akbank_like_layout_learns_and_next_month_reads_without_ai(tmpdb, gemini, pdf):  # noqa: F811
+    nxt = L.akbank(cut="12.11.2026", due="22.11.2026", prev=3100.00, month=10)
+    st = _upload_pair(gemini, pdf, L.akbank(), nxt)
+    [t] = _cards()
+    spec = t["spec"]
+    assert spec["bank"] == "Akbank" and spec["cards"] == "section" and spec["stop"] == ["gelecek donem taksitleriniz"]
+    assert (st.total_debt, st.period_end.isoformat(), st.due_date.isoformat()) == (nxt.total, "2026-11-12", "2026-11-22")
+    assert st.min_payment == round(nxt.total * 0.4, 2) and st.credit_limit == 30000.0
+    assert len(st.transactions) == len(nxt.rows) and st.reconciliation_diff() == 0
+    ek = [x for x in st.transactions if x.card == "5571***8812"]
+    assert sorted(x.description for x in ek) == ["ORNEK KAFE", "ORNEK KITAPCI"]  # ek kart bölümü kendi kartında
+    inst = next(x for x in st.transactions if "ELEKTRONIK" in x.description)
+    assert (inst.amount, inst.installment_no, inst.installments_left) == (1000.0, 2, 4)  # taksit, işlem toplamı değil
+    fx = next(x for x in st.transactions if "DIJITAL" in x.description)
+    assert (fx.amount, fx.orig_amount, fx.orig_currency) == (857.50, 25.00, "USD")
+
+
+def test_isbank_like_layout_learns_and_next_month_reads_without_ai(tmpdb, gemini, pdf):  # noqa: F811
+    st = _upload_pair(gemini, pdf, L.isbank(), L.isbank(cut="05.11.2026", due="15.11.2026", prev=1420.90))
+    assert _cards()[0]["spec"]["credit"] == "trailplus"
+    assert st.previous_balance == 1420.90 and st.payments == 1420.90 and st.total_debt == L.isbank(prev=1420.90).total
+    assert {x.description: x.txn_type for x in st.transactions}["ORNEK SINEMA IADE"] == "iade"
+
+
+def test_albaraka_like_layout_learns_and_next_month_reads_without_ai(tmpdb, gemini, pdf):  # noqa: F811
+    st = _upload_pair(gemini, pdf, L.albaraka(), L.albaraka(cut="08/11/2026", due="18/11/2026"))
+    assert _cards()[0]["spec"]["prev0"] is True and st.previous_balance == 0
+    assert {x.description: x.txn_type for x in st.transactions}["KAR PAYI"] == "faiz_ucret"  # katılım bankası faizi
+
+
+# ---------------------------------------------------------------- her düşme nedeni ayrı ayrı
+
+def test_columnar_header_value_row_is_not_a_transaction():
+    """Sütunlu başlığın değer satırı tarihle başlıyor ("12.10.2026 22.10.2026 7.512,35 TL …"): işlem sayılırdı."""
+    lay = L.akbank(ek=False, future=False)
+    assert lay.text.splitlines()[6].startswith("12.10.2026 22.10.2026")
+    assert _why(lay) == "ok"
+
+
+def test_supplementary_card_sections_are_learned_not_refused():
+    """Ek kartlı ekstre eskiden hiç öğrenilmiyordu; bölüm başlığındaki kart no ile ayrılır."""
+    assert _why(L.akbank(future=False)) == "ok"
+
+
+def test_wrong_supplementary_card_assignment_is_refused():
+    lay = L.akbank(future=False)
+    for r in lay.rows:
+        if r.card:
+            r.card = None  # yapay zekâ ek kart işlemlerini ana karta yazdı: metindeki bölümle çelişir
+    lay.rows[0].card = "5571***9999"
+    assert _why(lay) == "card"
+
+
+def test_future_installment_table_is_cut_by_learned_section_heading():
+    lay = L.akbank(ek=False)
+    assert "Gelecek Dönem Taksitleriniz" in lay.text
+    built, why = card_reader.explain_from_ai(lay.text, _ai(lay))
+    assert why == "ok" and built[0]["stop"] == ["gelecek donem taksitleriniz"]
+
+
+def test_installment_line_with_same_value_count_uses_its_own_column():
+    """Taksit satırı (toplam, taksit, puan) ile dövizsiz puanlı satır (tutar, puan) — değer sayısı çakışırsa ayrı kural."""
+    lay = L.akbank(ek=False, future=False)
+    lay.rows.append(L.Row("29.09.2026", "ORNEK SPOR", 300.00, points=3.00))
+    lay.text = lay.text.replace("Ana Kart Toplamı", "29.09.2026 ORNEK SPOR 300,00 3,00 0,00\nAna Kart Toplamı")
+    lay.text = lay.text.replace(L.m(lay.total - 300), L.m(lay.total)).replace(
+        L.m(round((lay.total - 300) * 0.4, 2)), L.m(round(lay.total * 0.4, 2)))
+    lay.available = False
+    built, why = card_reader.explain_from_ai(lay.text, _ai(lay, available_limit=None))
+    assert why == "ok" and built[0]["inst_at"] == {"3": 1}  # taksit satırında 2. değer; taksitsiz 3 değerlide 1.
+
+
+def test_previous_label_before_total_does_not_shadow_it():
+    """"Önceki Hesap Özeti Borcu" dönem borcundan önce: ortak etiket ve öğrenilen çapa önceki borcu okuyordu."""
+    lay = L.isbank()
+    h = card_reader.header(lay.text, "tr")
+    assert (h["total"], h["prev"]) == (lay.total, 2150.00)
+    assert _why(lay) == "ok"
+
+
+def test_learned_anchor_is_not_part_of_a_longer_label():
+    lines = ["Sonraki Son Ödeme Tarihi 15.11.2026", "Son Ödeme Tarihi 15.10.2026",
+             "Önceki Dönem Borcu 1.000,00", "Dönem Borcu 2.000,00"]
+    assert card_reader._anchor_value(lines, {"label": "son odeme tarihi", "off": 0, "nth": 0}, "date", "tr").month == 10
+    assert card_reader._anchor_value(lines, {"label": "donem borcu", "off": 0, "nth": 0}, "money", "tr") == 2000.00
+
+
+def test_trailing_plus_credit_sign():
+    assert _why(L.isbank()) == "ok"
+    lay = L.isbank()
+    lay.text = lay.text.replace(" +", "")  # işaret yoksa ödeme yine "ödeme" kelimesinden (words) — iade de kelimeden
+    assert _why(lay) == "ok"
+
+
+def test_missing_previous_balance_line_with_zero_previous():
+    lay = L.albaraka()
+    assert card_reader.header(lay.text, "tr")["prev"] is None
+    built, why = card_reader.explain_from_ai(lay.text, _ai(lay))
+    assert why == "ok" and built[0]["prev0"] is True
+    # önceki borç sıfır değilse ama metinde yoksa şablon tutturamaz: öğrenilmez (yanlış şablon yok)
+    lay.text = lay.text.replace(f"Ekstre Borcu {L.m(lay.total)}", f"Ekstre Borcu {L.m(lay.total + 100)}")
+    assert card_reader.explain_from_ai(lay.text, _ai(lay, previous_balance=100.0, total_debt=lay.total + 100))[1] \
+        == "equation"
+
+
+def test_ai_summary_fields_wrong_but_transactions_consistent_still_learns():
+    """Model özet alanlarını (dönem içi, ödemeler) faiz hariç / boş yazabiliyor; işlemler denklemi tutuyorsa öğrenilir."""
+    lay = L.isbank()
+    assert _why(lay, period_activity=0.0, payments=0.0) == "ok"
+
+
+def test_old_installment_line_without_ai_installment_number_is_plausible():
+    """Yapay zekâ "3/6" taksit satırına taksit numarası yazmadı: 62 günden eski satır "dönem dışı" sayılıyordu."""
+    lay = L.isbank()
+    lay.text = lay.text.replace("ORNEK MOBILYA 3. TAKSIT", "ORNEK MOBILYA 3/6")
+    lay.rows[2].desc, lay.rows[2].inst = "ORNEK MOBILYA 3/6", None
+    assert _why(lay) == "ok"
+
+
+def test_ai_null_optional_field_is_skipped_not_fatal():
+    lay = L.akbank(ek=False, future=False)
+    built, why = card_reader.explain_from_ai(lay.text, _ai(lay, credit_limit=None, available_limit=None))
+    assert why == "ok" and set(built[0]["skip"]) == {"limit", "available"}
+    st, ok = card_reader.apply(lay.text, built[0], "Akbank")
+    assert ok and st.credit_limit is None and st.available_limit is None  # doğrulanamayan alan boş kalır
+
+
+def test_untrustworthy_ai_reasons():
+    lay = L.isbank()
+    reply = lay.reply()
+    reply["transactions"].pop()
+    from app import receipt
+    from app.parsers import ai
+
+    orig = receipt._gemini_json
+    receipt._gemini_json = lambda *a, **k: (reply, {})
+    try:
+        st = ai.parse_pdf_with_ai(b"x")
+    finally:
+        receipt._gemini_json = orig
+    assert card_reader.explain_from_ai(lay.text, st)[1] == "ai_equation"
+    assert _why(lay, due_date="2026-10-01") == "ai_dates"
+    assert card_reader.explain_from_ai("", _ai(lay))[1] == "no_text"
+
+
+def test_amount_the_text_does_not_contain_is_refused():
+    """Yapay zekâ iki tutarı yanlış okudu ama toplam aynı kaldı: denklem tutar, şablon metinden farklı okur → öğrenilmez."""
+    lay = L.isbank()
+    lay.rows[1].amount += 10  # ORNEK MARKET
+    lay.rows[4].amount -= 10  # ORNEK RESTORAN
+    assert _why(lay) == "amounts"
+
+
+def test_bank_name_only_in_logo_or_conflicting():
+    lay = L.isbank()
+    lay.text = lay.text.replace("TÜRKİYE İŞ BANKASI A.Ş.", "").replace("Maximum Kart", "Kart")
+    assert _why(lay) == "bank_not_in_text"  # sonraki ekstre bankayla eşleşemezdi: kaydetmek boşuna
+    assert _why(L.isbank(), bank="Akbank") == "bank_mismatch"
+
+
+def test_learned_specs_are_safe_and_carry_no_document_values():
+    for lay in (L.akbank(), L.isbank(), L.albaraka()):
+        built, why = card_reader.explain_from_ai(lay.text, _ai(lay))
+        assert why == "ok" and card_reader.is_safe(built[0]) and templates.is_safe(built[0])
+        raw = json.dumps(built[0], ensure_ascii=False)
+        for personal in ("DENEME", "5571", "4410", "8812", "4506", "2290", "6631", "ORNEK", "2026", "30.000", "Chip"):
+            assert personal not in raw
+
+
+def test_is_safe_rejects_bad_new_fields():
+    ok = {"v": 1, "kind": "card", "bank": "Akbank", "keywords": [], "date": {"sep": ".", "order": "dmy"},
+          "num": "tr", "amount_idx": 0, "credit": "trailplus", "inst_at": {"3": 1}, "skip": ["min"], "prev0": True,
+          "cards": "section", "stop": ["gelecek donem taksitleriniz"]}
+    assert card_reader.is_safe(ok)
+    for bad in ({**ok, "stop": ["ayse yilmaz"]}, {**ok, "stop": ["gelecek  donem"]}, {**ok, "stop": "gelecek"},
+                {**ok, "skip": ["total"]}, {**ok, "skip": []}, {**ok, "prev0": 1}, {**ok, "cards": "4410"},
+                {**ok, "inst_at": {"3": 9}}, {**ok, "credit": "trailx"}, {**ok, "amount_idx": True}):
+        assert not card_reader.is_safe(bad), bad
+
+
+# ---------------------------------------------------------------- gözlem, kaynak, önbellek
+
+def _attempts() -> dict:
+    return {a["bank"]: a for a in templates.card_overview()["attempts"]}
+
+
+def test_attempts_are_recorded_per_bank_with_reason(tmpdb, gemini, pdf):  # noqa: F811
+    lay = L.isbank()
+    pdf["ok"], pdf["bad"] = lay.text, lay.text.replace("TÜRKİYE İŞ BANKASI A.Ş.", "").replace("Maximum Kart", "Kart")
+    gemini["replies"] += [lay.reply(), L.isbank().reply(bank="Akbank T.A.Ş.")]
+    parsers.parse_statement(b"STMT:ok")
+    parsers.parse_statement(b"STMT:bad")
+    a = _attempts()
+    assert a["İş Bankası"]["ok"] == 1 and a["İş Bankası"]["reasons"] == {"learned": 1}
+    assert a["Akbank"]["failed"] == 1 and a["Akbank"]["reasons"] == {"bank_not_in_text": 1}
+    with __import__("app.system", fromlist=["x"]).connect() as c:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(template_learn_attempts)")]
+    assert cols == ["day", "bank", "ok", "reason", "n"]  # içerik yok: yalnız gün, banka, sonuç, kod, sayı
+
+
+def test_admin_endpoint_shows_attempts_and_card_templates(client, gemini, pdf):  # noqa: F811
+    pdf["a"] = L.albaraka().text
+    gemini["replies"].append(L.albaraka().reply())
+    parsers.parse_statement(b"STMT:a")
+    r = client.get("/api/admin/card-templates").json()
+    assert r["attempts"][0]["bank"] == "Albaraka" and r["attempts"][0]["reasons"] == {"learned": 1}
+    assert [t["bank"] for t in r["templates"]] == ["Albaraka"] and r["templates"][0]["disabled"] is False
+    assert "DENEME" not in json.dumps(r, ensure_ascii=False)
+
+
+def test_admin_endpoint_requires_admin(hosted):  # noqa: F811
+    c, _ = _user(hosted)
+    assert c.get("/api/admin/card-templates").status_code == 403
+    assert hosted.get("/api/admin/card-templates").status_code == 200
+
+
+def test_statement_source_is_stored(client, gemini, pdf):  # noqa: F811
+    from app import db
+
+    pdf["a"], pdf["b"] = L.isbank().text, L.isbank(cut="05.11.2026", due="15.11.2026", prev=1420.90).text
+    gemini["replies"].append(L.isbank().reply())
+    for name in ("a", "b"):
+        r = client.post("/api/statements/upload", files=[("files", (f"{name}.pdf", f"STMT:{name}".encode(),
+                                                                    "application/pdf"))]).json()[0]
+        assert r["status"] == "saved", r
+    with db.connect() as c:
+        assert [x[0] for x in c.execute("SELECT source FROM statements ORDER BY period_end")] == ["yapay_zeka", "sablon"]
+
+
+def test_cached_ai_result_still_teaches(tmpdb, gemini, pdf, monkeypatch):  # noqa: F811
+    """Önbellekten dönen yapay zekâ okuması (aynı PDF yeniden) da öğretir: eski sürümde öğrenilemeyen ekstre için."""
+    from app import doc_cache
+
+    monkeypatch.setattr(doc_cache, "_where", lambda: 1)  # hazır sürümde kullanıcının defteri (önbellek defter başına)
+    pdf["a"] = L.isbank().text
+    gemini["replies"].append(L.isbank().reply())
+    with monkeypatch.context() as m:
+        m.setattr(card_reader, "learn_from_ai", lambda text, st, record=True: None)  # eski sürüm: öğrenmedi
+        with doc_cache.reading(b"STMT:a", doc_cache.EKSTRE):
+            parsers.parse_statement(b"STMT:a")
+    assert _cards() == []
+    with doc_cache.reading(b"STMT:a", doc_cache.EKSTRE) as slot:
+        st = parsers.parse_statement(b"STMT:a")
+    assert slot.hit and st.ai_parsed and st.source == "yapay_zeka" and gemini["calls"] == 1 and len(_cards()) == 1
+
+
+# ---------------------------------------------------------------- saklı ekstrelerden geriye dönük öğrenme
+
+def _upload(c, name: str):
+    r = c.post("/api/statements/upload", files=[("files", (f"{name}.pdf", f"STMT:{name}".encode(), "application/pdf"))])
+    assert r.json()[0]["status"] == "saved", r.text
+    return r.json()[0]
+
+
+def test_backfill_learns_from_stored_statements_without_ai(hosted, gemini, pdf, monkeypatch, capsys):  # noqa: F811
+    """Düzeltmeden önce yapay zekâyla okunmuş (şablon öğretmemiş) ekstreler: saklı PDF + kayıtlı sonuçtan öğrenilir.
+    Yapay zekâya gidilmez, defter değişmez, çıktıda belge içeriği yok, ikinci çalıştırma bir şey değiştirmez."""
+    import sqlite3
+
+    from app import card_reader_backfill, system
+
+    c, u = _user(hosted)
+    lays = {"ak": L.akbank(), "is": L.isbank(), "al": L.albaraka()}
+    with monkeypatch.context() as m:
+        m.setattr(card_reader, "learn_from_ai", lambda text, st, record=True: None)  # düzeltme öncesi: öğrenmedi
+        for k, lay in lays.items():
+            pdf[k] = lay.text
+            gemini["replies"].append(lay.reply())
+            _upload(c, k)
+    assert _cards() == [] and gemini["calls"] == 3
+    path = system.user_db_path(u)
+    with sqlite3.connect(path) as cx:  # eski kayıt: kaynak yazılmamıştı
+        cx.execute("UPDATE statements SET source = NULL WHERE filename = 'is.pdf'")
+    before = open(path, "rb").read()
+
+    recs = card_reader_backfill.run(dry_run=True)
+    assert sorted((r["bank"], r["reason"]) for r in recs) == [("Akbank", "would_learn"), ("Albaraka", "would_learn"),
+                                                              ("İş Bankası", "would_learn")]
+    assert _cards() == []  # deneme kipi: kayıt yok
+    recs = card_reader_backfill.run()
+    assert sorted(r["reason"] for r in recs) == ["learned"] * 3 and all(r["user"] == u["id"] and r["ok"] for r in recs)
+    assert sorted(t["bank"] for t in _cards()) == ["Akbank", "Albaraka", "İş Bankası"]
+    assert {r["reason"] for r in card_reader_backfill.run()} == {"already_local"}  # tekrar: değişiklik yok
+    assert gemini["calls"] == 3 and open(path, "rb").read() == before  # yapay zekâ yok, defter aynı
+    out = capsys.readouterr().out
+    assert "reason=learned" in out
+    for personal in ("DENEME", "ORNEK", "5571", "4410", "2290", "6631", "4.200", "2.150", "ayse"):
+        assert personal not in out
+    # bir sonraki ay: şablonla, yapay zekâsız (şablonlar sunucu geneli; ücretsiz paketin günlük 3 okuması doldu)
+    pdf["ak2"] = L.akbank(cut="12.11.2026", due="22.11.2026", prev=3100.00, month=10).text
+    assert parsers.parse_statement(b"STMT:ak2").source == "sablon" and gemini["calls"] == 3
+
+
+def test_backfill_reports_reasons_for_unlearnable_and_missing_file(hosted, gemini, pdf, monkeypatch):  # noqa: F811
+    from app import card_reader_backfill, storage
+
+    c, _ = _user(hosted)
+    lay = L.isbank()
+    lay.text = lay.text.replace("TÜRKİYE İŞ BANKASI A.Ş.", "").replace("Maximum Kart", "Kart")  # banka adı logoda
+    pdf["x"] = lay.text
+    gemini["replies"].append(lay.reply())
+    _upload(c, "x")
+    assert [r["reason"] for r in card_reader_backfill.run(dry_run=True)] == ["bank_not_in_text"]
+    monkeypatch.setattr(storage, "book_get", lambda kind, name: None)
+    assert [(r["bank"], r["reason"], r["ok"]) for r in card_reader_backfill.run(dry_run=True)] == \
+        [("İş Bankası", "no_file", False)]
+    assert card_reader_backfill.main(["--dry-run", "--user", "yok@ornek.com"]) == 0

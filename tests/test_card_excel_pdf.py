@@ -43,7 +43,7 @@ def test_excel_then_pdf_counts_once(client, tmpdb):
     assert not tmpdb.statement_exists(b"pdf-june", st)  # Excel ekstresi PDF'in yerini almasına engel değil
     tmpdb.save_statement(b"pdf-june", "haziran.pdf", st)
     sts = tmpdb.list_statements()
-    assert len(sts) == 1 and sts[0]["source"] is None and sts[0]["total_debt"] == 3020.5
+    assert len(sts) == 1 and sts[0]["source"] == "parser" and sts[0]["total_debt"] == 3020.5
     assert _june_spend(tmpdb) == (2, 1020.5)  # önce 4 satır / 2.041
 
 

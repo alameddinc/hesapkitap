@@ -1413,6 +1413,16 @@ def admin_receipt_templates():
     return receipt_templates.overview()
 
 
+@app.get("/api/admin/card-templates")
+def admin_card_templates(days: int = Query(30, ge=1, le=365)):
+    """Kart ekstresi şablonları (banka başına isabet / hata / durum) ve yapay zekâ okumasından öğrenme denemeleri: son
+    `days` günde banka başına başarılı / başarısız ve neden kodları. Kişisel veri yok (app/templates.py card_overview)."""
+    from app import templates
+
+    _require_admin()
+    return templates.card_overview(days)
+
+
 @app.get("/api/admin/ai-costs/users")
 def admin_ai_cost_users(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
     """Kullanıcı başı aylık yapay zekâ maliyeti (en pahalı üstte): çağrı, okuma, tahmini ₺, paket, eşik, kısıtlama."""
