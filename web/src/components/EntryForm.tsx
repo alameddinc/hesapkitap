@@ -13,7 +13,7 @@ import CategoryPicker from "./CategoryPicker";
 import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
 import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import PayrollPreview from "./PayrollPreview";
-import SalaryChanges from "./SalaryChanges";
+import SalaryChanges, { useSalaryChanges } from "./SalaryChanges";
 import AmountChanges from "./AmountChanges";
 import SplitEditor from "./SplitEditor";
 import { TxnSpender } from "./Spender";
@@ -100,6 +100,9 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
   const [isGross, setIsGross] = useState(!!rec?.gross_amount || !!draft?.gross);
   const [gross, setGross] = useState(rec?.gross_amount ? String(rec.gross_amount) : "");
   const [advance, setAdvance] = useState(!!rec?.advance_pay);
+  // değişikliği olan maaşta buradaki brüt yalnız ilk değişiklikten önceki dönemindir (db.gross_at)
+  const salaryChanges = useSalaryChanges(rec && rec.kind === "gelir" && rec.gross_amount ? rec.id : undefined);
+  const hasChanges = (salaryChanges.data?.length ?? 0) > 0;
   const [person, setPerson] = useState(row?.counterparty ?? "");
   const [location, setLocation] = useState(row?.location ?? draft?.location ?? "");
   // fişten geldiyse: kalem kurallarına göre bölme önerisi; kullanıcı burada düzeltir, Kaydet'te onaylanmış olur
@@ -421,6 +424,8 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
               <>
                 <input className="input text-right" inputMode="decimal" placeholder="Aylık brüt (₺)" value={gross}
                   onChange={(e) => setGross(e.target.value)} />
+                {hasChanges && <p className="text-xs text-stone-500">Başlangıç brütü: ilk maaş değişikliğinden önceki dönem. Zam ya da düzeltmeyi aşağıdaki
+                  Maaş değişiklikleri'nden ekle; buradaki brütü değiştirmek sonraki ayları etkilemez.</p>}
                 <label className="flex cursor-pointer items-start gap-2 text-sm">
                   <input type="checkbox" className="mt-1" checked={advance} onChange={(e) => setAdvance(e.target.checked)} />
                   <span>Maaş peşin ödeniyor (memur)

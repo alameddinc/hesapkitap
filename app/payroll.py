@@ -5,7 +5,12 @@ Hesap (her ay):
   Gelir vergisi: yıl içi KÜMÜLATİF matraha artan oranlı tarife (dilim yükseldikçe net düşer)
   Asgari ücret istisnası: asgari ücretin kümülatif matrahına düşen vergi ve damga vergisi kadar indirim
   Damga vergisi: brütün binde 7,59'u
-Kaynaklar (2026): GVK 2026 ücret tarifesi (Resmi Gazete), brüt asgari ücret 33.030 TL, SGK tavanı 297.270 TL.
+Memur: ayrı tarife yok; aynı kümülatif tarife ve Ocak'ta matrah sıfırlanması memur bordrosunda da görülüyor (gerçek
+  bordrolarla geriye dönük karşılaştırmada yıl içi dilim düşüşleri ve Ocak sıçraması bu hesapla ~%1 içinde tuttu).
+  Ancak memurun kesintileri (emekli keseneği/GSS tabanı, vergiden muaf aile yardımı vb.) bu hesaptan farklı: kayıtlı
+  brüt, bordrodaki brüt değil, yatan nete uyan "eşdeğer brüt"tür. Bu yüzden memur zammı/düzeltmesi net (ya da %) ile
+  girilir (salary.resolve_draft netten brütü bulur); bordro brütü yazılırsa net olduğundan yüksek çıkar.
+Kaynaklar (2026):GVK 2026 ücret tarifesi (Resmi Gazete), brüt asgari ücret 33.030 TL, SGK tavanı 297.270 TL.
 """
 
 PARAMS = {

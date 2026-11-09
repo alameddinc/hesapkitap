@@ -39,6 +39,9 @@ interface Draft {
 }
 /** Mobil MaasGecmisi ile aynı: sunucuda ayrı tür yok, "Düzeltme" = reason "zam" + note "Düzeltme" (zam sayılmaz) */
 const DUZELTME = "Düzeltme";
+/** Memur bordrosundaki brüt (aile yardımı, kesenek tabanı…) bu hesabın brütüyle aynı değil: net yazmak daha doğru */
+const MEMUR_BRUT = "Memur bordrosundaki brütü yazarsan net olduğundan yüksek çıkabilir: kesintiler ve vergiden muaf ödemeler bu hesaptan "
+  + "farklı. Eline geçen neti yazarsan uygulama ona uyan brütü kendisi bulur.";
 type Tur = "zam" | "is_degisikligi" | "duzeltme";
 const turOf = (c: Change): Tur => (c.reason === "is_degisikligi" ? "is_degisikligi" : c.note === DUZELTME ? "duzeltme" : "zam");
 const TUR_AD: Record<Tur, string> = { zam: "zam", is_degisikligi: "iş değişikliği", duzeltme: "düzeltme" };
@@ -83,17 +86,22 @@ export function SalaryDriftCard({ d }: { d: SalaryDrift }) {
 }
 
 /** Brüt maaşta zam / iş değişikliği: o dönemden itibaren yeni brüt; geçmiş aylar eski brütle kalır. */
+/** Kalemin maaş değişiklikleri (aynı sorgu anahtarı: form ile liste tek istek paylaşır) */
+export const useSalaryChanges = (rid: number | undefined) =>
+  useQuery({ queryKey: ["salary-changes", rid], queryFn: () => json<Change[]>("GET", `/api/recurring/${rid}/salary-changes`), enabled: rid != null });
+
 export default function SalaryChanges({ rid, advance = false }: { rid: number; advance?: boolean }) {
   const ui = useUI();
   const [thisYear] = useState(() => new Date().getFullYear());
-  const list = useQuery({ queryKey: ["salary-changes", rid], queryFn: () => json<Change[]>("GET", `/api/recurring/${rid}/salary-changes`) });
+  const list = useSalaryChanges(rid);
   const drift = useSalaryDrift();
   const myDrift = (drift.data ?? []).find((d) => d.type === "maas" && d.recurring_id === rid) as SalaryDrift | undefined;
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<Tur>("zam");
   const [from, setFrom] = useState(addMonths(ui.month, 1));
   const [gross, setGross] = useState("");
-  const [basis, setBasis] = useState<Draft["basis"]>("brut");
+  // memurda (peşin maaş) bordro brütü bu hesabın brütü değil: varsayılan net (bkz. app/payroll.py "Memur")
+  const [basis, setBasis] = useState<Draft["basis"]>(advance ? "net" : "brut");
   const [mode, setMode] = useState<"tutar" | "yuzde">("tutar");
   const [cum, setCum] = useState<"devam" | "sifir" | "bilmiyorum">("bilmiyorum");
   const [payDay, setPayDay] = useState("");
@@ -189,7 +197,11 @@ export default function SalaryChanges({ rid, advance = false }: { rid: number; a
           {pct && <p className="text-xs text-stone-600 dark:text-stone-400">
             {resolved?.text ? maskText(resolved.text) : `Zammı ${basis === "brut" ? "brüte" : "nete"} göre yüzde olarak yaz; ${monthLabel(from)} öncesindeki maaşın üstüne eklenir.`}</p>}
           {!pct && basis === "net" && resolved && (
-            <p className="text-xs text-stone-500">≈ {tl0(resolved.gross)} brüt olarak kaydedilir. Net her ay vergi dilimine göre değişir; bordrodaki brütü biliyorsan onu yaz.</p>
+            <p className="text-xs text-stone-500">≈ {tl0(resolved.gross)} brüt olarak kaydedilir. Net her ay vergi dilimine göre değişir;
+              {advance ? " ilk zamlı aydaki farkı değil, sonraki normal ayın netini yaz." : " bordrodaki brütü biliyorsan onu yaz."}</p>
+          )}
+          {!pct && basis === "brut" && advance && (
+            <p className="text-xs text-stone-500">{MEMUR_BRUT}</p>
           )}
           {reason === "zam" && advance && (
             <div className="rounded-lg bg-stone-100 p-2 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
