@@ -309,6 +309,72 @@ def halkbank(cut="01/11/2026", due="11/11/2026", prev=4200.00, month=10, year=20
     return lay
 
 
+# ---------------------------------------------------------------- Garanti BBVA (Bonus) kart ekstresi benzeri
+# Tarih ay adıyla ("2 Ekim 2026"), Türk sayı biçimi; ödeme sondaki "+" ile; harcanan Bonus kendi tarihli satırında
+# sondaki "-" ile ("BONUS KULLANIMI … 50,00 -") ve dönem borcunu DEĞİŞTİRMEZ (Bonus sütunu). Kazanılan Bonus tutardan
+# ÖNCE ("0,07 734,60"), bazı satırlarda tutar TL karşılığıyla iki kez ("450,00 TL 450,00"); taksit satırı
+# "1.000,00x6=6.000,00 3.Taksit 1.000,00"; dövizli satır; ek kart bölümü. Önceki borç etiketi sözlük dışı ("Önceki
+# Dönemden Aktarılan Tutar"); önceki borç yalnız sondaki denklem satırından ("… TL + … TL + 0,00 TL - … TL = … TL").
+# Yapay zekâ (canlıda görüldüğü gibi) ödeme satırını yazmamış (yalnız özette) ve harcanan Bonus satırını iade yazmış.
+
+_AY = {"08": "Ağustos", "09": "Eylül", "10": "Ekim", "11": "Kasım", "12": "Aralık"}
+
+
+def _ay(s: str) -> str:
+    dd, mm, yy = s.split(".")
+    return f"{int(dd)} {_AY[mm]} {yy}"
+
+
+def garanti(cut="27.10.2026", due="06.11.2026", prev=4200.00, month=10, ai_bonus_refund=True) -> Layout:
+    mm, y = f"{month:02d}", 2026
+    ek = "5571***8812"
+    pay = Row(f"02.{mm}.{y}", "ODEMENIZ ICIN TESEKKUR EDERIZ", prev, "odeme")
+    bonus = Row(f"03.{mm}.{y}", "BONUS KULLANIMI ORNEK MARKET", 50.00, "iade")  # yapay zekânın yanlış satırı
+    main = [Row(f"03.{mm}.{y}", "ORNEK MARKET", 312.40),
+            Row(f"05.{mm}.{y}", "ORNEK 12-34-AB ONLINE", 734.60, points=0.07),
+            Row(f"08.{mm}.{y}", "ORNEK KAFE", 64.90)]
+    ek_rows = [Row(f"15.{month - 2:02d}.{y}", "ORNEK ELEKTRONIK", 1000.00, card=ek, inst=(3, 6), inst_total=6000.00),
+               Row(f"10.{mm}.{y}", "ORNEK GIYIM", 450.00, card=ek),
+               Row(f"12.{mm}.{y}", "ORNEK KITAPCI", 180.00, card=ek),
+               Row(f"14.{mm}.{y}", "ORNEK DIJITAL", 857.50, card=ek, fx=("USD", 25.00)),
+               Row(f"20.{mm}.{y}", "ORNEK AKARYAKIT", 1500.00, card=ek)]
+    lay = Layout("Garanti BBVA", "557123******4410", cut, due, prev, [pay, *main, *ek_rows], limit=40000.0)
+    t = lay.total
+    act = round(sum(r.amount for r in main + ek_rows), 2)
+    mn = round(t * 0.4, 2)
+    if ai_bonus_refund:
+        rows = [bonus, *main, *ek_rows]
+        lay.extra = {"transactions": Layout("", "", cut, due, prev, rows).reply()["transactions"], "payments": prev,
+                     "period_activity": act}
+
+    def line(r: Row) -> str:
+        if r.inst:
+            return f"{_ay(r.date)} {r.desc} {m(r.amount)}x{r.inst[1]}={m(r.inst_total)} {r.inst[0]}.Taksit {m(r.amount)}"
+        if r.fx:
+            return f"{_ay(r.date)} {r.desc} {m(r.fx[1])} {r.fx[0]} {m(r.amount)}"
+        if r.points:
+            return f"{_ay(r.date)} {r.desc} {m(r.points)} {m(r.amount)} Bonus"
+        if r.desc in ("ORNEK GIYIM", "ORNEK KITAPCI"):
+            return f"{_ay(r.date)} {r.desc} {m(r.amount)} TL {m(r.amount)}"
+        return f"{_ay(r.date)} {r.desc} {m(r.amount)}"
+
+    lines = ["GARANTİ BBVA", "Bonus Kredi Kartı Hesap Özeti", "Sayın DENEME KİŞİ", "Deneme Mah. Örnek Sok. No: 9 Test/Bursa",
+             "Kart Numarası 5571 23** **** 4410", f"Hesap Kesim Tarihi {_ay(cut)}", f"Son Ödeme Tarihi {_ay(due)}",
+             f"Dönem Borcunuz {m(t)} TL", f"Asgari Ödeme Tutarı {m(mn)} TL", "Kart Limiti 40.000,00 TL",
+             "Bu Dönem Harcanan Bonus -50,00 TL", "Bu Dönem Kazanılan Bonus 0,07 TL",
+             "İşlem Tarihi Açıklama Kalan Borç Taksit Bonus Tutar (TL)", f"Önceki Dönemden Aktarılan Tutar {m(prev)}",
+             f"{_ay(pay.date)} ÖDEMENİZ İÇİN TEŞEKKÜR EDERİZ {m(prev)} +",
+             f"{_ay(bonus.date)} {bonus.desc} {m(bonus.amount)} -"]
+    lines += [line(r) for r in main]
+    lines += ["Kart No: Bonus Ek Kart / 5571 23** **** 8812"] + [line(r) for r in ek_rows]
+    lines += [f"Toplam -50,00 {m(t)}",
+              "Önceki Bakiye Dönem Harcamaları Faiz ve Ücretler Ödemeler Dönem Borcunuz Asgari Ödeme Tutarınız",
+              f"{m(prev)} TL + {m(act)} TL + 0,00 TL - {m(prev)} TL = {m(t)} TL {m(mn)} TL",
+              "Akdi faiz oranı aylık %3,50."]
+    lay.text = "\n".join(lines)
+    return lay
+
+
 def _line(r: Row, credit: str) -> str:
     cols = [r.date, r.desc]
     if r.fx:

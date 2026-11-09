@@ -99,6 +99,73 @@ def test_halkbank_like_wrapped_descriptions_learn_card_template_beside_account_t
     assert ek == ["900.00/3- ORNEK SPOR 02.Taksit", "ORNEK KITAPCILIK YAYINCILIK"]
 
 
+def test_garanti_like_bonus_column_learns_and_next_month_reads_without_ai(tmpdb, gemini, pdf):  # noqa: F811
+    """Garanti (Bonus) kart ekstresi: yapay zekâ ödeme satırını yalnız özete yazmış ve harcanan Bonus satırını iade
+    saymış; denklem özet alanlarıyla tesadüfen "tutuyordu", şablon yapay zekâyı aynen veremediği için "lines" kalıyordu.
+    Belgenin kendi denklemini tutan şablon okumasıyla düzeltilip öğrenilir; sonraki ay yapay zekâsız okunur."""
+    nxt = L.garanti(cut="27.11.2026", due="07.12.2026", prev=5481.89, month=11)
+    st = _upload_pair(gemini, pdf, L.garanti(), nxt)
+    spec = _cards()[0]["spec"]
+    assert spec["bank"] == "Garanti" and spec["minus_pts"] is True and spec["credit"] == "trailplus"
+    assert (st.total_debt, st.previous_balance, st.payments) == (nxt.total, 5481.89, 5481.89)
+    assert len(st.transactions) == len(nxt.rows) and st.reconciliation_diff() == 0
+    by = {x.description: x for x in st.transactions}
+    assert not any("BONUS" in d for d in by)  # harcanan Bonus satırı işlem değil
+    assert [x.txn_type for x in st.transactions].count("odeme") == 1 and st.payments == 5481.89
+
+    def one(start):
+        [x] = [x for d, x in by.items() if d.startswith(start)]
+        return x
+    assert one("ORNEK 12-34-AB ONLINE").amount == 734.60  # kazanılan Bonus (önceki sütun) tutar değil
+    assert (one("ORNEK ELEKTRONIK").amount, one("ORNEK ELEKTRONIK").installment_no) == (1000.00, 3)
+    assert (one("ORNEK DIJITAL").orig_amount, one("ORNEK GIYIM").card, one("ORNEK MARKET").card) \
+        == (25.00, "5571***8812", "5571***4410")
+
+
+def test_spent_bonus_line_ai_counted_as_refund_is_fixed_not_copied():
+    lay = L.garanti()
+    ai = _ai(lay)
+    assert card_reader.ai_check(ai) is None and card_reader._summary_only(ai)  # özet "faiz" farkı tesadüf
+    built, why = card_reader.explain_from_ai(lay.text, ai)
+    assert why == "ok_fixed" and card_reader.is_safe(built[0])
+    st = built[1]
+    assert [x.txn_type for x in st.transactions].count("odeme") == 1 and not any(x.amount == -50 for x in st.transactions)
+    # puan sütunu kuralı olmadan harcanan Bonus satırı tutar sayılır: denklem tutmaz
+    plain = {k: v for k, v in built[0].items() if k != "minus_pts"}
+    assert card_reader.apply(lay.text, plain, "Garanti")[1] is False
+    # yapay zekâ doğru okuduysa aynı kural doğrudan öğrenilir
+    ok = L.garanti(ai_bonus_refund=False)
+    built, why = card_reader.explain_from_ai(ok.text, _ai(ok))
+    assert why == "ok" and built[0]["minus_pts"] is True
+    # sonu "-" olmayan düzende kural öğrenilmez
+    assert "minus_pts" not in card_reader.explain_from_ai(L.isbank().text, _ai(L.isbank()))[0][0]
+
+
+def test_ai_skipped_purchase_is_not_fixed_by_summary_coincidence():
+    """Yapay zekâ bir harcamayı atlamış, özet farkı onu "faiz" gibi açıklıyor: şablon fazladan HARCAMA okuyor —
+    düzeltme yalnız özetteki ödeme / faiz kalemleri için; öğrenilmez."""
+    lay = L.garanti(ai_bonus_refund=False)
+    reply = lay.reply()
+    tx = [x for x in reply["transactions"] if x["description"] != "ORNEK KAFE"]
+    ai = _ai(lay, transactions=tx)
+    assert card_reader._summary_only(ai)
+    assert card_reader.explain_from_ai(lay.text, ai)[0] is None
+
+
+def test_equation_line_with_currency_and_fee_term():
+    h = card_reader.header("10,00 TL + 25,50 TL + 1,50 TL - 10,00 TL = 27,00 TL 9,00 TL", "tr")
+    assert h["equation"] == [10.0, 27.0, 10.0, 27.0]  # faiz/ücret dönem içine katılır
+    assert "equation" not in card_reader.header("10,00 TL + 25,50 TL + 1,50 TL - 10,00 TL = 99,00 TL", "tr")
+    assert card_reader.header("1,000.00 + 250.00 - 1,000.00 = 250.00", "us")["equation"] == [1000.0, 250.0, 1000.0, 250.0]
+
+
+def test_amount_repeated_in_two_columns_does_not_decide_the_column():
+    """"450,00 TL 450,00" satırında tutar iki sütunda: oy bölünür, sırayı "0,07 734,60" (Bonus önde) belirler."""
+    lay = L.garanti(ai_bonus_refund=False)
+    idx, at, _ = card_reader._amount_at(lay.text, {"sep": "ay", "order": "dmy"}, "tr", True, _ai(lay))
+    assert idx == -1 and "2" not in at
+
+
 def test_wrapped_description_is_learned_only_when_needed():
     lay = L.halkbank()
     built, why = card_reader.explain_from_ai(lay.text, _ai(lay))
@@ -281,12 +348,12 @@ def test_learned_specs_are_safe_and_carry_no_document_values():
 def test_is_safe_rejects_bad_new_fields():
     ok = {"v": 1, "kind": "card", "bank": "Akbank", "keywords": [], "date": {"sep": ".", "order": "dmy"},
           "num": "tr", "amount_idx": 0, "credit": "trailplus", "inst_at": {"3": 1}, "skip": ["min"], "prev0": True,
-          "cards": "section", "stop": ["gelecek donem taksitleriniz"], "wrap": True}
+          "cards": "section", "stop": ["gelecek donem taksitleriniz"], "wrap": True, "minus_pts": True}
     assert card_reader.is_safe(ok)
     for bad in ({**ok, "stop": ["ayse yilmaz"]}, {**ok, "stop": ["gelecek  donem"]}, {**ok, "stop": "gelecek"},
                 {**ok, "skip": ["total"]}, {**ok, "skip": []}, {**ok, "prev0": 1}, {**ok, "cards": "4410"},
                 {**ok, "inst_at": {"3": 9}}, {**ok, "credit": "trailx"}, {**ok, "amount_idx": True},
-                {**ok, "wrap": 1}, {**ok, "wrap": "evet"}):
+                {**ok, "wrap": 1}, {**ok, "wrap": "evet"}, {**ok, "minus_pts": 1}, {**ok, "minus_pts": "-"}):
         assert not card_reader.is_safe(bad), bad
 
 
