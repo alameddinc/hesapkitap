@@ -251,6 +251,15 @@ def test_api_drift_param_and_capability(client, tmpdb):
     assert "salary_raise" in version.CAPABILITIES
 
 
+def test_correction_type_is_zam_with_note(client):
+    """Web ve mobil "Düzeltme": sunucuda reason zam + note "Düzeltme" (ayrı tür yok)."""
+    rid = _salary(client, gross=100000)
+    client.post(f"/api/recurring/{rid}/salary-changes",
+                json={"from_month": "2026-03", "gross": 95000, "reason": "zam", "note": "Düzeltme"})
+    ch = client.get(f"/api/recurring/{rid}/salary-changes").json()[0]
+    assert ch["reason"] == "zam" and ch["note"] == "Düzeltme" and ch["gross"] == 95000
+
+
 def test_net_defined_salary_raise_title_in_net(client, tmpdb):
     from app.payroll import gross_for_net, net_by_month
 

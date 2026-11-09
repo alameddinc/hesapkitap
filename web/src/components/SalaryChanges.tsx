@@ -20,6 +20,7 @@ interface Change {
   reset_cum: number;
   pay_day: number | null;
   employer: string | null;
+  note?: string | null;
   pct?: number | null;
   pct_basis?: "brut" | "net" | null;
 }
@@ -34,7 +35,13 @@ interface Draft {
   reset_cum: boolean;
   pay_day: number | null;
   employer: string | null;
+  note: string | null;
 }
+/** Mobil MaasGecmisi ile aynı: sunucuda ayrı tür yok, "Düzeltme" = reason "zam" + note "Düzeltme" (zam sayılmaz) */
+const DUZELTME = "Düzeltme";
+type Tur = "zam" | "is_degisikligi" | "duzeltme";
+const turOf = (c: Change): Tur => (c.reason === "is_degisikligi" ? "is_degisikligi" : c.note === DUZELTME ? "duzeltme" : "zam");
+const TUR_AD: Record<Tur, string> = { zam: "zam", is_degisikligi: "iş değişikliği", duzeltme: "düzeltme" };
 interface Schedule {
   params_year: number;
   annual_net: number;
@@ -83,7 +90,7 @@ export default function SalaryChanges({ rid, advance = false }: { rid: number; a
   const drift = useSalaryDrift();
   const myDrift = (drift.data ?? []).find((d) => d.type === "maas" && d.recurring_id === rid) as SalaryDrift | undefined;
   const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState<Draft["reason"]>("zam");
+  const [reason, setReason] = useState<Tur>("zam");
   const [from, setFrom] = useState(addMonths(ui.month, 1));
   const [gross, setGross] = useState("");
   const [basis, setBasis] = useState<Draft["basis"]>("brut");
@@ -97,7 +104,8 @@ export default function SalaryChanges({ rid, advance = false }: { rid: number; a
   const g = parseAmount(gross);
   const ok = pct ? g !== 0 && g > -50 && g <= 300 : g > 0;
   const draft: Draft | null = ok && /^\d{4}-\d{2}$/.test(from) ? {
-    from_month: from, basis, ...(pct ? { pct: g } : basis === "brut" ? { gross: g } : { net: g }), reason,
+    from_month: from, basis, ...(pct ? { pct: g } : basis === "brut" ? { gross: g } : { net: g }),
+    reason: reason === "is_degisikligi" ? "is_degisikligi" : "zam", note: reason === "duzeltme" ? DUZELTME : null,
     reset_cum: reason === "is_degisikligi" && cum === "sifir",
     pay_day: reason === "is_degisikligi" && Number(payDay) >= 1 && Number(payDay) <= 31 ? Number(payDay) : null,
     employer: reason === "is_degisikligi" && employer.trim() ? employer.trim() : null,
@@ -139,7 +147,7 @@ export default function SalaryChanges({ rid, advance = false }: { rid: number; a
             <span className="flex-1">
               <b>{monthLabel(c.from_month)}</b> döneminden itibaren {tl0(c.gross)} brüt
               <span className="text-xs text-stone-500">
-                {" · "}{c.pct != null ? `${pctLabel(c.pct)} ${c.pct_basis === "net" ? "net " : ""}` : ""}{c.reason === "zam" ? "zam" : "iş değişikliği"}
+                {" · "}{c.pct != null ? `${pctLabel(c.pct)} ${c.pct_basis === "net" ? "net " : ""}` : ""}{TUR_AD[turOf(c)]}
                 {c.pay_day ? ` · maaş günü ${c.pay_day}` : ""}
                 {c.reset_cum ? " · matrah sıfırdan" : ""}
                 {c.employer ? ` · ${c.employer}` : ""}
@@ -154,7 +162,8 @@ export default function SalaryChanges({ rid, advance = false }: { rid: number; a
       {open && (
         <div className="space-y-2 border-t border-stone-100 pt-2 dark:border-stone-800">
           <Segmented value={reason} onChange={setReason}
-            options={[{ value: "zam", label: "Zam" }, { value: "is_degisikligi", label: "İş değişikliği" }]} />
+            options={[{ value: "zam", label: "Zam" }, { value: "is_degisikligi", label: "İş değişikliği" }, { value: "duzeltme", label: "Düzeltme" }]} />
+          {reason === "duzeltme" && <p className="text-xs text-stone-500">Brütü yanlış girdiysen o aydan itibaren doğrusunu yaz; zam olarak sayılmaz.</p>}
           <div className="flex flex-wrap gap-2 [&>*]:min-w-[12rem] [&>*]:flex-1">
             <Segmented value={basis} onChange={(b) => { setBasis(b); if (!pct) setGross(""); }} label="Tutar türü"
               options={[{ value: "net", label: "Net yazacağım" }, { value: "brut", label: "Brüt yazacağım" }]} />
