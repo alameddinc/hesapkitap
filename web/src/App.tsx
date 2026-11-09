@@ -49,6 +49,11 @@ import PageBoundary from "./components/PageBoundary";
 import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
 import { send } from "./lib/apiError";
 import { JoinPreviewModal } from "./components/JoinBook";
+import { DURUM, tekrarFor } from "./lib/durum";
+import BekleyenKutusu from "./components/Bekleyen";
+import { CevrimdisiSerit } from "./components/SorguDurumu";
+import { okumaIstegiBirak, type BekleyenOkuma } from "./lib/okumaKutusu";
+import { openBookOf } from "./lib/saveBook";
 
 /** Hesabı açıkken davet bağlantısı (/davet/<kod> → #/kayit?kod=): kayıt yerine katılma önizlemesi (book_join). */
 const inviteCode = (): string | null => {
@@ -110,7 +115,7 @@ const readRoute = (): Route => {
 };
 
 type ModalState =
-  | { type: "add" }
+  | { type: "add"; okuma?: BekleyenOkuma }
   | { type: "entry"; row?: Row; draft?: EntryDraft }
   | { type: "card"; row: Row }
   | { type: "recurring"; id?: number; row?: Row }
@@ -213,7 +218,15 @@ function Shell() {
   const [toast, setToastState] = useState<ToastState | null>(() => { const f = readFlash(); return f ? { msg: f, kind: "ok" } : null; });
   const setToast = useCallback((msg: string, opts?: ToastOptions) =>
     setToastState({ msg, kind: "ok", undo: opts?.undo, action: opts?.action, id: Date.now() }), []);
-  const setError = useCallback((msg: string) => setToastState({ msg, kind: "error", id: Date.now() }), []);
+  const setError = useCallback((msg: string, opts?: Pick<ToastOptions, "action">) => setToastState({ msg, kind: "error", action: opts?.action, id: Date.now() }), []);
+  // bağlantı yokken kaydedilemedi (UX denetimi 09.11): askıda beklemez; "Tekrar dene" aynı kaydı aynı anahtarla yeniden gönderir
+  const fail = useCallback(function hata(e: unknown): void {
+    const tekrar = tekrarFor(e);
+    if (!tekrar) return setError((e as Error)?.message || "Bir şey ters gitti; tekrar dene.");
+    setError(DURUM.kaydedilemedi, { action: { label: DURUM.tekrar, run: () => {
+      void tekrar().then(() => setToast("Kaydedildi"), (e2: unknown) => hata(e2));
+    } } });
+  }, [setError, setToast]);
   useEffect(() => { try { sessionStorage.removeItem("hk-flash"); } catch { /* özel mod */ } }, []); // StrictMode'da başlatıcı iki kez çalışır: silme burada
   const recurring = useQuery({ queryKey: ["recurring"], queryFn: api.recurring, enabled: modal?.type === "recurring" });
 
@@ -261,14 +274,15 @@ function Shell() {
     openTransfer: (dekont) => { if (!viewer) setModal({ type: "transfer", dekont }); },
     toast: setToast,
     error: setError,
-  }), [month, viewer, setToast, setError]);
+    fail,
+  }), [month, viewer, setToast, setError, fail]);
 
   const Page = PAGES[canSee(route) ? route : "ozet"]; // ortak defterde kapalı sayfa: Özet
   const rec = modal?.type === "recurring" ? recurring.data?.find((r) => r.id === modal.id) : undefined;
 
   return (
     <UIContext.Provider value={ui}>
-      <div className="hidden md:block"><DemoBanner /></div>
+      <div className="hidden md:block"><CevrimdisiSerit /><DemoBanner /></div>
       <div className="md:flex">
         {/* Masaüstü yan menü */}
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-stone-200 bg-white p-3 md:flex dark:border-stone-800 dark:bg-stone-900">
@@ -304,8 +318,12 @@ function Shell() {
             {eyeBtn("-mr-2")}
           </div>
           <DemoBanner />
+          <CevrimdisiSerit />
         </div>
         <main className={cx("mx-auto w-full min-w-0 px-4 pt-3 pb-[calc(6.5rem+var(--sab))] md:px-6 md:pt-6 md:pb-10", route === "tablo" ? "max-w-none" : "max-w-5xl")}>
+          {/* bağlantısız kayıtlar ve saklanan belgeler (sahip kararı 09.11) */}
+          <BekleyenKutusu defter={openBookOf(book.data)}
+            onOku={(k) => { if (k.tur === "fis") setModal({ type: "add", okuma: k }); else { okumaIstegiBirak(k); ui.go("ekstreler"); } }} />
           <PageBoundary resetKey={route}><RouteLock route={canSee(route) ? route : "ozet"}><Page /></RouteLock></PageBoundary>
         </main>
       </div>
@@ -334,7 +352,7 @@ function Shell() {
       </nav>
 
       {modal?.type === "add" && (
-        <AddSheet onClose={close} onPick={(draft) => setModal({ type: "entry", draft })}
+        <AddSheet okuma={modal.okuma} onClose={close} onPick={(draft) => setModal({ type: "entry", draft })}
           onBill={(draft) => setModal({ type: "bill", draft })} onTransfer={(dekont) => setModal({ type: "transfer", dekont })} />
       )}
       {modal?.type === "entry" && (

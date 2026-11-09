@@ -1,11 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { send } from "../lib/apiError";
+import { DURUM } from "../lib/durum";
+import { taslakla, taslakSonuc } from "../lib/idem";
+import { useKayitBildir } from "./kayitBildir";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Payment, type Recurring, type Row } from "../api";
 import { cx, dateTR, fold, parseAmount, tl } from "../format";
-import type { EntryDraft } from "../ui";
+import { useUI, type EntryDraft } from "../ui";
 import CategoryPicker from "./CategoryPicker";
 import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
 import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
@@ -16,7 +19,7 @@ import SplitEditor from "./SplitEditor";
 import { TxnSpender } from "./Spender";
 import MarkDonation from "./MarkDonation";
 import AccountSelect, { lastAccount, rememberAccount } from "./AccountSelect";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
 import Segmented from "./Segmented";
 import { MatchPanel } from "./MatchInfo";
 import ReceiptItems, { checkSentence } from "./receipt/ReceiptItems";
@@ -135,15 +138,26 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
     enabled: showLink && !editingEntry?.linked,
   });
 
+  // kaydedilmemiş değişiklik (UX denetimi 09.11, Bulgu 5): açılıştaki hâlden farklıysa kapatırken sorulur; okunan fiş
+  // kaydedilmediyse her zaman (okuma boşa gitmesin)
+  const snap = JSON.stringify([kind, description, amount, date, category, sub, note, day, endMonth, payment, installments, accountId,
+    isGross, gross, advance, person, location, hidden, isRecurring, shares, items, tax]);
+  const [ilk, setIlk] = useState(snap);
+  const dirty = snap !== ilk || fromReceipt;
+  const ui = useUI();
+  const kayitBildir = useKayitBildir();
+  // tek seferlik kayıt: "Kaydedildi · Kasım dönemi" + İşlemler'de gör (sabit kalemde dönem yok)
+  const bildir = (msg: string) => (!isRecurring && !rec ? kayitBildir(msg, date) : onSaved?.(msg));
   const done = (msg: string) => {
-    onSaved?.(msg);
+    bildir(msg);
     onClose();
   };
   // "Kaydet, yenisini ekle" (yalnız yeni tek seferlik kayıt): kaydedip formu boşaltır; tarih, ödeme şekli, hesap/kart ve
   // kategori aynı kalır (art arda gider girerken her seferinde baştan başlanmasın), odak tutara gider
   const canAgain = !editingEntry && !rec && !isRecurring && !fromReceipt;
   const again = (msg: string | null) => {
-    if (msg) onSaved?.(msg);
+    if (msg) bildir(msg);
+    setIlk(""); // yeni boş form: aşağıdaki effect ilk hâli yeniden alır
     setDescription(""); setAmount(""); setNote(""); setPerson(""); setLocation("");
     setParts(null); setWholeCat(null); setShares([]); setItems([]); setErr(null);
     setTimeout(() => document.getElementById("e-amt")?.focus(), 0);
@@ -175,9 +189,11 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
     if (isRecurring)
       return api.createRecurring({ ...common, day_of_month: Number(day), start_month: date.slice(0, 7), end_month: endMonth || null });
     const sc = subs.on ? { subcategory: sub || null } : {}; // eski sunucuya alan gönderilmez
-    if (editingEntry) return api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, ...sc, entry_date: date,
-      ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) });
-    return api.createEntry({ ...common, ...pay, ...who, ...sc, ...(kind === "gider" ? st.extra() : {}), entry_date: date, legal_name: draft?.legal_name ?? null,
+    // bağlantı yokken: istek taslak olur, bağlanınca gönderilir (lib/bekleyen.ts)
+    const ozet = `${kind === "gelir" ? "Gelir" : "Gider"} · ${description.trim()} · ${tl(amt)}`;
+    if (editingEntry) return taslakla(ozet, () => api.patchEntry(editingEntry.id, { ...common, ...pay, ...who, ...sc, entry_date: date,
+      ...(hidden !== !!editingEntry.hidden ? { hidden } : {}) }));
+    return taslakla(ozet, () => api.createEntry({ ...common, ...pay, ...who, ...sc, ...(kind === "gider" ? st.extra() : {}), entry_date: date, legal_name: draft?.legal_name ?? null,
       ...(kind === "gider" && tax ? { vat_total: tax.vat_total ?? null, vat_lines: tax.vat_lines ?? [], tax_no: tax.tax_no ?? null,
         tax_office: tax.tax_office ?? null, legal_name: tax.legal_name ?? null } : {}),
       receipt_file: kind === "gider" ? draft?.receipt_file ?? null : null,
@@ -188,8 +204,9 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
           .map((p) => ({ amount: parseAmount(p.amount), category: p.category, description: p.description || null })),
         ...shares.filter((x) => x.person.trim() && parseAmount(x.amount) > 0)
           .map((x) => ({ amount: parseAmount(x.amount), person: x.person.trim(), category: "" })),
-      ] : null }, book);
+      ] : null }, book));
   }, (r, more) => {
+    if (taslakSonuc(r)) { ui.toast(DURUM.taslakSaklandi); return more ? again(null) : onClose(); }
     const sn = book ? null : shopNote(r); // başka deftere kayıtta sorulmaz (bağlama açık defterde yapılır)
     return (book && st.announce() ? (more ? again(null) : onClose()) : (more ? again : done)(isRecurring || rec ? "Sabit kalem kaydedildi"
     : splitsOf(r).length ? `Kaydedildi · ${splitsOf(r).map((x) => `${x.category} ${tl(x.amount)}`).join(", ")} ayrıldı`
@@ -205,11 +222,14 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
     if (editingEntry) return api.deleteEntry(editingEntry.id);
   }, () => done("Silindi"));
 
+  useEffect(() => { if (ilk === "") setIlk(snap); }, [ilk, snap]);
+  const saveNow = () => { setErr(null); save.mutate(false, { onError: (e) => setErr(e.message) }); };
+
   const cats = kind === "gelir" ? meta.data?.income_categories ?? [] : meta.data?.categories ?? [];
   const title = rec ? "Sabit kalemi düzenle" : editingEntry ? "Kaydı düzenle" : kind === "gelir" ? "Gelir ekle" : "Gider ekle";
 
   return (
-    <Modal title={title} onClose={onClose} footer={
+    <Modal title={title} onClose={onClose} dirty={dirty && !save.isPending && !viewer} onSave={saveNow} footer={
       <>
         {(editingEntry || rec) && !member && (
           <button className="btn-danger" disabled={del.isPending}
@@ -220,7 +240,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
           </button>
         )}
         <div className="flex-1" />
-        <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+        <button className="btn-ghost" onClick={() => void kirliyseSor(dirty && !viewer, onClose, saveNow)}>Vazgeç</button>
         {canAgain && !viewer && (
           <button className="btn-ghost whitespace-nowrap" disabled={save.isPending} aria-label="Kaydet, yenisini ekle"
             onClick={() => { setErr(null); save.mutate(true, { onError: (e) => setErr(e.message) }); }}>

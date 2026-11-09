@@ -33,7 +33,7 @@ export function useSave<A, R>(fn: (a: A) => Promise<R>, onDone?: (r: R, a: A) =>
       qc.invalidateQueries();
       onDone?.(r, a);
     },
-    onError: (e) => { if (!handled.current && !opts?.inline) ui?.error(e.message); },
+    onError: (e) => { if (!handled.current && !opts?.inline) { if (ui) ui.fail(e); } },
   });
   const { mutate: run } = m;
   const mutate = useCallback((...args: Parameters<typeof run>) => { handled.current = !!args[1]?.onError; run(...args); }, [run]) as typeof run;

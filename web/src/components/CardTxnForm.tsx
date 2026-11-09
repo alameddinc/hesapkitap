@@ -8,7 +8,9 @@ import CategoryPicker from "./CategoryPicker";
 import SubcategoryPicker, { useSubcategories } from "./SubcategoryPicker";
 import { isLimited, isViewer, useBook, useHasMembers, useMeta, useSave } from "./hooks";
 import { DowngradeForm } from "../pages/Savings";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
+import { DURUM } from "../lib/durum";
+import { taslakla, taslakSonuc } from "../lib/idem";
 import SplitEditor from "./SplitEditor";
 import { TxnSpender } from "./Spender";
 import MarkDonation from "./MarkDonation";
@@ -19,6 +21,7 @@ import { useUI } from "../ui";
 /** Ekstreden gelen işlemi düzenle: kategori, tip (faiz → harcama gibi), not, gizle/geri al. */
 export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClose: () => void; onSaved?: (m: string) => void }) {
   const meta = useMeta();
+  const ui = useUI();
   const [category, setCategory] = useState(row.category);
   const [sub, setSub] = useState(row.subcategory ?? "");
   const subs = useSubcategories();
@@ -33,12 +36,13 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   const viewer = isViewer(bookInfo); // sadece görür: kaydedemez
   const hasMembers = useHasMembers().data;
 
-  const save = useSave((body: Record<string, unknown>) => api.patchCard(row.id, body), (r) => {
+  // bağlantı yokken: düzenleme taslak olur, bağlanınca gönderilir (lib/bekleyen.ts)
+  const save = useSave((body: Record<string, unknown>) => taslakla(`Kart işlemi · ${row.description}`, () => api.patchCard(row.id, body)), (r) => {
+    if (taslakSonuc(r)) { ui.toast(DURUM.taslakSaklandi); return onClose(); }
     onSaved?.(r.rule ? `Kaydedildi · kural: ${r.rule}` : "Kaydedildi");
     onClose();
   }, { inline: true });
 
-  const ui = useUI();
   const qc = useQueryClient();
   const [adAc, setAdAc] = useState(false);
   const tazeleAd = () => {
@@ -62,6 +66,9 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   });
 
   const categoryChanged = category !== row.category && category !== "";
+  // kaydedilmemiş değişiklik: kapatırken sorulur (UX denetimi 09.11)
+  const dirty = categoryChanged || sub !== (row.subcategory ?? "") || kind !== row.kind || description !== row.description
+    || note !== (userNote(row) ?? "") || hidden !== !!row.hidden;
   const [downgrade, setDowngrade] = useState(false);
   const subSave = useSave((status: string) => fetch("/api/subscriptions", {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merchant: row.merchant, status }),
@@ -79,7 +86,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
   };
 
   return (
-    <Modal title="Kart işlemi" onClose={onClose} footer={
+    <Modal title="Kart işlemi" onClose={onClose} dirty={dirty && !save.isPending && !viewer} onSave={submit} footer={
       <>
         {/* Silmez: işlemi raporlardan çıkarır, aynı düğmeyle geri alınır (is_deleted bayrağı). */}
         {!member && <button className="btn-ghost" disabled={save.isPending} onClick={() => save.mutate({ is_deleted: !row.deleted })}
@@ -87,7 +94,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           {row.deleted ? <><RotateCcw size={16} /> Hesaba kat</> : <><EyeOff size={16} /> Hesaba katma</>}
         </button>}
         <div className="flex-1" />
-        <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+        <button className="btn-ghost" onClick={() => void kirliyseSor(dirty && !viewer, onClose, submit)}>Vazgeç</button>
         <button className="btn-primary" onClick={submit} disabled={save.isPending || viewer} title={viewer ? "Sadece görme yetkin var" : undefined}>Kaydet</button>
       </>
     }>

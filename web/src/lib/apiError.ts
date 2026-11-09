@@ -127,8 +127,10 @@ export async function send<T = unknown>(url: string, init: RequestInit & { json?
   let res: Response;
   try {
     res = await fetch(url, rest);
-  } catch {
-    throw new ApiError(networkText(), 0);
+  } catch (e) {
+    if (e && typeof e === "object" && (e as { taslak?: boolean }).taslak) throw e; // bağlantısız kayıt taslağa alındı (lib/idem.ts)
+    // offline bayrağı: ortak durum bileşeni ve bağlantısız kayıt kutusu bunu tanır (lib/durum.ts cevrimdisiHata)
+    throw new ApiError(networkText(), 0, { network: true, offline: typeof navigator !== "undefined" && navigator.onLine === false });
   }
   return readBody<T>(res);
 }

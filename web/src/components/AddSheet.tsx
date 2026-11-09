@@ -1,7 +1,9 @@
 import { ArrowLeftRight, Camera, FileText, Info, Loader2, Minus, Plus, Repeat } from "lucide-react";
 import { bodyOf, failureText, UNEXPECTED } from "../lib/apiError";
 import type { BillDraft } from "../api";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { DURUM } from "../lib/durum";
+import { okumaSakla, okumaSil, type BekleyenOkuma } from "../lib/okumaKutusu";
 import { useCap, useMeta, useDemo } from "./hooks";
 import { ReportProblem } from "./Feedback";
 import { classifyPdf, parseDekont, type DekontResult } from "./TransferForm";
@@ -104,7 +106,9 @@ function Opt({ icon, title, sub, onClick, disabled }: {
   );
 }
 
-export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
+export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }: {
+  /** bağlantı yokken saklanan fiş/fatura (lib/okumaKutusu): "Şimdi oku" ile açıldı, hemen okunur */
+  okuma?: BekleyenOkuma;
   onClose: () => void;
   onPick: (d: EntryDraft) => void;
   onBill: (d: BillDraft) => void;
@@ -135,16 +139,34 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
 
   // uzun fiş: sırayla çekilen parçalar tek fiş olarak okunur
   const [pages, setPages] = useState<Blob[]>([]);
+  // bağlantısız seçilen belge saklandı: bilgi satırı
+  const [stored, setStored] = useState<string | null>(null);
+  // "Şimdi oku" (tek dokunuş): saklanan belge hemen okunur
+  const okundu = useRef(false);
+  useEffect(() => {
+    if (!okuma || okundu.current) return;
+    okundu.current = true;
+    void parse(okuma.files, okuma.id);
+  }, [okuma]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Fiş mi fatura mı sunucu (Gemini) karar verir; ona göre doğru form açılır. Birden fazla görüntü = aynı fişin parçaları. */
-  async function parse(parts: { blob: Blob; name: string }[]) {
+  async function parse(parts: { blob: Blob; name: string }[], sakli?: string) {
     if (!parts.length) return;
-    setBusy(true);
     setErr(null);
+    setStored(null);
+    // bağlantı yok: okunmaz (okuma hakkı harcanmaz), cihazda saklanır; bağlanınca "Şimdi oku" (components/Bekleyen)
+    if (navigator.onLine === false) {
+      if (!sakli) await okumaSakla("fis", parts.slice(0, 4));
+      setPages([]);
+      setStored(parts.some((p) => p.blob.type === "application/pdf") ? DURUM.okumaBekliyorDosya : DURUM.okumaBekliyor);
+      return;
+    }
+    setBusy(true);
     try {
       const fd = new FormData();
       parts.slice(0, 4).forEach((p) => fd.append("file", p.blob, p.name));
       const res = await fetch("/api/documents/parse", { method: "POST", body: fd });
+      if (sakli) void okumaSil(sakli); // sunucuya ulaştı: saklanan kopya artık gerekmez
       await handle(res, parts[0]?.blob);
     } catch (e) {
       setErrKind("fis");
@@ -317,6 +339,10 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer }: {
         <button className="w-full pt-1 text-center text-xs text-stone-500 underline" onClick={() => onBill({})}>
           Faturayı dosyasız elle gir
         </button>
+        {stored && (
+          <p role="status" data-testid="okuma-saklandi" className="flex gap-2 rounded-lg bg-blue-50 p-2.5 text-sm text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+            <Info size={16} className="mt-0.5 shrink-0" aria-hidden /><span className="min-w-0 flex-1">{stored}</span></p>
+        )}
         {err && (
           <div className="space-y-1 pt-1" role="alert">
             <p className="text-sm text-red-600 dark:text-red-400">{err}</p>

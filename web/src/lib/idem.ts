@@ -39,7 +39,7 @@ const watch401 = (p: string) => (res: Response) => {
 };
 
 /** Yanıt alınamadı: Türkçe metinli hata (status 0). */
-const netError = (cause?: unknown) => Object.assign(new Error(networkText()), { status: 0, cause });
+const netError = (cause?: unknown) => Object.assign(new Error(networkText()), { status: 0, cause, offline: navigator.onLine === false });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let onStuck: (() => void) | null = null;
@@ -53,6 +53,35 @@ function path(input: RequestInfo | URL) {
   const u = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   try { return new URL(u, location.href).pathname; } catch { return u; }
 }
+
+// ---------------------------------------------------------------- bağlantısız kayıt (lib/bekleyen.ts)
+/** withTaslak içinde bağlantı yokken düşen JSON yazma isteği taslak olarak saklanır (components/Bekleyen.tsx kaydeder). */
+export interface YakalananIstek { method: string; url: string; body: string | null; headers: Record<string, string>; ozet: string }
+let taslakOzet: string | null = null;
+let taslakSakla: ((r: YakalananIstek) => void) | null = null;
+export const setTaslakHandler = (fn: ((r: YakalananIstek) => void) | null) => { taslakSakla = fn; };
+
+/** Taslak olarak saklandı (kayıt bağlanınca gönderilecek): formlar bunu başarı gibi karşılar, kapanır. */
+export class TaslakSaklandi extends Error {
+  status = 0; offline = true; taslak = true;
+  constructor() { super("İnternet yok · Bağlanınca kaydedeceğiz"); }
+}
+export const taslakMi = (e: unknown): e is TaslakSaklandi => !!e && typeof e === "object" && (e as { taslak?: boolean }).taslak === true;
+
+/** fn içindeki yazma isteği bağlantı yokken düşerse taslak olur (ozet: kutuda görünen kısa metin). */
+export async function withTaslak<T>(ozet: string, fn: () => Promise<T>): Promise<T> {
+  const prev = taslakOzet;
+  taslakOzet = ozet;
+  try { return await fn(); } finally { taslakOzet = prev; }
+}
+
+/** Taslağa alındı işareti (formun kayıt işlevi bunu döner; onSuccess'te "İnternet yok · Bağlanınca kaydedeceğiz"). */
+export const TASLAK = Object.freeze({ taslak: true as const });
+/** Kayıt işlevinin sonucu taslak mı (tür daraltma). */
+export const taslakSonuc = (r: unknown): r is typeof TASLAK => r === TASLAK;
+/** withTaslak + yakalama: bağlantı yoksa TASLAK döner, başka hata olduğu gibi fırlar. */
+export const taslakla = <T>(ozet: string, fn: () => Promise<T>): Promise<T | typeof TASLAK> =>
+  withTaslak(ozet, fn).catch((e: unknown) => { if (taslakMi(e)) return TASLAK; throw e; });
 
 /** window.fetch'i sarar (main.tsx bir kez çağırır). */
 export function installIdempotency() {
@@ -72,6 +101,12 @@ export function installIdempotency() {
         res = await send();
       } catch (e) {
         // yanıt gelmedi: istek sunucuda işlenmiş olabilir — aynı anahtarla yeniden (sunucu ilk yanıtı döner)
+        if (navigator.onLine === false && taslakOzet && taslakSakla && (init?.body == null || typeof init.body === "string")) {
+          const h: Record<string, string> = {};
+          headers.forEach((v, k) => { h[k] = v; });
+          taslakSakla({ method: method(input, init), url: typeof input === "string" ? input : input.href, body: (init?.body as string | null) ?? null, headers: h, ozet: taslakOzet });
+          throw new TaslakSaklandi();
+        }
         if (navigator.onLine === false || ++net > 2) throw netError(e);
         await sleep(800 * net);
         continue;

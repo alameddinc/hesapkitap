@@ -14,7 +14,10 @@ import { useAccounts } from "./AccountSelect";
 import type { Debt } from "./Debts";
 import { isQuotaFull, QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "./DocQuota";
 import { useCap, useOpenEntry, useSave } from "./hooks";
-import Modal from "./Modal";
+import Modal, { kirliyseSor } from "./Modal";
+import { DURUM } from "../lib/durum";
+import { taslakla, taslakSonuc } from "../lib/idem";
+import { useKayitBildir } from "./kayitBildir";
 import { ReportProblem } from "./Feedback";
 import Segmented from "./Segmented";
 
@@ -117,6 +120,9 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
       && nameKey(d.person) === k && Math.round(d.remaining * 100) > 0 && Math.round(amt * 100) <= Math.round(d.remaining * 100)) ?? null;
   }, [dk, dir, amt, person, tr.data]);
   const ok = person.trim().length > 0 && amt > 0 && !!dir && dup == null;
+  // kaydedilmemiş değişiklik: elle yazılan ya da okunan dekont kaydedilmeden kapanırken sorulur (UX denetimi 09.11)
+  const dirty = !!dk || person.trim() !== "" || amount !== "" || note.trim() !== "";
+  const kayitBildir = useKayitBildir();
 
   function apply(d: DekontResult) {
     setDk(d);
@@ -155,7 +161,8 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
   }
   const pick = () => { if (quota.fullFor("belge")) setFull({ kind: "belge" }); else fileRef.current?.click(); };
 
-  const save = useSave(() => {
+  // bağlantı yokken: kayıt taslak olur, bağlanınca gönderilir (lib/bekleyen.ts)
+  const save = useSave(() => taslakla(`Transfer · ${person.trim()} · ${tl(amt)}`, () => {
     const who = person.trim();
     if (dk) {
       return call<{ id: number; debt_settled: number | null }>("POST", "/api/dekont/save", {
@@ -171,8 +178,9 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
       note: note.trim() || null, category: known?.category ?? null,
       payment: banks.find((a) => a.id === acc)?.kind === "nakit" ? "nakit" : "havale", account_id: acc,
     });
-  }, (r) => {
-    ui.toast(r.debt_settled ? (dk ? "Eklendi · borç/alacak kaydına işlendi" : "Eklendi · açık borç/alacak kapandı") : "Transfer eklendi");
+  }), (r) => {
+    if (taslakSonuc(r)) { ui.toast(DURUM.taslakSaklandi); return onClose(); }
+    kayitBildir(r.debt_settled ? (dk ? "Kaydedildi · borç/alacak kaydına işlendi" : "Kaydedildi · açık borç/alacak kapandı") : "Kaydedildi", date);
     onClose();
   }, { inline: true });
   const saveErr = save.error && dupOf(save.error) == null ? save.error.message : null;
@@ -187,9 +195,9 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
   const sub = dk ? [dk.transfer_type ? dk.transfer_type.toUpperCase().replace("HAVALE", "Havale") : null, dk.bank,
     dk.iban_last4 ? `IBAN …${dk.iban_last4}` : null].filter(Boolean).join(" · ") : "";
   return (
-    <Modal title="Transfer ekle" onClose={onClose} footer={<>
+    <Modal title="Transfer ekle" onClose={onClose} dirty={dirty && !save.isPending} onSave={() => { if (ok) doSave(); }} footer={<>
       <div className="flex-1" />
-      <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
+      <button className="btn-ghost" onClick={() => void kirliyseSor(dirty, onClose, () => { if (ok) doSave(); })}>Vazgeç</button>
       <button className="btn-primary" disabled={!ok || save.isPending || reading} onClick={doSave}>{save.isPending ? "Kaydediliyor…" : "Kaydet"}</button>
     </>}>
       <div className="space-y-3 text-sm">

@@ -56,7 +56,9 @@ export interface UI {
   /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo/action verilirse düğme (en az 8 sn). */
   toast: (msg: string, opts?: ToastOptions) => void;
   /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. */
-  error: (msg: string) => void;
+  error: (msg: string, opts?: Pick<ToastOptions, "action">) => void;
+  /** Hata nesnesinden bildirim: bağlantısız kayıtta "Bağlantı yok, kaydedilemedi" + "Tekrar dene" (lib/durum.ts tekrarFor). */
+  fail: (e: unknown) => void;
 }
 
 export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris" | "faiz";

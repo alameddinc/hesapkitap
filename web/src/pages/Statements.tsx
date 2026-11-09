@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send as apiSend } from "../lib/apiError";
 import { AlertTriangle, CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { DURUM } from "../lib/durum";
+import { okumaIstegiAl, okumaSakla, okumaSil } from "../lib/okumaKutusu";
 import { api, type DocKind, type UploadResult } from "../api";
 import BankImport from "../components/BankImport";
 import RecentImports from "../components/RecentImports";
@@ -14,6 +16,7 @@ import StatementCard from "../components/StatementCard";
 import { QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "../components/DocQuota";
 import { prepare, uploadInBatches } from "../lib/batchUpload";
 import { ReportProblem } from "../components/Feedback";
+import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 export default function Statements() {
   const ui = useUI();
@@ -66,11 +69,27 @@ export default function Statements() {
   const demo = useDemo().data;
   const sample = useSave((key: string) => apiSend<UploadResult[]>(`/api/demo/sample/${key}`, { method: "POST" }), (res) => setResults(res));
 
+  // bağlantı yokken seçilen belge okunmaz (okuma hakkı harcanmaz), cihazda saklanır; bağlanınca "Şimdi oku" (components/Bekleyen)
+  const [stored, setStored] = useState(false);
   const send = (files: FileList | null) => {
     if (quota.full) return setFull({ kind: "belge" });
     const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
-    if (ok.length) void sendFiles(ok);
+    if (!ok.length) return;
+    if (navigator.onLine === false) {
+      void okumaSakla("belge", ok.map((f) => ({ blob: f, name: f.name })));
+      setStored(true);
+      return;
+    }
+    setStored(false);
+    void sendFiles(ok);
   };
+  // "Şimdi oku" ile gelindi: saklanan belge tek dokunuşla okunur
+  useEffect(() => {
+    const k = okumaIstegiAl();
+    if (!k) return;
+    void okumaSil(k.id);
+    void sendFiles(k.files.map((f) => new File([f.blob], f.name, { type: f.blob.type })));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-4">
@@ -106,6 +125,7 @@ export default function Statements() {
             <div className="h-full bg-blue-600 transition-[width]" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
           </div>
         )}
+        {stored && <div role="status" data-testid="okuma-saklandi" className="text-sm text-blue-800 dark:text-blue-300">{DURUM.okumaBekliyorDosya}</div>}
         <div className="text-xs text-stone-500">
           Kredi kartı ekstresi (PDF) ya da vadesiz hesap dökümü (PDF, Excel, CSV) — hangisi olduğunu kendisi anlar ·
           birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri genel okuyucu, olmazsa yapay zekâ ile)
@@ -238,6 +258,7 @@ export default function Statements() {
       <RecentImports />
 
       <ul className="space-y-2">
+        <SorguDurumu q={list} etiket="Ekstreler yükleniyor"><SatirIskelet n={3} /></SorguDurumu>
         {list.data?.map((s) => <StatementCard key={s.id} s={s} />)}
       </ul>
     </div>
