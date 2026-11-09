@@ -12,7 +12,10 @@ Yan etkiler: yalnız sistem veritabanındaki bank_templates (--dry-run'da hiçbi
 
 Çıktı ekstre başına tek satır: kullanıcı id, banka (bilinen banka adı ya da "?"), sonuç ve neden kodu. Belge metni,
 isim, kart numarası ya da tutar yazılmaz. Kodlar: learned / revived / known / would_learn (--dry-run) / already_local
-(yapay zekâsız zaten okunuyor) / no_file / password / unreadable / ve card_reader.explain_from_ai kodları.
+(bankaya özel okuyucu ya da kayıtlı şablon yapay zekâsız zaten okuyor) / no_file / password / unreadable / ve
+card_reader.explain_from_ai kodları. Yapay zekâ okuması denklemi tutmuyor ama aynı belgeden şablon tutuyorsa şablon
+yine öğrenilir (card_reader._text_fix) ve "ai_fix=N" eklenir: kayıtlı okumada N satır eksik / fazla / işareti ters.
+Kayıtlı ekstre değiştirilmez — kullanıcıya düzeltme önerilecek.
 """
 import contextlib
 import os
@@ -79,33 +82,63 @@ def _text(data: bytes, passwords: list[str]) -> tuple[str | None, str | None]:
         return None, "unreadable"
 
 
+@contextlib.contextmanager
+def _no_learn():
+    orig = card_reader.learn
+    card_reader.learn = lambda text, bank: None
+    try:
+        yield
+    finally:
+        card_reader.learn = orig
+
+
 def _locally_readable(text: str) -> bool:
-    """Bankaya özel okuyucu ya da kayıtlı kart şablonu yapay zekâsız okuyor mu (sayaçlara / kayıtlara dokunmadan)."""
+    """Bankaya özel okuyucu ya da KAYITLI kart şablonu yapay zekâsız okuyor mu (sayaçlara / kayıtlara dokunmadan).
+    Kayıtsız deneme (card_reader.learn) sayılmaz: tutan kural burada kaydedilsin (check)."""
     from app import replay_check
     from app.parsers import parse_text
 
-    with replay_check._isolated(no_ai=True):
+    with replay_check._isolated(no_ai=True), _no_learn():
         try:
             return parse_text(text) is not None
         except Exception:  # noqa: BLE001
             return False
 
 
-def check(text: str, st: Statement, dry_run: bool) -> str:
-    """Tek ekstre: neden kodu (şablon kaydı --dry-run değilse)."""
+def _fix_count(ai: Statement, fixed: Statement | None) -> int:
+    """Kayıtlı (yapay zekâ) okumada şablonun düzelttiği satır sayısı: eksik / fazla / işareti ters (yalnız sayı)."""
+    if fixed is None:
+        return 0
+    from collections import Counter
+
+    from app import money
+
+    def keys(s):
+        return Counter((t.txn_date, money.kurus(t.amount)) for t in s.transactions)
+    a, b = keys(ai), keys(fixed)
+    return max(sum((a - b).values()), sum((b - a).values()))
+
+
+def check(text: str, st: Statement, dry_run: bool) -> tuple[str, int]:
+    """Tek ekstre: (neden kodu, kayıtlı okumada şablonun düzelttiği satır sayısı) — şablon kaydı --dry-run değilse.
+    Kayıtlı ekstre DEĞİŞMEZ; düzeltme sayısı yalnız raporlanır (kullanıcıya önerilecek)."""
     from app import templates
 
     if _locally_readable(text):
-        return "already_local"
+        return "already_local", 0
     built, reason = card_reader.explain_from_ai(text, st)
+    if not built and (got := card_reader.learn(text, card_reader.bank_of(text))) and got[0].get("bank") \
+            and card_reader.is_safe(got[0]):
+        built = got  # yapay zekâ okuması öğretmedi ama metin tek başına denklemi tutuyor (canlıda read() de kaydeder)
     if not built:
-        return reason
+        return reason, 0
+    fix = _fix_count(st, card_reader.fixed_read(text, st, built[0]))
     if dry_run:
-        return "would_learn"
+        return "would_learn", fix
     spec = built[0]
     if templates.save(spec):
-        return "learned"
-    return "revived" if templates._revive(spec) else "known"
+        return "learned", fix
+    return ("revived" if templates._revive(spec) else "known"), fix
 
 
 def _bank(st: Statement, text: str | None) -> str:
@@ -139,14 +172,15 @@ def _book(u: dict, live_path: str, dry_run: bool, emit) -> list[dict]:
                 st = statement_of(r, txns[r["id"]])
                 data = storage.book_get("uploads", f"{r['file_hash']}.pdf")
                 text, reason = (None, "no_file") if not data else _text(data, passwords)
+                fix = 0
                 if text is not None:
                     try:
-                        reason = check(text, st, dry_run)
+                        reason, fix = check(text, st, dry_run)
                     except Exception:  # noqa: BLE001 - bir ekstre diğerlerini durdurmasın
                         reason = "error"
                 rec = {"user": u["id"], "bank": _bank(st, text), "ok": reason in ("learned", "revived", "known",
                                                                                     "would_learn", "already_local"),
-                       "reason": reason}
+                       "reason": reason, "fix": fix}
                 out.append(rec)
                 emit(rec)
     finally:
@@ -155,8 +189,8 @@ def _book(u: dict, live_path: str, dry_run: bool, emit) -> list[dict]:
 
 
 def run(dry_run: bool = False, username: str | None = None, emit=None) -> list[dict]:
-    emit = emit or (lambda rec: print(f"user={rec['user']} bank={rec['bank']} ok={int(rec['ok'])} reason={rec['reason']}",
-                                      flush=True))
+    emit = emit or (lambda rec: print(f"user={rec['user']} bank={rec['bank']} ok={int(rec['ok'])} reason={rec['reason']}"
+                                      + (f" ai_fix={rec['fix']}" if rec.get("fix") else ""), flush=True))
     out = []
     for u, path in books(username):
         out += _book(u, path, dry_run, emit)
