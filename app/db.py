@@ -544,6 +544,13 @@ MIGRATIONS = [
     ("shopping_list", "brand_auto", "INTEGER"),  # marka addan mı (1), kişi mi seçti / yok (0), henüz bakılmadı (NULL)
     ("salary_changes", "pct", "REAL"),          # "%15 zam" diye girildiyse yüzde (gösterim ve beklenen/gelen karşılaştırması)
     ("salary_changes", "pct_basis", "TEXT"),    # yüzde neye göre: brut | net
+    # ödeme planı olan borç (app/debt_schedule.py): başka yerde anlaşılmış sabit taksitler; yalnız kayıt
+    ("debts", "plan_installment", "REAL"),      # aylık taksit
+    ("debts", "plan_count", "INTEGER"),         # taksit sayısı
+    ("debts", "plan_start", "TEXT"),            # ilk taksit ayı (YYYY-MM)
+    ("debts", "plan_day", "INTEGER"),           # ayın kaçında (ay kısaysa son günü)
+    ("debts", "creditor_type", "TEXT"),         # vergi_sgk | banka | kisi | diger
+    ("debts", "plan_interest", "TEXT"),         # bilgi: yok | var | bilmiyorum
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -3360,7 +3367,8 @@ def _shift_days(d: str, n: int) -> str:
 
 # ---------------------------------------------------------------- borç / alacak
 
-DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note", "account_id")
+DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note", "account_id",
+               "plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type", "plan_interest")
 
 
 def list_debts(open_only: bool = False) -> list[dict]:
@@ -3368,9 +3376,14 @@ def list_debts(open_only: bool = False) -> list[dict]:
         out = rows(c.execute("SELECT * FROM debts" + (" WHERE settled_at IS NULL" if open_only else "")
                              + " ORDER BY settled_at IS NOT NULL, COALESCE(due_date, debt_date), id"))
     pays = debt_payments() if out else []
+    from app import debt_schedule
+
+    today = date.today()
     for d in out:
         d["remaining"] = 0.0 if d["written_off_at"] else round(d["amount"] - d["paid_amount"], 4)
         d["payments"] = [p for p in pays if p["debt_id"] == d["id"]]
+        # ödeme planı olan borç: sıradaki taksit, bu ay ödenecek (istemci kendisi hesaplamasın)
+        d["schedule"] = debt_schedule.info(d, today) if debt_schedule.is_scheduled(d) else None
     return out
 
 
@@ -3423,6 +3436,16 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
         if d["written_off_at"] or (money.le(left, 0) if try_ else left <= 1e-9):
             raise OverpayError("Bu kayıt kapanmış; yeni ödeme yazılamaz")
         amt = amount if amount is not None else left
+        if amount is None:
+            # ödeme planı olan borçta "tamamı" sıradaki taksittir (geçmişte eksik kalan dahil), bütün borç değil: eski
+            # istemciler de Ödemeler'deki taksit satırında tutarı boş gönderir
+            from app import debt_schedule
+
+            row = {**dict(d), "paid_amount": paid}
+            if debt_schedule.is_scheduled(row):
+                sch = debt_schedule.info(row, date.fromisoformat(on[:10]))
+                if sch["next"]:
+                    amt = min(left, max(sch["next"]["left"], sch["due_now"]))
         if try_:  # altın/döviz borcunda tutar miktardır (gram, adet): yuvarlanmaz
             amt = money.money(amt)
         if (money.gt(amt, left) if try_ else amt > left + 1e-9):

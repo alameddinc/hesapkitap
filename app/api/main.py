@@ -5137,24 +5137,70 @@ def test_item_rule(body: dict):
 
 # ---------------------------------------------------------------- borç / alacak
 
-class DebtIn(BaseModel):
+_YM = r"^\d{4}-(0[1-9]|1[0-2])$"
+
+
+class DebtPlanFields(BaseModel):
+    """Ödeme planı olan borç (yetenek debt_schedule; app/debt_schedule.py): başka yerde anlaşılmış sabit taksitler,
+    yalnız kayıt. plan_installment verilince amount isteğe bağlı (taksit × sayı); sayı yerine plan_end (son taksit ayı)
+    ya da toplam (amount) verilebilir."""
+    plan_installment: float | None = Field(default=None, gt=0, le=100_000_000)
+    plan_count: int | None = Field(default=None, ge=1, le=240)
+    plan_end: str | None = Field(default=None, pattern=_YM)     # son taksit ayı (sayı yerine)
+    plan_start: str | None = Field(default=None, pattern=_YM)   # ilk taksit ayı
+    plan_day: int | None = Field(default=None, ge=1, le=31)
+    creditor_type: Literal["vergi_sgk", "banka", "kisi", "diger"] | None = None
+    plan_interest: Literal["yok", "var", "bilmiyorum"] | None = None
+
+    def _plan(self, amount: float | None) -> float | None:
+        """Planı tamamla ve doğrula; dönen: toplam (amount)."""
+        from app import debt_schedule
+
+        if self.plan_installment is None:
+            return amount
+        self.plan_installment = money.money(self.plan_installment)
+        if not self.plan_start:
+            self.plan_start = date.today().isoformat()[:7]
+        if self.plan_count is None:
+            self.plan_count = debt_schedule.count_from(self.plan_installment, amount, self.plan_end, self.plan_start)
+        if self.plan_count is None:
+            raise ValueError("Taksit sayısını ya da son taksit ayını yaz")
+        total = money.money(amount) if amount is not None else money.money(self.plan_installment * self.plan_count)
+        err = debt_schedule.validate(self.plan_installment, self.plan_count, total)
+        if err:
+            raise ValueError(err)
+        self.plan_day = self.plan_day or 1
+        self.creditor_type = self.creditor_type or "diger"
+        return total
+
+
+class DebtIn(DebtPlanFields):
     person: str = Field(min_length=1)
     direction: Literal["borc", "alacak"]
     asset: str = Field(default="TRY", min_length=1, max_length=40)
-    amount: float = Field(gt=0)
-    debt_date: date
+    amount: float | None = Field(default=None, gt=0)  # ödeme planlı borçta isteğe bağlı (toplam)
+    debt_date: date | None = None  # boş: bugün (ödeme planlı borçta ilk taksit ayı)
     due_date: date | None = None
     note: str | None = None
     account_id: int | None = None  # banka/nakit hesabı
 
     @model_validator(mode="after")
     def _tl(self):
-        if self.amount is not None and (self.asset or "TRY") == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
+        if self.plan_installment is not None:
+            if self.direction != "borc" or (self.asset or "TRY") != "TRY":
+                raise ValueError("Ödeme planı yalnız TL borçta girilir")
+            self.amount = self._plan(self.amount)
+            self.due_date = None  # vade taksitlerden gelir
+        if self.amount is None:
+            raise ValueError("Miktar gerekli")
+        if (self.asset or "TRY") == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
             self.amount = money.money(self.amount)
+        if self.debt_date is None:
+            self.debt_date = date.fromisoformat(self.plan_start + "-01") if self.plan_start else date.today()
         return self
 
 
-class DebtPatch(BaseModel):
+class DebtPatch(DebtPlanFields):
     person: str | None = None
     direction: Literal["borc", "alacak"] | None = None
     asset: str | None = None
@@ -5163,9 +5209,12 @@ class DebtPatch(BaseModel):
     due_date: date | None = None
     note: str | None = None
     account_id: int | None = None  # banka/nakit hesabı
+    plan_off: bool = False  # ödeme planını kaldır: elden borç olarak kalır (tutar ve ödemeler değişmez)
 
     @model_validator(mode="after")
     def _tl(self):
+        if self.plan_installment is not None:
+            self.amount = self._plan(self.amount)
         if self.amount is not None and self.asset == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
             self.amount = money.money(self.amount)
         return self
@@ -5186,7 +5235,7 @@ def list_debts():
 @app.post("/api/debts")
 def create_debt(body: DebtIn):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
-    data = body.model_dump()
+    data = body.model_dump(exclude={"plan_end"})
     data["debt_date"] = body.debt_date.isoformat()
     data["due_date"] = body.due_date.isoformat() if body.due_date else None
     return {"id": db.create_debt(data)}
@@ -5195,7 +5244,13 @@ def create_debt(body: DebtIn):
 @app.patch("/api/debts/{did}")
 def patch_debt(did: int, body: DebtPatch):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
-    data = body.model_dump(exclude_unset=True)
+    data = body.model_dump(exclude_unset=True, exclude={"plan_end", "plan_off"})
+    if body.plan_installment is not None:  # tamamlanan alanlar (sayı, gün, toplam) da yazılsın
+        data.update({k: getattr(body, k) for k in ("plan_installment", "plan_count", "plan_start", "plan_day",
+                                                   "creditor_type", "amount")})
+        data["due_date"] = None
+    if body.plan_off:
+        data.update({k: None for k in ("plan_installment", "plan_count", "plan_start", "plan_day", "plan_interest")})
     if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
         with db.connect() as c:
             paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (did,)).fetchone()[0]

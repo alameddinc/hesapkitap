@@ -275,6 +275,18 @@ CAPABILITIES = (
                               # status {key ok|behind|ahead|done, title, text}, changed {title, reasons, action,
                               # confirm} | null, differs, ...} | null, commit_offer, commit_history; kart satırında harm
                               # {title, steps, compare, info} (tutar son ödeme gününe kadar kartın tamamına yetmezse)
+    "debt_plan_groups",       # borç planında kişi kişi satırlar: this_month.groups [{key, kind card|person|fixed, title,
+                              # count, amount, done, full, text, due_label, items [this_month.items satırı], payable (tek
+                              # borçta)}], months[].groups [{key, kind, title, count, amount, closes, keys}]; elden borç
+                              # ödemeleri yuvarlı (₺50 katı, kişi başı en az ₺250, küçük kalan yok); rules_info (ⓘ metni)
+    "debt_schedule",          # ödeme planı olan borç (yalnız kayıt; app/debt_schedule.py): POST/PATCH /api/debts
+                              # {plan_installment, plan_count | plan_end (YYYY-MM), plan_start (YYYY-MM), plan_day,
+                              # creditor_type vergi_sgk|banka|kisi|diger, plan_interest yok|var|bilmiyorum, amount?
+                              # (toplam; boşsa taksit × sayı)}; PATCH {plan_off: true} planı kaldırır; GET /api/debts
+                              # [].schedule {installment, count, start_month, end_month, day, creditor_label, next {no,
+                              # date, amount, left} | null, due_now, overdue, paid_count, text} | null. Borç planında
+                              # kind "fixed": her ay önce ayrılır; POST /api/debts/{id}/pay amount null → sıradaki taksit
+                              # (bütün borç değil); Ödemeler'de sıradaki taksit; push "borc" taksit gününde
 )
 
 

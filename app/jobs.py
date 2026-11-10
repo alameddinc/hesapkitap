@@ -78,6 +78,16 @@ def reminders(today: date) -> list[str]:
 
     # 1c) Borç / alacak vadeleri
     for d in db.list_debts(open_only=True):
+        sch = d.get("schedule")
+        if sch and sch["next"]:  # ödeme planı olan borç: sıradaki taksit
+            nx = sch["next"]
+            days = (date.fromisoformat(nx["date"]) - today).days
+            if days in REMIND_DAYS or days in (-1, -7):
+                when = {0: "BUGÜN", -1: "DÜN GEÇTİ", -7: "1 HAFTA GEÇTİ"}.get(days, f"{days} gün kaldı")
+                msgs.append(f"🤝 Taksit: <b>{d['person']}</b> · {nx['no']}. taksit "
+                            f"{finance.fmt_asset(max(nx['left'], sch['due_now']), 'TRY')} · "
+                            f"{date.fromisoformat(nx['date']):%d.%m} ({when})")
+            continue
         if not d["due_date"]:
             continue
         days = (date.fromisoformat(d["due_date"]) - today).days

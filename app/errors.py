@@ -63,7 +63,9 @@ _FIELDS = {"amount": "Tutar", "entry_date": "Tarih", "description": "Açıklama"
            "files": "Dosya", "monthly_limit": "Aylık sınır", "goal": "Hedef", "note": "Not", "asset": "Birim",
            "quantity": "Miktar", "start_month": "Başlangıç ayı", "day_of_month": "Ayın günü", "code": "Kod",
            "installments": "Taksit", "account_id": "Hesap", "from_month": "Başlangıç ayı", "gross": "Brüt tutar",
-           "pattern": "Kural", "parts": "Alt kalemler", "items": "Kalemler", "other": "Eşleşme", "same": "Cevap"}
+           "pattern": "Kural", "parts": "Alt kalemler", "items": "Kalemler", "other": "Eşleşme", "same": "Cevap",
+           "plan_installment": "Aylık taksit", "plan_count": "Taksit sayısı", "plan_start": "İlk taksit ayı",
+           "plan_end": "Son taksit ayı", "plan_day": "Ödeme günü", "creditor_type": "Kime", "plan_interest": "Faiz bilgisi"}
 
 
 def _num(x) -> str:

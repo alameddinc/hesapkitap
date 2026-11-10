@@ -23,6 +23,16 @@ Borçlar kendiliğinden toplanır:
             ekstrenin toplamında olduğu için ayrıca sayılmaz). Gelecek taksitler bilgi olarak (her ay ekstreye eklenir).
   kişi      Borç / Alacak'taki açık "borcum" kayıtları (TL; elden borç ve elle girilen diğer borçlar). Döviz / altın
             borcu planda yer almaz, "excluded" listesinde görünür.
+  taksit    Ödeme planı olan borç (app/debt_schedule.py; ör. vergi/SGK, banka, bir kişiyle anlaşılmış taksitler): plan
+            bunu yalnız kaydedilmiş bir yükümlülük olarak okur. Her ay vadesi gelen taksit (geçmişte eksik kalan dahil)
+            aylık tutardan ÖNCE ayrılır; kalan kartlara, sonra elden borçlara gider. Taksitler öne çekilmez.
+
+Tutarlar (sahibin geri bildirimi: aynı kişiye küsuratlı tutarlar alt alta anlamsız): elden borç ödemeleri kişi
+başına toplanır ve ROUND_TO katlarına yuvarlanır; kişi başı en az MIN_PAY (kalan daha azsa kalanın tamamı); FOLD'dan
+küçük kalan bırakılmaz, önceki ödemeye eklenir. "Faizi önle"de orantılı pay MIN_PAY'in altına düşerse önce en küçük
+borçlar bütün olarak kapanır (daha az, daha büyük ödeme). Kart ve taksit tutarları tam (kuruşuyla) kalır: kart borcu
+tamamı ödenmezse faiz işler, taksit tutarı anlaşmadır. Yanıtta this_month.groups ve months[].groups aynı kişinin
+borçlarını tek satırda toplar (items / payments eski istemciler için borç borç kalır).
 
 Aylık tutar: her zamanki harcamaların (taksitler dahil) karşılandıktan sonra borçlara ayırabileceğin para. Önerisi
 Planlama'nın "her zamanki harcamanla" artanı (months[].net_with_estimate ortalaması), hiçbir zaman eksi değil.
@@ -50,7 +60,8 @@ from app import db, money
 ORDERS = ("faiz", "kucuk", "soz")
 ORDER_INFO = {
     "faiz": ("Faizi önle", "Önce kart borçları, son ödeme gününe göre: kartta borç kalmazsa faiz işlemez. Kalan para "
-                           "elden borçlara, kalan tutarlarıyla orantılı paylaşılır; kimse bekletilmez."),
+                           "elden borçlara kişi kişi, kalanlarıyla orantılı paylaşılır; pay çok küçük kalırsa önce "
+                           "küçük borçlar bütün olarak kapanır."),
     "kucuk": ("En küçükten başla", "Önce kart borçları. Sonra en küçük elden borç; her kapanan borç bir sonrakine güç verir."),
     "soz": ("Söz verdiğim tarihe göre", "Önce kart borçları. Sonra söz verdiğin tarihi en yakın olan; tarihi olmayanlar "
                                        "en eskiden başlayarak."),
@@ -62,6 +73,9 @@ SETTING = "debt_plan"  # defter ayarı: {"monthly": float | null, "order": "faiz
 COMMIT = "debt_plan_commit"  # defter ayarı: {"current": anlık görüntü | null, "history": [{started_at, ...}]}
 HISTORY = 5
 TOL = 1.0              # plan takibinde 1 TL'lik fark yok sayılır
+ROUND_TO = 50          # elden borç ödemeleri bu katlara yuvarlanır (kart ve taksit tutarı tam kalır)
+MIN_PAY = 250          # kişi başı en az anlamlı ödeme (kalan daha azsa kalanın tamamı)
+FOLD = 100             # bundan küçük kalan bırakılmaz: aynı ayın ödemesine eklenir (aylık tutarı en çok bu kadar aşar)
 # "Ocak'ta" gibi bulunma eki (ayın son sesine göre)
 _AY_EK = ("'ta", "'ta", "'ta", "'da", "'ta", "'da", "'da", "'ta", "'de", "'de", "'da", "'ta")
 _YIL_EK = {"0": "'da", "1": "'de", "2": "'de", "3": "'te", "4": "'te", "5": "'te", "6": "'da", "7": "'de", "8": "'de",
@@ -230,15 +244,15 @@ def _card_title(st: dict, p: dict) -> str:
     return f"{st.get('bank')} ••{card[-4:]}" if st.get("bank") and len(card) >= 4 else p["title"]
 
 
-def _people(today: date) -> tuple[list[dict], list[dict], list[dict]]:
-    """(açık TL borçlarım, TL dışı borçlar, bu ay tamamen ödenen borçlar)."""
-    from app import finance
+def _people(today: date) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """(açık TL elden borçlarım, TL dışı borçlar, bu ay tamamen ödenen borçlar, ödeme planı olan açık borçlar)."""
+    from app import debt_schedule, finance
 
     if _hidden_people():
-        return [], [], []
+        return [], [], [], []
     this_month = _ym(today)
     payables = {p["id"]: p for p in finance.payables(today) if p["type"] == "debt"}
-    open_, other, done = [], [], []
+    open_, other, done, fixed = [], [], [], []
     for d in db.list_debts():
         if d["direction"] != "borc" or d["written_off_at"]:
             continue
@@ -255,6 +269,9 @@ def _people(today: date) -> tuple[list[dict], list[dict], list[dict]]:
                 done.append({"key": f"borc:{d['id']}", "kind": "person", "id": d["id"], "title": d["person"],
                              "paid": _r(paid_now), "payable": payable})
             continue
+        if d.get("schedule"):
+            fixed.append(_fixed_item(d, payable, paid_now, today))
+            continue
         open_.append({
             "key": f"borc:{d['id']}", "kind": "person", "id": d["id"], "title": d["person"],
             "note": d["note"] or None, "total": _r(d["amount"]), "paid": _r(d["paid_amount"] or 0),
@@ -262,7 +279,35 @@ def _people(today: date) -> tuple[list[dict], list[dict], list[dict]]:
             "debt_date": d["debt_date"], "overdue": bool(d["due_date"] and d["due_date"] < today.isoformat()),
             "payable": payable,
         })
-    return open_, other, done
+    return open_, other, done, fixed
+
+
+def _fixed_item(d: dict, payable: dict, paid_now: float, today: date) -> dict:
+    """Ödeme planı olan borç: kalan taksitler ay ay (ödenen toplam en eski taksitten düşer; geçmişte eksik kalan bu aya)."""
+    from app import debt_schedule
+
+    sch = d["schedule"]
+    start = _ym(today)
+    left_paid = d["paid_amount"] or 0.0
+    dues: dict[str, float] = {}
+    due_nos: list[int] = []  # bu aya kadar vadesi gelip ödenmemiş taksitlerin numaraları
+    for r in debt_schedule.installments(d):
+        take = min(left_paid, r["amount"])
+        left_paid = _r(left_paid - take)
+        rest = _r(r["amount"] - take)
+        if rest > 0:
+            m = max(r["month"], start)
+            dues[m] = _r(dues.get(m, 0.0) + rest)
+            if r["month"] <= start:
+                due_nos.append(r["no"])
+    nx = sch["next"]
+    return {
+        "key": f"borc:{d['id']}", "kind": "fixed", "id": d["id"], "title": d["person"], "note": d["note"] or None,
+        "total": _r(d["amount"]), "paid": _r(d["paid_amount"] or 0), "paid_now": _r(paid_now),
+        "remaining": _r(d["remaining"]), "due_date": nx["date"] if nx else None, "debt_date": d["debt_date"],
+        "overdue": bool(sch["overdue"]), "dues": dues, "due_nos": due_nos, "day": sch["day"], "schedule": sch,
+        "creditor_label": sch["creditor_label"], "payable": payable,
+    }
 
 
 def _debt_payable(d: dict, today: date) -> dict:
@@ -314,39 +359,143 @@ def _sort_people(people: list[dict], order: str) -> list[dict]:
     return sorted(people, key=lambda d: (d["due_date"] is None, d["due_date"] or "", d["debt_date"] or "", d["id"]))
 
 
-def _share(people: list[dict], rem: dict[str, float], budget: float) -> dict[str, float]:
-    """Orantılı paylaştırma (su doldurma): borcundan fazla düşen payın artanı ötekilere geçer. Kuruşa yuvarlı."""
+def person_key(title: str) -> str:
+    """Aynı kişinin borçları tek satırda toplansın: "Nermin Teyze" = "nermin teyze " (Türkçe büyük/küçük harf)."""
+    return " ".join(title.replace("İ", "i").replace("I", "ı").lower().split())
+
+
+def _floor(x: float) -> float:
+    """ROUND_TO katına aşağı (ROUND_TO'dan küçükse tam liraya)."""
+    if x >= ROUND_TO:
+        return float(math.floor(x / ROUND_TO + 1e-9) * ROUND_TO)
+    return float(math.floor(max(0.0, x) + 1e-9))
+
+
+def _part(rem: float, budget: float, any_paid: bool) -> float:
+    """Bir kişiye (ya da borca) bütçeden ne kadar: yetiyorsa tamamı; FOLD'dan küçük kalan bırakmaz (tamamı); değilse
+    ROUND_TO katına yuvarlı kısmi ve sonraya en az MIN_PAY bırakır. Bu ay başka ödeme varken MIN_PAY'den küçük kısmi
+    ödeme yapılmaz (0)."""
+    if budget <= 0 or rem <= 0:
+        return 0.0
+    if money.ge(budget, rem) or rem - budget < FOLD:
+        return rem
+    amt = _floor(budget)
+    if rem - amt < MIN_PAY:
+        amt = _floor(rem - MIN_PAY)
+    if amt < MIN_PAY and any_paid:
+        return 0.0
+    return max(0.0, amt)
+
+
+def _round_shares(shares: dict[str, float], budget: float) -> dict[str, float]:
+    """Payları ROUND_TO katlarına: toplam bütçenin yuvarlısı (en büyük küsurat önce)."""
+    base = {k: _floor(v) if v >= ROUND_TO else 0.0 for k, v in shares.items()}
+    left = _floor(budget) - sum(base.values())
+    for k in sorted(shares, key=lambda k: -(shares[k] - base[k])):
+        if left < ROUND_TO:
+            break
+        base[k] += ROUND_TO
+        left -= ROUND_TO
+    return {k: v for k, v in base.items() if v > 0}
+
+
+def _group_people(people: list[dict], rem: dict[str, float]) -> dict[str, list[dict]]:
+    """Kişi → açık borçları (verilen sırada)."""
+    out: dict[str, list[dict]] = {}
+    for d in people:
+        if rem[d["key"]] > 0:
+            out.setdefault(person_key(d["title"]), []).append(d)
+    return out
+
+
+def _within(debts: list[dict], rem: dict[str, float], amount: float) -> dict[str, float]:
+    """Kişiye ayrılan tutar borçlarına: söz tarihi yakın, sonra küçük borç önce; önce bütün olarak kapanır."""
     out: dict[str, float] = {}
-    live = [p for p in people if rem[p["key"]] > 0]
+    for d in sorted(debts, key=lambda d: (d["due_date"] is None, d["due_date"] or "", rem[d["key"]], d["id"])):
+        if amount <= 0:
+            break
+        amt = _r(min(rem[d["key"]], amount))
+        if amt > 0:
+            out[d["key"]] = amt
+            amount = _r(amount - amt)
+    return out
+
+
+def allocate_people(people_s: list[dict], rem: dict[str, float], budget: float, order: str) -> dict[str, float]:
+    """Kartlardan (ve taksitlerden) kalan bütçe elden borçlara. kucuk/soz: sıradaki borç önce (borç borç). faiz: kişi
+    kişi kalanıyla orantılı; pay MIN_PAY'in altına düşerse en küçük kişinin borcu bütün olarak kapanır. Tutarlar
+    _part / _round_shares ile anlamlı (yuvarlı, küçük kalan yok)."""
+    out: dict[str, float] = {}
+    budget = _r(budget)
+    if budget <= 0:
+        return out
+    if order != "faiz":
+        for d in people_s:
+            if budget <= 0:
+                break
+            amt = _part(rem[d["key"]], budget, bool(out))
+            if amt > 0:
+                out[d["key"]] = _r(amt)
+                budget = _r(budget - amt)
+        return out
+    groups = _group_people(people_s, rem)
+    idx = {k: i for i, k in enumerate(groups)}
+    prem = {k: _r(sum(rem[d["key"]] for d in v)) for k, v in groups.items()}
+    amounts: dict[str, float] = {}
+    live = list(groups)
     while budget > 0 and live:
-        total = sum(rem[p["key"]] for p in live)
+        total = sum(prem[k] for k in live)
         if money.ge(budget, total):
-            for p in live:
-                out[p["key"]] = out.get(p["key"], 0.0) + rem[p["key"]]
-            return out
-        capped = [p for p in live if money.ge(budget * rem[p["key"]] / total, rem[p["key"]])]
-        if not capped:
-            given = 0.0
-            for i, p in enumerate(live):
-                amt = _r(budget * rem[p["key"]] / total) if i < len(live) - 1 else _r(budget - given)
-                amt = min(amt, rem[p["key"]])
-                out[p["key"]] = out.get(p["key"], 0.0) + amt
-                given += amt
-            return out
-        for p in capped:
-            out[p["key"]] = out.get(p["key"], 0.0) + rem[p["key"]]
-            budget -= rem[p["key"]]
-        live = [p for p in live if p not in capped]
+            amounts.update({k: prem[k] for k in live})
+            break
+        if len(live) == 1:
+            amt = _part(prem[live[0]], budget, bool(amounts))
+            if amt > 0:
+                amounts[live[0]] = amt
+            break
+        shares = {k: budget * prem[k] / total for k in live}
+        # payı kalanına yakın (küçük kalan bırakacak) kişi bütün olarak kapanır
+        capped = [k for k in live if shares[k] >= prem[k] - MIN_PAY - ROUND_TO and money.le(prem[k], budget)]
+        if not capped and min(shares.values()) < MIN_PAY:
+            k = min(live, key=lambda k: (prem[k], idx[k]))
+            if money.le(prem[k], budget):
+                capped = [k]
+            else:  # en küçüğe bile yetmiyor: hepsi ona (bölüp küçük ödemeler yapılmaz)
+                amt = _part(prem[k], budget, bool(amounts))
+                if amt > 0:
+                    amounts[k] = amt
+                break
+        if capped:
+            for k in sorted(capped, key=lambda k: (prem[k], idx[k])):
+                if money.le(prem[k], budget):
+                    amounts[k] = prem[k]
+                    budget = _r(budget - prem[k])
+                    live.remove(k)
+            continue
+        amounts.update(_round_shares(shares, budget))
+        break
+    for k, amt in amounts.items():
+        out.update(_within(groups[k], rem, amt))
     return out
 
 
 def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, start: str,
-             first_budget: float | None = None) -> dict:
-    """Ay ay ödeme. cards/people: {key, title, remaining, due_date, ...} (kartta rate.monthly). Dönen: months,
-    closes {key: ay}, interest (toplam, varsayım), interest_by {key: tutar}, debt_free (ay | None)."""
-    rem = {d["key"]: d["remaining"] for d in (*cards, *people)}
+             first_budget: float | None = None, fixed: list[dict] | None = None) -> dict:
+    """Ay ay ödeme. cards/people: {key, title, remaining, due_date, ...} (kartta rate.monthly); fixed: ödeme planı olan
+    borçlar {key, title, remaining, dues {ay: tutar}, day}. Her ay önce o ayın taksitleri (eksik kalan sonraki aya
+    devreder), sonra kartlar, sonra elden borçlar. Dönen: months, closes {key: ay}, interest (toplam, varsayım),
+    interest_by {key: tutar}, debt_free (ay | None)."""
+    fixed = fixed or []
+    rem = {d["key"]: d["remaining"] for d in (*fixed, *cards, *people)}
     cards_s = _sort_cards(cards)
     people_s = _sort_people(people, order)
+    fixed_s = sorted(fixed, key=lambda d: (d.get("day") or 1, d["id"]))
+    carry = {d["key"]: 0.0 for d in fixed_s}
+    titles = {d["key"]: d["title"] for d in (*fixed_s, *cards_s, *people_s)}
+    canon: dict[str, str] = {}  # aynı kişinin borçları tek ad altında ("nermin teyze" → "Nermin Teyze")
+    for d in sorted(people_s, key=lambda d: d["id"]):
+        titles[d["key"]] = canon.setdefault(person_key(d["title"]), d["title"])
+    kinds = {d["key"]: d["kind"] for d in (*fixed_s, *cards_s, *people_s)}
     closes: dict[str, str] = {}
     interest_by: dict[str, float] = {}
     months: list[dict] = []
@@ -357,6 +506,20 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
         m = _add(start, k)
         budget = _r(first_budget if k == 0 and first_budget is not None else monthly)
         pays: dict[str, float] = {}
+        # 1) ödeme planı olan borçların bu ayki taksiti (vadesi gelmiş yükümlülük: önce ayrılır)
+        fixed_due = fixed_short = 0.0
+        for d in fixed_s:
+            due = _r(min(rem[d["key"]], carry[d["key"]] + d["dues"].get(m, 0.0)))
+            if due <= 0:
+                continue
+            amt = _r(min(due, budget))
+            fixed_due = _r(fixed_due + due)
+            if amt > 0:
+                pays[d["key"]] = amt
+                budget = _r(budget - amt)
+            carry[d["key"]] = _r(due - amt)
+            fixed_short = _r(fixed_short + due - amt)
+        # 2) kartlar
         due_now = [d for d in cards_s if rem[d["key"]] > 0 and (d["due_date"] or "9999")[:7] <= m]
         if due_now and not money.ge(budget, sum(rem[d["key"]] for d in due_now)):
             # tutar son ödemesi gelen kartlara yetmiyor: önce her birinin asgarisi (gecikme faizi işlemesin), kalanı
@@ -383,19 +546,9 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
                     budget = _r(budget - amt)
         for key, amt in pays.items():
             rem[key] = _r(rem[key] - amt)
+        # 3) elden borçlar (kişi kişi, yuvarlı)
         if budget > 0:
-            if order == "faiz":
-                share = _share(people_s, rem, budget)
-            else:
-                share = {}
-                for d in people_s:
-                    if budget <= 0:
-                        break
-                    amt = min(rem[d["key"]], budget)
-                    if amt > 0:
-                        share[d["key"]] = amt
-                        budget = _r(budget - amt)
-            for key, amt in share.items():
+            for key, amt in allocate_people(people_s, rem, budget, order).items():
                 amt = _r(amt)
                 if amt > 0:
                     pays[key] = _r(pays.get(key, 0.0) + amt)
@@ -410,16 +563,14 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
                 interest_by[d["key"]] = _r(interest_by.get(d["key"], 0.0) + add)
                 month_interest = _r(month_interest + add)
         rows = []
-        titles = {d["key"]: d["title"] for d in (*cards_s, *people_s)}
-        kinds = {d["key"]: d["kind"] for d in (*cards_s, *people_s)}
         for key, amt in pays.items():
             closed = rem[key] <= 0
             if closed and key not in closes:
                 closes[key] = m
             rows.append({"key": key, "kind": kinds[key], "title": titles[key], "amount": _r(amt), "closes": closed})
         left = _r(sum(v for v in rem.values() if v > 0))
-        months.append({"month": m, "label": month_label(m), "total": used, "payments": rows,
-                       "interest": month_interest, "left": left})
+        months.append({"month": m, "label": month_label(m), "total": used, "payments": rows, "groups": group_rows(rows),
+                       "interest": month_interest, "left": left, "fixed_due": fixed_due, "fixed_short": fixed_short})
         if left <= 0:
             debt_free = m
             break
@@ -427,6 +578,28 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
             break  # tutar yok: tek ay gösterilir (faiz uyarısıyla)
     return {"months": months, "closes": closes, "interest": _r(sum(interest_by.values())), "interest_by": interest_by,
             "debt_free": debt_free}
+
+
+def group_rows(rows: list[dict]) -> list[dict]:
+    """Ay satırları kişi kişi: aynı kişiye (elden borç) birden çok ödeme tek satır {key, kind, title, count, amount,
+    closes (hepsi kapanıyorsa), keys}. Kart ve taksit satırları tek başına kalır."""
+    out: list[dict] = []
+    by: dict[str, dict] = {}
+    for r in rows:
+        if r["kind"] != "person":
+            out.append({**r, "count": 1, "keys": [r["key"]]})
+            continue
+        pk = person_key(r["title"])
+        g = by.get(pk)
+        if g is None:
+            g = by[pk] = {"key": f"kisi:{pk}", "kind": "person", "title": r["title"], "amount": 0.0, "closes": True,
+                          "count": 0, "keys": []}
+            out.append(g)
+        g["amount"] = _r(g["amount"] + r["amount"])
+        g["closes"] = g["closes"] and r["closes"]
+        g["count"] += 1
+        g["keys"].append(r["key"])
+    return out
 
 
 def _asgari(d: dict, rem_now: float, month: str, first: bool) -> float:
@@ -442,14 +615,23 @@ def _asgari(d: dict, rem_now: float, month: str, first: bool) -> float:
     return _r(rem_now * mp / total) if total > 0 else 0.0
 
 
-def min_monthly(cards: list[dict], start: str, paid_now: float = 0.0) -> float:
+def min_monthly(cards: list[dict], start: str, paid_now: float = 0.0, fixed: list[dict] | None = None) -> float:
     """Kart borçlarının hepsi son ödeme aylarında kapansın (faiz işlemesin) diye gereken en az aylık tutar, 10 TL'ye
-    yukarı yuvarlı. Bu ay ödenen (paid_now) bu ayın tutarından düşüldüğü için eklenir."""
+    yukarı yuvarlı. Bu ay ödenen (paid_now) bu ayın tutarından düşüldüğü için eklenir. Ödeme planı olan borçların
+    taksitleri her ay önce ayrıldığı için o aya kadarki taksitler de eklenir (ve tutar her ayın taksitine yetmeli)."""
+    fixed_by: dict[str, float] = {}
+    for f in fixed or []:
+        for m, a in f["dues"].items():
+            fixed_by[m] = fixed_by.get(m, 0.0) + a
+    def fixed_until(k: int) -> float:
+        return sum(a for m, a in fixed_by.items() if _months_between(start, m) <= k)
     need, cum = 0.0, 0.0
     for d in _sort_cards(cards):
         cum += d["remaining"]
         k = max(0, _months_between(start, (d["due_date"] or start)[:7]))
-        need = max(need, (cum + paid_now) / (k + 1))
+        need = max(need, (cum + paid_now + fixed_until(k)) / (k + 1))
+    if cards:
+        need = max([need] + [a + (paid_now if m == start else 0.0) for m, a in fixed_by.items()])
     return float(math.ceil(need / 10 - 1e-9) * 10)
 
 
@@ -472,9 +654,9 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
     people_hidden = _hidden_people()
 
     cards, cards_done = _cards(today)
-    people, other, people_done = _people(today)
-    paid_now = _paid_now(cards, people, cards_done, people_done)
-    need = min_monthly(cards, start, paid_now) if cards else 0.0
+    people, other, people_done, fixed = _people(today)
+    paid_now = _paid_now(cards, [*people, *fixed], cards_done, people_done)
+    need = min_monthly(cards, start, paid_now, fixed) if cards else 0.0
     if source == "suggestion" and sug and need > 0:
         # öneri artanın 100'e aşağı yuvarlısı: artan faizsiz tutara yetiyorsa öneri en az o tutar olsun (yuvarlama
         # yüzünden faizli bir plan önerilmesin); yetmiyorsa öneri cümlesi faizsiz tutarı da söyler
@@ -484,11 +666,13 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         elif sug["amount"] < need:
             sug = {**sug, "text": sug["text"] + f" Faizsiz kapatmak için ayda {_tl(need)} gerekiyor."}
     first = _r(max(0.0, (monthly or 0) - paid_now))
-    sim = simulate(cards, people, monthly or 0.0, order, start, first_budget=first) if monthly is not None else None
+    sim = simulate(cards, people, monthly or 0.0, order, start, first_budget=first, fixed=fixed) \
+        if monthly is not None else None
+    fixed_s = sorted(fixed, key=lambda d: (d["due_date"] or "9999", d["id"]))
 
     debts = []
-    for i, d in enumerate([*_sort_cards(cards), *_sort_people(people, order)]):
-        item = {k: v for k, v in d.items() if k not in ("paid_now", "debt_date", "period_end")}
+    for i, d in enumerate([*fixed_s, *_sort_cards(cards), *_sort_people(people, order)]):
+        item = {k: v for k, v in d.items() if k not in ("paid_now", "debt_date", "period_end", "dues")}
         item["order"] = i + 1
         item["progress"] = round(d["paid"] / d["total"], 3) if d["total"] else 0.0
         item["due_label"] = _day_label(d["due_date"]) if d["due_date"] else None
@@ -504,6 +688,9 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                 item["warning"] = harm["text"]  # eski istemci de tek metin olarak gösterir
             if sim and sim["interest_by"].get(d["key"]) and not fees_hidden:
                 item["projected_interest"] = sim["interest_by"][d["key"]]
+        elif d["kind"] == "fixed":
+            item["subtitle"] = " · ".join(x for x in (d["creditor_label"], d["schedule"]["text"]) if x)
+            item["promise"] = None
         else:
             item["subtitle"] = d["note"] or "Elden borç"
             item["promise"] = _promise(d, close)
@@ -516,6 +703,20 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                              "title": it["title"], "text": it["warning"]})
         if it.get("promise") and it["promise"].get("missed"):
             warnings.append({"key": f"soz:{it['key']}", "level": "info", "title": it["title"], "text": it["promise"]["text"]})
+        if it["kind"] == "fixed" and it["overdue"] and it["schedule"].get("next"):
+            nx = it["schedule"]["next"]
+            warnings.append({"key": f"taksit:{it['key']}", "level": "warn", "title": it["title"],
+                             "text": f"{nx['no']}. taksitin günü ({_day_label(nx['date'])}) geçti, ödenmemiş görünüyor. "
+                                     "Ödediysen Ödedim'le işaretle."})
+
+    # aylık tutar bu ayın taksitlerine yetmiyor: taksitler ödenmesi gereken tutarlardır (kalanı kartlara ve borçlara)
+    fixed_short = None
+    if sim and sim["months"] and sim["months"][0]["fixed_short"] > 0 and monthly:
+        m0 = sim["months"][0]
+        fixed_short = {"due": m0["fixed_due"], "short": m0["fixed_short"],
+                       "title": "Aylık tutar bu ayın taksitlerine yetmiyor",
+                       "text": f"Ödeme planı olan borçlarının bu ayki taksitleri {_tl(m0['fixed_due'])}. Aylık tutar "
+                               "önce bunlara ayrılır; kalanı kartlara ve elden borçlara gider."}
 
     shortfall = None
     if sim and sim["interest"] > 0 and cards:
@@ -544,8 +745,11 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             pace = {"months": n, "text": "Bu tutarla elden borçlar bu ay biter." if n == 1 else
                     f"Bu tutarla elden borçlar {n} ayda biter."}
 
-    total_open = _r(sum(d["remaining"] for d in (*cards, *people)))
+    total_open = _r(sum(d["remaining"] for d in (*fixed, *cards, *people)))
     by_key = {d["key"]: d for d in debts}
+    # aynı kişinin borçları açılınca ayırt edilsin: not ya da borç tarihi ("3 Mart 2026 borcu")
+    subs = {d["key"]: d["note"] or f"{_day_label(d['debt_date'])} {d['debt_date'][:4]} borcu"
+            for d in (*people, *people_done) if d.get("debt_date")}
     items = []
     if sim and sim["months"] and sim["months"][0]["month"] == start:
         for p in sim["months"][0]["payments"]:
@@ -553,21 +757,32 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             full = money.ge(p["amount"], d["remaining"])
             harm = d.get("harm")
             asg = harm["min_left"] if harm and harm.get("min_left") else None
+            if d["kind"] == "fixed":
+                nx = d["schedule"].get("next") or {}
+                due_m = d["schedule"]["due_now"]
+                nos = d.get("due_nos") or []
+                if len(nos) > 1:  # geçmişte ödenmemiş taksit de bu aya geldi
+                    text = f"{nos[0]}–{nos[-1]}. taksit · gecikmiş taksit dahil"
+                else:
+                    text = (f"{nx['no']}. taksit" if nx else "Taksit") + (f" · son gün {d['due_label']}" if d["due_label"] else "")
+                if due_m and p["amount"] + TOL < due_m:
+                    text += f" · bu ayki taksit {_tl(due_m)}"
+            else:
+                text = (("Tamamını öde" if full else "Bu ay bu kadarını öde")
+                        + (f" (asgari {_tl(asg)} dahil)" if asg and p["amount"] >= asg else "")
+                        + (f" · son ödeme {d['due_label']}" if d["kind"] == "card" and d["due_date"] else ""))
             items.append({"key": p["key"], "kind": d["kind"], "title": d["title"], "amount": p["amount"],
                           "full": full, "done": False, "due_date": d["due_date"], "due_label": d["due_label"],
-                          "min_left": asg,
-                          "text": ("Tamamını öde" if full else "Bu ay bu kadarını öde")
-                                  + (f" (asgari {_tl(asg)} dahil)" if asg and p["amount"] >= asg else "")
-                                  + (f" · son ödeme {d['due_label']}" if d["kind"] == "card" and d["due_date"] else ""),
-                          "payable": d["payable"]})
-    for d in (*cards, *people):
+                          "min_left": asg, "text": text, "sub": subs.get(p["key"]), "payable": d["payable"]})
+    for d in (*fixed, *cards, *people):
         if d["paid_now"] > 0:
             items.append({"key": d["key"], "kind": d["kind"], "title": d["title"], "amount": d["paid_now"], "full": False,
-                          "done": True, "due_date": d["due_date"], "due_label": None,
+                          "done": True, "due_date": d["due_date"], "due_label": None, "sub": subs.get(d["key"]),
                           "text": f"Bu ay {_tl(d['paid_now'])} ödendi", "payable": d["payable"]})
     for d in (*cards_done, *people_done):
         items.append({"key": d["key"], "kind": d["kind"], "title": d["title"], "amount": d["paid"], "full": True,
-                      "done": True, "due_date": None, "due_label": None, "text": "Bu ay kapandı", "payable": d["payable"]})
+                      "done": True, "due_date": None, "due_label": None, "sub": subs.get(d["key"]), "text": "Bu ay kapandı",
+                      "payable": d["payable"]})
 
     df = sim["debt_free"] if sim else None
     debt_free = None
@@ -586,9 +801,9 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
 
     commit_raw = _store()
     commitment = _commitment(commit_raw["current"], cards, people, sim, monthly, order, today, people_hidden,
-                             any(d.get("harm") for d in debts)) if commit_raw["current"] else None
+                             any(d.get("harm") for d in debts), fixed) if commit_raw["current"] else None
     offer = None
-    if not commitment and (cards or people) and monthly:
+    if not commitment and (cards or people or fixed) and monthly:
         offer = {"title": "Bu planla başla",
                  "text": "Planı başlatırsan her ay plana göre nerede olduğunu gösteririz. Tutarı denemek planı "
                          "değiştirmez; değiştirmek istediğinde \"Bu planla devam\" dersin.",
@@ -611,24 +826,72 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         "intro": "Borçların tek listede. Önce kart borçları kapanır: kartta borç kalmazsa faiz işlemez. Aylık tutar, "
                  "her zamanki harcamaların ve taksitlerin dışında borçlara ayırabileceğin para.",
         "totals": {"open": total_open, "cards": _r(sum(d["remaining"] for d in cards)),
-                   "people": _r(sum(d["remaining"] for d in people)), "count": len(cards) + len(people),
+                   "people": _r(sum(d["remaining"] for d in people)), "count": len(cards) + len(people) + len(fixed),
                    "card_count": len(cards), "person_count": len(people), "paid_this_month": paid_now,
+                   # ödeme planı olan borçlar (yetenek debt_schedule): kalan toplam, sayı, bu ayki taksitler
+                   "fixed": _r(sum(d["remaining"] for d in fixed)), "fixed_count": len(fixed),
+                   "fixed_this_month": _r(sum(d["dues"].get(start, 0.0) for d in fixed)),
                    "min_monthly_no_interest": need,
                    "interest_projected": None if fees_hidden or not sim else sim["interest"]},
         "debts": debts,
         "months": sim["months"] if sim else [],
         "debt_free": debt_free,
         "this_month": {"month": start, "label": month_label(start), "budget": first if sim else None,
-                       "planned": _r(sum(i["amount"] for i in items if not i["done"])), "paid": paid_now, "items": items},
-        "warnings": warnings, "shortfall": shortfall, "pace": pace, "stuck": stuck, "excluded": other,
+                       "planned": _r(sum(i["amount"] for i in items if not i["done"])), "paid": paid_now, "items": items,
+                       "groups": group_items(items)},
+        "rules_info": RULES_INFO,
+        "warnings": warnings, "shortfall": shortfall, "fixed_short": fixed_short, "pace": pace, "stuck": stuck,
+        "excluded": other,
         "hidden": {"fees": fees_hidden, "people": people_hidden},
         "can_edit": _can_edit(),
         "commitment": commitment, "commit_offer": offer, "commit_history": history, "faiz_info": FAIZ_INFO,
-        "summary_card": {"eligible": len(cards) + len(people) >= 2},
-        "empty": None if cards or people else {
+        "summary_card": {"eligible": len(cards) + len(people) + len(fixed) >= 2},
+        "empty": None if cards or people or fixed else {
             "title": "Açık borcun görünmüyor",
             "text": "Kart ekstrelerin ödenmiş, Borç / Alacak'ta açık borcun yok. Elden bir borcun varsa Borç / Alacak'tan ekle."},
     }
+
+
+RULES_INFO = (f"Elden borç ödemeleri kişi kişi toplanır ve ₺{ROUND_TO}'nin katlarına yuvarlanır. Bir kişiye bir ayda "
+              f"en az ₺{MIN_PAY} ödenir (borcun kalanı daha azsa kalanın tamamı). Son ödemede ₺{FOLD}'den az kalan "
+              "bırakılmaz, bir önceki ödemeye eklenir. \"Faizi önle\"de paylar çok küçük kalırsa önce küçük borçlar "
+              "bütün olarak kapanır: daha az ama daha büyük ödeme. Kart borcu ve taksitler tam tutarıyla yazılır. "
+              "Ödeme planı olan borçların taksiti her ay önce ayrılır; kalan para kartlara, sonra elden borçlara gider.")
+
+
+def group_items(items: list[dict]) -> list[dict]:
+    """"Bu ay ödenecekler" kişi kişi: aynı kişinin elden borçları tek satır (açınca borç borç). Kart ve taksit tek
+    başına. {key, kind, title, count, amount, done, full, text, due_label, items, payable (tek borçta)}."""
+    out: list[dict] = []
+    by: dict[tuple, dict] = {}
+    for it in items:
+        if it["kind"] != "person":
+            out.append({**it, "count": 1, "items": [it]})
+            continue
+        gk = (person_key(it["title"]), it["done"])
+        g = by.get(gk)
+        if g is None:
+            g = by[gk] = {"key": f"kisi:{gk[0]}:{'d' if it['done'] else 'p'}", "kind": "person", "title": it["title"],
+                          "done": it["done"], "items": []}
+            out.append(g)
+        g["items"].append(it)
+    for g in by.values():
+        xs = g["items"]
+        n = len(xs)
+        g["count"] = n
+        g["amount"] = _r(sum(x["amount"] for x in xs))
+        g["full"] = all(x["full"] for x in xs)
+        g["due_label"] = min((x["due_label"] for x in xs if x.get("due_label")), default=None)
+        g["payable"] = xs[0]["payable"] if n == 1 else None
+        if n == 1:
+            g["text"] = xs[0]["text"]
+        elif g["done"]:
+            g["text"] = f"{n} borç · bu ay {_tl(g['amount'])} ödendi"
+        else:
+            closing = sum(1 for x in xs if x["full"])
+            g["text"] = f"{n} borç · " + ("hepsi bu ay kapanır" if closing == n else
+                                          f"{closing} tanesi bu ay kapanır" if closing else "bu ay bu kadarını öde")
+    return out
 
 
 def _card_warning(d: dict, fees_hidden: bool) -> dict:
@@ -743,11 +1006,12 @@ def commit_plan(monthly: float | None = None, order: str | None = None, today: d
         raise ValueError("Önce her ay borçlara ayırabileceğin tutarı yaz.")
     monthly = _r(monthly)
     cards, cards_done = _cards(today)
-    people, _, people_done = _people(today)
-    if not cards and not people:
+    people, _, people_done, fixed = _people(today)
+    if not cards and not people and not fixed:
         raise ValueError("Açık borcun görünmüyor; başlatılacak bir plan yok.")
-    paid_now = _paid_now(cards, people, cards_done, people_done)
-    sim = simulate(cards, people, monthly, order, start, first_budget=_r(max(0.0, monthly - paid_now)))
+    paid_now = _paid_now(cards, [*people, *fixed], cards_done, people_done)
+    sim = simulate(cards, people, monthly, order, start, first_budget=_r(max(0.0, monthly - paid_now)), fixed=fixed)
+    people = [*fixed, *people]
     ids = {d["key"]: _ident(d) for d in (*cards, *people)}
     planned: dict[str, float] = {}
     months = []
@@ -803,7 +1067,7 @@ def _credited(snap: dict, people_hidden: bool) -> dict[str, float]:
 
 
 def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | None, monthly: float | None, order: str,
-                today: date, people_hidden: bool, harm_now: bool) -> dict:
+                today: date, people_hidden: bool, harm_now: bool, fixed: list[dict] | None = None) -> dict:
     """Kaydedilen plana göre bu ay nerede olduğun. Sözler yalnız daha çok ayırmayı, harcamayı kısmayı ve (kartta tutar
     yetmiyorsa) son ödeme gününden önce en az asgariyi önerir; başka yol önermez."""
     start = _ym(today)
@@ -813,16 +1077,17 @@ def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | N
     before = _r(sum(a for mo in snap["months"] if mo["month"] < start for i, a in mo["pays"].items() if not skip(i)))
     target = _r(sum(a for mo in snap["months"] if mo["month"] == start for i, a in mo["pays"].items() if not skip(i)))
     expected = _r(before + target)
-    total_open = _r(sum(d["remaining"] for d in (*cards, *people)))
+    fixed = fixed or []
+    total_open = _r(sum(d["remaining"] for d in (*cards, *people, *fixed)))
     df = snap.get("debt_free")
     # aynı tutar ve sıralamayla bugünkü borçlardan hesaplanan plan (önizleme farklıysa ayrı hesaplanır)
     differs = monthly != snap["monthly"] or order != snap["order"]
     live = sim
     if differs or live is None:
         cards_now, people_now = cards, people
-        paid_now = _r(sum(d["paid_now"] for d in (*cards_now, *people_now)))
+        paid_now = _r(sum(d["paid_now"] for d in (*cards_now, *people_now, *fixed)))
         live = simulate(cards_now, people_now, snap["monthly"], snap["order"], start,
-                        first_budget=_r(max(0.0, snap["monthly"] - paid_now)))
+                        first_budget=_r(max(0.0, snap["monthly"] - paid_now)), fixed=fixed)
     behind = _r(before - got)
     if total_open <= 0:
         status = {"key": "done", "title": "Plan tamamlandı ✓", "text": "Borçların kapandı. Ellerine sağlık."}
@@ -847,7 +1112,7 @@ def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | N
                   "text": f"Bu ay planda {_tl(left)} daha var." if left > TOL else "Bu ayın ödemesi tamam."}
     reasons = []
     known = {x["ident"] for x in snap["debts"]}
-    new = [d["title"] for d in (*cards, *people) if _ident(d) not in known]
+    new = [d["title"] for d in (*cards, *people, *fixed) if _ident(d) not in known]
     if new:
         reasons.append({"key": "new_debt", "text": f"Yeni borç eklendi: {', '.join(new)}"})
     if behind > TOL:

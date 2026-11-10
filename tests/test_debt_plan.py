@@ -69,18 +69,19 @@ def test_orderings_differ_for_personal_debts():
     assert list(soz["closes"]) == ["borc:soon", "borc:big", "borc:small"]  # tarihsiz en sonda
     faiz = dp.simulate([], people, 2000, "faiz", "2026-11")
     pays = {p["key"]: p["amount"] for p in faiz["months"][0]["payments"]}
-    assert set(pays) == {"borc:big", "borc:small", "borc:soon"}  # orantılı: herkes alır
-    assert pays == {"borc:big": 1200.0, "borc:small": 200.0, "borc:soon": 600.0}
+    # orantılı pay küçüğe ₺200 düşerdi (< ₺250): küçük borç bütün olarak kapanır, kalan 1.000 ötekilere orantılı, ₺50 katı
+    assert pays == {"borc:small": 1000.0, "borc:big": 650.0, "borc:soon": 350.0}
+    assert {p["key"]: p["amount"] for p in faiz["months"][1]["payments"]} == {"borc:big": 1350.0, "borc:soon": 650.0}
     for sim in (kucuk, soz, faiz):
         assert sim["debt_free"] == "2027-03" and sum(m["total"] for m in sim["months"]) == 10000
 
 
-def test_proportional_share_redistributes_capped_amounts():
+def test_proportional_share_closes_small_person_whole():
     from app import debt_plan as dp
 
     people = [_person("a", 100, i=1), _person("b", 9900, i=2)]
-    out = dp._share(people, {"a": 100, "b": 9900}, 5000)
-    assert round(sum(out.values()), 2) == 5000 and out["a"] == 50
+    out = dp.allocate_people(people, {"a": 100, "b": 9900}, 5000, "faiz")
+    assert out == {"a": 100.0, "b": 4900.0}  # a'nın payı ₺50 olurdu: bütün olarak kapanır
 
 
 def test_too_small_amount_shows_needed_amount_and_interest_warning():
@@ -271,6 +272,8 @@ def test_no_interest_steering_words_in_sources():
     """Kaynaktaki kullanıcıya giden dizgiler (tırnak içi). Açıklamalar ve yorumlar taranmaz: modülün ilke notu yasak
     ifadeleri ne yapılmayacağını anlatmak için adıyla anar. Mobil ekran ayrı depoda: e2e testi ekrandaki metni tarar."""
     files = [ROOT / "app" / "debt_plan.py", ROOT / "web" / "src" / "pages" / "DebtPlan.tsx",
+             # ödeme planı olan borç: kayıt formu ve hesap (yalnız kayıt; yapılandırma vb. önerisi yok)
+             ROOT / "app" / "debt_schedule.py", ROOT / "web" / "src" / "components" / "Debts.tsx",
              # Alırsam ne olur? (mobil Alsam mı? aynı lib/alsamMi.ts): alım ekranı da faizli yolu önermez
              ROOT / "web" / "src" / "components" / "Simulator.tsx", ROOT / "web" / "src" / "lib" / "alsamMi.ts"]
     for f in files:

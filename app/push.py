@@ -92,7 +92,7 @@ TYPES = {
     "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
-    "borc": ("Borç ödeme günü", True),  # elden borçta söz verilen gün yaklaştı (2 gün kala ve o gün; app/debt_plan.py)
+    "borc": ("Borç ödeme günü", True),  # elden borçta söz verilen gün ve ödeme planlı borcun taksit günü (2 gün kala ve o gün)
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -695,7 +695,23 @@ def _borc(today: date) -> list[dict]:
         return []
     out = []
     for d in db.list_debts(open_only=True):
-        if d["direction"] != "borc" or not d["due_date"] or d["written_off_at"] or d["remaining"] <= 0:
+        if d["direction"] != "borc" or d["written_off_at"] or d["remaining"] <= 0:
+            continue
+        sch = d.get("schedule")
+        if sch:  # ödeme planı olan borç: her taksitten 2 gün önce ve o gün (ödenmişse yok)
+            nx = sch["next"]
+            if not nx:
+                continue
+            left = (date.fromisoformat(nx["date"]) - today).days
+            if left not in (0, 2):
+                continue
+            when = "bugün" if left == 0 else "2 gün sonra"
+            out.append(item("borc", f"borc:{d['id']}:taksit{nx['no']}:{nx['date']}:{'songun' if left == 0 else '2gun'}",
+                            f"{d['person']}: {nx['no']}. taksitin günü {when}",
+                            f"Taksit {money.tl(max(nx['left'], sch['due_now']), trim=True)}. Ödediysen Borç planında "
+                            "işaretle.", R_BORC_PLANI))
+            continue
+        if not d["due_date"]:
             continue
         left = (date.fromisoformat(d["due_date"]) - today).days
         if left not in (0, 2):

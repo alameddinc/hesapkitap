@@ -100,6 +100,14 @@ export const TERIM = {
       "üstüne gecikme faizi eklenir. Faiz kalan borca işlediği için ne kadar çok yatırırsan o kadar az faiz çıkar; " +
       "tamamını ödersen hiç çıkmaz.",
   },
+  borcTutar: {
+    ad: "Tutarlar nasıl hesaplanır",
+    aciklama: "Elden borç ödemeleri kişi kişi toplanır ve ₺50'nin katlarına yuvarlanır. Bir kişiye bir ayda en az ₺250 " +
+      "ödenir (borcun kalanı daha azsa kalanın tamamı). Son ödemede ₺100'den az kalan bırakılmaz, bir önceki ödemeye " +
+      "eklenir. \"Faizi önle\"de paylar çok küçük kalırsa önce küçük borçlar bütün olarak kapanır: daha az ama daha " +
+      "büyük ödeme. Kart borcu ve taksitler tam tutarıyla yazılır. Ödeme planı olan borçların taksiti her ay önce " +
+      "ayrılır; kalan para kartlara, sonra elden borçlara gider.",
+  },
 } as const satisfies Record<string, Terim>;
 
 export type TerimId = keyof typeof TERIM;

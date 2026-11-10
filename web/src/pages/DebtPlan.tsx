@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarCheck, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
@@ -10,10 +10,18 @@ import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurum
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
-import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanHarm } from "../lib/debtPlan";
+import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind } from "../lib/debtPlan";
+import { DebtForm } from "../components/Debts";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
 const trimTl = (x: number) => tl(x).replace(/,00(?=\D*$)/, "");
+/** eski sunucu: groups yok → her satır kendi grubu */
+const asGroups = (items: PlanItem[]): PlanGroup[] => items.map((i) => ({ ...i, count: 1, items: [i], payable: i.payable }));
+const KIND_ICON: Record<PlanKind, { Icon: typeof CreditCard; tone: string; bar: string }> = {
+  card: { Icon: CreditCard, tone: "bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400", bar: "bg-blue-600" },
+  person: { Icon: HandCoins, tone: "bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-400", bar: "bg-green-600" },
+  fixed: { Icon: CalendarClock, tone: "bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300", bar: "bg-violet-600" },
+};
 
 /** Borç kapatma planı (Diğer → Borç planı; Borç / Alacak başlığından da açılır). */
 export default function DebtPlan() {
@@ -31,6 +39,9 @@ export default function DebtPlan() {
   const text = typed ?? (r?.monthly != null ? r.monthly.toLocaleString("tr-TR", { maximumFractionDigits: 2 }) : "");
   const [allMonths, setAllMonths] = useState(false);
   const [openMonth, setOpenMonth] = useState<string | null>(null);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const people = useQuery({ queryKey: ["transfers"], queryFn: () => send<{ people: { name: string }[] }>("/api/transfers"), enabled: adding });
   // yazılan tutar: geçerliyse sayı, değilse hata (plan son geçerli tutarla kalır)
   const parsed = typed == null ? null : typed.trim() ? parseAmount(typed) : null;
   const err = typed == null ? null : aylikTutarHatasi(parsed);
@@ -176,6 +187,10 @@ export default function DebtPlan() {
             {p.shortfall.allocation && <p className="text-xs opacity-90" data-testid="dagitim">{p.shortfall.allocation}</p>}
           </section>
         )}
+        {p.fixed_short && (
+          <p role="alert" className="flex gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/40 dark:text-amber-50" data-testid="taksit-yetmiyor">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden /><span><b>{p.fixed_short.title}.</b> {maskText(p.fixed_short.text)}</span></p>
+        )}
         <section className="card space-y-3 p-4" data-testid="borc-plani-ozet">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="min-w-0">
@@ -196,6 +211,11 @@ export default function DebtPlan() {
             <span className="rounded-xl bg-stone-50 px-3 py-2 dark:bg-stone-800/60">
               <span className="block text-xs text-stone-500">Elden borç ({p.totals.person_count})</span>
               <span className="block text-sm font-semibold tabular-nums">{p.hidden.people ? "—" : tl(p.totals.people)}</span></span>
+            {(p.totals.fixed_count ?? 0) > 0 && (
+              <span className="col-span-2 flex items-center justify-between gap-2 rounded-xl bg-stone-50 px-3 py-2 dark:bg-stone-800/60" data-testid="odeme-planli-toplam">
+                <span className="min-w-0 text-xs text-stone-500">Ödeme planı olan ({p.totals.fixed_count}) · bu ay taksit {tl(p.totals.fixed_this_month ?? 0)}</span>
+                <span className="shrink-0 text-sm font-semibold tabular-nums">{tl(p.totals.fixed ?? 0)}</span></span>
+            )}
           </div>
           {p.debt_free && <p className="text-sm text-stone-600 dark:text-stone-300" data-testid="borcsuz">{p.debt_free.text}</p>}
           {p.hidden.people && <p className="text-xs text-stone-500">Borç / Alacak bu defterde sana kapalı; elden borçlar planda yok.</p>}
@@ -276,24 +296,53 @@ export default function DebtPlan() {
 
         {p.this_month.items.length > 0 && (
           <section className="space-y-1.5" aria-label="Bu ay ödenecekler">
-            <H2>Bu ay ödenecekler · {p.this_month.label}</H2>
+            <h2 className="flex items-center gap-1.5 px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">
+              Bu ay ödenecekler · {p.this_month.label}
+              <TerimBilgi id="borcTutar" metin={p.rules_info} /></h2>
             <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
-              {p.this_month.items.map((i) => (
-                <li key={`${i.key}-${i.done ? "d" : "p"}`} className="flex items-center gap-3 p-3" data-testid="bu-ay">
-                  <span className={cx("flex size-7 shrink-0 items-center justify-center rounded-full border-2",
-                    i.done ? "border-green-600 bg-green-600 text-white" : "border-stone-300 dark:border-stone-600")} aria-hidden>
-                    {i.done && <Check size={15} strokeWidth={3} />}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className={cx("block font-medium break-words", i.done && "text-stone-500 line-through")}>{i.title}</span>
-                    <span className="block text-xs text-stone-500">{maskText(i.text)}</span></span>
-                  {/* dar ekranda tutar ve düğme alt alta: ad ve açıklama sıkışmasın */}
-                  <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
-                    <span className="font-semibold tabular-nums">{tl(i.amount)}</span>
-                    {!i.done && p.can_edit && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(i.payable)}
-                      aria-label={`${i.title}: ödedim`}>Ödedim</button>}
-                  </span>
-                </li>
-              ))}
+              {(p.this_month.groups ?? asGroups(p.this_month.items)).map((g) => {
+                const many = g.count > 1;
+                const open = openGroup === g.key;
+                return (
+                  <li key={`${g.key}-${g.done ? "d" : "p"}`} data-testid="bu-ay">
+                    <div className="flex items-center gap-3 p-3">
+                      <span className={cx("flex size-7 shrink-0 items-center justify-center rounded-full border-2",
+                        g.done ? "border-green-600 bg-green-600 text-white" : "border-stone-300 dark:border-stone-600")} aria-hidden>
+                        {g.done && <Check size={15} strokeWidth={3} />}</span>
+                      {many ? (
+                        <button className="min-w-0 flex-1 text-left" aria-expanded={open} onClick={() => setOpenGroup(open ? null : g.key)}>
+                          <span className={cx("flex items-center gap-1 font-medium break-words", g.done && "text-stone-500 line-through")}>{maskText(g.title)}
+                            <ChevronDown size={15} className={cx("shrink-0 text-stone-400 transition-transform", open && "rotate-180")} aria-hidden /></span>
+                          <span className="block text-xs text-stone-500">{maskText(g.text)}</span></button>
+                      ) : (
+                        <span className="min-w-0 flex-1">
+                          <span className={cx("block font-medium break-words", g.done && "text-stone-500 line-through")}>{maskText(g.title)}</span>
+                          <span className="block text-xs text-stone-500">{maskText(g.text)}</span></span>
+                      )}
+                      {/* dar ekranda tutar ve düğme alt alta: ad ve açıklama sıkışmasın */}
+                      <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
+                        <span className="font-semibold tabular-nums">{tl(g.amount)}</span>
+                        {!g.done && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
+                          aria-label={`${g.title}: ödedim`}>Ödedim</button>}
+                      </span>
+                    </div>
+                    {many && open && (
+                      <ul className="space-y-1 px-3 pb-3 pl-13 text-sm" data-testid="bu-ay-alt">
+                        {g.items.map((i, n) => (
+                          <li key={`${i.key}-${n}`} className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1">
+                              <span className="block break-words">{i.sub ? maskText(i.sub) : `${n + 1}. borç`}</span>
+                              <span className="block text-xs text-stone-500">{maskText(i.text)}</span></span>
+                            <span className="tabular-nums">{tl(i.amount)}</span>
+                            {!i.done && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
+                              aria-label={`${i.title} ${n + 1}. borç: ödedim`}>Ödedim</button>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </section>
         )}
@@ -304,9 +353,8 @@ export default function DebtPlan() {
             {p.debts.map((d) => (
               <li key={d.key} className="card space-y-2 p-3" data-testid="borc">
                 <div className="flex items-start gap-3">
-                  <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-lg",
-                    d.kind === "card" ? "bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400" : "bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-400")} aria-hidden>
-                    {d.kind === "card" ? <CreditCard size={17} /> : <HandCoins size={17} />}</span>
+                  {(() => { const k = KIND_ICON[d.kind] ?? KIND_ICON.person; return (
+                    <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-lg", k.tone)} aria-hidden><k.Icon size={17} /></span>); })()}
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium break-words">{d.order}. {d.title}</span>
                     <span className={cx("block text-xs", d.overdue && d.kind === "card" ? "text-red-600 dark:text-red-400" : "text-stone-500")}>{d.subtitle}</span></span>
@@ -316,13 +364,16 @@ export default function DebtPlan() {
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800" role="progressbar" aria-label={`${d.title} ödenen`}
                   aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(d.progress * 100)}>
-                  <div className={cx("h-full rounded-full", d.kind === "card" ? "bg-blue-600" : "bg-green-600")} style={{ width: `${Math.max(d.progress * 100, d.progress > 0 ? 3 : 0)}%` }} />
+                  <div className={cx("h-full rounded-full", (KIND_ICON[d.kind] ?? KIND_ICON.person).bar)} style={{ width: `${Math.max(d.progress * 100, d.progress > 0 ? 3 : 0)}%` }} />
                 </div>
                 {d.paid > 0 && <p className="text-xs text-stone-500 tabular-nums">{tl(d.paid)} ödendi · {tl(d.total)} borcun %{Math.round(d.progress * 100)}</p>}
                 {d.harm ? <Harm h={d.harm} rateNote={d.rate_note ?? null} /> : d.warning && <p className={cx("flex gap-2 rounded-lg p-2 text-xs", d.overdue ? "bg-red-50 text-red-900 dark:bg-red-950/40 dark:text-red-100" : "bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100")}>
                   <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>{maskText(d.warning)}{d.rate_note && <span className="block opacity-80">{d.rate_note}</span>}</span></p>}
                 {d.promise && <p className={cx("text-xs", d.promise.missed ? "text-amber-800 dark:text-amber-300" : "text-stone-500")}>{d.promise.text}</p>}
                 {d.future_installments && <p className="text-xs text-stone-500">{maskText(d.future_installments.text)}</p>}
+                {d.schedule?.next && <p className="text-xs text-stone-500 tabular-nums" data-testid="siradaki-taksit">
+                  Sıradaki: {d.schedule.next.no}. taksit · {maskText(trimTl(d.schedule.next.left))} · {d.due_label}
+                  {d.schedule.interest_label ? ` · ${d.schedule.interest_label}` : ""}</p>}
               </li>
             ))}
           </ul>
@@ -334,7 +385,8 @@ export default function DebtPlan() {
             <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
               {months.map((m) => {
                 const open = openMonth === m.month;
-                const closing = m.payments.filter((x) => x.closes);
+                const rows = m.groups ?? m.payments.map((x) => ({ ...x, count: 1 }));
+                const closing = rows.filter((x) => x.closes);
                 return (
                   <li key={m.month}>
                     <button className="flex w-full items-center gap-3 p-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" aria-expanded={open}
@@ -343,7 +395,7 @@ export default function DebtPlan() {
                       <span className="min-w-0 flex-1">
                         <span className="block font-medium">{m.label}</span>
                         <span className="block text-xs text-stone-500">
-                          {closing.length ? `Kapanan: ${closing.map((x) => x.title).join(", ")}` : `${m.payments.length} ödeme`}
+                          {closing.length ? `Kapanan: ${closing.map((x) => x.title).join(", ")}` : `${rows.length} ödeme`}
                           {m.left > 0 ? ` · kalan ${tl(m.left)}` : " · borç kalmadı"}
                           {m.interest > 0 && !p.hidden.fees ? ` · faiz ~${tl(m.interest)}` : ""}</span></span>
                       <span className="shrink-0 font-semibold tabular-nums">{tl(m.total)}</span>
@@ -351,9 +403,12 @@ export default function DebtPlan() {
                     </button>
                     {open && (
                       <ul className="space-y-1 px-3 pb-3 pl-11 text-sm">
-                        {m.payments.map((x) => (
+                        {rows.map((x) => (
                           <li key={x.key} className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 break-words">{x.title}{x.closes && <span className="ml-1 text-xs text-green-700 dark:text-green-400">· kapanır</span>}</span>
+                            <span className="min-w-0 flex-1 break-words">{x.title}
+                              {x.count > 1 && <span className="ml-1 text-xs text-stone-500">· {x.count} borç</span>}
+                              {x.kind === "fixed" && <span className="ml-1 text-xs text-stone-500">· taksit</span>}
+                              {x.closes && <span className="ml-1 text-xs text-green-700 dark:text-green-400">· kapanır</span>}</span>
                             <span className="tabular-nums">{tl(x.amount)}</span>
                           </li>
                         ))}
@@ -377,7 +432,15 @@ export default function DebtPlan() {
           </section>
         )}
 
+        {adding && p.can_edit && (
+          <section className="card p-4" aria-label="Borç ekle">
+            <h2 className="mb-2 font-semibold">Borç ekle</h2>
+            <DebtForm people={(people.data?.people ?? []).map((x) => x.name)} borcOnly onDone={() => {
+              setAdding(false); void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" }); }} />
+          </section>
+        )}
         <div className="flex flex-wrap gap-2">
+          {p.can_edit && !adding && <button className="btn-ghost" onClick={() => setAdding(true)}><Plus size={16} /> Borç ekle</button>}
           <button className="btn-ghost" onClick={() => ui.go("borclar")}><HandCoins size={16} /> Borç / Alacak</button>
           {p.summary_card.eligible && <OzetToggle />}
         </div>

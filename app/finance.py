@@ -1636,7 +1636,20 @@ def payables(today: date | None = None) -> list[dict]:
 
     rules = book.active()
     for d in [] if rules and "borclar" in rules["hidden_pages"] else db.list_debts():
-        if d["direction"] != "borc" or not d["due_date"] or d["asset"] != "TRY":  # döviz/altın: Transferler + hatırlatma
+        sch = d.get("schedule")
+        if sch and d["direction"] == "borc" and not d["settled_at"] and sch["next"]:
+            # ödeme planı olan borç: sıradaki taksit (geçmişte eksik kalan dahil); ödeme borcun kendisine düşer
+            nx = sch["next"]
+            paid = d["paid_amount"] or 0.0
+            amount = _round(paid + max(nx["left"], sch["due_now"]))
+            status = _status(amount, paid or None, nx["date"], today)
+            out.append({"type": "debt", "id": d["id"], "title": f"{d['person']} ({nx['no']}. taksit)",
+                        "subtitle": " · ".join(x for x in ("Ödeme planı", sch["creditor_label"], d["note"]) if x),
+                        "amount": amount, "min_payment": None, "due_date": nx["date"],
+                        "days_left": (date.fromisoformat(nx["date"]) - today).days,
+                        "paid_amount": paid or None, "paid_at": None, "status": status, "in_total": True})
+            continue
+        if sch or d["direction"] != "borc" or not d["due_date"] or d["asset"] != "TRY":  # döviz/altın: Transferler + hatırlatma
             continue
         if d["settled_at"] and (today - date.fromisoformat(d["settled_at"])).days > PAYABLE_WINDOW:
             continue
