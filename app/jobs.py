@@ -304,6 +304,13 @@ async def scheduler() -> None:
             await asyncio.to_thread(integrity.report_admin, now)
         except Exception:  # noqa: BLE001
             log.exception("integrity report failed")
+        try:  # yeni sürüm açıldı: her defteri bir kez denetle; son gecede olmayan ekstre uyarısı → yöneticiye bildirim
+            from app import integrity
+
+            if (got := await asyncio.to_thread(integrity.post_deploy_tick)) and got.get("finished"):
+                log.info("güncelleme sonrası denetim: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("post-deploy integrity failed")
         try:  # ürün grubu sürümü yükseldiyse arka planda parça parça yeniden gruplama (app/product_groups.py regroup_tick)
             from app import product_groups
 

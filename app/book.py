@@ -17,8 +17,12 @@ süzülür; özet, grafik, plan ve tahminler bunlardan hesaplandığı için giz
 """
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from app import db, saferegex
+
+_OWNER_VIEW: ContextVar[bool] = ContextVar("book_owner_view", default=False)
 
 PAGES = {  # sayfa → üyeye kapanan API önekleri
     "plan": ("/api/plan", "/api/recurring"),
@@ -77,8 +81,21 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
 
 def member() -> dict | None:
     """İsteği yapan, ortak defteri açmış bir üye mi? (sahip, tek kullanıcılı kurulum ve "Benim" defteri: None)"""
+    if _OWNER_VIEW.get():
+        return None
     u = db.current_user()
     return u if u and u.get("member_of") and not u.get("own_book") else None
+
+
+@contextmanager
+def owner_view():
+    """Bu blokta süzme yok (sahibin gördüğü tüm defter): defterin bütününe ait iç hesaplar için, ör. doğruluk denetimi.
+    Sonucu üyeye ancak sayı olarak gidecek işlerde kullanılır; kayıt ayrıntısı üyeye ayrıca süzülür (integrity.details)."""
+    token = _OWNER_VIEW.set(True)
+    try:
+        yield
+    finally:
+        _OWNER_VIEW.reset(token)
 
 
 def role(u: dict | None = None) -> str:

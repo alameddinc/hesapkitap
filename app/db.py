@@ -675,9 +675,13 @@ def _cached(name: str, fn, *key):
 
 
 def _viewer() -> int | None:
-    """Önbellek anahtarı: ortak defter üyesi süzülmüş veri görür, sahibinkiyle karışmasın."""
-    u = current_user()
-    return u["id"] if u and u.get("member_of") else None
+    """Önbellek anahtarı: ortak defter üyesi süzülmüş veri görür, sahibinkiyle karışmasın. Süzmeyle aynı kaynak
+    (book.member): sahip görünümünde (book.owner_view, doğruluk denetimi) üyenin süzülmüş kopyası kullanılmaz ve
+    süzülmemiş veri üyenin anahtarına yazılmaz."""
+    from app import book
+
+    m = book.member()
+    return m["id"] if m else None
 
 
 _MISS = object()
@@ -1360,10 +1364,8 @@ def card_transactions(include_deleted: bool = False) -> list[dict]:
                     FROM transactions t JOIN statements s ON s.id = t.statement_id
                     {'' if include_deleted else 'WHERE t.is_deleted = 0'}
                     ORDER BY t.txn_date DESC, t.id DESC""")))
-    u = current_user()
-    viewer = u["id"] if u and u.get("member_of") else None  # ortak defter üyesi süzülmüş görür
     # tek istekte birkaç kez okunuyor; çağıran satırı değiştirebilir: kopyası döner
-    return [dict(r) for r in _cached("card_txns", load, include_deleted, viewer)]
+    return [dict(r) for r in _cached("card_txns", load, include_deleted, _viewer())]
 
 
 CARD_EDITABLE = {"category", "subcategory", "txn_type", "note", "is_deleted", "description", "hidden"}
