@@ -14,17 +14,28 @@ TODAY = date(2026, 11, 10)
 # Sahibin kuralı: plan hiçbir zaman faizli bir yol önermez. Metinlerde bu ifadeler geçmez (büyük/küçük harf fark etmez).
 BANNED = [r"kredi\s*çek", r"kredi\s*al", r"kredi\s*kullan", r"ihtiyaç\s*kredi", r"kredi\s*teklif", r"taksitlendir",
           r"borç\s*transfer", r"nakit\s*avans", r"ertele", r"refinans", r"yapılandır", r"asgari(yi)?\s+öde(?![a-zçğıöşü])",
-          r"kredi\s*kartı\s*başvur", r"faizsiz\s*kredi", r"kampanya"]
+          r"kredi\s*kartı\s*başvur", r"faizsiz\s*kredi", r"kampanya",
+          # asgariyi strateji olarak önermek yasak; yalnız zararı azaltma cümlesi "en az asgari tutarı … yatır" geçer
+          r"(?<!en az )asgari(yi)?\s+(tutar\w*\s+)?(\([^)]*\)\s+)?(öde|yatır)(?![a-zçğıöşü])"]
+# Zararı azaltma sözleri: yalnız tutar kartın tamamına son ödeme gününe kadar yetmiyorsa (aksi halde tamamını öde)
+HARM = [r"en\s+az\s+asgari", r"gecikme\s+faizi\s+işlemez", r"kapatamıyorsun"]
+
+
+def _low(text: str) -> str:
+    return text.replace("İ", "i").replace("I", "ı").lower()
 
 
 def _banned_in(text: str) -> list[str]:
-    t = text.replace("İ", "i").replace("I", "ı").lower()
-    return [p for p in BANNED if re.search(p, t)]
+    return [p for p in BANNED if re.search(p, _low(text))]
 
 
-def _card(key, remaining, due, rate=0.035, title=None):
+def _harm_in(text: str) -> list[str]:
+    return [p for p in HARM if re.search(p, _low(text))]
+
+
+def _card(key, remaining, due, rate=0.035, title=None, min_payment=None):
     return {"key": key, "kind": "card", "title": title or key, "remaining": remaining, "due_date": due,
-            "rate": {"monthly": rate, "source": "genel"}}
+            "rate": {"monthly": rate, "source": "genel"}, "min_payment": min_payment, "total": remaining, "paid": 0.0}
 
 
 def _person(key, remaining, due=None, debt_date="2026-01-01", i=0):
@@ -130,7 +141,9 @@ def test_build_gathers_cards_and_personal_debts(client, tmpdb):
     first = p["debts"][0]
     assert first["due_date"] == "2026-11-12" and first["rate"] == {"monthly": 0.0375, "source": "ekstre"}
     # yalnız asgariyi ödersen: (12.000 − 4.800) × %3,75 × 1,3 = 351
-    assert first["interest_if_min"] == 351.0 and "yalnız asgariyi ödersen bu ay yaklaşık ₺351 faiz işler" in first["warning"]
+    assert first["interest_if_min"] == 351.0
+    # 10.000 iki kartın 18.000'ine yetmiyor: uyarı zararı azaltma adımlarına döner (ayrıntı: test_harm_*)
+    assert first["harm"] and first["warning"].startswith("Bu ay tamamını kapatamıyorsun.")
     assert first["payable"]["type"] == "statement" and first["payable"]["id"]
     assert p["excluded"] and "TL dışı" in p["excluded"][0]["text"]  # altın borcu planda yok
     assert all(d["title"] != "Örnek Kişi" or d["remaining"] == 5000 for d in p["debts"])  # alacak plana girmez
@@ -139,6 +152,8 @@ def test_build_gathers_cards_and_personal_debts(client, tmpdb):
     assert p["shortfall"]["title"] == "Bu tutarla kart faizi önlenemiyor" and "₺18.000 yaparsan" in p["shortfall"]["text"]
     ok = dp.build(monthly=18000, today=TODAY)
     assert ok["shortfall"] is None and ok["totals"]["interest_projected"] == 0
+    assert "yalnız asgariyi ödersen bu ay yaklaşık ₺351 faiz işler" in ok["debts"][0]["warning"]
+    assert all(d.get("harm") is None for d in ok["debts"])
     assert ok["debt_free"]["month"] == "2026-12" and "Aralık 2026" in ok["debt_free"]["text"]
     items = ok["this_month"]["items"]
     assert [i["key"] for i in items if not i["done"]][:2] == [d["key"] for d in ok["debts"][:2]]
@@ -225,6 +240,8 @@ def test_shared_book_permissions_and_visibility(owner, tmpdb):  # noqa: F811
     assert all(d["interest_if_min"] is None for d in r["debts"]) and r["totals"]["interest_projected"] is None
     low = editor.get("/api/debt-plan", params={"monthly": 100}).json()
     assert low["shortfall"]["interest"] is None and "faiz ve vergi işler" not in low["shortfall"]["text"]
+    harms = [d["harm"] for d in low["debts"] if d.get("harm")]
+    assert harms and all(h["compare"] is None and h["interest_planned"] is None and "₺" not in h["steps"][1] for h in harms)
     assert owner.get("/api/debt-plan").json()["totals"]["person_count"] == 2  # sahip her şeyi görür
 
 
@@ -269,8 +286,11 @@ def test_banned_scanner_catches_examples():
     for s in ("Kredi çekerek kapat", "Borcunu taksitlendir", "Borç transferi yap", "Nakit avans kullan",
               "Ödemeyi ertele", "Asgari öde, rahatla", "Asgariyi öde."):
         assert _banned_in(s), s
+    for s in ("Asgari tutarı yatır, yeter.", "Asgariyi yatır.", "Asgari tutarı (₺4.800) yatır."):
+        assert _banned_in(s), s
     for s in ("Bu kartta yalnız asgariyi ödersen bu ay yaklaşık ₺351 faiz işler.", "yalnız asgari ödeme faizi durdurmaz",
-              "Kredi kartı borcu"):
+              "Kredi kartı borcu", "Son ödeme gününden (18 Kasım) önce en az asgari tutarı (₺9.578) yatır — gecikme "
+              "faizi işlemez."):
         assert not _banned_in(s), s
 
 
@@ -346,3 +366,200 @@ def test_first_load_field_and_plan_use_same_amount(client, tmpdb, monkeypatch, s
     same = client.get("/api/debt-plan", params={"monthly": want}).json()
     assert r["debt_free"] == same["debt_free"] and r["months"] == same["months"]
     assert r["this_month"]["budget"] == same["this_month"]["budget"]
+
+
+# ---------------------------------------------------------------- zararı azaltma (tutar kartın tamamına yetmiyorsa)
+
+def test_shortfall_allocation_puts_every_minimum_first_then_highest_rate():
+    from app import debt_plan as dp
+
+    cards = [_card("kart:a", 10000, "2026-11-15", rate=0.03, min_payment=3000),
+             _card("kart:b", 8000, "2026-11-25", rate=0.045, min_payment=2000)]
+    people = [_person("borc:1", 1000, i=1)]
+    sim = dp.simulate(cards, people, 9000, "faiz", "2026-11")
+    pays = {p["key"]: p["amount"] for p in sim["months"][0]["payments"]}
+    # asgariler (3.000 + 2.000), kalan 4.000 faizi yüksek karta (b); elden borca bu ay kalmaz
+    assert pays == {"kart:a": 3000.0, "kart:b": 6000.0}
+    # asgarilere bile yetmiyorsa: son ödemesi önce gelenin asgarisi önce
+    low = {p["key"]: p["amount"] for p in dp.simulate(cards, people, 4000, "faiz", "2026-11")["months"][0]["payments"]}
+    assert low == {"kart:a": 3000.0, "kart:b": 1000.0}
+    # aynı oranda borcu büyük olan önce
+    same = [_card("kart:a", 4000, "2026-11-15", min_payment=1000), _card("kart:b", 9000, "2026-11-25", min_payment=2000)]
+    eq = {p["key"]: p["amount"] for p in dp.simulate(same, [], 5000, "faiz", "2026-11")["months"][0]["payments"]}
+    assert eq == {"kart:a": 1000.0, "kart:b": 4000.0}
+    # tutar yetiyorsa eski sıra: son ödeme gününe göre tamamı, sonra elden borç
+    ok = {p["key"]: p["amount"] for p in dp.simulate(cards, people, 19000, "faiz", "2026-11")["months"][0]["payments"]}
+    assert ok == {"kart:a": 10000.0, "kart:b": 8000.0, "borc:1": 1000.0}
+    # gelecek ay son ödemesi olan kart bu ay "yetmiyor" sayılmaz: bu ay a'nın tamamı
+    later = [_card("kart:a", 10000, "2026-11-15", min_payment=3000), _card("kart:b", 6000, "2026-12-20", min_payment=1500)]
+    nov = {p["key"]: p["amount"] for p in dp.simulate(later, [], 10000, "faiz", "2026-11")["months"][0]["payments"]}
+    assert nov == {"kart:a": 10000.0}
+
+
+def test_harm_reduction_steps_and_comparison(client, tmpdb):
+    from app import debt_plan as dp
+
+    _seed_cards(tmpdb)
+    _seed_people(client)
+    p = dp.build(monthly=10000, today=TODAY)
+    c1, c2 = p["debts"][0], p["debts"][1]
+    # 10.000: asgariler 4.800 + 2.400, kalan 2.800 faizi yüksek (%3,75) karta → 7.600 / 2.400
+    h = c1["harm"]
+    assert h["title"] == "Bu ay tamamını kapatamıyorsun" and h["planned"] == 7600 and h["min_left"] == 4800
+    assert h["steps"][0] == "Son ödeme gününden (12 Kasım) önce en az asgari tutarı (₺4.800) yatır — gecikme faizi işlemez."
+    # (12.000 − 7.600) × %3,75 × 1,3 = 214,5 → ~₺215
+    assert "planladığın ₺7.600 ile bu ay yaklaşık ₺215 faiz işler (tamamını ödersen ₺0)" in h["steps"][1]
+    assert [(r["key"], r["amount"], r["interest"]) for r in h["compare"]] == [
+        ("asgari", 4800.0, 351.0), ("plan", 7600.0, 215.0), ("full", 12000.0, 0.0)]
+    assert c2["harm"]["planned"] == 2400 and c2["harm"]["compare"][1]["interest"] == 164.0  # 3.600 × %3,5 × 1,3
+    assert "gecikme faizi" in h["info"] and "akdi" in h["info"]
+    # asgari borcun tamamıysa karşılaştırmada ayrı "Yalnız asgari" satırı yok
+    from app import debt_plan as _dp
+    whole = _dp._harm({**c1, "min_payment": 20000, "paid": 0.0, "kind": "card", "remaining": 12000.0}, {"months": []}, "2026-11", False)
+    assert whole["min_left"] == 12000 and [r["key"] for r in whole["compare"]] == ["plan", "full"]
+    assert "asgarisini" in p["shortfall"]["allocation"] and "faizi en yüksek" in p["shortfall"]["allocation"]
+    item = next(i for i in p["this_month"]["items"] if i["key"] == c1["key"])
+    assert item["amount"] == 7600 and "(asgari ₺4.800 dahil)" in item["text"]
+    assert [w["text"] for w in p["warnings"] if w["key"] == f"faiz:{c1['key']}"] == [c1["warning"]]
+    # asgarilere bile yetmiyor: planlanan asgarinin altında, gecikme faizi uyarısı
+    low = dp.build(monthly=5000, today=TODAY)["debts"][1]["harm"]
+    assert low["below_min"] and low["planned"] == 200 and low["compare"][1]["late"] and "asgarinin altında" in low["steps"][1]
+
+
+def test_no_harm_reduction_text_when_full_payment_possible(client, tmpdb):
+    from app import debt_plan as dp
+
+    _seed_cards(tmpdb)
+    _seed_people(client)
+    for monthly in (18000, 25000, 100000):
+        for order in dp.ORDERS:
+            p = dp.build(monthly=monthly, order=order, today=TODAY)
+            assert p["shortfall"] is None and all(d.get("harm") is None for d in p["debts"])
+            found = {s: _harm_in(s) for s in _all_strings(p) if _harm_in(s)}
+            assert not found, found
+            # tamamı ödenebiliyorken asgari bir seçenek değil: uyarı "Tamamını öde"
+            assert all("Tamamını öde" in d["warning"] for d in p["debts"] if d["kind"] == "card" and d.get("warning"))
+    short = dp.build(monthly=10000, today=TODAY)
+    assert any(_harm_in(s) for s in _all_strings(short))
+
+
+# ---------------------------------------------------------------- planı başlat (anlık görüntü)
+
+def _people_only(client):
+    a = client.post("/api/debts", json={"person": "Örnek Kişi", "direction": "borc", "amount": 5000,
+                                        "debt_date": "2026-06-01"}).json()["id"]
+    b = client.post("/api/debts", json={"person": "Komşu", "direction": "borc", "amount": 2000,
+                                        "debt_date": "2026-08-01"}).json()["id"]
+    return a, b
+
+
+def test_commit_saves_snapshot_and_preview_does_not_change_it(client):
+    from app import debt_plan as dp
+
+    _people_only(client)
+    p = dp.build(monthly=2000, order="kucuk", today=TODAY)
+    assert p["commitment"] is None and p["commit_offer"]["action"] == "Planı başlat"
+    p = dp.commit_plan(monthly=2000, order="kucuk", today=TODAY)
+    c = p["commitment"]
+    assert c["start_month"] == "2026-11" and c["monthly"] == 2000 and c["order"] == "kucuk" and not c["differs"]
+    assert c["debt_free"]["month"] == "2027-02" and c["month_no"] == 1 and c["month_count"] == 4
+    assert c["status"] == {"key": "ok", "title": "Plana uygun ✓", "text": "Bu ay planda ₺2.000 daha var."}
+    assert c["changed"] is None and p["commit_offer"] is None and p["settings"] == {"monthly": 2000.0, "order": "kucuk"}
+    prev = dp.build(monthly=3500, today=TODAY)
+    assert prev["commitment"]["differs"] and prev["commitment"]["monthly"] == 2000
+    assert prev["commitment"]["continue"]["action"] == "Bu planla devam"
+    assert dp._store()["current"]["monthly"] == 2000  # önizleme kaydı değiştirmedi
+
+
+def test_commit_progress_on_track_behind_ahead_and_done(client):
+    from app import debt_plan as dp
+
+    a, b = _people_only(client)
+    dp.commit_plan(monthly=2000, order="kucuk", today=TODAY)  # Kas: Komşu 2.000 · Ara–Şub: Örnek Kişi
+    dec = date(2026, 12, 10)
+    # Kasım'da hiç ödenmedi: geride, yetişmek için bu ay 4.000; plan değişti uyarısı
+    c = dp.build(today=dec)["commitment"]
+    assert c["status"]["key"] == "behind" and c["status"]["title"] == "Planın ₺2.000 gerisindesin"
+    assert c["status"]["text"].startswith("Bu ay ₺4.000 ödersen yetişirsin.")
+    assert [r["key"] for r in c["changed"]["reasons"]] == ["missed"] and c["changed"]["text"] == "Kasım'da plandaki ödeme eksik kaldı"
+    assert c["changed"]["action"] == "Planı yeniden oluştur"
+    for s in _all_strings(c):
+        assert not _banned_in(s) and not _harm_in(s), s  # kartta yetmeme yok: asgari sözü de yok
+    client.post(f"/api/debts/{b}/pay", json={"amount": 2000, "paid_at": "2026-11-20"})
+    c = dp.build(today=dec)["commitment"]
+    assert c["status"] == {"key": "ok", "title": "Plana uygun ✓", "text": "Bu ay planda ₺2.000 daha var."}
+    assert c["changed"] is None and c["month_no"] == 2
+    client.post(f"/api/debts/{a}/pay", json={"amount": 3000, "paid_at": "2026-11-25"})
+    c = dp.build(today=dec)["commitment"]
+    assert c["status"]["key"] == "ahead"
+    assert c["status"] == {"key": "ahead", "title": "Planın önündesin", "text": "Şubat 2027 yerine Aralık'ta bitebilir."}
+    client.post(f"/api/debts/{a}/pay", json={"amount": 2000, "paid_at": "2026-12-05"})
+    assert dp.build(today=dec)["commitment"]["status"]["key"] == "done"
+
+
+def test_new_debt_marks_plan_changed_and_replan_keeps_history(client):
+    from app import debt_plan as dp
+
+    _people_only(client)
+    dp.commit_plan(monthly=2000, order="kucuk", today=TODAY)
+    client.post("/api/debts", json={"person": "Kuzen", "direction": "borc", "amount": 1500, "debt_date": "2026-11-20"})
+    dec = date(2026, 12, 10)
+    c = dp.build(today=dec)["commitment"]
+    assert c["changed"]["title"] == "Plan değişti" and "Yeni borç eklendi: Kuzen" in c["changed"]["text"]
+    assert "Önceki plan" in c["changed"]["confirm"]
+    p = dp.commit_plan(today=dec)  # yeniden oluştur: kayıtlı tutar ve sıralamayla, bugünkü borçlar
+    c = p["commitment"]
+    assert c["start_month"] == "2026-12" and c["changed"] is None and c["status"]["key"] == "ok"
+    assert {x["title"] for x in dp._store()["current"]["debts"]} == {"Örnek Kişi", "Komşu", "Kuzen"}
+    assert [h["label"] for h in p["commit_history"]] == ["Önceki plan: Kasım'da başladı · ayda ₺2.000"]
+    for i in range(7):
+        dp.commit_plan(today=dec)
+    assert len(dp._store()["history"]) == dp.HISTORY
+
+
+def test_commit_tracks_card_payments(client, tmpdb):
+    from app import debt_plan as dp
+
+    _seed_cards(tmpdb)
+    p = dp.commit_plan(monthly=18000, today=TODAY)
+    sid = p["debts"][0]["id"]
+    assert p["commitment"]["this_target"] == 18000
+    assert client.post(f"/api/statements/{sid}/pay", json={"amount": 12000, "paid_at": "2026-11-11"}).status_code == 200
+    c = dp.build(today=TODAY)["commitment"]
+    assert c["paid"] == 12000 and c["status"]["text"] == "Bu ay planda ₺6.000 daha var."
+
+
+def test_commit_endpoint_permissions_and_errors(owner, tmpdb):  # noqa: F811
+    assert owner.post("/api/debt-plan/commit", json={"monthly": 1000}).status_code == 422  # açık borç yok
+    _seed_cards(tmpdb)
+    assert "debt_plan_commit" in owner.get("/api/meta").json()["capabilities"]
+    r = owner.post("/api/debt-plan/commit", json={})
+    assert r.status_code == 422 and "tutarı yaz" in r.json()["detail"]
+    viewer = _member(owner, "goren", role="viewer")
+    editor = _member(owner, "esim")
+    assert viewer.post("/api/debt-plan/commit", json={"monthly": 5000}).status_code == 403
+    r = editor.post("/api/debt-plan/commit", json={"monthly": 20000, "order": "soz"})
+    assert r.status_code == 200 and r.json()["commitment"]["monthly"] == 20000
+    assert owner.get("/api/debt-plan").json()["commitment"]["order"] == "soz"
+    assert owner.get("/api/debt-plan", params={"monthly": 100}).json()["commitment"]["differs"] is True
+
+
+def test_behind_on_card_advice_is_only_pay_more_or_minimum(client, tmpdb):
+    from app import debt_plan as dp
+
+    import json
+
+    _seed_cards(tmpdb)
+    dp.commit_plan(monthly=10000, today=TODAY)
+    # plan bir ay önce başlamış gibi: ekim hedefi (5.000) ödenmedi
+    store = dp._store()
+    store["current"]["start_month"] = "2026-10"
+    store["current"]["months"].insert(0, {"month": "2026-10", "total": 5000, "pays": {"card:4111***1111": 5000}})
+    store["current"]["debts"][0]["planned"] += 5000
+    tmpdb.set_setting(dp.COMMIT, json.dumps(store))
+    p = dp.build(monthly=10000, today=TODAY)
+    c = p["commitment"]
+    assert c["status"]["key"] == "behind"
+    assert "en az asgari tutarı yatır" in c["status"]["text"]  # kartta tutar yetmiyor: zararı azaltma
+    bad = {s: _banned_in(s) for s in _all_strings(p) if _banned_in(s)}
+    assert not bad, bad

@@ -4367,6 +4367,18 @@ def save_debt_plan(body: DebtPlanIn):
     return dp.save_settings(body.model_dump(exclude_unset=True))
 
 
+@app.post("/api/debt-plan/commit")
+def commit_debt_plan(body: DebtPlanIn):
+    """Planı başlat / "Bu planla devam" / "Planı yeniden oluştur": bugünkü borçlarla ay ay hedefler kaydedilir (eski
+    plan geçmişte kalır). Sonraki aylarda plan yanıtındaki commitment bu hedeflere göre ilerlemeyi söyler."""
+    from app import debt_plan as dp
+
+    try:
+        return dp.commit_plan(**body.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+
+
 @app.get("/api/net-worth/at")
 def net_worth_at(month: str):
     """Seçilen geçmiş dönemin son günündeki net durum (yaklaşık)."""

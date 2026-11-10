@@ -56,6 +56,7 @@ MEMBER_WRITES = [
     ("PUT", r"/api/shopping-list/saved-plan"), ("DELETE", r"/api/shopping-list/saved-plan"),
     ("POST", r"/api/shopping-trips/\d+/reuse"),
     ("PUT", r"/api/debt-plan"),  # borç kapatma planı: aylık tutar ve sıralama (Aile birlikte planlar)
+    ("POST", r"/api/debt-plan/commit"),  # planı başlat / yeniden oluştur (anlık görüntü)
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",

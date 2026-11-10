@@ -270,6 +270,11 @@ CAPABILITIES = (
                               # description?, amount (artı), txn_type, dry_run?} ve PATCH .../rows/{txn_id} {amount?,
                               # txn_type?, txn_date?, is_deleted?, dry_run?} → {ok, undo_id?, check {ok, diff, hint}};
                               # işaret türden (iade, ödeme eksi); geri al POST /api/imports/{undo_id}/undo
+    "debt_plan_commit",       # borç planını başlat (anlık görüntü): POST /api/debt-plan/commit {monthly?, order?} →
+                              # plan yanıtı; GET /api/debt-plan commitment {started_at, start_label, monthly, order,
+                              # status {key ok|behind|ahead|done, title, text}, changed {title, reasons, action,
+                              # confirm} | null, differs, ...} | null, commit_offer, commit_history; kart satırında harm
+                              # {title, steps, compare, info} (tutar son ödeme gününe kadar kartın tamamına yetmezse)
 )
 
 

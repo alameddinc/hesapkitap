@@ -94,6 +94,12 @@ export const TERIM = {
     ad: "Onaylandı",
     aciklama: "Rakamlar tutmamıştı; sen PDF'e bakıp doğru olduğunu onayladın.",
   },
+  kartFaizi: {
+    ad: "Faiz neden işler",
+    aciklama: "Kartta son ödeme gününe kadar ödenmeyen kalan borca akdi (alışveriş) faizi işler. Asgariyi de ödemezsen " +
+      "üstüne gecikme faizi eklenir. Faiz kalan borca işlediği için ne kadar çok yatırırsan o kadar az faiz çıkar; " +
+      "tamamını ödersen hiç çıkmaz.",
+  },
 } as const satisfies Record<string, Terim>;
 
 export type TerimId = keyof typeof TERIM;

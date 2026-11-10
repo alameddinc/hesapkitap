@@ -1,14 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarCheck, Check, ChevronDown, ChevronRight, CreditCard, HandCoins, Info, LayoutDashboard, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CalendarCheck, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
+import { ask } from "../lib/ask";
+import TerimBilgi from "../components/TerimBilgi";
 import { cx, maskText, parseAmount, tl } from "../format";
 import { useBook, useCap, useUiPrefs } from "../components/hooks";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
-import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData } from "../lib/debtPlan";
+import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanHarm } from "../lib/debtPlan";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
 const trimTl = (x: number) => tl(x).replace(/,00(?=\D*$)/, "");
@@ -82,6 +84,20 @@ export default function DebtPlan() {
     const t = setTimeout(() => setKayit(null), 2500);
     return () => clearTimeout(t);
   }, [kayit]);
+  // planı başlat / bu planla devam / yeniden oluştur: o anki tutar ve sıralamayla anlık görüntü (eski plan geçmişte)
+  const commitM = useMutation({
+    mutationFn: (body: { monthly?: number | null; order?: DebtOrder }) => send<DebtPlanData>("/api/debt-plan/commit", { method: "POST", json: body }),
+    onSuccess: () => {
+      ui.toast("Plan kaydedildi; her ay buna göre nerede olduğunu göreceksin");
+      setDraft({}); setText(null); sent.current = undefined;
+      void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" });
+    },
+    onError: (e: Error) => ui.toast(e.message || "Plan kaydedilemedi"),
+  });
+  const commitPlan = async (p: DebtPlanData, confirm?: { action: string; text: string }) => {
+    if (confirm && !(await ask(confirm.text, { title: `${confirm.action}?`, confirm: confirm.action }))) return;
+    commitM.mutate({ monthly: p.monthly, order: p.order });
+  };
   const commitAmount = () => { if (valid != null) { setDraft((d) => ({ ...d, monthly: valid })); persist({ monthly: valid }); } };
   const old = !on || (q.error instanceof ApiError && q.error.status === 404);
 
@@ -104,6 +120,43 @@ export default function DebtPlan() {
       ) : planBody(r))}
     </div>
   );
+
+  /** Başlatılan plana göre bu ay: plana uygun / gerisinde / önünde; plan değiştiyse yeniden oluştur. */
+  function takip(p: DebtPlanData, c: PlanCommitment | null) {
+    const tone = !c ? "" : c.status.key === "behind" ? "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+      : "bg-green-100 text-green-700 dark:bg-green-950/60 dark:text-green-400";
+    const StatusIcon = !c ? Flag : c.status.key === "behind" ? TrendingDown : c.status.key === "ahead" ? TrendingUp : Check;
+    return (
+      <section className="card space-y-3 p-4" aria-label="Başlattığın plan" data-testid="plan-takip">
+        {c && (
+          <div className="flex items-start gap-3">
+            <span className={cx("flex size-9 shrink-0 items-center justify-center rounded-full", tone)} aria-hidden><StatusIcon size={18} /></span>
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p className="text-xs text-stone-500">Başlattığın plan · {maskText(c.text)}</p>
+              <p className="font-semibold" data-testid="plan-durum">{maskText(c.status.title)}</p>
+              <p className="text-sm text-stone-600 dark:text-stone-300">{maskText(c.status.text)}</p>
+              {c.status.key !== "done" && <p className="text-xs text-stone-500 tabular-nums">
+                {c.month_no}. ay{c.month_count ? ` / ${c.month_count}` : ""} · bu aya kadar planda {tl(c.expected)}, ödenen {tl(c.paid)}
+                {c.debt_free ? ` · plan bitişi ${c.debt_free.label}` : ""}</p>}
+            </div>
+          </div>
+        )}
+        {c?.changed && (
+          <div role="alert" className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-50" data-testid="plan-degisti">
+            <p className="flex items-center gap-2 font-semibold"><AlertTriangle size={16} aria-hidden />{c.changed.title}</p>
+            <ul className="list-disc space-y-0.5 pl-5 text-xs">{c.changed.reasons.map((x) => <li key={x.key}>{maskText(x.text)}</li>)}</ul>
+            {p.can_edit && <button className="btn-ghost border border-amber-300 dark:border-amber-800" disabled={commitM.isPending || !p.monthly}
+              onClick={() => void commitPlan(p, { action: c.changed!.action, text: c.changed!.confirm })}>{c.changed.action}</button>}
+          </div>
+        )}
+        {(p.commit_history?.length ?? 0) > 0 && (
+          <ul className="space-y-0.5 text-xs text-stone-500" aria-label="Önceki planlar">
+            {p.commit_history!.map((h) => <li key={h.started_at + h.ended_at} className="flex items-center gap-1.5"><History size={12} aria-hidden />{maskText(h.label)}</li>)}
+          </ul>
+        )}
+      </section>
+    );
+  }
 
   function planBody(p: DebtPlanData) {
     const months = allMonths ? p.months : p.months.slice(0, 12);
@@ -133,6 +186,8 @@ export default function DebtPlan() {
           {p.debt_free && <p className="text-sm text-stone-600 dark:text-stone-300" data-testid="borcsuz">{p.debt_free.text}</p>}
           {p.hidden.people && <p className="text-xs text-stone-500">Borç / Alacak bu defterde sana kapalı; elden borçlar planda yok.</p>}
         </section>
+
+        {(p.commitment || (p.commit_history?.length ?? 0) > 0) && takip(p, p.commitment ?? null)}
 
         <section className="card space-y-3 p-4" aria-label="Plan ayarı">
           <label className="block space-y-1">
@@ -172,6 +227,19 @@ export default function DebtPlan() {
             ))}
           </div>
           {!p.can_edit && <p className="text-xs text-stone-500">Bu defterde sadece görüntüleme yetkin var: değişiklikler kaydedilmez, yalnız burada denersin.</p>}
+          {p.can_edit && !p.commitment && p.commit_offer && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl bg-blue-50 p-3 dark:bg-blue-950/40" data-testid="plan-baslat">
+              <p className="min-w-0 flex-1 basis-60 text-sm text-blue-950 dark:text-blue-100"><b>{p.commit_offer.title}.</b> {p.commit_offer.text}</p>
+              <button className="btn-primary" disabled={commitM.isPending} onClick={() => void commitPlan(p)}><Flag size={16} aria-hidden />{p.commit_offer.action}</button>
+            </div>
+          )}
+          {p.can_edit && p.commitment?.differs && p.monthly != null && p.monthly > 0 && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 p-3 dark:bg-stone-800/60" data-testid="plan-devam">
+              <p className="min-w-0 flex-1 basis-60 text-sm text-stone-700 dark:text-stone-200">
+                Denediğin tutar başlattığın plandan farklı (ayda {maskText(trimTl(p.commitment.monthly))} · {p.commitment.order_label}). Kayıtlı plan değişmedi.</p>
+              <button className="btn-primary" disabled={commitM.isPending} onClick={() => void commitPlan(p, { action: p.commitment!.continue.action, text: p.commitment!.continue.confirm })}>{p.commitment.continue.action}</button>
+            </div>
+          )}
         </section>
 
         {p.shortfall && (
@@ -179,6 +247,7 @@ export default function DebtPlan() {
             <p className="flex items-center gap-2 font-semibold"><AlertTriangle size={18} aria-hidden />{p.shortfall.title}</p>
             <p className="text-sm">{maskText(p.shortfall.text)}</p>
             <p className="text-xs opacity-90">{p.shortfall.hint}</p>
+            {p.shortfall.allocation && <p className="text-xs opacity-90" data-testid="dagitim">{p.shortfall.allocation}</p>}
             <button className="btn-primary" onClick={() => setTo(p.shortfall!.min_monthly)}>
               Aylık tutarı {trimTl(p.shortfall.min_monthly)} yap</button>
           </section>
@@ -240,7 +309,7 @@ export default function DebtPlan() {
                   <div className={cx("h-full rounded-full", d.kind === "card" ? "bg-blue-600" : "bg-green-600")} style={{ width: `${Math.max(d.progress * 100, d.progress > 0 ? 3 : 0)}%` }} />
                 </div>
                 {d.paid > 0 && <p className="text-xs text-stone-500 tabular-nums">{tl(d.paid)} ödendi · {tl(d.total)} borcun %{Math.round(d.progress * 100)}</p>}
-                {d.warning && <p className={cx("flex gap-2 rounded-lg p-2 text-xs", d.overdue ? "bg-red-50 text-red-900 dark:bg-red-950/40 dark:text-red-100" : "bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100")}>
+                {d.harm ? <Harm h={d.harm} rateNote={d.rate_note ?? null} /> : d.warning && <p className={cx("flex gap-2 rounded-lg p-2 text-xs", d.overdue ? "bg-red-50 text-red-900 dark:bg-red-950/40 dark:text-red-100" : "bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100")}>
                   <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>{maskText(d.warning)}{d.rate_note && <span className="block opacity-80">{d.rate_note}</span>}</span></p>}
                 {d.promise && <p className={cx("text-xs", d.promise.missed ? "text-amber-800 dark:text-amber-300" : "text-stone-500")}>{d.promise.text}</p>}
                 {d.future_installments && <p className="text-xs text-stone-500">{maskText(d.future_installments.text)}</p>}
@@ -306,6 +375,33 @@ export default function DebtPlan() {
       </>
     );
   }
+}
+
+/** Zararı azaltma: tutar kartın tamamına son ödeme gününe kadar yetmiyorsa ne yapılır ve faiz nasıl değişir. */
+function Harm({ h, rateNote }: { h: PlanHarm; rateNote: string | null }) {
+  return (
+    <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-amber-950 dark:bg-amber-950/40 dark:text-amber-50" data-testid="faiz-azalt">
+      <p className="flex items-center gap-1.5 text-sm font-semibold"><AlertTriangle size={15} className="shrink-0" aria-hidden />{h.title}
+        <TerimBilgi id="kartFaizi" metin={h.info} /></p>
+      <p className="text-xs">Faizi en aza indirmek için:</p>
+      <ol className="list-decimal space-y-1 pl-5 text-xs leading-relaxed">{h.steps.map((s) => <li key={s}>{maskText(s)}</li>)}</ol>
+      {h.compare && (
+        <div className="grid grid-cols-3 gap-1.5" data-testid="faiz-karsilastir">
+          {h.compare.map((r) => (
+            <div key={r.key} className={cx("min-w-0 rounded-md bg-white/80 px-2 py-1.5 dark:bg-stone-900/50",
+              r.key === "plan" && "ring-1 ring-amber-400 dark:ring-amber-600")}>
+              <span className="block truncate text-[11px] text-stone-600 dark:text-stone-300">{r.label}</span>
+              <span className="block text-sm font-semibold tabular-nums">{tl(r.amount).replace(/,\d\d$/, "")}</span>
+              <span className={cx("block text-[11px] tabular-nums", r.interest > 0 ? "text-amber-800 dark:text-amber-300" : "text-green-700 dark:text-green-400")}>
+                {r.interest > 0 ? `~${trimTl(r.interest)} faiz` : "₺0 faiz"}</span>
+              {r.late && <span className="block text-[11px] text-red-700 dark:text-red-400">+ gecikme faizi</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {rateNote && <p className="text-[11px] opacity-80">{rateNote}</p>}
+    </div>
+  );
 }
 
 /** Özet'te küçük kart (yalnız ≥2 açık borçta, kullanıcı eklerse; Özeti düzenle'den de kaldırılır). */
