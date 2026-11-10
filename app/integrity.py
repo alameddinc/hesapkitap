@@ -425,7 +425,7 @@ def post_deploy_tick(spaces=None) -> dict | None:
             return {**st, "finished": False}
         path, user = todo[st["pos"]]
         try:
-            with db.use_space(path, user):
+            with jobs.book_space(path, user):
                 if n := post_deploy_new(last()):
                     st["new"] += n
                     st["books"] += 1
@@ -662,7 +662,7 @@ def main(argv: list[str]) -> int:
         from app import jobs
 
         for path, user in jobs.spaces():
-            with db.use_space(path, user):
+            with jobs.book_space(path, user):
                 print((user or {}).get("id", 0), run())
         return 0
     if argv:

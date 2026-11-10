@@ -333,7 +333,7 @@ def tick(now: float | None = None, spaces=None) -> dict | None:
             continue
         seen.add(key)
         try:
-            with db.use_space(path, user):
+            with jobs.book_space(path, user):
                 got = scan(fp, deadline)
         except Exception:  # noqa: BLE001 - bir defter diğerlerini durdurmasın
             log.exception("yeniden okuma taraması başarısız")
