@@ -13,7 +13,8 @@ import { useUI } from "../ui";
 import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 // Kategorisizleri düzenle (sunucu app/uncategorized.py; mobil src/screens/Kategorisiz.tsx ile aynı akış).
-// Küme Özet'teki "N işlem kategorisiz" uyarısıyla aynı; işyeri/kişi grupları, ücretsiz öneri, Uygula + Geri al,
+// Küme Özet'teki "N işlem kategorisiz" uyarısıyla aynı; işyeri/kişi grupları, ücretsiz öneri. Öneriye tıklamak ya da
+// seçiciden kategori seçmek HEMEN uygular (ayrı "Uygula" adımı yok: seçip bırakan kullanıcı uygulandı sanıyordu), Geri al,
 // "Bundan sonra hep böyle" (kural / kişi kategorisi), önerisi olmayan işyerleri için yapay zekâ (1 okuma hakkı).
 // Toplu: önerilenlerin hepsini uygula, çoklu seçim → tek kategori, tek seferlikleri Diğer yap (hepsi tek Geri al;
 // POST /api/uncategorized/apply-many). "Adı düzelt": görünen işyeri adı (POST /api/merchants/rename).
@@ -53,7 +54,6 @@ export default function Uncategorized() {
     refetchOnMount: "always",
   });
   const [remember, setRemember] = useState(true);
-  const [secim, setSecim] = useState<Record<string, string>>({});
   const [yz, setYz] = useState<Record<string, Oneri>>({});
   const [sorulan, setSorulan] = useState<Set<string>>(new Set());
 
@@ -67,10 +67,9 @@ export default function Uncategorized() {
     ? Math.abs(b.total) - Math.abs(a.total) || b.count - a.count || a.label.localeCompare(b.label, "tr")
     : b.count - a.count || Math.abs(b.total) - Math.abs(a.total) || a.label.localeCompare(b.label, "tr"));
   const oneri = (g: Grup) => g.suggestion ?? yz[g.key] ?? null;
-  const secili = (g: Grup) => secim[g.key] ?? oneri(g)?.category ?? "";
-  const sorulacak = groups.filter((g) => g.kind === "isyeri" && !oneri(g) && !secim[g.key] && !sorulan.has(g.key));
+  const sorulacak = groups.filter((g) => g.kind === "isyeri" && !oneri(g) && !sorulan.has(g.key));
   const aiMax = q.data?.ai_max ?? 40;
-  const hazir = groups.filter((g) => secili(g));
+  const hazir = groups.filter((g) => oneri(g));
   const tekler = groups.filter((g) => g.one_off);
   const secilen = groups.filter((g) => sec.has(g.key));
   const secAkis = secilen[0]?.flow ?? null;
@@ -90,8 +89,8 @@ export default function Uncategorized() {
       qc.setQueryData<Yanit>(["uncategorized", ay], (d) => d && { ...d, groups: d.groups.filter((x) => x.key !== g.key), count: d.count - g.count });
       tazele();
       const ek = r.also_changed > 0 ? ` (+${r.also_changed} başka dönemde)` : "";
-      const ogren = r.remembered === "kural" ? " Bundan sonra da böyle." : r.remembered === "kisi" ? ` ${g.label} için hatırlanacak.` : "";
-      ui.toast(`${r.changed} işlem ${cat} oldu${ek}.${ogren}`, r.undo_id ? {
+      const ogren = r.remembered === "kural" ? " · bundan sonra da" : r.remembered === "kisi" ? ` · ${g.label} için hatırlanacak` : "";
+      ui.toast(`${r.changed} işlem → ${cat}${ek}${ogren}`, r.undo_id ? {
         undo: async () => { await send("/api/uncategorized/undo", { method: "POST", json: { undo_id: r.undo_id } }); tazele(); },
       } : undefined);
     },
@@ -119,7 +118,7 @@ export default function Uncategorized() {
     },
     onError: (e) => ui.error(e instanceof Error ? e.message : "Kategori verilemedi"),
   });
-  const hepsiniUygula = () => toplu.mutate({ items: hazir.map((g) => ({ key: g.key, category: secili(g) })), hatirla: remember });
+  const hepsiniUygula = () => toplu.mutate({ items: hazir.map((g) => ({ key: g.key, category: oneri(g)!.category })), hatirla: remember });
   const tekleriDiger = async () => {
     const esik = tl(q.data?.one_off_max ?? 250);
     const ok = await ask(`${tekler.length} tek seferlik işlem Diğer olsun mu?\n\nTek işlemli ve ${esik} ya da daha az tutan giderler "Diğer" kategorisine alınır. Kural öğrenilmez; Geri al ile hepsi geri gelir.`,
@@ -194,7 +193,7 @@ export default function Uncategorized() {
 
       {groups.length > 0 && (
         <>
-          <p className="text-sm text-stone-600 dark:text-stone-400">{q.data!.count} işlem · {groups.length} grup. Aynı yerdeki işlemler tek seferde kategorilenir.</p>
+          <p className="text-sm text-stone-600 dark:text-stone-400">{q.data!.count} işlem · {groups.length} grup. Kategori seçince aynı yerdeki işlemlerin hepsine hemen uygulanır.</p>
           <div className="card flex items-center gap-3 p-3">
             <span className="min-w-0 flex-1">
               <span id="hep-boyle" className="block text-sm font-medium">Bundan sonra hep böyle</span>
@@ -244,7 +243,7 @@ export default function Uncategorized() {
           <ul className="grid gap-3 md:grid-cols-2">
             {groups.map((g) => {
               const o = oneri(g);
-              const cat = secili(g);
+              const busy = busyKey === g.key;
               const Ic = g.kind === "kisi" ? Users : Store;
               const kapali = !!secAkis && secAkis !== g.flow;
               const isaretli = sec.has(g.key);
@@ -265,15 +264,24 @@ export default function Uncategorized() {
                     <span className={cx("shrink-0 font-medium tabular-nums", g.flow === "gelir" && "text-green-700 dark:text-green-400")}>
                       {g.flow === "gelir" ? "+" : ""}{tl(g.total)}</span>
                   </div>
-                  <div className="space-y-1">
-                    <CategoryPicker value={cat} options={g.flow === "gelir" ? gelirKat : giderKat} placeholder="Kategori seç"
-                      onChange={(c) => setSecim((s) => ({ ...s, [g.key]: c }))} />
-                    {cat && !secim[g.key] && o && <p className="text-xs text-stone-500 dark:text-stone-400">{KAYNAK[o.source]}</p>}
-                    {!cat && sorulan.has(g.key) && <p className="text-xs text-stone-500 dark:text-stone-400">Yapay zekâ emin olamadı</p>}
+                  <div className="space-y-2">
+                    {o && (
+                      <div>
+                        <button className="btn-primary w-full justify-center px-3 py-2 text-sm" disabled={uygula.isPending || secMod}
+                          onClick={() => uygula.mutate({ g, cat: o.category })}>
+                          {busy ? "Uygulanıyor…" : <><Check size={16} aria-hidden /> <span className="[overflow-wrap:anywhere]">{o.category} yap</span></>}</button>
+                        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Öneri · {KAYNAK[o.source]}</p>
+                      </div>
+                    )}
+                    <div className={cx(uygula.isPending && "pointer-events-none")}>
+                      <label className="sr-only" htmlFor={`kat-${g.key}`}>{g.label} için {o ? "başka kategori" : "kategori"}</label>
+                      <CategoryPicker id={`kat-${g.key}`} value="" options={g.flow === "gelir" ? gelirKat : giderKat}
+                        placeholder={busy && !o ? "Uygulanıyor…" : o ? "Başka kategori seç" : "Kategori seç"}
+                        onChange={(c) => { if (c) uygula.mutate({ g, cat: c }); }} />
+                    </div>
+                    {!o && sorulan.has(g.key) && <p className="text-xs text-stone-500 dark:text-stone-400">Yapay zekâ emin olamadı</p>}
                   </div>
-                  <div className="mt-auto flex flex-wrap items-center gap-2">
-                    <button className="btn-primary px-4 py-1.5 text-sm" disabled={!cat || uygula.isPending} onClick={() => uygula.mutate({ g, cat })}>
-                      {busyKey === g.key ? "Uygulanıyor…" : "Uygula"}</button>
+                  <div className="mt-auto flex flex-wrap items-center gap-2 empty:hidden">
                     {g.renamable && (
                       <button className="btn-ghost px-2 py-1.5 text-sm" onClick={() => setAdGrup(g)}><Pencil size={14} aria-hidden /> Adı düzelt</button>
                     )}
