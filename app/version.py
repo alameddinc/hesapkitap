@@ -255,6 +255,13 @@ CAPABILITIES = (
                               # /api/statements/{id}/reread-preview → {available, rows, sig, items [{kind added|removed|
                               # changed, label, text, note?}], diff, totals_before/after, equation_ok_after}, POST
                               # .../reread-apply {sig?} → {ok, undo_id, added, changed, removed} (409: değişti / yok)
+    "debt_plan",              # borç kapatma planı (app/debt_plan.py): GET /api/debt-plan?monthly&order=faiz|kucuk|soz
+                              # (önizleme) → {monthly, monthly_source, suggestion, order, orders, totals, debts [{key
+                              # kart:<id>|borc:<id>, kind card|person, remaining, progress, closes, warning, payable}],
+                              # months [{month, label, total, payments, interest, left}], debt_free, this_month {items
+                              # [{key, amount, done, text, payable}]}, warnings, shortfall {min_monthly, text} | null,
+                              # stuck, excluded, can_edit, summary_card {eligible}}; PUT /api/debt-plan {monthly, order};
+                              # paket satırı "borc_plani" (ücretsiz); push türü "borc" (elden borcun söz verilen günü)
 )
 
 

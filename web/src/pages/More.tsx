@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { useState } from "react";
-import { ArrowLeftRight, BadgePercent, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
+import { ArrowLeftRight, ListChecks, BadgePercent, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
 import { inSharedBook, routeVisible, useBook, useIsAdmin, useMeta } from "../components/hooks";
@@ -64,6 +64,9 @@ export default function More() {
         <Item icon={<Landmark size={18} />} label="Hesaplar ve kartlar: banka, nakit, kumbara" onClick={() => ui.go("hesaplar")} route="hesaplar" />
         <Item icon={<Zap size={18} />} label="Faturalar: kurum kurum aylık tutar, değişim" onClick={() => ui.go("faturalar")} route="faturalar" />
         <Item icon={<HandCoins size={18} />} label="Borç / Alacak: TL, döviz, altın" onClick={() => ui.go("borclar")} route="borclar" />
+        {meta.data?.capabilities?.includes("debt_plan") && (
+          <Item icon={<ListChecks size={18} />} label="Borç planı: faiz ödemeden ay ay kapat" onClick={() => ui.go("borc-plani")} route="borc-plani" />
+        )}
         <ZakatItem />
         <Item icon={<ArrowLeftRight size={18} />} label="Transferler: kime ne gitti" onClick={() => ui.go("transferler")} route="transferler" />
         <Item icon={<TagIcon size={18} />} label="Fiyatlar: fişlerden ürün fiyat takibi" onClick={() => ui.go("fiyatlar")} route="fiyatlar" />

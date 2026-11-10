@@ -4345,6 +4345,28 @@ def interest_report(months: int = Query(12, ge=0, le=120)):
     return finance.interest_report(months)
 
 
+@app.get("/api/debt-plan")
+def debt_plan(monthly: float | None = Query(None, ge=0, le=100_000_000), order: Literal["faiz", "kucuk", "soz"] | None = None):
+    """Borç kapatma planı (yetenek debt_plan, app/debt_plan.py): açık kart ve elden borçlar, ay ay takvim, bu ayın
+    ödenecekleri, faiz uyarıları. monthly/order verilirse önizleme (kayıtlı ayar değişmez)."""
+    from app import debt_plan as dp
+
+    return dp.build(monthly=monthly, order=order)
+
+
+class DebtPlanIn(BaseModel):
+    monthly: Money | None = Field(default=None, ge=0, le=100_000_000)  # null: kayıtlı tutarı kaldır (öneri kullanılır)
+    order: Literal["faiz", "kucuk", "soz"] | None = None
+
+
+@app.put("/api/debt-plan")
+def save_debt_plan(body: DebtPlanIn):
+    """Planın aylık tutarı ve sıralaması (defter ayarı; ortak defterde ekleyebilen üye de değiştirir)."""
+    from app import debt_plan as dp
+
+    return dp.save_settings(body.model_dump(exclude_unset=True))
+
+
 @app.get("/api/net-worth/at")
 def net_worth_at(month: str):
     """Seçilen geçmiş dönemin son günündeki net durum (yaklaşık)."""

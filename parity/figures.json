@@ -49,5 +49,9 @@
   "tasarruf.aylik": {"web": "/api/savings", "mobile": "/api/savings", "path": "monthly_saving",
     "web_src": "web/src/pages/Savings.tsx", "mobile_src": "src/screens/Tasarruf.tsx"},
   "faturalar.ortalama": {"web": "/api/bills/summary?months=24&until={until}", "mobile": "/api/bills/summary?months=24", "path": "overall.average_12",
-    "web_src": "web/src/pages/Bills.tsx", "mobile_src": "src/screens/Faturalar.tsx"}
+    "web_src": "web/src/pages/Bills.tsx", "mobile_src": "src/screens/Faturalar.tsx"},
+  "borc_plani.toplam": {"web": "/api/debt-plan", "mobile": "/api/debt-plan", "path": "totals.open",
+    "web_src": "web/src/pages/DebtPlan.tsx", "mobile_src": "src/screens/BorcPlani.tsx"},
+  "borc_plani.kart": {"web": "/api/debt-plan", "mobile": "/api/debt-plan", "path": "totals.cards",
+    "web_src": "web/src/pages/DebtPlan.tsx", "mobile_src": "src/screens/BorcPlani.tsx"}
 }

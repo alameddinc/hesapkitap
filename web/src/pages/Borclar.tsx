@@ -3,9 +3,14 @@ import { send } from "../lib/apiError";
 import Debts, { type Debt } from "../components/Debts";
 import Kpi from "../components/Kpi";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
+import { ChevronRight, ListChecks } from "lucide-react";
+import { useCap } from "../components/hooks";
+import { useUI } from "../ui";
 
 /** Borç / alacak defteri: kim kime ne (TL, döviz, altın) borçlu. Gelir/gider değil, eldeki parayı etkiler. */
 export default function Borclar() {
+  const ui = useUI();
+  const plan = useCap("debt_plan");
   const debts = useQuery({ queryKey: ["debts"], queryFn: () => send<Debt[]>("/api/debts") });
   const people = useQuery({
     queryKey: ["transfers"],
@@ -20,7 +25,10 @@ export default function Borclar() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">Borç / Alacak</h1>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-xl font-semibold">Borç / Alacak</h1>
+          {plan && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.go("borc-plani")}><ListChecks size={16} /> Borç planı <ChevronRight size={14} /></button>}
+        </div>
         <p className="text-sm text-stone-500">
           Borç verip almak gelir ya da gider değildir: verdiğin gün elindeki para azalır, geri aldığın gün artar; aylık
           harcaman değişmez. Geri gelmeyecekse "Alamayacağım" de, kalan o gün gider olur; karşı taraf borcunu sildiyse "Borcu sildi", kalan o gün gelir olur.
