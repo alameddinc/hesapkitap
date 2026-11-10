@@ -76,7 +76,7 @@ def tick(spaces=None) -> dict | None:
         return None
     t0, done = time.monotonic(), {"rows": 0, "changed": 0}
     for path, user in (jobs.spaces() if spaces is None else spaces):
-        with db.use_space(path, user):
+        with jobs.book_space(path, user):
             while True:
                 if done["rows"] and time.monotonic() - t0 >= BUDGET_S:
                     return {**done, "finished": False}

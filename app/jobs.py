@@ -5,6 +5,7 @@ Her iş günde bir kez çalışır; çalıştığı gün settings tablosuna yaz�
 import asyncio
 import logging
 import os
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -187,16 +188,48 @@ def due_jobs(now: datetime) -> list[tuple[str, callable]]:
 
 
 def spaces() -> list[tuple[str | None, dict | None]]:
-    """Zamanlanmış işlerin çalışacağı alanlar: ana veritabanı + kendi veritabanı olan her etkin kullanıcı."""
+    """Zamanlanmış işlerin çalışacağı defterler: her fiziksel veritabanı dosyası BİR KEZ, sahibinin bağlamıyla.
+
+    - ana veritabanı (None, None)
+    - kendi defteri olan her etkin kullanıcı (ortak defterin sahibi dahil): (defteri, kullanıcı)
+    - ortak defter üyesinin kendi ("Benim") defteri, dosyası varsa: (own_db_path, {..., own_book: True}); istekteki
+      "kendi" seçimiyle aynı bağlam (app/api/main.py _access)
+    Ortak defter üyesi sahibinin dosyasıyla eşlenmez: 10.11.2026'ya dek üye satırı sahibin defterine gidiyordu; üyenin
+    kendi defteri hiç gece işi almıyordu, üye id'si sahibinkinden küçükse de işler sahibin defterinde üyenin süzülmüş
+    görünümüyle koşabiliyordu. İşler ayrıca jobs.book_space ile sahip görünümünde (book.owner_view) çalışır."""
     from app import system
 
     out: list[tuple[str | None, dict | None]] = [(None, None)]
+    seen: set[str | None] = {None}
+
+    def add(path: str | None, user: dict) -> None:
+        key = os.path.abspath(path) if path else None
+        if key not in seen:
+            seen.add(key)
+            out.append((path, user))
+
     try:
-        out += [(system.user_db_path(u), u) for u in system.users()
-                if u.get("db_file") and not u.get("disabled") and not u.get("deleted_at")]  # silinmek üzere: iş yok
+        for u in system.users():
+            if u.get("disabled") or u.get("deleted_at"):  # silinmek üzere: iş yok
+                continue
+            if u.get("member_of"):
+                own = system.own_db_path(u)
+                if os.path.isfile(own):  # hiç açılmamış "Benim" defteri: boş dosya yaratılmaz
+                    add(own, {**u, "own_book": True})
+            elif u.get("db_file"):
+                add(system.user_db_path(u), u)
     except Exception:  # noqa: BLE001 - sistem veritabanı yoksa (tek kullanıcı) sadece ana alan
         log.exception("kullanıcı listesi okunamadı")
     return out
+
+
+@contextmanager
+def book_space(path: str | None, user: dict | None):
+    """Bir defterde arka plan işi: o dosya + sahip görünümü (ortak defter süzgeci yok; işler defterin bütününe bakar)."""
+    from app import book
+
+    with db.use_space(path, user), book.owner_view():
+        yield
 
 
 def mail_due(now: datetime) -> bool:
@@ -361,7 +394,7 @@ async def scheduler() -> None:
         except Exception:  # noqa: BLE001
             log.exception("push failed")
         for path, user in spaces():
-            with db.use_space(path, user):  # her kullanıcının işi kendi veritabanında (to_thread bağlamı taşır)
+            with book_space(path, user):  # her defterin işi kendi veritabanında, sahip görünümüyle (to_thread bağlamı taşır)
                 for name, fn in due_jobs(now):
                     try:
                         result = await asyncio.to_thread(fn, now.date())
