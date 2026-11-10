@@ -132,6 +132,15 @@ def _extras() -> None:
     db.create_jar({"name": "Acil durum", "goal": 50000, "account_id": acc}, initial=21000)
     # borç / alacak
     db.create_debt({"person": "Ali", "direction": "alacak", "amount": 1500, "debt_date": "2026-10-04", "asset": "TRY"})
+    # borç kapatma planı (app/debt_plan.py): iki kart + iki elden borç; aylık tutar kayıtlı (örnek plan birkaç aya yayılır,
+    # biri söz verilen tarihten sonra kapanır: "Söz verdiğim tarihe göre" sıralamasının farkı görünsün). Kurgu adlar.
+    db.create_debt({"person": "Kerem", "direction": "borc", "amount": 30000, "debt_date": "2026-06-12",
+                    "due_date": "2026-11-25", "note": "Düğün masrafı", "asset": "TRY"})
+    db.create_debt({"person": "Selin", "direction": "borc", "amount": 8000, "debt_date": "2026-08-03",
+                    "note": "Elden", "asset": "TRY"})
+    from app import debt_plan
+
+    debt_plan.save_settings({"monthly": 30000, "order": "faiz"})
     # altın ve döviz (zekât ile ortak liste)
     me = zakat.people()[0]["id"]
     es = zakat.add_person("Eşim")

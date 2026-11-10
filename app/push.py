@@ -92,6 +92,7 @@ TYPES = {
     "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
+    "borc": ("Borç ödeme günü", True),  # elden borçta söz verilen gün yaklaştı (2 gün kala ve o gün; app/debt_plan.py)
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -99,7 +100,7 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
-         "liste": "alışveriş listesi bildirimi"}
+         "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -110,6 +111,7 @@ R_OZET, R_ODEMELER, R_EKSTRELER, R_BUTCELER = "#/ozet", "#/diger/odemeler", "#/d
 R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger/tasarruf", "#/diger/zekat"
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
+R_BORC_PLANI = "#/diger/borc-plani"
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 
 
@@ -684,6 +686,28 @@ def _fatura(today: date) -> list[dict]:
     return out
 
 
+def _borc(today: date) -> list[dict]:
+    """Elden borçta (Borç / Alacak "borcum", TL) söz verilen ödeme günü: 2 gün kala ve o gün. Borç / Alacak ortak
+    defterde üyeye kapalıysa yok. Dokununca Borç planı."""
+    from app import debt_plan, money
+
+    if debt_plan._hidden_people():
+        return []
+    out = []
+    for d in db.list_debts(open_only=True):
+        if d["direction"] != "borc" or not d["due_date"] or d["written_off_at"] or d["remaining"] <= 0:
+            continue
+        left = (date.fromisoformat(d["due_date"]) - today).days
+        if left not in (0, 2):
+            continue
+        amt = money.tl(d["remaining"], trim=True) if d["asset"] == "TRY" else f"{d['remaining']:g} {d['asset']}"
+        when = "bugün" if left == 0 else "2 gün sonra"
+        out.append(item("borc", f"borc:{d['id']}:{d['due_date']}:{'songun' if left == 0 else '2gun'}",
+                        f"{d['person']}: söz verdiğin ödeme günü {when}",
+                        f"Kalan {amt}. Ödediysen Borç planında işaretle.", R_BORC_PLANI))
+    return out
+
+
 def _butce(today: date) -> list[dict]:
     from app import finance, money
 
@@ -818,7 +842,7 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     for kind, fn in (("odeme", lambda: _odeme_ekstre_dokum(today, on)), ("fatura", lambda: _fatura(today)),
                      ("butce", lambda: _butce(today)), ("gelir", lambda: _gelir(today)), ("ozet", lambda: _ozet(today)),
                      ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
-                     ("fiyat", lambda: _fiyat(today))):
+                     ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:

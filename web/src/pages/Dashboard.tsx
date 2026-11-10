@@ -30,6 +30,7 @@ import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
 import { DonemSonuKarti } from "../components/Beklenen";
+import DebtPlanCard from "../components/DebtPlanCard";
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { boundsOf, cx, signed, tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
@@ -89,7 +90,7 @@ function Section({ title, children, right }: { title: string; children: React.Re
 }
 
 // Özet bileşenleri: sırası ve hangilerinin görüneceği kişiye özel (Düzenle). module: ait olduğu özellik/sayfa.
-const WIDGETS: Record<string, { title: string; module?: string }> = {
+export const WIDGETS: Record<string, { title: string; module?: string; cap?: string }> = {
   kartlar: { title: "Gelir · gider · net · faiz" },
   "donem-sonu": { title: "Dönem sonu", module: "plan" },
   gelenler: { title: "Telefondan gelenler" },
@@ -109,8 +110,10 @@ const WIDGETS: Record<string, { title: string; module?: string }> = {
   kumbaralar: { title: "Kumbaralar", module: "hesaplar" },
   altin: { title: "Altın ve döviz", module: "hesaplar" },
   "son-islemler": { title: "Son işlemler" },
+  // varsayılan düzende yok: Borç planı ekranındaki "Özet'te göster" ya da Özeti düzenle ile eklenir; ≥2 açık borçta görünür
+  "borc-plani": { title: "Borç planı", cap: "debt_plan" },
 };
-const DEFAULT_LAYOUT = ["kartlar", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
+export const DEFAULT_LAYOUT = ["kartlar", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
   "istatistik-link", "odemeler"];
 
 export default function Dashboard() {
@@ -160,7 +163,11 @@ export default function Dashboard() {
     setLayout(next);
   };
   // bileşen, kapatılan özelliğe aitse ya da ortak defter üyesine kapalıysa gösterilmez
-  const shown = (id: string) => { const m = WIDGETS[id]?.module; return !m || routeVisible(book, m, meta?.modules); };
+  const shown = (id: string) => {
+    const w = WIDGETS[id];
+    if (w?.cap && !meta?.capabilities?.includes(w.cap)) return false;
+    return !w?.module || routeVisible(book, w.module, meta?.modules);
+  };
 
   const detailBlock = detail && (
     <section className="card mt-4 overflow-hidden" id="detay">
@@ -279,6 +286,7 @@ export default function Dashboard() {
       case "faiz": return book?.hide_fees ? null : <InterestHistory />;
       case "kumbaralar": return <Jars />;
       case "altin": return <Holdings />;
+      case "borc-plani": return <DebtPlanCard />;
       case "son-islemler": {
         const recent = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme" && !isEstimate(r))
           .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);

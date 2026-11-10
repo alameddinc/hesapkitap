@@ -61,7 +61,7 @@ export interface UI {
   fail: (e: unknown) => void;
 }
 
-export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris" | "faiz";
+export type Route = "ozet" | "islemler" | "plan" | "ekstreler" | "kurallar" | "ayarlar" | "tasarruf" | "tablo" | "transferler" | "borclar" | "fiyatlar" | "hesaplar" | "zekat" | "istatistik" | "faturalar" | "diger" | "kategorisiz" | "yonetici" | "alisveris" | "faiz" | "borc-plani";
 
 export const UIContext = createContext<UI | null>(null);
 

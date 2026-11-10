@@ -45,6 +45,7 @@ export const useLock = (key: string | undefined) => {
 export const ROUTE_FEATURE: Partial<Record<Route, string>> = {
   plan: "planlama", hesaplar: "hesaplar", borclar: "borclar", transferler: "transferler", faturalar: "faturalar",
   tasarruf: "tasarruf", tablo: "tablo", kurallar: "kurallar", fiyatlar: "fiyatlar", alisveris: "alisveris_listesi",
+  "borc-plani": "borc_plani",
 };
 
 export function Upgrade({ need }: { need?: string }) {
