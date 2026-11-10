@@ -78,7 +78,6 @@ def test_post_deploy_check_notifies_admin_only_for_new_statement_warnings(tmpdb,
     """Güncelleme sonrası denetim: son gece koşusunda olmayan ekstre uyarısı → yöneticiye tek "sistem" bildirimi
     (yalnız sayı); aynı sürümde tekrar çalışmaz; gece koşusundan sonra yüklenen ekstre sayılmaz; deftere yazmaz."""
     from app import feedback, push
-    from app.parsers import base
 
     st = parsers.parse_statement(fixture_bytes("vakifbank_b.txt"), allow_ai=False)
     db.save_statement(b"x1", "e1.pdf", st)
@@ -90,8 +89,9 @@ def test_post_deploy_check_notifies_admin_only_for_new_statement_warnings(tmpdb,
     assert integrity.post_deploy_tick([(None, None)])["new"] == 0 and not sent  # gerileme yok: bildirim yok
     assert integrity.post_deploy_tick([(None, None)]) is None  # aynı sürüm: bir kez
 
-    real = base.equation  # yeni sürüm denklemi bozuyor (faizi saymıyor)
-    monkeypatch.setattr(base, "equation", lambda p, pay, a, f, t: real(p, pay, a, 0, t))
+    # yeni sürüm ekstreyi bozuyor (ör. okuyucu yeni borcu 100 TL kaydırıyor): özet de satırlar da tutmaz
+    with db.connect() as c:
+        c.execute("UPDATE statements SET total_debt = total_debt + 100")
     monkeypatch.setenv("APP_VERSION", "bbb222")
     before = db.get_setting(integrity.SETTING)
     r = integrity.post_deploy_tick([(None, None), (None, MEMBER)])  # üyenin alanı aynı dosya: bir kez sayılır
