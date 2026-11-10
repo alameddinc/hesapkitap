@@ -5582,6 +5582,67 @@ def statement_reread_apply(sid: int, body: RereadApplyIn | None = None):
         raise HTTPException(409, str(e)) from None
 
 
+_ROW_TYPE = Literal["harcama", "iade", "odeme", "faiz_ucret"]
+
+
+class StatementRowIn(BaseModel):
+    txn_date: date | None = None  # yoksa kesim tarihi
+    description: str | None = Field(None, max_length=120)
+    amount: Money = Field(gt=0, le=10_000_000)  # artı; işaret türden (iade, ödeme eksi)
+    txn_type: _ROW_TYPE
+    dry_run: bool = False  # yazmadan sonucu döndür (canlı "Tuttu ✓")
+
+
+class StatementRowPatch(BaseModel):
+    amount: Money | None = Field(None, gt=0, le=10_000_000)
+    txn_type: _ROW_TYPE | None = None
+    txn_date: date | None = None
+    is_deleted: bool | None = None  # hesaba katma / kat
+    dry_run: bool = False
+
+
+def _row_call(fn, *a, **kw):
+    from app import statement_fix
+
+    if not statement_fix.can_edit():
+        raise HTTPException(403, "Bu işlemi defter sahibi yapabilir")
+    try:
+        return fn(*a, **kw)
+    except KeyError:
+        raise HTTPException(404, "Ekstre ya da satır bulunamadı") from None
+    except statement_fix.FixError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@app.get("/api/statements/{sid}/rows")
+def statement_rows(sid: int):
+    """Ekstrenin satırları (düzeltme için) ve durumu: {rows [{id, txn_date, description, amount, txn_type,
+    is_deleted}], check {ok, diff, hint, reconciliation_diff, equation_diff, rows_diff}} (app/statement_fix.py)."""
+    from app import statement_fix
+
+    return _row_call(statement_fix.rows_of, sid)
+
+
+@app.post("/api/statements/{sid}/rows")
+def statement_row_add(sid: int, body: StatementRowIn):
+    """Ekstreye eksik satır ekle (tutar artı, işaret türden). dry_run: yazmaz, sonucu döndürür. Yanıt {ok, id,
+    undo_id, check}; geri al: POST /api/imports/{undo_id}/undo."""
+    from app import statement_fix
+
+    data = body.model_dump(exclude={"dry_run"})
+    return _row_call(statement_fix.add_row, sid, data, dry_run=body.dry_run)
+
+
+@app.patch("/api/statements/{sid}/rows/{txn_id}")
+def statement_row_edit(sid: int, txn_id: int, body: StatementRowPatch):
+    """Ekstre satırının tutarını (artı), türünü (işaret türden), tarihini düzelt ya da hesaba katma. dry_run: yazmaz.
+    Yanıt {ok, undo_id, check}; geri al: POST /api/imports/{undo_id}/undo."""
+    from app import statement_fix
+
+    data = body.model_dump(exclude={"dry_run"}, exclude_none=True)
+    return _row_call(statement_fix.edit_row, sid, txn_id, data, dry_run=body.dry_run)
+
+
 @app.delete("/api/statements/{sid}")
 def delete_statement(sid: int):
     db.delete_statement(sid)

@@ -1300,9 +1300,11 @@ def link_entry(entry_id: int, txn_id: int | None) -> None:
 
 def list_statements() -> list[dict]:
     """Ekstreler. fees: faiz ve ücret (özet satırı okunduysa interest_fees, yoksa faiz/ücret işlemlerinin toplamı);
-    reconciliation_diff: okunan işlemler − ekstre özeti (faiz ve ücret dahil, app/parsers/base.py) — kayıtlı veriden."""
-    from app import book
-    from app.parsers.base import equation, reconciliation_diff, statement_fees
+    reconciliation_diff: okunan işlemler − ekstre özeti (faiz ve ücret dahil, app/parsers/base.py) — kayıtlı veriden.
+    Durum app/statement_fix.evaluate: needs_check (tutmuyor, onay yok), check_kind ("rows": özet doğru, işlem listesi
+    tutmuyor | "summary": özet rakamları tutmuyor | null), fix_badge / fix_title (rozet, tek cümle), fix_diff (satırlar −
+    beklenen), fix_hint (ne eksik / fazla: {kind, text, suggest, row_id}), rows_diff (önceki + satırlar − yeni borç)."""
+    from app import book, statement_fix
 
     with connect() as c:
         out = book.filter_statements(rows(c.execute(
@@ -1314,22 +1316,37 @@ def list_statements() -> list[dict]:
                       ROUND(COALESCE(SUM(CASE WHEN t.txn_type = 'faiz_ucret' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
                           AS fee_txns,
                       ROUND(COALESCE(SUM(CASE WHEN t.txn_type <> 'odeme' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
-                          AS parsed_total
+                          AS parsed_total,
+                      ROUND(COALESCE(SUM(CASE WHEN t.txn_type = 'iade' AND t.is_deleted = 0 THEN t.amount END), 0), 2)
+                          AS refund_txns,
+                      ROUND(COALESCE(SUM(CASE WHEN t.is_deleted = 0 THEN t.amount END), 0), 2) AS rows_total,
+                      COALESCE(SUM(CASE WHEN t.txn_type = 'odeme' AND t.is_deleted = 0 THEN 1 END), 0) AS payment_rows
                FROM statements s LEFT JOIN transactions t ON t.statement_id = s.id
                GROUP BY s.id ORDER BY s.period_end DESC""")))
     hide = book.hide_fees()
     for s in out:
-        s["fees"] = 0.0 if hide else statement_fees(s["interest_fees"], s.pop("fee_txns"))
-        s.pop("fee_txns", None)
-        parsed = s.pop("parsed_total")
-        s["needs_check"] = False  # aşağıda: denklem tutmuyor ve kullanıcı onaylamadı
-        s["reconciliation_diff"] = (reconciliation_diff(parsed, s["period_activity"], s["interest_fees"], s["fees"],
-                                                        s["previous_balance"], s["payments"], s["total_debt"])
-                                    if s["period_activity"] is not None else None)
-        eq = equation(s["previous_balance"], s["payments"], s["period_activity"], s["fees"], s["total_debt"])
-        s["fees_included"], s["equation_diff"] = eq["fees_included"], eq["diff"]  # faiz harcamaların içinde mi
-        s["needs_check"] = (bool(s["reconciliation_diff"]) and abs(s["reconciliation_diff"]) >= 1
-                            or eq["ok"] is False) and not s.get("confirmed_at")
+        agg = {"parsed": s.pop("parsed_total"), "fee_txns": s.pop("fee_txns"), "refunds": s.pop("refund_txns"),
+               "rows_total": s.pop("rows_total"), "payment_rows": s.pop("payment_rows")}
+        ev = statement_fix.evaluate(s, agg, hide)
+        s["fees"] = ev["fees"]
+        s["reconciliation_diff"], s["equation_diff"] = ev["reconciliation_diff"], ev["equation_diff"]
+        s["fees_included"], s["refunds_separate"] = ev["fees_included"], ev["refunds_separate"]
+        s["refund_total"] = agg["refunds"] if ev["refunds_separate"] else None  # özette ayrı satır: kutuda gösterilir
+        s["rows_diff"], s["rows_ok"] = ev["rows_diff"], ev["rows_ok"]
+        s["needs_check"] = ev["ok"] is False and not s.get("confirmed_at")
+        s["check_kind"] = ev["kind"]
+        s["fix_badge"], s["fix_title"] = ev["badge"], ev["title"]
+        s["fix_diff"] = ev["diff"] if ev["ok"] is False else None
+        s["fix_hint"] = ev["hint"] if ev["ok"] is False else None
+    bad = [s for s in out if s["fix_hint"]]
+    if bad:  # tutmayan (az) ekstrede öneri tek satırı da arasın: tam o tutarda fazla / işareti ters satır
+        with connect() as c:
+            for s in bad:
+                txns = rows(c.execute("SELECT id, txn_date, amount, txn_type, is_deleted FROM transactions "
+                                      "WHERE statement_id = ?", (s["id"],)))
+                agg = statement_fix.aggregate(txns)
+                s["fix_hint"] = statement_fix.hint(s, agg, s["fix_diff"], via_rows=s["check_kind"] == "summary",
+                                                   rows=txns)
     return out
 
 

@@ -60,7 +60,8 @@ export function RereadSheet({ sid, onClose }: { sid: number; onClose: () => void
             {p.items.map((it, i) => <Item key={i} it={it} />)}
           </ul>
           <p className="rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
-            {maskText(OKU.rakam(p.totals_before.equation_diff, p.equation_ok_after))} {OKU.korunur}</p>
+            {maskText(p.fix_before ? OKU.rakamDurum(p.fix_before, p.fix_after_ok ?? p.equation_ok_after)
+              : OKU.rakam(p.totals_before.equation_diff, p.equation_ok_after))} {OKU.korunur}</p>
         </div>
       )}
     </Modal>

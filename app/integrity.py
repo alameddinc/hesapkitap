@@ -92,13 +92,14 @@ def _ekstre_denklem(statements: list[dict]) -> list[str]:
     list_statements'ın equation_diff'i (parsers.base.equation, fees_included dahil). Kullanıcının onayladığı ekstre ve
     kart Excel'inden üretilen (borcu kurgu) ekstre sayılmaz. Okunan satırlar ile özetin farkı ayrı denetim (satır farkı)."""
     return [f"statement:{s['id']}" for s in statements if s.get("source") != "excel" and not s.get("confirmed_at")
+            and not s.get("rows_ok")  # satırlar önceki borçtan yeni borca kuruşu kuruşuna götürüyor: özetin ara rakamı yanlış
             and s.get("equation_diff") is not None and money.diff_k(abs(s["equation_diff"]), 1) >= 0]
 
 
 def _ekstre_satir_farki(statements: list[dict]) -> list[str]:
     """I3, satırlar: okunan işlemler (ödeme hariç) − özet ≥ 1 TL. Fark kullanıcının sildiği satırlardan geliyorsa
     (silinenler dahil edilince kapanıyorsa) bilinçli silmedir, ihlal değil."""
-    cand = [s for s in statements if s.get("source") != "excel" and not s.get("confirmed_at")
+    cand = [s for s in statements if s.get("source") != "excel" and not s.get("confirmed_at") and not s.get("rows_ok")
             and s.get("reconciliation_diff") is not None and money.diff_k(abs(s["reconciliation_diff"]), 1) >= 0]
     if not cand:
         return []

@@ -1,12 +1,14 @@
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, ListPlus, ListTree, RefreshCw, Trash2, Undo2 } from "lucide-react";
 import { TERIM } from "../lib/terimler";
 import { ask } from "../lib/ask";
 import { useState, useEffect, useRef } from "react";
 import { api, type Payable, type Statement } from "../api";
-import { cx, dateTR, tl, todayISO, tsDateTR } from "../format";
+import { cx, dateTR, maskText, tl, todayISO, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 import { RereadBanner, RereadSheet } from "./StatementReread";
+import { AddRowSheet, EditRowsSheet } from "./StatementFix";
+import { BILESEN, DUZELT, type GrupKey } from "../lib/ekstreDuzelt";
 
 /** Ekstredeki faiz ve ücret (sunucunun fees alanı; eski sunucuda interest_fees). */
 export const feesOf = (s: Statement) => s.fees ?? s.interest_fees ?? 0;
@@ -24,13 +26,29 @@ export function statementStatus(s: Statement): "ok" | "confirmed" | "check" | nu
   if (s.needs_check) return "check";
   const eq = equation(s);
   const recOff = !!s.reconciliation_diff && Math.abs(s.reconciliation_diff) >= 1;
-  if ((eq.ok === false || recOff) && s.confirmed_at) return "confirmed";
+  if ((eq.ok === false || recOff || !!s.check_kind) && s.confirmed_at) return "confirmed";
   return eq.ok != null || s.reconciliation_diff != null ? "ok" : null;
 }
 
-const Line = ({ l, v, tone }: { l: string; v: string; tone?: string }) => (
+const SECONDARY = "btn border border-stone-300 text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-800";
+
+/** Denklem satırı; onOpen verilirse dokununca o rakamı oluşturan satırlar açılır. */
+const Line = ({ l, v, tone, onOpen }: { l: string; v: string; tone?: string; onOpen?: () => void }) => onOpen ? (
+  <button type="button" onClick={onOpen} aria-label={DUZELT.grupAc(l.replace(/^[+−-]\s*/, ""))}
+    className={cx("-mx-1 flex w-[calc(100%+0.5rem)] justify-between gap-3 rounded px-1 text-left underline decoration-dotted underline-offset-4 hover:bg-stone-100 dark:hover:bg-stone-700/60", tone)}>
+    <span>{l}</span><span className="shrink-0 tabular-nums">{v}</span></button>
+) : (
   <div className={cx("flex justify-between gap-3", tone)}><span>{l}</span><span className="shrink-0 tabular-nums">{v}</span></div>
 );
+
+/** Ödeme durumu (Ödemeler ile aynı): Ödendi · ₺X ödendi (kısmi) · Gecikti · (bekliyor: rozet yok). */
+function paidChip(s: Statement): { text: string; tone: string } | null {
+  if (!s.due_date || s.total_debt <= 0) return null;
+  if (s.paid_amount != null && s.paid_amount >= s.total_debt - 0.01) return { text: "Ödendi", tone: "bg-green-50 text-green-700 dark:bg-green-950/50 dark:text-green-400" };
+  if (s.paid_amount) return { text: `${tl(s.paid_amount)} ödendi`, tone: "bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300" };
+  if (s.due_date < todayISO()) return { text: "Gecikti", tone: "bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300" };
+  return null;
+}
 
 /** Ekstreler listesinde tek ekstre: başlık (dokununca denklem açılır), durum rozeti, eylemler.
  *  "Rakamlar tutmadı" durumunda birincil eylemler PDF'i aç ve Doğru, onayla; silme en altta, ikincil. */
@@ -41,6 +59,10 @@ export default function StatementCard({ s }: { s: Statement }) {
   const focused = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("ekstre") === String(s.id);
   const [open, setOpen] = useState(status === "check" || focused || !!s.reread_rows);
   const [reread, setReread] = useState(false); // şablonla yeniden okuma farkı penceresi
+  const [fix, setFix] = useState<"add" | "rows" | null>(null); // eksik satır ekle / satırları düzenle
+  const [odak, setOdak] = useState<GrupKey[] | null>(null); // denklemde dokunulan rakamın satırları
+  const rows = (g: GrupKey[] | null) => s.can_fix ? () => { setOdak(g); setFix("rows"); } : undefined;
+  const chip = paidChip(s);
   const liRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (focused) liRef.current?.scrollIntoView({ block: "start" });
@@ -77,25 +99,27 @@ export default function StatementCard({ s }: { s: Statement }) {
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <span className="font-semibold tabular-nums">{tl(s.total_debt)}</span>
-          {status === "ok" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400"><CheckCircle2 size={12} aria-hidden /> {TERIM.dogrulandi.ad}</span>}
-          {status === "confirmed" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400"><CheckCircle2 size={12} aria-hidden /> {TERIM.onaylandi.ad}</span>}
-          {status === "check" && <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"><AlertTriangle size={12} aria-hidden /> {TERIM.rakamlarTutmadi.ad}</span>}
+          {status === "ok" && <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-1.5 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-950/50 dark:text-green-400" title={TERIM.dogrulandi.aciklama}><CheckCircle2 size={12} aria-hidden /> {DUZELT.rozetTuttu}</span>}
+          {status === "confirmed" && <span className="inline-flex items-center gap-1 rounded-md bg-stone-100 px-1.5 py-0.5 text-[11px] font-semibold text-stone-700 dark:bg-stone-800 dark:text-stone-300" title={TERIM.onaylandi.aciklama}><CheckCircle2 size={12} aria-hidden /> {DUZELT.rozetOnay}</span>}
+          {status === "check" && <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"><AlertTriangle size={12} aria-hidden /> {s.fix_badge ?? TERIM.rakamlarTutmadi.ad}</span>}
+          {chip && <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-semibold", chip.tone)}>{chip.text}</span>}
         </div>
         <ChevronDown size={16} aria-hidden className={cx("mt-1 shrink-0 text-stone-400 transition-transform", open && "rotate-180")} />
       </button>
 
       {open && (
         <div id={id} className="space-y-3 border-t border-stone-100 px-3 pt-3 pb-3 text-sm dark:border-stone-800">
-          {!!s.reread_rows && (
+          {!!s.reread_rows && !(status === "check" && s.check_kind) && (
             <RereadBanner sid={s.id} bank={s.bank} last4={(s.card_no.replace(/\D/g, "") || s.card_no).slice(-4)} rows={s.reread_rows}
               onOpen={() => setReread(true)} />
           )}
           {eq.ok != null && (
             <div className="space-y-1.5 rounded-lg bg-stone-50 p-3 text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
               <Line l="Önceki borç" v={tl(s.previous_balance!)} />
-              <Line l="− Ödemeler" v={tl(s.payments!)} />
-              <Line l={eq.feesIncluded === true && fees > 0 ? `+ Harcamalar (faiz ${tl(fees)} dahil)` : "+ Harcamalar"} v={tl(s.period_activity!)} />
-              {eq.feesIncluded === false && <Line l="+ Faiz ve ücret" v={tl(fees)} tone="text-red-600 dark:text-red-400" />}
+              <Line l="− Ödemeler" v={tl(s.payments!)} onOpen={rows(BILESEN.odeme)} />
+              <Line l={eq.feesIncluded === true && fees > 0 ? `+ Harcamalar (faiz ${tl(fees)} dahil)` : "+ Harcamalar"} v={tl(s.period_activity!)} onOpen={rows(BILESEN.harcama)} />
+              {eq.feesIncluded === false && <Line l="+ Faiz ve ücret" v={tl(fees)} tone="text-red-600 dark:text-red-400" onOpen={rows(BILESEN.faiz)} />}
+              {s.refunds_separate && s.refund_total != null && <Line l={DUZELT.iadeSatiri} v={tl(s.refund_total)} onOpen={rows(BILESEN.iade)} />}
               <div className="flex justify-between gap-3 border-t border-stone-200 pt-1.5 font-semibold text-stone-900 dark:border-stone-700 dark:text-stone-100">
                 <span>= Yeni borç</span>
                 <span className={cx("shrink-0 tabular-nums", eq.ok || s.confirmed_at ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-300")}>
@@ -104,16 +128,25 @@ export default function StatementCard({ s }: { s: Statement }) {
               {!eq.ok && <Line l="Fark" v={tl(eq.diff!)} tone="text-amber-700 dark:text-amber-300" />}
             </div>
           )}
-          <p className="text-xs text-stone-500 dark:text-stone-400">
-            {status === "check"
-              ? eq.ok === false
-                ? `Rakamlar ${tl(Math.abs(eq.diff!))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
-                : `PDF'i aç ve işlemleri ekstreyle karşılaştır. Rakamlar aynıysa "Doğru, onayla" de.`
-              : status === "confirmed" ? `Rakamları ekstreyle karşılaştırıp doğru dedin${s.confirmed_at ? ` (${tsDateTR(s.confirmed_at)})` : ""}.`
-              : eq.ok && eq.feesIncluded != null ? "Rakamlar tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı (uygulama kontrol etti)."
-              : eq.ok ? "Rakamlar tuttu: okunan rakamlar ekstreyle aynı (uygulama kontrol etti)." : "Bu ekstrede özet rakamları okunamadı."}
-          </p>
-          {!!s.reconciliation_diff && Math.abs(s.reconciliation_diff) >= 1 && (
+          {status === "check" && s.fix_title ? (
+            // özet doğru ama işlem listesi tutmuyor ("rows") ya da özet tutmuyor ("summary"): tek cümle + ne eksik / fazla
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+              role="status" data-testid="ekstre-fark">
+              <div className="font-semibold">{maskText(s.fix_title)}</div>
+              {s.fix_hint && <div className="mt-0.5 text-xs">{maskText(s.fix_hint.text)}</div>}
+            </div>
+          ) : (
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              {status === "check"
+                ? eq.ok === false
+                  ? `Rakamlar ${tl(Math.abs(eq.diff!))} tutmadı. PDF'i aç, ekstredeki "Dönem borcu" ve işlemlerle karşılaştır: eksik ya da fazla okunan işlem olabilir. Rakamlar aynıysa "Doğru, onayla" de.`
+                  : `PDF'i aç ve işlemleri ekstreyle karşılaştır. Rakamlar aynıysa "Doğru, onayla" de.`
+                : status === "confirmed" ? DUZELT.onayMetni(s.confirmed_at ? tsDateTR(s.confirmed_at) : null)
+                : eq.ok && eq.feesIncluded != null ? "Rakamlar tuttu: faiz ve ücretle birlikte okunan rakamlar ekstreyle aynı (uygulama kontrol etti)."
+                : eq.ok ? "Rakamlar tuttu: okunan rakamlar ekstreyle aynı (uygulama kontrol etti)." : "Bu ekstrede özet rakamları okunamadı."}
+            </p>
+          )}
+          {!(status === "check" && s.fix_title) && !s.confirmed_at && !!s.reconciliation_diff && Math.abs(s.reconciliation_diff) >= 1 && (
             <p className="text-xs text-amber-700 dark:text-amber-300">
               Okunan işlemlerin toplamı ekstre özetinden {tl(Math.abs(s.reconciliation_diff))} {s.reconciliation_diff > 0 ? "fazla" : "eksik"}: bir işlem eksik ya da fazla okunmuş olabilir.
             </p>
@@ -123,7 +156,22 @@ export default function StatementCard({ s }: { s: Statement }) {
           )}
 
           <div className="flex flex-wrap items-center gap-2">
-            {status === "check" ? (<>
+            {status === "check" && s.check_kind ? (<>
+              {/* birincil: şablon varsa onunla düzelt, yoksa eksik satır ekle; "Rakamlar doğru, onayla" ikincil */}
+              {!!s.reread_rows && (
+                <button className="btn-primary" onClick={() => setReread(true)} data-testid="ekstre-sablonla">
+                  <RefreshCw size={15} aria-hidden /> {DUZELT.sablonla(s.reread_rows)}</button>
+              )}
+              {s.can_fix && (<>
+                <button className={s.reread_rows ? SECONDARY : "btn-primary"} onClick={() => setFix("add")} data-testid="ekstre-satir-ekle">
+                  <ListPlus size={15} aria-hidden /> {DUZELT.satirEkle}</button>
+                <button className={SECONDARY} onClick={() => { setOdak(null); setFix("rows"); }} data-testid="ekstre-satirlar">
+                  <ListTree size={15} aria-hidden /> {DUZELT.satirlar}</button>
+              </>)}
+              <a className="btn-ghost" href={pdf} target="_blank" rel="noreferrer"><FileText size={15} aria-hidden /> {DUZELT.pdf}</a>
+              <button className="btn-ghost" disabled={confirm.isPending} onClick={() => confirm.mutate(undefined)} data-testid="ekstre-onayla">
+                <CheckCircle2 size={15} aria-hidden /> {DUZELT.onayla}</button>
+            </>) : status === "check" ? (<>
               <a className="btn border border-stone-300 text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-800"
                 href={pdf} target="_blank" rel="noreferrer"><FileText size={15} aria-hidden /> PDF'i aç</a>
               <button className="btn-primary" disabled={confirm.isPending} onClick={() => confirm.mutate(undefined)}>
@@ -140,7 +188,7 @@ export default function StatementCard({ s }: { s: Statement }) {
             ))}
             {status === "confirmed" && (
               <button className="btn-ghost" disabled={unconfirm.isPending} onClick={() => unconfirm.mutate(undefined)}>
-                <Undo2 size={15} aria-hidden /> Onayı geri al</button>
+                <Undo2 size={15} aria-hidden /> {DUZELT.yenidenKontrol}</button>
             )}
           </div>
           {/* Silme onay/ödeme düğmelerinden ayrı satırda: yanlış dokunuşla yanındaki düğme yerine basılmasın. */}
@@ -157,6 +205,8 @@ export default function StatementCard({ s }: { s: Statement }) {
         </div>
       )}
       {reread && <RereadSheet sid={s.id} onClose={() => setReread(false)} />}
+      {fix === "add" && <AddRowSheet s={s} onClose={() => setFix(null)} />}
+      {fix === "rows" && <EditRowsSheet s={s} odak={odak} onClose={() => { setFix(null); setOdak(null); }} />}
     </li>
   );
 }
