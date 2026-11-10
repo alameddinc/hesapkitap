@@ -138,6 +138,13 @@ def _extras() -> None:
                     "due_date": "2026-11-25", "note": "Düğün masrafı", "asset": "TRY"})
     db.create_debt({"person": "Selin", "direction": "borc", "amount": 8000, "debt_date": "2026-08-03",
                     "note": "Elden", "asset": "TRY"})
+    # aynı kişiye ikinci borç (söz tarihi önce): "Bu ay ödenecekler"de Kerem tek satır, açınca iki borç
+    db.create_debt({"person": "Kerem", "direction": "borc", "amount": 1500, "debt_date": "2026-09-14",
+                    "due_date": "2026-11-05", "note": "Araba tamiri", "asset": "TRY"})
+    # ödeme planı olan borç (app/debt_schedule.py; yalnız kayıt): ayda ₺1.500, 8 taksit, her ayın 26'sı. Kurgu kurum.
+    db.create_debt({"person": "Örnek Vergi Dairesi", "direction": "borc", "amount": 12000, "debt_date": "2026-10-01",
+                    "asset": "TRY", "plan_installment": 1500, "plan_count": 8, "plan_start": "2026-10", "plan_day": 26,
+                    "creditor_type": "vergi_sgk", "plan_interest": "bilmiyorum"})
     from app import debt_plan
 
     debt_plan.save_settings({"monthly": 30000, "order": "faiz"})
