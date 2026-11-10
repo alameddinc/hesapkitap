@@ -260,7 +260,8 @@ CAPABILITIES = (
                               # kart:<id>|borc:<id>, kind card|person, remaining, progress, closes, warning, payable}],
                               # months [{month, label, total, payments, interest, left}], debt_free, this_month {items
                               # [{key, amount, done, text, payable}]}, warnings, shortfall {min_monthly, text} | null,
-                              # stuck, excluded, can_edit, summary_card {eligible}}; PUT /api/debt-plan {monthly, order};
+                              # pace {months, text} | null (yalnız elden borç), stuck, excluded, can_edit, summary_card
+                              # {eligible}}; istemci yazarken önizler (kaydetmez), durunca PUT /api/debt-plan {monthly, order};
                               # paket satırı "borc_plani" (ücretsiz); push türü "borc" (elden borcun söz verilen günü)
     "statement_fix",          # tutmayan ekstreyi elle düzelt: GET /api/statements [].check_kind ("rows": özet doğru,
                               # işlem listesi tutmuyor | "summary": özet tutmuyor | null), fix_diff (satırlar −

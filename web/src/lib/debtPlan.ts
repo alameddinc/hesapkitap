@@ -27,6 +27,8 @@ export interface DebtPlanData {
   this_month: { month: string; label: string; budget: number | null; planned: number; paid: number; items: PlanItem[] };
   warnings: { key: string; level: "warn" | "bad" | "info"; title: string; text: string }[];
   shortfall: { min_monthly: number; interest: number | null; title: string; text: string; hint: string } | null;
+  /** yalnız elden borç varken nötr satır ("Bu tutarla elden borçlar N ayda biter."); eski sunucuda yok */
+  pace?: { months: number; text: string } | null;
   stuck: { title: string; text: string } | null; excluded: { key: string; title: string; text: string }[];
   hidden: { fees: boolean; people: boolean }; can_edit: boolean; summary_card: { eligible: boolean };
   empty: { title: string; text: string } | null;
@@ -39,3 +41,18 @@ export const debtPlanUrl = (monthly?: number | null, order?: DebtOrder | null) =
   const s = q.toString();
   return `/api/debt-plan${s ? `?${s}` : ""}`;
 };
+
+/** Sunucunun kabul ettiği en büyük aylık tutar (PUT/GET /api/debt-plan: le=100_000_000). */
+export const AYLIK_EN_COK = 100_000_000;
+/** Plan yazarken canlı önizlenir: önizleme gecikmesi ve kayıt gecikmesi (ms). Mobil lib/endpoints/borcPlani.ts aynı. */
+export const ONIZLE_MS = 300;
+export const KAYDET_MS = 1000;
+
+/** Aylık tutar kutusunun hatası (null: geçerli). v: yazılanın sayısı (boşsa null, rakam değilse NaN). Mobil ile aynı sözler. */
+export function aylikTutarHatasi(v: number | null): string | null {
+  if (v == null) return "Her ay borçlara ne kadar ayırabileceğini yaz; plan ay ay çıksın.";
+  if (!Number.isFinite(v) || v < 0) return "Tutarı rakamla yaz (ör. 15.000).";
+  if (v === 0) return "0 ile borç kapanmaz; ayırabileceğin tutarı yaz.";
+  if (v > AYLIK_EN_COK) return "Bu tutar çok büyük; en çok ₺100.000.000 yazabilirsin.";
+  return null;
+}

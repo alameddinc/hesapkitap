@@ -295,3 +295,54 @@ def test_order_labels_and_texts(order):
 
     label, text = dp.ORDER_INFO[order]
     assert label and "kart" in text.lower()
+
+
+# ---------------------------------------------------------------- canlı önizleme (yazarken)
+
+def test_live_preview_changes_months_without_saving(client, tmpdb):
+    """İstemci yazarken GET ?monthly=… ile önizler: borçsuz ay ve takvim tutarla değişir, kayıtlı ayar değişmez."""
+    _seed_cards(tmpdb)
+    _seed_people(client)
+    client.put("/api/debt-plan", json={"monthly": 73600})
+    big = client.get("/api/debt-plan", params={"monthly": 73600}).json()
+    small = client.get("/api/debt-plan", params={"monthly": 2500}).json()
+    assert big["debt_free"]["months"] == 1 and small["debt_free"]["months"] > big["debt_free"]["months"]
+    assert len(small["months"]) == small["debt_free"]["months"] and small["debt_free"]["label"] != big["debt_free"]["label"]
+    assert small["shortfall"]["title"] == "Bu tutarla kart faizi önlenemiyor" and big["shortfall"] is None
+    assert small["pace"] is None  # kart varken faiz uyarısı konuşur
+    assert client.get("/api/debt-plan").json()["settings"]["monthly"] == 73600  # önizleme kaydetmedi
+    r = client.get("/api/debt-plan", params={"order": "kucuk"}).json()
+    assert r["order"] == "kucuk" and r["monthly"] == 73600 and r["settings"]["order"] == "faiz"
+
+
+def test_pace_line_only_personal_debts(client):
+    from app import debt_plan as dp
+
+    _seed_people(client)  # 5.000 + 2.000 elden borç, kart yok
+    p = dp.build(monthly=2000, today=TODAY)
+    assert p["shortfall"] is None and p["pace"] == {"months": 4, "text": "Bu tutarla elden borçlar 4 ayda biter."}
+    assert "(4 ay)" in p["debt_free"]["text"]
+    assert dp.build(monthly=7000, today=TODAY)["pace"]["text"] == "Bu tutarla elden borçlar bu ay biter."
+    assert dp.build(monthly=0, today=TODAY)["pace"] is None
+    assert dp.build(monthly=1, today=TODAY)["pace"] is None  # 10 yılda bitmiyor: stuck konuşur
+
+
+@pytest.mark.parametrize("saved", [None, 25000])
+def test_first_load_field_and_plan_use_same_amount(client, tmpdb, monkeypatch, saved):
+    """İlk açılış: kutudaki tutar (yanıttaki monthly) ile planın hesaplandığı tutar aynı. Kayıt yoksa öneri (kaynak
+    "suggestion"), kayıt varsa kayıtlı tutar; öneri ayrıca gelir. Sahadan: kutu ₺73.600 gösterip plan ₺25.000 ile
+    hesaplanmış gibi görünmüştü."""
+    from app import debt_plan as dp
+
+    _seed_cards(tmpdb)
+    _seed_people(client)
+    monkeypatch.setattr(dp, "suggestion", lambda today: {"amount": 73600.0, "months": 3, "text": "öneri"})
+    if saved:
+        client.put("/api/debt-plan", json={"monthly": saved})
+    r = client.get("/api/debt-plan").json()
+    want = saved or 73600
+    assert r["monthly"] == want and r["monthly_source"] == ("saved" if saved else "suggestion")
+    assert r["suggestion"]["amount"] == 73600 and r["settings"]["monthly"] == saved
+    same = client.get("/api/debt-plan", params={"monthly": want}).json()
+    assert r["debt_free"] == same["debt_free"] and r["months"] == same["months"]
+    assert r["this_month"]["budget"] == same["this_month"]["budget"]

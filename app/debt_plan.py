@@ -458,6 +458,15 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         stuck = {"title": "Bu tutarla 10 yılda kapanmıyor",
                  "text": "Aylık tutarı artırabilirsen plan kısalır; Bütçeler ve Tasarruf'ta kısılabilecek harcamalara bak."}
 
+    # yalnız elden borç varken (kart yok: faiz uyarısı çıkmaz) nötr bir satır: bu tutarla elden borçlar kaç ayda biter
+    pace = None
+    if sim and people and not cards and monthly:
+        closes_p = [sim["closes"].get(d["key"]) for d in people]
+        if all(closes_p):
+            n = _months_between(start, max(closes_p)) + 1
+            pace = {"months": n, "text": "Bu tutarla elden borçlar bu ay biter." if n == 1 else
+                    f"Bu tutarla elden borçlar {n} ayda biter."}
+
     total_open = _r(sum(d["remaining"] for d in (*cards, *people)))
     by_key = {d["key"]: d for d in debts}
     items = []
@@ -507,7 +516,7 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         "debt_free": debt_free,
         "this_month": {"month": start, "label": month_label(start), "budget": first if sim else None,
                        "planned": _r(sum(i["amount"] for i in items if not i["done"])), "paid": paid_now, "items": items},
-        "warnings": warnings, "shortfall": shortfall, "stuck": stuck, "excluded": other,
+        "warnings": warnings, "shortfall": shortfall, "pace": pace, "stuck": stuck, "excluded": other,
         "hidden": {"fees": fees_hidden, "people": people_hidden},
         "can_edit": _can_edit(),
         "summary_card": {"eligible": len(cards) + len(people) >= 2},

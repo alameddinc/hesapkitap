@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarCheck, Check, ChevronDown, ChevronRight, CreditCard, HandCoins, Info, LayoutDashboard, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
 import { cx, maskText, parseAmount, tl } from "../format";
 import { useBook, useCap, useUiPrefs } from "../components/hooks";
@@ -8,7 +8,7 @@ import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurum
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
-import { debtPlanUrl, type DebtOrder, type DebtPlanData } from "../lib/debtPlan";
+import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData } from "../lib/debtPlan";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
 const trimTl = (x: number) => tl(x).replace(/,00(?=\D*$)/, "");
@@ -19,7 +19,7 @@ export default function DebtPlan() {
   const qc = useQueryClient();
   const on = useCap("debt_plan");
   const book = useBook().data;
-  // önizleme: kullanıcı tutarı / sıralamayı değiştirdi (kaydedilene dek sorgu bu değerlerle)
+  // önizleme: kullanıcı tutarı / sıralamayı değiştirdi (sorgu bu değerlerle; sunucu kaydetmez, kayıt ayrıca PUT)
   const [draft, setDraft] = useState<{ monthly?: number | null; order?: DebtOrder }>({});
   const q = useQuery({ queryKey: ["debt-plan", draft.monthly ?? null, draft.order ?? null],
     queryFn: () => send<DebtPlanData>(debtPlanUrl(draft.monthly, draft.order)), enabled: on, placeholderData: (prev) => prev });
@@ -29,22 +29,60 @@ export default function DebtPlan() {
   const text = typed ?? (r?.monthly != null ? r.monthly.toLocaleString("tr-TR", { maximumFractionDigits: 2 }) : "");
   const [allMonths, setAllMonths] = useState(false);
   const [openMonth, setOpenMonth] = useState<string | null>(null);
+  // yazılan tutar: geçerliyse sayı, değilse hata (plan son geçerli tutarla kalır)
+  const parsed = typed == null ? null : typed.trim() ? parseAmount(typed) : null;
+  const err = typed == null ? null : aylikTutarHatasi(parsed);
+  const valid = typed != null && !err && parsed != null ? Math.round(parsed * 100) / 100 : null;
+  const canEdit = !!r?.can_edit;
+  const savedMonthly = r?.settings.monthly ?? null;
+  const [kayit, setKayit] = useState<"bekliyor" | "kaydedildi" | null>(null);
+  const sent = useRef<number | null | undefined>(undefined); // son gönderilen aylık tutar (aynısı iki kez gitmesin)
   const save = useMutation({
     mutationFn: (body: { monthly?: number | null; order?: DebtOrder }) => send("/api/debt-plan", { method: "PUT", json: body }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["debt-plan"] }); },
-    onError: (e: Error) => ui.toast(`${e.message || "Kaydedilemedi"} · plan yalnız bu ekranda değişti`),
+    onMutate: () => setKayit("bekliyor"),
+    // refetchType "all": açık olmayan parametresiz plan (Özet kartı, ilk açılış) da tazelensin; kutu ile plan ayrışmasın
+    onSuccess: () => { setKayit("kaydedildi"); void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" }); },
+    onError: (e: Error) => { setKayit(null); sent.current = undefined; ui.toast(`${e.message || "Kaydedilemedi"} · plan yalnız bu ekranda değişti`); },
   });
+  const persist = (body: { monthly?: number | null; order?: DebtOrder }) => {
+    if (!canEdit) return;
+    if ("monthly" in body) {
+      if (body.monthly === sent.current || (sent.current === undefined && body.monthly === savedMonthly)) return;
+      sent.current = body.monthly;
+    }
+    save.mutate(body);
+  };
   const apply = (body: { monthly?: number | null; order?: DebtOrder }) => {
     setDraft((d) => ({ ...d, ...body }));
-    if (r?.can_edit) save.mutate(body);
+    persist(body);
   };
-  const commitAmount = () => {
-    const v = parseAmount(text);
-    if (!text.trim()) return;
-    if (!Number.isFinite(v) || v < 0) { ui.toast("Tutarı rakamla yaz (ör. 15.000)"); return; }
-    if (v === r?.monthly) return;
-    apply({ monthly: Math.round(v * 100) / 100 });
-  };
+  const setTo = (v: number) => { setText(v.toLocaleString("tr-TR", { maximumFractionDigits: 2 })); apply({ monthly: v }); };
+  // yazarken canlı: 300 ms sonra önizleme (kaydetmeden), 1 sn durunca kayıt. Ayrı "Uygula" adımı yok.
+  useEffect(() => {
+    if (valid == null) return;
+    const t = setTimeout(() => setDraft((d) => (d.monthly === valid ? d : { ...d, monthly: valid })), ONIZLE_MS);
+    return () => clearTimeout(t);
+  }, [valid]);
+  const persistRef = useRef(persist);
+  useEffect(() => { persistRef.current = persist; });
+  useEffect(() => {
+    if (valid == null || !canEdit || valid === savedMonthly) return;
+    const t = setTimeout(() => persistRef.current({ monthly: valid }), KAYDET_MS);
+    return () => clearTimeout(t);
+  }, [valid, canEdit, savedMonthly]);
+  // ekrandan çıkarken bekleyen kayıt kaybolmasın
+  const pending = useRef<number | null>(null);
+  useEffect(() => { pending.current = valid != null && canEdit && valid !== savedMonthly && valid !== sent.current ? valid : null; });
+  useEffect(() => () => {
+    if (pending.current != null) void send("/api/debt-plan", { method: "PUT", json: { monthly: pending.current } })
+      .then(() => qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" })).catch(() => undefined);
+  }, [qc]);
+  useEffect(() => {
+    if (kayit !== "kaydedildi") return;
+    const t = setTimeout(() => setKayit(null), 2500);
+    return () => clearTimeout(t);
+  }, [kayit]);
+  const commitAmount = () => { if (valid != null) { setDraft((d) => ({ ...d, monthly: valid })); persist({ monthly: valid }); } };
   const old = !on || (q.error instanceof ApiError && q.error.status === 404);
 
   return (
@@ -98,22 +136,30 @@ export default function DebtPlan() {
 
         <section className="card space-y-3 p-4" aria-label="Plan ayarı">
           <label className="block space-y-1">
-            <span className="text-sm font-medium">Her ay borçlara ayırabileceğin</span>
-            <div className="flex gap-2">
-              <input className="input min-w-0 flex-1 text-right tabular-nums" inputMode="decimal" placeholder="ör. 15.000" value={text}
-                aria-label="Aylık tutar" onChange={(e) => setText(e.target.value)} onBlur={commitAmount}
-                onKeyDown={(e) => { if (e.key === "Enter") commitAmount(); }} />
-              <button className="btn-primary shrink-0" onClick={commitAmount}>Uygula</button>
-            </div>
+            <span className="flex items-center justify-between gap-2 text-sm font-medium">Her ay borçlara ayırabileceğin
+              {/* kutudaki tutar her zaman planın tutarı; kayıt yoksa öneridir */}
+              {typed == null && p.monthly_source === "suggestion" && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-950/50 dark:text-blue-200" data-testid="oneri-etiket">Öneri</span>}</span>
+            <input className={cx("input w-full text-right tabular-nums", err && "border-red-400 dark:border-red-700")} inputMode="decimal" placeholder="ör. 15.000" value={text}
+              aria-label="Aylık tutar" aria-invalid={!!err} aria-describedby="aylik-durum" onChange={(e) => setText(e.target.value)} onBlur={commitAmount}
+              onKeyDown={(e) => { if (e.key === "Enter") commitAmount(); }} />
           </label>
-          {p.suggestion && (
-            <p className="flex flex-wrap items-center gap-x-2 text-xs text-stone-500">
-              <span>{maskText(p.suggestion.text)}</span>
+          <p id="aylik-durum" aria-live="polite" className="min-h-4 text-xs" data-testid="aylik-durum">
+            {err ? <span className="text-red-700 dark:text-red-400">{err}{p.monthly != null && <> Plan şimdilik {trimTl(p.monthly)} ile.</>}</span>
+              : kayit === "bekliyor" ? <span className="text-stone-500">Kaydediliyor…</span>
+              : kayit === "kaydedildi" ? <span className="inline-flex items-center gap-1 text-green-700 dark:text-green-400"><Check size={13} aria-hidden />Kaydedildi</span>
+              : q.isFetching && typed != null ? <span className="text-stone-500">Hesaplanıyor…</span> : null}
+          </p>
+          {p.suggestion && (p.monthly_source === "suggestion" && typed == null ? (
+            <p className="text-xs text-stone-500">{maskText(p.suggestion.text)}</p>
+          ) : (
+            <div className="space-y-0.5 text-xs text-stone-500" data-testid="oneri">
               {p.suggestion.amount > 0 && p.monthly !== p.suggestion.amount && (
-                <button className="font-medium text-blue-700 underline dark:text-blue-400"
-                  onClick={() => { setText(String(p.suggestion!.amount)); apply({ monthly: p.suggestion!.amount }); }}>Öneriyi kullan</button>)}
-            </p>
-          )}
+                <p className="flex flex-wrap items-center gap-x-2"><span className="tabular-nums">Öneri: {maskText(trimTl(p.suggestion.amount))}</span>
+                  <span aria-hidden>·</span>
+                  <button className="font-medium text-blue-700 underline dark:text-blue-400" onClick={() => setTo(p.suggestion!.amount)}>Öneriyi kullan</button></p>)}
+              <p>{maskText(p.suggestion.text)}</p>
+            </div>
+          ))}
           <div role="radiogroup" aria-label="Sıralama" className="grid gap-2 sm:grid-cols-3">
             {p.orders.map((o) => (
               <button key={o.key} role="radio" aria-checked={p.order === o.key} onClick={() => apply({ order: o.key })}
@@ -133,9 +179,12 @@ export default function DebtPlan() {
             <p className="flex items-center gap-2 font-semibold"><AlertTriangle size={18} aria-hidden />{p.shortfall.title}</p>
             <p className="text-sm">{maskText(p.shortfall.text)}</p>
             <p className="text-xs opacity-90">{p.shortfall.hint}</p>
-            <button className="btn-primary" onClick={() => { setText(String(p.shortfall!.min_monthly)); apply({ monthly: p.shortfall!.min_monthly }); }}>
+            <button className="btn-primary" onClick={() => setTo(p.shortfall!.min_monthly)}>
               Aylık tutarı {trimTl(p.shortfall.min_monthly)} yap</button>
           </section>
+        )}
+        {p.pace && !p.shortfall && (
+          <p role="note" className="rounded-xl bg-stone-50 p-3 text-sm text-stone-700 dark:bg-stone-800/60 dark:text-stone-200" data-testid="borc-plani-hiz">{p.pace.text}</p>
         )}
         {p.stuck && (
           <p role="note" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
