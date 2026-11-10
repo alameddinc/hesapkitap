@@ -37,7 +37,7 @@ from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND, Transaction
 
 log = logging.getLogger("hesapkitap.statement_reread")
 
-VERSION = 1                # hesap kuralı değişirse artır: bütün önbellek yeniden hesaplanır
+VERSION = 2                # hesap kuralı değişirse artır: bütün önbellek yeniden hesaplanır
 KEY = "reread:stmt:"       # defterin settings'i: + ekstre id
 REFRESH_DAYS = 7           # okunamayan / farksız sonuç bu kadar günde bir yeniden denenir (metin çıkarma iyileşebilir)
 TICK_EVERY_S = 15 * 60     # tam tarama sıklığı (şablon listesi değişince hemen)
@@ -177,14 +177,33 @@ def plan_for(st: dict, txns: list[dict], read) -> dict | None:
         else:
             changed.append({"row": a, "amount": t["amount"], "txn_type": t["txn_type"]})
     removed = [r for rs in pool.values() for r in rs]
+    _payment_types(st, kept, changed, added)
     after = kept + [{**c["row"], "amount": c["amount"], "txn_type": c["txn_type"]} for c in changed] + added
     d_after = _equation(st.get("previous_balance"), st["total_debt"], after)
     if abs(d_after) > EPS:
         return None
+    from app import statement_fix
+    if statement_fix.evaluate(st, statement_fix.aggregate(after))["ok"] is False:
+        return None  # satır denklemi tutuyor ama özetle (iade / ödeme ayrımı, harcama toplamı) çelişiyor: önerme
     visible = len(added) + sum(not c["row"].get("is_deleted") for c in changed) \
         + sum(not r.get("is_deleted") for r in removed)
     return {"kept": kept, "changed": changed, "added": added, "removed": removed, "after": after,
             "equation_after": d_after, "rows": visible}
+
+
+def _payment_types(st: dict, kept: list[dict], changed: list[dict], added: list[dict]) -> None:
+    """Şablon ödemeyi iade diye okumuş olabilir (açıklamada "ödeme" kelimesi yok: "HESAPTAN AKTARIM"): eklenecek
+    iade satırı, kayıtlı özetin "ödemeler"inde listede karşılığı olmayan tutara kuruşu kuruşuna eşitse ödemedir.
+    Satır denklemi ikisini ayıramaz; ayrılmazsa ödeme harcamadan düşülürdü."""
+    paid = -sum(r["amount"] for r in kept if r["txn_type"] == PAYMENT) \
+        - sum(c["amount"] for c in changed if c["txn_type"] == PAYMENT) \
+        - sum(a["amount"] for a in added if a["txn_type"] == PAYMENT)
+    gap = round((st.get("payments") or 0.0) - paid, 2)
+    if gap < EPS:
+        return
+    hit = [a for a in added if a["txn_type"] == REFUND and abs(-a["amount"] - gap) <= EPS]
+    if len(hit) == 1:
+        hit[0]["txn_type"] = PAYMENT
 
 
 def _text_of(st: dict) -> tuple[str | None, str | None]:
@@ -402,8 +421,14 @@ def annotate(statements: list[dict]) -> list[dict]:
     except Exception:  # noqa: BLE001 - liste bozulmasın
         log.exception("yeniden okuma bayrağı okunamadı")
         av = {}
+    try:
+        from app import statement_fix
+        can_fix = statement_fix.can_edit()
+    except Exception:  # noqa: BLE001
+        can_fix = False
     for s in statements:
         s["reread_rows"] = av[s["id"]]["rows"] if s["id"] in av else None
+        s["can_fix"] = can_fix  # satır ekle / düzelt (statement_fix): sahip ve tam yetkili üye
     return statements
 
 
@@ -469,12 +494,19 @@ def preview(sid: int) -> dict:
     p, why = compute(s, txns)
     _put_cache(sid, {"v": VERSION, "sig": rows_sig(s, txns), "fp": fingerprint(), "at": _now(), "reason": why,
                      "rows": p["rows"] if p else 0, "via": p["via"] if p else None})
+    from app import statement_fix
+
+    hide = book.hide_fees()
+    ev = statement_fix.evaluate(s, statement_fix.aggregate(txns), hide)
+    # kartın gösterdiği fark (statement_fix): totals_before.equation_diff satır denklemidir, eksik ödeme satırını da
+    # sayar (ekstre kartı "₺50 fark" derken burada önceki borç kadar büyük bir rakam görünmesin)
     base = {"statement_id": sid, "bank": s["bank"], "card_no": s["card_no"], "last4": _last4(s["card_no"]),
-            "period_end": s["period_end"], "total_debt": s["total_debt"], "totals_before": _totals(s, txns)}
+            "period_end": s["period_end"], "total_debt": s["total_debt"], "totals_before": _totals(s, txns),
+            "fix_before": {"ok": ev["ok"], "diff": ev["diff"]}}
     if not p:
         return {**base, "available": False, "reason": why, "rows": 0, "diff": {"added": [], "removed": [], "changed": []},
                 "items": [], "totals_after": None, "equation_ok_after": False}
-    hide_fees = book.hide_fees()
+    hide_fees = hide
 
     def shown(r: dict) -> bool:  # ortak defter: gizli satır ve (kurala göre) faiz satırı listede gösterilmez
         return not r.get("is_deleted") and not r.get("hidden") and not (hide_fees and r["txn_type"] == FEE)
@@ -506,9 +538,10 @@ def preview(sid: int) -> dict:
                "label": REMOVED_LABEL, "text": _line(r), "linked": r["id"] in links}
         diff["removed"].append(rec)
         items.append({"kind": "removed", **rec, **({"note": UNLINK_NOTE} if rec["linked"] else {})})
+    after_ok = statement_fix.evaluate(s, statement_fix.aggregate(p["after"]), hide)["ok"] is not False
     return {**base, "available": True, "reason": "ok", "rows": p["rows"], "sig": rows_sig(s, txns), "via": p["via"],
             "diff": diff, "items": items, "totals_after": _totals(s, p["after"]),
-            "equation_ok_after": abs(p["equation_after"]) <= EPS}
+            "equation_ok_after": abs(p["equation_after"]) <= EPS, "fix_after_ok": after_ok}
 
 
 def apply(sid: int, sig: str | None = None) -> dict:

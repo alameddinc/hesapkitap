@@ -102,7 +102,7 @@ def _loose(pat: str) -> str:
 _LABEL_RES = {k: re.compile(_loose(v)) for k, v in LABELS.items()}
 _PREV_LINE = re.compile(r"onceki donem|onceki ekstre|onceki hesap ozeti|devreden bakiye|devreden borc|gecen donem"
                         r"|donem basi bakiye")
-_PAY_WORDS = re.compile(r"odeme|tesekkur|payment|tahsilat")
+_PAY_WORDS = re.compile(r"odeme|tesekkur|payment|tahsilat|hesaptan aktarim")  # İş Bankası: "HESAPTAN AKTARIM"
 _REFUND_WORDS = re.compile(r"iade|iptal|refund")
 _FEE_WORDS = re.compile(r"faiz|bsmv|kkdf|ucret|aidat|vade fark|gecikme|kar payi")  # kâr payı: katılım bankası faizi
 _FOLD = str.maketrans("çğıöşüâîû", "cgiosuaiu")

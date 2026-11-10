@@ -255,6 +255,13 @@ CAPABILITIES = (
                               # /api/statements/{id}/reread-preview → {available, rows, sig, items [{kind added|removed|
                               # changed, label, text, note?}], diff, totals_before/after, equation_ok_after}, POST
                               # .../reread-apply {sig?} → {ok, undo_id, added, changed, removed} (409: değişti / yok)
+    "statement_fix",          # tutmayan ekstreyi elle düzelt: GET /api/statements [].check_kind ("rows": özet doğru,
+                              # işlem listesi tutmuyor | "summary": özet tutmuyor | null), fix_diff (satırlar −
+                              # beklenen), fix_hint {kind, text, suggest {txn_type, amount, txn_date} | null, row_id?},
+                              # can_fix; GET /api/statements/{id}/rows → {rows, check}; POST .../rows {txn_date?,
+                              # description?, amount (artı), txn_type, dry_run?} ve PATCH .../rows/{txn_id} {amount?,
+                              # txn_type?, txn_date?, is_deleted?, dry_run?} → {ok, undo_id?, check {ok, diff, hint}};
+                              # işaret türden (iade, ödeme eksi); geri al POST /api/imports/{undo_id}/undo
 )
 
 

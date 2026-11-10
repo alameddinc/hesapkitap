@@ -213,6 +213,32 @@ export interface Statement {
   equation_diff?: number | null;
   /** yetenek statement_reread: şablonla yeniden okunabilir, N satır farklı (önbellekten); null/yok: öneri yok */
   reread_rows?: number | null;
+  /** yetenek statement_fix: "rows" özet doğru, işlem listesi tutmuyor | "summary" özet tutmuyor | null tuttu */
+  check_kind?: "rows" | "summary" | null;
+  /** rozet ("İşlemler eksik" / "İşlemler fazla" / "Rakamlar tutmadı") ve tek cümle (sunucu; web ve mobil aynı) */
+  fix_badge?: string | null;
+  fix_title?: string | null;
+  /** düzeltilecek fark: satırlar − beklenen (artı: satırlar fazla) */
+  fix_diff?: number | null;
+  fix_hint?: FixHint | null;
+  /** satır ekle / düzelt yetkisi (sahip, tam yetkili üye) */
+  can_fix?: boolean;
+  /** özetin "harcamalar"ı iadesiz, iade / kampanya ayrı satır (Halkbank biçimi); refund_total o satırın tutarı (eksi) */
+  refunds_separate?: boolean;
+  refund_total?: number | null;
+}
+
+/** Farkı en iyi açıklayan düzeltme (app/statement_fix.py hint). */
+export interface FixHint {
+  kind: "payment_missing" | "extra_row" | "sign" | "fee_missing" | "charge_missing" | "credit_missing";
+  text: string;
+  suggest: { txn_type: "harcama" | "iade" | "odeme" | "faiz_ucret"; amount: number; txn_date: string } | null;
+  row_id?: number;
+}
+export interface FixCheck { ok: boolean | null; diff: number | null; hint: FixHint | null; badge: string | null; title: string | null }
+export interface StatementRow {
+  id: number; txn_date: string; description: string; amount: number; txn_type: string; is_deleted: number;
+  card: string | null; installment_no: number | null; orig_currency: string | null;
 }
 
 /** GET /api/statements/{id}/reread-preview: kayıtlı (yapay zekâ) okuma ile şablon okuması arasındaki fark. Metinler
@@ -231,6 +257,8 @@ export interface RereadPreview {
   items: RereadItem[];
   diff: { added: unknown[]; removed: unknown[]; changed: { before: unknown; after: unknown }[] };
   totals_before: RereadTotals; totals_after: RereadTotals | null; equation_ok_after: boolean;
+  /** kartın gösterdiği fark (statement_fix) ve uygulanınca tutuyor mu; eski sunucuda yok */
+  fix_before?: { ok: boolean | null; diff: number | null }; fix_after_ok?: boolean;
 }
 
 export interface Summary {
@@ -731,6 +759,12 @@ export const api = {
   confirmStatement: (id: number) => req<{ ok: boolean; confirmed_at: string | null }>("POST", `/api/statements/${id}/confirm`),
   unconfirmStatement: (id: number) => req<{ ok: boolean }>("DELETE", `/api/statements/${id}/confirm`),
   rereadPreview: (id: number) => req<RereadPreview>("GET", `/api/statements/${id}/reread-preview`),
+  statementRows: (id: number) => req<{ statement_id: number; rows: StatementRow[]; check: FixCheck }>("GET", `/api/statements/${id}/rows`),
+  /** tutar artı; işaret türden. dry_run: yazmaz, sonucu döndürür (canlı "Tuttu ✓") */
+  statementRowAdd: (id: number, body: { txn_type: string; amount: number; txn_date?: string; description?: string; dry_run?: boolean }) =>
+    req<{ ok: boolean; id?: number; undo_id?: string | null; check: FixCheck }>("POST", `/api/statements/${id}/rows`, body),
+  statementRowEdit: (id: number, txnId: number, body: { amount?: number; txn_type?: string; txn_date?: string; is_deleted?: boolean; dry_run?: boolean }) =>
+    req<{ ok: boolean; undo_id?: string | null; check: FixCheck }>("PATCH", `/api/statements/${id}/rows/${txnId}`, body),
   rereadApply: (id: number, sig?: string) =>
     req<{ ok: boolean; undo_id: string | null; added: number; changed: number; removed: number; rows: number }>(
       "POST", `/api/statements/${id}/reread-apply`, { sig }),

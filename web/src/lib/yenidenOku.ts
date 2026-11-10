@@ -17,6 +17,11 @@ export const OKU = {
   yukleniyor: "Fark hesaplanıyor",
   rakam: (once: number, sonraTutar: boolean) =>
     sonraTutar ? `Rakamlar şimdi ${tl(Math.abs(once))} tutmuyor; düzeltilince tutuyor.` : `Rakamlar şimdi ${tl(Math.abs(once))} tutmuyor.`,
+  /** sunucu fix_before (ekstre kartıyla aynı fark): özet tutuyorsa yalnız işlem listesi düzelir */
+  rakamDurum: (once: { ok: boolean | null; diff: number | null }, sonraTutar: boolean) =>
+    once.ok !== false || once.diff == null
+      ? "Özet rakamları tutuyor; işlem listesi ekstreyle aynı olacak."
+      : OKU.rakam(once.diff, sonraTutar),
 };
 
 /** Yapılacaklar / ekstre kartı satırı: "<Banka> ••1234 · N satır farklı". */

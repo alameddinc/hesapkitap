@@ -53,7 +53,8 @@ def statement_check(stmt) -> dict:
     """Kaydedilmemiş Statement için: {verified, verification, verification_text, equation_diff, reconciliation_diff}."""
     from app.parsers.base import equation
 
-    eq = equation(stmt.previous_balance, stmt.payments, stmt.period_activity, stmt.fees(), stmt.total_debt)
+    eq = equation(stmt.previous_balance, stmt.payments, stmt.period_activity, stmt.fees(), stmt.total_debt,
+                  stmt.refunds())
     rd = stmt.reconciliation_diff()
     ok = eq["ok"] is not False and abs(rd) < 1
     return {"verified": ok, "verification": DOGRULANDI if ok else DOGRULANAMADI,

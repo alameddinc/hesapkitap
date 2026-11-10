@@ -1,6 +1,8 @@
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date
 
+from app import money
+
 
 # İşlem tipleri
 PURCHASE = "harcama"
@@ -78,7 +80,11 @@ class Statement:
         """Parse edilen işlemler toplamı ile ekstre özetinin farkı. 0 değilse satır kaçmış demektir."""
         parsed = sum(t.amount for t in self.transactions if t.txn_type != PAYMENT)
         return reconciliation_diff(parsed, self.period_activity, self.interest_fees, self.fees(),
-                                   self.previous_balance, self.payments, self.total_debt)
+                                   self.previous_balance, self.payments, self.total_debt, self.refunds())
+
+    def refunds(self) -> float:
+        """İade satırlarının toplamı (eksi): bazı ekstrelerde özetin "harcamalar"ı iadesiz, iade ayrı satırdır."""
+        return round(sum(t.amount for t in self.transactions if t.txn_type == REFUND), 2)
 
 
 def statement_fees(interest_fees: float | None, fee_txn_sum: float) -> float:
@@ -86,30 +92,40 @@ def statement_fees(interest_fees: float | None, fee_txn_sum: float) -> float:
 
 
 def reconciliation_diff(parsed: float, activity: float | None, interest_fees: float | None, fees: float,
-                        previous: float | None, payments: float | None, total: float | None) -> float:
+                        previous: float | None, payments: float | None, total: float | None,
+                        refunds: float | None = None) -> float:
     """Okunan işlemler (ödeme hariç, faiz/ücret dahil) − ekstre özeti. Bazı ekstrelerde "Dönem içi işlemler" faizi
     içerir, bazılarında faiz ayrı satırdır (VakıfBank: önceki borç − ödemeler + harcamalar + faiz ve ücret = yeni borç).
-    Özetteki faiz satırı okunamadıysa (interest_fees 0) hangisi olduğu denklemden anlaşılır."""
+    Özetteki faiz satırı okunamadıysa (interest_fees 0) hangisi olduğu denklemden anlaşılır. İade de öyle: özetin
+    "harcamalar"ı iadeleri içermiyorsa (iade / kampanya / geri ödeme ayrı satır, equation refunds_separate) okunan
+    işlemlerdeki iade özetin harcamasından ayrıca düşülür."""
     activity = activity or 0.0
+    eq = equation(previous, payments, activity, fees, total, refunds)
     extra = interest_fees or 0.0
     if not extra and fees:
-        inc = equation(previous, payments, activity, fees, total)["fees_included"]
-        extra = 0.0 if inc in (True, None) else fees
-    return round(parsed - (activity + extra), 2)
+        extra = 0.0 if eq["fees_included"] in (True, None) else fees
+    sep = (refunds or 0.0) if eq.get("refunds_separate") else 0.0
+    return round(parsed - (activity + extra + sep), 2)
 
 
 def equation(previous: float | None, payments: float | None, activity: float | None, fees: float | None,
-             total: float | None) -> dict:
-    """Ekstre denklemi: önceki − ödemeler + harcamalar (+ faiz ve ücret) = yeni borç. Faiz bazı ekstrelerde "dönem içi
-    işlemler"in içindedir, bazılarında ayrı satırdır: hangi biçim denklemi tutturuyorsa o seçilir; ikisi de tutmuyorsa
-    farkı küçük olan. {fees_included: bool|None (faiz yok/hesaplanamaz), diff: yeni borç − hesap, ok}."""
+             total: float | None, refunds: float | None = None) -> dict:
+    """Ekstre denklemi: önceki − ödemeler + harcamalar (+ faiz ve ücret) (+ iadeler) = yeni borç. Faiz bazı ekstrelerde
+    "dönem içi işlemler"in içindedir, bazılarında ayrı satırdır; iade / kampanya / geri ödeme de öyle (refunds: okunan
+    iade satırlarının toplamı, eksi — Halkbank örneği: harcamalar iadesiz, "iadeler" ayrı). Hangi biçim denklemi
+    tutturuyorsa o seçilir (önce iadeler harcamaların içinde, faiz içinde); hiçbiri tutmuyorsa iadeler içinde varsayılıp
+    farkı küçük olan. {fees_included: bool|None (faiz yok/hesaplanamaz), diff: yeni borç − hesap, ok;
+    refunds_separate: True yalnız iadeler ayrı biçimi seçildiyse}."""
     if None in (previous, payments, activity, total):
         return {"fees_included": None, "diff": None, "ok": None}
     base = previous - payments + activity
-    d_in = round(total - base, 2)
-    if not fees:
-        return {"fees_included": None, "diff": d_in, "ok": abs(d_in) < 1}
-    d_sep = round(total - (base + fees), 2)
-    included = abs(d_in) <= abs(d_sep)
-    diff = d_in if included else d_sep
-    return {"fees_included": included, "diff": diff, "ok": abs(diff) < 1}
+    fee_opts = [(True, 0.0), (False, fees)] if fees else [(None, 0.0)]
+    ref_opts = [(False, 0.0)] + ([(True, refunds)] if refunds and not money.is_zero(refunds) else [])
+    first = None
+    for sep, r in ref_opts:  # her biçimde faiz içinde / ayrı: daha yakını (eşitse içinde)
+        inc, d = min(((inc, round(total - (base + f + r), 2)) for inc, f in fee_opts), key=lambda x: abs(x[1]))
+        if abs(d) < 1:
+            return {"fees_included": inc, "diff": d, "ok": True, **({"refunds_separate": True} if sep else {})}
+        first = first or (inc, d)
+    best = first
+    return {"fees_included": best[0], "diff": best[1], "ok": False}
