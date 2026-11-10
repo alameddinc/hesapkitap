@@ -32,7 +32,7 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("fiyatlar", "Fiyat takibi", "sayfa", PREMIUM, True, "Ürün ürün fiyat geçmişi, en ucuz market"),
     ("alisveris_listesi", "Alışveriş listesi", "sayfa", PREMIUM, True,
      "Ortak liste, her ürün için en ucuz market ve hepsini tek yerden alırsan toplam"),
-    ("alsam_mi", "Alsam mı?", "sayfa", PREMIUM, True, "Taksitli alımın aylara etkisi"),
+    ("alsam_mi", "Alsam mı?", "sayfa", PREMIUM, True, "Almadan önce: peşin mi, biriktirerek mi; aylarına etkisi"),
     ("posta", "Deftere özel posta adresi", "sayfa", PREMIUM, True, "Ekstre, döküm, fatura postayla kendiliğinden"),
     ("ortak_defter", "Ortak defter, üye yetkileri, ortak kumbara", "sayfa", FAMILY, True,
      "4 kişiye kadar; her üye Premium'un tamamını kullanır"),

@@ -106,7 +106,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
         {isSt && (
           <div role="radiogroup" aria-label="Ne kadar ödedin?" className="divide-y divide-stone-100 overflow-hidden rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-700">
             {([["tam", "Tamamı", (p.paid_amount ?? 0) > 0 && !paid ? `kalan ${tl(left)} da ödendi` : "borcun hepsi", sec.full],
-              ...(sec.min != null ? [["asgari", "Asgari", "kalanına faiz işleyebilir", sec.min]] : []),
+              ...(sec.min != null ? [["asgari", "Asgari", "kalan borca faiz işler", sec.min]] : []),
               ["diger", "Başka tutar", "ödediğin tutarı yaz", null]] as [Secim, string, string, number | null][]).map(([k, ad, alt, v]) => (
               <button key={k} type="button" role="radio" aria-checked={secim === k} onClick={() => secimYap(k)}
                 className={cx("flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-800/60", secim === k && "bg-stone-50 dark:bg-stone-800/60")}>

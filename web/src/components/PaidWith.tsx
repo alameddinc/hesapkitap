@@ -11,7 +11,8 @@ export type PaidWithValue = "kredi_karti" | "banka" | "nakit" | "havale";
 
 export interface PaidWithState { how: PaidWithValue; account: number | null; card: string; recipient: string }
 
-export const PAID_WITH_START: PaidWithState = { how: "kredi_karti", account: null, card: "", recipient: "" };
+// varsayılan banka hesabından: zekât/sadaka ödemesinde borçla (kartla) ödeme seçili gelmesin (mobil NASIL_BASLA ile aynı)
+export const PAID_WITH_START: PaidWithState = { how: "banka", account: null, card: "", recipient: "" };
 
 export const paidWithBody = (s: PaidWithState) => ({
   payment: s.how === "banka" ? "nakit" : s.how,  // banka kartı = sunucuda "nakit / banka kartı" + banka hesabı
@@ -39,10 +40,10 @@ export default function PaidWith({ id, value, onChange, noRecipient }: {
         <label className="label" htmlFor={id}>Nasıl ödedin?</label>
         <select id={id} className="input" value={value.how}
           onChange={(e) => onChange({ ...value, how: e.target.value as PaidWithValue, account: null })}>
-          <option value="kredi_karti">Kredi kartı</option>
           <option value="banka">Banka hesabından (banka kartı)</option>
           <option value="nakit">Nakit</option>
           <option value="havale">Havale / EFT</option>
+          <option value="kredi_karti">Kredi kartı</option>
         </select>
         <p className="mt-1 text-xs text-stone-500">{HINT[value.how]}</p>
       </div>

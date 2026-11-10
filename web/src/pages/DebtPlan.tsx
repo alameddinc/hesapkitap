@@ -162,6 +162,20 @@ export default function DebtPlan() {
     const months = allMonths ? p.months : p.months.slice(0, 12);
     return (
       <>
+        {/* tutar faizi önlemiyor: uyarı ve faizsiz tutar en üstte, borçsuz aydan ve "Planı başlat"tan önce */}
+        {p.shortfall && (
+          <section role="alert" className="space-y-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-900 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-100" data-testid="borc-plani-yetmiyor">
+            <p className="flex items-center gap-2 font-semibold"><AlertTriangle size={18} aria-hidden />{p.shortfall.title}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <p className="min-w-0 flex-1 basis-56 text-sm font-semibold tabular-nums" data-testid="faizsiz-tutar">
+                Faizsiz kapatmak için aylık {maskText(trimTl(p.shortfall.min_monthly))} gerekir</p>
+              <button className="btn-primary" onClick={() => setTo(p.shortfall!.min_monthly)}>Bu tutarı kullan</button>
+            </div>
+            <p className="text-sm">{maskText(p.shortfall.text)}</p>
+            <p className="text-xs opacity-90">{p.shortfall.hint}</p>
+            {p.shortfall.allocation && <p className="text-xs opacity-90" data-testid="dagitim">{p.shortfall.allocation}</p>}
+          </section>
+        )}
         <section className="card space-y-3 p-4" data-testid="borc-plani-ozet">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="min-w-0">
@@ -171,7 +185,7 @@ export default function DebtPlan() {
             {p.debt_free && (
               <div className="min-w-0 text-right">
                 <p className="text-sm text-stone-500">Borçsuz olacağın ay</p>
-                <p className="text-xl font-semibold text-green-700 dark:text-green-400">{p.debt_free.label}</p>
+                <p className={cx("text-xl font-semibold", p.shortfall || p.debt_free.interest ? "text-stone-800 dark:text-stone-100" : "text-green-700 dark:text-green-400")}>{p.debt_free.label}</p>
               </div>
             )}
           </div>
@@ -227,12 +241,18 @@ export default function DebtPlan() {
             ))}
           </div>
           {!p.can_edit && <p className="text-xs text-stone-500">Bu defterde sadece görüntüleme yetkin var: değişiklikler kaydedilmez, yalnız burada denersin.</p>}
-          {p.can_edit && !p.commitment && p.commit_offer && (
+          {p.can_edit && !p.commitment && p.commit_offer && (p.commit_offer.secondary || p.shortfall ? (
+            // faizli plan: ikincil seçenek (uyarı en üstte, ana düğme "Bu tutarı kullan")
+            <div className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 p-3 dark:bg-stone-800/60" data-testid="plan-baslat">
+              <p className="min-w-0 flex-1 basis-60 text-sm text-stone-700 dark:text-stone-200"><b>{p.commit_offer.title}.</b> {maskText(p.commit_offer.text)}</p>
+              <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={commitM.isPending} onClick={() => void commitPlan(p)}><Flag size={16} aria-hidden />{p.commit_offer.action}</button>
+            </div>
+          ) : (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-blue-50 p-3 dark:bg-blue-950/40" data-testid="plan-baslat">
               <p className="min-w-0 flex-1 basis-60 text-sm text-blue-950 dark:text-blue-100"><b>{p.commit_offer.title}.</b> {p.commit_offer.text}</p>
               <button className="btn-primary" disabled={commitM.isPending} onClick={() => void commitPlan(p)}><Flag size={16} aria-hidden />{p.commit_offer.action}</button>
             </div>
-          )}
+          ))}
           {p.can_edit && p.commitment?.differs && p.monthly != null && p.monthly > 0 && (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 p-3 dark:bg-stone-800/60" data-testid="plan-devam">
               <p className="min-w-0 flex-1 basis-60 text-sm text-stone-700 dark:text-stone-200">
@@ -242,16 +262,6 @@ export default function DebtPlan() {
           )}
         </section>
 
-        {p.shortfall && (
-          <section role="alert" className="space-y-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-900 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-100" data-testid="borc-plani-yetmiyor">
-            <p className="flex items-center gap-2 font-semibold"><AlertTriangle size={18} aria-hidden />{p.shortfall.title}</p>
-            <p className="text-sm">{maskText(p.shortfall.text)}</p>
-            <p className="text-xs opacity-90">{p.shortfall.hint}</p>
-            {p.shortfall.allocation && <p className="text-xs opacity-90" data-testid="dagitim">{p.shortfall.allocation}</p>}
-            <button className="btn-primary" onClick={() => setTo(p.shortfall!.min_monthly)}>
-              Aylık tutarı {trimTl(p.shortfall.min_monthly)} yap</button>
-          </section>
-        )}
         {p.pace && !p.shortfall && (
           <p role="note" className="rounded-xl bg-stone-50 p-3 text-sm text-stone-700 dark:bg-stone-800/60 dark:text-stone-200" data-testid="borc-plani-hiz">{p.pace.text}</p>
         )}

@@ -116,11 +116,12 @@ export default function Planning() {
                 <span className="min-w-0">
                   <b>{dateTR(d.date)}</b> <span className="text-stone-500">· {d.bank} {d.account}</span>
                   {d.estimated && <span className="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-xs dark:bg-stone-800">tahmini</span>}
+                  {/* asgari tutar bilerek gösterilmez (mobil Kartlar/Takvim ile aynı): kullanıcıyı asgari ödemeye yönlendirmesin */}
+                  {d.min_payment != null && <span className="block text-xs text-stone-500">tamamını ödersen faiz işlemez</span>}
                 </span>
                 <span className="shrink-0 text-right whitespace-nowrap tabular-nums">
                   {d.paid_amount ? <span className="mr-1 text-xs text-amber-700 dark:text-amber-300">kalan</span> : null}
                   {d.amount != null ? tl(d.amount) : "—"}
-                  {d.min_payment != null && <span className="block text-xs text-stone-500">asgari {tl(d.min_payment)}</span>}
                 </span>
               </li>
             ))}

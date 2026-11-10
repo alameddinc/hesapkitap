@@ -70,6 +70,8 @@ def test_interest_report_tips_only_from_data(client, tmpdb):
         _fee(c, "2026-09-15", "KKDF - ORNEK ELEKTRONIK", 9.60)
     r = finance.interest_report(12, today=date(2026, 10, 1))
     assert [t["key"] for t in r["tips"]] == ["tek_cekim"]
+    # çözüm tek çekim ya da biriktirip peşin almak: bankanın taksit kampanyası önerilmez
+    assert "biriktirip peşin" in r["tips"][0]["detail"] and "kampanya" not in r["tips"][0]["detail"]
     assert r["tax"] == 9.6 and r["statements"][0]["reason"] is None
 
 
@@ -103,3 +105,15 @@ def test_interest_hidden_card_not_leaked_to_member(owner):  # noqa: F811
     # faiz alarmı (özet uyarısı, faiz geçmişi) da gizli kartın faizini göstermez
     assert not any("Kuveyt" in a["title"] for mo in m.get("/api/interest-history").json()["months"] for a in mo["alarms"])
     assert any("Kuveyt" in a["title"] for mo in owner.get("/api/interest-history").json()["months"] for a in mo["alarms"])
+
+
+def test_due_reminder_shows_total_not_minimum(client, tmpdb):
+    """Telegram son ödeme hatırlatması: dönem borcu öne, asgari tutar yazılmaz (küçük rakam çapa olmasın)."""
+    from app import jobs
+
+    with tmpdb.connect() as c:
+        _statement(c, "2026-11-01", "2026-11-11", 12000.00)
+        c.execute("UPDATE statements SET min_payment = 4800 WHERE period_end = '2026-11-01'")
+    [m] = [m for m in jobs.reminders(date(2026, 11, 10)) if "4111***1111" in m]
+    assert "Dönem borcu: <b>₺12.000,00</b>" in m and "Tamamını son ödeme gününe kadar ödersen faiz işlemez." in m
+    assert "asgari" not in m.lower() and "4.800" not in m

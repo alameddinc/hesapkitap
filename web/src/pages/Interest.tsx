@@ -262,7 +262,11 @@ export default function Interest() {
             <li key={x.uid}>
               <button className="flex w-full items-center gap-2 p-3 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50" onClick={() => openTxn(x.uid, x.date)}>
                 <span className="min-w-0 flex-1"><span className="block break-words">{x.description}</span><span className="block text-xs text-stone-500">{dayMonth(x.date)}</span></span>
-                <span className="shrink-0 tabular-nums text-green-700 dark:text-green-400">+{tl(x.amount)}</span>
+                {/* kazanç gibi (yeşil +) değil: arındırılacak tutar */}
+                <span className="flex shrink-0 flex-col items-end gap-0.5">
+                  <span className="tabular-nums text-amber-700 dark:text-amber-300">{tl(x.amount)}</span>
+                  <span className="rounded bg-amber-50 px-1.5 py-px text-[11px] font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">arındırılacak</span>
+                </span>
                 <ChevronRight size={16} className="shrink-0 text-stone-400" aria-hidden />
               </button>
             </li>

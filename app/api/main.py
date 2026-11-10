@@ -3653,7 +3653,7 @@ def _onboarding_v2() -> dict:
              "text": "Kira, aidat, abonelik, fatura… Her ay ödediklerin ay sonunu doğru gösterir.",
              "guide": ["Adını ve tutarını yaz, ödeme gününü seç.",
                        "Tutarı değişen faturalarda ortalamayı yaz; fatura gelince düzeltirsin.",
-                       "Bitiş ayı olan kalemler (taksitli kredi gibi) o ay kendiliğinden biter."]},
+                       "Bitiş ayı olan kalemler (ör. kira sözleşmesi, kurs taksidi) o ay kendiliğinden biter."]},
         ]
         if u and plans.hosted() and plans.allows(u, "posta"):
             steps.append({"key": "posta", "done": one("SELECT 1 FROM mail_log"), "route": "ayarlar", "action": "posta",

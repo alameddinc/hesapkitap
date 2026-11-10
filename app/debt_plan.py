@@ -293,7 +293,7 @@ def suggestion(today: date) -> dict | None:
     amount = float(max(0, math.floor(avg / 100) * 100))
     text = (f"Planlama'ya göre her zamanki harcamanla ayda yaklaşık {_tl(amount)} artıyor." if amount > 0 else
             "Planlama'ya göre her zamanki harcamanla bu ay artan para görünmüyor; ayırabileceğin tutarı sen yaz.")
-    return {"amount": amount, "months": len(nets), "text": text}
+    return {"amount": amount, "raw": _r(max(0.0, avg)), "months": len(nets), "text": text}
 
 
 # ---------------------------------------------------------------- takvim
@@ -474,9 +474,17 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
     cards, cards_done = _cards(today)
     people, other, people_done = _people(today)
     paid_now = _paid_now(cards, people, cards_done, people_done)
+    need = min_monthly(cards, start, paid_now) if cards else 0.0
+    if source == "suggestion" and sug and need > 0:
+        # öneri artanın 100'e aşağı yuvarlısı: artan faizsiz tutara yetiyorsa öneri en az o tutar olsun (yuvarlama
+        # yüzünden faizli bir plan önerilmesin); yetmiyorsa öneri cümlesi faizsiz tutarı da söyler
+        if sug["amount"] < need <= sug.get("raw", sug["amount"]):
+            sug = {**sug, "amount": need}
+            monthly = need
+        elif sug["amount"] < need:
+            sug = {**sug, "text": sug["text"] + f" Faizsiz kapatmak için ayda {_tl(need)} gerekiyor."}
     first = _r(max(0.0, (monthly or 0) - paid_now))
     sim = simulate(cards, people, monthly or 0.0, order, start, first_budget=first) if monthly is not None else None
-    need = min_monthly(cards, start, paid_now) if cards else 0.0
 
     debts = []
     for i, d in enumerate([*_sort_cards(cards), *_sort_people(people, order)]):
@@ -567,6 +575,10 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         n = _months_between(start, df) + 1
         debt_free = {"month": df, "label": month_label(df), "months": n,
                      "text": f"Bu planla {month_label(df)} sonunda borçsuzsun" + (f" ({n} ay)." if n > 1 else ".")}
+        if shortfall:  # faiz işleyen plan başarı gibi okunmasın
+            debt_free["interest"] = True
+            debt_free["text"] += (" Bu tutarla kartlarda faiz işler." if fees_hidden else
+                                  f" Bu tutarla kartlarda yaklaşık {_tl(sim['interest'])} faiz işler.")
         last_inst = max((d["future_installments"]["last_month"] for d in cards if d.get("future_installments")), default=None)
         if last_inst and last_inst > df:
             debt_free["installments_until"] = {"month": last_inst, "label": month_label(last_inst)}
@@ -581,6 +593,11 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                  "text": "Planı başlatırsan her ay plana göre nerede olduğunu gösteririz. Tutarı denemek planı "
                          "değiştirmez; değiştirmek istediğinde \"Bu planla devam\" dersin.",
                  "action": "Planı başlat"}
+        if shortfall:  # faizli plan: ikincil seçenek, uyarıdan sonra (istemci düğmeyi ikincil gösterir)
+            offer = {"title": "Bu tutar faizi önlemiyor",
+                     "text": "Yine de bu planla başlamak istersen her ay plana göre nerede olduğunu gösteririz. "
+                             f"Aylık tutarı {_tl(need)} yaparsan kartlarda faiz işlemez.",
+                     "action": "Planı başlat", "secondary": True}
     history = [{"started_at": h["started_at"], "start_month": h["start_month"], "monthly": h["monthly"],
                 "ended_at": h.get("ended_at"),
                 "label": f"Önceki plan: {month_in(h['start_month'], start)} başladı · ayda {_tl(h['monthly'])}"}
@@ -684,12 +701,12 @@ def _harm(d: dict, sim: dict, start: str, fees_hidden: bool) -> dict | None:
               f"yaklaşık {_tl(y)} faiz işler (tamamını ödersen ₺0).")
     compare = None
     if not fees_hidden:
-        compare = []
+        # sıra: Tamamı (₺0 faiz) önce, yalnız asgari en son: göz önce faizsiz yola gitsin
+        compare = [{"key": "full", "label": "Tamamı", "amount": rem, "interest": 0.0, "late": False},
+                   {"key": "plan", "label": "Planladığın", "amount": planned, "interest": y, "late": below}]
         if min_left is not None and 0 < min_left < rem:  # asgari borcun tamamıysa "Tamamı" ile aynı satır
             compare.append({"key": "asgari", "label": "Yalnız asgari", "amount": min_left,
                             "interest": _whole((rem - min_left) * eff), "late": False})
-        compare.append({"key": "plan", "label": "Planladığın", "amount": planned, "interest": y, "late": below})
-        compare.append({"key": "full", "label": "Tamamı", "amount": rem, "interest": 0.0, "late": False})
     return {"title": title, "steps": [s1, s2], "text": f"{title}. Faizi en aza indirmek için: 1) {s1} 2) {s2}",
             "min_left": min_left, "planned": planned, "interest_planned": None if fees_hidden else y,
             "below_min": below, "due_label": label, "compare": compare, "info": FAIZ_INFO}

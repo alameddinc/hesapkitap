@@ -270,7 +270,9 @@ def test_no_interest_steering_words_in_any_output(client, tmpdb):
 def test_no_interest_steering_words_in_sources():
     """Kaynaktaki kullanıcıya giden dizgiler (tırnak içi). Açıklamalar ve yorumlar taranmaz: modülün ilke notu yasak
     ifadeleri ne yapılmayacağını anlatmak için adıyla anar. Mobil ekran ayrı depoda: e2e testi ekrandaki metni tarar."""
-    files = [ROOT / "app" / "debt_plan.py", ROOT / "web" / "src" / "pages" / "DebtPlan.tsx"]
+    files = [ROOT / "app" / "debt_plan.py", ROOT / "web" / "src" / "pages" / "DebtPlan.tsx",
+             # Alırsam ne olur? (mobil Alsam mı? aynı lib/alsamMi.ts): alım ekranı da faizli yolu önermez
+             ROOT / "web" / "src" / "components" / "Simulator.tsx", ROOT / "web" / "src" / "lib" / "alsamMi.ts"]
     for f in files:
         assert f.exists(), f
         text = f.read_text(encoding="utf-8")
@@ -410,13 +412,13 @@ def test_harm_reduction_steps_and_comparison(client, tmpdb):
     # (12.000 − 7.600) × %3,75 × 1,3 = 214,5 → ~₺215
     assert "planladığın ₺7.600 ile bu ay yaklaşık ₺215 faiz işler (tamamını ödersen ₺0)" in h["steps"][1]
     assert [(r["key"], r["amount"], r["interest"]) for r in h["compare"]] == [
-        ("asgari", 4800.0, 351.0), ("plan", 7600.0, 215.0), ("full", 12000.0, 0.0)]
+        ("full", 12000.0, 0.0), ("plan", 7600.0, 215.0), ("asgari", 4800.0, 351.0)]  # Tamamı önce, asgari en son
     assert c2["harm"]["planned"] == 2400 and c2["harm"]["compare"][1]["interest"] == 164.0  # 3.600 × %3,5 × 1,3
     assert "gecikme faizi" in h["info"] and "akdi" in h["info"]
     # asgari borcun tamamıysa karşılaştırmada ayrı "Yalnız asgari" satırı yok
     from app import debt_plan as _dp
     whole = _dp._harm({**c1, "min_payment": 20000, "paid": 0.0, "kind": "card", "remaining": 12000.0}, {"months": []}, "2026-11", False)
-    assert whole["min_left"] == 12000 and [r["key"] for r in whole["compare"]] == ["plan", "full"]
+    assert whole["min_left"] == 12000 and [r["key"] for r in whole["compare"]] == ["full", "plan"]
     assert "asgarisini" in p["shortfall"]["allocation"] and "faizi en yüksek" in p["shortfall"]["allocation"]
     item = next(i for i in p["this_month"]["items"] if i["key"] == c1["key"])
     assert item["amount"] == 7600 and "(asgari ₺4.800 dahil)" in item["text"]
@@ -424,6 +426,45 @@ def test_harm_reduction_steps_and_comparison(client, tmpdb):
     # asgarilere bile yetmiyor: planlanan asgarinin altında, gecikme faizi uyarısı
     low = dp.build(monthly=5000, today=TODAY)["debts"][1]["harm"]
     assert low["below_min"] and low["planned"] == 200 and low["compare"][1]["late"] and "asgarinin altında" in low["steps"][1]
+
+
+def test_interest_plan_is_not_shown_as_success(client, tmpdb):
+    """Tutar faizi önlemiyorsa: borçsuz ay cümlesi faizi söyler, "Planı başlat" ikincil ve faizsiz tutarı anar
+    (istemci uyarıyı borçsuz ayın üstünde gösterir). Tutar yetiyorsa eski sözler."""
+    from app import debt_plan as dp
+
+    _seed_cards(tmpdb)
+    _seed_people(client)
+    p = dp.build(monthly=10000, today=TODAY)
+    assert p["shortfall"] and p["debt_free"]["interest"] is True
+    assert p["debt_free"]["text"].endswith(f" Bu tutarla kartlarda yaklaşık {dp._tl(p['shortfall']['interest'])} faiz işler.")
+    offer = p["commit_offer"]
+    assert offer["secondary"] is True and offer["title"] == "Bu tutar faizi önlemiyor"
+    assert "₺18.000 yaparsan kartlarda faiz işlemez" in offer["text"] and offer["action"] == "Planı başlat"
+    ok = dp.build(monthly=18000, today=TODAY)
+    assert "interest" not in ok["debt_free"] and "faiz" not in ok["debt_free"]["text"]
+    assert ok["commit_offer"]["title"] == "Bu planla başla" and not ok["commit_offer"].get("secondary")
+
+
+def test_suggestion_never_rounds_below_interest_free(client, tmpdb, monkeypatch):
+    """Öneri artanın 100'e aşağı yuvarlısı. Artan faizsiz tutara yetiyorsa öneri en az o tutar (yuvarlama faizli plan
+    önermesin); yetmiyorsa öneri cümlesi faizsiz tutarı söyler. Kayıtlı ya da yazılan tutara dokunulmaz."""
+    from app import debt_plan as dp
+
+    _seed_cards(tmpdb)
+    _seed_people(client)
+    monkeypatch.setattr(dp, "suggestion", lambda today: {"amount": 18000.0, "raw": 18000.0, "months": 3, "text": "öneri."})
+    need = dp.build(today=TODAY)["totals"]["min_monthly_no_interest"]
+    assert need == 18000
+    monkeypatch.setattr(dp, "suggestion", lambda today: {"amount": 17900.0, "raw": 18050.0, "months": 3, "text": "öneri."})
+    r = dp.build(today=TODAY)
+    assert r["monthly_source"] == "suggestion" and r["monthly"] == 18000 and r["suggestion"]["amount"] == 18000
+    assert r["shortfall"] is None
+    monkeypatch.setattr(dp, "suggestion", lambda today: {"amount": 9000.0, "raw": 9050.0, "months": 3, "text": "öneri."})
+    r = dp.build(today=TODAY)
+    assert r["monthly"] == 9000 and r["shortfall"]
+    assert r["suggestion"]["text"] == "öneri. Faizsiz kapatmak için ayda ₺18.000 gerekiyor."
+    assert dp.build(monthly=9000, today=TODAY)["suggestion"]["text"] == "öneri."  # yazılan tutarda öneri olduğu gibi
 
 
 def test_no_harm_reduction_text_when_full_payment_possible(client, tmpdb):

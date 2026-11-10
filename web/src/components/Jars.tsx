@@ -33,17 +33,19 @@ const isUnit = (j?: { unit?: string }) => !!j?.unit && j.unit !== "TRY";
 
 const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 
-function JarForm({ jar, onClose }: { jar?: Jar; onClose: () => void }) {
+/** preset: başka ekrandan hazır doldurulmuş yeni kumbara (Alırsam ne olur? → "Biriktir"); onSaved: kayıttan sonra. */
+export function JarForm({ jar, onClose, preset, onSaved }: { jar?: Jar; onClose: () => void;
+  preset?: { name: string; goal: number | null; monthly: number | null }; onSaved?: () => void }) {
   const ui = useUI();
   const [unit, setUnit] = useState(jar?.unit ?? "TRY");
   const u = unit !== "TRY";
-  const [name, setName] = useState(jar?.name ?? "");
-  const [goal, setGoal] = useState(jar?.goal ? String(jar.goal) : "");
+  const [name, setName] = useState(jar?.name ?? preset?.name ?? "");
+  const [goal, setGoal] = useState(jar?.goal ? String(jar.goal) : preset?.goal ? String(preset.goal).replace(".", ",") : "");
   const [deadline, setDeadline] = useState(jar?.deadline ?? "");
   const [account, setAccount] = useState<number | null>(jar?.account_id ?? null);
   const [initial, setInitial] = useState("");
-  const [auto, setAuto] = useState(!!jar?.monthly);
-  const [monthly, setMonthly] = useState(jar?.monthly ? String(jar.monthly) : "");
+  const [auto, setAuto] = useState(!!(jar?.monthly ?? preset?.monthly));
+  const [monthly, setMonthly] = useState(jar?.monthly ? String(jar.monthly) : preset?.monthly ? String(preset.monthly).replace(".", ",") : "");
   const [day, setDay] = useState(String(jar?.auto_day ?? 1));
   const body = {
     ...(jar ? {} : { unit }),
@@ -51,7 +53,7 @@ function JarForm({ jar, onClose }: { jar?: Jar; onClose: () => void }) {
     monthly: auto && parseAmount(monthly) > 0 ? parseAmount(monthly) : null, auto_day: auto && parseAmount(monthly) > 0 ? Number(day) : null,
   };
   const save = useSave(() => jar ? json("PATCH", `/api/jars/${jar.id}`, body)
-    : json("POST", "/api/jars", { ...body, initial: parseAmount(initial) || 0 }), () => { ui.toast("Kaydedildi"); onClose(); });
+    : json("POST", "/api/jars", { ...body, initial: parseAmount(initial) || 0 }), () => { ui.toast("Kaydedildi"); (onSaved ?? onClose)(); });
   return (
     <Modal title={jar ? "Kumbarayı düzenle" : "Yeni kumbara"} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!name.trim() || save.isPending}

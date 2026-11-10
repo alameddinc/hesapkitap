@@ -1986,8 +1986,8 @@ def _interest_tips(items: list[dict], stmts: list[dict], all_stmts: dict[int, di
     if total("vade_farki"):
         n = len({i["description"].split("-", 1)[-1].strip() for i in items if i["type"] == "vade_farki"})
         out.append({"key": "tek_cekim", "title": "Taksit yerine tek çekim",
-                    "detail": f"{span} {n} taksitli alışverişe {_tl(total('vade_farki'))} vade farkı eklendi. Tek çekim ya da "
-                              "vade farksız taksit kampanyası seçersen bu tutarı ve vergisini ödemezsin."})
+                    "detail": f"{span} {n} taksitli alışverişe {_tl(total('vade_farki'))} vade farkı eklendi. Tek çekim yaparsan "
+                              "ya da biriktirip peşin alırsan bu tutarı ve vergisini ödemezsin."})
     if total("nakit_avans"):
         out.append({"key": "nakit_avans", "title": "Karttan nakit çekme",
                     "detail": f"{span} nakit avans için {_tl(total('nakit_avans'))} faiz ödedin. Nakit avansta faiz ilk günden "
@@ -2293,7 +2293,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             ratio = unpaid / s["credit_limit"]
             if ratio > 0.5:
                 out.append({"level": "uyari", "title": f"{s['card_no']} limit doluluğu: %{ratio * 100:.0f}",
-                            "detail": "Ödenmemiş ekstre borcu limite göre yüksek; kredi notunu olumsuz etkiler.",
+                            "detail": "Ödenmemiş ekstre borcu limite göre yüksek; tamamı son ödeme gününe kadar "
+                                      "ödenmezse kalan borca faiz işler.",
                             "link": "ekstreler", "key": f"limit:{_slug(s['card_no'])}:{month}"})
 
     # 9b) Aynı gelir bu dönemde birden fazla (ör. ay dönümü kayınca ya da yanlış tarihle girilince)

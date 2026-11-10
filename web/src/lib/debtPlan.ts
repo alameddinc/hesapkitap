@@ -40,11 +40,13 @@ export interface DebtPlanData {
   totals: { open: number; cards: number; people: number; count: number; card_count: number; person_count: number;
     paid_this_month: number; min_monthly_no_interest: number; interest_projected: number | null };
   debts: PlanDebt[]; months: PlanMonth[];
-  debt_free: { month: string; label: string; months: number; text: string; installments_until?: { month: string; label: string } } | null;
+  debt_free: { month: string; label: string; months: number; text: string; installments_until?: { month: string; label: string };
+    /** bu tutarla kartlarda faiz işliyor: borçsuz ay başarı gibi (yeşil) gösterilmez */
+    interest?: boolean } | null;
   this_month: { month: string; label: string; budget: number | null; planned: number; paid: number; items: PlanItem[] };
   warnings: { key: string; level: "warn" | "bad" | "info"; title: string; text: string }[];
   shortfall: { min_monthly: number; interest: number | null; title: string; text: string; hint: string; allocation?: string } | null;
-  commitment?: PlanCommitment | null; commit_offer?: { title: string; text: string; action: string } | null;
+  commitment?: PlanCommitment | null; commit_offer?: { title: string; text: string; action: string; /** faizli plan: ikincil düğme, uyarıdan sonra */ secondary?: boolean } | null;
   commit_history?: { started_at: string; start_month: string; monthly: number; ended_at: string | null; label: string }[];
   /** yalnız elden borç varken nötr satır ("Bu tutarla elden borçlar N ayda biter."); eski sunucuda yok */
   pace?: { months: number; text: string } | null;

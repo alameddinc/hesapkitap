@@ -61,7 +61,8 @@ export default function Payables() {
               </div>
               <div className="mt-0.5 text-xs text-stone-500">
                 {p.subtitle} · son ödeme {dateTR(p.due_date)}
-                {p.min_payment != null && p.min_payment < p.amount && p.status !== "odendi" && p.status !== "kismi" && ` · asgari ${tl(p.min_payment)}`}
+                {/* asgari tutar listede bilerek yok (mobil Kartlar ile aynı): kullanıcıyı asgari ödemeye yönlendirmesin; yalnız "Ödedim" penceresinde */}
+                {p.type === "statement" && p.status !== "odendi" && p.status !== "kismi" && " · tamamını ödersen faiz işlemez"}
                 {p.status === "kismi" && p.type === "statement" && ` · ${tl(p.paid_amount ?? 0)} ödendi · kalanına faiz işleyebilir`}
                 {rolled(p) && <span className="block text-stone-600 dark:text-stone-300">Ödenmedi; kalanı sonraki ekstreye devretti (orada sayılıyor, toplama ayrıca girmez)</span>}
                 {p.cycle && <CycleLine c={p.cycle} />}

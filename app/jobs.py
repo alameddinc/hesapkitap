@@ -62,8 +62,8 @@ def reminders(today: date) -> list[str]:
             when = "BUGÜN" if days == 0 else f"{days} gün kaldı"
             line = f"💳 <b>{s['bank']} {s['card_no']}</b> son ödeme {date.fromisoformat(s['due_date']):%d.%m} ({when})\n" \
                    f"Dönem borcu: <b>{_tl(s['total_debt'])}</b>"
-            if s["min_payment"] and s["min_payment"] < s["total_debt"]:
-                line += f" · asgari {_tl(s['min_payment'])}\n⚠️ Sadece asgariyi ödersen kalan borca faiz işler."
+            # asgari tutar bilerek yazılmaz (küçük rakam çapa olmasın; mobil Kartlar ve push ile aynı dil)
+            line += "\nTamamını son ödeme gününe kadar ödersen faiz işlemez."
             msgs.append(line)
 
     # 1b) Faturalar
