@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { rowTotals } from "../lib/counts";
-import { TERIM } from "../lib/terimler";
+import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "../components/TerimBilgi";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -204,6 +204,8 @@ export default function Dashboard() {
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">Gelen</div>
               <div className="font-semibold tabular-nums">{tlCompact(s.totals.income)}</div>
               {s.pending.income > 0 && <div className="text-[11px] text-blue-100">+{tlCompact(s.pending.income)} bekliyor</div>}
+              {(s.totals.interest_income ?? 0) > 0 && (
+                <div className="text-[11px] leading-tight text-amber-200" data-testid="faiz-geliri">{faizGeliriNotu(tl(s.totals.interest_income!))}</div>)}
             </div>
             <div>
               <div className="text-[11px] tracking-wide text-blue-100 uppercase">{TERIM.artan.ad} <TerimBilgi id="artan" metin={s.definitions?.left} className="text-blue-100" /></div>
@@ -219,7 +221,10 @@ export default function Dashboard() {
         </section>
         <div className={cx("hidden grid-cols-2 gap-2 sm:grid sm:gap-3", feesHidden ? "lg:grid-cols-3" : "lg:grid-cols-4")}>
           <Kpi label="Gelir" value={s.totals.income} tone="green"
-            sub={s.pending.income ? `+${tl(s.pending.income)} bekliyor` : undefined} />
+            sub={s.pending.income || (s.totals.interest_income ?? 0) > 0 ? <>
+              {s.pending.income ? <span className="block">+{tl(s.pending.income)} bekliyor</span> : null}
+              {(s.totals.interest_income ?? 0) > 0 && <span className="block text-amber-700 dark:text-amber-400">{faizGeliriNotu(tl(s.totals.interest_income!))}</span>}
+            </> : undefined} />
           <Kpi label="Gider" value={s.totals.expense}
             sub={<>{`Kart ${tlCompact(s.totals.card_spend_incl_pending ?? s.totals.card_spend)} · Elle ${tlCompact(s.totals.manual_expense_excl_card_pending ?? s.totals.manual_expense)}${s.totals.savings ? ` · Birikime ${tlCompact(s.totals.savings)} ayrı` : ""}`}
               {kiyas && <span className={cx("block", kiyas.up ? "text-amber-700 dark:text-amber-400" : "text-green-700 dark:text-green-400")}>{kiyas.text}</span>}</>} />

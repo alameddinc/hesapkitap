@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { TERIM } from "../lib/terimler";
+import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "./TerimBilgi";
 import { Camera, List, Minimize2 } from "lucide-react";
 import { api } from "../api";
@@ -32,6 +32,7 @@ export default function SimpleDashboard() {
             <div className="rounded-xl bg-green-50 p-3 dark:bg-green-950/30">
               <div className="text-base text-stone-500">Gelen</div>
               <div className="text-2xl font-semibold whitespace-nowrap tabular-nums text-green-700 dark:text-green-400">{tl(t.income)}</div>
+              {(t.interest_income ?? 0) > 0 && <div className="mt-0.5 text-sm text-amber-700 dark:text-amber-400">{faizGeliriNotu(tl(t.interest_income!))}</div>}
             </div>
             <div className="rounded-xl bg-stone-50 p-3 dark:bg-stone-800/50">
               <div className="text-base text-stone-500">{TERIM.eldeKalan.ad} <TerimBilgi id="eldeKalan" metin={summary.data?.definitions?.left_after_savings} /></div>

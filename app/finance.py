@@ -453,7 +453,8 @@ def counts(r: dict) -> tuple[bool, bool]:
 TOTALS_DEFINITIONS = {  # metinler app/terms.py terimleriyle
     "expense": "Gider: kart harcaması + faiz/ücret + elle gider − iadeler. Birikime ayrılan (altın/döviz alımı), kart "
                "ödemesi, borç hareketi ve bekleyen kayıtlar dahil değil.",
-    "income": "Gelir: gerçekleşen gelir kayıtları (bekleyenler dahil değil).",
+    "income": "Gelir: gerçekleşen gelir kayıtları (bekleyenler dahil değil). Hesaba işleyen faiz geliri de dahildir, "
+              "ayrıca gösterilir (arındırılacak).",
     "left": f"{terms.LEFT}: gelir − gider.",
     "left_after_savings": f"{terms.LEFT_AFTER_SAVINGS}: gelir − gider − birikime ayrılan (altın/döviz alımı).",
     "cash_net": "Eldeki paraya etkisi: gelir − gider − birikime ayrılan ± borç/alacak hareketleri.",
@@ -547,6 +548,11 @@ def summary(month: str, today: date | None = None) -> dict:
     from app import book
 
     totals["fees_hidden"] = book.hide_fees()  # ortak defterde faiz gizli: istemci faiz kutusunu göstermesin
+    # gelirin içindeki faiz geliri (vadesizde gecelik faiz vb.): gelire DAHİL, Özet'te "içinde faiz geliri ₺X ·
+    # arındırılacak" diye ayrıca gösterilir (interest_alarm ile aynı ölçüt). Ortak defterde faiz gizliyse 0.
+    totals["interest_income"] = 0.0 if totals["fees_hidden"] else _round(sum(
+        r["amount"] for r in rows if is_interest_income(r) and not (r.get("deleted") or r.get("skipped")
+                                                                    or r.get("pending") or r.get("linked"))))
     by_category = _group_categories(expenses)
     exp = expected(month, today=today)
     return {
@@ -1225,7 +1231,7 @@ def recurring_suggestions(today: date | None = None) -> list[dict]:
     """
     today = today or date.today()
     entries = [e for e in db.list_entries() if not e["skipped"] and e["amount"] > 0 and not e.get("debt_id")
-               and e["payment"] not in ("kredi_karti", "kart") and e["entry_date"] <= today.isoformat()
+               and e["payment"] not in ("kredi_karti", "kart", "altin_bozdurma", "altin") and e["entry_date"] <= today.isoformat()
                and e["category"] not in ("Nakit Çekim", "Transfer")]  # ATM'den çekilen para sabit kalem değil
     recs = db.list_recurring()
     taken = {r["match_key"] for r in recs if r.get("match_key")}
@@ -1311,7 +1317,7 @@ def accept_recurring_suggestion(key: str, description: str | None = None, amount
            "start_month": s["first_month"], "account_id": s["account_id"], "match_key": mkey}
     cands = [e for e in db.list_entries()
              if e["kind"] == kind and not e["recurring_id"] and not e["skipped"]
-             and e["payment"] not in ("kredi_karti", "kart")
+             and e["payment"] not in ("kredi_karti", "kart", "altin_bozdurma", "altin")
              and db.recurring_key(e["description"], e["counterparty"]) == mkey]
     # dönem kuralı yeni kayıtlarla aynı (db._nearest_recurring_month): gününe en yakın boş dönem. Başlangıç ayı da
     # takvim ayı değil ilk bağlanan kaydın DÖNEMİ (ay dönümü 17'de 17 Ağustos kirası Eylül dönemidir)
@@ -1739,6 +1745,12 @@ def _fold(s: str) -> str:
     return fold_key(s)
 
 
+def is_interest_income(r: dict) -> bool:
+    """Faiz geliri satırı mı (vadesizde gecelik faiz, nema…)? Gelire dahildir; Özet'te ayrıca gösterilir, Faiz alarmı
+    arındırmayı hatırlatır (interest_alarm, interest_history ile tek ölçüt)."""
+    return r["kind"] == INCOME and any(k in _fold(r["description"] or "") for k in ("FAIZ", "NEMA"))
+
+
 def _slug(x: str) -> str:
     """Uyarı anahtarında ad: küçük harf, boşluk yerine tire (kararlı; görünen metinden bağımsız)."""
     return re.sub(r"[\s/:]+", "-", (x or "").strip().casefold())[:60] or "-"
@@ -1822,8 +1834,7 @@ def interest_alarm(month: str) -> list[dict]:
                               + " Önlem: bankada son ödeme gününde dönem borcunun tamamı için otomatik ödeme talimatı ver.",
                     "filter": {"kind": FEE}, "key": f"faiz:{_slug(card)}:{month}"})
     # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): arındır
-    inc = [r for r in transactions(month) if r["kind"] == INCOME and not r.get("pending")
-           and any(k in _fold(r["description"]) for k in ("FAIZ", "FAİZ", "NEMA"))]
+    inc = [r for r in transactions(month) if is_interest_income(r) and not r.get("pending")]
     if inc:
         out.append({"level": "uyari", "title": f"Faiz geliri: {_tl(sum(r['amount'] for r in inc))} (arındırılacak)",
                     "detail": "Hesabına faiz işlemiş görünüyor. Faizden uzak durmak istiyorsan bu tutarı sevap beklemeden "
@@ -1952,8 +1963,7 @@ def interest_report(months: int = 12, today: date | None = None) -> dict:
     tax = _round(sum(i["amount"] for i in items if i["type"] in TAX_KINDS))
     fee = _round(sum(i["amount"] for i in items if i["type"] in FEE_KINDS))
     # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): interest_alarm ile aynı ölçüt
-    inc = [r for r in transactions(None) if r["kind"] == INCOME and not r.get("pending") and r["month"] >= start
-           and any(k in _fold(r["description"]) for k in ("FAIZ", "NEMA"))]
+    inc = [r for r in transactions(None) if is_interest_income(r) and not r.get("pending") and r["month"] >= start]
     return {
         **empty, "from": start, "total": total, "interest": _round(total - tax - fee), "tax": tax, "fee": fee,
         "count": len(items),

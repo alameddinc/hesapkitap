@@ -4,7 +4,7 @@ Kayıt elle girilebilir ya da hesap dökümü / kart ekstresindeki bir hareket i
 kategorisindeki işaretlenmemiş hareketler "bu sadaka mı, zekât mı?" diye sorulur. Zekât olarak işaretlenen hareket o
 kişinin zekât yılına ödeme olarak yazılır (zakat_payments).
 
-Elle girerken nasıl ödendiği seçilirse (nakit, havale, kredi kartı) gider olarak da yazılır (own_entry = 1; zekât
+Elle girerken nasıl ödendiği seçilirse (nakit, havale, kredi kartı, altın bozdurup, altın vererek) gider olarak da yazılır (own_entry = 1; zekât
 ödemesinde de aynı: app/zakat.add_payment). Kredi kartıyla verilen hemen "ekstre bekleniyor" elle gider olur (Özet'te o
 gün sayılır); ekstre gelince kart satırıyla eşleşir (db.auto_link), bir kez sayılır ve eşleşen ekstre satırı yeniden
 "sadaka mı zekât mı?" diye sorulmaz. Ödeme silinince/düzeltilince açtığı gider kaydı da.
@@ -32,7 +32,16 @@ CREATE TABLE IF NOT EXISTS donations (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
-PAYMENTS = ("nakit", "havale", "kredi_karti")
+# altin_bozdurma: altın satılıp parası verildi; altin: doğrudan altın verildi. İkisinde de hesaptan para çıkmaz (hesap
+# bakiyesinden düşmez, döküm/ekstreyle eşleşmez) ama gider yazılır (TL karşılığı); kayıtta ödeme yolu altın görünür.
+GOLD_PAYMENTS = ("altin_bozdurma", "altin")
+# banka: banka hesabından (banka kartı); gider kaydında "nakit / banka kartı" + (seçildiyse) banka hesabı. Hesap seçilmese
+# de cüzdana yazılmaz (nakit'ten farkı). Eski istemci banka için nakit + hesap gönderir (aynı sonuç).
+PAYMENTS = ("banka", "nakit", "havale", "kredi_karti", *GOLD_PAYMENTS)
+PAYMENT_LABELS = {"banka": "Banka hesabından", "nakit": "Nakit / banka kartı", "havale": "Havale / EFT",
+                  "kredi_karti": "Kredi kartı", "altin_bozdurma": "Altın bozdurup", "altin": "Altın vererek"}
+PAYMENT_ERROR = "Ödeme şekli banka, nakit, havale, kredi kartı ya da altın olmalı"
+
 
 
 def _add_col(c, table: str, col: str, ddl: str) -> None:
@@ -63,11 +72,13 @@ def create_expense(label: str, amount: float, day: str, payment: str, account_id
     elle gider (Özet'te hemen sayılır, Kartlar'da açık döneme girer); ekstredeki satırla eşleşince kart satırı sayılır,
     elle kayıt sayılmaz (tek sayım). Havale/nakit: döküm önceden yüklendiyse aynı hareketle birleşir (app/sync.py)."""
     if payment not in PAYMENTS:
-        raise ValueError("Ödeme şekli nakit, havale ya da kredi kartı olmalı")
+        raise ValueError(PAYMENT_ERROR)
     card = payment == "kredi_karti"
+    gold = payment in GOLD_PAYMENTS  # hesaptan para çıkmadı: hesap yok, döküm/ekstreyle eşleşmez (app/sync.py)
     data = {"entry_date": day, "description": label, "amount": amount, "kind": "gider", "category": CATEGORY,
-            "payment": payment, "account_id": None if card else account_id, "card_last4": card_last4 if card else None,
-            "note": note or None}
+            "payment": "nakit" if payment == "banka" else payment, "account_id": None if card or gold else account_id,
+            "card_last4": card_last4 if card else None,
+            "note": note or (PAYMENT_LABELS[payment] if gold else None)}
     if recipient and payment == "havale":  # kime gönderildi: dökümdeki havaleyle eşleşmeye yardım eder
         data["counterparty"] = db.known_counterparty(recipient.strip())
     if payment == "nakit" and not account_id:  # tek nakit hesabı (cüzdan) varsa ondan düşer (POST /api/entries gibi)
@@ -136,7 +147,7 @@ def add(kind: str, amount: float, given_date: str, recipient: str | None = None,
         raise ValueError("Bilinmeyen tür")
     payment = payment or ("nakit" if as_expense else None)
     if payment and payment not in PAYMENTS:
-        raise ValueError("Ödeme şekli nakit, havale ya da kredi kartı olmalı")
+        raise ValueError(PAYMENT_ERROR)
     with db.connect() as c:
         _init(c)
     who = (recipient or "").strip() or None

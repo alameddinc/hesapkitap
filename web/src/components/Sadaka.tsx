@@ -5,7 +5,7 @@ import { Eye, EyeOff, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { dateTR, parseAmount, tlShown } from "../format";
 import { useUI } from "../ui";
-import PaidWith, { PAID_WITH_START, paidWithBody, type PaidWithState } from "./PaidWith";
+import PaidWith, { PAID_WITH_START, paidWithBody, usePaidWithGold, type PaidWithState } from "./PaidWith";
 import { useSave } from "./hooks";
 import { DONATION_KINDS } from "./MarkDonation";
 import Modal, { kirliyseSor } from "./Modal";
@@ -30,8 +30,9 @@ function AddForm({ onClose }: { onClose: () => void }) {
   const [date, setDate] = useState(today());
   const [recipient, setRecipient] = useState("");
   const [paid, setPaid] = useState<PaidWithState>(PAID_WITH_START);
+  const gold = usePaidWithGold();
   const save = useSave(() => call("POST", "/api/donations", { kind, amount: parseAmount(amount), given_date: date, recipient: recipient || null,
-    ...paidWithBody(paid) }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
+    ...paidWithBody(paid, gold) }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
   const kaydet = () => { if (parseAmount(amount) > 0 && !save.isPending) save.mutate(undefined, { onError: (e) => ui.fail(e) }); };
   // kaydedilmemiş değişiklik (UX denetimi 09.11): kapatırken sorulur
   const dirty = amount !== "" || recipient !== "" || kind !== "sadaka" || JSON.stringify(paid) !== JSON.stringify(PAID_WITH_START);

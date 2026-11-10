@@ -64,10 +64,11 @@ def _user_id() -> int | None:
 
 # ---------------------------------------------------------------- adaylar
 
-# Elle girilen ve dökümde karşılığı aranabilecek kayıtlar: kartla/ön ödemeli kartla ödenmemiş, nakit hesabında değil
+# Elle girilen ve dökümde karşılığı aranabilecek kayıtlar: kartla/ön ödemeli kartla ya da altınla (zekât/sadaka: altın
+# bozdurup / altın vererek) ödenmemiş, nakit hesabında değil
 _M_BANK = """SELECT e.* FROM entries e LEFT JOIN accounts a ON a.id = e.account_id
     WHERE e.import_hash IS NULL AND e.skipped = 0 AND e.wallet_id IS NULL AND e.debt_id IS NULL
-      AND e.linked_txn_id IS NULL AND COALESCE(e.payment, '') NOT IN ('kredi_karti', 'kart')
+      AND e.linked_txn_id IS NULL AND COALESCE(e.payment, '') NOT IN ('kredi_karti', 'kart', 'altin_bozdurma', 'altin')
       AND (a.id IS NULL OR a.kind = 'banka') AND COALESCE(e.category, '') <> ?"""
 # Dökümden ya da banka e-posta bildiriminden (mail:) gelmiş, henüz bir elle kayda bağlanmamış kayıtlar (maaş sabit
 # kalemi, borç hareketi, bölünmüş olanlar hariç). Bildirim önce gelip elle kayıt sonra girilince de eşleşir.
@@ -478,7 +479,8 @@ def attach_recurring_row(c, data: dict, r: dict) -> int | None:
     best = None
     for m in db.rows(c.execute(
             "SELECT * FROM entries WHERE recurring_id = ? AND import_hash IS NULL AND skipped = 0 AND linked_txn_id IS NULL "
-            "AND wallet_id IS NULL AND debt_id IS NULL AND COALESCE(payment, '') NOT IN ('kredi_karti', 'kart') "
+            "AND wallet_id IS NULL AND debt_id IS NULL "
+            "AND COALESCE(payment, '') NOT IN ('kredi_karti', 'kart', 'altin_bozdurma', 'altin') "
             "AND id NOT IN (SELECT entry_id FROM entry_matches)", (rec["id"],))):
         gap = abs((date.fromisoformat(m["entry_date"]) - d).days)
         if gap > RECURRING_DAYS or (m["id"], f"h:{r['hash']}") in rejects:
@@ -528,7 +530,8 @@ def _side_entry(c, e: dict, accs: dict) -> dict:
     return {"id": e["id"], "uid": f"m{e['id']}", "description": e["description"], "amount": e["amount"],
             "date": e["entry_date"], "kind": e["kind"], "category": e.get("category"), "note": e.get("note"),
             "account": accs.get(e.get("account_id")) or {"havale": "Havale", "nakit": "Nakit / banka kartı",
-                                                          "kredi_karti": "Kredi kartı"}.get(e.get("payment") or "", None),
+                                                          "kredi_karti": "Kredi kartı", "altin_bozdurma": "Altın bozdurup",
+                                                          "altin": "Altın vererek"}.get(e.get("payment") or "", None),
             "created_by": e.get("created_by"), "receipt": bool(e.get("receipt_file"))}
 
 

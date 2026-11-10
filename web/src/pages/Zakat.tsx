@@ -9,12 +9,14 @@ import Sadaka from "../components/Sadaka";
 import { ZakatOff } from "../components/ZakatConsent";
 import Segmented from "../components/Segmented";
 import ZakatPay, { type ZakatPayBody } from "../components/ZakatPay";
+import { altinVarliklari, odemeAltYazi, type KayitliOdeme } from "../lib/nasilOdedin";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 
-interface Line { id?: number; acquired?: string | null; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
-interface Payment { id: number; year_start: string; pay_date: string; amount: number; note: string | null }
+interface Line { id?: number; kind?: string; acquired?: string | null; label: string; qty?: number; unit?: string; value: number | null; exempt?: boolean; source: string; note?: string | null }
+/** how, method_editable, asset_*: sunucu donation_payment_gold (eski sunucuda yok) */
+interface Payment extends KayitliOdeme { year_start: string }
 interface Person {
   id: number; name: string; is_self: boolean; is_minor?: boolean; plus: Line[];
   check?: { date: string; hijri: string; days_left: number; zakat_now: number; paid: number; difference: number } | null; minus: Line[]; gross: number; deduct: number; total: number;
@@ -87,7 +89,7 @@ function History({ p }: { p: Person }) {
         ))}
       </ul>
       {payY && <ZakatPay title="Geçmiş yılın zekâtını ödedim" note={`${dateTR(payY.end)}'de biten yıl için.`}
-        amount={payY.remaining ?? 0} date={today()} busy={pay.isPending} onClose={() => setPayY(null)}
+        amount={payY.remaining ?? 0} date={today()} busy={pay.isPending} onClose={() => setPayY(null)} golds={altinVarliklari(p.plus)}
         onSave={(b) => pay.mutate({ y: payY, b }, { onError: (e) => ui.error(e.message) })} />}
       {d.notes.map((n) => <p key={n} className="text-xs text-stone-500">• {n}</p>)}
       <p className="text-xs text-stone-500">• Ödenmeyen zekât, Hanefî'ye göre borç olarak kalır ve sonraki yılın hesabından düşülür. Kesin karar için müftülüğe danış.</p>
@@ -100,6 +102,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [editPay, setEditPay] = useState<Payment | null>(null);
   const [hist, setHist] = useState(false);
   const onErr = { onError: (e: Error) => ui.error(e.message) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
@@ -109,6 +112,9 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const pay = useSave((b: ZakatPayBody) => json("POST", `/api/zakat/people/${p.id}/payments`, b),
     () => { setPaying(false); ui.toast("Ödeme kaydedildi. Allah kabul etsin."); });
   const delPay = useSave((id: number) => json("DELETE", `/api/zakat/payments/${id}`));
+  const patchPay = useSave((a: { id: number; b: ZakatPayBody }) => Object.keys(a.b).length ? json("PATCH", `/api/zakat/payments/${a.id}`, a.b) : Promise.resolve(null),
+    () => { setEditPay(null); ui.toast("Ödeme düzeltildi"); });
+  const golds = altinVarliklari(p.plus);
   const delAsset = useSave((id: number) => json("DELETE", `/api/zakat/assets/${id}`));
   const delPerson = useSave(() => json("DELETE", `/api/zakat/people/${p.id}`));
   const h = p.hawl;
@@ -167,7 +173,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               <button className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
                 onClick={() => setPaying(true)}>Ödeme ekle</button>
               {paying && <ZakatPay title="Zekâtı ödedim" note={`${p.name} için bu kameri yılın zekâtı. Bir kısmını verdiysen tutarı değiştir.`}
-                amount={h.remaining} date={today()} busy={pay.isPending} onClose={() => setPaying(false)}
+                amount={h.remaining} date={today()} busy={pay.isPending} onClose={() => setPaying(false)} golds={golds}
                 onSave={(b) => pay.mutate(b, onErr)} />}
               {h.days_left <= 0 && (
                 <button className="btn-primary px-2 py-1 text-xs"
@@ -197,8 +203,13 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
               <ul className="mt-2 space-y-1 text-xs">
                 {yearPays.map((x) => (
                   <li key={x.id} className="flex items-center justify-between gap-2">
-                    <span>{dateTR(x.pay_date)} {x.note && `· ${x.note}`}</span>
-                    <span className="flex items-center gap-2 tabular-nums">{tl(x.amount)}
+                    {/* dokununca düzenle (tutar, tarih, ödeme şekli) */}
+                    <button className="min-w-0 flex-1 rounded py-1 text-left hover:bg-stone-100 dark:hover:bg-stone-800" onClick={() => setEditPay(x)}
+                      aria-label={`${dateTR(x.pay_date)} ödemesi ${tl(x.amount)}: düzenle`}>
+                      <span className="block">{dateTR(x.pay_date)}</span>
+                      {odemeAltYazi(x) && <span className="block [overflow-wrap:anywhere] text-stone-500">{odemeAltYazi(x)}</span>}
+                    </button>
+                    <span className="flex shrink-0 items-center gap-2 tabular-nums">{tl(x.amount)}
                       <button className="btn-ghost p-1.5 text-stone-400 hover:text-red-600" aria-label="Ödemeyi sil" disabled={delPay.isPending}
                         onClick={() => void ask("Ödeme silinsin mi?").then((ok) => { if (ok) delPay.mutate(x.id); })}><Trash2 size={16} /></button>
                     </span>
@@ -206,6 +217,9 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
                 ))}
               </ul>
             )}
+            {editPay && <ZakatPay title="Ödemeyi düzenle" note={`${p.name} · ${dateTR(editPay.pay_date)} tarihli zekât ödemesi.`}
+              amount={editPay.amount} date={editPay.pay_date.slice(0, 10)} edit={editPay} golds={golds} busy={patchPay.isPending}
+              onClose={() => setEditPay(null)} onSave={(b) => patchPay.mutate({ id: editPay.id, b }, onErr)} />}
           </>
         ) : (
           <div className="space-y-2 text-xs text-stone-600 dark:text-stone-400">

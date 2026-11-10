@@ -249,6 +249,16 @@ CAPABILITIES = (
                               # person, amount, pay_date, year_start}]: ödenmiş ama gider olarak görünmeyen zekât → POST
                               # /api/zakat/payments/{id}/expense {payment, account_id?, card_last4?, recipient?, pay_date?}
                               # → {entry_id, created} ya da POST .../no-expense ("gerek yok", bir daha sorulmaz)
+    "donation_payment_gold",  # "Nasıl ödedin?" genişledi: payment banka (banka hesabından; hesap ops., cüzdana yazılmaz) |
+                              # altin_bozdurma (altın satılıp parası verildi) | altin (doğrudan altın). Altınla: gider TL
+                              # karşılığıyla yazılır, hesaptan düşmez, döküm/ekstreyle eşleşmez; zekâtta asset_id +
+                              # asset_qty (ops.) o altın varlığından düşer, ödeme silinince geri konur. Bilinmeyen payment
+                              # 422 (eski davranış). GET /api/zakat people[].payments[] how, account_id, card_last4,
+                              # method_editable, asset_id, asset_qty, asset_label, asset_unit; PATCH
+                              # /api/zakat/payments/{id} payment (+ account_id, card_last4, recipient, asset_id,
+                              # asset_qty): ödeme şekli sonradan değişir (açtığı gider yeniden yazılır)
+    "summary_interest_income", # GET /api/summary totals.interest_income: gelirin İÇİNDEKİ faiz geliri (gelire dahil;
+                              # Özet "içinde faiz geliri ₺X · arındırılacak"); ortak defterde faiz gizliyse 0
     "statement_reread",       # yapay zekâ okuması tutmayan ekstre şablonla yeniden okunabilir: GET /api/statements
                               # [].reread_rows (N | null), /api/reminders kind "ekstre_oku" (action statement_reread,
                               # statement_id, rows; "Şimdi değil" = POST /api/reminders/ekstre_oku:<id>/dismiss), GET

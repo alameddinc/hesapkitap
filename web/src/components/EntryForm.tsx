@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { send } from "../lib/apiError";
 import { DURUM } from "../lib/durum";
+import { NASIL_AD } from "../lib/nasilOdedin";
 import { taslakla, taslakSonuc } from "../lib/idem";
 import { useKayitBildir } from "./kayitBildir";
 import { Link2, Link2Off, Repeat, Trash2 } from "lucide-react";
@@ -336,6 +337,8 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
               { value: "nakit", label: "Nakit / Banka k." },
               { value: "havale", label: "Havale" },
               ...(wallets.data?.length || payment === "kart" ? [{ value: "kart" as Payment, label: "Yemek / hediye" }] : []),
+              // zekât/sadaka altınla verildiyse (hesapsız gider): düzenlerken şekli korunsun
+              ...(payment === "altin" || payment === "altin_bozdurma" ? [{ value: payment, label: NASIL_AD[payment] }] : []),
             ]} />
             {payment === "kart" && (
               <div className="mt-2">

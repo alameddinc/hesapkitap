@@ -122,3 +122,7 @@ export const METIN = {
   /** ekstre rozeti */
   rakamlarTutmadi: "⚠ Rakamlar tutmadı",
 } as const;
+
+/** Özet'te gelirin altında: faiz geliri gelire DAHİL, ayrıca görünür; arındırma (ihtiyaç sahibine verme) hatırlatılır.
+ *  Dil nötr: faize yönlendirmez. tutar biçimlenmiş gelir (ör. "₺42,50"). */
+export const faizGeliriNotu = (tutar: string) => `içinde faiz geliri ${tutar} · arındırılacak`;

@@ -90,7 +90,8 @@ def _tax_cells(r: dict) -> list:
             *(rates.get(k) for k in (*vat.EXPORT_RATES, 0))]
 
 
-PAYMENT = {"kredi_karti": "Kredi kartı", "nakit": "Nakit", "havale": "Havale / EFT", "kart": "Ön ödemeli kart"}
+PAYMENT = {"kredi_karti": "Kredi kartı", "nakit": "Nakit", "havale": "Havale / EFT", "kart": "Ön ödemeli kart",
+           "altin_bozdurma": "Altın bozdurup", "altin": "Altın vererek"}
 RECEIPT_HEAD = ["Tarih", "İşyeri", *TAX_HEAD[:3], "Toplam (₺)", *TAX_HEAD[4:], "KDV toplam (₺)", "Ödeme", "Kategori"]
 
 

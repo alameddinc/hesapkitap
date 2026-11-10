@@ -1807,7 +1807,11 @@ def revoke_all_sessions(request: Request, response: Response, body: RevokeAllIn 
     return {"ok": True, "revoked": n}
 
 Kind = Literal["gelir", "gider"]
-Payment = Literal["kredi_karti", "nakit", "havale", "kart"]  # kart: ön ödemeli (yemek/hediye/giyim), wallet_id ile
+# kart: ön ödemeli (yemek/hediye/giyim), wallet_id ile. altin_bozdurma / altin: zekât/sadaka altınla verildi (hesapsız,
+# donations.create_expense açar); kayıt düzenlenip geri gönderilince kabul edilsin diye burada da
+Payment = Literal["kredi_karti", "nakit", "havale", "kart", "altin_bozdurma", "altin"]
+# zekât/sadaka "Nasıl ödedin?" (donations.PAYMENTS); bilinmeyen değer eskisi gibi 422
+DonationPayment = Literal["banka", "nakit", "havale", "kredi_karti", "altin_bozdurma", "altin"]
 CardKind = Literal["harcama", "iade", "faiz_ucret", "odeme"]
 EXPENSE_CATEGORIES = ["Altın & Döviz Birikimi", "Kira & Aidat", "Faturalar", "Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Sağlık",
                       "Eğitim", "Ulaşım & Araç", "Market & Gıda", "Kredi & Borç", "Bağış & Sadaka", "Diğer"]
@@ -3984,8 +3988,9 @@ class DonationIn(BaseModel):
     note: str | None = Field(None, max_length=200)
     as_expense: bool = False   # eski istemci: nakitten verdim → gider olarak da yaz (payment = nakit)
     account_id: int | None = None
-    # nasıl verdin: gider olarak da yazılır. kredi_karti → hemen "ekstre bekleniyor" gider, ekstre gelince eşleşir
-    payment: Literal["nakit", "havale", "kredi_karti"] | None = None
+    # nasıl verdin: gider olarak da yazılır. kredi_karti → hemen "ekstre bekleniyor" gider, ekstre gelince eşleşir;
+    # banka | nakit | havale | kredi_karti | altin_bozdurma | altin (donations.PAYMENTS)
+    payment: DonationPayment | None = None
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")
 
 
@@ -4087,15 +4092,18 @@ class ZakatPaymentIn(BaseModel):
     year_start: date | None = None  # geçmiş bir yılın ödemesi
     # nasıl ödendi (ops.): verilirse gider olarak da yazılır (Bağış & Sadaka). kredi_karti → hemen "ekstre bekleniyor"
     # gider, ekstre gelince kart satırıyla eşleşir (tek sayım). Yoksa (eski istemci) yalnız zekât ödemesi.
-    payment: Literal["nakit", "havale", "kredi_karti"] | None = None
-    account_id: int | None = None   # havale/nakit: hangi hesaptan
+    # banka | nakit | havale | kredi_karti | altin_bozdurma | altin
+    payment: DonationPayment | None = None
+    account_id: int | None = None   # banka/havale/nakit: hangi hesaptan (ops.)
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # kredi kartı: hangisi (ops.)
     recipient: str | None = Field(None, max_length=80)  # havale: kime (dökümdeki havaleyle eşleşir)
+    asset_id: int | None = None     # altınla ödendi: düşülecek altın varlığı (ops.)
+    asset_qty: float | None = Field(None, gt=0)  # düşülecek miktar (gram / adet)
 
 
 class ZakatExpenseIn(BaseModel):
     """Gider olarak görünmeyen zekât ödemesine gider aç: nasıl ödendi."""
-    payment: Literal["nakit", "havale", "kredi_karti"]
+    payment: DonationPayment
     account_id: int | None = None
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")
     recipient: str | None = Field(None, max_length=80)
@@ -4246,7 +4254,8 @@ def zakat_add_payment(pid: int, body: ZakatPaymentIn):
     try:
         return {"id": zakat.add_payment(pid, body.amount, (body.pay_date or date.today()).isoformat(), body.note,
                                         body.year_start.isoformat() if body.year_start else None,
-                                        body.payment, body.account_id, body.card_last4, body.recipient)}
+                                        body.payment, body.account_id, body.card_last4,
+                                        body.recipient, body.asset_id, body.asset_qty)}
     except LookupError as e:
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
@@ -4258,17 +4267,27 @@ class ZakatPaymentPatch(BaseModel):
     pay_date: date | None = None
     note: str | None = None
     year_start: date | None = None
+    # ödeme şeklini değiştir (yetenek donation_payment_gold): açtığı gider kaydı yeni şekille yeniden yazılır
+    payment: DonationPayment | None = None
+    account_id: int | None = None
+    card_last4: str | None = Field(None, pattern=r"^\d{4}$")
+    recipient: str | None = Field(None, max_length=80)
+    asset_id: int | None = None
+    asset_qty: float | None = Field(None, gt=0)
 
 
 @app.patch("/api/zakat/payments/{pay_id}")
 def zakat_update_payment(pay_id: int, body: ZakatPaymentPatch):
     """Ödemeyi tek işlemde düzenle; yalnız gönderilen alanlar değişir. Dönüş: güncel ödeme."""
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba gider yazamaz
     data = body.model_dump(exclude_unset=True)
     for k in ("pay_date", "year_start"):
         if data.get(k):
             data[k] = data[k].isoformat()
     try:
         r = zakat.update_payment(pay_id, data)
+    except LookupError as e:  # düşülecek altın varlığı yok
+        raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
     if r is None:

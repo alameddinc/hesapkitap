@@ -55,6 +55,8 @@ KINDS: dict[str, tuple[str, str, str]] = {
     "GBP": ("Sterlin", "GBP", "£"),
     "TRY": ("TL (nakit, mevduat, yatırım)", "", "₺"),
 }
+# altın türleri: zekât/sadaka altınla ödendiyse bu varlıklardan düşülebilir (_take_asset)
+GOLD_KINDS = ("ALTIN_24", "ALTIN_22", "ALTIN_18", "ALTIN_14", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA")
 # borç/alacak birimleri (finance.ASSETS) → fiyat anahtarı
 DEBT_ASSET_KEYS = {"GRAM_ALTIN": "GRA", "CEYREK_ALTIN": "CEYREKALTIN", "YARIM_ALTIN": "YARIMALTIN", "TAM_ALTIN": "TAMALTIN",
                    "CUMHURIYET_ALTIN": "CUMHURIYETALTINI", "USD": "USD", "EUR": "EUR", "GBP": "GBP"}
@@ -104,6 +106,20 @@ def _init(c) -> None:
         c.execute("ALTER TABLE zakat_people ADD COLUMN is_minor INTEGER NOT NULL DEFAULT 0")
     if "estimated" not in cols:
         c.execute("ALTER TABLE zakat_assets ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0")
+    from app import donations
+
+    donations._init(c)  # zakat_payments.entry_id / own_entry / no_expense (ödemeler gider kaydıyla okunur: _PAYMENTS_SQL)
+    zcols = {r[1] for r in c.execute("PRAGMA table_info(zakat_payments)")}
+    for col, ddl in (("payment", "TEXT"),       # nasıl ödendi (banka, nakit, havale, kredi_karti, altin_bozdurma, altin)
+                     ("asset_id", "INTEGER"),   # altınla ödendiyse düşülen varlık (zakat_assets.id)
+                     ("asset_qty", "REAL"),     # düşülen miktar (gram / adet)
+                     ("asset_snap", "TEXT")):   # düşülmeden önceki varlık (JSON): ödeme silinince geri konur
+        if col not in zcols:
+            try:
+                c.execute(f"ALTER TABLE zakat_payments ADD COLUMN {col} {ddl}")
+            except sqlite3.OperationalError as e:  # aynı defteri iki istek aynı anda açtı
+                if "duplicate column name" not in str(e):
+                    raise
     if not c.execute("SELECT 1 FROM zakat_people").fetchone():
         c.execute("INSERT INTO zakat_people (name, is_self) VALUES ('Ben', 1)")
 
@@ -483,9 +499,79 @@ def people(today: date | None = None) -> list[dict]:
         for p in ps:
             p["hawl_start"] = _rolled_start(p["hawl_start"], today)
             p["assets"] = db.rows(c.execute("SELECT * FROM zakat_assets WHERE person_id = ? ORDER BY id", (p["id"],)))
-            p["payments"] = db.rows(c.execute("SELECT * FROM zakat_payments WHERE person_id = ? ORDER BY pay_date DESC",
-                                              (p["id"],)))
+            p["payments"] = [_payment_view(x) for x in db.rows(c.execute(_PAYMENTS_SQL + " WHERE zp.person_id = ? "
+                                                                          "ORDER BY zp.pay_date DESC", (p["id"],)))]
     return ps
+
+
+# ödeme + açtığı/bağlı olduğu gider kaydı: nasıl ödendiği (how) ve sonradan değiştirilebilir mi (method_editable)
+_PAYMENTS_SQL = """SELECT zp.*, e.payment AS e_payment, e.account_id AS e_account_id, e.card_last4 AS e_card_last4,
+    a.kind AS e_account_kind,
+    (e.linked_txn_id IS NOT NULL OR e.id IN (SELECT entry_id FROM entry_matches)) AS e_matched
+    FROM zakat_payments zp LEFT JOIN entries e ON e.id = zp.entry_id LEFT JOIN accounts a ON a.id = e.account_id"""
+
+
+def _payment_view(r: dict) -> dict:
+    """how: banka | nakit | havale | kredi_karti | altin_bozdurma | altin | None (ödeme şekli girilmemiş).
+    method_editable: ödeme şekli sonradan değişebilir mi (ekstre/döküm satırından işaretlenen ya da gerçek hareketle
+    eşleşmiş gider kaydı: şekli oradan gelir, değişmez). asset_label: altınla ödendiyse düşülen varlık."""
+    from app import donations
+
+    ep, how = r.pop("e_payment", None), r.get("payment")
+    acc_kind, matched = r.pop("e_account_kind", None), bool(r.pop("e_matched", 0))
+    if how not in donations.PAYMENTS:  # eski kayıt: gider kaydından
+        how = ("kredi_karti" if r.get("txn_id") else
+               "banka" if ep == "nakit" and acc_kind == "banka" else ep if ep in donations.PAYMENTS else None)
+    r["how"] = how
+    r["account_id"] = r.pop("e_account_id", None)
+    r["card_last4"] = r.pop("e_card_last4", None)
+    r["method_editable"] = not r.get("txn_id") and (not r.get("entry_id") or bool(r.get("own_entry"))) and not matched
+    snap = json.loads(r.pop("asset_snap", None) or "null")
+    r["asset_label"] = KINDS.get(snap["kind"], (snap["kind"],))[0] if snap else None
+    r["asset_unit"] = KINDS.get(snap["kind"], ("", "", ""))[2] if snap else None
+    return r
+
+
+def _take_asset(c, asset_id: int, qty: float) -> str:
+    """Altınla ödenen zekât: varlıktan qty düşülür (hepsi verildiyse varlık silinir). Dönüş: varlığın önceki hâli (JSON),
+    ödeme silinince/değişince geri konur (_give_back_asset). Alış bedeli (cost) miktarla orantılı azalır."""
+    if not (isinstance(qty, (int, float)) and qty > 0):
+        raise ValueError("Düşülecek miktar sıfırdan büyük olmalı")
+    a = c.execute("SELECT * FROM zakat_assets WHERE id = ?", (asset_id,)).fetchone()
+    if not a:
+        raise LookupError("Varlık yok")
+    a = dict(a)
+    if a["kind"] not in GOLD_KINDS:
+        raise ValueError("Yalnız altın varlığından düşülebilir")
+    if qty > a["quantity"] + 1e-9:
+        raise ValueError("Elindeki miktardan fazlası düşülemez")
+    left = round(a["quantity"] - qty, 4)
+    if left <= 0:
+        c.execute("DELETE FROM zakat_assets WHERE id = ?", (asset_id,))
+    else:
+        cost = round(a["cost"] * left / a["quantity"], 2) if a["cost"] else a["cost"]
+        c.execute("UPDATE zakat_assets SET quantity = ?, cost = ? WHERE id = ?", (left, cost, asset_id))
+    return json.dumps({k: a[k] for k in ("id", "person_id", "kind", "quantity", "is_jewelry", "acquired", "cost",
+                                         "estimated", "note")}, ensure_ascii=False)
+
+
+def _give_back_asset(c, pay: dict) -> None:
+    """Ödemenin düştüğü altın geri konur (varlık duruyorsa miktarına eklenir, silinmişse aynı hâliyle yeniden açılır)."""
+    if not (pay.get("asset_id") and pay.get("asset_qty") and pay.get("asset_snap")):
+        return
+    snap, qty = json.loads(pay["asset_snap"]), pay["asset_qty"]
+    share = round(snap["cost"] * qty / snap["quantity"], 2) if snap.get("cost") else None
+    a = c.execute("SELECT quantity, cost FROM zakat_assets WHERE id = ?", (pay["asset_id"],)).fetchone()
+    if a:
+        c.execute("UPDATE zakat_assets SET quantity = ?, cost = ? WHERE id = ?",
+                  (round(a["quantity"] + qty, 4), round((a["cost"] or 0) + share, 2) if share else a["cost"],
+                   pay["asset_id"]))
+    elif c.execute("SELECT 1 FROM zakat_people WHERE id = ?", (snap["person_id"],)).fetchone():
+        c.execute("INSERT INTO zakat_assets (id, person_id, kind, quantity, is_jewelry, acquired, cost, estimated, note) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  (pay["asset_id"], snap["person_id"], snap["kind"], qty, snap["is_jewelry"], snap["acquired"], share,
+                   snap["estimated"], snap["note"]))
+    c.execute("UPDATE zakat_payments SET asset_id = NULL, asset_qty = NULL, asset_snap = NULL WHERE id = ?", (pay["id"],))
 
 
 def _app_lines(pr: dict, st: dict, today: date) -> tuple[list[dict], list[dict]]:
@@ -938,15 +1024,19 @@ def delete_asset(aid: int) -> bool:
 
 def add_payment(pid: int, amount: float, pay_date: str, note: str | None, year_start: str | None = None,
                 payment: str | None = None, account_id: int | None = None, card_last4: str | None = None,
-                recipient: str | None = None) -> int:
+                recipient: str | None = None, asset_id: int | None = None, asset_qty: float | None = None) -> int:
     """year_start verilmezse içinde bulunulan zekât yılı (geçmiş yıl için o yılın başlangıcı).
-    payment (nakit | havale | kredi_karti): nasıl ödendi → gider olarak da yazılır (Bağış & Sadaka, own_entry). Kredi
-    kartıyla verilen zekât hemen "ekstre bekleniyor" gider olur, ekstre gelince kart satırıyla eşleşip bir kez sayılır.
+    payment (banka | nakit | havale | kredi_karti | altin_bozdurma | altin): nasıl ödendi → gider olarak da yazılır
+    (Bağış & Sadaka, own_entry). Kredi kartıyla verilen zekât hemen "ekstre bekleniyor" gider olur, ekstre gelince kart
+    satırıyla eşleşip bir kez sayılır. Altınla (bozdurup ya da doğrudan): gider TL karşılığıyla yazılır, hesap bakiyesinden
+    düşmez; asset_id + asset_qty verilirse o altın varlığından düşülür (ödeme silinince geri konur).
     payment yoksa (eski istemci) yalnız zekât ödemesi; Zekât ekranı "gider olarak görünmüyor" diye sorar (unexpensed)."""
     from app import donations
 
     if payment and payment not in donations.PAYMENTS:
-        raise ValueError("Ödeme şekli nakit, havale ya da kredi kartı olmalı")
+        raise ValueError(donations.PAYMENT_ERROR)
+    if asset_id and payment not in donations.GOLD_PAYMENTS:
+        asset_id = None  # altın düşümü yalnız altınla ödemede
     _roll_years(date.today())
     with db.connect() as c:
         _init(c)
@@ -956,14 +1046,22 @@ def add_payment(pid: int, amount: float, pay_date: str, note: str | None, year_s
             raise LookupError("Kişi yok")
         if not (year_start or p["hawl_start"]):
             raise ValueError("Önce zekât yılının başladığı günü gir")
+        if asset_id and not c.execute("SELECT 1 FROM zakat_assets WHERE id = ?", (asset_id,)).fetchone():
+            raise LookupError("Varlık yok")
     label = "Zekât" if p["is_self"] else f"Zekât · {p['name']}"
     entry_id = donations.create_expense(label, amount, pay_date, payment, account_id, card_last4,
                                         (note or "").strip() or None, recipient) if payment else None
-    with db.connect() as c:
-        pay_id = c.execute("INSERT INTO zakat_payments (person_id, year_start, pay_date, amount, note, entry_id, own_entry) "
-                           "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           (pid, year_start or p["hawl_start"], pay_date, amount, (note or "").strip() or None, entry_id,
-                            int(bool(entry_id)))).lastrowid
+    try:
+        with db.connect() as c:
+            snap = _take_asset(c, asset_id, asset_qty) if asset_id else None
+            pay_id = c.execute("INSERT INTO zakat_payments (person_id, year_start, pay_date, amount, note, entry_id, "
+                               "own_entry, payment, asset_id, asset_qty, asset_snap) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               (pid, year_start or p["hawl_start"], pay_date, amount, (note or "").strip() or None,
+                                entry_id, int(bool(entry_id)), payment, asset_id if snap else None,
+                                asset_qty if snap else None, snap)).lastrowid
+    except (ValueError, LookupError):
+        donations.drop_own_entry(entry_id)  # varlık düşülemedi: açılan gider de geri alınır
+        raise
     refresh_self_due()
     return pay_id
 
@@ -1009,7 +1107,7 @@ def add_expense(pay_id: int, payment: str, account_id: int | None = None, card_l
     eid = donations.create_expense(label, r["amount"], day or r["pay_date"], payment, account_id, card_last4, r["note"],
                                    recipient)
     with db.connect() as c:
-        c.execute("UPDATE zakat_payments SET entry_id = ?, own_entry = 1 WHERE id = ?", (eid, pay_id))
+        c.execute("UPDATE zakat_payments SET entry_id = ?, own_entry = 1, payment = ? WHERE id = ?", (eid, payment, pay_id))
     return {"entry_id": eid, "created": True}
 
 
@@ -1025,7 +1123,16 @@ def dismiss_expense(pay_id: int) -> bool:
 
 def update_payment(pay_id: int, data: dict) -> dict | None:
     """Ödemeyi düzenle (amount, pay_date, note, year_start) — tek işlemde. Yoksa None. year_start boş verilemez;
-    note boş metin = notu sil. Hanefî düşümü pay_date'e bağlı olduğundan history() yeni tarihle hesaplar."""
+    note boş metin = notu sil. Hanefî düşümü pay_date'e bağlı olduğundan history() yeni tarihle hesaplar.
+    payment (+ account_id, card_last4, recipient, asset_id, asset_qty) verilirse ödeme şekli de değişir: açtığı gider
+    kaydı yeni şekille yeniden yazılır, altınla ödemede düşülen varlık geri konup yeni seçimle düşülür. Ekstre/döküm
+    satırından gelen ya da gerçek hareketle eşleşmiş ödemenin şekli değişmez (method_editable false → ValueError).
+    Bilinmeyen payment ValueError (eski davranış: 422)."""
+    from app import donations
+
+    method = {k: data[k] for k in ("payment", "account_id", "card_last4", "recipient", "asset_id", "asset_qty") if k in data}
+    if method and method.get("payment") not in donations.PAYMENTS:
+        raise ValueError(donations.PAYMENT_ERROR if method.get("payment") else "Ödeme şeklini de gönder")
     fields = {k: v for k, v in data.items() if k in ("amount", "pay_date", "note", "year_start")}
     if "amount" in fields and not (isinstance(fields["amount"], (int, float)) and fields["amount"] > 0):
         raise ValueError("Tutar sıfırdan büyük olmalı")
@@ -1037,18 +1144,64 @@ def update_payment(pay_id: int, data: dict) -> dict | None:
         fields["note"] = (fields["note"] or "").strip() or None
     with db.connect() as c:  # tek bağlantı = tek işlem: ya hepsi ya hiçbiri
         _init(c)
-        if not c.execute("SELECT 1 FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone():
+        donations._init(c)
+        rows = db.rows(c.execute(_PAYMENTS_SQL + " WHERE zp.id = ?", (pay_id,)))
+        if not rows:
             return None
+        plan = _method_plan(rows[0], method) if method else None  # şekil değişemezse hiçbir şey yazılmadan 422
         if fields:
             c.execute(f"UPDATE zakat_payments SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                       (*fields.values(), pay_id))
+        if plan and not plan["same_asset"]:  # altın: geri koy + yeniden düş (düşülemezse hepsi geri alınır)
+            _give_back_asset(c, rows[0])
+            snap = _take_asset(c, plan["asset_id"], plan["asset_qty"]) if plan["asset_id"] else None
+            c.execute("UPDATE zakat_payments SET asset_id = ?, asset_qty = ?, asset_snap = ? WHERE id = ?",
+                      (plan["asset_id"] if snap else None, plan["asset_qty"] if snap else None, snap, pay_id))
+        if plan:
+            c.execute("UPDATE zakat_payments SET payment = ? WHERE id = ?", (plan["payment"], pay_id))
         out = dict(c.execute("SELECT * FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone())
-    if out.get("own_entry") and ("amount" in fields or "pay_date" in fields):  # açtığı gider kaydı da düzelir
-        from app import donations
-
+    if plan and not plan["same_entry"]:
+        _rewrite_expense(out, plan)
+    elif out.get("own_entry") and ("amount" in fields or "pay_date" in fields):  # açtığı gider kaydı da düzelir
         donations.sync_own_entry(out.get("entry_id"), fields.get("amount"), fields.get("pay_date"))
     refresh_self_due()
-    return out
+    with db.connect() as c:
+        return _payment_view(db.rows(c.execute(_PAYMENTS_SQL + " WHERE zp.id = ?", (pay_id,)))[0])
+
+
+def _method_plan(row: dict, m: dict) -> dict:
+    """Yeni ödeme şekli: gider kaydı ve altın düşümü değişecek mi? Değişecekse ve ödeme şekli değişemiyorsa ValueError."""
+    from app import donations
+
+    cur = _payment_view(dict(row))
+    payment = m["payment"]
+    gold = payment in donations.GOLD_PAYMENTS
+    acc = None if payment == "kredi_karti" or gold else m.get("account_id", cur["account_id"])
+    card = m.get("card_last4", cur["card_last4"]) if payment == "kredi_karti" else None
+    asset_id = m.get("asset_id", row.get("asset_id")) if gold else None
+    qty = m.get("asset_qty", row.get("asset_qty")) if asset_id else None
+    same_entry = bool(cur["how"] == payment and cur["account_id"] == acc and (cur["card_last4"] or None) == (card or None)
+                      and row.get("entry_id") and not (m.get("recipient") or "").strip())
+    same_asset = (row.get("asset_id") or None) == (asset_id or None) and (row.get("asset_qty") or None) == (qty or None)
+    if not (same_entry and same_asset) and not cur["method_editable"]:
+        raise ValueError("Bu ödeme ekstre ya da hesap dökümündeki bir hareketten geliyor; ödeme şekli oradan gelir")
+    return {"payment": payment, "account_id": acc, "card_last4": card, "recipient": m.get("recipient"),
+            "asset_id": asset_id, "asset_qty": qty, "same_entry": same_entry, "same_asset": same_asset}
+
+
+def _rewrite_expense(pay: dict, plan: dict) -> None:
+    """Ödemenin açtığı gider kaydı silinir, yenisi yeni şekille yazılır (kredi kartı: ekstre bekleniyor; altın: hesapsız)."""
+    from app import donations
+
+    with db.connect() as c:
+        p = c.execute("SELECT name, is_self FROM zakat_people WHERE id = ?", (pay["person_id"],)).fetchone()
+    if pay.get("own_entry"):
+        donations.drop_own_entry(pay.get("entry_id"))
+    label = "Zekât" if p["is_self"] else f"Zekât · {p['name']}"
+    eid = donations.create_expense(label, pay["amount"], pay["pay_date"], plan["payment"], plan["account_id"],
+                                   plan["card_last4"], pay.get("note"), plan["recipient"])
+    with db.connect() as c:
+        c.execute("UPDATE zakat_payments SET entry_id = ?, own_entry = 1, no_expense = 0 WHERE id = ?", (eid, pay["id"]))
 
 
 def delete_payment(pay_id: int) -> bool:
@@ -1058,9 +1211,10 @@ def delete_payment(pay_id: int) -> bool:
     with db.connect() as c:
         _init(c)
         donations._init(c)
-        r = c.execute("SELECT entry_id, own_entry FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone()
+        r = c.execute("SELECT * FROM zakat_payments WHERE id = ?", (pay_id,)).fetchone()
         if not r:
             return False
+        _give_back_asset(c, dict(r))  # altınla ödendiyse düşülen altın geri konur
         c.execute("DELETE FROM zakat_payments WHERE id = ?", (pay_id,))
     if r["own_entry"]:
         donations.drop_own_entry(r["entry_id"])

@@ -138,7 +138,8 @@ export interface AccountMergeResult {
 
 export const movedCount = (m: AccountMergeResult["moved"]) => Object.values(m ?? {}).reduce((a, b) => a + b, 0);
 
-export type Payment = "kredi_karti" | "nakit" | "havale" | "kart"; // kart: ön ödemeli (yemek/hediye/giyim)
+// kart: ön ödemeli (yemek/hediye/giyim); altin_bozdurma / altin: zekât/sadaka altınla verildi (hesapsız; lib/nasilOdedin)
+export type Payment = "kredi_karti" | "nakit" | "havale" | "kart" | "altin_bozdurma" | "altin";
 
 export interface LinkCandidate {
   id: number;
@@ -287,6 +288,9 @@ export interface Summary {
     card_spend_incl_pending?: number;
     manual_expense_excl_card_pending?: number;
     fees_hidden?: boolean; // ortak defterde faiz gizli: Faiz kutusu gösterilmez
+    /** gelirin İÇİNDEKİ faiz geliri (gelire dahil; Özet'te "içinde faiz geliri ₺X · arındırılacak"); sunucu
+     *  summary_interest_income, eski sunucuda yok */
+    interest_income?: number;
   };
   /** rakam tanımları (i) için: expense, income, left, left_after_savings, cash_net */
   definitions?: Partial<Record<"expense" | "income" | "left" | "left_after_savings" | "cash_net" | "expected", string>>;
