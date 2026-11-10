@@ -236,7 +236,16 @@ def _cift_ekstre() -> list[str]:
 # ---------------------------------------------------------------- çalıştırma
 
 def check(today: date | None = None) -> dict:
-    """Defterin değişmezlerini denetle (yazmaz). {day, counts: {kod: n}, refs: {kod: [kimlik]}, ms}."""
+    """Defterin değişmezlerini denetle (yazmaz). {day, counts: {kod: n}, refs: {kod: [kimlik]}, ms}.
+    Ortak defter üyesi çalıştırsa da (Yeniden kontrol et, gece işi üyenin alanında) defterin tamamı denetlenir: üyenin
+    süzmesi (hide_fees faizi 0 yapar, gizli kart ekstresi düşer) denklemi bozar ve sahibe sahte ihlal yazardı."""
+    from app import book
+
+    with book.owner_view():
+        return _check(today)
+
+
+def _check(today: date | None) -> dict:
     today = today or date.today()
     t0 = time.perf_counter()
     statements = db.list_statements()
@@ -355,6 +364,87 @@ def report_admin(now: datetime) -> dict | None:
 
 
 REPORT_HOUR = 5  # denetim 4'te; özet herkesin denetimi bittikten sonra
+
+
+# ---------------------------------------------------------------- güncelleme sonrası denetim
+
+POST_DEPLOY_KEY = "integrity:post_deploy"  # sys_settings: {ver, pos, new, books, done}
+POST_DEPLOY_BUDGET_S = 2.0  # tur başına süre; bitmezse sonraki tur kaldığı defterden
+POST_DEPLOY_CODES = ("ekstre_denklem", "ekstre_satir_farki")
+
+
+def _existed(ref: str, cutoff: str) -> bool:
+    """Ekstre son gece denetiminden önce de var mıydı (sonradan yüklenen ekstrenin uyarısı güncellemeden gelmez)."""
+    if not ref.startswith("statement:"):
+        return True
+    with db.connect() as c:
+        r = c.execute("SELECT uploaded_at FROM statements WHERE id = ?", (int(ref.split(":", 1)[1]),)).fetchone()
+    return bool(r and r[0] and r[0][:19] <= cutoff)
+
+
+def post_deploy_new(prev: dict | None) -> int:
+    """Bu defterde şimdi çıkan, son gece denetiminde olmayan ekstre uyarısı sayısı (yazmaz). Önceki koşu yoksa 0."""
+    if not prev or not prev.get("ran_at"):
+        return 0
+    cutoff = prev["ran_at"].replace("T", " ")[:19]
+    old = prev.get("refs") or {}
+    refs = check()["refs"]
+    return sum(1 for k in POST_DEPLOY_CODES for r in refs.get(k, ())
+               if r not in set(old.get(k, ())) and _existed(r, cutoff))
+
+
+def post_deploy_tick(spaces=None) -> dict | None:
+    """Yeni sürüm açıldıktan sonra her defteri bir kez denetle (yazmaz: deftere ve son koşuya dokunmaz); son gece
+    denetiminde olmayan ekstre uyarısı çıkarsa yöneticiye "sistem" bildirimi. Okuma ya da denklem gerilemesi dakikalar
+    içinde görülsün, ertesi geceyi beklemesin. Bildirimde yalnız sayılar (kişi, kart, tutar yok). jobs.scheduler her
+    turda çağırır; süre bütçesiyle parça parça (kaldığı defter sys_settings'te). İş yoksa None."""
+    from app import jobs, system, version
+
+    ver = version.current()
+    if not ver:
+        return None
+    try:
+        st = json.loads(system.get(POST_DEPLOY_KEY) or "null") or {}
+    except ValueError:
+        st = {}
+    if st.get("ver") == ver and st.get("done"):
+        return None
+    if st.get("ver") != ver:
+        st = {"ver": ver, "pos": 0, "new": 0, "books": 0, "done": False}
+    seen, todo = set(), []
+    for path, user in (jobs.spaces() if spaces is None else spaces):
+        key = os.path.abspath(path) if path else None
+        if key not in seen:  # ortak defter üyesinin alanı sahibin dosyasıdır: bir kez
+            seen.add(key)
+            todo.append((path, user))
+    t0 = time.monotonic()
+    while st["pos"] < len(todo):
+        if st["pos"] and time.monotonic() - t0 >= POST_DEPLOY_BUDGET_S:
+            system.put(POST_DEPLOY_KEY, json.dumps(st))
+            return {**st, "finished": False}
+        path, user = todo[st["pos"]]
+        try:
+            with db.use_space(path, user):
+                if n := post_deploy_new(last()):
+                    st["new"] += n
+                    st["books"] += 1
+        except Exception:  # noqa: BLE001 - bir defter denetlenemezse ötekiler sürsün
+            log.exception("güncelleme sonrası denetim bir defterde çalışamadı")
+        st["pos"] += 1
+    st["done"] = True
+    system.put(POST_DEPLOY_KEY, json.dumps(st))
+    if st["new"]:
+        log.warning("güncelleme sonrası denetim (%s): %d yeni ekstre uyarısı, %d defter", ver[:12], st["new"], st["books"])
+        try:
+            from app import feedback, push
+
+            text = f"{st['new']} yeni ekstre uyarısı ({st['books']} defter); son gece denetiminde yoktu."
+            for a in feedback.admins():
+                push.notify(a["id"], [push.item("sistem", f"sistem:denetim:{ver[:12]}", "Denetim: güncelleme sonrası",
+                                                text, push.R_SISTEM)])
+        except Exception:  # noqa: BLE001 - bildirim gitmese de sonuç günlükte
+            log.exception("güncelleme sonrası denetim bildirimi gönderilemedi")
+    return {**st, "finished": True}
 
 
 # ---------------------------------------------------------------- Yapılacaklar maddesi

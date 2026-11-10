@@ -270,3 +270,38 @@ def test_ran_at_utc_naive_and_night_wording(client, monkeypatch):
                        ("2026-10-31T04:10:00", True)):   # eski biçim (yerel)
         db.set_setting(integrity.SETTING, __import__("json").dumps({**r, "ran_at": ran}))
         assert integrity.todo()["text"].startswith("Gece yaptığımız" if night else "Son kontrolde")
+
+
+def test_member_view_does_not_fake_equation_violation(tmpdb):
+    """Ortak defter üyesine faiz gizliyse (hide_fees) üyenin alanında çalışan denetim faizi 0 görüp ayrı faizli ekstreyi
+    (önceki − ödeme + harcama + faiz = borç) ihlal sayıyordu; gizli kartın ekstresi de denetimden düşüyordu."""
+    from app import book
+
+    with db.connect() as c:
+        sid = _stmt(c, "h0101", 2900, 2900, 4400, 54.3, 4454.3, txns=(4400,))  # faiz ayrı satır, denklem tutuyor
+        c.execute("INSERT INTO transactions (statement_id, txn_date, description, amount, txn_type) "
+                  "VALUES (?, '2026-10-03', 'Akdi faiz', 54.3, 'faiz_ucret')", (sid,))
+        bad = _stmt(c, "h0102", 0, 0, 1000, None, 1500, txns=(1000,))  # gizli kartta gerçek ihlal
+        card = c.execute("SELECT card_no FROM statements WHERE id = ?", (bad,)).fetchone()[0]
+    book.set_rules({"hide_fees": True, "hidden_cards": [card]})
+    owner = integrity.check(date(2026, 10, 31))["refs"].get("ekstre_denklem")
+    assert owner == [f"statement:{bad}"]
+    with db.use_space(None, {"id": 2, "member_of": 1, "book_role": "editor"}):
+        assert book.hide_fees()  # üye isteğinde süzme sürüyor
+        assert integrity.check(date(2026, 10, 31))["refs"].get("ekstre_denklem") == owner
+        assert book.hide_fees()  # denetimden sonra da
+
+
+def test_owner_view_does_not_mix_member_read_cache(tmpdb):
+    """Okuma önbelleği üyenin süzülmüş kopyasıyla sahip görünümünü karıştırmaz (gizli kart işlemi üyeye sızmaz)."""
+    from app import book
+
+    with db.connect() as c:
+        sid = _stmt(c, "h0201", 0, 0, 300, None, 300, txns=(300,))
+        card = c.execute("SELECT card_no FROM statements WHERE id = ?", (sid,)).fetchone()[0]
+    book.set_rules({"hidden_cards": [card]})
+    with db.use_space(None, {"id": 2, "member_of": 1, "book_role": "editor"}):
+        assert db.card_transactions() == []
+        with book.owner_view():
+            assert len(db.card_transactions()) == 1
+        assert db.card_transactions() == []
