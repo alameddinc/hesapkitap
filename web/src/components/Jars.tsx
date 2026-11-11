@@ -11,6 +11,7 @@ import Modal from "./Modal";
 import { fullTexts, isQuotaFull, renewDate, useDocQuota } from "./DocQuota";
 import { KIND_LABEL } from "./Plan";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
+import { hedefMetni, type GoalStatus, type Ton } from "../lib/kumbaraHedef";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
 interface Jar {
@@ -20,6 +21,7 @@ interface Jar {
   monthly: number | null; auto_day: number | null; note: string | null; closed_at: string | null;
   balance: number; moves: Move[]; pct?: number; left?: number; need_per_month?: number;
   pace: number; eta?: string; on_track?: boolean;
+  goal_status?: GoalStatus | null; // sunucu app/jar_goal.py: rozet + "ayda ₺… ayır" (eski sunucuda yok)
   contributions?: { user_id: number | null; amount: number }[]; // ortak kumbara: kim ne kadar ayırdı
 }
 
@@ -32,6 +34,32 @@ export const qty = (n: number, s: string) => (s === "gr" || s === "adet" ? `${Nu
 const isUnit = (j?: { unit?: string }) => !!j?.unit && j.unit !== "TRY";
 
 const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
+
+// hedef durumu: renk tek başına anlam taşımaz (rozet ve cümle yazılı); mobil components/para/HedefDurumu.tsx ile aynı
+const TON: Record<Ton, { kutu: string; rozet: string; cubuk: string }> = {
+  iyi: { kutu: "bg-green-50 dark:bg-green-950/40", rozet: "bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200", cubuk: "bg-green-600" },
+  uyari: { kutu: "bg-amber-50 dark:bg-amber-950/40", rozet: "bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200", cubuk: "bg-amber-500" },
+  notr: { kutu: "bg-stone-50 dark:bg-stone-900", rozet: "", cubuk: "bg-stone-500 dark:bg-stone-400" },
+};
+const MIKTAR = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 3 }); // "1,5 gr" (mobil qty ile aynı)
+const tonOf = (g?: GoalStatus | null): Ton | null => (!g ? null : g.status === "geride" ? "uyari" : g.status === "tarihsiz" ? "notr" : "iyi");
+
+function HedefDurumu({ j }: { j: Jar }) {
+  const g = j.goal_status;
+  if (!g || j.closed_at) return null;
+  const s = j.unit_symbol ?? sym(j.unit);
+  const tl0 = (n: number) => tl(n).replace(/,00$/, ""); // yuvarlı tutar: "₺2.500" (mobil ile aynı; gizliyken maske)
+  const t = hedefMetni(g, { para: tl0, birim: g.unit === "TRY" ? tl0 : (n) => `${MIKTAR.format(n)} ${s}` });
+  return (
+    <div role="status" data-testid="kumbara-hedef" className={cx("mt-1.5 rounded-lg px-2.5 py-1.5", TON[t.ton].kutu)}>
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold">
+        {t.rozet && <span data-testid="kumbara-rozet" className={cx("rounded-md px-1.5 py-0.5 text-xs font-bold", TON[t.ton].rozet)}>{t.rozet}</span>}
+        <span className="tabular-nums">{t.satir}</span>
+      </p>
+      {t.ayrinti && <p className="text-xs text-stone-600 dark:text-stone-400">{t.ayrinti}</p>}
+    </div>
+  );
+}
 
 /** preset: başka ekrandan hazır doldurulmuş yeni kumbara (Alırsam ne olur? → "Biriktir"); onSaved: kayıttan sonra. */
 export function JarForm({ jar, onClose, preset, onSaved }: { jar?: Jar; onClose: () => void;
@@ -302,18 +330,19 @@ export default function Jars() {
             {shares(j) && <p className="text-xs text-stone-500">{shares(j)}</p>}
             {j.goal != null && (
               <div className="mt-1 h-2 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800">
-                <div className="h-full rounded-full bg-green-600" style={{ width: `${j.pct ?? 0}%` }} />
+                <div className={cx("h-full rounded-full", TON[tonOf(j.goal_status) ?? "iyi"].cubuk)} style={{ width: `${j.pct ?? 0}%` }} />
               </div>
             )}
+            <HedefDurumu j={j} />
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
               <span>
                 {j.closed_at ? `kapandı ${dateTR(j.closed_at)}`
-                  : j.goal && (j.left ?? 0) <= 0 ? "Hedefe ulaştın 🎉"
-                  : [j.deadline && `son tarih ${dateTR(j.deadline)}`, j.need_per_month && (isUnit(j) ? `ayda ${qty(j.need_per_month, j.unit_symbol ?? sym(j.unit))} almalısın` : `ayda ${tl(j.need_per_month)} ayırmalısın`),
+                  : j.goal && (j.left ?? 0) <= 0 ? (j.goal_status ? "" : "Hedefe ulaştın 🎉")
+                  : [j.deadline && `son tarih ${dateTR(j.deadline)}`, !j.goal_status && j.need_per_month && (isUnit(j) ? `ayda ${qty(j.need_per_month, j.unit_symbol ?? sym(j.unit))} almalısın` : `ayda ${tl(j.need_per_month)} ayırmalısın`),
                     j.monthly && (isUnit(j) ? `her ayın ${j.auto_day}. günü ${qty(j.monthly, j.unit_symbol ?? sym(j.unit))} al`
                       : `her ayın ${j.auto_day}. günü ${tl(j.monthly)} otomatik`), j.account_name && `yeri: ${j.account_name}`]
                     .filter(Boolean).join(" · ")}
-                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && (
+                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && !j.goal_status && (
                   <span className={cx("block", j.eta ? (j.on_track === false ? "text-amber-600" : "text-green-700 dark:text-green-400") : "text-stone-500")}>
                     {j.eta ? `Bu hızla (ayda ${isUnit(j) ? qty(j.pace, j.unit_symbol ?? sym(j.unit)) : tl(j.pace)}) ${monthLabel(j.eta)}'de ulaşırsın${j.on_track === false ? ", son tarihe yetişmiyor" : ""}`
                       : "Son 3 ayda ayırma yok; ayır ya da otomatik ayırmayı aç"}
