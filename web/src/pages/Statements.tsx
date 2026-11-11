@@ -13,6 +13,7 @@ import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
 import StatementHelp from "../components/StatementHelp";
 import StatementCard from "../components/StatementCard";
+import FirstLook from "../components/FirstLook";
 import { QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "../components/DocQuota";
 import { prepare, uploadInBatches } from "../lib/batchUpload";
 import { ReportProblem } from "../components/Feedback";
@@ -65,6 +66,10 @@ export default function Statements() {
       void quota.refresh();
     }
   };
+
+  // kaydedilen kart ekstreleri (dekont değil): İlk bakış bunları özetler; kart Excel'inde kimlik yok → her kartın sonu
+  const cardSaved = results.filter((r) => r.status === "saved" && !r.dekont && (r.statement_id != null || !!r.card_excel));
+  const cardIds = { saved: cardSaved.length > 0, ids: cardSaved.flatMap((r) => (r.statement_id != null ? [r.statement_id] : [])) };
 
   const demo = useDemo().data;
   const sample = useSave((key: string) => apiSend<UploadResult[]>(`/api/demo/sample/${key}`, { method: "POST" }), (res) => setResults(res));
@@ -160,6 +165,9 @@ export default function Statements() {
           </label>
         </form>
       )}
+
+      {/* İlk bakış: kullanıcının ilk haftasında kart ekstresi kaydedildiyse (sunucu first; sonra normal sonuç) */}
+      {!busy && cardIds.saved && <FirstLook ids={cardIds.ids} onUpload={pick} />}
 
       {results.length > 1 && (() => {
         const n = (f: (r: UploadResult) => boolean) => results.filter(f).length;

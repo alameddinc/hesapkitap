@@ -308,6 +308,16 @@ CAPABILITIES = (
                               # kalan üzerinden: ilk taksit ayından önce ödenen plana girmez); DELETE …/schedule planı
                               # kaldırır (elden borç kalır). Dönüş {ok, debt}. schedule'a total, paid_before, left_count,
                               # last_amount eklendi
+    "summary_interest_paid",  # GET /api/summary interest_paid {total, interest, tax, fee, count, statements, has_cards,
+                              # state var|yok|ekstre_yok} | null (ortak defterde faiz gizli): Özet "Bu dönem ödenen faiz
+                              # ve ücret ₺X" kartı; total = totals.fees = Faiz sayfasının o ayı (finance.interest_paid)
+    "first_look",             # İlk gün özeti: POST /api/statements/upload kaydedilen ekstrede statement_id; GET
+                              # /api/first-look?ids=1,2 → {first (ilk hafta), statement_count, statements, to_pay {total,
+                              # items [{statement_id, card, amount, due_date, days_left, status}], note}, past_due, fees
+                              # | null, installments {total, count, months, next, last_month, last_label}, steps [{key
+                              # dokum|butce|hatirlatma, title, text, cta, platform?}]} (app/first_look.py)
+    "statement_help",         # GET /api/statement-help?platform=web|mobile → {title, sections [{key, title, icon, steps
+                              # [{text}]}], tips [{text}]}: "Ekstre nasıl indirilir?" tek kaynak; **kalın** işaretli metin
     "debt_terms",             # borç planı v4, borcun koşulları (yalnız "borcum"; boş = eski davranış): POST/PATCH /api/debts
                               # {creditor_type kisi|vergi_sgk|banka|magaza|diger (planı olmayan borçta da), pay_terms
                               # taksitli|parca|tek|bilinmiyor (taksitli = ödeme planı alanlarıyla), due_strict true kesin |

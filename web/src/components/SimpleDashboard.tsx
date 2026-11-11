@@ -1,19 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "./TerimBilgi";
-import { Camera, List, Minimize2 } from "lucide-react";
-import { api } from "../api";
+import { CheckCircle2, Camera, ChevronRight, List, Minimize2 } from "lucide-react";
+import { api, type InterestPaid } from "../api";
+import { donemObegi, faizKartMetni } from "../lib/faizOzet";
 import { addMonths, dateTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { payableKey } from "../lib/odeme";
 import { EstimateNote } from "./Estimates";
-import { isViewer, useBook, useUiPrefs } from "./hooks";
+import { isViewer, useBook, useMeta, useUiPrefs } from "./hooks";
 
 /** Sade görünüm: büyük yazı, tek bakışta "bu ay ne kadar harcadım" (kuruşu kuruşuna), yaklaşan ödemeler, iki düğme. */
 export default function SimpleDashboard() {
   const ui = useUI();
   const { save } = useUiPrefs();
   const viewer = isViewer(useBook().data); // ortak defterde sadece görür
+  const meta = useMeta().data;
   const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
   const prevMonth = addMonths(ui.month, -1);
   const prev = useQuery({ queryKey: ["summary", prevMonth], queryFn: () => api.summary(prevMonth) });
@@ -41,7 +43,10 @@ export default function SimpleDashboard() {
           </div>
         )}
         {!!t?.savings && <p className="mt-3 text-lg text-amber-700 dark:text-amber-400">Birikime giden (altın/döviz): {tl(t.savings)}</p>}
-        {!!t?.fees && <p className="mt-3 text-lg text-red-600">Bu ay {tl(t.fees)} faiz / ücret ödendi</p>}
+        {/* faiz ve ücret: sunucu interest_paid (dokununca Faiz ve ücretler); eski sunucuda eski satır */}
+        {summary.data?.interest_paid !== undefined ? <SadeFaiz p={summary.data.interest_paid}
+          donem={ui.month < (meta?.current_month ?? ui.month) ? donemObegi(true, summary.data.period?.name) : "Bu ay"} />
+          : !!t?.fees && <p className="mt-3 text-lg text-red-600">Bu ay {tl(t.fees)} faiz / ücret ödendi</p>}
       </section>
 
       <div className="grid grid-cols-2 gap-3">
@@ -74,5 +79,21 @@ export default function SimpleDashboard() {
         <Minimize2 size={18} /> Tam görünüme geç
       </button>
     </div>
+  );
+}
+
+/** Sade görünümde faiz satırı: büyük yazı, tek satır; dokununca Faiz ve ücretler. Kart ekstresi gelmediyse satır yok. */
+function SadeFaiz({ p, donem }: { p: InterestPaid | null; donem: string }) {
+  const ui = useUI();
+  const m = faizKartMetni(p, tl, donem);
+  if (!m || m.tone === "neutral") return null;
+  return (
+    <button data-testid="sade-faiz" onClick={() => ui.go("faiz")}
+      className={`mt-3 flex w-full items-center gap-2 rounded-xl p-3 text-left text-lg ${m.tone === "ok" ? "bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-300" : "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300"}`}>
+      {m.tone === "ok" && <CheckCircle2 size={22} className="shrink-0" />}
+      <span className="min-w-0 flex-1">{m.title}</span>
+      {m.value && <span className="shrink-0 font-semibold whitespace-nowrap tabular-nums">{m.value}</span>}
+      <ChevronRight size={20} className="shrink-0 opacity-60" />
+    </button>
   );
 }
