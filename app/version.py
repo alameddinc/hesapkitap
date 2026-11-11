@@ -270,7 +270,7 @@ CAPABILITIES = (
                               # /api/statements/{id}/reread-preview → {available, rows, sig, items [{kind added|removed|
                               # changed, label, text, note?}], diff, totals_before/after, equation_ok_after}, POST
                               # .../reread-apply {sig?} → {ok, undo_id, added, changed, removed} (409: değişti / yok)
-    "debt_plan",              # borç kapatma planı (app/debt_plan.py): GET /api/debt-plan?monthly&order=faiz|kucuk|soz
+    "debt_plan",              # borç kapatma planı (app/debt_plan.py): GET /api/debt-plan?monthly&order=tarih|kucuk (eski faiz|soz → tarih)
                               # (önizleme) → {monthly, monthly_source, suggestion, order, orders, totals, debts [{key
                               # kart:<id>|borc:<id>, kind card|person, remaining, progress, closes, warning, payable}],
                               # months [{month, label, total, payments, interest, left}], debt_free, this_month {items
@@ -308,6 +308,18 @@ CAPABILITIES = (
                               # kalan üzerinden: ilk taksit ayından önce ödenen plana girmez); DELETE …/schedule planı
                               # kaldırır (elden borç kalır). Dönüş {ok, debt}. schedule'a total, paid_before, left_count,
                               # last_amount eklendi
+    "debt_terms",             # borç planı v4, borcun koşulları (yalnız "borcum"; boş = eski davranış): POST/PATCH /api/debts
+                              # {creditor_type kisi|vergi_sgk|banka|magaza|diger (planı olmayan borçta da), pay_terms
+                              # taksitli|parca|tek|bilinmiyor (taksitli = ödeme planı alanlarıyla), due_strict true kesin |
+                              # false söz | null varsayılan (kurumda ve planlıda kesin)}; GET /api/debts [].terms,
+                              # terms_label, strict, creditor_label (geçerli değerler). plan_off / DELETE schedule alacaklı
+                              # türünü korur. GET /api/debt-plan: orders [tarih, kucuk]; debts[] terms, terms_label,
+                              # strict, date_kind kesin|soz, late {kind, head, text, open, close, need_monthly?, warning?,
+                              # hint?, action? {label "Yeni tarihte anlaştık", date, confirm}} (istemci PATCH due_date),
+                              # saving {month, text} (tek seferde: birikim), day_note {text}, tl_text/approx_note (altın,
+                              # döviz: fiyatı varsa plana girer); months[].payments[] saving/saved/from_saved/units_text;
+                              # this_month.items[] saving/from_saved/pay_total; day_notes, price_note; commitment.saved
+                              # [{title, amount, text}]; push "borc" kesin tarihte "ödeme günü"
 )
 
 

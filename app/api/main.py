@@ -4425,7 +4425,8 @@ def interest_report(months: int = Query(12, ge=0, le=120)):
 
 
 @app.get("/api/debt-plan")
-def debt_plan(monthly: float | None = Query(None, ge=0, le=100_000_000), order: Literal["faiz", "kucuk", "soz"] | None = None):
+def debt_plan(monthly: float | None = Query(None, ge=0, le=100_000_000),
+              order: Literal["tarih", "kucuk", "faiz", "soz"] | None = None):
     """Borç kapatma planı (yetenek debt_plan, app/debt_plan.py): açık kart ve elden borçlar, ay ay takvim, bu ayın
     ödenecekleri, faiz uyarıları. monthly/order verilirse önizleme (kayıtlı ayar değişmez)."""
     from app import debt_plan as dp
@@ -4435,7 +4436,7 @@ def debt_plan(monthly: float | None = Query(None, ge=0, le=100_000_000), order: 
 
 class DebtPlanIn(BaseModel):
     monthly: Money | None = Field(default=None, ge=0, le=100_000_000)  # null: kayıtlı tutarı kaldır (öneri kullanılır)
-    order: Literal["faiz", "kucuk", "soz"] | None = None
+    order: Literal["tarih", "kucuk", "faiz", "soz"] | None = None  # faiz / soz: eski ayar, "tarih" olarak kaydedilir
 
 
 @app.put("/api/debt-plan")
@@ -5228,8 +5229,11 @@ class DebtPlanFields(BaseModel):
     plan_end: str | None = Field(default=None, pattern=_YM)     # son taksit ayı (sayı yerine)
     plan_start: str | None = Field(default=None, pattern=_YM)   # ilk taksit ayı
     plan_day: int | None = Field(default=None, ge=1, le=31)
-    creditor_type: Literal["vergi_sgk", "banka", "kisi", "diger"] | None = None
+    creditor_type: Literal["vergi_sgk", "banka", "magaza", "kisi", "diger"] | None = None
     plan_interest: Literal["yok", "var", "bilmiyorum"] | None = None
+    # borcun koşulları (yetenek debt_terms; yalnız "borcum", boşsa eski davranış): ödeme koşulu ve tarih türü
+    pay_terms: Literal["taksitli", "parca", "tek", "bilinmiyor"] | None = None
+    due_strict: bool | None = None  # true: tarihinde ödenmesi şart (kesin) · false: söz (esnek) · null: varsayılan
 
     def _plan(self, amount: float | None) -> float | None:
         """Planı tamamla ve doğrula; dönen: toplam (amount)."""
@@ -5265,11 +5269,16 @@ class DebtIn(DebtPlanFields):
 
     @model_validator(mode="after")
     def _tl(self):
+        if self.direction == "alacak":  # koşullar yalnız borçta
+            self.pay_terms = self.due_strict = None
         if self.plan_installment is not None:
             if self.direction != "borc" or (self.asset or "TRY") != "TRY":
                 raise ValueError("Ödeme planı yalnız TL borçta girilir")
             self.amount = self._plan(self.amount)
             self.due_date = None  # vade taksitlerden gelir
+            self.pay_terms = "taksitli"
+        elif self.pay_terms == "taksitli":
+            raise ValueError("Taksitli borçta aylık taksiti ve taksit sayısını yaz")
         if self.amount is None:
             raise ValueError("Miktar gerekli")
         if (self.asset or "TRY") == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
@@ -5288,19 +5297,21 @@ class DebtPatch(DebtPlanFields):
     due_date: date | None = None
     note: str | None = None
     account_id: int | None = None  # banka/nakit hesabı
-    plan_off: bool = False  # ödeme planını kaldır: elden borç olarak kalır (tutar ve ödemeler değişmez)
+    plan_off: bool = False  # ödeme planını kaldır: diğer borç olarak kalır (tutar ve ödemeler değişmez)
 
     @model_validator(mode="after")
     def _tl(self):
         if self.plan_installment is not None:
             self.amount = self._plan(self.amount)
+            self.pay_terms = "taksitli"
         if self.amount is not None and self.asset == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
             self.amount = money.money(self.amount)
         return self
 
 
-# planı kaldırınca hepsi boşalır: "planlı oluştur + kaldır" ile "elden borç" aynı kayıt
-_PLAN_COLS = ("plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type", "plan_interest")
+# planı kaldırınca plan alanları boşalır: "planlı oluştur + kaldır" ile "diğer borç" aynı kayıt. Alacaklı türü
+# (creditor_type) borcun kendisinindir, kalır; ödeme koşulu "taksitli" ise boşalır (bilinmiyor)
+_PLAN_COLS = ("plan_installment", "plan_count", "plan_start", "plan_day", "plan_interest")
 
 
 class DebtPayIn(BaseModel):
@@ -5330,10 +5341,17 @@ def patch_debt(did: int, body: DebtPatch):
     data = body.model_dump(exclude_unset=True, exclude={"plan_end", "plan_off"})
     if body.plan_installment is not None:  # tamamlanan alanlar (sayı, gün, toplam) da yazılsın
         data.update({k: getattr(body, k) for k in ("plan_installment", "plan_count", "plan_start", "plan_day",
-                                                   "creditor_type", "amount")})
+                                                   "creditor_type", "amount", "pay_terms")})
         data["due_date"] = None
     if body.plan_off:
         data.update({k: None for k in _PLAN_COLS})
+        if data.get("pay_terms") == "taksitli" or "pay_terms" not in data:
+            data["pay_terms"] = None
+    elif data.get("pay_terms") == "taksitli" and body.plan_installment is None:
+        with db.connect() as c:
+            row = c.execute("SELECT plan_installment FROM debts WHERE id = ?", (did,)).fetchone()
+        if row is not None and not row["plan_installment"]:
+            raise HTTPException(422, "Taksitli borçta ödeme planını ekle (aylık taksit ve taksit sayısı)")
     if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
         with db.connect() as c:
             paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (did,)).fetchone()[0]
@@ -5392,7 +5410,7 @@ def put_debt_schedule(did: int, body: DebtScheduleIn):
         raise HTTPException(422, f"Taksit sayısı 1 ile {debt_schedule.MAX_COUNT} arasında olmalı")
     data = {"plan_installment": inst, "plan_count": count, "plan_start": start, "plan_day": body.plan_day or 1,
             "creditor_type": body.creditor_type or d["creditor_type"] or "diger", "plan_interest": body.plan_interest,
-            "due_date": None}  # vade taksitlerden gelir
+            "due_date": None, "pay_terms": "taksitli"}  # vade taksitlerden gelir
     if body.amount is not None:
         data["amount"] = amount
     db.update_debt(did, data)
@@ -5403,11 +5421,12 @@ def put_debt_schedule(did: int, body: DebtScheduleIn):
 
 @app.delete("/api/debts/{did}/schedule")
 def delete_debt_schedule(did: int):
-    """Planı kaldır: borç elden borç olarak kalır (tutar ve ödemeler değişmez). Dönüş: {ok, debt}."""
+    """Planı kaldır: borç diğer borç olarak kalır (tutar, ödemeler ve alacaklı türü değişmez; ödeme koşulu boşalır).
+    Dönüş: {ok, debt}."""
     with db.connect() as c:
         if not c.execute("SELECT 1 FROM debts WHERE id = ?", (did,)).fetchone():
             raise HTTPException(404, "Kayıt yok")
-    db.update_debt(did, {k: None for k in _PLAN_COLS})
+    db.update_debt(did, {**{k: None for k in _PLAN_COLS}, "pay_terms": None})
     return {"ok": True, "debt": _debt_row(did)}
 
 

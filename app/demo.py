@@ -132,8 +132,8 @@ def _extras() -> None:
     db.create_jar({"name": "Acil durum", "goal": 50000, "account_id": acc}, initial=21000)
     # borç / alacak
     db.create_debt({"person": "Ali", "direction": "alacak", "amount": 1500, "debt_date": "2026-10-04", "asset": "TRY"})
-    # borç kapatma planı (app/debt_plan.py): iki kart + iki elden borç; aylık tutar kayıtlı (örnek plan birkaç aya yayılır,
-    # biri söz verilen tarihten sonra kapanır: "Söz verdiğim tarihe göre" sıralamasının farkı görünsün). Kurgu adlar.
+    # borç kapatma planı (app/debt_plan.py): iki kart + diğer borçlar; aylık tutar kayıtlı (örnek plan birkaç aya yayılır,
+    # biri söz verilen tarihten sonra kapanır: "Yetişmeyen tarih" ve "Yeni tarihte anlaştık" görünsün). Kurgu adlar.
     db.create_debt({"person": "Kerem", "direction": "borc", "amount": 30000, "debt_date": "2026-06-12",
                     "due_date": "2026-11-25", "note": "Düğün masrafı", "asset": "TRY"})
     db.create_debt({"person": "Selin", "direction": "borc", "amount": 8000, "debt_date": "2026-08-03",
@@ -144,10 +144,22 @@ def _extras() -> None:
     # ödeme planı olan borç (app/debt_schedule.py; yalnız kayıt): ayda ₺1.500, 8 taksit, her ayın 26'sı. Kurgu kurum.
     db.create_debt({"person": "Örnek Vergi Dairesi", "direction": "borc", "amount": 12000, "debt_date": "2026-10-01",
                     "asset": "TRY", "plan_installment": 1500, "plan_count": 8, "plan_start": "2026-10", "plan_day": 26,
-                    "creditor_type": "vergi_sgk", "plan_interest": "bilmiyorum"})
+                    "creditor_type": "vergi_sgk", "plan_interest": "bilmiyorum", "pay_terms": "taksitli"})
+    # borç planı v4 (borcun koşulları): senetli mağaza alışverişi (taksitli, kesin; günü maaştan önce: "önceki aydan
+    # ayır" notu), tek seferde ödenecek kişi borcu (birikim) ve aynı aya söz verilmiş iki borç (Ali / Ahmet). Kurgu adlar.
+    db.create_debt({"person": "Örnek Mobilya", "direction": "borc", "amount": 9000, "debt_date": "2026-09-05",
+                    "asset": "TRY", "plan_installment": 1500, "plan_count": 6, "plan_start": "2026-10", "plan_day": 5,
+                    "creditor_type": "magaza", "plan_interest": "yok", "pay_terms": "taksitli", "note": "Senetli koltuk"})
+    db.create_debt({"person": "Burak", "direction": "borc", "amount": 12000, "debt_date": "2026-07-20",
+                    "due_date": "2027-02-15", "note": "Ev eşyası", "asset": "TRY", "creditor_type": "kisi",
+                    "pay_terms": "tek", "due_strict": 0})
+    db.create_debt({"person": "Ahmet", "direction": "borc", "amount": 4000, "debt_date": "2026-09-01",
+                    "due_date": "2026-12-20", "asset": "TRY", "creditor_type": "kisi", "pay_terms": "parca"})
+    db.create_debt({"person": "Ali", "direction": "borc", "amount": 6500, "debt_date": "2026-09-10",
+                    "due_date": "2026-12-20", "asset": "TRY", "creditor_type": "kisi", "pay_terms": "tek"})
     from app import debt_plan
 
-    debt_plan.save_settings({"monthly": 30000, "order": "faiz"})
+    debt_plan.save_settings({"monthly": 30000, "order": "tarih"})
     # altın ve döviz (zekât ile ortak liste)
     me = zakat.people()[0]["id"]
     es = zakat.add_person("Eşim")

@@ -11,6 +11,17 @@ from tests.test_book import _member, owner  # noqa: F401  (owner: fixture)
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = date(2026, 11, 10)
 
+
+@pytest.fixture(autouse=True)
+def _no_price_download(monkeypatch):
+    """Altın/döviz borcunun TL karşılığı (app/zakat.prices) dışarıya çıkmasın: önbellekte fiyat yoksa borç plan dışı."""
+    from app import zakat
+
+    def fail():
+        raise RuntimeError("testte fiyat indirilmez")
+
+    monkeypatch.setattr(zakat, "_download_prices", fail)
+
 # Sahibin kuralı: plan hiçbir zaman faizli bir yol önermez. Metinlerde bu ifadeler geçmez (büyük/küçük harf fark etmez).
 BANNED = [r"kredi\s*çek", r"kredi\s*al", r"kredi\s*kullan", r"ihtiyaç\s*kredi", r"kredi\s*teklif", r"taksitlendir",
           r"borç\s*transfer", r"nakit\s*avans", r"ertele", r"refinans", r"yapılandır", r"asgari(yi)?\s+öde(?![a-zçğıöşü])",
@@ -67,11 +78,9 @@ def test_orderings_differ_for_personal_debts():
     soz = dp.simulate([], people, 2000, "soz", "2026-11")
     assert soz["months"][0]["payments"][0]["key"] == "borc:soon"  # söz verilen tarihi en yakın
     assert list(soz["closes"]) == ["borc:soon", "borc:big", "borc:small"]  # tarihsiz en sonda
+    # eski "faiz" (orantılı) ayarı artık "tarih": borçlar 7 aya ufalanmaz, aynı plan
     faiz = dp.simulate([], people, 2000, "faiz", "2026-11")
-    pays = {p["key"]: p["amount"] for p in faiz["months"][0]["payments"]}
-    # orantılı pay küçüğe ₺200 düşerdi (< ₺250): küçük borç bütün olarak kapanır, kalan 1.000 ötekilere orantılı, ₺50 katı
-    assert pays == {"borc:small": 1000.0, "borc:big": 650.0, "borc:soon": 350.0}
-    assert {p["key"]: p["amount"] for p in faiz["months"][1]["payments"]} == {"borc:big": 1350.0, "borc:soon": 650.0}
+    assert faiz["months"] == soz["months"]
     for sim in (kucuk, soz, faiz):
         assert sim["debt_free"] == "2027-03" and sum(m["total"] for m in sim["months"]) == 10000
 
@@ -191,10 +200,10 @@ def test_endpoint_preview_and_save(client, tmpdb):
     _seed_people(client)
     assert "debt_plan" in client.get("/api/meta").json()["capabilities"]
     r = client.get("/api/debt-plan").json()
-    assert r["monthly_source"] in ("suggestion", None) and r["settings"] == {"monthly": None, "order": "faiz"}
+    assert r["monthly_source"] in ("suggestion", None) and r["settings"] == {"monthly": None, "order": "tarih"}
     assert r["suggestion"] is None or r["suggestion"]["amount"] >= 0  # öneri hiçbir zaman eksi değil
     prev = client.get("/api/debt-plan", params={"monthly": 5000, "order": "soz"}).json()
-    assert prev["monthly"] == 5000 and prev["order"] == "soz" and prev["monthly_source"] == "param"
+    assert prev["monthly"] == 5000 and prev["order"] == "tarih" and prev["monthly_source"] == "param"  # eski "soz"
     assert client.get("/api/debt-plan").json()["settings"]["monthly"] is None  # önizleme kaydetmez
     assert client.put("/api/debt-plan", json={"monthly": 7500.555, "order": "kucuk"}).json() == {"monthly": 7500.56, "order": "kucuk"}
     r = client.get("/api/debt-plan").json()
@@ -229,7 +238,7 @@ def test_shared_book_permissions_and_visibility(owner, tmpdb):  # noqa: F811
     assert viewer.get("/api/debt-plan").json()["can_edit"] is False
     assert viewer.put("/api/debt-plan", json={"monthly": 1000}).status_code == 403
     assert editor.put("/api/debt-plan", json={"monthly": 12000, "order": "soz"}).status_code == 200  # Aile birlikte planlar
-    assert owner.get("/api/debt-plan").json()["settings"] == {"monthly": 12000.0, "order": "soz"}
+    assert owner.get("/api/debt-plan").json()["settings"] == {"monthly": 12000.0, "order": "tarih"}  # eski "soz"
     assert editor.get("/api/debt-plan").json()["totals"]["person_count"] == 2
 
     owner.put("/api/book/rules", json={"hidden_pages": ["borclar"], "hide_fees": True,
@@ -316,12 +325,12 @@ def test_push_reminds_promised_day(client):
     assert push.TYPES["borc"][1] is True
 
 
-@pytest.mark.parametrize("order", ["faiz", "kucuk", "soz"])
+@pytest.mark.parametrize("order", ["tarih", "kucuk", "faiz", "soz"])
 def test_order_labels_and_texts(order):
     from app import debt_plan as dp
 
-    label, text = dp.ORDER_INFO[order]
-    assert label and "kart" in text.lower()
+    label, text = dp.ORDER_INFO[dp.norm_order(order)]  # eski "faiz" / "soz" → "tarih"
+    assert label and "kart" in text.lower() and "kesin" in text.lower()
 
 
 # ---------------------------------------------------------------- canlı önizleme (yazarken)
@@ -339,7 +348,7 @@ def test_live_preview_changes_months_without_saving(client, tmpdb):
     assert small["pace"] is None  # kart varken faiz uyarısı konuşur
     assert client.get("/api/debt-plan").json()["settings"]["monthly"] == 73600  # önizleme kaydetmedi
     r = client.get("/api/debt-plan", params={"order": "kucuk"}).json()
-    assert r["order"] == "kucuk" and r["monthly"] == 73600 and r["settings"]["order"] == "faiz"
+    assert r["order"] == "kucuk" and r["monthly"] == 73600 and r["settings"]["order"] == "tarih"
 
 
 def test_pace_line_only_personal_debts(client):
@@ -347,9 +356,9 @@ def test_pace_line_only_personal_debts(client):
 
     _seed_people(client)  # 5.000 + 2.000 elden borç, kart yok
     p = dp.build(monthly=2000, today=TODAY)
-    assert p["shortfall"] is None and p["pace"] == {"months": 4, "text": "Bu tutarla elden borçlar 4 ayda biter."}
+    assert p["shortfall"] is None and p["pace"] == {"months": 4, "text": "Bu tutarla diğer borçlar 4 ayda biter."}
     assert "(4 ay)" in p["debt_free"]["text"]
-    assert dp.build(monthly=7000, today=TODAY)["pace"]["text"] == "Bu tutarla elden borçlar bu ay biter."
+    assert dp.build(monthly=7000, today=TODAY)["pace"]["text"] == "Bu tutarla diğer borçlar bu ay biter."
     assert dp.build(monthly=0, today=TODAY)["pace"] is None
     assert dp.build(monthly=1, today=TODAY)["pace"] is None  # 10 yılda bitmiyor: stuck konuşur
 
@@ -586,7 +595,7 @@ def test_commit_endpoint_permissions_and_errors(owner, tmpdb):  # noqa: F811
     assert viewer.post("/api/debt-plan/commit", json={"monthly": 5000}).status_code == 403
     r = editor.post("/api/debt-plan/commit", json={"monthly": 20000, "order": "soz"})
     assert r.status_code == 200 and r.json()["commitment"]["monthly"] == 20000
-    assert owner.get("/api/debt-plan").json()["commitment"]["order"] == "soz"
+    assert owner.get("/api/debt-plan").json()["commitment"]["order"] == "tarih"  # eski "soz"
     assert owner.get("/api/debt-plan", params={"monthly": 100}).json()["commitment"]["differs"] is True
 
 

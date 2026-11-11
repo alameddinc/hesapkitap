@@ -41,7 +41,7 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("hesaplar", "Hesaplar ve kumbara", "sayfa", FREE, True, "Banka hesapları, nakit, net varlık"),
     ("borclar", "Borç / Alacak", "sayfa", FREE, True, "Kime ne borcun var, kimden alacağın var"),
     ("borc_plani", "Borç kapatma planı", "sayfa", FREE, True,
-     "Kart ve elden borçlar tek planda, faiz ödemeden ay ay kapatma (borçtan çıkmaya yardım: ücretsiz)"),
+     "Kart ve diğer borçlar tek planda, faiz ödemeden ay ay kapatma (borçtan çıkmaya yardım: ücretsiz)"),
     ("transferler", "Transferler", "sayfa", FREE, True, "Havale, FAST ve kendi hesapların arası"),
     ("planlama", "Planlama", "sayfa", FREE, True, "Ücretsizde 1 ay (uzun planlama ayrı satır)"),
     ("odemeler", "Ödemeler", "sayfa", FREE, True, "Yaklaşan kart, fatura ve sabit ödemeler"),

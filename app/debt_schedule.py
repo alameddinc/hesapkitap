@@ -9,14 +9,26 @@ farkı alır). Ödemeler her zamanki borç ödemesidir (POST /api/debts/{id}/pay
 Plan borcun alt kaydıdır: borç elden borç olarak girilip plan sonradan eklenebilir, düzenlenebilir, kaldırılabilir (PUT /
 DELETE /api/debts/{id}/schedule). İlk taksit ayından ÖNCE yapılmış ödemeler (paid_at < plan_start-01) plana girmez:
 taksitler "kalan" (amount - plan öncesi ödenen) üzerinden kurulur, ödenen taksitler plan başlangıcından sonraki
-ödemelerle eşleşir. Böylece "ödeme planlı oluştur" ile "elden borç oluştur + sonradan plan ekle" aynı planı verir.
+ödemelerle eşleşir. Böylece "ödeme planlı oluştur" ile "diğer borç oluştur + sonradan plan ekle" aynı planı verir.
+
+Borcun koşulları (yalnız "borcum"; borç planı bunlara göre sıralar, app/debt_plan.py). Sütun boşsa eski davranış:
+  creditor_type  kime: kisi | vergi_sgk | banka | magaza ("Mağaza / senet") | diger (kurum). Planı olmayan borçta da
+                 durur; plan kaldırılınca silinmez.
+  pay_terms      ödeme koşulu: taksitli (= ödeme planı var) | parca (parça parça ödenebilir) | tek (tek seferde
+                 ödenecek) | bilinmiyor (parca gibi). Boşsa: planlıysa taksitli, değilse bilinmiyor.
+  due_strict     tarih türü: 1 kesin (tarihinde ödenmesi şart; gecikirse bedeli/yaptırımı var) | 0 söz (esnek). Boşsa:
+                 planlı borçta ve kurumda (vergi_sgk, banka, magaza, diger) kesin, kişide ve türü boş borçta söz.
 """
 import calendar
 from datetime import date
 
 from app import money
 
-CREDITORS = {"vergi_sgk": "Vergi / SGK", "banka": "Banka", "kisi": "Kişi", "diger": "Diğer"}
+CREDITORS = {"vergi_sgk": "Vergi / SGK", "banka": "Banka", "magaza": "Mağaza / senet", "kisi": "Kişi",
+             "diger": "Diğer"}
+KURUM = ("vergi_sgk", "banka", "magaza", "diger")  # kurum türleri: tarih varsayılanı kesin
+TERMS = {"taksitli": "Taksitli (ödeme planı)", "parca": "Parça parça ödenebilir", "tek": "Tek seferde ödenecek",
+         "bilinmiyor": "Bilmiyorum"}
 INTEREST = {"yok": "Faiz / gecikme zammı yok", "var": "Faiz ya da gecikme zammı var",
             "bilmiyorum": "Faiz / gecikme zammı bilinmiyor"}
 MAX_COUNT = 240  # en çok 20 yıl
@@ -25,6 +37,23 @@ AYLAR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağu
 
 def is_scheduled(d: dict) -> bool:
     return bool(d.get("plan_installment")) and bool(d.get("plan_count")) and bool(d.get("plan_start"))
+
+
+def terms_of(d: dict) -> str:
+    """Geçerli ödeme koşulu: planlıysa taksitli; değilse kayıtlı parca/tek; boş ya da bilinmiyor → bilinmiyor (plan
+    parça parça ödenebilir gibi davranır). Planı kaldırılmış "taksitli" kaydı bilinmiyor sayılır."""
+    if is_scheduled(d):
+        return "taksitli"
+    t = d.get("pay_terms")
+    return t if t in ("parca", "tek") else "bilinmiyor"
+
+
+def strict_of(d: dict) -> bool:
+    """Tarih kesin mi: kayıtlıysa o; boşsa planlı borçta ve kurumda kesin, kişide (ve türü boş eski kayıtta) söz."""
+    v = d.get("due_strict")
+    if v is not None:
+        return bool(v)
+    return is_scheduled(d) or d.get("creditor_type") in KURUM
 
 
 def paid_before(payments: list[dict], start_month: str | None) -> float:

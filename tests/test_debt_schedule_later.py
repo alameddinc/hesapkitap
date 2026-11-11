@@ -44,8 +44,10 @@ def test_add_plan_later_equals_creating_with_plan(client):
     da, db_ = _debt(client, a), _debt(client, b)
     for d in (da, db_):
         assert d["schedule"] is None and d["amount"] == 12000.0 and d["remaining"] == 12000.0
-        assert all(d[k] is None for k in ("plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type",
-                                          "plan_interest"))
+        assert all(d[k] is None for k in ("plan_installment", "plan_count", "plan_start", "plan_day", "plan_interest",
+                                          "pay_terms"))
+        # alacaklı türü borcun kendisinin: plan kalkınca da kalır (v4); ödeme koşulu boşalır, tarih türü kurumda kesin
+        assert d["creditor_type"] == "vergi_sgk" and d["terms"] == "bilinmiyor" and d["strict"] is True
 
 
 def test_payments_before_plan_kept_and_not_counted_as_installments(client):

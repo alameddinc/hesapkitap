@@ -88,7 +88,7 @@ def shift_text(text: str, days: int) -> str:
     return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if days else text
 
 
-TEMPLATE_VERSION = 6  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
+TEMPLATE_VERSION = 7  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
 #                      2: fiş kalemleri, alışveriş listesi, plan ve geçmiş alışveriş (app/demo_prices.py)
 #                      3: gerçek marka / banka / zincir adları yerine kurgu adlar (app/demo_names.py)
 #                      4: geçmiş 12 ayın ödenmiş faturaları (elektrik, doğalgaz, internet), 12 aylık gelir/gider

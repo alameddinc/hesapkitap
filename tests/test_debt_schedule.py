@@ -45,11 +45,11 @@ def test_same_person_debts_grouped_in_this_month_and_months(client):
     assert g["count"] == 3 and len(g["items"]) == 3 and g["payable"] is None
     assert g["amount"] == 2800.0 and g["full"] and g["text"] == "3 borç · hepsi bu ay kapanır"
     assert sum(i["amount"] for i in g["items"]) == g["amount"]
-    # faizi önle: kişi kişi orantılı; Nermin Teyze'nin payı tek satırda, borçlarına sırayla (önce bütün olarak kapanır)
+    # söz tarihine göre (eski "faizi önle" de): tarihsizler en eskiden, borç borç; orantılı ufalama yok
     f = dp.build(monthly=15000, order="faiz", today=TODAY)
     fg = [g for g in f["this_month"]["groups"] if g["title"] == "Nermin Teyze"]
-    assert len(fg) == 1 and fg[0]["amount"] == 1300.0 and fg[0]["count"] == 2
-    assert [i["amount"] for i in fg[0]["items"]] == [700.0, 600.0] and fg[0]["text"] == "2 borç · 1 tanesi bu ay kapanır"
+    assert len(fg) == 1 and fg[0]["amount"] == 1200.0 and fg[0]["count"] == 1 and fg[0]["full"]
+    assert next(g for g in f["this_month"]["groups"] if g["title"] == "Örnek Kişi")["amount"] == 13800.0
     # eski istemciler için borç borç satırlar kalır
     assert len([i for i in p["this_month"]["items"] if i["title"] == "Nermin Teyze"]) == 3
     m0 = p["months"][0]
@@ -107,7 +107,7 @@ def test_rules_info_explains_rounding():
     from app import debt_plan as dp
 
     t = dp.RULES_INFO
-    assert "₺50" in t and "₺250" in t and "küçük borçlar" in t and "taksit" in t
+    assert "₺50" in t and "₺250" in t and "küçük borçlar" in t and "taksit" in t and "kesin" in t and "birikim" in t
     assert not _banned_in(t) and not _restructure_in(t)
 
 

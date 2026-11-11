@@ -92,7 +92,7 @@ TYPES = {
     "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
-    "borc": ("Borç ödeme günü", True),  # elden borçta söz verilen gün ve ödeme planlı borcun taksit günü (2 gün kala ve o gün)
+    "borc": ("Borç ödeme günü", True),  # borçta söz verilen ya da kesin gün ve ödeme planlı borcun taksit günü (2 gün kala ve o gün)
     "duyuru": ("Duyurular ve yeni sürümler", True),  # yöneticinin duyurusu (app/announce.py)
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
@@ -704,8 +704,8 @@ def _fatura(today: date) -> list[dict]:
 
 
 def _borc(today: date) -> list[dict]:
-    """Elden borçta (Borç / Alacak "borcum", TL) söz verilen ödeme günü: 2 gün kala ve o gün. Borç / Alacak ortak
-    defterde üyeye kapalıysa yok. Dokununca Borç planı."""
+    """Borçta (Borç / Alacak "borcum") söz verilen ya da kesin ödeme günü ve ödeme planındaki her taksit: 2 gün kala ve
+    o gün. Borç / Alacak ortak defterde üyeye kapalıysa yok. Dokununca Borç planı."""
     from app import debt_plan, money
 
     if debt_plan._hidden_people():
@@ -735,8 +735,9 @@ def _borc(today: date) -> list[dict]:
             continue
         amt = money.tl(d["remaining"], trim=True) if d["asset"] == "TRY" else f"{d['remaining']:g} {d['asset']}"
         when = "bugün" if left == 0 else "2 gün sonra"
+        what = "ödeme günü" if d.get("strict") else "söz verdiğin ödeme günü"  # kesin tarih: vade
         out.append(item("borc", f"borc:{d['id']}:{d['due_date']}:{'songun' if left == 0 else '2gun'}",
-                        f"{d['person']}: söz verdiğin ödeme günü {when}",
+                        f"{d['person']}: {what} {when}",
                         f"Kalan {amt}. Ödediysen Borç planında işaretle.", R_BORC_PLANI))
     return out
 

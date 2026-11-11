@@ -549,8 +549,11 @@ MIGRATIONS = [
     ("debts", "plan_count", "INTEGER"),         # taksit sayısı
     ("debts", "plan_start", "TEXT"),            # ilk taksit ayı (YYYY-MM)
     ("debts", "plan_day", "INTEGER"),           # ayın kaçında (ay kısaysa son günü)
-    ("debts", "creditor_type", "TEXT"),         # vergi_sgk | banka | kisi | diger
+    ("debts", "creditor_type", "TEXT"),         # vergi_sgk | banka | magaza | kisi | diger (planı olmayan borçta da)
     ("debts", "plan_interest", "TEXT"),         # bilgi: yok | var | bilmiyorum
+    # borcun koşulları (yalnız "borcum"; boşsa eski davranış; app/debt_schedule.py terms_of / strict_of)
+    ("debts", "pay_terms", "TEXT"),             # taksitli | parca | tek | bilinmiyor
+    ("debts", "due_strict", "INTEGER"),         # 1 kesin (tarihinde ödenmesi şart) | 0 söz (esnek)
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -3368,7 +3371,8 @@ def _shift_days(d: str, n: int) -> str:
 # ---------------------------------------------------------------- borç / alacak
 
 DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note", "account_id",
-               "plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type", "plan_interest")
+               "plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type", "plan_interest",
+               "pay_terms", "due_strict")
 
 
 def list_debts(open_only: bool = False) -> list[dict]:
@@ -3389,6 +3393,17 @@ def list_debts(open_only: bool = False) -> list[dict]:
             d["schedule"] = debt_schedule.info(d, today)
         else:
             d["schedule"] = None
+        # borcun koşulları (yetenek debt_terms): kayıtlı sütunlar (pay_terms, due_strict; boş olabilir) + geçerli
+        # değerler (terms, strict) ve etiketler; alacakta null
+        d["due_strict"] = None if d.get("due_strict") is None else bool(d["due_strict"])
+        if d["direction"] == "borc":
+            d["terms"] = debt_schedule.terms_of(d)
+            d["terms_label"] = debt_schedule.TERMS[d["terms"]]
+            d["strict"] = debt_schedule.strict_of(d)
+            d["creditor_label"] = debt_schedule.CREDITORS.get(d.get("creditor_type") or "") if d.get("creditor_type") \
+                else None
+        else:
+            d["terms"] = d["terms_label"] = d["strict"] = d["creditor_label"] = None
     return out
 
 
