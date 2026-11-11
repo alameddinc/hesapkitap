@@ -378,7 +378,8 @@ def require(u: dict | None, feature: str) -> None:
 
 
 # önekle yakalanamayan (yolun ortasında değişken olan) kilitli uçlar: (yöntem, tam yol deseni, özellik)
-GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_rapor")]  # kartı kişiye bağla
+GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_rapor"),  # kartı kişiye bağla
+            ("POST", re.compile(r"/api/debts/\d+/jar"), "kumbara")]  # borç planı birikimi için yeni kumbara
 
 
 def gate_for(path: str, method: str = "GET") -> str | None:

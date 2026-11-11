@@ -1,4 +1,5 @@
 import type { Payable } from "../api";
+import type { DebtJarFlags, PlanJar, PlanJarRow } from "./borcKumbara";
 
 /** GET /api/debt-plan (yetenek debt_plan; sunucu app/debt_plan.py). Bütün rakamlar ve metinler sunucudan: mobil
  *  screens/BorcPlani.tsx aynı alanları aynı sözlerle gösterir. monthly/order verilirse önizleme; PUT kaydeder. */
@@ -54,6 +55,8 @@ export interface PlanDebt {
   qty_text?: string; tl_text?: string; approx_note?: string;
   /** kind "fixed", faiz "var": erken kapatma (yetenek debt_payoff; eski sunucuda yok) */
   payoff?: PlanPayoff | null;
+  /** borç planı birikimi kumbarada (yetenek debt_jar; eski sunucuda yok): offer · locked · linked */
+  jar?: PlanJar | null;
 }
 export interface PlanLate {
   kind: "kesin" | "soz"; date: string; label: string; head: string; open: number; overdue: boolean;
@@ -73,7 +76,7 @@ export interface PlanCommitment {
   debt_free: { month: string; label: string } | null; month_no: number; month_count: number; expected: number; paid: number;
   this_target: number; text: string; differs: boolean;
   /** tek seferde ödenecek borçta geçmiş ayların birikimi: ödenene kadar "biriktirildi" (eski sunucuda yok) */
-  saved?: { ident: string; title: string; amount: number; text: string }[];
+  saved?: { ident: string; title: string; amount: number; text: string; /** kumbaradaki gerçek bakiye (debt_jar) */ jar_id?: number }[];
   status: { key: "ok" | "behind" | "ahead" | "done"; title: string; text: string; need?: number };
   changed: { title: string; reasons: { key: string; text: string }[]; text: string; action: string; confirm: string } | null;
   continue: { action: string; confirm: string };
@@ -89,7 +92,7 @@ export interface PlanMonth { month: string; label: string; total: number; intere
   fixed_due?: number; fixed_short?: number;
   /** ay sonunda birikimde duran (tek seferde ödenecek borçlar için; eski sunucuda yok) */
   saved?: number }
-export interface PlanItem { key: string; kind: PlanKind; title: string; amount: number; full: boolean; done: boolean;
+export interface PlanItem extends PlanJarRow { key: string; kind: PlanKind; title: string; amount: number; full: boolean; done: boolean;
   due_label: string | null; text: string; payable: Payable;
   /** aynı kişinin borçlarını ayırt eden kısa ad: not ya da "3 Mart 2026 borcu" (eski sunucuda yok) */
   sub?: string | null;
@@ -98,7 +101,7 @@ export interface PlanItem { key: string; kind: PlanKind; title: string; amount: 
   /** erken kapatma satırı (payable yok): birikim ya da kapatma; kapatmada "Kapattım" (close_early) */
   payoff?: boolean; close_early?: PlanCloseEarly }
 /** "Bu ay ödenecekler" kişi kişi: count > 1 ise açılınca borç borç (items), payable yalnız tek borçta */
-export interface PlanGroup { key: string; kind: PlanKind; title: string; count: number; amount: number; done: boolean; full: boolean;
+export interface PlanGroup extends PlanJarRow { key: string; kind: PlanKind; title: string; count: number; amount: number; done: boolean; full: boolean;
   text: string; due_label: string | null; items: PlanItem[]; payable: Payable | null;
   saving?: boolean; units_text?: string; from_saved?: number; pay_total?: number; payoff?: boolean; close_early?: PlanCloseEarly }
 export interface DebtPlanData {
@@ -131,6 +134,8 @@ export interface DebtPlanData {
   pace?: { months: number; text: string } | null;
   stuck: { title: string; text: string } | null; excluded: { key: string; title: string; text: string }[];
   hidden: { fees: boolean; people: boolean }; can_edit: boolean; summary_card: { eligible: boolean };
+  /** borç planı ↔ kumbara düğmeleri (yetenek debt_jar; eski sunucuda yok) */
+  debt_jar?: DebtJarFlags;
   empty: { title: string; text: string } | null;
 }
 

@@ -471,6 +471,10 @@ MIGRATIONS = [
     ("jar_moves", "cost", "REAL"),                             # birimli kumbara: ödenen TL
     ("jar_moves", "asset_id", "INTEGER"),                      # birimli kumbara: eklenen varlık (Altın ve döviz)
     ("jar_moves", "created_by", "INTEGER"),                    # ortak kumbara: kim koydu / çekti
+    ("jars", "debt_id", "INTEGER"),                            # borca bağlı kumbara (borç planı birikimi; yetenek debt_jar)
+    ("jars", "debt_title", "TEXT"),                            # bağlı borcun adı (borç silinse de etiket kalır)
+    ("jars", "closed_payment_id", "INTEGER"),                  # "Kumbaradan öde" bu ödemeyle kapattı (geri alınca açılır)
+    ("jar_moves", "debt_payment_id", "INTEGER"),               # kumbaradan borç ödemesi (geri alınınca hareket de silinir)
     ("jar_moves", "entry_id", "INTEGER"),                      # birimli kumbara: ödemenin gider kaydı  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
@@ -3436,6 +3440,11 @@ def update_debt(debt_id: int, data: dict) -> bool:
 def delete_debt(debt_id: int) -> bool:
     with connect() as c:  # bağlı hareketler yeniden normal gelir/gider olur
         c.execute("UPDATE entries SET debt_id = NULL WHERE debt_id = ?", (debt_id,))
+        # borca bağlı kumbara silinmez: bağ kopar, ad kalır ("Borç silindi" önerisi); kumbaradan yapılan ödemenin
+        # çekim hareketi geçmişte kalır (para kumbaradan çıktı)
+        c.execute("UPDATE jars SET debt_id = NULL WHERE debt_id = ?", (debt_id,))
+        c.execute("UPDATE jar_moves SET debt_payment_id = NULL WHERE debt_payment_id IN "
+                  "(SELECT id FROM debt_payments WHERE debt_id = ?)", (debt_id,))
         c.execute("DELETE FROM splits WHERE debt_id = ?", (debt_id,))  # ortak harcama payı: ana harcamaya geri döner
         c.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
         return c.execute("DELETE FROM debts WHERE id = ?", (debt_id,)).rowcount > 0
@@ -3509,9 +3518,13 @@ def unpay_debt(debt_id: int) -> None:
     with connect() as c:
         c.execute("UPDATE entries SET debt_id = NULL WHERE id IN (SELECT entry_id FROM debt_payments WHERE debt_id = ?)",
                   (debt_id,))
+        jars: list[int] = []
+        for (pid,) in c.execute("SELECT id FROM debt_payments WHERE debt_id = ?", (debt_id,)).fetchall():
+            jars += _undo_jar_payment(c, pid)  # kumbaradan yapılan ödeme: çekim hareketi de geri gelir
         c.execute("DELETE FROM debt_payments WHERE debt_id = ?", (debt_id,))
         c.execute("UPDATE debts SET written_off_at = NULL WHERE id = ?", (debt_id,))
         _recalc_debt(c, debt_id)
+        _sync_debt_jar_goal(c, jars, debt_id)
 
 
 def delete_debt_payment(payment_id: int) -> int | None:
@@ -3523,10 +3536,12 @@ def delete_debt_payment(payment_id: int) -> int | None:
         if not p:
             return None
         c.execute("DELETE FROM debt_payments WHERE id = ?", (payment_id,))
+        jars = _undo_jar_payment(c, payment_id)
         if p["entry_id"] and not c.execute("SELECT 1 FROM debt_payments WHERE debt_id = ? AND entry_id = ?",
                                            (p["debt_id"], p["entry_id"])).fetchone():
             c.execute("UPDATE entries SET debt_id = NULL WHERE id = ? AND debt_id = ?", (p["entry_id"], p["debt_id"]))
         _recalc_debt(c, p["debt_id"])
+        _sync_debt_jar_goal(c, jars, p["debt_id"])
         return p["debt_id"]
 
 
@@ -3536,6 +3551,141 @@ def write_off_debt(debt_id: int, on: str) -> None:
         if not c.execute("UPDATE debts SET written_off_at = ? WHERE id = ?", (on, debt_id)).rowcount:
             raise KeyError(debt_id)
         _recalc_debt(c, debt_id)
+
+
+# ---------------------------------------------------------------- borca bağlı kumbara (yetenek debt_jar)
+# Borç planındaki birikim (tek seferde ödenecek borç ya da faizli kredinin erken kapatılması) bir kumbarada tutulur:
+# jars.debt_id. Bir borca en çok bir açık kumbara. Plan bu kumbaranın GERÇEK bakiyesini birikim sayar (app/debt_plan.py).
+# "Kumbaradan öde": borç ödemesi + kumbaradan çekim (jar_moves.debt_payment_id); ödeme geri alınınca çekim de silinir,
+# kumbarayı bu ödeme kapattıysa yeniden açılır. Borç silinirse kumbara kalır (bağ kopar, ad kalır).
+
+class DebtJarExists(ValueError):
+    """Bu borcun zaten açık bir kumbarası var."""
+
+
+def debt_jar_rows(open_only: bool = True) -> list[dict]:
+    """Borca bağlı TL kumbaraları (hareketler ve bakiye ile; list_jars satırı)."""
+    return [j for j in list_jars(include_closed=not open_only)
+            if j.get("debt_id") and (j.get("unit") or "TRY") == "TRY"]
+
+
+def create_debt_jar(debt_id: int, name: str, goal: float | None, deadline: str | None, monthly: float | None,
+                    account_id: int | None = None) -> int:
+    """Borca bağlı kumbara aç (otomatik ayırma yok: ayırma plandaki "Kumbaraya ayır"la, tek dokunuşla)."""
+    with connect() as c:
+        d = c.execute("SELECT person, direction, settled_at, written_off_at FROM debts WHERE id = ?", (debt_id,)).fetchone()
+        if not d:
+            raise LookupError("Borç bulunamadı")
+        if d["direction"] != "borc" or d["settled_at"] or d["written_off_at"]:
+            raise ValueError("Bu borç kapanmış; kumbara açılamaz")
+        if c.execute("SELECT 1 FROM jars WHERE debt_id = ? AND closed_at IS NULL", (debt_id,)).fetchone():
+            raise DebtJarExists("Bu borcun zaten bir kumbarası var")
+        return c.execute("INSERT INTO jars (name, goal, deadline, account_id, monthly, unit, debt_id, debt_title) "
+                         "VALUES (?, ?, ?, ?, ?, 'TRY', ?, ?)",
+                         (name.strip()[:60], goal, deadline, account_id, monthly, debt_id, d["person"])).lastrowid
+
+
+def unlink_jar_debt(jid: int) -> bool:
+    """"Başka hedefe çevir": kumbaranın borçla bağı kalkar (plan eski davranışa döner); bakiye ve hareketler kalır."""
+    with connect() as c:
+        return c.execute("UPDATE jars SET debt_id = NULL, debt_title = NULL WHERE id = ?", (jid,)).rowcount > 0
+
+
+def reopen_conflict(jid: int) -> bool:
+    """Kapalı borç kumbarası yeniden açılırsa aynı borcun iki açık kumbarası olur mu?"""
+    with connect() as c:
+        j = c.execute("SELECT debt_id FROM jars WHERE id = ?", (jid,)).fetchone()
+        return bool(j and j["debt_id"] and c.execute(
+            "SELECT 1 FROM jars WHERE debt_id = ? AND closed_at IS NULL AND id <> ?", (j["debt_id"], jid)).fetchone())
+
+
+def _undo_jar_payment(c, payment_id: int) -> list[int]:
+    """Kumbaradan yapılan borç ödemesi geri alındı: çekim hareketi silinir, kumbarayı bu ödeme kapattıysa açılır.
+    Dönüş: etkilenen kumbaralar."""
+    jids = [r["jar_id"] for r in c.execute("SELECT jar_id FROM jar_moves WHERE debt_payment_id = ?", (payment_id,))]
+    c.execute("DELETE FROM jar_moves WHERE debt_payment_id = ?", (payment_id,))
+    for r in c.execute("SELECT id FROM jars WHERE closed_payment_id = ?", (payment_id,)).fetchall():
+        c.execute("UPDATE jars SET closed_at = NULL, closed_payment_id = NULL WHERE id = ?", (r["id"],))
+        jids.append(r["id"])
+    return list(dict.fromkeys(jids))
+
+
+def _sync_debt_jar_goal(c, jids: list[int], debt_id: int) -> None:
+    """Kısmi ödeme geri alınınca kumbaranın hedefi yeniden borcun kalanı (yalnız ödeme planı olmayan, açık TL borçta)."""
+    if not jids:
+        return
+    d = c.execute("SELECT amount, paid_amount, plan_installment, settled_at FROM debts WHERE id = ?", (debt_id,)).fetchone()
+    if not d or d["plan_installment"] or d["settled_at"]:
+        return
+    left = money.money(d["amount"] - (d["paid_amount"] or 0))
+    if left > 0:
+        c.execute(f"UPDATE jars SET goal = ? WHERE debt_id = ? AND id IN ({', '.join('?' * len(jids))})",
+                  (left, debt_id, *jids))
+
+
+def pay_debt_from_jar(jid: int, amount: float | None, on: str, account_id: int | None = None,
+                      account_given: bool = False) -> dict:
+    """"Kumbaradan öde": bağlı borca ödeme + kumbaradan çekim. Ödeme planlı borçta (faizli kredi) erken kapatmadır:
+    tutar bankaya ödenen kapatma tutarı (zorunlu), borç bu ödemeyle kapanır (close_debt_early). Diğer borçta tutar boşsa
+    kumbaradaki kadar (en çok kalan borç): azsa kısmi ödeme (kumbara boşalır, açık kalır, hedefi kalan borç olur).
+    Kumbarada artan kalırsa kumbara açık kalır (ne yapılacağı sorulur); boşalınca kapanır.
+    Hesap: verilmezse kumbaranın hesabı (para oradan çıkar; harcanabilir tutar tutarlı kalır).
+    Dönüş: {payment_id, move_id, paid, from_jar, leftover, jar_closed, debt_closed, debt_left, close_early}."""
+    with connect() as c:
+        j = c.execute("SELECT * FROM jars WHERE id = ?", (jid,)).fetchone()
+        if not j:
+            raise LookupError("Kumbara yok")
+        if j["closed_at"]:
+            raise ValueError("Kumbara kapalı; önce yeniden aç")
+        if (j["unit"] or "TRY") != "TRY":
+            raise ValueError("Bu bir altın/döviz kumbarası; borç ödemesi TL kumbarasından yapılır")
+        if not j["debt_id"]:
+            raise ValueError("Bu kumbara bir borca bağlı değil")
+        d = c.execute("SELECT * FROM debts WHERE id = ?", (j["debt_id"],)).fetchone()
+        if not d:
+            raise LookupError("Borç bulunamadı")
+        if d["settled_at"] or d["written_off_at"] or d["direction"] != "borc":
+            raise ValueError("Bu borç kapanmış")
+        if (d["asset"] or "TRY") != "TRY":
+            raise ValueError("Kumbaradan yalnız TL borç ödenir")
+        bal = money.money(c.execute("SELECT COALESCE(SUM(amount), 0) FROM jar_moves WHERE jar_id = ?", (jid,)).fetchone()[0])
+        paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (d["id"],)).fetchone()[0]
+    if bal <= 0:
+        raise ValueError("Kumbarada para yok")
+    early = bool(d["plan_installment"])
+    left = money.money(d["amount"] - paid)
+    if early:
+        if amount is None:
+            raise ValueError("Kapatırken bankaya ödediğin tutarı yaz")
+        pay = money.money(amount)
+    else:
+        pay = money.money(amount if amount is not None else min(bal, left))
+    take = money.money(min(bal, pay))
+    acc = account_id if account_given else j["account_id"]
+    pid = pay_debt(d["id"], pay, on, account_id=acc)
+    try:
+        if early:
+            close_debt_early(d["id"])
+        with connect() as c:
+            u = current_user()
+            mid = c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, created_by, debt_payment_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?)", (jid, on, -take, "Borç ödemesi", u.get("id") if u else None,
+                                                          pid)).lastrowid
+            leftover = money.money(bal - take)
+            r = c.execute("SELECT amount, paid_amount, settled_at FROM debts WHERE id = ?", (d["id"],)).fetchone()
+            debt_left = money.money(max(0.0, r["amount"] - (r["paid_amount"] or 0)))
+            closed = False
+            if not r["settled_at"] and debt_left > 0:
+                # kısmi: kumbara boşalır ama açık kalır (kalan için ayırmaya devam), hedefi kalan borç
+                c.execute("UPDATE jars SET goal = ? WHERE id = ?", (debt_left, jid))
+            elif money.is_zero(leftover):
+                closed = True
+                c.execute("UPDATE jars SET closed_at = ?, closed_payment_id = ? WHERE id = ?", (on, pid, jid))
+    except Exception:
+        delete_debt_payment(pid)
+        raise
+    return {"payment_id": pid, "move_id": mid, "paid": pay, "from_jar": take, "leftover": leftover,
+            "jar_closed": closed, "debt_closed": bool(r["settled_at"]), "debt_left": debt_left, "close_early": early}
 
 
 def debt_payments(debt_id: int | None = None) -> list[dict]:

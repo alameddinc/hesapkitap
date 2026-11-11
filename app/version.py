@@ -347,6 +347,18 @@ CAPABILITIES = (
                               # from_saved/pay_total/interest_saved); kapatma satırında close_early {debt_id, amount,
                               # label, confirm} → POST /api/debts/{id}/pay {amount, paid_at, close_early: true} (borç
                               # ödenen toplamla kapanır); totals.payoff_saving
+    "debt_jar",               # borç planı birikimi kumbarada (Premium "kumbara"; plan ücretsiz): POST /api/debts/{id}/jar
+                              # {name?, goal?, deadline?, monthly?, account_id?} → {id, jar} (402 kumbara, 409 açık kumbarası
+                              # var, 422 uygun değil); GET /api/debt-plan debts[].jar {state offer|locked|linked, ...; linked:
+                              # id, balance, goal, pct, text, can_move, pay {label, jar_id, debt_id, amount, from_jar,
+                              # close_early, partial, leftover, text, confirm} | null}, this_month.items[] jar_id, jar_action
+                              # {label, jar_id, amount, note} (POST /api/jars/{id}/moves), jar_pay; debt_jar {available,
+                              # premium, can_open, can_move, can_pay, lock, saved_this_month}; commitment.saved[].jar_id.
+                              # POST /api/jars/{id}/pay-debt {amount?, paid_at, account_id?} → {payment_id, move_id, paid,
+                              # from_jar, leftover, jar_closed, debt_closed, debt_left, close_early, message, ask | null}
+                              # (Geri al: DELETE /api/debt-payments/{payment_id}: kumbara hareketi de geri gelir).
+                              # GET /api/jars [].debt {id, title, state acik|kapandi|silindi, label, remaining?, suggestion?}
+                              # | null; PATCH /api/jars/{id} {unlink_debt: true} ("başka hedefe çevir")
 )
 
 

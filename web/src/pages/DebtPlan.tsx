@@ -12,6 +12,8 @@ import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
 import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind, type PlanDebt, type PlanLate, type PlanPayoff, type PlanCloseEarly } from "../lib/debtPlan";
 import { DebtForm } from "../components/Debts";
+import { JarBox, JarRowButton } from "../components/DebtJar";
+import { jarBox, jarButton } from "../lib/borcKumbara";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
 const trimTl = (x: number) => tl(x).replace(/,00(?=\D*$)/, "");
@@ -28,6 +30,7 @@ export default function DebtPlan() {
   const ui = useUI();
   const qc = useQueryClient();
   const on = useCap("debt_plan");
+  const jarCap = useCap("debt_jar"); // eski sunucu: kumbara düğmeleri yok
   const book = useBook().data;
   // önizleme: kullanıcı tutarı / sıralamayı değiştirdi (sorgu bu değerlerle; sunucu kaydetmez, kayıt ayrıca PUT)
   const [draft, setDraft] = useState<{ monthly?: number | null; order?: DebtOrder }>({});
@@ -340,6 +343,7 @@ export default function DebtPlan() {
               {(p.this_month.groups ?? asGroups(p.this_month.items)).map((g) => {
                 const many = g.count > 1;
                 const open = openGroup === g.key;
+                const jb = many ? null : jarButton(g, p.debt_jar, jarCap);
                 return (
                   <li key={`${g.key}-${g.done ? "d" : "p"}`} data-testid="bu-ay">
                     <div className="flex items-center gap-3 p-3">
@@ -360,10 +364,11 @@ export default function DebtPlan() {
                       )}
                       {/* dar ekranda tutar ve düğme alt alta: ad ve açıklama sıkışmasın */}
                       <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
-                        <span className="font-semibold tabular-nums">{tl(g.amount)}</span>
-                        {!g.done && !g.saving && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
+                        <span className="font-semibold tabular-nums">{tl(g.pay_total ?? g.amount)}</span>
+                        {jb && <JarRowButton kind={jb} action={g.jar_action} pay={g.jar_pay} title={g.title} />}
+                        {jb !== "ode" && !g.done && !g.saving && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
                           aria-label={`${g.title}: ödedim`}>Ödedim</button>}
-                        {!g.done && p.can_edit && g.close_early && <button className="btn-ghost px-2 py-1 text-sm" disabled={closeEarly.isPending}
+                        {jb !== "ode" && !g.done && p.can_edit && g.close_early && <button className="btn-ghost px-2 py-1 text-sm" disabled={closeEarly.isPending}
                           onClick={() => void askCloseEarly(g.close_early!)} aria-label={`${g.title}: ${g.close_early.label}`} data-testid="kapattim">{g.close_early.label}</button>}
                       </span>
                     </div>
@@ -374,8 +379,9 @@ export default function DebtPlan() {
                             <span className="min-w-0 flex-1">
                               <span className="block break-words">{i.sub ? maskText(i.sub) : `${n + 1}. borç`}</span>
                               <span className="block text-xs text-stone-500">{maskText(i.text)}</span></span>
-                            <span className="tabular-nums">{tl(i.amount)}</span>
-                            {!i.done && !i.saving && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
+                            <span className="tabular-nums">{tl(i.pay_total ?? i.amount)}</span>
+                            {(() => { const b = jarButton(i, p.debt_jar, jarCap); return b && <JarRowButton kind={b} action={i.jar_action} pay={i.jar_pay} title={i.title} small />; })()}
+                            {jarButton(i, p.debt_jar, jarCap) !== "ode" && !i.done && !i.saving && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
                               aria-label={`${i.title} ${n + 1}. borç: ödedim`}>Ödedim</button>}
                           </li>
                         ))}
@@ -431,6 +437,7 @@ export default function DebtPlan() {
                   Sıradaki: {d.schedule.next.no}. taksit · {maskText(trimTl(d.schedule.next.left))} · {d.due_label}
                   {d.schedule.interest_label ? ` · ${d.schedule.interest_label}` : ""}</p>}
                 {d.payoff && <Payoff p={d.payoff} />}
+                {jarBox(d.jar, jarCap) && <JarBox jar={d.jar!} debtId={d.id} title={d.title} />}
               </li>
             ))}
           </ul>
