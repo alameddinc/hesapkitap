@@ -13,7 +13,7 @@ Ritim (sistem veritabanı "sadaka:<kullanıcı id>"; kişinin bütün defterleri
 - kapali ("Hatırlatma"): Özet'te kart yok, bildirim yok.
 (Gün API'de değişebilir: day 0–6, varsayılan 4 Cuma; arayüz yalnız Cuma'yı sunar.)
 Seçim yapılmamışsa düzenli hatırlatma YOK (kapalı sayılır):
-- Özelliği açık gördüğü ilk Cuma (o hafta kaydı yoksa) "Hayırlı Cumalar · Bu hafta sadaka verdiysen not edelim mi?";
+- 1.0.7+ telefonu olan ve özelliği açık gördüğü ilk Cuma (o hafta kaydı yoksa) "Hayırlı Cumalar · Bu hafta sadaka verdiysen not edelim mi?";
   dokununca sadaka formu. Kayıttan sonra formda "Her Cuma hatırlatalım mı?" (Her Cuma / Ayda bir / Hatırlatma).
 - Dokunmaz ya da kayıt yapmazsa (ilk sorudan beri kaydı yok) sonraki ayın ilk Cuması bir kez daha (OFFER_MAX = 2); sonra
   susar.
@@ -293,8 +293,9 @@ def texts(rhythm: str, day: int, last: date | None, in_period: bool, today: date
 
 
 def push_text(rhythm: str, day: int, streak_line: str | None) -> tuple[str, str]:
-    """Hatırlatma (dönemde kayıt yokken): Cuma'ya düşen bildirimin başlığı "Hayırlı Cumalar"."""
-    title = GREETING if day == FRIDAY else "Sadaka hatırlatması"
+    """Hatırlatma (dönemde kayıt yokken): haftalık Cuma bildiriminin başlığı "Hayırlı Cumalar"; aylıkta (sahibin kararı,
+    11.11) "Sadaka hatırlatması"."""
+    title = GREETING if rhythm == "haftalik" and day == FRIDAY else "Sadaka hatırlatması"
     if rhythm == "haftalik":
         return title, f"{streak_line} · bu haftakini not edelim mi?" if streak_line else OFFER_BODY
     return title, "Bu ay sadaka verdiysen not edelim mi?"
@@ -355,6 +356,28 @@ def offer_due(st: dict, ds: list[date], today: date) -> int | None:
     return st["offers"] + 1
 
 
+OFFER_MIN_APP = (1, 0, 7)  # kayıttan sonraki ritim sorusu bu sürümde; eski sürümde dokununca yalnız Zekât sayfası açılır
+
+
+def _ver(v: str | None) -> tuple[int, ...]:
+    """Cihaz kaydındaki sürüm ("1.0.7 (39)", "1.0.7") → (1, 0, 7); okunamazsa ()."""
+    head = (v or "").split(" ")[0]
+    try:
+        return tuple(int(x) for x in head.split("."))
+    except ValueError:
+        return ()
+
+
+def _has_new_app(uid: int | None) -> bool:
+    """İlk "Hayırlı Cumalar" (seçim) bildirimi yalnız OFFER_MIN_APP ve sonrası bir telefonu olan kişiye (sahibin kararı,
+    11.11): eski sürümde akış eksik. Sayaç gönderilmeyince artmaz; kişi güncelleyince ilk Cuma başlar."""
+    from app import push
+
+    if uid is None:
+        return False
+    return any(_ver(d.get("app_version")) >= OFFER_MIN_APP for d in push.devices(uid))
+
+
 def push_items(today: date) -> list[dict]:
     """Günlük işin "sadaka" bildirimi (bağlam: kişinin defteri). Çağıran (push.collect) yalnız tür açıkken ve cihazı
     olan kişi için çağırır: seçimsiz bildirimin sayacı burada artar. Kimlik: seçimsizde "sadaka:cuma:<n>", hatırlatmada
@@ -366,7 +389,7 @@ def push_items(today: date) -> list[dict]:
     uid = _uid()
     st = _state(uid)
     ds = dates(today)
-    n = offer_due(st, ds, today)
+    n = offer_due(st, ds, today) if _has_new_app(uid) else None
     if n:
         st.update({"offers": n, "last_offer": today.isoformat()})
         _save(uid, st)

@@ -4,6 +4,8 @@ ritim (Her Cuma / Ayda bir / Hatırlatma), Cuma'dan Cuma'ya hafta, süreklilik, 
 Sadaka" giderleri; zekât sayılmaz), sessiz saat, tekrar yok, rıza / özellik kapalı, ortak defter (kişi başı, gizli sayfa),
 gelire oranı (faiz geliri hariç, gelirsiz ay, eşik, özet cümlesi, ortak defter). Kişiler ve tutarlar uydurma."""
 import json
+
+import pytest
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -38,6 +40,35 @@ def _card_txn(db, day: str, desc: str = "ORNEK DERNEK BAGIS", card="5400******96
 
 
 # ---------------------------------------------------------------- seçim yokken
+
+@pytest.fixture(autouse=True)
+def _new_app(monkeypatch, request):
+    """İlk Cuma bildirimi yalnız 1.0.7+ telefonu olana: sürüm süzgecini sınayan test dışında hepsi yeni sürüm varsayar."""
+    from app import sadaka_reminder as sr
+
+    if request.node.name != "test_offer_only_to_new_app_version":
+        monkeypatch.setattr(sr, "_has_new_app", lambda uid: True)
+
+
+def test_offer_only_to_new_app_version(client, monkeypatch):
+    from app import push
+    from app import sadaka_reminder as sr
+
+    assert sr._ver("1.0.7 (39)") == (1, 0, 7) and sr._ver("1.0.10") > sr._ver("1.0.7") and sr._ver("") == ()
+    devs = [{"app_version": "1.0.6 (38)"}]
+    monkeypatch.setattr(push, "devices", lambda uid: devs)
+    monkeypatch.setattr(sr, "_uid", lambda: 7)
+    assert sr.push_items(FRI) == [] and sr._state(7)["offers"] == 0  # eski sürüm: gönderilmez, sayaç artmaz
+    devs.append({"app_version": "1.0.7 (39)"})
+    [it] = sr.push_items(FRI)
+    assert it["id"] == "sadaka:cuma:1"
+
+
+def test_monthly_title_is_plain(client):
+    from app import sadaka_reminder as sr
+
+    assert sr.push_text("aylik", sr.FRIDAY, None)[0] == "Sadaka hatırlatması"
+    assert sr.push_text("haftalik", sr.FRIDAY, None)[0] == "Hayırlı Cumalar"
 
 def test_unchosen_is_off_and_asks_after_save(client):
     from app import sadaka_reminder as sr
@@ -259,7 +290,7 @@ def test_push_only_on_reminder_day_and_once_per_period(client, keys):  # noqa: F
     assert sr.push_items(date(2026, 11, 5)) == []   # Perşembe
     assert sr.push_items(FRI) == []                 # ikinci Cuma
     [it] = sr.push_items(FIRST_FRI)
-    assert it["id"] == "sadaka:a:2026-11" and it["title"] == "Hayırlı Cumalar"
+    assert it["id"] == "sadaka:a:2026-11" and it["title"] == "Sadaka hatırlatması"  # aylıkta selam yok (11.11)
     sr.set_pref("haftalik")
     assert sr.push_items(date(2026, 11, 12)) == []  # Perşembe
     [it] = sr.push_items(FRI)
