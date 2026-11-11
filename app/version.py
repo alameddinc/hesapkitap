@@ -313,6 +313,12 @@ CAPABILITIES = (
                               # ve ücret ₺X" kartı; total = totals.fees = Faiz sayfasının o ayı (finance.interest_paid);
                               # last_period {month, name, label, total, interest, tax, fee, count, statements, state} |
                               # null: ekstre_yok iken son ekstreli dönem ("Ekim döneminde …")
+    "summary_interest_latest",  # GET /api/summary interest_latest {total, interest, tax, fee, count, by_type, state
+                              # var|yok, statement_count, statements [{id, bank, last4, period_end, total}], source
+                              # ("Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri" | "3 ekstre")} | null (faiz gizli ya da
+                              # kart ekstresi yok): Özet "Son ekstrelerinde faiz ve ücret ₺X" (first_look.latest_fees)
+    "payables_this_period",   # GET /api/payables?totals=1 totals.this_period {month, end, total, count, overdue,
+                              # overdue_count, next_due, estimated}: Özet "Bu ay ödenecek ₺X" (dönem sonuna kadar)
     "first_look",             # İlk gün özeti: POST /api/statements/upload kaydedilen ekstrede statement_id; GET
                               # /api/first-look?ids=1,2 → {first (ilk hafta), statement_count, statements, to_pay {total,
                               # items [{statement_id, card, amount, due_date, days_left, status}], note}, past_due, fees

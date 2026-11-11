@@ -79,6 +79,56 @@ def _fees(sids: set[int]) -> dict | None:
                                for k, v in by_type.items()), key=lambda x: -x["total"])}
 
 
+AY_KISA = ("Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara")
+STALE_DAYS = 45  # kart başına son ekstre, en yeni kesimden bu kadar gün eskiyse sayılmaz (kullanılmayan kart)
+MAX_NAMED = 2  # alt metinde en çok bu kadar ekstre adıyla; fazlası "3 ekstre"
+
+
+def _short_day(iso: str) -> str:
+    d = date.fromisoformat(str(iso)[:10])
+    return f"{d.day} {AY_KISA[d.month - 1]}"
+
+
+def latest_fees(today: date | None = None) -> dict | None:
+    """Özet'in faiz satırı (yetenek "summary_interest_latest"; summary.interest_latest): kart başına EN SON kesilmiş
+    ekstredeki faiz, vergi ve ücret (Faiz sayfasıyla aynı sınıflama, _fees). Dönem adına bakmaz: ay dönümü maaş günü
+    olan kullanıcıda Kasım başında kesilen ekstre "Eylül döneminde" görünüyordu; burada "Son ekstrelerinde faiz ve
+    ücret ₺X" + kaynak "Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri" (MAX_NAMED'den fazlaysa "3 ekstre"). En yeni
+    kesimden STALE_DAYS günden eski son ekstre (artık kullanılmayan kart) sayılmaz.
+    {total, interest, tax, fee, count, by_type, state var|yok, statement_count, statements [{id, bank, last4,
+    period_end, total}], source}. Ortak defterde faiz gizliyse ya da hiç kart ekstresi yoksa None (istemci toplamaz)."""
+    today = today or date.today()
+    real = [s for s in db.list_statements() if s.get("source") != "excel"]
+    latest = sorted(db.latest_card_statements(today.isoformat(), real).values(),
+                    key=lambda s: (s["period_end"], s["id"]), reverse=True)
+    if not latest:
+        return None
+    # artık kullanılmayan kartın aylar önceki ekstresi "son ekstre" sayılmaz: en yeni kesimden STALE_DAYS önceye kadar
+    cut = (date.fromisoformat(latest[0]["period_end"][:10]) - timedelta(days=STALE_DAYS)).isoformat()
+    latest = [s for s in latest if s["period_end"][:10] >= cut]
+    fees = _fees({s["id"] for s in latest})
+    if fees is None:
+        return None
+    per: dict[int, float] = defaultdict(float)
+    sids = {s["id"] for s in latest}
+    for t in db.card_transactions():
+        if t["statement_id"] in sids and t["txn_type"] == finance.FEE:
+            per[t["statement_id"]] += t["amount"]
+    banks = [s["bank"] for s in latest]
+
+    def name(s: dict) -> str:  # aynı bankanın iki kartı: son dört hane ayırır
+        last4 = f" …{str(s['card_no'])[-4:]}" if banks.count(s["bank"]) > 1 else ""
+        return f"{s['bank']}{last4} {_short_day(s['period_end'])}"
+
+    named = [name(s) for s in latest]
+    source = (f"{' · '.join(named)} {'ekstresi' if len(latest) == 1 else 'ekstreleri'}" if len(latest) <= MAX_NAMED
+              else f"{len(latest)} ekstre")
+    return {**fees, "state": "var" if money.gt(fees["total"], 0) else "yok", "statement_count": len(latest),
+            "statements": [{"id": s["id"], "bank": s["bank"], "last4": str(s["card_no"])[-4:], "period_end": s["period_end"],
+                            "total": money.money(per.get(s["id"], 0.0))} for s in latest],
+            "source": source}
+
+
 def _installments(cards: set[str]) -> dict:
     """Bu kartların son ekstrelerindeki kalan taksitler (card_projection: Planlama'daki taksit satırlarıyla aynı).
     total: sonraki aylara düşen taksitlerin toplamı; count: kaç alışveriş (vade farkı/vergi taksiti sayılmaz);

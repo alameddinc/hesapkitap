@@ -587,7 +587,16 @@ def summary(month: str, today: date | None = None) -> dict:
         # "Bu dönem ödenen faiz ve ücret" kartı (yetenek "summary_interest_paid"; interest_paid). Ortak defterde faiz
         # gizliyse null (kart yok)
         "interest_paid": paid,
+        # Özet faiz satırı (yetenek "summary_interest_latest"; first_look.latest_fees): kart başına son ekstredeki faiz ve
+        # ücret, dönem adı yerine ekstreye dayalı ("Son ekstrelerinde faiz ve ücret ₺X"). Ortak defterde gizliyse null
+        "interest_latest": _latest_fees(today),
     }
+
+
+def _latest_fees(today: date | None) -> dict | None:
+    from app import first_look
+
+    return first_look.latest_fees(today)
 
 
 def interest_paid(month: str, rows: list[dict] | None = None, statements: list[dict] | None = None) -> dict | None:
@@ -1779,8 +1788,18 @@ def payables_totals(today: date | None = None, items: list[dict] | None = None, 
     paid_m = [p for p in items if p["status"] == "odendi" and (p.get("paid_at") or "")[:7] == this_month]
     out_paid = {"month": this_month, "total": _round(sum(p["paid_amount"] or p["amount"] for p in paid_m)),
                 "count": len(paid_m)}
+    # Özet "Bu ay ödenecek" (yetenek "payables_this_period"): içinde bulunulan dönemin sonuna kadar vadesi gelen (ya da
+    # geçmiş) ve toplama giren kalemlerin kalanı — ekstreler (taksitler içinde), faturalar, borç taksitleri. Kesilmemiş
+    # ekstrenin tahmini toplama girmez, ayrı: estimated
+    p_end = period_bounds(current_period(today))[1].isoformat()
+    in_p = [p for p in inc if p["due_date"] <= p_end and money.gt(rem(p), 0)]
+    out_period = {"month": current_period(today), "end": p_end, "total": _round(sum(rem(p) for p in in_p)),
+                  "count": len(in_p), "overdue": _round(sum(rem(p) for p in in_p if p["days_left"] < 0)),
+                  "overdue_count": len([p for p in in_p if p["days_left"] < 0]),
+                  "next_due": min((p["due_date"] for p in in_p if p["days_left"] >= 0), default=None),
+                  "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate" and p["due_date"] <= p_end))}
     return {"open": _round(sum(rem(p) for p in inc)), "open_count": len(inc), "window": out_window,
-            "paid_this_month": out_paid,
+            "paid_this_month": out_paid, "this_period": out_period,
             "card_debt": db.card_debt_at(today.isoformat()), "statements": by["statement"], "bills": by["bill"],
             "debts": by["debt"], "overdue": _round(sum(rem(p) for p in rolled)), "overdue_count": len(rolled),
             "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate"))}
