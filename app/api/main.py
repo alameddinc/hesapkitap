@@ -4910,12 +4910,14 @@ def shopping_stores():
 
 
 @app.post("/api/shopping-list")
-def shopping_add(body: ShoppingIn):
-    """{text, qty?, unit?, group_key?}: miktar ve birim verilmezse metinden ("2,5 kg elma", "6x süt")."""
+def shopping_add(body: ShoppingIn, request: Request):
+    """{text, qty?, unit?, group_key?}: miktar ve birim verilmezse metinden ("2,5 kg elma", "6x süt"). Idempotency-Key
+    satıra kalıcı yazılır: çevrimdışı kuyruğun günler sonraki tekrarı da aynı satırı döner (_client_key)."""
     from app import shopping
 
     try:
-        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"), body.group_key, body.unit)
+        return shopping.add(body.text, body.qty, (db.current_user() or {}).get("id"), body.group_key, body.unit,
+                            client_key=_client_key(request))
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
 
@@ -5491,8 +5493,18 @@ def delete_debt(did: int):
     return {"ok": True}
 
 
+def _client_key(request: Request) -> str | None:
+    """İstemcinin işlem kimliği: "<kullanıcı id>:<Idempotency-Key>". Ara katman aynı anahtarın tekrarını 24 saat
+    yakalar (app/idempotency.py); para ve liste yazan uçlar (borç ödemesi, listeye ekle) bunu satıra da yazar, çevrimdışı
+    kuyruk (mobil lib/bekleyen.ts) günler sonra gönderse de çift kayıt olmaz."""
+    key = (request.headers.get("idempotency-key") or "").strip()
+    if not idempotency.KEY_RE.match(key):
+        return None
+    return f"{(db.current_user() or {}).get('id') or 0}:{key}"
+
+
 @app.post("/api/debts/{did}/pay")
-def pay_debt(did: int, body: DebtPayIn):
+def pay_debt(did: int, body: DebtPayIn, request: Request):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     if body.entry_id is not None:
         _visible_or_404("entry", body.entry_id)
@@ -5510,7 +5522,8 @@ def pay_debt(did: int, body: DebtPayIn):
                 raise HTTPException(422, "Erken kapatma yalnız açık, ödeme planı olan borçta yazılır")
             if body.amount is None:
                 raise HTTPException(422, "Kapatırken ödediğin tutarı yaz")
-        pid = db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id)
+        pid = db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id,
+                          client_key=_client_key(request))
         if body.close_early:
             db.close_debt_early(did)
     except KeyError as e:

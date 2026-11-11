@@ -558,6 +558,10 @@ MIGRATIONS = [
     ("debts", "payoff_amount", "REAL"),         # bankadan öğrenilen "bugün kapatma tutarı"
     ("debts", "payoff_date", "TEXT"),           # tutarın öğrenildiği gün (YYYY-MM-DD)
     ("debts", "plan_rate", "REAL"),             # aylık faiz oranı, yüzde (ör. 2.89)
+    # istemcinin işlem kimliği ("<kullanıcı>:<Idempotency-Key>"): çevrimdışı kuyruktan günler sonra gelen tekrar da çift
+    # kayıt açmasın (Idempotency-Key kaydı 24 saat tutulur; bu sütun kalıcıdır)
+    ("debt_payments", "client_key", "TEXT"),
+    ("shopping_list", "client_key", "TEXT"),
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -568,6 +572,8 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS ix_entries_import_hash ON entries(import_hash)",
     "CREATE INDEX IF NOT EXISTS ix_entries_account_date ON entries(account_id, entry_date)",
     "CREATE INDEX IF NOT EXISTS ix_card_payments_stmt ON card_payments(statement_id)",
+    "CREATE INDEX IF NOT EXISTS ix_debt_payments_client ON debt_payments(client_key) WHERE client_key IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_shopping_list_client ON shopping_list(client_key) WHERE client_key IS NOT NULL",
 ]
 
 
@@ -3445,14 +3451,20 @@ class OverpayError(ValueError):
     """Ödeme kalan borçtan fazla (ya da kayıt kapanmış): kullanıcıya gösterilecek Türkçe neden."""
 
 
-def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None) -> int:
+def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None,
+             client_key: str | None = None) -> int:
     """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
     entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz.
-    Kalandan fazla ödeme reddedilir (OverpayError): önce borç "kapandı" görünürken fazlası da akışa/bakiyeye giriyordu."""
+    Kalandan fazla ödeme reddedilir (OverpayError): önce borç "kapandı" görünürken fazlası da akışa/bakiyeye giriyordu.
+    client_key: istemcinin işlem kimliği; bu borçta aynı kimlikle ödeme varsa yenisi yazılmaz, o ödemenin id'si döner."""
     with connect() as c:
         d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
         if not d:
             raise KeyError(debt_id)
+        if client_key:
+            dup = c.execute("SELECT id FROM debt_payments WHERE debt_id = ? AND client_key = ?", (debt_id, client_key)).fetchone()
+            if dup:
+                return dup["id"]
         paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (debt_id,)).fetchone()[0]
         left = d["amount"] - paid
         try_ = d["asset"] == "TRY"
@@ -3479,8 +3491,8 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
             fmt = lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")  # noqa: E731
             raise OverpayError(f"Kalan {fmt(left)} {unit}; {fmt(amt)} {unit} ödeme yazılamaz. Fazlası ayrı bir "
                                f"{'alacak' if d['direction'] == 'borc' else 'borç'} kaydı olarak girilebilir.")
-        pid = c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id) VALUES (?, ?, ?, ?, ?)",
-                        (debt_id, amt, on, entry_id, account_id)).lastrowid
+        pid = c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id, client_key) "
+                        "VALUES (?, ?, ?, ?, ?, ?)", (debt_id, amt, on, entry_id, account_id, client_key)).lastrowid
         if entry_id:
             c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, entry_id))
         _recalc_debt(c, debt_id)
@@ -3540,8 +3552,11 @@ def write_off_debt(debt_id: int, on: str) -> None:
 
 def debt_payments(debt_id: int | None = None) -> list[dict]:
     with connect() as c:
-        return rows(c.execute("SELECT * FROM debt_payments" + (" WHERE debt_id = ?" if debt_id else "") + " ORDER BY paid_at",
-                              (debt_id,) if debt_id else ()))
+        out = rows(c.execute("SELECT * FROM debt_payments" + (" WHERE debt_id = ?" if debt_id else "") + " ORDER BY paid_at",
+                             (debt_id,) if debt_id else ()))
+    for p in out:
+        p.pop("client_key", None)  # iç kimlik (kullanıcı id + istemci anahtarı): yanıtta yok
+    return out
 
 
 def _entry_is_debt_linked(entry_id: int | None) -> bool:
