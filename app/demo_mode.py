@@ -88,7 +88,7 @@ def shift_text(text: str, days: int) -> str:
     return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if days else text
 
 
-TEMPLATE_VERSION = 8  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
+TEMPLATE_VERSION = 9  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
 #                      2: fiş kalemleri, alışveriş listesi, plan ve geçmiş alışveriş (app/demo_prices.py)
 #                      3: gerçek marka / banka / zincir adları yerine kurgu adlar (app/demo_names.py)
 #                      4: geçmiş 12 ayın ödenmiş faturaları (elektrik, doğalgaz, internet), 12 aylık gelir/gider
@@ -98,6 +98,8 @@ TEMPLATE_VERSION = 8  # şablonun içeriği değişince artır: eski template-*.
 #                      8: tanıtım videosu: vergi 4 / mobilya 3 taksit (bitiş aylık tutarla değişir), Burak ₺40.000
 #                         (birikim satırı), maaş 15'inde (taksit günü notu), Zeynep'e 2 gram altın borcu, geçen ay
 #                         başlatılmış plan (plan takibi: gerisinde), Özet düzeninde Borç planı kartı
+#                      9: fiyattan bağımsız: Selin ₺4.000 (altının TL karşılığı borçsuz ayı kaydırmaz), Kerem'e söz bu
+#                         ayın son günü (bugüne göre; 30–40k'da "Söze yetişmezse" ve "Yeni tarihte anlaştık")
 
 
 def template() -> str:

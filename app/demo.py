@@ -90,6 +90,7 @@ def add_plan_commit(today: date) -> None:
     ₺2.000 gerisindesin · Bu ay ₺… ödersen yetişirsin". Tarihler today'e göre (ayar JSON'u kaydırılmaz: canlı demoda
     kaydırmadan sonra çağrılır)."""
     import json
+    from datetime import timedelta
 
     from app import debt_plan
 
@@ -100,6 +101,11 @@ def add_plan_commit(today: date) -> None:
                 key=lambda d: d["amount"])
     selin = debts["Selin"]
     paid_kerem, missed_selin = 6000.0, 2000.0
+    # Kerem'e söz bu ayın son günü (kaydırmadan bağımsız, bugüne göre): bu ayın kart, taksit ve diğer ödemelerinden
+    # sonra kalan pay (40.000'de bile ~₺10.000) borca yetmez → "Söze yetişmezse" ve "Yeni tarihte anlaştık" 30–40k'da
+    y, m = divmod(today.year * 12 + today.month, 12)
+    month_end = date(y, m + 1, 1) - timedelta(days=1)
+    db.update_debt(kerem["id"], {"due_date": month_end.isoformat()})
     db.pay_debt(kerem["id"], paid_kerem, started.replace(day=28).isoformat())  # geçen ay, plan başladıktan sonra
     debt_plan.commit_plan(today=today)  # bugünkü borçlarla (Kerem'in ödemesi düşülmüş)
     store = json.loads(db.get_setting(debt_plan.COMMIT))
@@ -192,7 +198,7 @@ def _extras() -> None:
     # biri söz verilen tarihten sonra kapanır: "Yetişmeyen tarih" ve "Yeni tarihte anlaştık" görünsün). Kurgu adlar.
     db.create_debt({"person": "Kerem", "direction": "borc", "amount": 36000, "debt_date": "2026-06-12",
                     "due_date": "2026-11-25", "note": "Düğün masrafı", "asset": "TRY"})
-    db.create_debt({"person": "Selin", "direction": "borc", "amount": 8000, "debt_date": "2026-08-03",
+    db.create_debt({"person": "Selin", "direction": "borc", "amount": 4000, "debt_date": "2026-08-03",
                     "note": "Elden", "asset": "TRY"})
     # aynı kişiye ikinci borç (söz tarihi önce): "Bu ay ödenecekler"de Kerem tek satır, açınca iki borç
     db.create_debt({"person": "Kerem", "direction": "borc", "amount": 1500, "debt_date": "2026-09-14",
@@ -216,7 +222,8 @@ def _extras() -> None:
     db.create_debt({"person": "Ali", "direction": "borc", "amount": 6500, "debt_date": "2026-09-10",
                     "due_date": "2026-12-20", "asset": "TRY", "creditor_type": "kisi", "pay_terms": "tek"})
     # altın borcu (kendi biriminde, TL karşılığı güncel gram fiyatından; fiyat yoksa demo yedek fiyatı:
-    # app/demo_prices.seed_market_fallback)
+    # app/demo_prices.seed_market_fallback). Selin ₺4.000 ile birlikte son ayın payı küçük: gram ₺3.000–8.000 arası
+    # her fiyatta borçsuz ayı değişmez (tests/test_demo_mode.py)
     db.create_debt({"person": "Zeynep", "direction": "borc", "amount": 2, "debt_date": "2026-08-22",
                     "note": "Düğünde ödünç", "asset": "GRAM_ALTIN", "creditor_type": "kisi", "pay_terms": "parca"})
     from app import debt_plan, prefs

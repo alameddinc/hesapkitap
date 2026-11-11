@@ -191,7 +191,7 @@ def test_demo_bills_any_day(tmpdb, today):
 
 
 def test_demo_debt_plan_video_points(demo, monkeypatch):
-    """Şablon v8 (tanıtım videosu): bitiş ayı aylık tutarla değişir, Burak birikim satırı, maaş günü notu, altın borcu
+    """Şablon v9 (tanıtım videosu): bitiş ayı aylık tutarla değişir (altın fiyatından bağımsız), Kerem söze yetişmez, Burak birikim satırı, maaş günü notu, altın borcu
     (dış fiyat yoksa demo yedek fiyatı), geçen ay başlatılmış planın takibi (gerisinde), Özet düzeninde Borç planı."""
     from app import zakat
 
@@ -199,9 +199,24 @@ def test_demo_debt_plan_video_points(demo, monkeypatch):
         raise RuntimeError("ağ yok")
 
     monkeypatch.setattr(zakat, "_download_prices", offline)
-    ends = {a: demo.get("/api/debt-plan", params={"monthly": a}).json() for a in (20000, 30000, 35000)}
-    months = [ends[a]["debt_free"]["month"] for a in (20000, 30000, 35000)]
-    assert months[0] > months[1] > months[2], months  # tutar artınca bitiş öne gelir
+    real_prices = zakat.prices
+
+    def ends(gram: float) -> dict:
+        monkeypatch.setattr(zakat, "prices", lambda: {**real_prices(), "prices": {"GRA": gram}})
+        out = {}
+        for a in (20000, 30000, 35000, 40000):
+            r = demo.get("/api/debt-plan", params={"monthly": a}).json()
+            kerem = [d["late"] for d in r["debts"] if d["title"] == "Kerem" and d.get("late") and d["late"]["kind"] == "soz"]
+            if a >= 30000:  # "Söze yetişmezse" ve "Yeni tarihte anlaştık" 30–40k arası her tutarda
+                assert kerem and kerem[-1].get("action"), a
+            out[a] = r["debt_free"]["month"]
+            assert next(d for d in r["debts"] if d["title"] == "Zeynep")["remaining"] == 2 * gram
+        return out
+
+    cheap, dear = ends(3000.0), ends(8000.0)
+    assert cheap == dear, (cheap, dear)  # altının TL karşılığı borçsuz ayı kaydırmaz
+    assert cheap[20000] > cheap[30000] > cheap[40000], cheap  # tutar artınca bitiş öne gelir
+    monkeypatch.setattr(zakat, "prices", real_prices)
     p = demo.get("/api/debt-plan").json()
     assert p["monthly"] == 30000
     by = {d["title"]: d for d in p["debts"]}
