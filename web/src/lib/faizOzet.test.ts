@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { InterestPaid } from "../api.ts";
-import { donemObegi, faizKartMetni } from "./faizOzet.ts";
+import type { InterestLatest, InterestPaid } from "../api.ts";
+import { donemObegi, faizKartMetni, faizSonEkstreMetni, ozetFaizMetni } from "./faizOzet.ts";
 
 const para = (x: number) => `₺${x}`;
 const p = (o: Partial<InterestPaid>): InterestPaid => ({
@@ -57,4 +57,26 @@ test("bu dönemin ekstresi yok: son ekstreli dönemin değeri (sunucu last_perio
   assert.equal(y.tone, "ok");
   // önceki dönemde de ekstre yok (null): eski nötr metin
   assert.equal(faizKartMetni(p({ state: "ekstre_yok", statements: 0, last_period: null }), para)!.tone, "neutral");
+});
+
+// ---------------------------------------------------------------- son ekstre metni (summary.interest_latest)
+const son = (o: Partial<InterestLatest>): InterestLatest => ({
+  total: 0, interest: 0, tax: 0, fee: 0, count: 0, state: "yok", statement_count: 2, statements: [],
+  source: "Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri", ...o,
+});
+
+test("son ekstre: dönem adı yok, kaynak ekstreler; tek ekstrede tekil", () => {
+  const m = faizSonEkstreMetni(son({ state: "var", total: 1114.82, count: 3 }), para)!;
+  assert.deepEqual(m, { title: "Son ekstrelerinde faiz ve ücret", value: "₺1114.82", sub: "Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri", tone: "warn" });
+  assert.deepEqual(faizSonEkstreMetni(son({}), para), { title: "Son ekstrelerinde faiz yok", value: null, sub: "Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri", tone: "ok" });
+  assert.equal(faizSonEkstreMetni(son({ statement_count: 1, source: "Mavi Bank 7 Kas ekstresi" }), para)!.title, "Son ekstrende faiz yok");
+  assert.equal(faizSonEkstreMetni(null, para), null); // faiz gizli / kart yok
+});
+
+test("Özet: içinde bulunulan dönemde son ekstre, geçmiş dönemde ve eski sunucuda dönem metni", () => {
+  const ip = p({ state: "ekstre_yok", last_period: { month: "2026-10", name: "Eylül", label: "Eylül 2026", total: 900, interest: 900, tax: 0, fee: 0, count: 1, statements: 1, state: "var" } });
+  assert.equal(ozetFaizMetni({ interest_paid: ip, interest_latest: son({ state: "var", total: 1114.82 }) }, para, false, "Bu dönem")!.title, "Son ekstrelerinde faiz ve ücret");
+  assert.equal(ozetFaizMetni({ interest_paid: ip, interest_latest: son({}) }, para, true, "Eylül döneminde")!.title, "Eylül döneminde ödenen faiz ve ücret");
+  assert.equal(ozetFaizMetni({ interest_paid: ip }, para, false, "Bu dönem")!.title, "Eylül döneminde ödenen faiz ve ücret");
+  assert.equal(ozetFaizMetni({ interest_paid: null, interest_latest: null }, para, false, "Bu dönem"), null);
 });

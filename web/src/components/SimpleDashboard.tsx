@@ -2,8 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "./TerimBilgi";
 import { CheckCircle2, Camera, ChevronRight, List, Minimize2 } from "lucide-react";
-import { api, type InterestPaid } from "../api";
-import { donemObegi, faizKartMetni } from "../lib/faizOzet";
+import { api, type Summary } from "../api";
+import { donemObegi, ozetFaizMetni } from "../lib/faizOzet";
 import { addMonths, dateTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { payableKey } from "../lib/odeme";
@@ -44,7 +44,7 @@ export default function SimpleDashboard() {
         )}
         {!!t?.savings && <p className="mt-3 text-lg text-amber-700 dark:text-amber-400">Birikime giden (altın/döviz): {tl(t.savings)}</p>}
         {/* faiz ve ücret: sunucu interest_paid (dokununca Faiz ve ücretler); eski sunucuda eski satır */}
-        {summary.data?.interest_paid !== undefined ? <SadeFaiz p={summary.data.interest_paid}
+        {summary.data?.interest_paid !== undefined ? <SadeFaiz s={summary.data} past={ui.month < (meta?.current_month ?? ui.month)}
           donem={ui.month < (meta?.current_month ?? ui.month) ? donemObegi(true, summary.data.period?.name) : "Bu ay"} />
           : !!t?.fees && <p className="mt-3 text-lg text-red-600">Bu ay {tl(t.fees)} faiz / ücret ödendi</p>}
       </section>
@@ -82,16 +82,19 @@ export default function SimpleDashboard() {
   );
 }
 
-/** Sade görünümde faiz satırı: büyük yazı, tek satır; dokununca Faiz ve ücretler. Kart ekstresi gelmediyse satır yok. */
-function SadeFaiz({ p, donem }: { p: InterestPaid | null; donem: string }) {
+/** Sade görünümde faiz satırı: büyük yazı; içinde bulunulan dönemde son ekstreler ("Son ekstrelerinde faiz ve ücret",
+ *  altında kaynak ekstreler), geçmiş dönemde dönem metni; dokununca Faiz ve ücretler. Kart ekstresi yoksa satır yok. */
+function SadeFaiz({ s, past, donem }: { s: Summary; past: boolean; donem: string }) {
   const ui = useUI();
-  const m = faizKartMetni(p, tl, donem);
+  const m = s.totals.fees_hidden ? null : ozetFaizMetni(s, tl, past, donem);
+  const kaynak = !past && s.interest_latest !== undefined;
   if (!m || m.tone === "neutral") return null;
   return (
     <button data-testid="sade-faiz" onClick={() => ui.go("faiz")}
       className={`mt-3 flex w-full items-center gap-2 rounded-xl p-3 text-left text-lg ${m.tone === "ok" ? "bg-green-50 text-green-800 dark:bg-green-950/30 dark:text-green-300" : "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300"}`}>
       {m.tone === "ok" && <CheckCircle2 size={22} className="shrink-0" />}
-      <span className="min-w-0 flex-1">{m.title}</span>
+      <span className="min-w-0 flex-1">{m.title}
+        {kaynak && <span data-testid="sade-faiz-kaynak" className="block text-base opacity-80">{m.sub}</span>}</span>
       {m.value && <span className="shrink-0 font-semibold whitespace-nowrap tabular-nums">{m.value}</span>}
       <ChevronRight size={20} className="shrink-0 opacity-60" />
     </button>
