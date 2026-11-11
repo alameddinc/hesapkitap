@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from app import auth, backup, config, db, deletion, donations, errors, finance, idempotency, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, receipt_verify, system, telegram, zakat
+from app import auth, backup, config, db, deletion, donations, errors, finance, idempotency, jar_goal, jobs, limits, money, ocr, plans, prefs, receipt, receipt_check, receipt_verify, system, telegram, zakat
 from app.categorize import CATEGORIES, suggest_pattern
 from app.parsers import parse_statement
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
@@ -3952,6 +3952,8 @@ def _jar_view(j: dict, today: date) -> dict:
             months = max(1, (dl.year - today.year) * 12 + dl.month - today.month)
             out["need_per_month"] = round(left / months, 2)
             out["on_track"] = bool(out.get("eta") and out["eta"] <= j["deadline"][:7])
+    # hedef durumu (rozet + "ayda ₺… ayır"): gerçek ayırma hızına göre yolunda / geride / önde / tarihsiz
+    out["goal_status"] = jar_goal.jar_goal_status(j, today, out.get("unit_price"))
     return out
 
 
