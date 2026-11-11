@@ -5299,6 +5299,10 @@ class DebtPatch(DebtPlanFields):
         return self
 
 
+# planı kaldırınca hepsi boşalır: "planlı oluştur + kaldır" ile "elden borç" aynı kayıt
+_PLAN_COLS = ("plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type", "plan_interest")
+
+
 class DebtPayIn(BaseModel):
     amount: float | None = Field(default=None, gt=0)  # boş → kalanın tamamı
     paid_at: date
@@ -5329,7 +5333,7 @@ def patch_debt(did: int, body: DebtPatch):
                                                    "creditor_type", "amount")})
         data["due_date"] = None
     if body.plan_off:
-        data.update({k: None for k in ("plan_installment", "plan_count", "plan_start", "plan_day", "plan_interest")})
+        data.update({k: None for k in _PLAN_COLS})
     if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
         with db.connect() as c:
             paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (did,)).fetchone()[0]
@@ -5341,6 +5345,70 @@ def patch_debt(did: int, body: DebtPatch):
     if not db.update_debt(did, data):
         raise HTTPException(404, "Kayıt yok")
     return {"ok": True}
+
+
+class DebtScheduleIn(DebtPlanFields):
+    """Var olan açık TL borcuna ödeme planı ekle ya da planı değiştir (yetenek debt_schedule_edit). Borcun tutarı
+    korunur; taksitler kalan (tutar eksi ilk taksit ayından önce ödenen) üzerinden kurulur, toplam ≠ kalan olabilir (son
+    taksit farkı alır). amount verilirse borcun toplamı da değişir (ör. "taksit toplamına göre güncelle")."""
+    plan_installment: float = Field(gt=0, le=100_000_000)
+    amount: float | None = Field(default=None, gt=0, le=1_000_000_000)
+
+
+def _debt_row(did: int) -> dict:
+    d = next((x for x in db.list_debts() if x["id"] == did), None)
+    if not d:
+        raise HTTPException(404, "Kayıt yok")
+    return d
+
+
+@app.put("/api/debts/{did}/schedule")
+def put_debt_schedule(did: int, body: DebtScheduleIn):
+    """Ödeme planı borcun alt kaydı: elden borca sonradan plan ekle ya da var olan planı düzenle. Dönüş: {ok, debt}."""
+    from app import debt_schedule
+
+    with db.connect() as c:
+        d = c.execute("SELECT * FROM debts WHERE id = ?", (did,)).fetchone()
+        pays = db.rows(c.execute("SELECT amount, paid_at FROM debt_payments WHERE debt_id = ?", (did,)))
+    if not d:
+        raise HTTPException(404, "Kayıt yok")
+    if d["direction"] != "borc" or (d["asset"] or "TRY") != "TRY":
+        raise HTTPException(422, "Ödeme planı yalnız TL borçta eklenir")
+    if d["settled_at"] or d["written_off_at"]:
+        raise HTTPException(422, "Bu borç kapanmış; ödeme planı eklenemez")
+    inst = money.money(body.plan_installment)
+    start = body.plan_start or date.today().isoformat()[:7]
+    amount = money.money(body.amount) if body.amount is not None else d["amount"]
+    paid = money.money(sum(p["amount"] or 0 for p in pays))
+    if money.lt(amount, paid):
+        raise HTTPException(422, f"Bu kayıttan {_tl_tr(paid)} ödenmiş; tutar bundan az olamaz")
+    rest = money.money(amount - debt_schedule.paid_before(pays, start))
+    if rest <= 0:
+        raise HTTPException(422, "İlk taksit ayından önce borcun tamamı ödenmiş; ilk taksit ayını değiştir")
+    count = body.plan_count or debt_schedule.count_from(inst, rest, body.plan_end, start)
+    if not count:
+        raise HTTPException(422, "Taksit sayısını ya da son taksit ayını yaz")
+    if count > debt_schedule.MAX_COUNT:
+        raise HTTPException(422, f"Taksit sayısı 1 ile {debt_schedule.MAX_COUNT} arasında olmalı")
+    data = {"plan_installment": inst, "plan_count": count, "plan_start": start, "plan_day": body.plan_day or 1,
+            "creditor_type": body.creditor_type or d["creditor_type"] or "diger", "plan_interest": body.plan_interest,
+            "due_date": None}  # vade taksitlerden gelir
+    if body.amount is not None:
+        data["amount"] = amount
+    db.update_debt(did, data)
+    with db.connect() as c:
+        db._recalc_debt(c, did)
+    return {"ok": True, "debt": _debt_row(did)}
+
+
+@app.delete("/api/debts/{did}/schedule")
+def delete_debt_schedule(did: int):
+    """Planı kaldır: borç elden borç olarak kalır (tutar ve ödemeler değişmez). Dönüş: {ok, debt}."""
+    with db.connect() as c:
+        if not c.execute("SELECT 1 FROM debts WHERE id = ?", (did,)).fetchone():
+            raise HTTPException(404, "Kayıt yok")
+    db.update_debt(did, {k: None for k in _PLAN_COLS})
+    return {"ok": True, "debt": _debt_row(did)}
 
 
 @app.delete("/api/debts/{did}")

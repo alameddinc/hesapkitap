@@ -5,6 +5,11 @@ Kayıt (debts sütunları): plan_installment (aylık taksit), plan_count (taksit
 YYYY-MM), plan_day (ayın kaçında; ay kısaysa ayın son günü), creditor_type (vergi_sgk | banka | kisi | diger),
 plan_interest (yalnız bilgi: yok | var | bilmiyorum). amount = toplam (verilmezse taksit × sayı; verilirse son taksit
 farkı alır). Ödemeler her zamanki borç ödemesidir (POST /api/debts/{id}/pay): ödenen toplam taksitlere sırayla düşer.
+
+Plan borcun alt kaydıdır: borç elden borç olarak girilip plan sonradan eklenebilir, düzenlenebilir, kaldırılabilir (PUT /
+DELETE /api/debts/{id}/schedule). İlk taksit ayından ÖNCE yapılmış ödemeler (paid_at < plan_start-01) plana girmez:
+taksitler "kalan" (amount - plan öncesi ödenen) üzerinden kurulur, ödenen taksitler plan başlangıcından sonraki
+ödemelerle eşleşir. Böylece "ödeme planlı oluştur" ile "elden borç oluştur + sonradan plan ekle" aynı planı verir.
 """
 import calendar
 from datetime import date
@@ -20,6 +25,29 @@ AYLAR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağu
 
 def is_scheduled(d: dict) -> bool:
     return bool(d.get("plan_installment")) and bool(d.get("plan_count")) and bool(d.get("plan_start"))
+
+
+def paid_before(payments: list[dict], start_month: str | None) -> float:
+    """İlk taksit ayından önce yapılmış ödemeler (plana girmez; taksitler kalan üzerinden kurulur)."""
+    if not start_month:
+        return 0.0
+    first = f"{start_month}-01"
+    return money.money(sum(p["amount"] or 0 for p in payments if (p.get("paid_at") or "")[:10] < first))
+
+
+def base(d: dict) -> float:
+    """Planın kapsadığı tutar: borç toplamı eksi plan öncesi ödenen."""
+    return money.money(max(0.0, d["amount"] - (d.get("plan_paid_before") or 0)))
+
+
+def plan_paid(d: dict) -> float:
+    """Plana sayılan ödenen (plan başlangıcından sonraki ödemeler)."""
+    return money.money(max(0.0, (d.get("paid_amount") or 0) - (d.get("plan_paid_before") or 0)))
+
+
+def suggest(remaining: float, count: int) -> float:
+    """Kalan ÷ sayı, tam liraya yuvarlı (son taksit farkı alır)."""
+    return float(round(money.money(remaining) / count)) if count > 0 and remaining > 0 else 0.0
 
 
 def _add(month: str, n: int) -> str:
@@ -66,13 +94,13 @@ def validate(installment: float, count: int, total: float | None) -> str | None:
 
 
 def installments(d: dict) -> list[dict]:
-    """[{no, month, date, amount}] (toplam d["amount"]; son taksit farkı alır)."""
+    """[{no, month, date, amount}] (toplam: base(d), yani d["amount"] eksi plan öncesi ödenen; son taksit farkı alır)."""
     inst = money.money(d["plan_installment"])
     n = int(d["plan_count"])
-    total = money.money(d["amount"])
+    total = base(d)
     out, given = [], 0.0
     for i in range(n):
-        amt = inst if i < n - 1 else money.money(total - given)
+        amt = min(inst, money.money(total - given)) if i < n - 1 else money.money(total - given)  # kalan aşılmaz
         if amt <= 0:
             break
         m = _add(d["plan_start"], i)
@@ -89,7 +117,7 @@ def due_through(d: dict, month: str) -> float:
 def info(d: dict, today: date) -> dict:
     """İstemcinin göstereceği durum: sıradaki taksit, bu ay ödenecek (geçmiş eksik dahil), gecikme."""
     rows = installments(d)
-    paid = money.money(d.get("paid_amount") or 0)
+    paid = plan_paid(d)
     month = today.isoformat()[:7]
     cum, nxt, paid_count = 0.0, None, 0
     for r in rows:
@@ -99,16 +127,19 @@ def info(d: dict, today: date) -> dict:
         elif nxt is None:
             nxt = {**r, "left": money.money(min(r["amount"], cum - paid))}
     due_now = 0.0 if d.get("settled_at") or d.get("written_off_at") else \
-        money.money(max(0.0, min(due_through(d, month) - paid, d["amount"] - paid)))
+        money.money(max(0.0, min(due_through(d, month) - paid, base(d) - paid)))
     overdue = bool(nxt and nxt["date"] < today.isoformat())
     last = rows[-1] if rows else None
     ctype = d.get("creditor_type") or "diger"
     return {
-        "installment": money.money(d["plan_installment"]), "count": int(d["plan_count"]), "start_month": d["plan_start"],
+        "installment": money.money(d["plan_installment"]), "count": len(rows) or int(d["plan_count"]),
+        "start_month": d["plan_start"],
         "day": int(d.get("plan_day") or 1), "end_month": last["month"] if last else d["plan_start"],
         "creditor_type": ctype, "creditor_label": CREDITORS.get(ctype, CREDITORS["diger"]),
         "interest": d.get("plan_interest"), "interest_label": INTEREST.get(d.get("plan_interest") or ""),
-        "paid_count": paid_count, "next": nxt, "due_now": due_now, "overdue": overdue,
+        "paid_count": paid_count, "left_count": len(rows) - paid_count, "next": nxt, "due_now": due_now,
+        "overdue": overdue, "total": base(d), "paid_before": money.money(d.get("plan_paid_before") or 0),
+        "last_amount": last["amount"] if last else 0.0,
         "text": summary(d, rows),
     }
 
@@ -118,7 +149,7 @@ def summary(d: dict, rows: list[dict] | None = None) -> str:
     rows = rows if rows is not None else installments(d)
     last = rows[-1]["month"] if rows else d["plan_start"]
     y, m = last.split("-")
-    return (f"Ayda {money.tl(d['plan_installment'], trim=True)} · {int(d['plan_count'])} taksit · her ayın "
+    return (f"Ayda {money.tl(d['plan_installment'], trim=True)} · {len(rows) or int(d['plan_count'])} taksit · her ayın "
             f"{int(d.get('plan_day') or 1)}'{_ek(int(d.get('plan_day') or 1))} · son taksit {AYLAR[int(m) - 1]} {y}")
 
 

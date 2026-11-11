@@ -10,6 +10,7 @@ import CategoryPicker from "./CategoryPicker";
 import { useSave } from "./hooks";
 import Segmented from "./Segmented";
 import type { DebtSchedule } from "../lib/debtPlan";
+import DebtScheduleSection, { CREDITORS } from "./DebtScheduleSection";
 
 export interface Debt {
   id: number;
@@ -34,13 +35,6 @@ export interface Debt {
 
 /** Ödeme planı olan borçta "Ödedim"in varsayılanı: sıradaki taksit (geçmişte eksik kalan dahil), bütün borç değil. */
 export const dueInstallment = (d: Debt) => (d.schedule?.next ? Math.min(d.remaining, Math.max(d.schedule.next.left, d.schedule.due_now)) : d.remaining);
-
-const CREDITORS: { value: DebtSchedule["creditor_type"]; label: string; hint: string }[] = [
-  { value: "vergi_sgk", label: "Vergi / SGK", hint: "ör. Vergi dairesi, SGK" },
-  { value: "banka", label: "Banka", hint: "ör. Örnek Bank" },
-  { value: "kisi", label: "Kişi", hint: "ör. Nermin Teyze" },
-  { value: "diger", label: "Diğer", hint: "ör. site yönetimi" },
-];
 
 // Birimler: TL, döviz, altın; listede yoksa serbest yazılır ("22 ayar bilezik")
 export const ASSETS: { value: string; label: string }[] = [
@@ -156,6 +150,8 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
       {openId === d.id && (
         <div className="mt-2 space-y-2">
           <DebtForm people={people} debt={d} onDone={() => setOpenId(null)} />
+          {/* ödeme planı borcun alt kaydı: sonradan eklenir, düzenlenir, kaldırılır */}
+          <DebtScheduleSection d={d} />
           {d.payments.some((p) => !p.entry_id) && d.asset === "TRY" && (<>
             <div className="text-xs font-medium text-stone-500">Önceki ödemelerin hesabı</div>
             {accountsOf({ ...d, payments: d.payments })}
@@ -201,14 +197,14 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
   );
 }
 
-/** Yeni borç/alacak ya da (debt verilirse) var olanı düzenle: PATCH /api/debts/{id}. Borçta tür seçimi: elden borç ya
- *  da ödeme planı olan borç (başka yerde anlaşılmış sabit taksitler; uygulama yalnız kaydeder ve hatırlatır).
- *  borcOnly: Borç planı'ndan açılır (yön "borç aldım"). */
+/** Yeni borç/alacak ya da (debt verilirse) var olanı düzenle: PATCH /api/debts/{id}. Yeni borçta tür seçimi: elden borç
+ *  ya da ödeme planı olan borç (başka yerde anlaşılmış sabit taksitler; uygulama yalnız kaydeder ve hatırlatır). Var olan
+ *  borcun planı ayrı bölümde (DebtScheduleSection: borcun alt kaydı). borcOnly: Borç planı'ndan açılır (yön "borç aldım"). */
 export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[]; onDone: () => void; debt?: Debt; borcOnly?: boolean }) {
   const ui = useUI();
   const known = !debt || ASSETS.some((a) => a.value === debt.asset);
   const [direction, setDirection] = useState<Debt["direction"]>(borcOnly ? "borc" : debt?.direction ?? "borc");
-  const [kind, setKind] = useState<"elden" | "plan">(debt?.schedule ? "plan" : "elden");
+  const [kind, setKind] = useState<"elden" | "plan">("elden");
   const [person, setPerson] = useState(debt?.person ?? "");
   const [asset, setAsset] = useState(debt ? (known ? debt.asset : "_") : "TRY");
   const [custom, setCustom] = useState(debt && !known ? debt.asset : "");
@@ -217,17 +213,17 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
   const [due, setDue] = useState(debt?.due_date ?? "");
   const [note, setNote] = useState(debt?.note ?? "");
   const [accountId, setAccountId] = useState<number | null>(debt?.account_id ?? null);
-  const s0 = debt?.schedule;
-  const [creditor, setCreditor] = useState<DebtSchedule["creditor_type"]>(s0?.creditor_type ?? "vergi_sgk");
-  const [inst, setInst] = useState(s0 ? String(s0.installment).replace(".", ",") : "");
-  const [count, setCount] = useState(s0 ? String(s0.count) : "");
+  // yalnız yeni borçta: ödeme planlı oluştur (var olan borcun planı DebtScheduleSection'da)
+  const [creditor, setCreditor] = useState<DebtSchedule["creditor_type"]>("vergi_sgk");
+  const [inst, setInst] = useState("");
+  const [count, setCount] = useState("");
   const [endMonth, setEndMonth] = useState("");
-  const [startMonth, setStartMonth] = useState(s0?.start_month ?? today().slice(0, 7));
-  const [day, setDay] = useState(s0 ? String(s0.day) : String(Number(today().slice(8, 10))));
-  const [total, setTotal] = useState(s0 && Math.abs(s0.installment * s0.count - (debt?.amount ?? 0)) > 0.009 ? String(debt!.amount).replace(".", ",") : "");
-  const [interest, setInterest] = useState<string>(s0?.interest ?? "");
+  const [startMonth, setStartMonth] = useState(today().slice(0, 7));
+  const [day, setDay] = useState(String(Number(today().slice(8, 10))));
+  const [total, setTotal] = useState("");
+  const [interest, setInterest] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
-  const plan = direction === "borc" && kind === "plan";
+  const plan = !debt && direction === "borc" && kind === "plan";
   const save = useSave(async () => {
     if (plan) {
       const i = parseAmount(inst);
@@ -241,16 +237,16 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
       const body = { person: person.trim(), direction: "borc", asset: "TRY", plan_installment: i,
         ...(n >= 1 ? { plan_count: Math.round(n) } : { plan_end: endMonth }), plan_start: startMonth, plan_day: dd,
         creditor_type: creditor, plan_interest: interest || null, note: note.trim() || null, ...(t != null && t > 0 ? { amount: t } : {}) };
-      return debt ? json("PATCH", `/api/debts/${debt.id}`, body) : json("POST", "/api/debts", body);
+      return json("POST", "/api/debts", body);
     }
     const a = parseAmount(amount);
     if (!person.trim() || !(a > 0)) throw new Error("Kişi ve miktar gerekli");
     const unit = asset === "_" ? custom.trim() : asset;
     if (!unit) throw new Error("Birim yaz (ör. 22 ayar bilezik)");
     if (debt && a + 1e-9 < debt.paid_amount) throw new Error(`Bu kayda ${fmtAsset(debt.paid_amount, debt.asset)} ödeme yapılmış; miktar bundan az olamaz`);
+    // ödeme planlı borçta vade taksitlerden gelir: söz tarihi gönderilmez (plan aşağıdaki bölümde)
     const body = { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
-      due_date: due || null, note: note.trim() || null, account_id: unit === "TRY" ? accountId : null,
-      ...(debt?.schedule ? { plan_off: true } : {}) };
+      ...(debt?.schedule ? {} : { due_date: due || null }), note: note.trim() || null, account_id: unit === "TRY" ? accountId : null };
     return debt ? json("PATCH", `/api/debts/${debt.id}`, body) : json("POST", "/api/debts", body);
   }, () => { ui.toast(debt ? "Güncellendi" : "Kaydedildi"); onDone(); });
   const c = CREDITORS.find((x) => x.value === creditor) ?? CREDITORS[3];
@@ -260,7 +256,7 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
       {!borcOnly && <Segmented value={direction} onChange={setDirection} label="Yön" options={[
         { value: "borc", label: "Borç aldım", tone: "red" }, { value: "alacak", label: "Borç verdim", tone: "green" },
       ]} />}
-      {direction === "borc" && (!debt || debt.asset === "TRY") && (<>
+      {direction === "borc" && !debt && (<>
         <Segmented value={kind} onChange={setKind} label="Borç türü" options={[
           { value: "elden", label: "Elden borç" }, { value: "plan", label: "Ödeme planlı borç" },
         ]} />
@@ -314,7 +310,6 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
           </select>
         </label>
         <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
-        {debt && debt.paid_amount > 0 && <p className="text-xs text-stone-500">Şimdiye kadar {fmtAsset(debt.paid_amount, "TRY")} ödendi; ödemeler taksitlere sırayla düşer.</p>}
       </>) : (<>
       <div>
         <span className="label">Kişi</span>
@@ -341,10 +336,12 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
           <span className="label">Tarih</span>
           <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
-        <label className="text-xs">
-          <span className="label">Vade (opsiyonel)</span>
-          <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} />
-        </label>
+        {!debt?.schedule && (
+          <label className="text-xs">
+            <span className="label">Vade (opsiyonel)</span>
+            <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} />
+          </label>
+        )}
       </div>
       {asset === "TRY" && (
         <AccountSelect value={accountId} onChange={setAccountId}

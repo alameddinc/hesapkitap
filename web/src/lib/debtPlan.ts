@@ -11,6 +11,9 @@ export interface DebtSchedule {
   creditor_type: "vergi_sgk" | "banka" | "kisi" | "diger"; creditor_label: string;
   interest: "yok" | "var" | "bilmiyorum" | null; interest_label: string | null; paid_count: number;
   next: { no: number; month: string; date: string; amount: number; left: number } | null; due_now: number; overdue: boolean; text: string;
+  /** yetenek debt_schedule_edit: planın kapsadığı tutar (borç eksi ilk taksit ayından önce ödenen), plan öncesi ödenen,
+   *  kalan taksit sayısı, son taksit (eski sunucuda yok) */
+  total?: number; paid_before?: number; left_count?: number; last_amount?: number;
 }
 export interface PlanDebt {
   key: string; kind: PlanKind; id: number; title: string; subtitle: string; order: number;

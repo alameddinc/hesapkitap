@@ -288,7 +288,7 @@ def _fixed_item(d: dict, payable: dict, paid_now: float, today: date) -> dict:
 
     sch = d["schedule"]
     start = _ym(today)
-    left_paid = d["paid_amount"] or 0.0
+    left_paid = debt_schedule.plan_paid(d)  # ilk taksit ayından önce ödenen plana girmez
     dues: dict[str, float] = {}
     due_nos: list[int] = []  # bu aya kadar vadesi gelip ödenmemiş taksitlerin numaraları
     for r in debt_schedule.installments(d):

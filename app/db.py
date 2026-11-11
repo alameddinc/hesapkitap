@@ -3382,8 +3382,13 @@ def list_debts(open_only: bool = False) -> list[dict]:
     for d in out:
         d["remaining"] = 0.0 if d["written_off_at"] else round(d["amount"] - d["paid_amount"], 4)
         d["payments"] = [p for p in pays if p["debt_id"] == d["id"]]
-        # ödeme planı olan borç: sıradaki taksit, bu ay ödenecek (istemci kendisi hesaplamasın)
-        d["schedule"] = debt_schedule.info(d, today) if debt_schedule.is_scheduled(d) else None
+        # ödeme planı olan borç: sıradaki taksit, bu ay ödenecek (istemci kendisi hesaplamasın). İlk taksit ayından önce
+        # ödenen plana girmez (plan sonradan eklendiyse taksitler kalan üzerinden)
+        if debt_schedule.is_scheduled(d):
+            d["plan_paid_before"] = debt_schedule.paid_before(d["payments"], d["plan_start"])
+            d["schedule"] = debt_schedule.info(d, today)
+        else:
+            d["schedule"] = None
     return out
 
 
@@ -3443,6 +3448,9 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
 
             row = {**dict(d), "paid_amount": paid}
             if debt_schedule.is_scheduled(row):
+                row["plan_paid_before"] = debt_schedule.paid_before(
+                    rows(c.execute("SELECT amount, paid_at FROM debt_payments WHERE debt_id = ?", (debt_id,))),
+                    row["plan_start"])
                 sch = debt_schedule.info(row, date.fromisoformat(on[:10]))
                 if sch["next"]:
                     amt = min(left, max(sch["next"]["left"], sch["due_now"]))

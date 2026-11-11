@@ -302,6 +302,12 @@ CAPABILITIES = (
                               # date, amount, left} | null, due_now, overdue, paid_count, text} | null. Borç planında
                               # kind "fixed": her ay önce ayrılır; POST /api/debts/{id}/pay amount null → sıradaki taksit
                               # (bütün borç değil); Ödemeler'de sıradaki taksit; push "borc" taksit gününde
+    "debt_schedule_edit",     # ödeme planı borcun alt kaydı: PUT /api/debts/{id}/schedule {plan_installment, plan_count |
+                              # plan_end, plan_start, plan_day, creditor_type, plan_interest, amount? (borç toplamını da
+                              # değiştir)} açık TL "borcum"a sonradan plan ekler / planı düzenler (tutar korunur; taksitler
+                              # kalan üzerinden: ilk taksit ayından önce ödenen plana girmez); DELETE …/schedule planı
+                              # kaldırır (elden borç kalır). Dönüş {ok, debt}. schedule'a total, paid_before, left_count,
+                              # last_amount eklendi
 )
 
 
