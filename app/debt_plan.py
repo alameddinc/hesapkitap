@@ -885,7 +885,25 @@ def need_monthly(key: str, deadline: str, cards, people, fixed, order: str, star
     return float(hi * 10)
 
 
-def _late(d: dict, sim: dict, start: str, close: str | None, need: float | None) -> dict | None:
+def agreed_month(key: str, close: str | None, cards, people, fixed, monthly: float, order: str, start: str,
+                 first: float) -> str | None:
+    """"Yeni tarihte anlaştık" için önerilecek ay: söz tarihi o aya alınınca borç sırada geriye düşebilir; plan yeni
+    tarihle yeniden hesaplanır, borç o ayda kapanana kadar sonraki aya bakılır (en çok 12 deneme)."""
+    cand = close
+    for _ in range(12):
+        if not cand:
+            return None
+        trial = [{**d, "due_date": debt_schedule.day_in(cand, int(d["due_date"][8:10]))} if d["key"] == key else d
+                 for d in people]
+        c = simulate(cards, trial, monthly, order, start, first_budget=first, fixed=fixed)["closes"].get(key)
+        if c and c <= cand:
+            return cand
+        cand = c
+    return cand
+
+
+def _late(d: dict, sim: dict, start: str, close: str | None, need: float | None,
+          agreed: str | None = None) -> dict | None:
     """Plan söz/vade tarihine yetişmiyorsa (ya da tarih geçtiyse ve bu ay kapanmıyorsa): tarih, o tarihte açık kalan,
     tahmini ödeme ayı. Sözde "Yeni tarihte anlaştık" önerilen günü; kesinde gereken aylık tutar."""
     if not d.get("due_date"):
@@ -912,10 +930,11 @@ def _late(d: dict, sim: dict, start: str, close: str | None, need: float | None)
                               "Bu tarih kesin ve geçti; bir an önce ödemek gecikme bedelini durdurur.")
     else:
         out["hint"] = "Kendisine önceden haber vermek iyi olur."
-        if close:
-            y, mo = map(int, close.split("-"))
+        target = agreed or close
+        if target:
+            y, mo = map(int, target.split("-"))
             day = int(d["due_date"][8:10])
-            new = debt_schedule.day_in(close, day)
+            new = debt_schedule.day_in(target, day)
             out["action"] = {"label": "Yeni tarihte anlaştık", "date": new, "date_label": _day_label(new) + f" {y}",
                              "confirm": f"Söz tarihi {_day_label(new)} {y} olarak kaydedilsin mi?"}
     return out
@@ -1022,7 +1041,12 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                 dl = max(d["due_date"][:7], start)
                 if not (close and close <= dl):
                     nm = need_monthly(d["key"], dl, cards, people, fixed, order, start, paid_now)
-            item["late"] = _late(d, sim, start, close, nm) if sim and monthly else None
+            late = _late(d, sim, start, close, nm) if sim and monthly else None
+            if late and late["kind"] == "soz" and late.get("action"):
+                ag = agreed_month(d["key"], close, cards, people, fixed, monthly, order, start, first)
+                if ag and ag != close:
+                    late = _late(d, sim, start, close, nm, ag)
+            item["late"] = late
             item["saving"] = _saving_info(d, sim, close, start) if sim else None
             item["day_note"] = _day_note(d, salary_day)
             if d.get("price"):

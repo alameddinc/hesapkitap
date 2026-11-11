@@ -362,3 +362,20 @@ def test_no_interest_steering_words_in_v4_outputs(client):
     p = dp.commit_plan(monthly=15000, today=TODAY)
     assert not [s for s in _all_strings(dp.build(today=date(2026, 12, 10))) if _banned_in(s) or _restructure_in(s)]
     assert p["commitment"]
+
+
+def test_agreed_date_keeps_debt_on_time_after_reordering(client):
+    """"Yeni tarihte anlaştık": söz tarihi ileri alınınca borç sırada başka sözlerin arkasına düşebilir; önerilen tarih
+    yeni sırayla hesaplanır, kaydedildikten sonra borç yetişir görünür."""
+    from app import debt_plan as dp
+
+    kurum = _post(client, person="Örnek Kurum", amount=60000, debt_date="2026-08-01", due_date="2026-12-31")
+    _post(client, person="Komşu", amount=30000, debt_date="2026-08-01", due_date="2027-03-15")
+    _post(client, person="Kuzen", amount=30000, debt_date="2026-08-01", due_date="2027-04-15")
+    p = dp.build(monthly=10000, today=TODAY)
+    late = next(d for d in p["debts"] if d["id"] == kurum)["late"]
+    new = late["action"]["date"]
+    assert client.patch(f"/api/debts/{kurum}", json={"due_date": new}).status_code == 200
+    again = next(d for d in dp.build(monthly=10000, today=TODAY)["debts"] if d["id"] == kurum)
+    assert again["late"] is None, (new, again["late"])
+
