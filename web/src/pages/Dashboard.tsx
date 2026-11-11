@@ -286,8 +286,12 @@ export default function Dashboard() {
           <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={left} tone={left < 0 ? "red" : "green"}
             sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
           {!feesHidden && (
-            <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
-              sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
+            // sade düzende (Ayrıntılar'daki kartlar) dönem bazlı olduğu açık yazılır; bu dönem 0 iken son ekstrelerde faiz
+            // varsa küçük not (Tek bakış'ın 3. satırıyla çelişkili görünmesin)
+            <Kpi label={sade ? "Bu dönem faiz" : "Faiz & ücret"} value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
+              sub={sade && s.totals.fees <= 0 && s.interest_latest?.state === "var"
+                ? <span data-testid="faiz-son-ekstre">son ekstrede {tl(s.interest_latest.total)}</span>
+                : s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
   </>);
   const renderDiger = (id: string): React.ReactNode => {
     if (!s) return null;
