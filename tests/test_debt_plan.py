@@ -285,6 +285,8 @@ def test_no_interest_steering_words_in_sources():
              ROOT / "app" / "debt_schedule.py", ROOT / "web" / "src" / "components" / "Debts.tsx",
              # sonradan eklenen ödeme planı (borcun alt kaydı): bölüm, form ve hesap
              ROOT / "web" / "src" / "components" / "DebtScheduleSection.tsx", ROOT / "web" / "src" / "lib" / "odemePlani.ts",
+             # borcun koşulları (yetenek debt_terms): kime, nasıl ödenecek, tarih türü
+             ROOT / "web" / "src" / "lib" / "borcKosul.ts", ROOT / "web" / "src" / "lib" / "debtPlan.ts",
              # Alırsam ne olur? (mobil Alsam mı? aynı lib/alsamMi.ts): alım ekranı da faizli yolu önermez
              ROOT / "web" / "src" / "components" / "Simulator.tsx", ROOT / "web" / "src" / "lib" / "alsamMi.ts"]
     for f in files:

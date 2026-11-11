@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, PiggyBank, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
@@ -10,7 +10,7 @@ import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurum
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
-import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind } from "../lib/debtPlan";
+import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind, type PlanDebt, type PlanLate } from "../lib/debtPlan";
 import { DebtForm } from "../components/Debts";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
@@ -109,6 +109,30 @@ export default function DebtPlan() {
     if (confirm && !(await ask(confirm.text, { title: `${confirm.action}?`, confirm: confirm.action }))) return;
     commitM.mutate({ monthly: p.monthly, order: p.order });
   };
+  // "Yeni tarihte anlaştık": yalnız kullanıcı basınca söz tarihi plandaki tahmini aya (PATCH /api/debts/{id})
+  const newDate = useMutation({
+    mutationFn: ({ ids, date }: { ids: number[]; date: string }) =>
+      Promise.all(ids.map((id) => send(`/api/debts/${id}`, { method: "PATCH", json: { due_date: date } }))),
+    onSuccess: () => { ui.toast("Söz tarihi kaydedildi"); void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" }); },
+    onError: (e: Error) => ui.toast(e.message || "Kaydedilemedi"),
+  });
+  // aynı kişiye aynı söz tarihli birden çok kayıt: tek kutu, düğme hepsinin söz tarihini günceller
+  const agreeNewDate = async (ids: number[], l: PlanLate) => {
+    if (!l.action) return;
+    const msg = ids.length > 1 ? `${l.action.confirm}\n\nBu kişiye aynı tarihli ${ids.length} borcun hepsi güncellenir.` : l.action.confirm;
+    if (!(await ask(msg, { title: `${l.action.label}?`, confirm: "Kaydet", danger: false }))) return;
+    newDate.mutate({ ids, date: l.action.date });
+  };
+  const lateGroups = (debts: PlanDebt[]) => {
+    const lead = new Map<string, string>(); const ids = new Map<string, number[]>(); const dup = new Set<string>();
+    for (const d of debts) {
+      if (!d.late) continue;
+      const g = `${d.title}|${d.late.kind}|${d.late.date}|${d.late.close?.month ?? ""}`;
+      const k = lead.get(g);
+      if (k) { ids.get(k)!.push(d.id); dup.add(d.key); } else { lead.set(g, d.key); ids.set(d.key, [d.id]); }
+    }
+    return { ids, dup };
+  };
   const commitAmount = () => { if (valid != null) { setDraft((d) => ({ ...d, monthly: valid })); persist({ monthly: valid }); } };
   const old = !on || (q.error instanceof ApiError && q.error.status === 404);
 
@@ -146,6 +170,8 @@ export default function DebtPlan() {
               <p className="text-xs text-stone-500">Başlattığın plan · {maskText(c.text)}</p>
               <p className="font-semibold" data-testid="plan-durum">{maskText(c.status.title)}</p>
               <p className="text-sm text-stone-600 dark:text-stone-300">{maskText(c.status.text)}</p>
+              {(c.saved?.length ?? 0) > 0 && <ul className="space-y-0.5 text-xs text-stone-600 dark:text-stone-300" data-testid="biriktirildi">
+                {c.saved!.map((x) => <li key={x.ident} className="flex items-center gap-1.5"><PiggyBank size={12} className="shrink-0" aria-hidden />{maskText(x.text)}</li>)}</ul>}
               {c.status.key !== "done" && <p className="text-xs text-stone-500 tabular-nums">
                 {c.month_no}. ay{c.month_count ? ` / ${c.month_count}` : ""} · bu aya kadar planda {tl(c.expected)}, ödenen {tl(c.paid)}
                 {c.debt_free ? ` · plan bitişi ${c.debt_free.label}` : ""}</p>}
@@ -170,6 +196,7 @@ export default function DebtPlan() {
   }
 
   function planBody(p: DebtPlanData) {
+    let lg: ReturnType<typeof lateGroups> | undefined;
     const months = allMonths ? p.months : p.months.slice(0, 12);
     return (
       <>
@@ -209,7 +236,7 @@ export default function DebtPlan() {
               <span className="block text-xs text-stone-500">Kart borcu ({p.totals.card_count})</span>
               <span className="block text-sm font-semibold tabular-nums">{tl(p.totals.cards)}</span></span>
             <span className="rounded-xl bg-stone-50 px-3 py-2 dark:bg-stone-800/60">
-              <span className="block text-xs text-stone-500">Elden borç ({p.totals.person_count})</span>
+              <span className="block text-xs text-stone-500">Diğer borç ({p.totals.person_count})</span>
               <span className="block text-sm font-semibold tabular-nums">{p.hidden.people ? "—" : tl(p.totals.people)}</span></span>
             {(p.totals.fixed_count ?? 0) > 0 && (
               <span className="col-span-2 flex items-center justify-between gap-2 rounded-xl bg-stone-50 px-3 py-2 dark:bg-stone-800/60" data-testid="odeme-planli-toplam">
@@ -218,7 +245,7 @@ export default function DebtPlan() {
             )}
           </div>
           {p.debt_free && <p className="text-sm text-stone-600 dark:text-stone-300" data-testid="borcsuz">{p.debt_free.text}</p>}
-          {p.hidden.people && <p className="text-xs text-stone-500">Borç / Alacak bu defterde sana kapalı; elden borçlar planda yok.</p>}
+          {p.hidden.people && <p className="text-xs text-stone-500">Borç / Alacak bu defterde sana kapalı; diğer borçlar planda yok.</p>}
         </section>
 
         {(p.commitment || (p.commit_history?.length ?? 0) > 0) && takip(p, p.commitment ?? null)}
@@ -249,7 +276,7 @@ export default function DebtPlan() {
               <p>{maskText(p.suggestion.text)}</p>
             </div>
           ))}
-          <div role="radiogroup" aria-label="Sıralama" className="grid gap-2 sm:grid-cols-3">
+          <div role="radiogroup" aria-label="Sıralama" className={cx("grid gap-2", p.orders.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
             {p.orders.map((o) => (
               <button key={o.key} role="radio" aria-checked={p.order === o.key} onClick={() => apply({ order: o.key })}
                 className={cx("rounded-xl border p-3 text-left transition-colors",
@@ -307,8 +334,9 @@ export default function DebtPlan() {
                   <li key={`${g.key}-${g.done ? "d" : "p"}`} data-testid="bu-ay">
                     <div className="flex items-center gap-3 p-3">
                       <span className={cx("flex size-7 shrink-0 items-center justify-center rounded-full border-2",
-                        g.done ? "border-green-600 bg-green-600 text-white" : "border-stone-300 dark:border-stone-600")} aria-hidden>
-                        {g.done && <Check size={15} strokeWidth={3} />}</span>
+                        g.done ? "border-green-600 bg-green-600 text-white" : g.saving ? "border-violet-400 text-violet-600 dark:border-violet-500 dark:text-violet-300"
+                          : "border-stone-300 dark:border-stone-600")} aria-hidden>
+                        {g.done ? <Check size={15} strokeWidth={3} /> : g.saving && <PiggyBank size={14} />}</span>
                       {many ? (
                         <button className="min-w-0 flex-1 text-left" aria-expanded={open} onClick={() => setOpenGroup(open ? null : g.key)}>
                           <span className={cx("flex items-center gap-1 font-medium break-words", g.done && "text-stone-500 line-through")}>{maskText(g.title)}
@@ -316,13 +344,14 @@ export default function DebtPlan() {
                           <span className="block text-xs text-stone-500">{maskText(g.text)}</span></button>
                       ) : (
                         <span className="min-w-0 flex-1">
-                          <span className={cx("block font-medium break-words", g.done && "text-stone-500 line-through")}>{maskText(g.title)}</span>
+                          <span className={cx("block font-medium break-words", g.done && "text-stone-500 line-through")}>{maskText(g.title)}
+                            {g.saving && <span className="ml-1.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950/50 dark:text-violet-300" data-testid="biriktir">Biriktir</span>}</span>
                           <span className="block text-xs text-stone-500">{maskText(g.text)}</span></span>
                       )}
                       {/* dar ekranda tutar ve düğme alt alta: ad ve açıklama sıkışmasın */}
                       <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
                         <span className="font-semibold tabular-nums">{tl(g.amount)}</span>
-                        {!g.done && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
+                        {!g.done && !g.saving && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
                           aria-label={`${g.title}: ödedim`}>Ödedim</button>}
                       </span>
                     </div>
@@ -334,7 +363,7 @@ export default function DebtPlan() {
                               <span className="block break-words">{i.sub ? maskText(i.sub) : `${n + 1}. borç`}</span>
                               <span className="block text-xs text-stone-500">{maskText(i.text)}</span></span>
                             <span className="tabular-nums">{tl(i.amount)}</span>
-                            {!i.done && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
+                            {!i.done && !i.saving && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
                               aria-label={`${i.title} ${n + 1}. borç: ödedim`}>Ödedim</button>}
                           </li>
                         ))}
@@ -350,14 +379,22 @@ export default function DebtPlan() {
         <section className="space-y-1.5" aria-label="Borçların">
           <H2>Borçların · kapanış sırasıyla</H2>
           <ul className="space-y-2">
-            {p.debts.map((d) => (
+            {p.debts.map((d, _i, all) => (
               <li key={d.key} className="card space-y-2 p-3" data-testid="borc">
                 <div className="flex items-start gap-3">
                   {(() => { const k = KIND_ICON[d.kind] ?? KIND_ICON.person; return (
                     <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-lg", k.tone)} aria-hidden><k.Icon size={17} /></span>); })()}
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium break-words">{d.order}. {d.title}</span>
-                    <span className={cx("block text-xs", d.overdue && d.kind === "card" ? "text-red-600 dark:text-red-400" : "text-stone-500")}>{d.subtitle}</span></span>
+                    <span className={cx("block text-xs", d.overdue && d.kind === "card" ? "text-red-600 dark:text-red-400" : "text-stone-500")}>{d.subtitle}</span>
+                    {d.kind === "person" && (d.terms === "tek" || d.date_kind) && (
+                      <span className="mt-1 flex flex-wrap gap-1" data-testid="borc-rozet">
+                        {d.terms === "tek" && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-950/50 dark:text-violet-300">Tek seferde</span>}
+                        {d.date_kind === "kesin" && <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950/50 dark:text-red-300">Kesin tarih{d.due_label ? ` · ${d.due_label}` : ""}</span>}
+                        {d.date_kind === "soz" && <span className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[11px] font-medium text-stone-600 dark:bg-stone-800 dark:text-stone-300">Söz{d.due_label ? ` · ${d.due_label}` : ""}</span>}
+                      </span>
+                    )}
+                    {d.tl_text && <span className="mt-0.5 block text-xs text-stone-600 tabular-nums dark:text-stone-300" data-testid="altin-tl">{maskText(d.tl_text)}</span>}</span>
                   <span className="shrink-0 text-right">
                     <span className="block font-semibold tabular-nums">{tl(d.remaining)}</span>
                     <span className="block text-xs text-stone-500">{d.closes ? `Kapanış: ${d.closes.label}` : p.monthly ? "Kapanmıyor" : ""}</span></span>
@@ -369,7 +406,14 @@ export default function DebtPlan() {
                 {d.paid > 0 && <p className="text-xs text-stone-500 tabular-nums">{tl(d.paid)} ödendi · {tl(d.total)} borcun %{Math.round(d.progress * 100)}</p>}
                 {d.harm ? <Harm h={d.harm} rateNote={d.rate_note ?? null} /> : d.warning && <p className={cx("flex gap-2 rounded-lg p-2 text-xs", d.overdue ? "bg-red-50 text-red-900 dark:bg-red-950/40 dark:text-red-100" : "bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100")}>
                   <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /><span>{maskText(d.warning)}{d.rate_note && <span className="block opacity-80">{d.rate_note}</span>}</span></p>}
-                {d.promise && <p className={cx("text-xs", d.promise.missed ? "text-amber-800 dark:text-amber-300" : "text-stone-500")}>{d.promise.text}</p>}
+                {d.late ? (lg ??= lateGroups(all)).dup.has(d.key)
+                  ? <p className={cx("text-xs", d.late.kind === "kesin" ? "text-red-700 dark:text-red-400" : "text-amber-800 dark:text-amber-300")}>{maskText(d.late.text)}</p>
+                  : <Late l={d.late} canEdit={p.can_edit} busy={newDate.isPending} n={lg.ids.get(d.key)?.length ?? 1}
+                      onAgree={() => void agreeNewDate(lg!.ids.get(d.key) ?? [d.id], d.late!)} />
+                  : d.promise && <p className={cx("text-xs", d.promise.missed ? "text-amber-800 dark:text-amber-300" : "text-stone-500")}>{d.promise.text}</p>}
+                {d.saving && <p className="flex gap-1.5 text-xs text-violet-800 dark:text-violet-300" data-testid="birikim"><PiggyBank size={13} className="mt-0.5 shrink-0" aria-hidden />{maskText(d.saving.text)}</p>}
+                {d.day_note && <p className="flex gap-1.5 text-xs text-stone-600 dark:text-stone-300" data-testid="gun-notu"><CalendarClock size={13} className="mt-0.5 shrink-0" aria-hidden />{maskText(d.day_note.text)}</p>}
+                {d.approx_note && <p className="text-[11px] text-stone-500">{d.approx_note}</p>}
                 {d.future_installments && <p className="text-xs text-stone-500">{maskText(d.future_installments.text)}</p>}
                 {d.schedule?.next && <p className="text-xs text-stone-500 tabular-nums" data-testid="siradaki-taksit">
                   Sıradaki: {d.schedule.next.no}. taksit · {maskText(trimTl(d.schedule.next.left))} · {d.due_label}
@@ -396,6 +440,7 @@ export default function DebtPlan() {
                         <span className="block font-medium">{m.label}</span>
                         <span className="block text-xs text-stone-500">
                           {closing.length ? `Kapanan: ${closing.map((x) => x.title).join(", ")}` : `${rows.length} ödeme`}
+                          {(m.saved ?? 0) > 0 ? ` · birikimde ${tl(m.saved!)}` : ""}
                           {m.left > 0 ? ` · kalan ${tl(m.left)}` : " · borç kalmadı"}
                           {m.interest > 0 && !p.hidden.fees ? ` · faiz ~${tl(m.interest)}` : ""}</span></span>
                       <span className="shrink-0 font-semibold tabular-nums">{tl(m.total)}</span>
@@ -408,6 +453,8 @@ export default function DebtPlan() {
                             <span className="min-w-0 flex-1 break-words">{x.title}
                               {x.count > 1 && <span className="ml-1 text-xs text-stone-500">· {x.count} borç</span>}
                               {x.kind === "fixed" && <span className="ml-1 text-xs text-stone-500">· taksit</span>}
+                              {x.saving && <span className="ml-1 text-xs text-violet-700 dark:text-violet-300">· birikim</span>}
+                              {x.units_text && <span className="ml-1 text-xs text-stone-500">· {maskText(x.units_text)}</span>}
                               {x.closes && <span className="ml-1 text-xs text-green-700 dark:text-green-400">· kapanır</span>}</span>
                             <span className="tabular-nums">{tl(x.amount)}</span>
                           </li>
@@ -431,6 +478,7 @@ export default function DebtPlan() {
             </ul>
           </section>
         )}
+        {p.price_note && <p className="px-1 text-xs text-stone-500" data-testid="fiyat-notu">Altın / döviz borcu: {p.price_note}</p>}
 
         {adding && p.can_edit && (
           <section className="card p-4" aria-label="Borç ekle">
@@ -448,6 +496,25 @@ export default function DebtPlan() {
       </>
     );
   }
+}
+
+/** Söz/vade tarihine yetişmeyen borç. Sözde "Yeni tarihte anlaştık" (kullanıcı basınca); kesinde tarih değiştirme yok,
+ *  gereken aylık tutar güçlü uyarıyla. */
+function Late({ l, canEdit, busy, onAgree, n = 1 }: { l: PlanLate; canEdit: boolean; busy: boolean; onAgree: () => void; n?: number }) {
+  if (l.kind === "kesin") return (
+    <div role="alert" className="space-y-1 rounded-lg border border-red-200 bg-red-50 p-2.5 text-red-900 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-100" data-testid="yetismiyor-kesin">
+      <p className="flex gap-1.5 text-sm font-semibold"><AlertTriangle size={15} className="mt-0.5 shrink-0" aria-hidden />{maskText(l.warning ?? "")}</p>
+      <p className="text-xs tabular-nums">{maskText(l.text)}</p>
+    </div>
+  );
+  return (
+    <div className="space-y-1.5 rounded-lg bg-amber-50 p-2.5 text-amber-950 dark:bg-amber-950/40 dark:text-amber-50" data-testid="yetismiyor-soz">
+      <p className="text-xs font-medium tabular-nums">{maskText(l.text)}</p>
+      {l.hint && <p className="text-xs opacity-90">{l.hint}</p>}
+      {l.action && canEdit && <button className="btn-ghost border border-amber-300 px-2 py-1 text-xs dark:border-amber-800" disabled={busy} onClick={onAgree}>
+        <CalendarCheck size={13} aria-hidden />{l.action.label} · {l.action.date_label}{n > 1 ? ` (${n} borç)` : ""}</button>}
+    </div>
+  );
 }
 
 /** Zararı azaltma: tutar kartın tamamına son ödeme gününe kadar yetmiyorsa ne yapılır ve faiz nasıl değişir. */

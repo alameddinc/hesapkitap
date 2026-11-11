@@ -102,11 +102,13 @@ export const TERIM = {
   },
   borcTutar: {
     ad: "Tutarlar nasıl hesaplanır",
-    aciklama: "Elden borç ödemeleri kişi kişi toplanır ve ₺50'nin katlarına yuvarlanır. Bir kişiye bir ayda en az ₺250 " +
-      "ödenir (borcun kalanı daha azsa kalanın tamamı). Son ödemede ₺100'den az kalan bırakılmaz, bir önceki ödemeye " +
-      "eklenir. \"Faizi önle\"de paylar çok küçük kalırsa önce küçük borçlar bütün olarak kapanır: daha az ama daha " +
-      "büyük ödeme. Kart borcu ve taksitler tam tutarıyla yazılır. Ödeme planı olan borçların taksiti her ay önce " +
-      "ayrılır; kalan para kartlara, sonra elden borçlara gider.",
+    aciklama: "Önce kart borçları, o ayın taksitleri ve tarihi kesin borçlar: tutar yetmezse önce her birinin " +
+      "gecikmesi önlenir (kartta asgari, taksitte o ayın taksiti), kalanı karta. Tarihi kesin bir borç ileride ise ona " +
+      "yalnız tarihine yetişmek için gereken kadar ayrılır. Sonra diğer borçlar söz tarihine göre: aynı aya düşenlerde " +
+      "para hepsine yetmiyorsa kapanabilenler önce kapanır (önce tek seferde ödenecek olan, sonra küçük borçlar); " +
+      "hiçbirine yetmiyorsa parça ödenebilenlere anlamlı paylar, tek seferde ödenecek olana birikim ayrılır. Ödemeler " +
+      "kişi kişi toplanır ve ₺50'nin katlarına yuvarlanır; bir kişiye bir ayda en az ₺250 ödenir (kalanı daha azsa " +
+      "kalanın tamamı); son ödemede ₺100'den az kalan bırakılmaz. Kart borcu ve taksitler tam tutarıyla yazılır.",
   },
 } as const satisfies Record<string, Terim>;
 

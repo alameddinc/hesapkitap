@@ -3,19 +3,15 @@ import { useState } from "react";
 import { call } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import type { DebtSchedule } from "../lib/debtPlan";
+import { ALACAKLI } from "../lib/borcKosul";
 import { oneriTaksit, planFarki, planFarkMetni, planKalani, planOncesiOdenen } from "../lib/odemePlani";
 import { dateTR, monthLabel, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { isLimited, useBook, useSave } from "./hooks";
 import type { Debt } from "./Debts";
 
-/** Kime: Vergi / SGK, Banka, Kişi, Diğer (sunucu app/debt_schedule.CREDITORS) */
-export const CREDITORS: { value: DebtSchedule["creditor_type"]; label: string; hint: string }[] = [
-  { value: "vergi_sgk", label: "Vergi / SGK", hint: "ör. Vergi dairesi, SGK" },
-  { value: "banka", label: "Banka", hint: "ör. Örnek Bank" },
-  { value: "kisi", label: "Kişi", hint: "ör. Nermin Teyze" },
-  { value: "diger", label: "Diğer", hint: "ör. site yönetimi" },
-];
+/** Kime: Kişi, Vergi / SGK, Banka, Mağaza / senet, Diğer (sunucu app/debt_schedule.CREDITORS; lib/borcKosul.ts) */
+export const CREDITORS = ALACAKLI;
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const tl0 = (n: number) => tl(n).replace(/,00$/, "");
@@ -24,7 +20,7 @@ const planBody = (s: DebtSchedule) => ({ plan_installment: s.installment, plan_c
   plan_day: s.day, creditor_type: s.creditor_type, plan_interest: s.interest });
 
 /** Borç detayında "Ödeme planı" bölümü (yetenek debt_schedule_edit): plan borcun alt kaydıdır. Yoksa "Ödeme planı ekle";
- *  varsa özet + Düzenle + Planı kaldır (borç kalır, elden borca döner). Yalnız açık TL "borcum"da. Mobil
+ *  varsa özet + Düzenle + Planı kaldır (borç kalır, diğer borç olur). Yalnız açık TL "borcum"da. Mobil
  *  components/borc/OdemePlani.tsx aynı sözler. */
 export default function DebtScheduleSection({ d }: { d: Debt }) {
   const ui = useUI();
@@ -33,7 +29,7 @@ export default function DebtScheduleSection({ d }: { d: Debt }) {
   const s = d.schedule;
   const off = useSave(() => call("DELETE", `/api/debts/${d.id}/schedule`), () => {
     const prev = s;
-    ui.toast("Ödeme planı kaldırıldı; borç elden borç olarak duruyor", prev ? { undo: () => putSchedule(d.id, planBody(prev)) } : undefined);
+    ui.toast("Ödeme planı kaldırıldı; borç diğer borç olarak duruyor", prev ? { undo: () => putSchedule(d.id, planBody(prev)) } : undefined);
   });
   if (d.direction !== "borc" || d.asset !== "TRY" || d.settled_at) return null;
   return (
@@ -59,7 +55,7 @@ export default function DebtScheduleSection({ d }: { d: Debt }) {
           <div className="flex flex-wrap gap-2">
             <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(true)}><Pencil size={13} aria-hidden /> Düzenle</button>
             <button className="btn-ghost px-2 py-1 text-xs text-stone-500" disabled={off.isPending}
-              onClick={() => void ask("Ödeme planı kaldırılsın mı?\n\nBorç silinmez: elden borç olarak kalır; tutar ve ödemeler değişmez.",
+              onClick={() => void ask("Ödeme planı kaldırılsın mı?\n\nBorç silinmez: diğer borç olarak kalır; tutar ve ödemeler değişmez.",
                 { confirm: "Planı kaldır", danger: false }).then((ok) => { if (ok) off.mutate(undefined); })}>
               <X size={13} aria-hidden /> Planı kaldır</button>
           </div>
@@ -74,10 +70,12 @@ export default function DebtScheduleSection({ d }: { d: Debt }) {
 
 /** Plan ekle / düzenle: PUT /api/debts/{id}/schedule. Borcun tutarı korunur; öneri kalan ÷ sayı. Toplam ≠ kalan ise
  *  yalnız bilgi verilir; istenirse borç tutarı taksit toplamına göre güncellenir. */
-function ScheduleForm({ d, onDone }: { d: Debt; onDone: () => void }) {
+export function ScheduleForm({ d, onDone, creditor: fixedCreditor }: { d: Debt; onDone: () => void;
+  /** borç formunda "Kime" zaten seçildi: burada ayrıca sorulmaz */ creditor?: DebtSchedule["creditor_type"] }) {
   const ui = useUI();
   const s0 = d.schedule;
-  const [creditor, setCreditor] = useState<DebtSchedule["creditor_type"]>(s0?.creditor_type ?? d.creditor_type ?? "kisi");
+  const [creditorSel, setCreditor] = useState<DebtSchedule["creditor_type"]>(s0?.creditor_type ?? d.creditor_type ?? "kisi");
+  const creditor = fixedCreditor ?? creditorSel;
   const [inst, setInst] = useState(s0 ? String(s0.installment).replace(".", ",") : "");
   const [instTouched, setInstTouched] = useState(!!s0);
   const [count, setCount] = useState(s0 ? String(s0.count) : "");
@@ -109,12 +107,12 @@ function ScheduleForm({ d, onDone }: { d: Debt; onDone: () => void }) {
     <div className="space-y-2" data-testid="odeme-plani-form">
       <p className="text-xs text-stone-500 dark:text-stone-400">Anlaştığın taksitleri kaydet. Kalan borç {tl0(kalan)}{once > 0 ? ` (plandan önce ödenen ${tl0(once)} korunur)` : ""}.</p>
       <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs">
+        {!fixedCreditor && <label className="text-xs">
           <span className="label">Kime</span>
           <select className="input" value={creditor} onChange={(e) => setCreditor(e.target.value as DebtSchedule["creditor_type"])}>
             {CREDITORS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
           </select>
-        </label>
+        </label>}
         <label className="text-xs">
           <span className="label">Taksit sayısı</span>
           <input className="input text-right" inputMode="numeric" placeholder="ör. 6" aria-label="Taksit sayısı" value={count} onChange={(e) => onCount(e.target.value)} />

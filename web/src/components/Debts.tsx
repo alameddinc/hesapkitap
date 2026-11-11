@@ -7,10 +7,11 @@ import { cx, dateTR, maskText, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import AccountSelect, { useAccounts } from "./AccountSelect";
 import CategoryPicker from "./CategoryPicker";
-import { useSave } from "./hooks";
+import { useCap, useSave } from "./hooks";
 import Segmented from "./Segmented";
 import type { DebtSchedule } from "../lib/debtPlan";
-import DebtScheduleSection, { CREDITORS } from "./DebtScheduleSection";
+import { ALACAKLI, KOSULLAR, TARIH_TURU, kosulGovdesi, kosulOzeti, varsayilanKesin, type CreditorType, type PayTerms } from "../lib/borcKosul";
+import DebtScheduleSection, { ScheduleForm } from "./DebtScheduleSection";
 
 export interface Debt {
   id: number;
@@ -27,10 +28,13 @@ export interface Debt {
   written_off_at: string | null;
   account_id: number | null;
   payments: { id: number; amount: number; paid_at: string; entry_id: number | null; account_id: number | null }[];
-  /** ödeme planı olan borç (yetenek debt_schedule): kayıtlı taksitler; elden borçta null (eski sunucuda yok) */
+  /** ödeme planı olan borç (yetenek debt_schedule): kayıtlı taksitler; diğer borçta null (eski sunucuda yok) */
   schedule?: DebtSchedule | null;
   plan_installment?: number | null; plan_count?: number | null; plan_start?: string | null; plan_day?: number | null;
-  creditor_type?: DebtSchedule["creditor_type"] | null; plan_interest?: DebtSchedule["interest"];
+  creditor_type?: CreditorType | null; plan_interest?: DebtSchedule["interest"];
+  /** borcun koşulları (yetenek debt_terms; alacakta ve eski sunucuda null/yok): kayıtlı değerler ve geçerli olanlar */
+  pay_terms?: PayTerms | null; due_strict?: boolean | null;
+  terms?: PayTerms | null; terms_label?: string | null; strict?: boolean | null; creditor_label?: string | null;
 }
 
 /** Ödeme planı olan borçta "Ödedim"in varsayılanı: sıradaki taksit (geçmişte eksik kalan dahil), bütün borç değil. */
@@ -109,6 +113,9 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
               {d.direction === "borc" ? "borcum" : "alacağım"}
             </span>
           </div>
+          {d.direction === "borc" && !d.settled_at && !d.schedule && kosulOzeti(d) && (
+            <div className="text-xs text-stone-600 dark:text-stone-300" data-testid="borc-kosul-ozet">{kosulOzeti(d)}</div>
+          )}
           {d.schedule && !d.settled_at && (
             <div className="text-xs text-stone-600 dark:text-stone-300" data-testid="borc-taksit">
               Ödeme planı · {d.schedule.creditor_label} · {d.schedule.paid_count}/{d.schedule.count} taksit ödendi
@@ -118,7 +125,7 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
           )}
           <div className="text-xs text-stone-500">
             {d.schedule ? maskText(d.schedule.text) : dateTR(d.debt_date)}
-            {d.due_date && <span className={cx(late && "font-medium text-red-600")}> · vade {dateTR(d.due_date)}</span>}
+            {d.due_date && <span className={cx(late && "font-medium text-red-600")}> · {d.direction === "borc" && d.strict === false ? "söz" : "vade"} {dateTR(d.due_date)}</span>}
             {d.paid_amount > 0 && !d.settled_at && ` · ${fmtAsset(d.paid_amount, d.asset)} ödendi`}
             {d.settled_at && (d.written_off_at ? ` · vazgeçildi ${dateTR(d.written_off_at)}` : ` · kapandı ${dateTR(d.settled_at)}`)}
             {d.note && ` · ${d.note}`}
@@ -197,14 +204,36 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
   );
 }
 
-/** Yeni borç/alacak ya da (debt verilirse) var olanı düzenle: PATCH /api/debts/{id}. Yeni borçta tür seçimi: elden borç
- *  ya da ödeme planı olan borç (başka yerde anlaşılmış sabit taksitler; uygulama yalnız kaydeder ve hatırlatır). Var olan
- *  borcun planı ayrı bölümde (DebtScheduleSection: borcun alt kaydı). borcOnly: Borç planı'ndan açılır (yön "borç aldım"). */
+/** Seçim düğmeleri (dar ekranda alt alta kırılır; Segmented tek satırda kesilirdi). */
+function Chips<T extends string>({ value, onChange, options, label, cols = "grid-cols-2 sm:grid-cols-4", testid }: {
+  value: T; onChange: (v: T) => void; options: { value: T; label: string }[]; label: string; cols?: string; testid?: string }) {
+  return (
+    <div role="radiogroup" aria-label={label} className={cx("grid gap-1.5", cols)} data-testid={testid}>
+      {options.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}
+          className={cx("rounded-lg border px-2 py-1.5 text-left text-xs font-medium leading-snug transition-colors pointer-coarse:min-h-11",
+            value === o.value ? "border-blue-500 bg-blue-50 text-blue-900 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-100"
+              : "border-stone-200 text-stone-600 dark:border-stone-700 dark:text-stone-300")}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Yeni borç/alacak ya da (debt verilirse) var olanı düzenle: PATCH /api/debts/{id}. Borçta (yetenek debt_terms) kime,
+ *  nasıl ödenecek ve tarih türü; "Taksitli (ödeme planı)" seçilince plan alanları açılır (yeni borçta bu formda, var
+ *  olan borçta Ödeme planı formu). Taksitliden başka koşula geçmek planı kaldırır (onay sorulur). borcOnly: Borç
+ *  planı'ndan açılır (yön "borç aldım"). Mobil screens/BorcAlacak.tsx AddDebt aynı alanlar, aynı sözler. */
 export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[]; onDone: () => void; debt?: Debt; borcOnly?: boolean }) {
   const ui = useUI();
+  const termsCap = useCap("debt_terms");
   const known = !debt || ASSETS.some((a) => a.value === debt.asset);
   const [direction, setDirection] = useState<Debt["direction"]>(borcOnly ? "borc" : debt?.direction ?? "borc");
-  const [kind, setKind] = useState<"elden" | "plan">("elden");
+  const [creditor, setCreditor] = useState<CreditorType>(debt?.creditor_type ?? (debt?.schedule ? "diger" : "kisi"));
+  const [terms, setTerms] = useState<PayTerms>(debt?.terms ?? (debt?.schedule ? "taksitli" : "parca"));
+  // null: kullanıcı değiştirmedi (sunucu varsayılanı: kurumda kesin, kişide söz); düzenlemede kayıtlı açık değer
+  const [strict, setStrict] = useState<boolean | null>(debt?.due_strict ?? null);
   const [person, setPerson] = useState(debt?.person ?? "");
   const [asset, setAsset] = useState(debt ? (known ? debt.asset : "_") : "TRY");
   const [custom, setCustom] = useState(debt && !known ? debt.asset : "");
@@ -214,7 +243,6 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
   const [note, setNote] = useState(debt?.note ?? "");
   const [accountId, setAccountId] = useState<number | null>(debt?.account_id ?? null);
   // yalnız yeni borçta: ödeme planlı oluştur (var olan borcun planı DebtScheduleSection'da)
-  const [creditor, setCreditor] = useState<DebtSchedule["creditor_type"]>("vergi_sgk");
   const [inst, setInst] = useState("");
   const [count, setCount] = useState("");
   const [endMonth, setEndMonth] = useState("");
@@ -223,7 +251,14 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
   const [total, setTotal] = useState("");
   const [interest, setInterest] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
-  const plan = !debt && direction === "borc" && kind === "plan";
+  const borc = direction === "borc";
+  const kosulOn = borc && termsCap; // eski sunucu: yalnız eski alanlar
+  const taksitli = borc && terms === "taksitli";
+  const plan = !debt && taksitli;
+  // var olan, planı olmayan borçta taksitli seçildi: plan aşağıda Ödeme planı formunda kaydedilir
+  const planEkle = !!debt && taksitli && !debt.schedule;
+  const effStrict = strict ?? varsayilanKesin(creditor, terms);
+  const kosul = kosulOn ? kosulGovdesi({ creditor, terms, strict, hasDue: !!due }) : {};
   const save = useSave(async () => {
     if (plan) {
       const i = parseAmount(inst);
@@ -244,33 +279,43 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
     const unit = asset === "_" ? custom.trim() : asset;
     if (!unit) throw new Error("Birim yaz (ör. 22 ayar bilezik)");
     if (debt && a + 1e-9 < debt.paid_amount) throw new Error(`Bu kayda ${fmtAsset(debt.paid_amount, debt.asset)} ödeme yapılmış; miktar bundan az olamaz`);
+    // ödeme planı kalkıyor (taksitliden başka koşula): onay; borç silinmez, tutar ve ödemeler değişmez
+    const planOff = !!debt?.schedule && kosulOn && !taksitli;
+    if (planOff && !(await ask("Ödeme planı kaldırılsın mı?\n\nBorç silinmez: diğer borç olarak kalır; tutar ve ödemeler değişmez.",
+      { confirm: "Planı kaldır", danger: false }))) throw new Error("Ödeme planı duruyor; koşulu değiştirmedin");
     // ödeme planlı borçta vade taksitlerden gelir: söz tarihi gönderilmez (plan aşağıdaki bölümde)
+    const keepPlan = !!debt?.schedule && !planOff;
     const body = { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
-      ...(debt?.schedule ? {} : { due_date: due || null }), note: note.trim() || null, account_id: unit === "TRY" ? accountId : null };
+      ...(keepPlan ? {} : { due_date: due || null }), note: note.trim() || null, account_id: unit === "TRY" ? accountId : null,
+      ...(borc && !planEkle ? kosul : {}), ...(planOff ? { plan_off: true } : {}) };
     return debt ? json("PATCH", `/api/debts/${debt.id}`, body) : json("POST", "/api/debts", body);
   }, () => { ui.toast(debt ? "Güncellendi" : "Kaydedildi"); onDone(); });
-  const c = CREDITORS.find((x) => x.value === creditor) ?? CREDITORS[3];
+  const c = ALACAKLI.find((x) => x.value === creditor) ?? ALACAKLI[0];
+  const kosulNot = KOSULLAR.find((x) => x.value === terms)?.note;
+  const tlOnly = asset === "TRY" || plan;
 
   return (
-    <div className="mb-3 space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700">
+    <div className="mb-3 space-y-2 rounded-lg border border-stone-200 p-3 dark:border-stone-700" data-testid="borc-formu">
       {!borcOnly && <Segmented value={direction} onChange={setDirection} label="Yön" options={[
         { value: "borc", label: "Borç aldım", tone: "red" }, { value: "alacak", label: "Borç verdim", tone: "green" },
       ]} />}
-      {direction === "borc" && !debt && (<>
-        <Segmented value={kind} onChange={setKind} label="Borç türü" options={[
-          { value: "elden", label: "Elden borç" }, { value: "plan", label: "Ödeme planlı borç" },
-        ]} />
-        <p className="text-xs text-stone-500 dark:text-stone-400" data-testid="borc-turu-not">
-          {plan ? "Ödeme planı olan borç (ör. vergi/SGK, banka ya da bir kişiyle anlaşılmış taksitler): taksitleri kaydedersin, Borç planı her ay önce bunları ayırır, günü gelince hatırlatılır."
-            : "Elden borç: bir kişiye olan borcun; ne zaman ödeyeceğini söz tarihi olarak yazabilirsin."}</p>
-      </>)}
-      {plan ? (<>
-        <label className="block text-xs">
+      {kosulOn && (<>
+        <div className="space-y-1">
           <span className="label">Kime</span>
-          <select className="input" value={creditor} onChange={(e) => setCreditor(e.target.value as DebtSchedule["creditor_type"])}>
-            {CREDITORS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
-          </select>
-        </label>
+          <Chips value={creditor} onChange={setCreditor} label="Kime" cols="grid-cols-2 sm:grid-cols-5" testid="borc-kime"
+            options={ALACAKLI.map((x) => ({ value: x.value, label: x.label }))} />
+        </div>
+        <div className="space-y-1">
+          <span className="label">Nasıl ödenecek</span>
+          <Chips value={terms} onChange={setTerms} label="Nasıl ödenecek" testid="borc-kosul"
+            options={KOSULLAR.filter((x) => x.value !== "taksitli" || tlOnly || !!debt?.schedule).map((x) => ({ value: x.value, label: x.label }))} />
+          {kosulNot && <p className="text-xs text-stone-500 dark:text-stone-400" data-testid="borc-turu-not">{kosulNot}</p>}
+        </div>
+      </>)}
+      {borc && !debt && !termsCap && (
+        <p className="text-xs text-stone-500 dark:text-stone-400" data-testid="borc-turu-not">Diğer borç: ne zaman ödeyeceğini söz tarihi olarak yazabilirsin.</p>
+      )}
+      {plan ? (<>
         <div>
           <span className="label">Alacaklının adı</span>
           <CategoryPicker value={person} onChange={setPerson} options={people} placeholder={c.hint} />
@@ -284,21 +329,21 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
             <span className="label">Taksit sayısı</span>
             <input className="input text-right" inputMode="numeric" placeholder="ör. 6" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ""))} />
           </label>
-          <label className="text-xs">
+          <label className="col-span-2 text-xs sm:col-span-1">
             <span className="label">İlk taksit ayı</span>
             <input type="month" className="input" value={startMonth} onChange={(e) => setStartMonth(e.target.value)} />
           </label>
-          <label className="text-xs">
+          <label className="col-span-2 text-xs sm:col-span-1">
             <span className="label">Ayın kaçında</span>
             <input className="input text-right" inputMode="numeric" value={day} onChange={(e) => setDay(e.target.value.replace(/\D/g, "").slice(0, 2))} />
           </label>
           {!count && (
-            <label className="text-xs">
+            <label className="col-span-2 text-xs sm:col-span-1">
               <span className="label">ya da son taksit ayı</span>
               <input type="month" className="input" value={endMonth} onChange={(e) => setEndMonth(e.target.value)} />
             </label>
           )}
-          <label className="text-xs">
+          <label className="col-span-2 text-xs sm:col-span-1">
             <span className="label">Toplam (opsiyonel)</span>
             <input className="input text-right" inputMode="decimal" placeholder="taksit × sayı" value={total} onChange={(e) => setTotal(e.target.value)} />
           </label>
@@ -310,10 +355,12 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
           </select>
         </label>
         <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
-      </>) : (<>
+      </>) : planEkle ? (
+        <ScheduleForm d={{ ...debt!, creditor_type: creditor }} creditor={creditor} onDone={onDone} />
+      ) : (<>
       <div>
-        <span className="label">Kişi</span>
-        <CategoryPicker value={person} onChange={setPerson} options={people} placeholder="Seç veya yaz" />
+        <span className="label">{borc && kosulOn && creditor !== "kisi" ? "Alacaklının adı" : "Kişi"}</span>
+        <CategoryPicker value={person} onChange={setPerson} options={people} placeholder={borc && kosulOn ? c.hint : "Seç veya yaz"} />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs">
@@ -336,28 +383,38 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
           <span className="label">Tarih</span>
           <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
-        {!debt?.schedule && (
+        {!(debt?.schedule && taksitli) && (
           <label className="text-xs">
-            <span className="label">Vade (opsiyonel)</span>
+            <span className="label">{borc && kosulOn ? (effStrict ? "Son ödeme tarihi" : "Söz verdiğin tarih") : "Vade"} (opsiyonel)</span>
             <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} />
           </label>
         )}
       </div>
+      {kosulOn && !taksitli && due && (
+        <div className="space-y-1">
+          <span className="label">Tarih türü</span>
+          <Chips value={effStrict ? "kesin" : "soz"} onChange={(v) => setStrict(v === "kesin")} label="Tarih türü" cols="grid-cols-2" testid="borc-tarih-turu"
+            options={TARIH_TURU.map((x) => ({ value: x.value, label: x.label }))} />
+          <p className="text-xs text-stone-500 dark:text-stone-400">{TARIH_TURU.find((x) => x.value === (effStrict ? "kesin" : "soz"))!.note}</p>
+        </div>
+      )}
       {asset === "TRY" && (
         <AccountSelect value={accountId} onChange={setAccountId}
           label={direction === "alacak" ? "Hangi hesaptan verdin? (nakitse boş bırak)" : "Hangi hesaba geldi? (nakitse boş bırak)"} />
       )}
       <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
       </>)}
-      {debt && debt.payments.some((p) => p.entry_id) && (
+      {debt && debt.payments.some((p) => p.entry_id) && !planEkle && (
         <p className="text-xs text-stone-500 dark:text-stone-400">Bu kayda havaleyle bağlanmış ödeme var; kişiyi ya da miktarı değiştirirsen bağlantı korunur, kalan yeniden hesaplanır.</p>
       )}
       {err && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{err}</p>}
-      <div className="flex gap-2">
-        <button className="btn-primary" disabled={save.isPending}
-          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>{debt ? "Güncelle" : "Kaydet"}</button>
-        <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
-      </div>
+      {!planEkle && (
+        <div className="flex gap-2">
+          <button className="btn-primary" disabled={save.isPending}
+            onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>{debt ? "Güncelle" : "Kaydet"}</button>
+          <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
+        </div>
+      )}
     </div>
   );
 }
