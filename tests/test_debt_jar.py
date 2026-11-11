@@ -92,11 +92,16 @@ def test_offer_open_and_one_open_jar_per_debt(client):
     r = client.post(f"/api/debts/{did}/jar", json={})
     assert r.status_code == 200, r.text
     j = r.json()["jar"]
+    # aylık saklanmaz: ay ay tutarlar borç planından (tek kaynak)
     assert (j["name"], j["goal"], j["deadline"], j["monthly"], j["auto_day"], j["debt_id"]) == \
-        ("Deniz borcu", 12000, "2027-02-28", 3000, None, did)
+        ("Deniz borcu", 12000, "2027-02-28", None, None, did)
     assert j["debt"]["label"] == "Borç: Deniz için" and j["debt"]["state"] == "acik" and j["debt"]["suggestion"] is None
-    # plan ile kumbara aynı aylık tutarı söyler (bu ay da ayırma ayı: Kasım–Şubat 4 ay × 3.000)
-    assert j["goal_status"]["status"] == "yolunda" and j["goal_status"]["needed_monthly"] == 3000
+    assert o["plan_text"] == "Kasım 2026–Şubat 2027 ayda ₺3.000 · Şubat 2027'de kumbaradan öde"
+    assert r.json()["message"] == 'Kumbara açıldı. Bu ay ₺3.000 ayır: "Kumbaraya ayır"a dokun.'
+    # kumbara kartında kendi aylık hesabı yok (planla çelişmesin); planın durumu
+    assert j["goal_status"] is None and "need_per_month" not in j
+    assert j["debt"]["plan"]["status"] == "bu_ay" and j["debt"]["plan"]["line"] == "Bu ay ₺3.000 ayır"
+    assert j["debt"]["plan"]["detail"] == "Kasım 2026–Şubat 2027 ayda ₺3.000 · Şubat 2027'de kumbaradan öde"
     assert client.post(f"/api/debts/{did}/jar", json={}).status_code == 409
     # kumbara kapatılınca yenisi açılabilir; eskisi yeniden açılmak istenirse çakışma
     client.patch(f"/api/jars/{j['id']}", json={"closed": True})
@@ -453,3 +458,49 @@ def test_extra_deposit_does_not_starve_this_months_installment(client):
     assert rows == [(40000, True, "Bu ay kumbaraya ₺40.000 ayrıldı")]
     assert p["this_month"]["budget"] == 5000 and p["months"][0]["saved"] == 40000
     assert p["debt_jar"]["saved_this_month"] == 40000
+
+
+def test_plan_starts_later_neutral_status_and_free_put(client, tmpdb):
+    """Plan bu ay bu borca birikim ayırmıyorsa (önce kart): kumbara "Plan … başlıyor" der, "Yolunda" demez; toast
+    planın takvimini söyler; isteyen yine ayırır (tutar sorulur, önerilen yok)."""
+    from tests.test_debt_payoff import _card_stmt
+
+    _card_stmt(tmpdb, total=25000, due="2026-11-20")
+    did = _tek(client)
+    client.put("/api/debt-plan", json={"monthly": 6000})
+    p = _plan(client)
+    assert all(i["key"] != f"borc:{did}" for i in p["this_month"]["items"])  # bu ay Deniz'e birikim yok
+    r = client.post(f"/api/debts/{did}/jar", json={}).json()
+    plan = r["jar"]["debt"]["plan"]
+    assert plan["status"] == "baslamadi" and plan["this_month"] == 0 and plan["badge"] is None
+    assert plan["line"].startswith("Plan ") and "başlıyor" in plan["line"]
+    assert r["message"].startswith("Kumbara açıldı. Plan Deniz için ") and r["message"].endswith(" ayırır.")
+    linked = _debt_item(_plan(client), did)["jar"]
+    assert linked["put"] == {"label": "Kumbaraya ayır", "jar_id": r["id"], "note": "Borç planı", "amount": None}
+    assert linked["plan"] == plan
+    # bu ay kendisi ayırırsa: "Bu ay ₺1.000 ayırdın", plan sonraki ayları azaltır
+    _put(client, r["id"], 1000, "2026-11-11")
+    assert _jar(client, r["id"])["debt"]["plan"]["line"] == "Bu ay ₺1.000 ayırdın"
+
+
+def test_spendable_counts_debt_and_its_jar_once(client):
+    """Borca bağlı kumbaradaki para borcun kalanından düşülmüş sayılır: harcanabilirden borç kalanı kadar düşer
+    (kumbara ayrıca düşmez); kumbara borçtan büyükse kumbara kadar. Bağlı olmayan kumbara eskisi gibi."""
+    client.post("/api/accounts", json={"name": "Ana hesap", "kind": "banka", "balance": 50000})
+    did = _tek(client)  # 12.000
+    client.put("/api/debt-plan", json={"monthly": 3000})
+    jid = client.post(f"/api/debts/{did}/jar", json={}).json()["id"]
+    base = client.get("/api/net-worth").json()
+    assert base["spendable"] == 50000 - 12000
+    _put(client, jid, 5000, "2026-11-11")
+    nw = client.get("/api/net-worth").json()
+    parts = {x["key"]: x for x in nw["spendable_parts"]}
+    assert nw["spendable"] == 50000 - 12000  # 7.000 borç + 5.000 kumbara
+    assert parts["payable"]["amount"] == 7000 and parts["reserved"]["amount"] == 5000
+    assert parts["payable"]["label"] == "TL borçların (kumbarada ayrılan kısmı hariç)"
+    assert "iki kez düşülmez" in nw["spendable_explain"]
+    assert nw["payable"] == 12000 and nw["net"] == base["net"]  # net durum değişmez
+    _put(client, jid, 9000, "2026-11-11")  # kumbara 14.000 > borç 12.000
+    assert client.get("/api/net-worth").json()["spendable"] == 50000 - 14000
+    other = client.post("/api/jars", json={"name": "Tatil", "initial": 2000}).json()["id"]
+    assert other and client.get("/api/net-worth").json()["spendable"] == 50000 - 14000 - 2000

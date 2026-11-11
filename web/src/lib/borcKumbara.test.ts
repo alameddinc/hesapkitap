@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { jarBox, jarButton, offerSummary, payAmountEditable, type DebtJarFlags, type PlanJarPay } from "./borcKumbara.ts";
+import { jarBox, jarButton, offerSummary, openToast, payAmountEditable, planTon, type DebtJarFlags, type PlanJarPay } from "./borcKumbara.ts";
 
 const F = (o: Partial<DebtJarFlags> = {}): DebtJarFlags => ({ available: true, premium: true, can_open: true, can_move: true,
   can_pay: true, lock: null, saved_this_month: 0, ...o });
@@ -34,4 +34,17 @@ test("kredide tutar yazılır; özet satırı", () => {
   const tl = (n: number) => `₺${new Intl.NumberFormat("tr-TR").format(n)}`;
   assert.equal(offerSummary({ state: "offer", label: "Kumbara aç", text: "", name: "Deniz borcu", goal: 12000, deadline: "2027-02-28",
     deadline_label: "Şubat 2027", monthly: 3000 }, tl), "Hedef ₺12.000 · Şubat 2027 · ayda ₺3.000");
+});
+
+test("öneri: planın takvimi aylık yerine; açılış sözü sunucudan; başlamadı nötr", () => {
+  const tl = (n: number) => `₺${new Intl.NumberFormat("tr-TR").format(n)}`;
+  assert.equal(offerSummary({ state: "offer", label: "Kumbara aç", text: "", name: "Burak borcu", goal: 40000, deadline: "2027-02-28",
+    deadline_label: "Şubat 2027", monthly: 12600, plan_text: "Ocak 2027'de ₺12.600 · Şubat 2027'de ₺27.400 · Şubat 2027'de kumbaradan öde" }, tl),
+    "Hedef ₺40.000 · Ocak 2027'de ₺12.600 · Şubat 2027'de ₺27.400 · Şubat 2027'de kumbaradan öde");
+  assert.equal(openToast({ id: 1, message: "Kumbara açıldı. Plan Burak için Ocak 2027'de ₺12.600, Şubat 2027'de ₺27.400 ayırır." }),
+    "Kumbara açıldı. Plan Burak için Ocak 2027'de ₺12.600, Şubat 2027'de ₺27.400 ayırır.");
+  assert.match(openToast({ id: 1 }), /Kumbaraya ayır/);
+  const P = { badge: null, line: "", detail: null, this_month: 0, schedule: [], pay_month: null, pay_label: null };
+  assert.equal(planTon({ ...P, status: "baslamadi" }), "notr");
+  assert.equal(planTon({ ...P, status: "bu_ay" }), "iyi");
 });

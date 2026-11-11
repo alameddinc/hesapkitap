@@ -3940,7 +3940,7 @@ def _jar_debt(j: dict, debts: dict[int, dict] | None) -> dict | None:
     return out
 
 
-def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None) -> dict:
+def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans: dict[int, dict] | None = None) -> dict:
     """Hedef ilerlemesi, son tarihe göre ayda gereken ve bu hızla ne zaman ulaşılacağı.
     Hız: otomatik aylık ayırma varsa o; yoksa son 3 ayda ayrılan (başlangıç ayırması hariç) aylık ortalaması."""
     from datetime import timedelta
@@ -3986,6 +3986,13 @@ def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None) -> dic
                                                   include_current=bool(j.get("debt_id")))
     if (out["debt"] or {}).get("suggestion"):
         out["goal_status"] = None  # borç kapandı / silindi: "ayda ₺… ayır" yerine "kumbarayı kapat ya da çevir" önerisi
+    plan = (plans or {}).get(j.get("debt_id")) if out["debt"] and out["debt"]["state"] == "acik" and not j.get("closed_at") else None
+    if out["debt"]:
+        out["debt"]["plan"] = plan
+    if plan:  # borca bağlı kumbarada tek kaynak borç planı: kumbaranın kendi aylık hesabı çelişmesin
+        out["goal_status"] = None
+        for k in ("need_per_month", "eta", "on_track"):
+            out.pop(k, None)
     return out
 
 
@@ -4006,7 +4013,16 @@ def list_jars():
     today = date.today()
     jars = db.list_jars(today)
     debts = _jar_debts(jars)
-    return [_jar_view(j, today, debts) for j in jars]
+    return [_jar_view(j, today, debts, _jar_plans(jars, debts)) for j in jars]
+
+
+def _jar_plans(jars: list[dict], debts: dict[int, dict] | None) -> dict[int, dict]:
+    """Açık borca bağlı açık kumbara varsa borç planından durumları (plan bir kez hesaplanır)."""
+    from app import debt_plan as dp
+
+    if not debts or not any(j.get("debt_id") in debts and not j.get("closed_at") for j in jars):
+        return {}
+    return dp.jar_plans()
 
 
 @app.post("/api/jars")
@@ -4089,8 +4105,9 @@ def create_debt_jar(did: int, body: DebtJarIn):
     data = body.model_dump(exclude_unset=True)
     deadline = data["deadline"].isoformat() if data.get("deadline") else (None if "deadline" in data else offer["deadline"])
     try:
+        # aylık tutar saklanmaz (verilmedikçe): bağlı kumbarada ay ay tutarlar borç planından gelir
         jid = db.create_debt_jar(did, data.get("name") or offer["name"], data.get("goal") or offer["goal"], deadline,
-                                 data.get("monthly") or offer["monthly"], data.get("account_id"))
+                                 data.get("monthly"), data.get("account_id"))
     except db.DebtJarExists as e:
         raise HTTPException(409, str(e)) from None
     except LookupError as e:
@@ -4100,7 +4117,8 @@ def create_debt_jar(did: int, body: DebtJarIn):
     today = date.today()
     jars = db.list_jars(today)
     j = next(x for x in jars if x["id"] == jid)
-    return {"id": jid, "jar": _jar_view(j, today, _jar_debts([j]))}
+    message, plan = dp.jar_open_message(did, today)
+    return {"id": jid, "message": message, "jar": _jar_view(j, today, _jar_debts([j]), {did: plan} if plan else {})}
 
 
 class DebtFromJarIn(BaseModel):

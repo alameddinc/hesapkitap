@@ -13,6 +13,7 @@ import { KIND_LABEL } from "./Plan";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import { hedefMetni, type GoalStatus, type Ton } from "../lib/kumbaraHedef";
 import type { JarDebt } from "../lib/borcKumbara";
+import { JarPlanLine } from "./DebtJar";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
 interface Jar {
@@ -353,7 +354,7 @@ export default function Jars() {
                 <div className={cx("h-full rounded-full", TON[tonOf(j.goal_status) ?? "iyi"].cubuk)} style={{ width: `${j.pct ?? 0}%` }} />
               </div>
             )}
-            <HedefDurumu j={j} />
+            {j.debt?.plan && !j.closed_at ? <div className="mt-1.5"><JarPlanLine p={j.debt.plan} /></div> : <HedefDurumu j={j} />}
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
               <span>
                 {j.closed_at ? `kapandı ${dateTR(j.closed_at)}`
@@ -362,7 +363,7 @@ export default function Jars() {
                     j.monthly && (isUnit(j) ? `her ayın ${j.auto_day}. günü ${qty(j.monthly, j.unit_symbol ?? sym(j.unit))} al`
                       : `her ayın ${j.auto_day}. günü ${tl(j.monthly)} otomatik`), j.account_name && `yeri: ${j.account_name}`]
                     .filter(Boolean).join(" · ")}
-                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && !j.goal_status && (
+                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && !j.goal_status && !j.debt?.plan && (
                   <span className={cx("block", j.eta ? (j.on_track === false ? "text-amber-600" : "text-green-700 dark:text-green-400") : "text-stone-500")}>
                     {j.eta ? `Bu hızla (ayda ${isUnit(j) ? qty(j.pace, j.unit_symbol ?? sym(j.unit)) : tl(j.pace)}) ${monthLabel(j.eta)}'de ulaşırsın${j.on_track === false ? ", son tarihe yetişmiyor" : ""}`
                       : "Son 3 ayda ayırma yok; ayır ya da otomatik ayırmayı aç"}

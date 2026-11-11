@@ -6,7 +6,8 @@ import { Lock, PiggyBank } from "lucide-react";
 import { useState } from "react";
 import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
-import { offerSummary, payAmountEditable, type JarPayResult, type PlanJar, type PlanJarAction, type PlanJarPay } from "../lib/borcKumbara";
+import { offerSummary, openToast, payAmountEditable, planTon, type JarOpenResult, type JarPayResult, type PlanJar, type PlanJarAction, type PlanJarPay,
+  type PlanJarPlan, type PlanJarPut } from "../lib/borcKumbara";
 import { cx, maskText, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import Modal from "./Modal";
@@ -77,11 +78,12 @@ export function JarBox({ jar, debtId, title }: { jar: PlanJar; debtId: number; t
   const ui = useUI();
   const refresh = useRefresh();
   const [paying, setPaying] = useState(false);
+  const [putting, setPutting] = useState(false);
   const open = useMutation({
-    mutationFn: () => send<{ id: number }>(`/api/debts/${debtId}/jar`, { method: "POST", json: {} }),
+    mutationFn: () => send<JarOpenResult>(`/api/debts/${debtId}/jar`, { method: "POST", json: {} }),
     onSuccess: (r) => {
       refresh();
-      ui.toast("Kumbara açıldı; bu ayın birikimini \"Kumbaraya ayır\"la ekle",
+      ui.toast(openToast(r),
         { undo: async () => { await send(`/api/jars/${r.id}`, { method: "DELETE" }); refresh(); } });
     },
     onError: (e: Error) => ui.error(e.message || "Kumbara açılamadı"),
@@ -122,6 +124,14 @@ export function JarBox({ jar, debtId, title }: { jar: PlanJar; debtId: number; t
           <div className="h-full rounded-full bg-violet-600" style={{ width: `${pct}%` }} />
         </div>
       )}
+      {jar.plan && <JarPlanLine p={jar.plan} />}
+      {jar.put && !jar.pay && (
+        <div className="flex justify-end">
+          <button className="btn-ghost border border-violet-300 px-2 py-1 text-sm text-violet-800 dark:border-violet-700 dark:text-violet-200"
+            data-testid="kumbaraya-ayir-serbest" onClick={() => setPutting(true)}>{jar.put.label}</button>
+        </div>
+      )}
+      {putting && jar.put && <JarPutDialog put={jar.put} title={jar.name} onClose={() => setPutting(false)} />}
       {jar.pay && (
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
           <span className="min-w-0 flex-1 basis-48">{maskText(jar.pay.text)}</span>
@@ -152,4 +162,47 @@ export function JarRowButton({ kind, action, pay, title, small }: { kind: "ayir"
     );
   }
   return null;
+}
+
+/** Planın takvimine göre kumbara durumu (rozet + satır + takvim); kumbara kartında da kullanılır. */
+export function JarPlanLine({ p }: { p: PlanJarPlan }) {
+  const iyi = planTon(p) === "iyi";
+  return (
+    <div className={cx("rounded-md px-2 py-1.5", iyi ? "bg-green-50 dark:bg-green-950/40" : "bg-stone-50 dark:bg-stone-900")} data-testid="kumbara-plan" data-status={p.status}>
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold text-stone-900 dark:text-stone-100">
+        {p.badge && <span className="rounded-md bg-green-100 px-1.5 py-0.5 text-xs font-bold text-green-800 dark:bg-green-900/60 dark:text-green-200">{p.badge}</span>}
+        <span className="tabular-nums">{maskText(p.line)}</span></p>
+      {p.detail && <p className="text-xs text-stone-600 tabular-nums dark:text-stone-400">{maskText(p.detail)}</p>}
+    </div>
+  );
+}
+
+/** "Kumbaraya ayır" (tutar sorulur): plan bu ay ayırmıyorsa da; bu ayın plan tutarı varsa önerilir. Geri al var. */
+export function JarPutDialog({ put, title, onClose }: { put: PlanJarPut; title: string; onClose: () => void }) {
+  const ui = useUI();
+  const refresh = useRefresh();
+  const [text, setText] = useState(put.amount ? put.amount.toLocaleString("tr-TR", { maximumFractionDigits: 2 }) : "");
+  const amount = parseAmount(text);
+  const m = useMutation({
+    mutationFn: () => send<{ id: number }>(`/api/jars/${put.jar_id}/moves`, { method: "POST",
+      json: { amount, direction: "yatir", move_date: today(), note: put.note } }),
+    onSuccess: (r) => {
+      onClose();
+      refresh();
+      ui.toast(`${trimTl(amount)} kumbaraya ayrıldı`, { undo: async () => { await send(`/api/jar-moves/${r.id}`, { method: "DELETE" }); refresh(); } });
+    },
+    onError: (e: Error) => ui.error(e.message || "Kaydedilemedi"),
+  });
+  return (
+    <Modal title={`${title} · ${put.label.toLowerCase()}`} onClose={onClose} footer={
+      <button className="btn-primary w-full justify-center" disabled={!(amount > 0) || m.isPending} onClick={() => m.mutate()}>{put.label}</button>}>
+      <div className="space-y-3 text-sm">
+        <label className="block text-xs">Tutar
+          <input className="input mt-1 text-right text-lg" inputMode="decimal" autoFocus value={text} onChange={(e) => setText(e.target.value)} />
+        </label>
+        <p className="text-xs text-stone-500">{put.amount ? "Önerilen tutar planın bu ayki birikimi." : "Plan bu ay bu borca birikim ayırmıyor; ayırdığın para kumbarada durur ve plan sonraki ayları buna göre azaltır."}
+          {" "}Para hesabında kalır; harcanabilir tutardan düşer.</p>
+      </div>
+    </Modal>
+  );
 }

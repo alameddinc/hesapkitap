@@ -4852,13 +4852,16 @@ def list_jars(today: date | None = None, include_closed: bool = True) -> list[di
 
 
 def jar_reserved(today: date | None = None) -> dict:
-    """Açık kumbaralarda ayrılan toplam ve hesap bazında dağılım."""
+    """Açık kumbaralarda ayrılan toplam, hesap bazında dağılım ve borca bağlı kumbaralarda borç başına bakiye."""
     by_acc: dict[int | None, float] = {}
+    by_debt: dict[int, float] = {}
     for j in list_jars(today, include_closed=False):
         if (j.get("unit") or "TRY") != "TRY":  # altın/döviz kumbarası para ayırmaz: alınan varlık net durumda görünür
             continue
         by_acc[j["account_id"]] = round(by_acc.get(j["account_id"], 0) + j["balance"], 2)
-    return {"total": round(sum(by_acc.values()), 2), "by_account": by_acc}
+        if j.get("debt_id"):  # borca bağlı kumbara (debt_jar): harcanabilirde borcun kalanıyla iki kez düşülmesin
+            by_debt[j["debt_id"]] = round(by_debt.get(j["debt_id"], 0) + j["balance"], 2)
+    return {"total": round(sum(by_acc.values()), 2), "by_account": by_acc, "by_debt": by_debt}
 
 
 JAR_FIELDS = ("name", "goal", "deadline", "account_id", "monthly", "auto_day", "note", "closed_at", "unit")
