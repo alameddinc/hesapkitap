@@ -3795,6 +3795,66 @@ def push_prefs_put(body: PushPrefsIn):
     return push.prefs_out(uid)
 
 
+class AnnounceTargetIn(BaseModel):
+    platform: Literal["all", "ios", "android"] = "all"
+    below_version: str | None = Field(default=None, max_length=20)
+    test_only: bool = False
+
+
+class AnnounceIn(AnnounceTargetIn):
+    title: str = Field(max_length=500)
+    body: str = Field(max_length=2000)
+    route: str | None = Field(default=None, max_length=200)
+    force: bool = False  # aynı metin 10 dk içinde gönderildiyse yine de gönder (istemci onayıyla)
+
+
+def _announce_admin() -> dict:
+    _require_admin()
+    u = db.current_user()
+    if not u or not u.get("id"):
+        raise HTTPException(409, "Duyuru için yönetici hesabıyla giriş gerekli")
+    return u
+
+
+@app.post("/api/admin/announce/preview")
+def admin_announce_preview(body: AnnounceTargetIn):
+    """Duyurunun hedefi: {users, devices, by_platform {ios, android}, opted_out (duyuruyu kapatan), enabled}."""
+    from app import announce
+
+    u = _announce_admin()
+    v = (body.below_version or "").strip() or None
+    if v and not announce.VERSION_RE.match(v):
+        raise HTTPException(422, "Sürüm 1.0.5 biçiminde olmalı")
+    return announce.preview(body.platform, v, body.test_only, u["id"])
+
+
+@app.post("/api/admin/announce")
+def admin_announce(body: AnnounceIn):
+    """Duyuru gönder (arka planda). Tercihinde "duyuru" kapalı olana gitmez, sessiz saatte kuyruğa girer, kişi başı bir
+    kez. test_only: yalnız kendi cihazlarına, hemen. Aynı metin 10 dk içinde ikinci kez: 409 (force ile geçer)."""
+    from app import announce
+
+    u = _announce_admin()
+    try:
+        a = announce.create(u, body.model_dump(), test_only=body.test_only, force=body.force)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except announce.DuplicateError as e:
+        return JSONResponse({"detail": "Bu duyuru 10 dakika içinde zaten gönderildi", "code": "duplicate",
+                             "existing": announce.to_json(e.existing)}, status_code=409)
+    return announce.to_json(a)
+
+
+@app.get("/api/admin/announcements")
+def admin_announcements():
+    """Geçmiş duyurular (yeniden eskiye, en çok 50)."""
+    from app import announce
+
+    _announce_admin()
+    return {"items": [announce.to_json(a) for a in announce.history()], "limits": {"title": announce.TITLE_MAX,
+                                                                                   "body": announce.BODY_MAX}}
+
+
 @app.post("/api/push/test")
 def push_test():
     """Kullanıcının cihazlarına "Bildirimler açık" (dakikada bir)."""

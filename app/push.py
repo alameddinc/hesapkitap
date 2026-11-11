@@ -93,6 +93,7 @@ TYPES = {
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
     "borc": ("Borç ödeme günü", True),  # elden borçta söz verilen gün ve ödeme planlı borcun taksit günü (2 gün kala ve o gün)
+    "duyuru": ("Duyurular ve yeni sürümler", True),  # yöneticinin duyurusu (app/announce.py)
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -100,7 +101,7 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
-         "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü"}
+         "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -316,14 +317,16 @@ def fcm_message(token: str, p: dict) -> dict:
     return {"message": {
         "token": token,
         "notification": {"title": p["title"], "body": p["body"]},
-        "data": {"route": p.get("route") or R_OZET, "kind": p["kind"], "id": p["id"]},
+        "data": {"route": p.get("route") or R_OZET, "kind": p["kind"], "id": p["id"],
+                 **({"action": p["action"]} if p.get("action") else {})},
         "android": {"priority": "HIGH", "notification": {"channel_id": ANDROID_CHANNEL, "tag": cid}},
     }}
 
 
 def apns_payload(p: dict) -> dict:
     return {"aps": {"alert": {"title": p["title"], "body": p["body"]}, "sound": "default", "thread-id": p["kind"]},
-            "route": p.get("route") or R_OZET, "kind": p["kind"], "id": p["id"]}
+            "route": p.get("route") or R_OZET, "kind": p["kind"], "id": p["id"],
+            **({"action": p["action"]} if p.get("action") else {})}
 
 
 def send_fcm(token: str, p: dict) -> str:
@@ -384,10 +387,16 @@ def send_apns(token: str, env: str | None, p: dict) -> str:
 
 
 def deliver(uid: int, p: dict) -> dict:
-    """Kullanıcının bütün cihazlarına gönder. Geçersiz cihazlar silinir. {sent, removed, failed}."""
+    """Kullanıcının bütün cihazlarına gönder. Geçersiz cihazlar silinir. {sent, removed, failed}.
+    p["only"] {platform, below} (duyuru): yalnız eşleşen cihazlar (app/announce.device_matches)."""
     out = {"sent": 0, "removed": 0, "failed": 0}
+    only = p.get("only") if isinstance(p.get("only"), dict) else None
+    if only:
+        from app import announce
     for d in devices(uid):
         if not _platform_on(d["platform"]):
+            continue
+        if only and not announce.device_matches(d, only.get("platform") or "all", only.get("below")):
             continue
         res = send_fcm(d["token"], p) if d["platform"] == "android" else send_apns(d["token"], d["env"], p)
         if res == "ok":
@@ -417,7 +426,9 @@ def register(uid: int, token: str, platform: str, env: str | None = None, app_ve
             c.execute("DELETE FROM push_devices WHERE token = ?", (token,))
             old = None
         if old:
-            c.execute("UPDATE push_devices SET platform = ?, env = ?, app_version = ?, last_seen = ? WHERE token = ?",
+            # sürüm her kayıtta güncellenir (uygulama güncellenince); gönderilmediyse eskisi kalır
+            c.execute("UPDATE push_devices SET platform = ?, env = ?, app_version = COALESCE(?, app_version), last_seen = ? "
+                      "WHERE token = ?",
                       (platform, env, app_version, now, token))
         else:
             c.execute("INSERT INTO push_devices (token, user_id, platform, env, app_version, created, last_seen) "
@@ -566,9 +577,15 @@ def flush(now: datetime | None = None) -> int:
             u = system.user(r["user_id"])
             if not u or u.get("disabled") or u.get("deleted_at"):
                 continue
-            res = deliver(r["user_id"], json.loads(r["payload"]))
+            p = json.loads(r["payload"])
+            res = deliver(r["user_id"], p)
             n += res["sent"]
-            if res["failed"] and not res["sent"] and (r.get("tries") or 0) + 1 < MAX_TRIES:
+            retry = bool(res["failed"] and not res["sent"] and (r.get("tries") or 0) + 1 < MAX_TRIES)
+            if p.get("ann"):  # duyuru: kuyruktan gidenler de kaydın sayılarına
+                from app import announce
+
+                announce.record(int(p["ann"]), res, final=not retry)
+            if retry:
                 with system.connect() as c:
                     c.execute("INSERT INTO push_queue (user_id, payload, not_before, created, tries) VALUES (?, ?, ?, ?, ?)",
                               (r["user_id"], r["payload"], now.timestamp() + 300 * ((r.get("tries") or 0) + 1),

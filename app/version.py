@@ -65,6 +65,11 @@ CAPABILITIES = (
                               # (kontrol: istemci tutarı vurgular, "Tutarı fişle karşılaştır"); text_match {date, merchant}
     "push",                   # telefona bildirim: POST/DELETE /api/push/devices, GET/PUT /api/push/prefs (enabled: sunucuda
                               # yapılandırılmış mı), POST /api/push/test; yük data {route, kind, id}
+    "push_announce",          # yöneticinin duyurusu: POST /api/admin/announce/preview {platform, below_version, test_only} →
+                              # {users, devices, by_platform, opted_out, enabled}; POST /api/admin/announce {title (≤80),
+                              # body (≤300), route "#/…"|"store", platform all|ios|android, below_version, test_only,
+                              # force} (409 duplicate: aynı metin 10 dk); GET /api/admin/announcements. Push türü "duyuru";
+                              # yük data action "store" → istemci mağaza sayfasını açar (route yine "#/ozet")
     "dekont_parse",           # havale/EFT dekontu: POST /api/dekont/parse (foto/PDF → transfer taslağı, yön/kişi/hesap/
                               # çift kayıt/borç önerisi), POST /api/dekont/save (409 zaten eklenmiş), POST /api/documents/classify
                               # (PDF metni: dekont|ekstre önerisi, hak düşmez); /api/bills/parse transfer_check → looks_like_transfer

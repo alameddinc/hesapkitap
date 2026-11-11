@@ -201,6 +201,25 @@ CREATE TABLE IF NOT EXISTS push_queue (     -- gönderilecekler (sessiz saat bit
     created TEXT,
     tries INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS announcements (  -- yöneticinin duyurusu (app/announce.py): metin, hedef, sayılar
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,            -- UTC "YYYY-MM-DD HH:MM:SS"
+    finished_at TEXT,
+    admin_id INTEGER,
+    admin_name TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    route TEXT,                          -- "#/…" | "store" | NULL
+    platform TEXT NOT NULL DEFAULT 'all',  -- all | ios | android
+    below_version TEXT,                  -- yalnız bu sürümün altındaki cihazlar (bilinmeyen dahil)
+    test_only INTEGER NOT NULL DEFAULT 0,  -- yalnız gönderen yöneticinin cihazları
+    target_users INTEGER NOT NULL DEFAULT 0,
+    target_devices INTEGER NOT NULL DEFAULT 0,
+    sent INTEGER NOT NULL DEFAULT 0,     -- ulaşan cihaz
+    failed INTEGER NOT NULL DEFAULT 0,   -- gönderilemeyen cihaz
+    queued INTEGER NOT NULL DEFAULT 0,   -- sessiz saatte bekleyen kişi
+    status TEXT NOT NULL DEFAULT 'sending'  -- sending | queued | done
+);
 CREATE TABLE IF NOT EXISTS feedback (       -- uygulama içi "Sorun bildir" (app/feedback.py); yönetici görür
     id INTEGER PRIMARY KEY,
     user_id INTEGER,                     -- oturumsuz (giriş ekranı) ve demoda NULL

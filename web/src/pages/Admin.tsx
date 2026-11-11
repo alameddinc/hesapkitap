@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
+import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AiCosts as Costs } from "../api";
 import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
 import AiCosts from "../components/AiCosts";
+import Announce from "../components/Announce";
 import AppUpdate from "../components/AppUpdate";
 import CardTemplates from "../components/CardTemplates";
 import DemoStats from "../components/DemoStats";
@@ -19,13 +20,14 @@ import { cx } from "../format";
 // Yönetici paneli (#/yonetici/<alt sayfa>): eskiden Ayarlar'ın altındaki yönetici bölümleri burada, her biri kendi
 // sayfasında. Adres alt sayfayı tutar: yenileyince aynı sayfa açılır. Bölümlerin kendisi (bileşenler) değişmedi.
 
-type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
+type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
 
 const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "genel", label: "Genel", icon: LayoutDashboard, hint: "Özet ve sürüm" },
   { key: "olcum", label: "Ölçüm", icon: Activity, hint: "Demo → hesap → aktivasyon → tutunma → abonelik" },
   { key: "kullanicilar", label: "Kullanıcılar", icon: UsersIcon, hint: "Hesaplar, davetler, paketler, silinenler" },
   { key: "geri-bildirim", label: "Geri bildirim", icon: MessageSquareWarning, hint: "Sorun bildir mesajları" },
+  { key: "duyuru", label: "Duyuru gönder", icon: Megaphone, hint: "Telefonlara bildirim: yeni sürüm, duyuru" },
   { key: "yapay-zeka", label: "Yapay zekâ maliyeti", icon: Coins, hint: "Aylık maliyet, kullanıcı başı, sınırla" },
   { key: "paket-tablosu", label: "Paket tablosu", icon: TableProperties, hint: "Hangi sayfa hangi pakette" },
   { key: "sablonlar", label: "Fiş şablonları", icon: Receipt, hint: "Yapay zekâsız okunan zincirler" },
@@ -87,6 +89,7 @@ export default function Admin() {
           {sub === "olcum" && <Olcum />}
           {sub === "kullanicilar" && <Users />}
           {sub === "geri-bildirim" && <AdminFeedback />}
+          {sub === "duyuru" && <Announce />}
           {sub === "yapay-zeka" && <AiCosts />}
           {sub === "paket-tablosu" && <PlanTable />}
           {sub === "sablonlar" && <><ReceiptTemplates /><CardTemplates /></>}
