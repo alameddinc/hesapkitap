@@ -228,6 +228,16 @@ def test_cycle_start_day(client, upload, tmpdb):
     assert tmpdb.auto_update_cycle() == 21
 
 
+def test_installment_rounding_goes_to_last_payment():
+    """Vade farksız taksitte kuruş farkı son taksite: toplam tam tutar, "vade farkı ₺0,01" yok (11.11)."""
+    from app.finance import installment_schedule, simulate_purchase
+
+    s = installment_schedule(500, 3, 0)
+    assert [x["payment"] for x in s] == [166.67, 166.67, 166.66] and round(sum(x["payment"] for x in s), 2) == 500
+    assert simulate_purchase(500, 3, 0)["extra_cost"] == 0
+    assert round(sum(x["payment"] for x in installment_schedule(1000, 7, 0)), 2) == 1000
+
+
 def test_installment_schedule():
     from app.finance import installment_schedule
 
@@ -235,7 +245,7 @@ def test_installment_schedule():
     assert [x["payment"] for x in s] == [1000.0] * 9 and sum(x["cost"] for x in s) == 0
     s = installment_schedule(425, 9, 0.0375)  # %3,75 + BSMV/KKDF (%30) → efektif %4,875, eşit taksit
     total = sum(x["payment"] for x in s)
-    assert s[0]["payment"] == 59.46 and round(total, 2) == 535.14  # annüite: 425·r/(1-(1+r)^-9)
+    assert s[0]["payment"] == 59.46 and round(total, 2) == 535.15  # annüite: 425·r/(1-(1+r)^-9); kuruş farkı son taksitte
     assert abs(sum(x["principal"] for x in s) - 425) < 0.05
 
 

@@ -2486,15 +2486,20 @@ TAX_ON_INTEREST = 0.30  # BSMV %15 + KKDF %15 (taksitli alışveriş / kredi kar
 
 
 def installment_schedule(amount: float, n: int, monthly_rate: float) -> list[dict]:
-    """Eşit taksit. Vade farkı varsa üstüne BSMV+KKDF eklenir (efektif oran = oran × 1,30)."""
+    """Eşit taksit. Vade farkı varsa üstüne BSMV+KKDF eklenir (efektif oran = oran × 1,30). Kuruş yuvarlama farkı son
+    taksite yansır (bankalar gibi): vade farksız 500 TL / 3 taksit = 166,67 + 166,67 + 166,66; toplam tam 500, "vade
+    farkı ₺0,01" görünmez (11.11 hata)."""
     r = monthly_rate * (1 + TAX_ON_INTEREST)
     pay = amount / n if r == 0 else amount * r / (1 - (1 + r) ** -n)
-    out, rem = [], amount
+    total = amount if r == 0 else pay * n
+    out, rem, paid = [], amount, 0.0
     for i in range(n):
         interest = rem * r
         principal = pay - interest
         rem -= principal
-        out.append({"no": i + 1, "payment": _round(pay), "principal": _round(principal), "cost": _round(interest)})
+        p = _round(pay) if i < n - 1 else _round(total - paid)
+        paid += p
+        out.append({"no": i + 1, "payment": p, "principal": _round(principal), "cost": _round(interest)})
     return out
 
 
