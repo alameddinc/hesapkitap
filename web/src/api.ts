@@ -313,6 +313,36 @@ export interface Summary {
   period?: { name: string; label: string; span: string; start: string; end: string };
   /** "geçen döneme göre": başlıktaki giderle aynı sayım; içinde bulunulan dönemde geçen dönemin aynı günü (yetenek period_naming) */
   vs_prev?: VsPrev | null;
+  /** "Bu dönem ödenen faiz ve ücret" kartı (yetenek summary_interest_paid; eski sunucuda yok). null: ortak defterde faiz gizli */
+  interest_paid?: InterestPaid | null;
+}
+
+/** Sunucu finance.interest_paid: total = totals.fees = Faiz sayfasının o ayı. state: var (faiz/ücret var) | yok (bu dönemin
+ *  ekstresi var, faiz yok) | ekstre_yok (bu dönemin kart ekstresi henüz yok). has_cards false: hiç kart ekstresi yok. */
+export interface InterestPaid {
+  total: number; interest: number; tax: number; fee: number; count: number; statements: number; has_cards: boolean;
+  state: "var" | "yok" | "ekstre_yok";
+  /** ekstre_yok iken son ekstreli dönem ("Ekim döneminde …"); öncesinde de ekstre yoksa null (eski sunucuda alan yok) */
+  last_period?: { month: string; name: string; label: string; total: number; interest: number; tax: number; fee: number; count: number; statements: number; state: "var" | "yok" } | null;
+}
+
+/** İlk gün özeti (GET /api/first-look, yetenek first_look; sunucu app/first_look.py). Asgari ödeme bilerek yok. */
+export interface FirstLook {
+  first: boolean;
+  statement_count: number;
+  statements: { id: number; card: string; bank: string; last4: string; period_end: string; due_date: string | null; total_debt: number | null }[];
+  to_pay: { total: number; items: { statement_id: number; card: string; amount: number; due_date: string; days_left: number; status: string }[]; note: string | null };
+  past_due: number;
+  fees: { total: number; interest: number; tax: number; fee: number; count: number; by_type: { type: string; label: string; total: number }[] } | null;
+  installments: { total: number; count: number; months: number; next: { month: string; label: string; amount: number } | null; last_month: string | null; last_label: string | null };
+  steps: { key: "dokum" | "butce" | "hatirlatma" | string; title: string; text: string; cta: string; platform?: "mobile" | "web" }[];
+}
+
+/** "Ekstre nasıl indirilir?" (GET /api/statement-help, yetenek statement_help): web ve mobil aynı kaynak. **kalın** */
+export interface StatementHelpContent {
+  title: string;
+  sections: { key: string; title: string; icon: string; steps: { text: string }[] }[];
+  tips: { text: string }[];
 }
 
 export interface VsPrev {
@@ -614,6 +644,7 @@ export interface UploadResult {
   cycle_day?: number;
   dekont?: boolean; // tek işlem dekontu: hesaba eklendi, bakiye değişmedi
   card_excel?: { statements: number; transactions: number; range: [string, string] | null; cut_day: number }; // kart işlem Excel'i
+  statement_id?: number; // kaydedilen kart ekstresi (yetenek first_look): İlk gün özeti bu kimliklerle istenir
   manual?: boolean; quota_full?: boolean; limit?: number; upgrade?: boolean; // hazır sürüm: okuma hakkı doldu (okunmadı)
   reason?: "quota"; kind?: ReadKind; extra_left?: number; // hak doldu: hangi sayaç (belge / fiş), ek paket bakiyesi
   /** S6 (sunucu 48d6cc2): ekstre denklemi tuttu mu; dogrulanamadi ise verification_text nedeni söyler */
@@ -758,6 +789,9 @@ export const api = {
     if (kind) fd.append("kind", kind);
     return req<UploadResult[]>("POST", "/api/statements/upload", fd);
   },
+  /** İlk gün özeti: yüklenen ekstrelerin kimlikleri (boşsa her kartın son ekstresi) */
+  firstLook: (ids: number[]) => req<FirstLook>("GET", `/api/first-look${ids.length ? `?ids=${ids.slice(0, 50).join(",")}` : ""}`),
+  statementHelp: () => req<StatementHelpContent>("GET", "/api/statement-help?platform=web"),
   imports: () => req<ImportBatch[]>("GET", "/api/imports"),
   undoImport: (id: string, force = false) =>
     req<{ ok: boolean; conflicts?: string[]; already?: boolean }>("POST", `/api/imports/${id}/undo${force ? "?force=true" : ""}`),

@@ -31,6 +31,7 @@ import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
 import { DonemSonuKarti } from "../components/Beklenen";
 import DebtPlanCard from "../components/DebtPlanCard";
+import FaizOzetKarti from "../components/FaizOzet";
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { boundsOf, cx, signed, tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
@@ -92,6 +93,8 @@ function Section({ title, children, right }: { title: string; children: React.Re
 // Özet bileşenleri: sırası ve hangilerinin görüneceği kişiye özel (Düzenle). module: ait olduğu özellik/sayfa.
 export const WIDGETS: Record<string, { title: string; module?: string; cap?: string }> = {
   kartlar: { title: "Gelir · gider · net · faiz" },
+  // dokununca Faiz ve ücretler; sunucu interest_paid vermiyorsa (eski sunucu) listede yok
+  "faiz-ucret": { title: "Bu dönem ödenen faiz ve ücret", cap: "summary_interest_paid" },
   "donem-sonu": { title: "Dönem sonu", module: "plan" },
   gelenler: { title: "Telefondan gelenler" },
   baslarken: { title: "Başlarken" },
@@ -113,7 +116,7 @@ export const WIDGETS: Record<string, { title: string; module?: string; cap?: str
   // varsayılan düzende yok: Borç planı ekranındaki "Özet'te göster" ya da Özeti düzenle ile eklenir; ≥2 açık borçta görünür
   "borc-plani": { title: "Borç planı", cap: "debt_plan" },
 };
-export const DEFAULT_LAYOUT = ["kartlar", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
+export const DEFAULT_LAYOUT = ["kartlar", "faiz-ucret", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
   "istatistik-link", "odemeler"];
 
 export default function Dashboard() {
@@ -242,6 +245,8 @@ export default function Dashboard() {
       </>);
       // dönem sonu tahmini (Planlama'nın bu ayı): yalnız bu ve ileri dönemde (geçmişte expected null → kart yok)
       case "donem-sonu": return <DonemSonuKarti summary={s} />;
+      // ortak defterde faiz gizliyse sunucu interest_paid null → kart yok
+      case "faiz-ucret": return feesHidden ? null : <FaizOzetKarti summary={s} past={month < (meta?.current_month ?? month)} />;
       case "gelenler": return <SharedInbox />;
       // Başlarken (sahibin kurulumu) ve altında Yapılacaklar (belge hatırlatmaları; üyede görebildikleri)
       case "baslarken": return <>{!inSharedBook(book) && <Onboarding />}<Reminders /></>;

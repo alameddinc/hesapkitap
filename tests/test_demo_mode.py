@@ -49,6 +49,7 @@ def test_closed_endpoints_and_samples(demo):
     assert demo.get("/api/book/me").status_code == 200
     r = demo.post("/api/demo/sample/vakifbank").json()[0]
     assert r["status"] == "saved" and r["reconciliation_diff"] == 0 and r["txn_count"] > 10
+    assert isinstance(r["statement_id"], int)  # İlk bakış (first_look) demoda da çalışır
     assert demo.post("/api/demo/sample/vakifbank").json()[0]["status"] == "duplicate"
     g = demo.post("/api/demo/sample/genel").json()[0]
     assert g["status"] == "saved" and g["bank"] == "Yeşil Bank" and g["reconciliation_diff"] == 0

@@ -5791,7 +5791,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                 res["charged"] = charged
             results.append({**res, "status": "duplicate"})
             continue
-        db.save_statement(data, f.filename or "ekstre.pdf", stmt)
+        sid = db.save_statement(data, f.filename or "ekstre.pdf", stmt)
+        res["statement_id"] = sid  # İlk gün özeti (GET /api/first-look?ids=) bu ekstreleri özetler
         # yerel ayrıştırıcı ya da yapay zekâ yedek okuması: belge başına (her 10 sayfa) 1
         if charged := doc_reads.charge(data):
             res["charged"] = charged
@@ -5809,6 +5810,24 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
     if (warn := db.take_storage_warning()) and results:
         results[-1]["storage_warning"] = warn
     return results
+
+
+@app.get("/api/first-look")
+def first_look(ids: str | None = Query(None, max_length=400, pattern=r"^\d{1,12}(,\d{1,12}){0,49}$")):
+    """İlk gün özeti (app/first_look.py): yüklenen kart ekstrelerinden bu ay ödenecekler, ödenen faiz/ücret, gelecek
+    taksitler ve sonraki adımlar. ids: yükleme sonucundaki statement_id'ler (virgülle); yoksa her kartın son ekstresi.
+    first: kullanıcının ilk haftası (istemci özeti yalnız o zaman belirgin gösterir)."""
+    from app import first_look as fl
+
+    return fl.build([int(x) for x in ids.split(",")] if ids else None)
+
+
+@app.get("/api/statement-help")
+def statement_help(platform: Literal["web", "mobile"] | None = None):
+    """Ekstre ve hesap dökümü nasıl indirilir (app/statement_help.py): web ve mobil aynı içerik, tek kaynak."""
+    from app import statement_help as sh
+
+    return sh.content(platform)
 
 
 @app.get("/api/statements/{sid}/file")
@@ -6587,10 +6606,10 @@ def demo_sample(key: str):
     if db.statement_exists(data, st):
         return [{**res, "status": "duplicate"}]
     with undo.batch(f"Ekstre: {s['label']}"):
-        db.save_statement(data, s["label"], st)
+        sid = db.save_statement(data, s["label"], st)
         linked = db.auto_link()
         db.auto_mark_paid()
-    return [{**res, "status": "saved", "linked": linked}]
+    return [{**res, "status": "saved", "linked": linked, "statement_id": sid}]  # İlk bakış (first_look) demoda da
 
 
 # ---------------------------------------------------------------- yüklemeyi geri al

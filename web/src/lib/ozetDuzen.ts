@@ -3,7 +3,7 @@
 // adı zaten atar (WIDGETS süzgeci), sunucu listeyi olduğu gibi saklar.
 
 /** Sonradan eklenen bileşenler → kayıtlı düzende hangisinin ardına girer. */
-export const YENI_BILESEN: Record<string, string> = { "donem-sonu": "kartlar" };
+export const YENI_BILESEN: Record<string, string> = { "donem-sonu": "kartlar", "faiz-ucret": "kartlar" };
 
 const isaret = (id: string) => `-${id}`;
 

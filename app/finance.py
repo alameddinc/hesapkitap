@@ -555,6 +555,7 @@ def summary(month: str, today: date | None = None) -> dict:
                                                                     or r.get("pending") or r.get("linked"))))
     by_category = _group_categories(expenses)
     exp = expected(month, today=today)
+    paid = interest_paid(month, rows, statements)
     return {
         "month": month,
         # dönemin adı (başladığı ay; anahtar değil) ve aralığı: istemciler aynı kuralı kullanır (db.period_name_month)
@@ -583,7 +584,53 @@ def summary(month: str, today: date | None = None) -> dict:
         # dönem sonu tahmini (yetenek "summary_expected"; finance.expected = Planlama'nın bu ayki satırı). Toplamlara
         # (totals, by_category, budgets, trend) hiçbir şey EKLEMEZ; geçmiş dönemde null
         "expected": exp,
+        # "Bu dönem ödenen faiz ve ücret" kartı (yetenek "summary_interest_paid"; interest_paid). Ortak defterde faiz
+        # gizliyse null (kart yok)
+        "interest_paid": paid,
     }
+
+
+def interest_paid(month: str, rows: list[dict] | None = None, statements: list[dict] | None = None) -> dict | None:
+    """Özet'teki "Bu dönem ödenen faiz ve ücret ₺X" kartı (istemci toplamasın). total: dönemin faiz/ücret satırları —
+    totals.fees ile AYNI sayım (_totals: silinen, atlanan, bekleyen, eşleşmiş satır yok) ve Faiz sayfasının (GET
+    /api/interest by_month) o ayı; interest / tax / fee: interest_type ile kırılım (vergi: BSMV/KKDF, ücret: aidat vb.,
+    interest: geri kalan faiz ve vade farkı). state: "var" (total > 0) | "yok" (bu dönemin kart ekstresi var, faiz yok) |
+    "ekstre_yok" (kart var, bu dönemin ekstresi henüz yüklenmedi: "faiz ödemedin" demek için erken). has_cards: hiç kart
+    ekstresi yoksa false (kart gösterilmez). Faiz GELİRİ burada yok (totals.interest_income, ayrı satır).
+    last_period: state "ekstre_yok" iken kart ekstresi olan EN SON önceki dönem {month, name ("Ekim"), label, total,
+    interest, tax, fee, count, statements, state var|yok} — Özet "Ekim döneminde ödenen faiz ve ücret ₺X" ("Bu dönemin
+    ekstresi gelince güncellenir"); öncesinde de ekstre yoksa null. Dönem anahtarı Özet'le aynı (kart satırı ekstrenin
+    kesim ayına yazılır; otomatik ay dönümü en geç kesim gününün ertesi olduğundan kesim o dönemin içindedir).
+    Ortak defterde faiz gizliyse None."""
+    from app import book
+
+    if book.hide_fees():
+        return None
+    all_st = db.list_statements()
+    here = len([s for s in all_st if s["period"] == month]) if statements is None else len(statements)
+    out = {**_fee_parts(transactions(month) if rows is None else rows), "statements": here, "has_cards": bool(all_st)}
+    out["state"] = "var" if money.gt(out["total"], 0) else "yok" if here else "ekstre_yok"
+    out["last_period"] = None
+    if out["state"] == "ekstre_yok":
+        prev = max((s["period"] for s in all_st if s["period"] < month), default=None)
+        if prev:
+            lp = _fee_parts(transactions(prev))
+            out["last_period"] = {"month": prev, "name": period_name(prev, year=False), "label": period_name(prev), **lp,
+                                  "statements": len([s for s in all_st if s["period"] == prev]),
+                                  "state": "var" if money.gt(lp["total"], 0) else "yok"}
+    return out
+
+
+def _fee_parts(rows: list[dict]) -> dict:
+    """Dönem satırlarından faiz/ücret toplamı ve kırılımı (_totals ile aynı süzgeç): total, interest, tax, fee, count."""
+    live = [r for r in rows if r["kind"] == FEE and not (r.get("deleted") or r.get("skipped") or r.get("pending")
+                                                         or r.get("linked"))]
+    by: dict[str, float] = defaultdict(float)
+    for r in live:
+        t = interest_type(r.get("description") or "")
+        by["tax" if t in TAX_KINDS else "fee" if t in FEE_KINDS else "interest"] += r["amount"]
+    return {"total": _round(sum(r["amount"] for r in live)), "interest": _round(by["interest"]), "tax": _round(by["tax"]),
+            "fee": _round(by["fee"]), "count": len(live)}
 
 
 def _vs_prev(month: str, totals: dict, by_month: dict, today: date) -> dict | None:
