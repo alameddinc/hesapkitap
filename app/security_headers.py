@@ -1,13 +1,19 @@
-"""Tarayıcı güvenlik başlıkları (D4): CSP (önce yalnız rapor), HSTS, Permissions-Policy; CSP rapor ucu.
+"""Tarayıcı güvenlik başlıkları (D4): CSP (varsayılan engelleyen), HSTS, Permissions-Policy; CSP rapor ucu.
 
 Saf ASGI ara katmanı: yalnız yanıtın başlangıç mesajına (http.response.start) başlık ekler, gövdeye hiç dokunmaz.
 Dosya (FileResponse), akış (StreamingResponse) ve sıkıştırılmış yanıtlar olduğu gibi geçer. Uygulamanın kendi koyduğu
 başlık ezilmez (yalnız yoksa eklenir).
 
 CSP
-- Şimdilik Content-Security-Policy-Report-Only: tarayıcı hiçbir şeyi ENGELLEMEZ, yalnız ihlali POST /api/csp-report'a
-  bildirir; rapor sunucu günlüğüne "hesapkitap.csp" adıyla düşer (dakikada sınırlı, kişisel veri yok). Bir süre rapor
-  gelmezse HESAPKITAP_CSP=enforce ile engelleyen başlığa geçilir (HESAPKITAP_CSP=off: hiç gönderilmez).
+- Varsayılan (HESAPKITAP_CSP boş ya da enforce): Content-Security-Policy, politika dışı kaynak ENGELLENİR ve ihlal
+  POST /api/csp-report'a bildirilir; rapor sunucu günlüğüne "hesapkitap.csp" adıyla düşer (dakikada sınırlı, kişisel
+  veri yok). Geri dönüş: HESAPKITAP_CSP=report → Content-Security-Policy-Report-Only (hiçbir şey engellenmez, yalnız
+  rapor), HESAPKITAP_CSP=off → hiç gönderilmez. Tanınmayan değer güvenli tarafa (enforce) düşer.
+- Engelleyen kipe geçiş denetimi (11.11): web derlemesi kendi dosyaları dışında kaynak yüklemez (dış adresler yalnız
+  bağlantı/gezinme: App Store, Play, GitHub; CSP gezinmeyi kısıtlamaz), iframe/object/worker/eval/WebAssembly yok,
+  form başka adrese gönderilmez; mobil uygulama (Capacitor) kendi paketini çalıştırır, sunucudan yalnız JSON alır
+  (JSON'a CSP eklenmez); demo ve yönetici sayfaları aynı web derlemesi; Google/Apple girişi ve mağaza ödemesi
+  yalnız telefonda (yerel SDK), web'de dış betik yok.
 - Yalnız HTML yanıtlarına eklenir. JSON API'yi (mobil uygulama, Capacitor) ve dosyaları etkilemez.
 - Web uygulaması (web/): kendi derleme dosyaları ('self'), index.html'deki tek satır içi betik (özeti dosyadan
   hesaplanır; içerik değişince kendiliğinden güncellenir), satır içi stil (grafikler, React style), data:/blob: resim
@@ -107,8 +113,8 @@ def _index_hashes(index_file: str | None) -> list[str]:
 
 
 def csp_mode() -> str:
-    v = (os.environ.get("HESAPKITAP_CSP") or "report").strip().lower()
-    return v if v in ("report", "enforce", "off") else "report"
+    v = (os.environ.get("HESAPKITAP_CSP") or "enforce").strip().lower()
+    return v if v in ("report", "enforce", "off") else "enforce"
 
 
 def hsts_value() -> str | None:
@@ -177,7 +183,10 @@ def summarize(body: bytes) -> list[str]:
         doc = r.get("document-uri") or r.get("documentURL")
         src = r.get("source-file") or r.get("sourceFile")
         line = r.get("line-number") or r.get("lineNumber")
-        out.append(f"{str(directive)[:40]} engellenecekti: {_origin_only(blocked)} · sayfa {_path_only(doc)}"
+        # disposition: tarayıcının uyguladığı kip ("enforce" engelledi, "report" yalnız bildirdi); yoksa sunucunun kipi
+        disp = str(r.get("disposition") or ("report" if csp_mode() == "report" else "enforce")).lower()
+        verb = "engellenecekti" if disp == "report" else "engellendi"
+        out.append(f"{str(directive)[:40]} {verb}: {_origin_only(blocked)} · sayfa {_path_only(doc)}"
                    + (f" · kaynak {_origin_only(src)}:{line}" if src else ""))
     return out
 

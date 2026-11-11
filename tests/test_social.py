@@ -165,7 +165,9 @@ def test_social_nonce_is_single_use_and_survives_consent_retry(google):
     assert TestClient(app).post("/api/auth/google", json={"id_token": hashed, "nonce": n2}).status_code == 200
 
 
-def test_social_nonce_can_be_required(google, monkeypatch):
+def test_social_nonce_required_by_default_with_optional_fallback(google, monkeypatch):
+    """Varsayılan zorunlu (mobil 1.0.1+ nonce gönderir; web'de sosyal giriş yok). Geri dönüş:
+    HESAPKITAP_SOCIAL_NONCE=optional. Testlerin geri kalanı conftest'te optional ile koşar (nonce'suz eski belgeler)."""
     from app import social
     from app.api.main import app
 
@@ -173,13 +175,38 @@ def test_social_nonce_can_be_required(google, monkeypatch):
 
     auth.create_user("mehmet@gmail.com", "mehmet-sifre-12345")
     t = google(email="mehmet@gmail.com")
-    monkeypatch.setenv("HESAPKITAP_SOCIAL_NONCE", "required")
-    assert TestClient(app).post("/api/auth/google", json={"id_token": t}).status_code == 401  # eski istemci
+    for v in (None, "", "required", "REQUIRED", "bilinmeyen"):
+        if v is None:
+            monkeypatch.delenv("HESAPKITAP_SOCIAL_NONCE", raising=False)
+        else:
+            monkeypatch.setenv("HESAPKITAP_SOCIAL_NONCE", v)
+        assert social.nonce_required(), v
+        r = TestClient(app).post("/api/auth/google", json={"id_token": t})  # nonce'suz (eski istemci / nonce alınamadı)
+        assert r.status_code == 401 and "Yeniden dene" in r.json()["detail"], v
+    assert not social.consume_nonce(None)  # oturum açma adımı da nonce'suz geçmez
+    auth._fails.clear(), auth._attempts.clear(), auth._account_fails.clear()  # art arda ret hız sınırına takılmasın
+    monkeypatch.delenv("HESAPKITAP_SOCIAL_NONCE", raising=False)
     n = social.issue_nonce()
     r = TestClient(app).post("/api/auth/google", json={"id_token": google(email="mehmet@gmail.com", nonce=n), "nonce": n})
     assert r.status_code == 200
-    monkeypatch.delenv("HESAPKITAP_SOCIAL_NONCE")
-    assert TestClient(app).post("/api/auth/google", json={"id_token": t}).status_code == 200  # varsayılan: geçiş dönemi
+    for v in ("optional", "off", " Optional "):
+        monkeypatch.setenv("HESAPKITAP_SOCIAL_NONCE", v)
+        assert TestClient(app).post("/api/auth/google", json={"id_token": t}).status_code == 200, v  # geri dönüş
+
+
+def test_multi_process_warning(monkeypatch, caplog):
+    """Nonce süreç belleğinde: WEB_CONCURRENCY>1 ise başlangıçta uyarı (sunucu tek süreç çalışmalı)."""
+    import logging
+
+    from app import social
+
+    with caplog.at_level(logging.WARNING, logger="hesapkitap.auth"):
+        monkeypatch.setenv("WEB_CONCURRENCY", "1")
+        social._warn_multi_process()
+        assert "WEB_CONCURRENCY" not in caplog.text
+        monkeypatch.setenv("WEB_CONCURRENCY", "4")
+        social._warn_multi_process()
+    assert "WEB_CONCURRENCY=4" in caplog.text
 
 
 def test_social_nonce_capability_before_login():

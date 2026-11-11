@@ -7,6 +7,7 @@ import { inApp } from "./AppServer";
 import { useMeta } from "./hooks";
 import { familyReadsText } from "../lib/saveBook";
 import { olcumGonder } from "../lib/olcum";
+import SorguDurumu from "./SorguDurumu";
 
 export const usePlan = () => useMeta().data?.plan;
 
@@ -48,11 +49,17 @@ export const ROUTE_FEATURE: Partial<Record<Route, string>> = {
   "borc-plani": "borc_plani",
 };
 
+/** Aboneliğin nereden alındığı. Web'de satın alma yok; eski uygulama kabuğu (web'i içinde açan, user-agent
+ *  "HesapKitapApp/") da satın alma ekranı taşımaz: ikisinde de mağazadaki güncel uygulamanın Paketler ekranı. */
+export const upgradeText = (shell: boolean) => shell
+  ? "Abonelik, mağazadaki güncel HesapKitap uygulamasının Paketler ekranından alınır; uygulamayı App Store ya da Google Play'den güncelle."
+  : "Abonelik HesapKitap telefon uygulamasındaki Paketler ekranından alınır (App Store / Google Play).";
+
 export function Upgrade({ need }: { need?: string }) {
   return (
     <p className="text-sm text-stone-600 dark:text-stone-400">
       {need ? <><b>{need}</b> paketinde var. </> : null}
-      {inApp() ? "Abonelik yakında buradan alınabilecek." : "Abonelik HesapKitap telefon uygulamasından alınır (App Store / Google Play)."}
+      {upgradeText(inApp())}
     </p>
   );
 }
@@ -231,7 +238,18 @@ export function compareRows(p: PlanInfo): CompareRow[] {
 
 /** Ayarlar → Paketin (sadece barındırılan sürümde). */
 export default function PlanSettings() {
-  const p = usePlan();
+  const meta = useMeta();
+  const p = meta.data?.plan;
+  // paket bilgisi alınamadıysa bölüm sessizce kaybolmasın: hata + "Tekrar dene" (yüklenirken bir şey çizilmez:
+  // kendi sunucusunda bu bölüm hiç yok, boşuna iskelet görünmesin)
+  if (meta.data === undefined && meta.error) {
+    return (
+      <section id="paket" className="card scroll-mt-4 space-y-3 p-4">
+        <h2 className="flex items-center gap-2 font-semibold"><Sparkles size={18} aria-hidden="true" /> Paket bilgisi</h2>
+        <SorguDurumu q={meta} kompakt />
+      </section>
+    );
+  }
   if (!p?.hosted) return null;
   const rows = compareRows(p);
   const prem = p.reads_by_plan?.premium;
