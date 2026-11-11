@@ -124,7 +124,10 @@ def check_nonce(claims: dict, nonce: str | None) -> None:
     düşürür. Nonce'suz istek yalnız zorunlu değilken geçer."""
     if not nonce:
         if nonce_required():
-            # nonce alınamadıysa (ağ) uygulama nonce'suz dener; eski sürüm de nonce göndermez
+            # nonce alınamadıysa (ağ) uygulama nonce'suz dener; eski sürüm de nonce göndermez. Günlükte iz kalsın:
+            # zorunluluk açıldıktan sonra bu satır görünürse geri dönüş HESAPKITAP_SOCIAL_NONCE=optional
+            __import__("logging").getLogger("hesapkitap.auth").warning("sosyal giriş nonce'suz reddedildi (%s)",
+                                                                       claims.get("iss") or "?")
             raise SocialError("Giriş doğrulanamadı. Yeniden dene; olmazsa uygulamayı güncelle")
         return
     claim = str(claims.get("nonce") or "")
