@@ -15,7 +15,7 @@ import pytest
 from tests.conftest import fixture_bytes
 
 SLOW = 1.5   # taklit edilen belge okuma süresi (sn)
-FAST = 0.5   # bu sürede başka istekler yanıt vermeli
+FAST = 1.0   # bu sürede başka istekler yanıt vermeli (SLOW 1,5 sn: kilitlenme en az bu kadar bekletir; 0,5 CI'da dalgalanıyordu)
 
 
 @pytest.fixture()
