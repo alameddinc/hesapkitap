@@ -700,11 +700,16 @@ def _detect_brand(text: str, g: dict | None, known: dict | None) -> tuple[str | 
     return (got["brand"], got["line"], 1) if got else (None, None, 0)
 
 
-def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None, unit: str | None = None) -> dict:
+def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None = None, unit: str | None = None,
+        client_key: str | None = None) -> dict:
+    """client_key: istemcinin işlem kimliği (çevrimdışı kuyruğun tekrarı); listede aynı kimlikli satır varsa yenisi
+    eklenmez, o satır döner."""
     t, q, u = split_amount(_clean_text(text), float(qty), unit)
     t, q = _clean_text(t), _clean_qty(q, u)
     pin = _clean_key(group_key)
     with db.connect() as c:
+        if client_key and (dup := c.execute("SELECT * FROM shopping_list WHERE client_key = ?", (client_key,)).fetchone()):
+            return _row_out(dict(dup))
         if c.execute("SELECT COUNT(*) FROM shopping_list").fetchone()[0] >= MAX_ITEMS:
             raise ValueError(f"Listede en fazla {MAX_ITEMS} satır olabilir")
     gs, known = _resolve_known([t])
@@ -712,8 +717,8 @@ def add(text: str, qty: float = 1, uid: int | None = None, group_key: str | None
     b, line, auto = _detect_brand(t, g, known[0])
     with db.connect() as c:
         rid = c.execute("INSERT INTO shopping_list (text, group_key, qty, unit, added_by, pinned_key, brand, brand_line, "
-                        "brand_auto) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (t, pin or (g["key"] if g else None), q, u, uid, pin, b, line, auto)).lastrowid
+                        "brand_auto, client_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (t, pin or (g["key"] if g else None), q, u, uid, pin, b, line, auto, client_key)).lastrowid
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
     from app import push
 

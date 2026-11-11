@@ -72,6 +72,8 @@ TEST_EVERY = 60         # POST /api/push/test: dakikada bir
 EKSTRE_FRESH = 7        # kesimden bu kadar gün geçtiyse "ekstre yükle" artık bildirim olmaz (Yapılacaklar'da durur)
 DOKUM_FRESH = 10
 GELIR_LATE = 2          # beklenen gelir gününden bu kadar gün sonra
+KUMBARA_DAYS = 7        # kumbaranın hedef tarihine bu kadar gün kala (hedefe ulaşılmadıysa)
+KART_DAYS = (30, 7)     # ön ödemeli kartın (yemek / hediye) son kullanmasına bu kadar gün kala
 
 # tür → (Türkçe ad, varsayılan)
 TYPES = {
@@ -94,6 +96,8 @@ TYPES = {
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
     "borc": ("Borç ödeme günü", True),  # borçta söz verilen ya da kesin gün ve ödeme planlı borcun taksit günü (2 gün kala ve o gün)
     "duyuru": ("Duyurular ve yeni sürümler", True),  # yöneticinin duyurusu (app/announce.py)
+    "kumbara": ("Kumbara hedef tarihi", True),  # hedef tarihine 7 gün kala, hedefin gerisindeyse (_kumbara)
+    "kart_suresi": ("Yemek / hediye kartı son kullanma", True),  # son kullanmaya 30 ve 7 gün kala, bakiye varsa
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -101,7 +105,8 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "faiz": "faiz uyarısı", "gelir": "gelir uyarısı", "abonelik": "abonelik uyarısı", "ozet": "dönem özeti",
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
-         "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru"}
+         "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
+         "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -113,6 +118,7 @@ R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
 R_BORC_PLANI = "#/diger/borc-plani"
+R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<id> ile o kumbaranın sayfası
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 
 
@@ -869,6 +875,73 @@ def _fiyat(today: date) -> list[dict]:
     return [item("fiyat", f"fiyat:{sig}", "Fiyat artışı", price_alerts.digest(rises), route)]
 
 
+def _hesaplar_hidden() -> bool:
+    """Ortak defterde sahibin üyeye kapattığı Hesaplar sayfası (kumbara ve ön ödemeli kartlar orada)."""
+    from app import book
+
+    r = book.active()
+    return bool(r and "hesaplar" in r["hidden_pages"])
+
+
+def _amount(x: float, unit: str) -> str:
+    from app import money, zakat
+
+    if unit == "TRY":
+        return money.tl(x, trim=True)
+    sym = zakat.KINDS.get(unit, (unit, "", unit))[2]
+    return f"{round(x, 3):g} {sym}".replace(".", ",")
+
+
+def _kumbara(today: date) -> list[dict]:
+    """Hedefi ve hedef tarihi olan açık kumbara: tarihe KUMBARA_DAYS gün kala biriken hedefin gerisindeyse tek
+    hatırlatma (kimlik tarihe bağlı: tarih değişirse yeni tarih için yine bir kez). Dokununca o kumbara."""
+    from app import book, money
+
+    if _hesaplar_hidden():
+        return []
+    out = []
+    for j in db.list_jars(today, include_closed=False):
+        if not j.get("goal") or not j.get("deadline"):
+            continue
+        if j.get("account_id") and not book.can_see_account(j["account_id"]):
+            continue
+        dl = date.fromisoformat(j["deadline"][:10])
+        if (dl - today).days != KUMBARA_DAYS:
+            continue
+        unit = j.get("unit") or "TRY"
+        left = j["goal"] - j["balance"]
+        if (money.le(left, 0) if unit == "TRY" else left <= 1e-9):  # altın/döviz miktarı yuvarlanmaz
+            continue
+        out.append(item("kumbara", f"kumbara:{j['id']}:{dl.isoformat()}:{KUMBARA_DAYS}gun",
+                        f"{j['name']}: hedef tarihine {KUMBARA_DAYS} gün kaldı",
+                        f"Hedef {_amount(j['goal'], unit)}, biriken {_amount(j['balance'], unit)}; {_amount(left, unit)} "
+                        f"eksik. Son gün {dl.day} {AY[dl.month - 1]}. Ekleyebilir ya da tarihi değiştirebilirsin.",
+                        f"{R_KUMBARA}/{j['id']}"))
+    return out
+
+
+def _kart_suresi(today: date) -> list[dict]:
+    """Ön ödemeli kart (yemek / hediye / giyim) son kullanma tarihine 30 ve 7 gün kala, kartta para varsa. Bakiye 0 ya
+    da eksiyse yok (kaybedilecek para yok)."""
+    from app import book, money
+
+    if _hesaplar_hidden():
+        return []
+    out = []
+    for w in db.list_wallets():
+        if not w.get("expires_at") or not book.can_see_account(w["id"]):
+            continue
+        exp = date.fromisoformat(str(w["expires_at"])[:10])
+        left = (exp - today).days
+        if left not in KART_DAYS or not money.gt(w.get("current") or 0, 0):
+            continue
+        out.append(item("kart_suresi", f"kart_suresi:{w['id']}:{exp.isoformat()}:{left}gun",
+                        f"{w['name']}: son kullanmaya {left} gün kaldı",
+                        f"Kartta {money.tl(w['current'], trim=True)} var; {exp.day} {AY[exp.month - 1]} sonrası "
+                        "kullanılamayabilir. Harcamayı planla.", R_YEMEK))
+    return out
+
+
 def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     """Bugünün zamanlı bildirimleri (açık türler), kullanıcının defterinde ve görebildiği kadarıyla. Bağlam: use_space."""
     on = (prefs or get_prefs(u["id"]))["types"]
@@ -876,7 +949,8 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     for kind, fn in (("odeme", lambda: _odeme_ekstre_dokum(today, on)), ("fatura", lambda: _fatura(today)),
                      ("butce", lambda: _butce(today)), ("gelir", lambda: _gelir(today)), ("ozet", lambda: _ozet(today)),
                      ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
-                     ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today))):
+                     ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today)),
+                     ("kumbara", lambda: _kumbara(today)), ("kart_suresi", lambda: _kart_suresi(today))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:
