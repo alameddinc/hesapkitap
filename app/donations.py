@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS donations (
     entry_id INTEGER,              -- hesap/elle kaydı (varsa)
     txn_id INTEGER,                -- kart işlemi (varsa)
     own_entry INTEGER NOT NULL DEFAULT 0,  -- entry_id'deki gider kaydını bu bağış açtı (silinince o da silinir)
+    created_by INTEGER,            -- ekleyen kullanıcı (ortak defterde kişi başı sadaka hatırlatması; eski kayıtta yok)
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -62,8 +63,16 @@ def _init(c) -> None:
         _add_col(c, "zakat_payments", "own_entry", "INTEGER NOT NULL DEFAULT 0")
     if cols and "no_expense" not in cols:  # "gider olarak görünmüyor" sorusuna "gerek yok" dendi
         _add_col(c, "zakat_payments", "no_expense", "INTEGER NOT NULL DEFAULT 0")
-    if "own_entry" not in {r[1] for r in c.execute("PRAGMA table_info(donations)")}:
+    dcols = {r[1] for r in c.execute("PRAGMA table_info(donations)")}
+    if "own_entry" not in dcols:
         _add_col(c, "donations", "own_entry", "INTEGER NOT NULL DEFAULT 0")
+    if "created_by" not in dcols:  # sadaka hatırlatması: ortak defterde kimin sadakası (app/sadaka_reminder.py)
+        _add_col(c, "donations", "created_by", "INTEGER")
+
+
+def _me() -> int | None:
+    u = db.current_user()
+    return u.get("id") if u else None
 
 
 def create_expense(label: str, amount: float, day: str, payment: str, account_id: int | None = None,
@@ -154,10 +163,10 @@ def add(kind: str, amount: float, given_date: str, recipient: str | None = None,
     entry_id = create_expense(KINDS[kind], amount, given_date, payment, cash_account_id, card_last4, who,
                               recipient=who) if payment else None
     with db.connect() as c:
-        return c.execute("INSERT INTO donations (kind, amount, given_date, recipient, note, entry_id, own_entry) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        return c.execute("INSERT INTO donations (kind, amount, given_date, recipient, note, entry_id, own_entry, created_by) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                          (kind, amount, given_date, (recipient or "").strip() or None, (note or "").strip() or None,
-                          entry_id, int(bool(entry_id)))).lastrowid
+                          entry_id, int(bool(entry_id)), _me())).lastrowid
 
 
 def mark(source: str, sid: int, kind: str, person_id: int | None = None, year_start: str | None = None,
@@ -196,8 +205,10 @@ def mark(source: str, sid: int, kind: str, person_id: int | None = None, year_st
             raise ValueError("Bilinmeyen tür")
         with db.connect() as c:
             _init(c)
-            c.execute(f"INSERT INTO donations (kind, amount, given_date, recipient, note, {col}) VALUES (?, ?, ?, ?, ?, ?)",
-                      (kind, abs(t["amount"]), t["date"], (recipient or "").strip() or None, t["description"][:80], sid))
+            c.execute(f"INSERT INTO donations (kind, amount, given_date, recipient, note, {col}, created_by) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                      (kind, abs(t["amount"]), t["date"], (recipient or "").strip() or None, t["description"][:80], sid,
+                       _me()))
     _set_category(source, sid)
     if kind == "zekat" or was_zakat:
         zakat_refresh()

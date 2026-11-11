@@ -176,9 +176,10 @@ def test_prefs_defaults_and_partial_put(owner, nokeys):  # noqa: F811
     assert p["enabled"] is False and p["digest"] is True and p["quiet"] == {"from": "22:00", "to": "09:00"}
     assert p["types"]["ortak"] is False and all(v for k, v in p["types"].items() if k != "ortak")
     assert set(p["labels"]) == set(p["types"]) and p["labels"]["odeme"] == "Kart son ödeme"
-    assert len(p["types"]) == 21  # + aile, + geri_bildirim ve sistem (yalnız yöneticiye: owner yönetici), + liste
+    assert len(p["types"]) == 22  # + aile, + geri_bildirim ve sistem (yalnız yöneticiye: owner yönetici), + liste
     # + fiyat (Fiyat artışı), + borc (elden borcun söz verilen günü), + duyuru (yöneticinin duyurusu)
-    # + kumbara (hedef tarihine 7 gün kala), + kart_suresi (yemek / hediye kartı son kullanma)
+    # + kumbara (hedef tarihine 7 gün kala), + kart_suresi (yemek / hediye kartı son kullanma), + sadaka (Hayırlı Cumalar)
+    assert p["labels"]["sadaka"] == "Sadaka hatırlatması"
 
     r = owner.put("/api/push/prefs", json={"types": {"faiz": False, "bilinmeyen": True}}).json()
     assert r["types"]["faiz"] is False and r["types"]["odeme"] is True and "bilinmeyen" not in r["types"]

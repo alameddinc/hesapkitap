@@ -11,6 +11,8 @@ import { DONATION_KINDS } from "./MarkDonation";
 import Modal, { kirliyseSor } from "./Modal";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import HolyDays from "./HolyDays";
+import SadakaOran from "./SadakaOran";
+import { KayitSonrasiSoru, SadakaHatirlatmaAyari, useSadakaReminder } from "./SadakaHatirlatma";
 
 interface Item { id: number; kind: string; label: string; amount: number; given_date: string; recipient: string | null; note: string | null }
 interface ZP { id: number; amount: number; pay_date: string; person: string; note: string | null }
@@ -23,7 +25,8 @@ const today = () => new Date().toISOString().slice(0, 10);
 // "Sağ elin verdiğini sol el bilmesin": tutarlar bu sayfada varsayılan gizli (cihaz ayarı değil, her açılışta)
 const MASK = "••••";
 
-function AddForm({ onClose }: { onClose: () => void }) {
+/** Sadaka / bağış ekle penceresi (Özet'teki sadaka kartının "Sadaka ver" düğmesi de bunu açar). */
+export function SadakaEkleFormu({ onClose }: { onClose: () => void }) {
   const ui = useUI();
   const [kind, setKind] = useState("sadaka");
   const [amount, setAmount] = useState("");
@@ -31,11 +34,22 @@ function AddForm({ onClose }: { onClose: () => void }) {
   const [recipient, setRecipient] = useState("");
   const [paid, setPaid] = useState<PaidWithState>(PAID_WITH_START);
   const gold = usePaidWithGold();
+  // ritim seçilmediyse kayıttan sonra aynı pencerede "Her Cuma hatırlatalım mı?" (sunucu ask_after_save)
+  const rem = useSadakaReminder()?.data;
+  const [soruAcik, setSoruAcik] = useState(false);
   const save = useSave(() => call("POST", "/api/donations", { kind, amount: parseAmount(amount), given_date: date, recipient: recipient || null,
-    ...paidWithBody(paid, gold) }), () => { ui.toast("Kaydedildi. Allah kabul etsin."); onClose(); });
+    ...paidWithBody(paid, gold) }), () => {
+    ui.toast("Kaydedildi. Allah kabul etsin.");
+    if (rem?.ask_after_save && kind === "sadaka") setSoruAcik(true); else onClose();
+  });
   const kaydet = () => { if (parseAmount(amount) > 0 && !save.isPending) save.mutate(undefined, { onError: (e) => ui.fail(e) }); };
   // kaydedilmemiş değişiklik (UX denetimi 09.11): kapatırken sorulur
   const dirty = amount !== "" || recipient !== "" || kind !== "sadaka" || JSON.stringify(paid) !== JSON.stringify(PAID_WITH_START);
+  if (soruAcik && rem) return (
+    <Modal title="Sadaka / bağış ekle" onClose={onClose} footer={<button className="btn-ghost flex-1 justify-center" onClick={onClose}>Şimdi değil</button>}>
+      <KayitSonrasiSoru d={rem} onDone={onClose} />
+    </Modal>
+  );
   return (
     <Modal title="Sadaka / bağış ekle" onClose={onClose} dirty={dirty && !save.isPending} onSave={kaydet} footer={<>
       <button className="btn-ghost" onClick={() => void kirliyseSor(dirty && !save.isPending, onClose, kaydet)}>Vazgeç</button>
@@ -102,6 +116,8 @@ export default function Sadaka() {
         <p className="mt-1 text-xs text-stone-500">"Sağ elin verdiğini sol el bilmesin": tutarlar bu sayfada gizli açılır.</p>
       </section>
 
+      <SadakaHatirlatmaAyari />
+
       {d.pending.length > 0 && (
         <section className="card p-4">
           <h3 className="text-sm font-medium">Dökümde bağış görünen hareketler: sadaka mı, zekât mı?</h3>
@@ -145,7 +161,8 @@ export default function Sadaka() {
           </div>
         )}
       </section>
-      {adding && <AddForm onClose={() => setAdding(false)} />}
+      <SadakaOran show={show} />
+      {adding && <SadakaEkleFormu onClose={() => setAdding(false)} />}
     </div>
   );
 }

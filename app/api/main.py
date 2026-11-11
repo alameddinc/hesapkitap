@@ -4229,6 +4229,43 @@ def donations_add(body: DonationIn):
         raise HTTPException(422, errors.user_text(e, 422)) from e
 
 
+class SadakaReminderIn(BaseModel):
+    rhythm: Literal["haftalik", "aylik", "kapali"] | None = None  # Her Cuma / Ayda bir (ayın ilk Cuması) / Hatırlatma
+    day: int | None = Field(None, ge=0, le=6)  # hatırlatma günü (0 Pazartesi … 4 Cuma … 6 Pazar); arayüz yalnız Cuma
+    show_streak: bool | None = None            # "Sürekliliği göster" (varsayılan açık)
+
+
+@app.get("/api/donations/reminder")
+def sadaka_reminder_get():
+    """Sadaka hatırlatması (kişiye özel): ritim, süreklilik, son sadaka, bu dönem kayıtlı mı, Özet kartının metni."""
+    from app import sadaka_reminder
+
+    return sadaka_reminder.status()
+
+
+@app.put("/api/donations/reminder")
+def sadaka_reminder_put(body: SadakaReminderIn):
+    """Kişinin kendi seçimi (yalnız gelen alanlar). Ortak defterde salt görüntüleyen üye de seçer; Zekât ve Sadaka sayfası
+    üyeye kapalıysa middleware keser, özellik kapalıysa 409."""
+    from app import sadaka_reminder
+
+    if not sadaka_reminder.available():
+        raise HTTPException(409, "Zekât ve Sadaka kapalı")
+    try:
+        sadaka_reminder.set_pref(body.rhythm, body.day, body.show_streak)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    return sadaka_reminder.status()
+
+
+@app.get("/api/donations/ratio")
+def sadaka_ratio(months: int = Query(12, ge=1, le=24)):
+    """Sadakanın gelire oranı (kişinin; faiz geliri hariç), son 6 ya da 12 dönem + nötr özet cümlesi."""
+    from app import sadaka_reminder
+
+    return sadaka_reminder.ratio(months)
+
+
 @app.delete("/api/donations/{did}")
 def donations_delete(did: int):
     if not donations.delete(did):

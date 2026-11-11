@@ -365,6 +365,16 @@ CAPABILITIES = (
                               # badge, text}, erken kapatma satırlarında kapatma tutarı / kurtulunan faiz / close_early yok
                               # (plus_locked: true), totals.payoff_saving null; POST /api/debt-plan/commit 402
                               # plan_required "borc_plani_plus". Kayıtlı plan (commit) silinmez: Premium'la geri gelir
+    "sadaka_reminder",        # sadaka hatırlatması (kişiye özel; seçim yoksa kapalı): GET /api/donations/reminder
+                              # {available, rhythm haftalik|aylik|kapali, day (4 Cuma), chosen, show (Özet kartı),
+                              # show_streak, streak, streak_text, last_date, days_since, in_period, period_key, title, text,
+                              # tone ok|nudge|empty, next_reminder, when, rhythms, days, choices [{rhythm, label, hint,
+                              # recommended}], ask_after_save + ask_title (sadaka kaydedilince "Her Cuma hatırlatalım
+                              # mı?")}; PUT {rhythm?, day?, show_streak?} (409: Zekât ve Sadaka kapalı). Push türü
+                              # "sadaka" ("Hayırlı Cumalar"), yol #/diger/zekat/sadaka (sadaka formu)
+    "sadaka_ratio",           # GET /api/donations/ratio?months=6|12 {available, months [{month, label, short, sadaka,
+                              # income|null, ratio (%)|null, note "gelir kaydı yok"|null, zakat|null (ayrı, oranda yok),
+                              # partial}], sentence|null, ratio_available, basis kisi|defter, min_income, note}
 )
 
 

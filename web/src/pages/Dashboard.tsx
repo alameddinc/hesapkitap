@@ -31,6 +31,7 @@ import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
 import { DonemSonuKarti } from "../components/Beklenen";
 import DebtPlanCard from "../components/DebtPlanCard";
+import SadakaOzetKarti from "../components/SadakaOzet";
 import FaizOzetKarti from "../components/FaizOzet";
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { boundsOf, cx, signed, tl, tlCompact, periodLabel } from "../format";
@@ -115,8 +116,10 @@ export const WIDGETS: Record<string, { title: string; module?: string; cap?: str
   "son-islemler": { title: "Son işlemler" },
   // varsayılan düzende yok: Borç planı ekranındaki "Özet'te göster" ya da Özeti düzenle ile eklenir; ≥2 açık borçta görünür
   "borc-plani": { title: "Borç planı", cap: "debt_plan" },
+  // ritim (Her Cuma / Ayda bir) seçiliyse son sadakadan beri geçen süre ve süreklilik; seçim yoksa görünmez
+  sadaka: { title: "Sadaka", module: "zekat", cap: "sadaka_reminder" },
 };
-export const DEFAULT_LAYOUT = ["kartlar", "faiz-ucret", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler", "kategoriler", "isyerleri",
+export const DEFAULT_LAYOUT = ["kartlar", "faiz-ucret", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "sadaka", "butceler", "kategoriler", "isyerleri",
   "istatistik-link", "odemeler"];
 
 export default function Dashboard() {
@@ -297,6 +300,8 @@ export default function Dashboard() {
       case "kumbaralar": return <Jars />;
       case "altin": return <Holdings />;
       case "borc-plani": return <DebtPlanCard />;
+      // içinde bulunulan dönemde (geçmiş dönemde "son sadakan" anlamsız)
+      case "sadaka": return month === meta?.current_month ? <SadakaOzetKarti /> : null;
       case "son-islemler": {
         const recent = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme" && !isEstimate(r))
           .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);

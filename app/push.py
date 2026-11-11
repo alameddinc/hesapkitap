@@ -98,6 +98,9 @@ TYPES = {
     "duyuru": ("Duyurular ve yeni sürümler", True),  # yöneticinin duyurusu (app/announce.py)
     "kumbara": ("Kumbara hedef tarihi", True),  # hedef tarihine 7 gün kala, hedefin gerisindeyse (_kumbara)
     "kart_suresi": ("Yemek / hediye kartı son kullanma", True),  # son kullanmaya 30 ve 7 gün kala, bakiye varsa
+    # "Hayırlı Cumalar": seçilen ritimde (Her Cuma / ayın ilk Cuması) o dönemde sadaka kaydı yoksa; seçim yapılmamışsa
+    # ilk Cuma ve (kayıt olmazsa) sonraki ayın ilk Cuması, en çok 2 kez (app/sadaka_reminder.py)
+    "sadaka": ("Sadaka hatırlatması", True),
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -106,7 +109,7 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
          "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
-         "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma"}
+         "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -118,6 +121,7 @@ R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
 R_BORC_PLANI = "#/diger/borc-plani"
+R_SADAKA = "#/diger/zekat/sadaka"  # Zekât ve Sadaka, sadaka formu açık (eski uygulama: Zekât ve Sadaka ana sayfası)
 R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<id> ile o kumbaranın sayfası
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 
@@ -856,6 +860,15 @@ def _zekat(today: date) -> list[dict]:
     return out
 
 
+def _sadaka(today: date) -> list[dict]:
+    """Seçilen ritmin hatırlatma günü (haftalık: Cuma; aylık: ayın ilk Cuması), o dönemde kişinin sadaka kaydı yoksa tek
+    bildirim; aynı dönem için bir kez. Seçim yoksa en çok 2 kez "Hayırlı Cumalar · not edelim mi?". Özellik / rıza kapalıysa ya da
+    Zekât ve Sadaka sayfası üyeye gizliyse yok (app/sadaka_reminder.push_items)."""
+    from app import sadaka_reminder
+
+    return sadaka_reminder.push_items(today)
+
+
 def _fiyat(today: date) -> list[dict]:
     """Sık aldığın ürünlerde (90 günde aynı zincirde 2+ alım) topluluk ortancası son ödediğinden %10+ yüksek: tek özet
     bildirim (app/price_alerts.py). Fiyat takibi paketinde ve sayfa açıkken. Kimlik artışların özeti: aynı artışlar
@@ -950,7 +963,8 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
                      ("butce", lambda: _butce(today)), ("gelir", lambda: _gelir(today)), ("ozet", lambda: _ozet(today)),
                      ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
                      ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today)),
-                     ("kumbara", lambda: _kumbara(today)), ("kart_suresi", lambda: _kart_suresi(today))):
+                     ("kumbara", lambda: _kumbara(today)), ("kart_suresi", lambda: _kart_suresi(today)),
+                     ("sadaka", lambda: _sadaka(today))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:

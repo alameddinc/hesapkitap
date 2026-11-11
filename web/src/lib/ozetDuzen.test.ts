@@ -20,9 +20,9 @@ test("eski kayıtlı düzen: yeni bileşen kartların ardına girer", () => {
 
 test("kaldırılınca işaret saklanır, geri gelmez; eklenince işaret kalkar", () => {
   const kayit = kayitDuzeni(["kartlar", "uyarilar"]);
-  assert.deepEqual(kayit, ["kartlar", "uyarilar", "-donem-sonu", "-faiz-ucret"]);
+  assert.deepEqual(kayit, ["kartlar", "uyarilar", "-donem-sonu", "-faiz-ucret", "-sadaka"]);
   assert.deepEqual(ozetDuzeni(kayit, known, VARSAYILAN), ["kartlar", "uyarilar"]);
-  assert.deepEqual(kayitDuzeni(["kartlar", "donem-sonu", "faiz-ucret"]), ["kartlar", "donem-sonu", "faiz-ucret"]);
+  assert.deepEqual(kayitDuzeni(["kartlar", "donem-sonu", "faiz-ucret", "sadaka"]), ["kartlar", "donem-sonu", "faiz-ucret", "sadaka"]);
 });
 
 test("faiz ve ücret kartı: eski kayıtlı düzende kartların hemen ardına (dönem sonundan önce) girer", () => {
@@ -32,4 +32,12 @@ test("faiz ve ücret kartı: eski kayıtlı düzende kartların hemen ardına (d
   // kaldırıldıysa geri gelmez; sunucu yeteneği yoksa (known false) hiç girmez
   assert.deepEqual(ozetDuzeni(["kartlar", "-faiz-ucret"], k, VARSAYILAN), ["kartlar", "donem-sonu"]);
   assert.deepEqual(ozetDuzeni(["kartlar"], known, VARSAYILAN), ["kartlar", "donem-sonu"]);
+});
+
+test("sadaka bileşeni: eski kayıtlı düzende uyarıların ardına girer; kaldırıldıysa geri gelmez", () => {
+  const k = (id: string) => KNOWN.has(id) || id === "sadaka";
+  assert.deepEqual(ozetDuzeni(["kartlar", "donem-sonu", "uyarilar", "butceler"], k, VARSAYILAN), ["kartlar", "donem-sonu", "uyarilar", "sadaka", "butceler"]);
+  assert.deepEqual(ozetDuzeni(["kartlar", "donem-sonu", "uyarilar", "-sadaka"], k, VARSAYILAN), ["kartlar", "donem-sonu", "uyarilar"]);
+  // eski sunucu (sadaka_reminder yok): bileşen bilinmez, girmez
+  assert.deepEqual(ozetDuzeni(["kartlar", "donem-sonu", "uyarilar"], known, VARSAYILAN), ["kartlar", "donem-sonu", "uyarilar"]);
 });

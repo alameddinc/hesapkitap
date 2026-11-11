@@ -632,7 +632,8 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))
             # fiyat paylaşımı tercihi; topluluk fiyatı satırları kişiye bağlanamaz, kalır (app/community_prices.py)
-            c.execute("DELETE FROM sys_settings WHERE key IN (?, ?)", (f"price_share:{uid}", f"region:{uid}"))
+            # sadaka hatırlatmasının ritmi de kişiye ait (app/sadaka_reminder.py)
+            c.execute("DELETE FROM sys_settings WHERE key IN (?, ?, ?)", (f"price_share:{uid}", f"region:{uid}", f"sadaka:{uid}"))
             for sql in ("DELETE FROM password_resets WHERE user_id = ?",   # tablolar ilk kullanımda kurulur (reset, inbound)
                         # gelen posta adresi: kod hiç yeniden verilmesin diye satır kalır, hesapla bağı kopar (D12)
                         "UPDATE inbound SET revoked = 1, user_id = 0 WHERE user_id = ?"):
