@@ -48,19 +48,24 @@ _BASE = {
     "form-action": "'self'",
     "frame-ancestors": "'none'",
 }
+# Cloudflare Web Analytics: sunucu Cloudflare arkasında; Cloudflare sayfaya beacon betiğini kendisi ekler (çerezsiz ziyaret
+# sayımı). CSP engelleyen kipe geçince (11.11) engellendi; izin verilmezse Cloudflare ziyaret istatistiği durur.
+CF_BEACON_SCRIPT = "https://static.cloudflareinsights.com"
+CF_BEACON_CONNECT = "https://cloudflareinsights.com"
 APP_POLICY = {
     **_BASE,
-    "script-src": "'self'",  # + index.html'deki satır içi betiğin özeti
+    "script-src": f"'self' {CF_BEACON_SCRIPT}",  # + index.html'deki satır içi betiğin özeti
     "style-src": "'self' 'unsafe-inline'",
     "img-src": "'self' data: blob:",
     "font-src": "'self' data:",
-    "connect-src": "'self'",
+    "connect-src": f"'self' {CF_BEACON_CONNECT}",
     "worker-src": "'self'",
     "manifest-src": "'self'",
 }
 SITE_POLICY = {
     **_BASE,
-    "script-src": "'self'",
+    "script-src": f"'self' {CF_BEACON_SCRIPT}",
+    "connect-src": f"'self' {CF_BEACON_CONNECT}",
     "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src": "'self' https://fonts.gstatic.com data:",
     "img-src": "'self' data:",
