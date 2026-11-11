@@ -365,6 +365,16 @@ export interface Payable {
   /** toplama girer mi (sunucu); false: ödenmemiş eski ekstre, kalanı rolled_into'daki son ekstreye devretti */
   in_total?: boolean;
   rolled_into?: number | null;
+  /** kart ekstresinin faiz satırı (yetenek card_interest; eski sunucuda yok) */
+  interest?: CardInterest | null;
+}
+
+/** Kartın son ekstresinde faiz satırı (sunucu debt_plan.card_interest; borç planıyla aynı hesap, istemci hesaplamaz).
+ *  after_due: son ödeme günü geçti, kalana bu ay eklenecek faiz ve vergi · partial: kısmi ödeme, kalanı son ödeme
+ *  gününe kadar öde · before_due: tamamını ödersen faiz işlemez. amount: ortak defterde faiz gizliyse null. */
+export interface CardInterest {
+  state: "after_due" | "partial" | "before_due"; level: "bad" | "warn" | "info"; remaining: number; amount: number | null;
+  rate: number; rate_source: "ekstre" | "genel"; rate_note: string | null; text: string; due_date: string;
 }
 
 /** GET /api/payables?totals=1 toplamları: istemci toplamaz (finance.payables_totals). */

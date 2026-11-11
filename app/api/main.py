@@ -5234,6 +5234,27 @@ class DebtPlanFields(BaseModel):
     # borcun koşulları (yetenek debt_terms; yalnız "borcum", boşsa eski davranış): ödeme koşulu ve tarih türü
     pay_terms: Literal["taksitli", "parca", "tek", "bilinmiyor"] | None = None
     due_strict: bool | None = None  # true: tarihinde ödenmesi şart (kesin) · false: söz (esnek) · null: varsayılan
+    # erken kapatma (yetenek debt_payoff; yalnız faizli planda): bankadan öğrenilen bugün kapatma tutarı, öğrenildiği
+    # gün (boşsa bugün) ve isteğe bağlı aylık faiz oranı (yüzde). null: siler; gönderilmezse dokunulmaz
+    payoff_amount: float | None = Field(default=None, gt=0, le=1_000_000_000)
+    payoff_date: date | None = None
+    plan_rate: float | None = Field(default=None, gt=0, le=15)
+
+    def _payoff(self) -> dict:
+        """Erken kapatma alanlarından yazılacaklar (yalnız gönderilenler). Tutar verilip gün verilmezse bugün."""
+        out: dict = {}
+        sent = self.model_fields_set
+        if "payoff_amount" in sent:
+            out["payoff_amount"] = money.money(self.payoff_amount) if self.payoff_amount else None
+            if self.payoff_amount and "payoff_date" not in sent:
+                out["payoff_date"] = date.today().isoformat()
+            if not self.payoff_amount:
+                out["payoff_date"] = None
+        if "payoff_date" in sent and out.get("payoff_amount", True):
+            out["payoff_date"] = self.payoff_date.isoformat() if self.payoff_date else out.get("payoff_date")
+        if "plan_rate" in sent:
+            out["plan_rate"] = round(self.plan_rate, 4) if self.plan_rate else None
+        return out
 
     def _plan(self, amount: float | None) -> float | None:
         """Planı tamamla ve doğrula; dönen: toplam (amount)."""
@@ -5311,7 +5332,8 @@ class DebtPatch(DebtPlanFields):
 
 # planı kaldırınca plan alanları boşalır: "planlı oluştur + kaldır" ile "diğer borç" aynı kayıt. Alacaklı türü
 # (creditor_type) borcun kendisinindir, kalır; ödeme koşulu "taksitli" ise boşalır (bilinmiyor)
-_PLAN_COLS = ("plan_installment", "plan_count", "plan_start", "plan_day", "plan_interest")
+_PLAN_COLS = ("plan_installment", "plan_count", "plan_start", "plan_day", "plan_interest", "payoff_amount", "payoff_date",
+              "plan_rate")
 
 
 class DebtPayIn(BaseModel):
@@ -5319,6 +5341,9 @@ class DebtPayIn(BaseModel):
     paid_at: date
     account_id: int | None = None  # banka/nakit hesabı
     entry_id: int | None = None    # var olan hareket bu ödemedir (Yapılacaklar "Bu havale borçtan mı?" → Evet)
+    # erken kapatma (yetenek debt_payoff): ödeme planlı borç bu ödemeyle kapandı; bankanın almadığı kalan faiz borçtan
+    # düşer (borç tutarı = ödenen toplam). Ödeme geri alınırsa borç ödenmemiş kapatma tutarıyla açılır
+    close_early: bool = False
 
 
 @app.get("/api/debts")
@@ -5326,19 +5351,38 @@ def list_debts():
     return db.list_debts()
 
 
+_PAYOFF_COLS = ("payoff_amount", "payoff_date", "plan_rate")
+_PAYOFF_ONLY_INTEREST = "Kapatma tutarı yalnız faizli ödeme planında girilir"
+
+
 @app.post("/api/debts")
 def create_debt(body: DebtIn):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
-    data = body.model_dump(exclude={"plan_end"})
+    data = body.model_dump(exclude={"plan_end", *_PAYOFF_COLS})
     data["debt_date"] = body.debt_date.isoformat()
     data["due_date"] = body.due_date.isoformat() if body.due_date else None
+    payoff = body._payoff()
+    if any(v is not None for v in payoff.values()):
+        if body.plan_installment is None or body.plan_interest != "var":
+            raise HTTPException(422, _PAYOFF_ONLY_INTEREST)
+        data.update(payoff)
     return {"id": db.create_debt(data)}
 
 
 @app.patch("/api/debts/{did}")
 def patch_debt(did: int, body: DebtPatch):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
-    data = body.model_dump(exclude_unset=True, exclude={"plan_end", "plan_off"})
+    data = body.model_dump(exclude_unset=True, exclude={"plan_end", "plan_off", *_PAYOFF_COLS})
+    payoff = body._payoff()
+    if any(v is not None for v in payoff.values()):
+        with db.connect() as c:
+            row = c.execute("SELECT plan_installment, plan_interest FROM debts WHERE id = ?", (did,)).fetchone()
+        interest = data["plan_interest"] if "plan_interest" in data else (row["plan_interest"] if row else None)
+        if row is not None and (not (row["plan_installment"] or body.plan_installment) or interest != "var"):
+            raise HTTPException(422, _PAYOFF_ONLY_INTEREST)
+    data.update(payoff)
+    if "plan_interest" in data and data["plan_interest"] != "var":  # faiz yoksa erken kapatma hesabı da yok
+        data.update({k: None for k in _PAYOFF_COLS})
     if body.plan_installment is not None:  # tamamlanan alanlar (sayı, gün, toplam) da yazılsın
         data.update({k: getattr(body, k) for k in ("plan_installment", "plan_count", "plan_start", "plan_day",
                                                    "creditor_type", "amount", "pay_terms")})
@@ -5411,6 +5455,14 @@ def put_debt_schedule(did: int, body: DebtScheduleIn):
     data = {"plan_installment": inst, "plan_count": count, "plan_start": start, "plan_day": body.plan_day or 1,
             "creditor_type": body.creditor_type or d["creditor_type"] or "diger", "plan_interest": body.plan_interest,
             "due_date": None, "pay_terms": "taksitli"}  # vade taksitlerden gelir
+    # erken kapatma: yalnız gönderilen alanlar yazılır (eski istemci planı düzenleyince girilen tutar silinmez); faiz
+    # "var" değilse silinir
+    payoff = body._payoff()
+    if body.plan_interest != "var":
+        if any(v is not None for v in payoff.values()):
+            raise HTTPException(422, _PAYOFF_ONLY_INTEREST)
+        payoff = {k: None for k in _PAYOFF_COLS}
+    data.update(payoff)
     if body.amount is not None:
         data["amount"] = amount
     db.update_debt(did, data)
@@ -5449,7 +5501,16 @@ def pay_debt(did: int, body: DebtPayIn):
         if e["debt_id"] or db._entry_is_debt_linked(body.entry_id):
             raise HTTPException(409, "Bu hareket zaten bir borca bağlı")
     try:
+        if body.close_early:
+            with db.connect() as c:
+                row = c.execute("SELECT plan_installment, direction, settled_at FROM debts WHERE id = ?", (did,)).fetchone()
+            if row is not None and (not row["plan_installment"] or row["direction"] != "borc" or row["settled_at"]):
+                raise HTTPException(422, "Erken kapatma yalnız açık, ödeme planı olan borçta yazılır")
+            if body.amount is None:
+                raise HTTPException(422, "Kapatırken ödediğin tutarı yaz")
         pid = db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id)
+        if body.close_early:
+            db.close_debt_early(did)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     except db.OverpayError as e:

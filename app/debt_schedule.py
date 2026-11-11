@@ -18,6 +18,15 @@ Borcun koşulları (yalnız "borcum"; borç planı bunlara göre sıralar, app/d
                  ödenecek) | bilinmiyor (parca gibi). Boşsa: planlıysa taksitli, değilse bilinmiyor.
   due_strict     tarih türü: 1 kesin (tarihinde ödenmesi şart; gecikirse bedeli/yaptırımı var) | 0 söz (esnek). Boşsa:
                  planlı borçta ve kurumda (vergi_sgk, banka, magaza, diger) kesin, kişide ve türü boş borçta söz.
+
+Erken kapatma (yalnız faizli planda, plan_interest "var"; isteğe bağlı; yetenek debt_payoff). Erken kapatma faizden
+çıkıştır: borç planı artan parayı biriktirip krediyi tek seferde kapatmayı hesaplar (app/debt_plan.py).
+  payoff_amount  "bugün kapatma tutarı": bankadan öğrenilen erken kapama tutarı (kalan anapara + varsa erken ödeme ücreti)
+  payoff_date    tutarın öğrenildiği gün (boşsa girildiği gün). Kapatma tutarı o günden sonra ödenen her taksitle azalır.
+  plan_rate      isteğe bağlı aylık faiz oranı (yüzde, ör. 2.89). Varsa her taksitin anapara payı orandan hesaplanır
+                 (kapatma tutarı × (1+r)^k − taksit × ((1+r)^k − 1)/r); yoksa basit yaklaşım: kalan faiz (kalan taksitler
+                 − kapatma tutarı) taksit ödendikçe orantılı azalır (kapatma tutarı = kalan taksitler × ilk oran). İkisi de
+                 yaklaşıktır; metinde "yaklaşık" yazılır, kapatmadan önce bankaya sorulur.
 """
 import calendar
 from datetime import date
@@ -143,6 +152,53 @@ def due_through(d: dict, month: str) -> float:
     return money.money(sum(i["amount"] for i in installments(d) if i["month"] <= month))
 
 
+def remaining_on(d: dict, day: str) -> float:
+    """O gün (dahil) itibarıyla kalan taksitler toplamı: borç tutarı eksi o güne kadar ödenen."""
+    paid = sum(p["amount"] or 0 for p in d.get("payments") or [] if (p.get("paid_at") or "")[:10] <= day)
+    return money.money(max(0.0, d["amount"] - paid))
+
+
+def payoff_base(d: dict, today: date) -> dict | None:
+    """Erken kapatma hesabının girdileri: {p0 (girilen kapatma tutarı), s0 (o gün kalan taksitler), inst (aylık taksit),
+    rate (aylık, 0.0289 | None), date}. Faizli plan değilse ya da tutar yoksa None."""
+    if not is_scheduled(d) or d.get("plan_interest") != "var" or not d.get("payoff_amount"):
+        return None
+    day = (d.get("payoff_date") or today.isoformat())[:10]
+    s0 = remaining_on(d, day)
+    if s0 <= 0:
+        return None
+    rate = d.get("plan_rate")
+    return {"p0": money.money(d["payoff_amount"]), "s0": s0, "inst": money.money(d["plan_installment"]),
+            "rate": rate / 100 if rate else None, "date": day}
+
+
+def payoff_at(base: dict, rest: float) -> float:
+    """Kalan taksitler `rest` iken yaklaşık kapatma tutarı (en çok rest). Oran varsa ödenen taksit sayısı kadar anapara
+    düşülür; yoksa kalan faiz kalan taksitlerle orantılı azalır."""
+    if rest <= 0:
+        return 0.0
+    r = base.get("rate")
+    if r:
+        k = max(0.0, (base["s0"] - rest) / base["inst"]) if base["inst"] > 0 else 0.0
+        g = (1 + r) ** k
+        v = base["p0"] * g - base["inst"] * (g - 1) / r
+    else:
+        v = base["p0"] * rest / base["s0"]
+    return money.money(min(rest, max(0.0, v)))
+
+
+def payoff_info(d: dict, today: date) -> dict | None:
+    """Bugün için: {amount (girilen), date, rate (yüzde), now (bugünkü yaklaşık kapatma tutarı), left (kalan taksitler),
+    interest (kalan faiz: left − now), benefit (erken kapatma faiz kazandırıyor mu)}."""
+    b = payoff_base(d, today)
+    if not b:
+        return None
+    left = money.money(max(0.0, d["amount"] - (d.get("paid_amount") or 0)))
+    now = payoff_at(b, left)
+    return {"amount": b["p0"], "date": b["date"], "rate": d.get("plan_rate"), "now": now, "left": left,
+            "interest": money.money(max(0.0, left - now)), "benefit": money.gt(left - now, 1.0)}
+
+
 def info(d: dict, today: date) -> dict:
     """İstemcinin göstereceği durum: sıradaki taksit, bu ay ödenecek (geçmiş eksik dahil), gecikme."""
     rows = installments(d)
@@ -170,6 +226,9 @@ def info(d: dict, today: date) -> dict:
         "overdue": overdue, "total": base(d), "paid_before": money.money(d.get("plan_paid_before") or 0),
         "last_amount": last["amount"] if last else 0.0,
         "text": summary(d, rows),
+        # erken kapatma (yetenek debt_payoff): girilen kapatma tutarı ve bugünkü yaklaşık karşılığı; faizli değilse None
+        "payoff": payoff_info(d, today),
+        "rate": d.get("plan_rate"),
     }
 
 

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { call } from "../lib/apiError";
+import type { CardInterest } from "../api";
 import { cx, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { isLimited, useBook, useMeta, useSave } from "./hooks";
@@ -11,6 +12,8 @@ export interface CardLimitInfo {
   card_no: string; limit: number | null; limit_source: "ekstre" | "elle" | null; statement_limit: number | null;
   available: number | null; available_source: "ekstre" | "tahmini" | null; available_as_of: string | null;
   used: number | null; used_pct: number | null;
+  /** son ekstrenin faiz satırı (yetenek card_interest; eski sunucuda yok) */
+  interest?: CardInterest | null;
 }
 interface Summary { cards: CardLimitInfo[] }
 

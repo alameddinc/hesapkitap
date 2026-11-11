@@ -554,6 +554,10 @@ MIGRATIONS = [
     # borcun koşulları (yalnız "borcum"; boşsa eski davranış; app/debt_schedule.py terms_of / strict_of)
     ("debts", "pay_terms", "TEXT"),             # taksitli | parca | tek | bilinmiyor
     ("debts", "due_strict", "INTEGER"),         # 1 kesin (tarihinde ödenmesi şart) | 0 söz (esnek)
+    # faizli ödeme planında erken kapatma (isteğe bağlı; app/debt_schedule.py payoff_*)
+    ("debts", "payoff_amount", "REAL"),         # bankadan öğrenilen "bugün kapatma tutarı"
+    ("debts", "payoff_date", "TEXT"),           # tutarın öğrenildiği gün (YYYY-MM-DD)
+    ("debts", "plan_rate", "REAL"),             # aylık faiz oranı, yüzde (ör. 2.89)
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -3372,7 +3376,7 @@ def _shift_days(d: str, n: int) -> str:
 
 DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date", "note", "account_id",
                "plan_installment", "plan_count", "plan_start", "plan_day", "creditor_type", "plan_interest",
-               "pay_terms", "due_strict")
+               "pay_terms", "due_strict", "payoff_amount", "payoff_date", "plan_rate")
 
 
 def list_debts(open_only: bool = False) -> list[dict]:
@@ -3489,6 +3493,15 @@ def _recalc_debt(c, debt_id: int) -> None:
                            (debt_id,)).fetchone()
     settled = d["written_off_at"] or (last if money.ge(paid, d["amount"]) else None)
     c.execute("UPDATE debts SET paid_amount = ?, settled_at = ? WHERE id = ?", (min(paid, d["amount"]), settled, debt_id))
+
+
+def close_debt_early(debt_id: int) -> None:
+    """Ödeme planlı borç erken kapatıldı: borç tutarı ödenen toplama iner (bankanın almadığı kalan faiz düşer), borç
+    kapanır. Kapatma ödemesi geri alınırsa borç o tutar kadar açık kalır."""
+    with connect() as c:
+        paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (debt_id,)).fetchone()[0]
+        c.execute("UPDATE debts SET amount = ? WHERE id = ? AND amount > ?", (money.money(paid), debt_id, paid))
+        _recalc_debt(c, debt_id)
 
 
 def unpay_debt(debt_id: int) -> None:

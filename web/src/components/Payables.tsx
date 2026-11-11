@@ -4,6 +4,7 @@ import { api, type Payable } from "../api";
 import { cx, dateTR, tl } from "../format";
 import { useUI } from "../ui";
 import CycleLine from "./CardCycle";
+import CardInterestLine from "./CardInterestLine";
 import { payableKey } from "../lib/odeme";
 
 function DueBadge({ p }: { p: Payable }) {
@@ -62,8 +63,10 @@ export default function Payables() {
               <div className="mt-0.5 text-xs text-stone-500">
                 {p.subtitle} · son ödeme {dateTR(p.due_date)}
                 {/* asgari tutar listede bilerek yok (mobil Kartlar ile aynı): kullanıcıyı asgari ödemeye yönlendirmesin; yalnız "Ödedim" penceresinde */}
-                {p.type === "statement" && p.status !== "odendi" && p.status !== "kismi" && " · tamamını ödersen faiz işlemez"}
-                {p.status === "kismi" && p.type === "statement" && ` · ${tl(p.paid_amount ?? 0)} ödendi · kalanına faiz işleyebilir`}
+                {/* faiz satırı sunucudan (yetenek card_interest): günü geçtiyse bu ay eklenecek faiz, kısmide kalanı öde */}
+                {p.type === "statement" && p.status !== "odendi" && p.status !== "kismi" && (!p.interest || p.interest.state === "before_due") && " · tamamını ödersen faiz işlemez"}
+                {p.status === "kismi" && p.type === "statement" && ` · ${tl(p.paid_amount ?? 0)} ödendi${p.interest ? "" : " · kalanına faiz işleyebilir"}`}
+                {p.type === "statement" && p.status !== "odendi" && <CardInterestLine i={p.interest} />}
                 {rolled(p) && <span className="block text-stone-600 dark:text-stone-300">Ödenmedi; kalanı sonraki ekstreye devretti (orada sayılıyor, toplama ayrıca girmez)</span>}
                 {p.cycle && <CycleLine c={p.cycle} />}
                 {p.has_file && p.id && <> · <a className="text-blue-600 underline" href={`/api/bills/${p.id}/file`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>dosya</a></>}

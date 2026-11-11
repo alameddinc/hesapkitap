@@ -15,7 +15,21 @@ export interface DebtSchedule {
   /** yetenek debt_schedule_edit: planın kapsadığı tutar (borç eksi ilk taksit ayından önce ödenen), plan öncesi ödenen,
    *  kalan taksit sayısı, son taksit (eski sunucuda yok) */
   total?: number; paid_before?: number; left_count?: number; last_amount?: number;
+  /** yetenek debt_payoff: faizli planda girilen bugün kapatma tutarı ve bugünkü yaklaşık karşılığı (yoksa null) */
+  payoff?: SchedulePayoff | null; rate?: number | null;
 }
+/** Girilen kapatma tutarı (amount, date), aylık oran (yüzde), bugünkü yaklaşık kapatma tutarı (now), kalan taksitler
+ *  (left), kalan faiz (interest), erken kapatma kazandırıyor mu (benefit). Hesap sunucuda. */
+export interface SchedulePayoff { amount: number; date: string; rate: number | null; now: number; left: number; interest: number; benefit: boolean }
+/** Borç planında ödeme planlı borcun erken kapatma satırı (yalnız faiz "var"): ask (tutar girilmemiş: nötr ipucu) · plan
+ *  (kapatma ayı ve kurtulunan faiz) · no_benefit · not_reached (bu tutarla birikmiyor) · known (aylık tutar yok) */
+export interface PlanPayoff {
+  state: "ask" | "plan" | "no_benefit" | "not_reached" | "known"; title: string; text: string; note?: string;
+  month?: string; label?: string; amount?: number | null; installments?: number | null; saved?: number | null;
+  entered?: number; entered_date?: string; rate?: number | null; now?: number | null;
+}
+/** Kapatma satırında "Kapattım": POST /api/debts/{debt_id}/pay {amount, paid_at, close_early: true} */
+export interface PlanCloseEarly { debt_id: number; amount: number; label: string; confirm: string }
 export interface PlanDebt {
   key: string; kind: PlanKind; id: number; title: string; subtitle: string; order: number;
   total: number; paid: number; remaining: number; progress: number; due_date: string | null; due_label: string | null;
@@ -38,6 +52,8 @@ export interface PlanDebt {
   day_note?: { day: number; salary_day: number; text: string } | null;
   /** altın / döviz: "2 gram altın · ≈₺6.000" ve "TL karşılığı fiyata göre değişir." */
   qty_text?: string; tl_text?: string; approx_note?: string;
+  /** kind "fixed", faiz "var": erken kapatma (yetenek debt_payoff; eski sunucuda yok) */
+  payoff?: PlanPayoff | null;
 }
 export interface PlanLate {
   kind: "kesin" | "soz"; date: string; label: string; head: string; open: number; overdue: boolean;
@@ -64,10 +80,12 @@ export interface PlanCommitment {
 }
 export interface PlanMonth { month: string; label: string; total: number; interest: number; left: number;
   payments: { key: string; kind: PlanKind; title: string; amount: number; closes: boolean; saving?: boolean; saved?: number;
-    from_saved?: number; units_text?: string }[];
+    from_saved?: number; units_text?: string;
+    /** erken kapatma satırı (anahtar borc:<id>:kapat): birikim ya da kapatma (pay_total) */
+    payoff?: boolean; pay_total?: number; interest_saved?: number }[];
   /** kişi kişi (yetenek debt_plan_groups; eski sunucuda yok): aynı kişinin ödemeleri tek satır; birikim ayrı satır */
   groups?: { key: string; kind: PlanKind; title: string; amount: number; closes: boolean; count: number; keys: string[];
-    saving?: boolean; units_text?: string }[];
+    saving?: boolean; units_text?: string; payoff?: boolean; pay_total?: number }[];
   fixed_due?: number; fixed_short?: number;
   /** ay sonunda birikimde duran (tek seferde ödenecek borçlar için; eski sunucuda yok) */
   saved?: number }
@@ -76,11 +94,13 @@ export interface PlanItem { key: string; kind: PlanKind; title: string; amount: 
   /** aynı kişinin borçlarını ayırt eden kısa ad: not ya da "3 Mart 2026 borcu" (eski sunucuda yok) */
   sub?: string | null;
   /** tek seferde ödenecek borç: bu ay birikim (Ödedim yok) · birikim yetti: tamamı (pay_total) bir kerede */
-  saving?: boolean; saved?: number; from_saved?: number; pay_total?: number; units_text?: string; approx_note?: string }
+  saving?: boolean; saved?: number; from_saved?: number; pay_total?: number; units_text?: string; approx_note?: string;
+  /** erken kapatma satırı (payable yok): birikim ya da kapatma; kapatmada "Kapattım" (close_early) */
+  payoff?: boolean; close_early?: PlanCloseEarly }
 /** "Bu ay ödenecekler" kişi kişi: count > 1 ise açılınca borç borç (items), payable yalnız tek borçta */
 export interface PlanGroup { key: string; kind: PlanKind; title: string; count: number; amount: number; done: boolean; full: boolean;
   text: string; due_label: string | null; items: PlanItem[]; payable: Payable | null;
-  saving?: boolean; units_text?: string; from_saved?: number; pay_total?: number }
+  saving?: boolean; units_text?: string; from_saved?: number; pay_total?: number; payoff?: boolean; close_early?: PlanCloseEarly }
 export interface DebtPlanData {
   available: boolean; month: string; month_label: string;
   settings: { monthly: number | null; order: DebtOrder }; monthly: number | null;
@@ -89,7 +109,9 @@ export interface DebtPlanData {
   totals: { open: number; cards: number; people: number; count: number; card_count: number; person_count: number;
     paid_this_month: number; min_monthly_no_interest: number; interest_projected: number | null;
     /** ödeme planı olan borçlar (eski sunucuda yok) */
-    fixed?: number; fixed_count?: number; fixed_this_month?: number; saving_this_month?: number };
+    fixed?: number; fixed_count?: number; fixed_this_month?: number; saving_this_month?: number;
+    /** erken kapatmayla kurtulunan yaklaşık faiz (faiz gizliyse null; eski sunucuda yok) */
+    payoff_saving?: number | null };
   debts: PlanDebt[]; months: PlanMonth[];
   debt_free: { month: string; label: string; months: number; text: string; installments_until?: { month: string; label: string };
     /** bu tutarla kartlarda faiz işliyor: borçsuz ay başarı gibi (yeşil) gösterilmez */

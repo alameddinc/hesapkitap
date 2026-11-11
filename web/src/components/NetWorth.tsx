@@ -13,6 +13,7 @@ import AccountMerge from "./AccountMerge";
 import Wallets from "./Wallets";
 import CycleLine from "./CardCycle";
 import CardLimit, { useCardLimits } from "./CardLimit";
+import CardInterestLine from "./CardInterestLine";
 import { CardSpender } from "./Spender";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "./SorguDurumu";
 
@@ -277,6 +278,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                         {c.next_estimate != null && !c.cycle && ` · sonraki ~${tl(c.next_estimate)}${c.next_due ? ` (son ödeme ${dateTR(c.next_due)})` : ""}`}
                       </span>
                       {c.cycle && <CycleLine c={c.cycle} />}
+                      {c.unpaid > 0 && <CardInterestLine i={limits.data?.get(c.card_no)?.interest} />}
                       <CardLimit info={limits.data?.get(c.card_no)} />
                       {!compact && <CardSpender cardNo={c.card_no} />}
                     </span>

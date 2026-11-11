@@ -11,7 +11,7 @@ import { useCap, useSave } from "./hooks";
 import Segmented from "./Segmented";
 import type { DebtSchedule } from "../lib/debtPlan";
 import { ALACAKLI, KOSULLAR, TARIH_TURU, kosulGovdesi, kosulOzeti, varsayilanKesin, type CreditorType, type PayTerms } from "../lib/borcKosul";
-import DebtScheduleSection, { ScheduleForm } from "./DebtScheduleSection";
+import DebtScheduleSection, { PayoffFields, ScheduleForm, payoffBody } from "./DebtScheduleSection";
 
 export interface Debt {
   id: number;
@@ -32,6 +32,8 @@ export interface Debt {
   schedule?: DebtSchedule | null;
   plan_installment?: number | null; plan_count?: number | null; plan_start?: string | null; plan_day?: number | null;
   creditor_type?: CreditorType | null; plan_interest?: DebtSchedule["interest"];
+  /** erken kapatma (yetenek debt_payoff): girilen bugün kapatma tutarı, öğrenildiği gün, aylık oran (yüzde) */
+  payoff_amount?: number | null; payoff_date?: string | null; plan_rate?: number | null;
   /** borcun koşulları (yetenek debt_terms; alacakta ve eski sunucuda null/yok): kayıtlı değerler ve geçerli olanlar */
   pay_terms?: PayTerms | null; due_strict?: boolean | null;
   terms?: PayTerms | null; terms_label?: string | null; strict?: boolean | null; creditor_label?: string | null;
@@ -250,6 +252,9 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
   const [day, setDay] = useState(String(Number(today().slice(8, 10))));
   const [total, setTotal] = useState("");
   const [interest, setInterest] = useState<string>("");
+  const payoffCap = useCap("debt_payoff");
+  const [payoff, setPayoff] = useState("");
+  const [rate, setRate] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const borc = direction === "borc";
   const kosulOn = borc && termsCap; // eski sunucu: yalnız eski alanlar
@@ -271,7 +276,8 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
       if (!(dd >= 1 && dd <= 31)) throw new Error("Ödeme günü 1 ile 31 arasında olmalı");
       const body = { person: person.trim(), direction: "borc", asset: "TRY", plan_installment: i,
         ...(n >= 1 ? { plan_count: Math.round(n) } : { plan_end: endMonth }), plan_start: startMonth, plan_day: dd,
-        creditor_type: creditor, plan_interest: interest || null, note: note.trim() || null, ...(t != null && t > 0 ? { amount: t } : {}) };
+        creditor_type: creditor, plan_interest: interest || null, note: note.trim() || null, ...(t != null && t > 0 ? { amount: t } : {}),
+        ...(payoffCap && interest === "var" ? payoffBody(payoff, rate) : {}) };
       return json("POST", "/api/debts", body);
     }
     const a = parseAmount(amount);
@@ -349,11 +355,12 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
           </label>
         </div>
         <label className="block text-xs">
-          <span className="label">Bu planın faizi / gecikme zammı var mı? (yalnız kayıt için)</span>
+          <span className="label">Bu planın faizi / gecikme zammı var mı?</span>
           <select className="input" value={interest} onChange={(e) => setInterest(e.target.value)}>
             <option value="">Belirtme</option><option value="yok">Yok</option><option value="var">Var</option><option value="bilmiyorum">Bilmiyorum</option>
           </select>
         </label>
+        {payoffCap && interest === "var" && <div className="grid grid-cols-2"><PayoffFields payoff={payoff} setPayoff={setPayoff} rate={rate} setRate={setRate} /></div>}
         <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
       </>) : planEkle ? (
         <ScheduleForm d={{ ...debt!, creditor_type: creditor }} creditor={creditor} onDone={onDone} />

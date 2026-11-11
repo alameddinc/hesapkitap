@@ -10,7 +10,7 @@ import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurum
 import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
 import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
-import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind, type PlanDebt, type PlanLate } from "../lib/debtPlan";
+import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind, type PlanDebt, type PlanLate, type PlanPayoff, type PlanCloseEarly } from "../lib/debtPlan";
 import { DebtForm } from "../components/Debts";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
@@ -132,6 +132,16 @@ export default function DebtPlan() {
       if (k) { ids.get(k)!.push(d.id); dup.add(d.key); } else { lead.set(g, d.key); ids.set(d.key, [d.id]); }
     }
     return { ids, dup };
+  };
+  // erken kapatma: kapatma ayında "Kapattım" → ödeme ve borç ödenen toplamla kapanır (POST pay close_early)
+  const closeEarly = useMutation({
+    mutationFn: (c: PlanCloseEarly) => send(`/api/debts/${c.debt_id}/pay`, { method: "POST",
+      json: { amount: c.amount, paid_at: new Date().toISOString().slice(0, 10), close_early: true } }),
+    onSuccess: () => { ui.toast("Kredi kapandı; kalan faizden kurtuldun"); void qc.invalidateQueries({ refetchType: "all" }); },
+    onError: (e: Error) => ui.toast(e.message || "Kaydedilemedi"),
+  });
+  const askCloseEarly = async (c: PlanCloseEarly) => {
+    if (await ask(c.confirm, { title: `${c.label}?`, confirm: c.label, danger: false })) closeEarly.mutate(c);
   };
   const commitAmount = () => { if (valid != null) { setDraft((d) => ({ ...d, monthly: valid })); persist({ monthly: valid }); } };
   const old = !on || (q.error instanceof ApiError && q.error.status === 404);
@@ -353,6 +363,8 @@ export default function DebtPlan() {
                         <span className="font-semibold tabular-nums">{tl(g.amount)}</span>
                         {!g.done && !g.saving && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
                           aria-label={`${g.title}: ödedim`}>Ödedim</button>}
+                        {!g.done && p.can_edit && g.close_early && <button className="btn-ghost px-2 py-1 text-sm" disabled={closeEarly.isPending}
+                          onClick={() => void askCloseEarly(g.close_early!)} aria-label={`${g.title}: ${g.close_early.label}`} data-testid="kapattim">{g.close_early.label}</button>}
                       </span>
                     </div>
                     {many && open && (
@@ -418,6 +430,7 @@ export default function DebtPlan() {
                 {d.schedule?.next && <p className="text-xs text-stone-500 tabular-nums" data-testid="siradaki-taksit">
                   Sıradaki: {d.schedule.next.no}. taksit · {maskText(trimTl(d.schedule.next.left))} · {d.due_label}
                   {d.schedule.interest_label ? ` · ${d.schedule.interest_label}` : ""}</p>}
+                {d.payoff && <Payoff p={d.payoff} />}
               </li>
             ))}
           </ul>
@@ -452,11 +465,12 @@ export default function DebtPlan() {
                           <li key={x.key} className="flex items-center gap-2">
                             <span className="min-w-0 flex-1 break-words">{x.title}
                               {x.count > 1 && <span className="ml-1 text-xs text-stone-500">· {x.count} borç</span>}
-                              {x.kind === "fixed" && <span className="ml-1 text-xs text-stone-500">· taksit</span>}
+                              {x.kind === "fixed" && <span className="ml-1 text-xs text-stone-500">{x.payoff ? "· erken kapatma" : "· taksit"}</span>}
                               {x.saving && <span className="ml-1 text-xs text-violet-700 dark:text-violet-300">· birikim</span>}
                               {x.units_text && <span className="ml-1 text-xs text-stone-500">· {maskText(x.units_text)}</span>}
                               {x.closes && <span className="ml-1 text-xs text-green-700 dark:text-green-400">· kapanır</span>}</span>
-                            <span className="tabular-nums">{tl(x.amount)}</span>
+                            <span className="text-right tabular-nums">{tl(x.amount)}
+                              {x.pay_total != null && x.pay_total !== x.amount && <span className="block text-[11px] text-stone-500">kapatma {tl(x.pay_total)}</span>}</span>
                           </li>
                         ))}
                       </ul>
@@ -513,6 +527,20 @@ function Late({ l, canEdit, busy, onAgree, n = 1 }: { l: PlanLate; canEdit: bool
       {l.hint && <p className="text-xs opacity-90">{l.hint}</p>}
       {l.action && canEdit && <button className="btn-ghost border border-amber-300 px-2 py-1 text-xs dark:border-amber-800" disabled={busy} onClick={onAgree}>
         <CalendarCheck size={13} aria-hidden />{l.action.label} · {l.action.date_label}{n > 1 ? ` (${n} borç)` : ""}</button>}
+    </div>
+  );
+}
+
+/** Faizli ödeme planında erken kapatma (yetenek debt_payoff): plan kapatma ayını ve kurtulunan faizi söyler; tutar
+ *  girilmemişse nötr ipucu. Metinler sunucudan. */
+function Payoff({ p }: { p: PlanPayoff }) {
+  const tone = p.state === "plan" ? "bg-green-50 text-green-950 dark:bg-green-950/40 dark:text-green-50"
+    : p.state === "ask" ? "bg-blue-50 text-blue-950 dark:bg-blue-950/40 dark:text-blue-50" : "bg-stone-50 text-stone-700 dark:bg-stone-800/60 dark:text-stone-200";
+  return (
+    <div className={cx("space-y-1 rounded-lg p-2.5", tone)} data-testid="erken-kapatma" data-state={p.state}>
+      <p className="flex gap-1.5 text-xs font-medium">{p.state === "plan" ? <TrendingDown size={14} className="mt-0.5 shrink-0" aria-hidden />
+        : <Info size={14} className="mt-0.5 shrink-0" aria-hidden />}<span className="min-w-0">{maskText(p.text)}</span></p>
+      {p.note && p.state !== "ask" && <p className="text-[11px] opacity-80">{p.note}</p>}
     </div>
   );
 }

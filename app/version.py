@@ -320,6 +320,21 @@ CAPABILITIES = (
                               # döviz: fiyatı varsa plana girer); months[].payments[] saving/saved/from_saved/units_text;
                               # this_month.items[] saving/from_saved/pay_total; day_notes, price_note; commitment.saved
                               # [{title, amount, text}]; push "borc" kesin tarihte "ödeme günü"
+    "card_interest",          # Kartlar ekranında faiz satırı (sunucu hesaplar; debt_plan.card_interest, planla aynı hesap):
+                              # GET /api/cards/summary cards[].interest ve GET /api/payables (statement, in_total) [].interest
+                              # {state after_due|partial|before_due, level bad|warn|info, remaining, amount (faiz + vergi;
+                              # ortak defterde faiz gizliyse null), rate, rate_source ekstre|genel, rate_note, text} | null
+    "debt_payoff",            # faizli kredinin erken kapatılması (faizden çıkış): POST/PATCH /api/debts ve PUT
+                              # /api/debts/{id}/schedule {payoff_amount (bugün kapatma tutarı; null siler), payoff_date?
+                              # (boşsa bugün), plan_rate? (aylık %, ≤15)} yalnız plan_interest "var"ken (yoksa 422); yalnız
+                              # gönderilen alan yazılır (eski istemci silmez); schedule.payoff {amount, date, rate, now,
+                              # left, interest, benefit} | null, schedule.rate. GET /api/debt-plan: debts[] (kind fixed)
+                              # payoff {state ask|plan|no_benefit|not_reached|known, title, text, note?, month?, label?,
+                              # amount?, installments?, saved?} | null; months[].payments[] ve this_month.items[] key
+                              # "borc:<id>:kapat" (kind fixed, payoff: true; birikim saving/saved ya da kapatma
+                              # from_saved/pay_total/interest_saved); kapatma satırında close_early {debt_id, amount,
+                              # label, confirm} → POST /api/debts/{id}/pay {amount, paid_at, close_early: true} (borç
+                              # ödenen toplamla kapanır); totals.payoff_saving
 )
 
 

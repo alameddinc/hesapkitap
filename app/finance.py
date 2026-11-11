@@ -1071,6 +1071,7 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
     rows = [r for r in transactions(None) if r["kind"] in CARD_ROW_KINDS]
     sts = {s["id"]: s for s in db.list_statements()}
     manual = db.card_limits()
+    interest = _card_interest_fn(today)
     cards = []
     for c in nw["credit_cards"]:
         card_no = c["card_no"]
@@ -1095,6 +1096,9 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
             "recent": mine[:recent], "recent_total": len(mine),
             # kart limiti ve kalan kullanılabilir limit (yetenek card_limit): limit, limit_source, available, used_pct
             **card_limit(card_no, list(sts.values()), manual, c["unpaid"], cyc.get(card_no)),
+            # son ekstrenin faiz satırı (yetenek card_interest): son ödeme günü geçtiyse bu ay eklenecek faiz ve vergi,
+            # kısmi ödemede kalanı ödersen kurtulacağın faiz, yoksa "tamamını ödersen faiz işlemez"
+            "interest": interest(card_no, c["unpaid"], latest) if latest else None,
         })
     so_far = sum((c["cycle"] or {}).get("so_far", 0) for c in cards)
     at_cut = sum((c["cycle"] or {}).get("at_cut", 0) for c in cards)
@@ -1599,11 +1603,28 @@ def _status(amount: float, paid: float | None, due: str, today: date) -> str:
     return "gecikti" if date.fromisoformat(due) < today else "bekliyor"
 
 
+def _card_interest_fn(today: date):
+    """Kart başına faiz satırı (debt_plan.card_interest; oran ekstreden, yoksa genel; ortak defterde faiz gizliyse tutar
+    yok). Dönen: (card_no, kalan, ekstre) → dict | None."""
+    from app import book, debt_plan
+
+    rates = debt_plan._learned_rates()
+    hidden = book.hide_fees()
+
+    def f(card_no: str, remaining: float, st: dict) -> dict | None:
+        if st.get("source") == "excel":
+            return None
+        paid = (st.get("paid_amount") or 0.0) if st.get("paid_at") else 0.0
+        return debt_plan.card_interest(remaining, st.get("due_date"), paid, rates.get(card_no), today, hidden)
+    return f
+
+
 @_memo
 def payables(today: date | None = None) -> list[dict]:
     """Ödenecekler: kart ekstreleri, faturalar ve henüz kesilmemiş ekstrelerin tahmini."""
     today = today or date.today()
     out = []
+    interest = None
     statements = db.list_statements()
     latest = {st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     by_card = {st["card_no"]: st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
@@ -1625,6 +1646,9 @@ def payables(today: date | None = None) -> list[dict]:
         if not is_latest and status != "odendi" and by_card.get(st["card_no"]):
             # ödenmemiş eski ekstre: kalanı kartın son ekstresine devretti; gecikmiş bilgisi, toplama girmez
             item["rolled_into"] = by_card[st["card_no"]]
+        if item["in_total"]:  # kartın faiz satırı (Kartlar ile aynı; yetenek card_interest)
+            interest = interest or _card_interest_fn(today)
+            item["interest"] = interest(st["card_no"], db.statement_remaining(st), st)
         out.append(item)
     for b in db.list_bills():
         status = _status(b["amount"], b["paid_amount"], b["due_date"], today)

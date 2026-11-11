@@ -2,7 +2,7 @@
 
 İlke (sahibin kararı, değişmez): plan borçtan çıkmayı ve FAİZ ÖDEMEMEYİ hedefler (niyet: insanları faizden
 kurtarmak). Hiçbir metin kredi, borç transferi, taksitlendirme, nakit avans, yapılandırma, erteleme ya da faizli bir
-ürün önermez. Tamamı ödenebiliyorken "asgariyi öde" bir seçenek değildir, yalnız uyarıdır (kalan borca ne kadar faiz
+ürün önermez. Var olan faizli bir kredinin ERKEN KAPATILMASI faizden çıkıştır, önerilebilir (aşağıda 2b). Tamamı ödenebiliyorken "asgariyi öde" bir seçenek değildir, yalnız uyarıdır (kalan borca ne kadar faiz
 işleyeceği). Banka/ortaklık teklifi yoktur. Söz tarihine yetişmeyen borçta yalnız "haber ver" ve kullanıcı basarsa
 "Yeni tarihte anlaştık" (söz tarihini kaydeder) vardır; kesin tarihte tarih değiştirme önerilmez, gereken aylık tutar
 söylenir.
@@ -21,6 +21,23 @@ Sıra (her ay; app/debt_plan.simulate):
      taksiti, kesin borçta vadesi bu aysa tutarı; kalan son ödemesi gelen kartlara (faizi en yüksek önce: faiz azalsın).
   2. Kesin tarihi ileride olan borçlar: tarihine yetişmek için bu ay ayrılması GEREKEN kadar (sonraki ayların tutarı,
      taksitleri ve kart borçları düşülerek hesaplanır; esnek borçların payı yalnız gerekirse kayar).
+  2b. Faizli kredinin erken kapatılması (ödeme planlı borçta faiz "var" ve "bugün kapatma tutarı" girildiyse;
+     app/debt_schedule.py payoff_*). Artan para BİRİKİM olarak ayrılır, yetince kredi tek seferde kapanır (satır
+     anahtarı borc:<id>:kapat; kapanınca sonraki taksitler yok). Kısmi erken ödeme modellenmez: banka kısmi ödemeyle
+     taksiti ya da vadeyi kendi hesabıyla değiştirir, kaydedilen plan artık doğru olmaz; tek seferde kapatma kaydedilen
+     planla tutarlı ve basittir (metinde: kısmi ödeme yaparsan planı bankanın yeni planına göre güncelle).
+       - Kartta kalan borç her zaman önce: kart 1. adımda kapanır; birikimdeki para kapatana kadar faizi azaltmaz,
+         karta yatan her lira hemen azaltır (kredinin oranı yüksek olsa da). İki kredide oranı bilinen ve yüksek olan
+         önce, sonra kalan faizi (kalan taksitlere oranla) büyük olan; sıradaki kredi öncekinin kapandığı ay başlar.
+       - Kapatma tutarı her ödenen taksitle azalır (payoff_at): oran girildiyse anapara payı orandan, yoksa kalan faiz
+         kalan taksitlerle orantılı azalır (yaklaşık). Erken kapatma kazandırmıyorsa (tutar ≥ kalan taksitler) ya da
+         bu ayki artanla kapatma tutarı taksitler bitmeden birikmeyecekse birikim ayrılmaz; taksitler biterse birikim
+         diğer borçlara döner.
+       - Söz tarihi gelmiş (esnek) borç varken kredi bu ay kapanamıyorsa birikim kalan paranın en çok yarısını alır
+         (DUE_SHARE); öbür yarısı söz tarihi gelmiş borçlara (biri tamamen beklemesin). Bu ay kapanabiliyorsa önce kredi.
+       - Gösterim debts[].payoff: "Krediyi Mart 2027'de kapatırsan yaklaşık ₺… faizden kurtulursun (kalan taksitler
+         ₺…, kapatma tutarı ₺…)"; tutar girilmemişse nötr ipucu "Bankana bugün kapatma tutarını sor; …". Kapatma ayında
+         "Kapattım" (POST /api/debts/{id}/pay close_early): borç ödenen toplamla kapanır.
   3. Kalan para tarih sırasıyla (sıralama "tarih"): söz/vade tarihi aynı aya düşen borçlar bir grup; tarihsizler en
      sonda, en eskiden. Grupta para hepsine yetiyorsa hepsi; yetmiyorsa kapanabilenler kapanır (önce "tek seferde"
      olan, sonra altın/döviz borcu, sonra küçük), kalan öbürlerine: parça ödenebilene anlamlı pay, tek seferde
@@ -55,8 +72,8 @@ Borçlar kendiliğinden toplanır:
   kart      her kartın son ekstresinin ödenmemiş kısmı (finance.payables: kısmi ödeme düşülmüş; eski ekstreler yeni
             ekstrenin toplamında olduğu için ayrıca sayılmaz). Gelecek taksitler bilgi olarak (her ay ekstreye eklenir).
   diğer     Borç / Alacak'taki açık "borcum" kayıtları (kind "person": kişi ya da kurum; TL, fiyatı varsa altın/döviz).
-  taksit    Ödeme planı olan borç (kind "fixed"; app/debt_schedule.py): plan bunu yalnız kaydedilmiş bir yükümlülük
-            olarak okur; taksitler öne çekilmez.
+  taksit    Ödeme planı olan borç (kind "fixed"; app/debt_schedule.py): plan bunu kaydedilmiş bir yükümlülük olarak
+            okur; taksitler tek tek öne çekilmez. Faizliyse ve kapatma tutarı girildiyse erken kapatma (2b).
 
 Tutarlar: diğer borç ödemeleri kişi başına toplanır ve ROUND_TO katlarına yuvarlanır; kişi başı en az MIN_PAY (kalan
 daha azsa kalanın tamamı); FOLD'dan küçük kalan bırakılmaz. Kart ve taksit tutarları tam (kuruşuyla) kalır. Yanıtta
@@ -71,6 +88,10 @@ Sıralama seçenekleri: "tarih" (Söz tarihine göre, varsayılan) ve "kucuk" (E
 Takvim takvim ayıdır (bu ay = 0). Bu ay borçlara zaten ödenen, bu ayın tutarından düşülür. Kart borcu son ödeme
 gününün ayında kapanmazsa kalanına aylık faiz (ekstredeki "Oran:%x" biliniyorsa o, yoksa genel varsayım) + vergiler
 eklenir: bu yalnız "bu tutarla ne olur" uyarısıdır; plan böyle bir durumu çözüm olarak sunmaz, kapatacak tutarı söyler.
+Aynı hesap (monthly_interest) Kartlar ekranındaki faiz satırını da verir (card_interest; /api/cards/summary ve
+/api/payables, sunucu hesaplar): son ödeme günü geçmiş kalan "bu ay yaklaşık ₺Y faiz ve vergi eklenir; ödemedikçe
+her ay büyür", gün gelmemiş kısmi ödemede "kalanı son ödeme gününe kadar öde: yaklaşık ₺Y faizden kurtulursun",
+yoksa "tamamını ödersen faiz işlemez".
 
 Ortak defter: kartlar ve hesaplar db süzgeçlerinden geçer (gizli kart yok); Borç / Alacak sayfası üyeye kapalıysa
 diğer borçlar plana girmez; faiz gizliyse faiz tutarı yazılmaz. Ayar (aylık tutar, sıralama) defterindir: "Görür ve
@@ -102,6 +123,8 @@ TOL = 1.0              # plan takibinde 1 TL'lik fark yok sayılır
 ROUND_TO = 50          # diğer borç ödemeleri bu katlara yuvarlanır (kart ve taksit tutarı tam kalır)
 MIN_PAY = 250          # kişi başı en az anlamlı ödeme (kalan daha azsa kalanın tamamı)
 FOLD = 100             # bundan küçük kalan bırakılmaz: aynı ayın ödemesine eklenir (aylık tutarı en çok bu kadar aşar)
+PK = ":kapat"          # erken kapatma satırının anahtar eki (borc:<id>:kapat): taksit satırından ayrı
+DUE_SHARE = 0.5        # söz tarihi gelmiş borç varken erken kapatma birikimi kalan paranın en çok bu kadarını alır
 # "Ocak'ta" gibi bulunma eki (ayın son sesine göre)
 _AY_EK = ("'ta", "'ta", "'ta", "'da", "'ta", "'da", "'da", "'ta", "'de", "'de", "'da", "'ta")
 _YIL_EK = {"0": "'da", "1": "'de", "2": "'de", "3": "'te", "4": "'te", "5": "'te", "6": "'da", "7": "'de", "8": "'de",
@@ -397,6 +420,8 @@ def _fixed_item(d: dict, payable: dict, paid_now: float, today: date) -> dict:
         "overdue": bool(sch["overdue"]), "dues": dues, "due_nos": due_nos, "day": sch["day"], "schedule": sch,
         "creditor_label": sch["creditor_label"], "creditor_type": sch["creditor_type"], "payable": payable,
         "terms": "taksitli", "terms_label": debt_schedule.TERMS["taksitli"], "strict": True,
+        # erken kapatma (faizli planda kapatma tutarı girildiyse): simulate bunu birikimle kapatır
+        "payoff_base": debt_schedule.payoff_base(d, today),
     }
 
 
@@ -435,6 +460,40 @@ def suggestion(today: date) -> dict | None:
 
 def _eff(rate: float) -> float:
     return rate * (1 + TAX)
+
+
+def monthly_interest(remaining: float, rate: float) -> float:
+    """Kalan kart borcuna bir ayda eklenen faiz ve vergi (BSMV + KKDF): kalan × aylık oran × (1 + TAX). Plan
+    (simulate) ve Kartlar ekranındaki faiz satırı (card_interest) aynı hesabı kullanır."""
+    return _r(max(0.0, remaining) * _eff(rate))
+
+
+def card_interest(remaining: float, due_date: str | None, paid: float | None, rate: float | None, today: date,
+                  fees_hidden: bool = False) -> dict | None:
+    """Kartlar ekranında son ekstrenin faiz satırı (sunucu hesaplar, istemci yalnız gösterir; yetenek card_interest).
+    state: after_due (son ödeme günü geçti, kalan var: bu ay eklenecek faiz ve vergi) | partial (gün gelmedi, kısmi
+    ödeme var: kalanı öde, faizden kurtul) | before_due (gün gelmedi: tamamını ödersen faiz işlemez). Oran ekstreden
+    (yoksa GENERIC_RATE, metinde "yaklaşık"). Ortak defterde faiz gizliyse tutar yazılmaz (amount None)."""
+    remaining = _r(remaining or 0.0)
+    if remaining <= 0 or not due_date:
+        return None
+    source = "ekstre" if rate else "genel"
+    rate = rate or GENERIC_RATE
+    y = monthly_interest(remaining, rate)
+    pct = f"%{rate * 100:.2f}".replace(".", ",")
+    note = (f"Hesap: ekstrendeki aylık {pct} faiz oranı ve vergiler (BSMV, KKDF)." if source == "ekstre"
+            else f"Hesap yaklaşık: aylık {pct} faiz ve vergiler (BSMV, KKDF); bankanın oranı ekstrende yazar.")
+    out = {"remaining": remaining, "amount": None if fees_hidden else y, "rate": rate, "rate_source": source,
+           "rate_note": None if fees_hidden else note, "due_date": due_date}
+    if due_date < today.isoformat():
+        text = (f"Kalan {_tl(remaining)} borca faiz ve vergi eklenir; ödemedikçe her ay büyür." if fees_hidden else
+                f"Kalan {_tl(remaining)} borca bu ay yaklaşık {_tl(y)} faiz ve vergi eklenir; ödemedikçe her ay büyür.")
+        return {**out, "state": "after_due", "level": "bad", "text": text}
+    if paid and paid > 0:
+        text = ("Kalanı son ödeme gününe kadar ödersen faiz işlemez." if fees_hidden else
+                f"Kalanı son ödeme gününe kadar öde: yaklaşık {_tl(y)} faizden kurtulursun.")
+        return {**out, "state": "partial", "level": "warn", "text": text}
+    return {**out, "state": "before_due", "level": "info", "text": "Tamamını ödersen faiz işlemez."}
 
 
 def _sort_cards(cards: list[dict]) -> list[dict]:
@@ -614,9 +673,9 @@ def _norm_person(d: dict) -> dict:
 def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, start: str,
              first_budget: float | None = None, fixed: list[dict] | None = None) -> dict:
     """Ay ay ödeme. cards/people: {key, title, remaining, due_date, ...} (kartta rate.monthly; diğer borçta terms,
-    strict, asset); fixed: ödeme planı olan borçlar {key, title, remaining, dues {ay: tutar}, day}. Sıra modül
-    açıklamasında. Dönen: months, closes {key: ay}, interest (toplam, varsayım), interest_by {key: tutar}, debt_free
-    (ay | None), saved_by {key: son birikim}."""
+    strict, asset); fixed: ödeme planı olan borçlar {key, title, remaining, dues {ay: tutar}, day, payoff_base?}. Sıra
+    modül açıklamasında. Dönen: months, closes {key: ay}, interest (toplam, varsayım), interest_by {key: tutar}, debt_free
+    (ay | None), saved_by {key: son birikim}, payoff_by {key: {month, amount, installments, saved}} (erken kapatma)."""
     order = norm_order(order) or "tarih"
     fixed = fixed or []
     people = [_norm_person(d) for d in people]
@@ -636,8 +695,19 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
     interest_by: dict[str, float] = {}
     months: list[dict] = []
     debt_free = None
+    # erken kapatma: faizli planda kapatma tutarı girilmiş krediler; oranı bilinen ve yüksek olan önce, sonra kalan faizi
+    # (kalan taksitlere göre) büyük olan. Para birikim olarak ayrılır, yetince kredi tek seferde kapanır.
+    payoffs = sorted((d for d in fixed_s if d.get("payoff_base") and d["remaining"] > 0),
+                     key=lambda d: (-(d["payoff_base"].get("rate") or 0),
+                                    debt_schedule.payoff_at(d["payoff_base"], d["remaining"]) / d["remaining"], d["id"]))
+    pot = {d["key"]: 0.0 for d in payoffs}
+    payoff_by: dict[str, dict] = {}
+    for d in payoffs:
+        titles[d["key"] + PK] = d["title"]
+        kinds[d["key"] + PK] = "fixed"
     if all(v <= 0 for v in rem.values()):
-        return {"months": [], "closes": {}, "interest": 0.0, "interest_by": {}, "debt_free": start, "saved_by": {}}
+        return {"months": [], "closes": {}, "interest": 0.0, "interest_by": {}, "debt_free": start, "saved_by": {},
+                "payoff_by": {}}
 
     def need(key: str) -> float:
         return _r(rem[key] - saved.get(key, 0.0))
@@ -736,6 +806,45 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
                 if reserve <= 0:
                     break
                 reserve = _r(reserve - give(d["key"], min(need(d["key"]), reserve)))
+        # 2b) faizli kredinin erken kapatılması: kartlar ve kesin tarihlerden artan para birikime; yetince tek seferde
+        payoff_from: dict[str, float] = {}
+        for d in payoffs:
+            key, b = d["key"], d["payoff_base"]
+            pk = key + PK
+            if key in payoff_by:
+                continue
+            rest = rem[key]  # bu ayın taksiti ödendikten sonra kalan taksitler
+            amount = debt_schedule.payoff_at(b, rest)
+            if rest <= 0 or not money.gt(rest - amount, 1.0):
+                # taksitler bitti ya da erken kapatma artık faiz kazandırmıyor: birikim diğer borçlara
+                budget = _r(budget + pot[key])
+                pot[key] = 0.0
+                continue
+            need_new = _r(amount - pot[key])
+            if money.ge(budget, need_new):
+                new = max(0.0, need_new)
+                payoff_from[pk] = _r(min(pot[key], amount))
+                pays[pk] = _r(new)
+                budget = _r(budget - new + max(0.0, -need_new))  # birikim kapatma tutarından fazlaysa artanı geri
+                payoff_by[key] = {"month": m, "amount": amount, "installments": rest, "saved": _r(rest - amount)}
+                rem[key] = 0.0
+                pot[key] = 0.0
+                continue
+            # bu ay yetmiyor: söz tarihi gelmiş (esnek) borç varsa ona da pay kalır (biri tamamen beklemesin)
+            due_p = _r(sum(need(x["key"]) for x in people_s
+                           if not x["strict"] and need(x["key"]) > 0 and _due_m(x) and _due_m(x) <= m))
+            hold = min(budget, due_p, _ceil_to(budget * DUE_SHARE)) if due_p > 0 else 0.0
+            avail = _r(budget - hold)
+            if avail <= 0:
+                break
+            # taksitler bitmeden birikmeyecekse ayırma (yalnız taksitler ödenir; para diğer borçlara)
+            left_n = math.ceil(rest / b["inst"] - 1e-9) if b["inst"] > 0 else 0
+            if math.ceil((need_new - avail) / avail - 1e-9) >= left_n:
+                continue
+            saves[pk] = avail
+            pot[key] = _r(pot[key] + avail)
+            budget = _r(budget - avail)
+            break  # sıradaki kredi bu kapanınca
         # 3) kalan para diğer borçlara (tarih grubu ya da küçükten), anlamlı tutarlarla
         if budget > 0:
             got = allocate_people(people_s, rem, budget, order, saved, any_paid=bool(pays or saves))
@@ -746,14 +855,28 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
         month_interest = 0.0
         for d in cards_s:
             if rem[d["key"]] > 0 and (d["due_date"] or "9999")[:7] <= m:
-                add = _r(rem[d["key"]] * _eff(d["rate"]["monthly"]))
+                add = monthly_interest(rem[d["key"]], d["rate"]["monthly"])
                 rem[d["key"]] = _r(rem[d["key"]] + add)
                 interest_by[d["key"]] = _r(interest_by.get(d["key"], 0.0) + add)
                 month_interest = _r(month_interest + add)
         rows = []
         for key in dict.fromkeys([*pays, *saves]):
             amt = pays.get(key) or saves.get(key) or 0.0
-            closed = rem[key] <= 0
+            base = key.removesuffix(PK)
+            if key != base:  # erken kapatma satırı: birikim ya da kapatma
+                closed = key in pays
+                if closed:
+                    closes[base] = m
+                row = {"key": key, "kind": "fixed", "title": titles[key], "amount": _r(amt), "closes": closed,
+                       "payoff": True}
+                if closed:
+                    row.update({"from_saved": payoff_from.get(key, 0.0), "pay_total": payoff_by[base]["amount"],
+                                "interest_saved": payoff_by[base]["saved"]})
+                else:
+                    row.update({"saving": True, "saved": pot[base]})
+                rows.append(row)
+                continue
+            closed = rem[key] <= 0 and not (base in payoff_by and payoff_by[base]["month"] == m)
             if closed and key not in closes:
                 closes[key] = m
             row = {"key": key, "kind": kinds[key], "title": titles[key], "amount": _r(amt), "closes": closed}
@@ -769,14 +892,14 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
         left = _r(sum(v for v in rem.values() if v > 0))
         months.append({"month": m, "label": month_label(m), "total": used, "payments": rows, "groups": group_rows(rows),
                        "interest": month_interest, "left": left, "fixed_due": fixed_due, "fixed_short": fixed_short,
-                       "saved": _r(sum(saved.values()))})
+                       "saved": _r(sum(saved.values()) + sum(pot.values()))})
         if left <= 0:
             debt_free = m
             break
         if monthly <= 0:
             break  # tutar yok: tek ay gösterilir (faiz uyarısıyla)
     return {"months": months, "closes": closes, "interest": _r(sum(interest_by.values())), "interest_by": interest_by,
-            "debt_free": debt_free, "saved_by": {k: v for k, v in saved.items() if v > 0}}
+            "debt_free": debt_free, "saved_by": {k: v for k, v in saved.items() if v > 0}, "payoff_by": payoff_by}
 
 
 def _fmt_units(x: float, asset: str) -> str:
@@ -1009,7 +1132,8 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
 
     debts = []
     for i, d in enumerate([*fixed_s, *_sort_cards(cards), *_sort_people(people, order)]):
-        item = {k: v for k, v in d.items() if k not in ("paid_now", "debt_date", "period_end", "dues", "price")}
+        item = {k: v for k, v in d.items() if k not in ("paid_now", "debt_date", "period_end", "dues", "price",
+                                                        "payoff_base")}
         item["order"] = i + 1
         item["progress"] = round(d["paid"] / d["total"], 3) if d["total"] else 0.0
         item["due_label"] = _day_label(d["due_date"]) if d["due_date"] else None
@@ -1030,6 +1154,7 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             item["promise"] = None
             item["date_kind"] = "kesin"
             item["day_note"] = _day_note(d, salary_day)
+            item["payoff"] = _payoff_row(d, sim, start, fees_hidden, bool(monthly))
         else:
             item["subtitle"] = " · ".join(x for x in (d.get("creditor_label") if d.get("creditor_type") != "kisi"
                                                       else None, d["note"]) if x) or "Diğer borç"
@@ -1121,7 +1246,10 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
     items = []
     if sim and sim["months"] and sim["months"][0]["month"] == start:
         for p in sim["months"][0]["payments"]:
-            d = by_key[p["key"]]
+            d = by_key[p["key"].removesuffix(PK)]
+            if p.get("payoff"):
+                items.append(_payoff_item(p, d, sim, start, fees_hidden, subs.get(d["key"])))
+                continue
             full = money.ge(p["amount"] + (p.get("from_saved") or 0.0), d["remaining"])
             harm = d.get("harm")
             asg = harm["min_left"] if harm and harm.get("min_left") else None
@@ -1217,6 +1345,8 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                    "fixed_this_month": _r(sum(d["dues"].get(start, 0.0) for d in fixed)),
                    "min_monthly_no_interest": need,
                    "interest_projected": None if fees_hidden or not sim else sim["interest"],
+                   # erken kapatmayla kurtulunan yaklaşık faiz (yetenek debt_payoff); faiz gizliyse None
+                   "payoff_saving": None if fees_hidden or not sim else _r(sum(v["saved"] for v in sim["payoff_by"].values())),
                    "saving_this_month": _r(sum(i["amount"] for i in items if i.get("saving")))},
         "debts": debts,
         "months": sim["months"] if sim else [],
@@ -1239,12 +1369,86 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
     }
 
 
+PAYOFF_NOTE = ("Kapatma tutarı ödenen her taksitle azalır; buradaki tutarlar yaklaşık. Kapatmadan önce güncel tutarı "
+               "sor. Bankalar kısmi erken ödemeyi de kabul eder; yaparsan ödeme planını bankanın yeni planına göre güncelle.")
+
+
+def _loan_word(d: dict) -> tuple[str, str]:
+    """("Krediyi", "Bankana") bankada; diğer alacaklıda ("Bu borcu", "Alacaklına")."""
+    return ("Krediyi", "Bankana") if d.get("creditor_type") == "banka" else ("Bu borcu", "Alacaklına")
+
+
+def _payoff_row(d: dict, sim: dict | None, start: str, fees_hidden: bool, has_monthly: bool) -> dict | None:
+    """Ödeme planlı borcun erken kapatma satırı (yalnız faiz "var"): girilmemişse nötr ipucu (ask); girildiyse planın
+    kapatma ayı ve kurtulunan yaklaşık faiz (plan), kazandırmıyorsa no_benefit, bu tutarla taksitler bitmeden
+    birikmiyorsa not_reached, aylık tutar yoksa bugünkü tutar (known)."""
+    sch = d["schedule"]
+    if sch.get("interest") != "var":
+        return None
+    obj, who = _loan_word(d)
+    info = sch.get("payoff")
+    if not d.get("payoff_base") or not info:
+        return {"state": "ask", "title": "Erken kapatma",
+                "text": f"{who} bugün kapatma tutarını sor; yazarsan erken kapatıp faizden kurtulma planı çıkar."}
+    base = {"state": None, "title": "Erken kapatma", "entered": info["amount"], "entered_date": info["date"],
+            "rate": info.get("rate"), "now": None if fees_hidden else info["now"], "note": PAYOFF_NOTE}
+    if not info["benefit"]:
+        return {**base, "state": "no_benefit",
+                "text": "Kapatma tutarı kalan taksitlerden az değil; erken kapatmak faiz kazandırmıyor. Taksitler "
+                        "planındaki gibi ödenir."}
+    pb = (sim or {}).get("payoff_by", {}).get(d["key"])
+    if pb:
+        when = month_in(pb["month"], start)
+        text = (f"{obj} {when} kapatırsan kalan faizden kurtulursun." if fees_hidden else
+                f"{obj} {when} kapatırsan yaklaşık {_tl(pb['saved'])} faizden kurtulursun (kalan taksitler "
+                f"{_tl(pb['installments'])}, kapatma tutarı {_tl(pb['amount'])}).")
+        return {**base, "state": "plan", "month": pb["month"], "label": month_label(pb["month"]),
+                "amount": None if fees_hidden else pb["amount"],
+                "installments": None if fees_hidden else pb["installments"],
+                "saved": None if fees_hidden else pb["saved"], "text": text}
+    if sim and has_monthly:
+        return {**base, "state": "not_reached",
+                "text": "Bu aylık tutarla kapatma tutarı taksitler bitmeden birikmiyor; taksitler planındaki gibi "
+                        "ödenir. Aylık tutarı artırırsan plan erken kapatmayı hesaplar."}
+    text = ("Bugün kapatırsan kalan faizden kurtulursun." if fees_hidden else
+            f"Bugün kapatırsan yaklaşık {_tl(info['now'])} ödersin; kalan taksitler {_tl(info['left'])}.")
+    return {**base, "state": "known", "text": text + " Aylık tutarı yazınca plan erken kapatmayı hesaplar."}
+
+
+def _payoff_item(p: dict, d: dict, sim: dict, start: str, fees_hidden: bool, sub: str | None) -> dict:
+    """"Bu ay ödenecekler"de erken kapatma satırı: birikim ya da kapatma (Kapattım: POST /api/debts/{id}/pay
+    {amount, close_early: true})."""
+    obj, _ = _loan_word(d)
+    pb = sim["payoff_by"].get(d["key"])
+    row = {"key": p["key"], "kind": "fixed", "title": d["title"], "amount": p["amount"], "done": False,
+           "due_date": None, "due_label": None, "min_left": None, "sub": sub, "payable": None, "payoff": True}
+    if p.get("saving"):
+        if pb:
+            text = (f"{obj} erken kapatmak için biriktir: {month_in(pb['month'], start)} kapatma tutarı birikmiş olur, "
+                    "tek seferde kapat." if fees_hidden else
+                    f"{obj} erken kapatmak için biriktir: {month_in(pb['month'], start)} {_tl(pb['amount'])} birikmiş "
+                    "olur, tek seferde kapat.")
+        else:
+            text = f"{obj} erken kapatmak için biriktir; kapatma tutarı birikince tek seferde kapat."
+        return {**row, "full": False, "saving": True, "saved": p.get("saved"), "text": text}
+    total = _r(p["amount"] + (p.get("from_saved") or 0.0))
+    text = f"{obj} erken kapat: {_tl(total)}" + (f" ({_tl(p['from_saved'])} birikimden)" if p.get("from_saved") else "")
+    if not fees_hidden and pb:
+        text += f" · yaklaşık {_tl(pb['saved'])} faizden kurtulursun"
+    return {**row, "full": True, "from_saved": p.get("from_saved") or 0.0, "pay_total": total, "text": text,
+            "close_early": {"debt_id": d["id"], "amount": total, "label": "Kapattım",
+                            "confirm": f"{d['title']}: {_tl(total)} ödeyip erken kapattın mı? Borç bu ödemeyle kapanır, "
+                                       "bankanın almadığı kalan faiz düşer."}}
+
+
 RULES_INFO = (f"Önce kart borçları, o ayın taksitleri ve tarihi kesin borçlar: tutar yetmezse önce her birinin "
               "gecikmesi önlenir (kartta asgari, taksitte o ayın taksiti), kalanı karta. Tarihi kesin bir borç ileride "
               "ise ona yalnız tarihine yetişmek için gereken kadar ayrılır. Sonra diğer borçlar söz tarihine göre: aynı "
               "aya düşenlerde para hepsine yetmiyorsa kapanabilenler önce kapanır (önce tek seferde ödenecek olan, "
               "sonra küçük borçlar); hiçbirine yetmiyorsa parça ödenebilenlere anlamlı paylar, tek seferde ödenecek olana "
-              f"birikim ayrılır. Ödemeler kişi kişi toplanır ve ₺{ROUND_TO}'nin katlarına yuvarlanır; bir kişiye bir "
+              "birikim ayrılır. Faizli bir ödeme planına kapatma tutarı yazdıysan, kartlardan ve kesin tarihlerden artan "
+              "para önce krediyi erken kapatmak için biriktirilir (söz tarihi gelmiş borç varken en çok yarısı); yetince "
+              f"kredi tek seferde kapanır. Ödemeler kişi kişi toplanır ve ₺{ROUND_TO}'nin katlarına yuvarlanır; bir kişiye bir "
               f"ayda en az ₺{MIN_PAY} ödenir (kalanı daha azsa kalanın tamamı); son ödemede ₺{FOLD}'den az kalan "
               "bırakılmaz. Kart borcu ve taksitler tam tutarıyla yazılır.")
 
@@ -1415,7 +1619,7 @@ def commit_plan(monthly: float | None = None, order: str | None = None, today: d
     for mo in sim["months"]:
         pays, saves = {}, {}
         for p in mo["payments"]:
-            i = ids[p["key"]]
+            i = ids[p["key"].removesuffix(PK)]  # erken kapatma satırı kredinin kendisine sayılır
             pays[i] = _r(pays.get(i, 0.0) + p["amount"])
             planned[i] = _r(planned.get(i, 0.0) + p["amount"])
             if p.get("saving"):  # birikim: hedefe sayılır, ödenene kadar "biriktirildi"
@@ -1428,6 +1632,7 @@ def commit_plan(monthly: float | None = None, order: str | None = None, today: d
                        # altın/döviz borcunda ödenen miktar biriminde, TL'ye plandaki fiyatla çevrilir
                        "paid0": _r(d["paid"] / d["price"]) if d.get("price") else d["paid"],
                        **({"price": d["price"]} if d.get("price") else {}),
+                       **({"payoff": True} if d.get("payoff_base") else {}),
                        "stmt_id": d["id"] if d["kind"] == "card" else None, "period_end": d.get("period_end")}
                       for d in (*cards, *people)],
             "months": months}
@@ -1480,7 +1685,13 @@ def _credited(snap: dict, people_hidden: bool, start: str | None = None) -> dict
                 got = x["planned"]
             else:
                 got = max(0.0, (d["paid_amount"] or 0.0) - (x["paid0"] or 0.0)) * (x.get("price") or 1.0)
-            got = max(got, saves.get(x["ident"], 0.0))
+            if x["kind"] == "fixed":
+                # ödeme planlı borçta birikim yalnız erken kapatma içindir: taksitler ayrıca ödenir (kapanınca ödenen
+                # kapatma tutarı birikimi de içerir)
+                if d is not None and not d["settled_at"]:
+                    got += saves.get(x["ident"], 0.0)
+            else:
+                got = max(got, saves.get(x["ident"], 0.0))
         out[x["ident"]] = _r(min(got, x["planned"]))
     return out
 
@@ -1546,15 +1757,20 @@ def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | N
     k = _months_between(snap["start_month"], start)
     titles = {x["ident"]: x["title"] for x in snap["debts"]}
     paid_real = {}
+    payoff_open = set()  # erken kapatma birikimi süren (kapanmamış) ödeme planlı borçlar
     if not people_hidden:
         dmap = {d["id"]: d for d in db.list_debts()}
         for x in snap["debts"]:
             if x["kind"] != "card":
                 d = dmap.get(int(x["ident"][5:]))
                 paid_real[x["ident"]] = 0.0 if d is None else max(0.0, (d["paid_amount"] or 0.0) - (x["paid0"] or 0.0))
+                if x["kind"] == "fixed" and d is not None and not d["settled_at"]:
+                    payoff_open.add(x["ident"])
     saved_rows = [{"ident": i, "title": titles.get(i, ""), "amount": a,
-                   "text": f"{titles.get(i, '')} için biriktirildi: {_tl(a)}"}
-                  for i, a in _past_saves(snap, start).items() if a > 0 and not skip(i) and paid_real.get(i, 0.0) <= TOL]
+                   "text": (f"{titles.get(i, '')}: erken kapatma için biriktirildi: {_tl(a)}" if i in payoff_open else
+                            f"{titles.get(i, '')} için biriktirildi: {_tl(a)}")}
+                  for i, a in _past_saves(snap, start).items()
+                  if a > 0 and not skip(i) and (paid_real.get(i, 0.0) <= TOL or i in payoff_open)]
     return {"started_at": snap["started_at"], "start_month": snap["start_month"],
             "start_label": month_label(snap["start_month"]), "monthly": snap["monthly"], "order": snap_order,
             "order_label": ORDER_INFO[snap_order][0], "saved": saved_rows,
