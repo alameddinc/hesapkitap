@@ -504,3 +504,108 @@ def test_spendable_counts_debt_and_its_jar_once(client):
     assert client.get("/api/net-worth").json()["spendable"] == 50000 - 14000
     other = client.post("/api/jars", json={"name": "Tatil", "initial": 2000}).json()["id"]
     assert other and client.get("/api/net-worth").json()["spendable"] == 50000 - 14000 - 2000
+
+
+# ---------------------------------------------------------------- borç planı: temel ücretsiz, gelişmiş Premium
+
+def _hosted_user(client, monkeypatch):
+    from tests.test_plans import _user
+
+    from app import auth
+    from app.api import main
+
+    monkeypatch.delenv("HESAPKITAP_NO_AUTH", raising=False)
+    monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
+    monkeypatch.setenv("REVENUECAT_WEBHOOK_AUTH", "Bearer rc-gizli")
+    auth._fails.clear()
+    main._signups.clear()
+    auth.create_admin("admin", "yonetici-sifre-1")
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "yonetici-sifre-1"}).status_code == 200
+    return _user(client)
+
+
+def _plan_shape(p):
+    """Sıra ve ay ay tutarlar (paketten bağımsız olmalı)."""
+    return [(m["month"], [(x["key"], x["amount"]) for x in m["payments"]]) for m in p["months"]], \
+        [(d["key"], d["order"], (d.get("closes") or {}).get("month")) for d in p["debts"]]
+
+
+def test_free_plan_same_order_and_amounts_but_plus_locked(client, monkeypatch):
+    from tests.test_plans import _rc
+
+    c, u = _hosted_user(client, monkeypatch)
+    loan = _loan(c)
+    _tek(c)
+    c.put("/api/debt-plan", json={"monthly": 20000})
+    free = _plan(c)
+    # temel ücretsiz: plan, sıra, ay ay tutarlar, bu ay ödenecekler, birikim satırları
+    assert free["months"] and free["this_month"]["items"] and free["debts"]
+    assert free["plus"] == {"available": False, "had_plan": False, "lock": {
+        "commit": {"key": "commit", "title": "Planı başlat", "badge": "Premium", "text": "Planı başlatıp her ay takip etmek Premium'da."},
+        "payoff": {"key": "payoff", "title": "Erken kapatma", "badge": "Premium",
+                   "text": "Erken kapatmanın faizden ne kadar kurtaracağını görmek Premium'da."}}}
+    assert free["commit_offer"] is None and free["commitment"] is None and free["totals"]["payoff_saving"] is None
+    po = next(d for d in free["debts"] if d["id"] == loan)["payoff"]
+    assert po["state"] == "locked" and "amount" not in po and "saved" not in po
+    row = next(i for i in free["this_month"]["items"] if i["key"] == f"borc:{loan}:kapat")
+    assert row["text"] == "Krediyi erken kapatmak için birikim" and row["plus_locked"] and "close_early" not in row
+    texts = " ".join(_all_strings(free))
+    assert "faizden kurtulursun" not in texts and "Kapattım" not in texts
+    r = c.post("/api/debt-plan/commit", json={})
+    assert r.status_code == 402 and r.json()["plan_required"] == "borc_plani_plus"
+    # kapatma tutarı kaydetmek ücretsiz (veri kaybolmaz)
+    assert c.patch(f"/api/debts/{loan}", json={"payoff_amount": 77000}).status_code == 200
+    assert _debt(c, loan)["payoff_amount"] == 77000
+    free = _plan(c)
+    # Premium: aynı plan + hesap ve takip
+    _rc(client, "INITIAL_PURCHASE", u["id"])
+    prem = _plan(c)
+    assert _plan_shape(prem) == _plan_shape(free)  # faizden çıkış ücrete bağlı değil: sıra ve tutarlar aynı
+    assert prem["plus"]["available"] and prem["plus"]["lock"] is None
+    assert next(d for d in prem["debts"] if d["id"] == loan)["payoff"]["state"] == "plan"
+    assert prem["commit_offer"]["action"] == "Planı başlat"
+    assert c.post("/api/debt-plan/commit", json={}).status_code == 200
+    assert _plan(c)["commitment"] is not None
+    # Premium biterse kayıtlı plan silinmez: takip kilitli, geri alınca geri gelir
+    _rc(client, "EXPIRATION", u["id"], exp_ms=1000)
+    p = _plan(c)
+    assert p["commitment"] is None and p["plus"]["had_plan"] is True and p["commit_history"] == []
+    _rc(client, "RENEWAL", u["id"])
+    assert _plan(c)["commitment"]["started_at"] == "2026-11-11"
+
+
+def test_family_member_gets_plus(client, monkeypatch):
+    from tests.test_plans import _rc
+    from app.api.main import app
+    from fastapi.testclient import TestClient
+
+    c, u = _hosted_user(client, monkeypatch)
+    _rc(client, "INITIAL_PURCHASE", u["id"], ents=("aile",))
+    inv = c.post("/api/book/invites", json={"note": "Eşim", "book_role": "editor"})
+    assert inv.status_code == 200, inv.text
+    m = TestClient(app)
+    assert m.post("/api/auth/register", json={"consent": ["kosullar", "acik_riza"], "code": inv.json()["code"],
+                                              "username": "esim@ornek.com", "password": "esim-sifre-12345"}).status_code == 200
+    _loan(c)
+    c.put("/api/debt-plan", json={"monthly": 20000})
+    p = _plan(m)
+    assert p["plus"]["available"] is True and p["commit_offer"] is not None
+    assert m.post("/api/debt-plan/commit", json={}).status_code == 200  # Aile birlikte planlar
+
+
+def test_self_hosted_everything_open(client):
+    loan = _loan(client)
+    client.put("/api/debt-plan", json={"monthly": 20000})
+    p = _plan(client)
+    assert p["plus"] == {"available": True, "had_plan": False, "lock": None}
+    assert next(d for d in p["debts"] if d["id"] == loan)["payoff"]["state"] == "plan"
+    assert "debt_plan_plus" in client.get("/api/meta").json()["capabilities"]
+    # eski istemci: alanların hepsi eski yerinde (commit_offer, payoff, close_early)
+    assert p["commit_offer"] and any(i.get("close_early") or i.get("saving") for i in p["this_month"]["items"] if i.get("payoff"))
+
+
+def test_plus_lock_texts_have_no_steering_words():
+    from app import debt_plan as dp
+
+    for t in (dp.PLUS_LOCK_COMMIT["text"], dp.PLUS_LOCK_PAYOFF["text"], dp.PLUS_PAYOFF_SAVE, dp.PLUS_PAYOFF_CLOSE):
+        assert not _banned_in(t), t

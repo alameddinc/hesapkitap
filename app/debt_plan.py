@@ -1432,7 +1432,7 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                 "label": f"Önceki plan: {month_in(h['start_month'], start)} başladı · ayda {_tl(h['monthly'])}"}
                for h in commit_raw["history"]]
 
-    return {
+    out = {
         "available": True,
         "today": today.isoformat(), "month": start, "month_label": month_label(start),
         "settings": saved, "monthly": monthly, "monthly_source": source, "suggestion": sug,
@@ -1473,6 +1473,60 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             "text": "Kart ekstrelerin ödenmiş, Borç / Alacak'ta açık borcun yok. Başka bir borcun varsa Borç / "
                     "Alacak'tan ekle."},
     }
+    plus = _plus()
+    out["plus"] = {"available": plus, "had_plan": bool(commit_raw["current"]),
+                   "lock": None if plus else {"commit": PLUS_LOCK_COMMIT, "payoff": PLUS_LOCK_PAYOFF}}
+    if not plus:
+        _lock_plus(out)
+    return out
+
+
+# ---------------------------------------------------------------- Premium: takip ve erken kapatma hesabı
+
+PLUS_FEATURE = "borc_plani_plus"
+PLUS_LOCK_COMMIT = {"key": "commit", "title": "Planı başlat", "badge": "Premium",
+                    "text": "Planı başlatıp her ay takip etmek Premium'da."}
+PLUS_LOCK_PAYOFF = {"key": "payoff", "title": "Erken kapatma", "badge": "Premium",
+                    "text": "Erken kapatmanın faizden ne kadar kurtaracağını görmek Premium'da."}
+PLUS_PAYOFF_SAVE = "Krediyi erken kapatmak için birikim"
+PLUS_PAYOFF_CLOSE = "Erken kapatma birikimi"
+
+
+def _plus() -> bool:
+    """Borç planının gelişmiş kısmı (Premium "borc_plani_plus"; kendi sunucusunda açık): planı başlat ve takip, faizli
+    kredide erken kapatma hesabı. Planın kendisi, sırası ve tutarları her pakette aynı."""
+    from app import plans
+
+    return plans.allows(db.current_user(), PLUS_FEATURE)
+
+
+def _lock_plus(out: dict) -> None:
+    """Ücretsiz pakette: takip (commitment, öneri, geçmiş) gönderilmez (kayıtlı veri silinmez, Premium'la geri gelir);
+    erken kapatmada kapatma tutarı, ayı, kurtulunan faiz ve "Kapattım" önerisi yok. Sıra ve ay ay tutarlar aynı kalır
+    (faizden çıkış ücrete bağlanmaz): kredi birikimi plandaki gibi ayrılır, yalnız hesap metni kilitli."""
+    out["commitment"] = None
+    out["commit_offer"] = None
+    out["commit_history"] = []
+    out["totals"]["payoff_saving"] = None
+    for d in out["debts"]:
+        if d.get("kind") == "fixed" and d.get("payoff"):
+            d["payoff"] = {"state": "locked", "title": PLUS_LOCK_PAYOFF["title"], "badge": PLUS_LOCK_PAYOFF["badge"],
+                           "text": PLUS_LOCK_PAYOFF["text"]}
+    for mo in out["months"]:
+        for row in (*mo["payments"], *mo.get("groups", [])):
+            if row.get("payoff"):
+                for k in ("interest_saved", "pay_total", "from_saved"):
+                    row.pop(k, None)
+    rows = [*out["this_month"]["items"], *out["this_month"]["groups"]]
+    for g in out["this_month"]["groups"]:
+        rows += g.get("items", [])
+    for it in rows:
+        if it.get("payoff") and not it.get("done"):
+            for k in ("close_early", "pay_total", "from_saved", "interest_saved"):
+                it.pop(k, None)
+            it["text"] = PLUS_PAYOFF_SAVE if it.get("saving") else PLUS_PAYOFF_CLOSE
+            it["full"] = False
+            it["plus_locked"] = True
 
 
 PAYOFF_NOTE = ("Kapatma tutarı ödenen her taksitle azalır; buradaki tutarlar yaklaşık. Kapatmadan önce güncel tutarı "

@@ -25,7 +25,8 @@ export interface SchedulePayoff { amount: number; date: string; rate: number | n
 /** Borç planında ödeme planlı borcun erken kapatma satırı (yalnız faiz "var"): ask (tutar girilmemiş: nötr ipucu) · plan
  *  (kapatma ayı ve kurtulunan faiz) · no_benefit · not_reached (bu tutarla birikmiyor) · known (aylık tutar yok) */
 export interface PlanPayoff {
-  state: "ask" | "plan" | "no_benefit" | "not_reached" | "known"; title: string; text: string; note?: string;
+  /** locked: Premium değil (yetenek debt_plan_plus): hesap yok, nötr kilit metni */
+  state: "ask" | "plan" | "no_benefit" | "not_reached" | "known" | "locked"; title: string; text: string; note?: string; badge?: string;
   month?: string; label?: string; amount?: number | null; installments?: number | null; saved?: number | null;
   entered?: number; entered_date?: string; rate?: number | null; now?: number | null;
 }
@@ -136,6 +137,8 @@ export interface DebtPlanData {
   hidden: { fees: boolean; people: boolean }; can_edit: boolean; summary_card: { eligible: boolean };
   /** borç planı ↔ kumbara düğmeleri (yetenek debt_jar; eski sunucuda yok) */
   debt_jar?: DebtJarFlags;
+  /** gelişmiş kısım (yetenek debt_plan_plus): takip ve erken kapatma hesabı Premium; lock null = açık */
+  plus?: PlanPlus;
   empty: { title: string; text: string } | null;
 }
 
@@ -160,4 +163,15 @@ export function aylikTutarHatasi(v: number | null): string | null {
   if (v === 0) return "0 ile borç kapanmaz; ayırabileceğin tutarı yaz.";
   if (v > AYLIK_EN_COK) return "Bu tutar çok büyük; en çok ₺100.000.000 yazabilirsin.";
   return null;
+}
+
+/** Borç planının gelişmiş kısmı (Premium "borc_plani_plus"): ücretsizde takip ve erken kapatma hesabı kilitli
+ *  (planın kendisi, sırası ve tutarları aynı). had_plan: daha önce başlatılmış plan kayıtlı (Premium'la geri gelir). */
+export interface PlanPlusLock { key: "commit" | "payoff"; title: string; badge: string; text: string }
+export interface PlanPlus { available: boolean; had_plan: boolean; lock: { commit: PlanPlusLock; payoff: PlanPlusLock } | null }
+
+/** Kilitli takip kartının metni: kayıtlı plan varsa onu da söyler (veri silinmedi). */
+export function plusCommitText(p: PlanPlus): string | null {
+  if (!p.lock) return null;
+  return p.had_plan ? `Başlattığın plan kayıtlı. ${p.lock.commit.text}` : p.lock.commit.text;
 }

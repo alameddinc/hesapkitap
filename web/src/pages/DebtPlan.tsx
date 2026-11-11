@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, PiggyBank, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, Crown, Lock, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, PiggyBank, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
@@ -14,6 +14,8 @@ import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, ty
 import { DebtForm } from "../components/Debts";
 import { JarBox, JarRowButton } from "../components/DebtJar";
 import { jarBox, jarButton } from "../lib/borcKumbara";
+import { plusCommitText } from "../lib/debtPlan";
+import { useGoPlan } from "../components/DocQuota";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
 const trimTl = (x: number) => tl(x).replace(/,00(?=\D*$)/, "");
@@ -262,6 +264,8 @@ export default function DebtPlan() {
         </section>
 
         {(p.commitment || (p.commit_history?.length ?? 0) > 0) && takip(p, p.commitment ?? null)}
+        {/* Premium değil, daha önce başlatılmış plan: takip kartı kilitli (veri kayıtlı, Premium'la geri gelir) */}
+        {p.plus?.lock && p.plus.had_plan && <PlusLock title="Başlattığın plan" text={plusCommitText(p.plus)!} />}
 
         <section className="card space-y-3 p-4" aria-label="Plan ayarı">
           <label className="block space-y-1">
@@ -301,6 +305,7 @@ export default function DebtPlan() {
             ))}
           </div>
           {!p.can_edit && <p className="text-xs text-stone-500">Bu defterde sadece görüntüleme yetkin var: değişiklikler kaydedilmez, yalnız burada denersin.</p>}
+          {p.plus?.lock && !p.plus.had_plan && p.monthly != null && <PlusLock title={p.plus.lock.commit.title} text={plusCommitText(p.plus)!} />}
           {p.can_edit && !p.commitment && p.commit_offer && (p.commit_offer.secondary || p.shortfall ? (
             // faizli plan: ikincil seçenek (uyarı en üstte, ana düğme "Bu tutarı kullan")
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 p-3 dark:bg-stone-800/60" data-testid="plan-baslat">
@@ -541,6 +546,7 @@ function Late({ l, canEdit, busy, onAgree, n = 1 }: { l: PlanLate; canEdit: bool
 /** Faizli ödeme planında erken kapatma (yetenek debt_payoff): plan kapatma ayını ve kurtulunan faizi söyler; tutar
  *  girilmemişse nötr ipucu. Metinler sunucudan. */
 function Payoff({ p }: { p: PlanPayoff }) {
+  if (p.state === "locked") return <PlusLock title={p.title} text={p.text} small />;
   const tone = p.state === "plan" ? "bg-green-50 text-green-950 dark:bg-green-950/40 dark:text-green-50"
     : p.state === "ask" ? "bg-blue-50 text-blue-950 dark:bg-blue-950/40 dark:text-blue-50" : "bg-stone-50 text-stone-700 dark:bg-stone-800/60 dark:text-stone-200";
   return (
@@ -548,6 +554,21 @@ function Payoff({ p }: { p: PlanPayoff }) {
       <p className="flex gap-1.5 text-xs font-medium">{p.state === "plan" ? <TrendingDown size={14} className="mt-0.5 shrink-0" aria-hidden />
         : <Info size={14} className="mt-0.5 shrink-0" aria-hidden />}<span className="min-w-0">{maskText(p.text)}</span></p>
       {p.note && p.state !== "ask" && <p className="text-[11px] opacity-80">{p.note}</p>}
+    </div>
+  );
+}
+
+/** Premium'daki gelişmiş kısım (yetenek debt_plan_plus): nötr satır + paket sayfası. Faize yönlendiren söz yok. */
+function PlusLock({ title, text, small }: { title: string; text: string; small?: boolean }) {
+  const goPlan = useGoPlan();
+  return (
+    <div className={cx("flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 text-stone-700 dark:bg-stone-800/60 dark:text-stone-200", small ? "p-2.5 text-xs" : "card p-3 text-sm")}
+      data-testid="premium-kilit">
+      <Lock size={small ? 14 : 16} className="shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 basis-48"><span className="font-medium text-stone-900 dark:text-stone-100">{title}</span>
+        <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">Premium</span>
+        <span className="block">{text}</span></span>
+      <button className="btn-ghost border border-stone-300 px-2 py-1 text-sm dark:border-stone-700" onClick={goPlan}><Crown size={14} aria-hidden /> Paketleri gör</button>
     </div>
   );
 }

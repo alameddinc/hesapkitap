@@ -359,6 +359,12 @@ CAPABILITIES = (
                               # (Geri al: DELETE /api/debt-payments/{payment_id}: kumbara hareketi de geri gelir).
                               # GET /api/jars [].debt {id, title, state acik|kapandi|silindi, label, remaining?, suggestion?}
                               # | null; PATCH /api/jars/{id} {unlink_debt: true} ("başka hedefe çevir")
+    "debt_plan_plus",         # borç planının gelişmiş kısmı Premium (plans "borc_plani_plus"; plan, sıra ve tutarlar ücretsiz):
+                              # GET /api/debt-plan plus {available, had_plan, lock {commit, payoff} | null}; ücretsizde
+                              # commitment/commit_offer null, commit_history [], debts[].payoff {state "locked", title,
+                              # badge, text}, erken kapatma satırlarında kapatma tutarı / kurtulunan faiz / close_early yok
+                              # (plus_locked: true), totals.payoff_saving null; POST /api/debt-plan/commit 402
+                              # plan_required "borc_plani_plus". Kayıtlı plan (commit) silinmez: Premium'la geri gelir
 )
 
 
