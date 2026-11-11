@@ -11,6 +11,12 @@ from app import db, demo_names
 from app.parsers import kuveytturk, vakifbank
 
 FIX = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+SALARY_DAY = 15
+# Özet düzeni (ui:owner; demo kullanıcısının id'si 0): varsayılan düzen + Borç planı kartı. Web DEFAULT_LAYOUT
+# (web/src/pages/Dashboard.tsx) ve mobil OZET_VARSAYILAN (hesapkitap-mobile src/lib/endpoints/islem.ts) ile aynı sıra.
+DEMO_LAYOUT = ["kartlar", "donem-sonu", "borc-plani", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler",
+               "kategoriler", "isyerleri", "istatistik-link", "odemeler"]
+DEMO_LAYOUT_MOBILE = ["donem", "donemsonu", "borcplani", "bakiye", "uyarilar", "odemeler", "gecen"]
 
 
 def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "kuveytturk.txt"), bills: bool = True) -> None:
@@ -28,11 +34,12 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
         db.save_statement(f"demo:{name}".encode(), demo_names.FILES[name], st)
     db.auto_link()
 
+    # maaş ayın 15'inde (Borç planı: günü maaştan önce olan taksit için "bu ödemeyi önceki aydan ayır" notu)
     maas = db.create_recurring({"description": "Maaş", "amount": 200000, "kind": "gelir", "category": "Maaş",
-                                "day_of_month": 1, "start_month": "2026-01"})
+                                "day_of_month": SALARY_DAY, "start_month": "2026-01"})
     kira = db.create_recurring({"description": "Kira", "amount": 22000, "kind": "gider", "category": "Kira & Aidat",
                                 "day_of_month": 5, "start_month": "2026-01"})
-    for rid, desc, amt, kind, cat, day in ((maas, "Maaş", 200000, "gelir", "Maaş", 1), (kira, "Kira", 22000, "gider", "Kira & Aidat", 5)):
+    for rid, desc, amt, kind, cat, day in ((maas, "Maaş", 200000, "gelir", "Maaş", SALARY_DAY), (kira, "Kira", 22000, "gider", "Kira & Aidat", 5)):
         db.create_entry({"entry_date": f"2026-10-{day:02d}", "description": desc, "amount": amt, "kind": kind,
                          "category": cat, "recurring_id": rid, "payment": "havale" if kind == "gider" else None})
     # aynı kiranın kategorisiz ikinci kaydı: hiçbir ödemeye bağlanmaz → Yapılacaklar / Planlama "İki sabit kalem aynı
@@ -67,7 +74,56 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
     db.set_subscription_state(merchant_name("ÖRNEK E-KİTAP ABONELİĞİ"), "iptal",
                               date(2026, 10, 15).isoformat())
     _extras()
+    if bills:
+        add_plan_commit(date(2026, 10, 20))  # ANCHOR; canlı demo şablonu kaydırmadan sonra gerçek bugünle (demo_mode)
     print(f"Demo verisi yüklendi: {db.DB_PATH}")
+
+
+def _prev_month(month: str) -> str:
+    y, m = divmod(int(month[:4]) * 12 + int(month[5:7]) - 2, 12)
+    return f"{y:04d}-{m + 1:02d}"
+
+
+def add_plan_commit(today: date) -> None:
+    """Geçen ay başlatılmış borç planı (Borç planı "plan takibi" kartı): plan bugünkü borçlarla kurulur, başına geçen
+    ayın hedefleri eklenir (Kerem'e ₺6.000, Selin'e ₺2.000); geçen ay Kerem'e ödenmiş, Selin'e ödenmemiş → "Planın
+    ₺2.000 gerisindesin · Bu ay ₺… ödersen yetişirsin". Tarihler today'e göre (ayar JSON'u kaydırılmaz: canlı demoda
+    kaydırmadan sonra çağrılır)."""
+    import json
+
+    from app import debt_plan
+
+    prev = _prev_month(f"{today.year:04d}-{today.month:02d}")
+    started = date(int(prev[:4]), int(prev[5:7]), min(today.day, 28))
+    debts = {d["person"]: d for d in db.list_debts() if d["direction"] == "borc"}
+    kerem = max((d for d in db.list_debts() if d["person"] == "Kerem" and d["direction"] == "borc"),
+                key=lambda d: d["amount"])
+    selin = debts["Selin"]
+    paid_kerem, missed_selin = 6000.0, 2000.0
+    db.pay_debt(kerem["id"], paid_kerem, started.replace(day=28).isoformat())  # geçen ay, plan başladıktan sonra
+    debt_plan.commit_plan(today=today)  # bugünkü borçlarla (Kerem'in ödemesi düşülmüş)
+    store = json.loads(db.get_setting(debt_plan.COMMIT))
+    snap = store["current"]
+    ki, si = f"debt:{kerem['id']}", f"debt:{selin['id']}"
+    for x in snap["debts"]:  # plan başladığında Kerem'in ödemesi henüz yapılmamıştı
+        if x["ident"] == ki:
+            x["remaining"] = debt_plan._r(x["remaining"] + paid_kerem)
+            x["paid0"] = debt_plan._r(x["paid0"] - paid_kerem)
+            x["planned"] = debt_plan._r(x["planned"] + paid_kerem)
+    left = missed_selin  # Selin'in geçen aya düşen payı sonraki aylardan alınmıştı: toplam hedef borcu aşmasın
+    for mo in reversed(snap["months"]):
+        take = min(left, mo["pays"].get(si, 0.0))
+        if take > 0:
+            mo["pays"][si] = debt_plan._r(mo["pays"][si] - take)
+            mo["total"] = debt_plan._r(mo["total"] - take)
+            if not mo["pays"][si]:
+                del mo["pays"][si]
+            left = debt_plan._r(left - take)
+    snap["months"].insert(0, {"month": prev, "total": paid_kerem + missed_selin,
+                              "pays": {ki: paid_kerem, si: missed_selin}})
+    snap.update({"started_at": started.isoformat(), "start_month": prev,
+                 "total": debt_plan._r(snap["total"] + paid_kerem)})
+    db.set_setting(debt_plan.COMMIT, json.dumps(store))
 
 
 # Faturalar: bu ayınki ödenmemiş, önceki 12 ayınki ödenmiş (Faturalar sayfası: aylık seri, ortalama, en yüksek ay,
@@ -113,7 +169,7 @@ def _extras() -> None:
                                      "2026-04": (185000, 4900, 2000), "2026-05": (185000, 5200, 1900),
                                      "2026-06": (185000, 4700, 2600), "2026-07": (200000, 6100, 2100),
                                      "2026-08": (200000, 5300, 3100), "2026-09": (200000, 4900, 2300)}.items():
-        db.create_entry({"entry_date": f"{m}-01", "description": "Maaş", "amount": gelir, "kind": "gelir", "category": "Maaş"})
+        db.create_entry({"entry_date": f"{m}-{SALARY_DAY}", "description": "Maaş", "amount": gelir, "kind": "gelir", "category": "Maaş"})
         db.create_entry({"entry_date": f"{m}-05", "description": "Kira", "amount": 22000 if m >= "2026-01" else 18500,
                          "kind": "gider", "category": "Kira & Aidat", "payment": "havale"})
         db.create_entry({"entry_date": f"{m}-14", "description": "Örnek Market", "amount": market, "kind": "gider",
@@ -134,32 +190,39 @@ def _extras() -> None:
     db.create_debt({"person": "Ali", "direction": "alacak", "amount": 1500, "debt_date": "2026-10-04", "asset": "TRY"})
     # borç kapatma planı (app/debt_plan.py): iki kart + diğer borçlar; aylık tutar kayıtlı (örnek plan birkaç aya yayılır,
     # biri söz verilen tarihten sonra kapanır: "Yetişmeyen tarih" ve "Yeni tarihte anlaştık" görünsün). Kurgu adlar.
-    db.create_debt({"person": "Kerem", "direction": "borc", "amount": 30000, "debt_date": "2026-06-12",
+    db.create_debt({"person": "Kerem", "direction": "borc", "amount": 36000, "debt_date": "2026-06-12",
                     "due_date": "2026-11-25", "note": "Düğün masrafı", "asset": "TRY"})
     db.create_debt({"person": "Selin", "direction": "borc", "amount": 8000, "debt_date": "2026-08-03",
                     "note": "Elden", "asset": "TRY"})
     # aynı kişiye ikinci borç (söz tarihi önce): "Bu ay ödenecekler"de Kerem tek satır, açınca iki borç
     db.create_debt({"person": "Kerem", "direction": "borc", "amount": 1500, "debt_date": "2026-09-14",
                     "due_date": "2026-11-05", "note": "Araba tamiri", "asset": "TRY"})
-    # ödeme planı olan borç (app/debt_schedule.py; yalnız kayıt): ayda ₺1.500, 8 taksit, her ayın 26'sı. Kurgu kurum.
-    db.create_debt({"person": "Örnek Vergi Dairesi", "direction": "borc", "amount": 12000, "debt_date": "2026-10-01",
-                    "asset": "TRY", "plan_installment": 1500, "plan_count": 8, "plan_start": "2026-10", "plan_day": 26,
+    # ödeme planı olan borç (app/debt_schedule.py; yalnız kayıt): ayda ₺2.000, 4 taksit, her ayın 26'sı. Kurgu kurum.
+    # Taksitler kısa: borçsuz ayı taksitlere değil aylık tutara bağlı kalsın (tutarı artırınca bitiş öne gelsin).
+    db.create_debt({"person": "Örnek Vergi Dairesi", "direction": "borc", "amount": 8000, "debt_date": "2026-10-01",
+                    "asset": "TRY", "plan_installment": 2000, "plan_count": 4, "plan_start": "2026-10", "plan_day": 26,
                     "creditor_type": "vergi_sgk", "plan_interest": "bilmiyorum", "pay_terms": "taksitli"})
     # borç planı v4 (borcun koşulları): senetli mağaza alışverişi (taksitli, kesin; günü maaştan önce: "önceki aydan
-    # ayır" notu), tek seferde ödenecek kişi borcu (birikim) ve aynı aya söz verilmiş iki borç (Ali / Ahmet). Kurgu adlar.
-    db.create_debt({"person": "Örnek Mobilya", "direction": "borc", "amount": 9000, "debt_date": "2026-09-05",
-                    "asset": "TRY", "plan_installment": 1500, "plan_count": 6, "plan_start": "2026-10", "plan_day": 5,
+    # ayır" notu), tek seferde ödenecek kişi borcu (birikim: aylık tutardan büyük, birkaç ay biriktirilir) ve aynı aya
+    # söz verilmiş iki borç (Ali / Ahmet). Kurgu adlar.
+    db.create_debt({"person": "Örnek Mobilya", "direction": "borc", "amount": 4500, "debt_date": "2026-09-05",
+                    "asset": "TRY", "plan_installment": 1500, "plan_count": 3, "plan_start": "2026-10", "plan_day": 5,
                     "creditor_type": "magaza", "plan_interest": "yok", "pay_terms": "taksitli", "note": "Senetli koltuk"})
-    db.create_debt({"person": "Burak", "direction": "borc", "amount": 12000, "debt_date": "2026-07-20",
+    db.create_debt({"person": "Burak", "direction": "borc", "amount": 40000, "debt_date": "2026-07-20",
                     "due_date": "2027-02-15", "note": "Ev eşyası", "asset": "TRY", "creditor_type": "kisi",
                     "pay_terms": "tek", "due_strict": 0})
     db.create_debt({"person": "Ahmet", "direction": "borc", "amount": 4000, "debt_date": "2026-09-01",
                     "due_date": "2026-12-20", "asset": "TRY", "creditor_type": "kisi", "pay_terms": "parca"})
     db.create_debt({"person": "Ali", "direction": "borc", "amount": 6500, "debt_date": "2026-09-10",
                     "due_date": "2026-12-20", "asset": "TRY", "creditor_type": "kisi", "pay_terms": "tek"})
-    from app import debt_plan
+    # altın borcu (kendi biriminde, TL karşılığı güncel gram fiyatından; fiyat yoksa demo yedek fiyatı:
+    # app/demo_prices.seed_market_fallback)
+    db.create_debt({"person": "Zeynep", "direction": "borc", "amount": 2, "debt_date": "2026-08-22",
+                    "note": "Düğünde ödünç", "asset": "GRAM_ALTIN", "creditor_type": "kisi", "pay_terms": "parca"})
+    from app import debt_plan, prefs
 
     debt_plan.save_settings({"monthly": 30000, "order": "tarih"})
+    prefs.set_ui({"layout": DEMO_LAYOUT, "layout_mobile": DEMO_LAYOUT_MOBILE})
     # altın ve döviz (zekât ile ortak liste)
     me = zakat.people()[0]["id"]
     es = zakat.add_person("Eşim")

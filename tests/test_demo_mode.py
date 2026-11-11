@@ -188,3 +188,31 @@ def test_demo_bills_any_day(tmpdb, today):
     db.init_db()
     demo.add_bills(today)
     _bills_check(bill_summary.summary(24, demo_mode._shift(today.isoformat(), 8)[:7]), db.list_bills(), today)
+
+
+def test_demo_debt_plan_video_points(demo, monkeypatch):
+    """Şablon v8 (tanıtım videosu): bitiş ayı aylık tutarla değişir, Burak birikim satırı, maaş günü notu, altın borcu
+    (dış fiyat yoksa demo yedek fiyatı), geçen ay başlatılmış planın takibi (gerisinde), Özet düzeninde Borç planı."""
+    from app import zakat
+
+    def offline():
+        raise RuntimeError("ağ yok")
+
+    monkeypatch.setattr(zakat, "_download_prices", offline)
+    ends = {a: demo.get("/api/debt-plan", params={"monthly": a}).json() for a in (20000, 30000, 35000)}
+    months = [ends[a]["debt_free"]["month"] for a in (20000, 30000, 35000)]
+    assert months[0] > months[1] > months[2], months  # tutar artınca bitiş öne gelir
+    p = demo.get("/api/debt-plan").json()
+    assert p["monthly"] == 30000
+    by = {d["title"]: d for d in p["debts"]}
+    for a in (15000, 20000, 25000, 30000, 35000):
+        b = next(d for d in demo.get("/api/debt-plan", params={"monthly": a}).json()["debts"] if d["title"] == "Burak")
+        assert b["saving"] and b["saving"]["text"].startswith("Burak için biriktir: ") and "tek seferde öde" in b["saving"]["text"]
+    assert by["Örnek Mobilya"]["day_note"]["text"] == "Örnek Mobilya 5'inde, maaş 15'inde: bu ödemeyi önceki aydan ayır."
+    assert by["Zeynep"]["tl_text"].startswith("2 gram altın · ≈₺") and not p["excluded"]
+    c = p["commitment"]
+    assert c and c["month_no"] == 2 and c["status"]["key"] == "behind"
+    assert c["status"]["title"] == "Planın ₺2.000 gerisindesin" and "ödersen yetişirsin" in c["status"]["text"]
+    assert p["summary_card"]["eligible"]
+    ui = demo.get("/api/meta").json()["ui"]
+    assert "borc-plani" in ui["layout"] and "borcplani" in ui["layout_mobile"]

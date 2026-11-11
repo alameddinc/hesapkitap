@@ -114,6 +114,31 @@ def shelf(p: float) -> float:
 
 # ---------------------------------------------------------------- 1. system.db
 
+# Demo yedek piyasa fiyatı (altın/döviz, ₺; UYDURMA): demo sunucusu dış fiyat kaynağına hiç ulaşamadıysa Zekât ve
+# Borç planındaki altın borcu boş kalmasın. Yalnız önbellek boşken yazılır ve "eski" işaretlenir (fetched 0): kaynak
+# ulaşılabilirse ilk istekte arka planda gerçek fiyatla değişir (app/zakat.fetch_prices).
+FALLBACK_MARKET = {"GRA": 5800.0, "YIA": 5300.0, "14AYARALTIN": 3400.0, "18AYARALTIN": 4350.0, "CEYREKALTIN": 9500.0,
+                   "YARIMALTIN": 19000.0, "TAMALTIN": 37900.0, "CUMHURIYETALTINI": 38500.0, "ATAALTIN": 39200.0,
+                   "USD": 42.0, "EUR": 48.5, "GBP": 55.5}
+
+
+def seed_market_fallback() -> bool:
+    """Önbellekte gram altın fiyatı yoksa demo yedek fiyatını yaz. Yazıldıysa True."""
+    import json
+
+    from app import system
+
+    try:
+        cur = json.loads(system.get("market_prices") or "null")
+    except ValueError:
+        cur = None
+    if cur and (cur.get("prices") or {}).get("GRA"):
+        return False
+    system.put("market_prices", json.dumps({"prices": FALLBACK_MARKET, "updated": None, "fetched": 0,
+                                            "source": "demo"}))
+    return True
+
+
 def seed_system(today: date | None = None, force: bool = False) -> bool:
     """Bugünün demo piyasa verisini yaz (günde bir kez). Yazıldıysa True."""
     from statistics import median

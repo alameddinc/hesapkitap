@@ -88,12 +88,16 @@ def shift_text(text: str, days: int) -> str:
     return re.sub(r"\b(\d{2})([./])(\d{2})\2(\d{4})\b", rep, text) if days else text
 
 
-TEMPLATE_VERSION = 7  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
+TEMPLATE_VERSION = 8  # şablonun içeriği değişince artır: eski template-*.db'ler silinip yeniden üretilir
 #                      2: fiş kalemleri, alışveriş listesi, plan ve geçmiş alışveriş (app/demo_prices.py)
 #                      3: gerçek marka / banka / zincir adları yerine kurgu adlar (app/demo_names.py)
 #                      4: geçmiş 12 ayın ödenmiş faturaları (elektrik, doğalgaz, internet), 12 aylık gelir/gider
 #                      6: borç planı v3: ödeme planı olan borç (Örnek Vergi Dairesi, ayda ₺1.500 × 8, 26'sı) ve
 #                         Kerem'e ikinci borç (kişi kişi gruplanan satır)
+#                      7: borç planı v4: borcun koşulları (Örnek Mobilya, Burak, Ali / Ahmet)
+#                      8: tanıtım videosu: vergi 4 / mobilya 3 taksit (bitiş aylık tutarla değişir), Burak ₺40.000
+#                         (birikim satırı), maaş 15'inde (taksit günü notu), Zeynep'e 2 gram altın borcu, geçen ay
+#                         başlatılmış plan (plan takibi: gerisinde), Özet düzeninde Borç planı kartı
 
 
 def template() -> str:
@@ -102,6 +106,7 @@ def template() -> str:
     from app import demo_prices
 
     demo_prices.seed_system()
+    demo_prices.seed_market_fallback()
     days = days_since_anchor()
     path = os.path.join(_base(), f"template-v{TEMPLATE_VERSION}-{days}.db")
     if os.path.exists(path):
@@ -127,6 +132,7 @@ def template() -> str:
     with db.use_space(tmp, None):  # kaydırmadan sonra, gerçek bugünle: liste, plan, geçmiş alışveriş
         demo_prices.shopping()
         demo.add_bills(date.today())  # faturalar takvim ayına göre (kaydırma ay sınırını kaydırmasın)
+        demo.add_plan_commit(date.today())  # geçen ay başlatılmış borç planı (ayar JSON'u kaydırılmaz)
     os.replace(tmp, path)
     return path
 
