@@ -42,6 +42,8 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("borclar", "Borç / Alacak", "sayfa", FREE, True, "Kime ne borcun var, kimden alacağın var"),
     ("borc_plani", "Borç kapatma planı", "sayfa", FREE, True,
      "Kart ve diğer borçlar tek planda, faiz ödemeden ay ay kapatma (borçtan çıkmaya yardım: ücretsiz)"),
+    ("borc_plani_plus", "Borç planı takibi ve erken kapatma hesabı", "ozellik", PREMIUM, True,
+     "Planı başlat ve her ay takip et; faizli kredide erken kapatmanın kazancı (planın kendisi, sırası ve tutarları ücretsiz)"),
     ("transferler", "Transferler", "sayfa", FREE, True, "Havale, FAST ve kendi hesapların arası"),
     ("planlama", "Planlama", "sayfa", FREE, True, "Ücretsizde 1 ay (uzun planlama ayrı satır)"),
     ("odemeler", "Ödemeler", "sayfa", FREE, True, "Yaklaşan kart, fatura ve sabit ödemeler"),
@@ -158,7 +160,8 @@ GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/shopping-list", "alisve
          (None, "/api/book/invites", "ortak_defter"),
          (None, "/api/book/member-spend", "aile_rapor"), (None, "/api/spender", "aile_rapor"),
          (None, "/api/plan/simulate", "alsam_mi"), (None, "/api/year-summary", "istatistik"),
-         (None, "/api/interest-history", "istatistik"), ("POST", "/api/jars", "kumbara")]
+         (None, "/api/interest-history", "istatistik"), ("POST", "/api/jars", "kumbara"),
+         ("POST", "/api/debt-plan/commit", "borc_plani_plus")]  # planı başlat / yeniden oluştur
 
 
 class PlanRequired(Exception):
@@ -378,7 +381,8 @@ def require(u: dict | None, feature: str) -> None:
 
 
 # önekle yakalanamayan (yolun ortasında değişken olan) kilitli uçlar: (yöntem, tam yol deseni, özellik)
-GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_rapor")]  # kartı kişiye bağla
+GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_rapor"),  # kartı kişiye bağla
+            ("POST", re.compile(r"/api/debts/\d+/jar"), "kumbara")]  # borç planı birikimi için yeni kumbara
 
 
 def gate_for(path: str, method: str = "GET") -> str | None:

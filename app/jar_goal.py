@@ -69,11 +69,14 @@ def _actual_pace(moves: list[dict], today: date) -> tuple[float, int]:
     return max(0.0, net / len(months)), len(months)
 
 
-def jar_goal_status(jar: dict, today: date | None = None, unit_price: float | None = None) -> dict | None:
+def jar_goal_status(jar: dict, today: date | None = None, unit_price: float | None = None,
+                    include_current: bool = False) -> dict | None:
     """Kumbaranın hedef durumu. Hedef yoksa ya da kumbara kapalıysa None.
 
     jar: db.list_jars() satırı (goal, deadline, balance, moves, monthly, unit, closed_at).
     unit_price: altın/döviz kumbarasında 1 birimin TL fiyatı (TL karşılıkları için; yoksa *_try alanları None).
+    include_current: bu ay da ayırma ayı sayılır (borca bağlı kumbara: borç planı birikimi bu aydan son tarih ayına
+    kadar her ay ayrılır; plan ile kumbara aynı aylık tutarı söylesin).
     Döner: status, left, months_left, needed_monthly, pace, pace_source, raise_by, eta, eta_months,
     months_early, deadline_passed, unit ve altın/döviz için left_try, needed_monthly_try, raise_by_try."""
     today = today or date.today()
@@ -107,7 +110,7 @@ def jar_goal_status(jar: dict, today: date | None = None, unit_price: float | No
             if dl < today:  # son tarih geçti, hedef dolmadı: kalanın hepsi şimdi
                 out.update(status="geride", deadline_passed=True, months_left=0, needed_monthly=_ceil(left, unit))
             else:
-                months = max(1, diff)
+                months = max(1, diff + 1 if include_current else diff)
                 need = left / months
                 out["months_left"], out["needed_monthly"] = months, _ceil(need, unit)
                 if pace + 1e-9 < need:

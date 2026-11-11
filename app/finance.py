@@ -2591,10 +2591,16 @@ def net_worth(today: date | None = None) -> dict:
     # harcanabilir TL: bankadaki/nakit para − ödenecek kart ekstresi − TL borçlar − kumbaraya ayrılan − zekât borcu.
     # altın/döviz (varlık, hemen harcanmaz), alacak (henüz elde değil) ve yemek/hediye kartı (sadece o işte harcanır)
     # dahil değil; net durumda hepsi var.
-    spendable = cash - card_debt - payable - jars["total"] - zakat_due
+    # borca bağlı kumbara (debt_jar): kumbaradaki para o borcun kalanından düşülmüş sayılır; borç için
+    # max(kalan − kumbara, 0) + kumbara düşülür (kalan ve kumbara ikisi birden değil)
+    rem_by = {d["id"]: d["remaining"] for d in open_try if d["direction"] == "borc"}
+    in_jar = _round(sum(min(max(0.0, b), max(0.0, rem_by[i])) for i, b in jars.get("by_debt", {}).items() if i in rem_by))
+    payable_sp = payable - in_jar
+    spendable = cash - card_debt - payable_sp - jars["total"] - zakat_due
     spendable_parts = [{"key": k, "label": lbl, "amount": _round(v), "sign": sg} for k, lbl, v, sg in (
         ("cash", "Bankadaki ve nakit para", cash, "+"), ("card_debt", "Ödenecek kart ekstresi", card_debt, "−"),
-        ("payable", "TL borçların", payable, "−"), ("reserved", "Kumbaraya ayrılan", jars["total"], "−"),
+        ("payable", "TL borçların" + (" (kumbarada ayrılan kısmı hariç)" if in_jar else ""), payable_sp, "−"),
+        ("reserved", "Kumbaraya ayrılan", jars["total"], "−"),
         ("zakat_due", "Ödenmemiş zekât", zakat_due, "−"))]
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "spendable": _round(spendable), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
@@ -2609,7 +2615,7 @@ def net_worth(today: date | None = None) -> dict:
                        "spendable": _round(spendable), "net": _round(cash + in_wallets + hold["self_total"] - card_debt
                                                                     + receivable - payable - zakat_due)},
             "spendable_parts": spendable_parts,  # formülün kalemleri (sign '+'/'−'); istemci yalnız gösterir
-            "spendable_explain": SPENDABLE_EXPLAIN,
+            "spendable_explain": SPENDABLE_EXPLAIN + (SPENDABLE_JAR_NOTE if in_jar else ""),
             "stale": stale}
 
 
@@ -2617,6 +2623,10 @@ SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − ödenecek 
                      "ödenmemiş zekât. Altın/döviz, alacakların ve yemek/hediye kartları dahil değil; eksiye düştüyse "
                      "ödenecekler eldeki parayı aşıyor demektir. Bugünün rakamıdır: Dönem sonu ise dönem bitene kadar "
                      "beklenen gelirleri (maaş gibi) de katar; bu yüzden Harcanabilir eksiyken Dönem sonu artı olabilir.")
+
+
+SPENDABLE_JAR_NOTE = (" Bir borç için kumbarada biriktirdiğin para o borcun kalanından düşülmüş sayılır: borç ve kumbara "
+                      "iki kez düşülmez.")
 
 
 def net_worth_at(day: date) -> dict:

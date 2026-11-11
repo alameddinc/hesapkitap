@@ -12,6 +12,8 @@ import { fullTexts, isQuotaFull, renewDate, useDocQuota } from "./DocQuota";
 import { KIND_LABEL } from "./Plan";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import { hedefMetni, type GoalStatus, type Ton } from "../lib/kumbaraHedef";
+import type { JarDebt } from "../lib/borcKumbara";
+import { JarPlanLine } from "./DebtJar";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
 interface Jar {
@@ -23,6 +25,7 @@ interface Jar {
   pace: number; eta?: string; on_track?: boolean;
   goal_status?: GoalStatus | null; // sunucu app/jar_goal.py: rozet + "ayda ₺… ayır" (eski sunucuda yok)
   contributions?: { user_id: number | null; amount: number }[]; // ortak kumbara: kim ne kadar ayırdı
+  debt?: JarDebt | null; // borca bağlı kumbara (yetenek debt_jar; eski sunucuda yok)
 }
 
 // TL dışı kumbara: her ay altın/döviz alımı (varlık olarak eklenir)
@@ -288,6 +291,8 @@ export default function Jars() {
   const patch = useSave((a: { id: number; body: object }) => json("PATCH", `/api/jars/${a.id}`, a.body));
   const del = useSave((id: number) => json("DELETE", `/api/jars/${id}`), () => ui.toast("Silindi"));
   const delMove = useSave((id: number) => json("DELETE", `/api/jar-moves/${id}`));
+  // borç kapandı / silindi: "Başka hedefe çevir" → bağ kalkar, düzenleme penceresi açılır
+  const unlink = useSave((j: Jar) => json("PATCH", `/api/jars/${j.id}`, { unlink_debt: true }), (_r, j) => setForm({ jar: { ...j, debt: null } }));
   const all = q.data ?? [];
   const active = all.filter((j) => !j.closed_at);
   const closed = all.filter((j) => j.closed_at);
@@ -327,13 +332,29 @@ export default function Jars() {
                 <span className="text-sm tabular-nums">{tl(j.balance)}{j.goal ? <span className="text-stone-500"> / {tl(j.goal)}</span> : null}</span>
               )}
             </div>
+            {j.debt && (
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs" data-testid="kumbara-borc">
+                <button className="rounded-full bg-violet-50 px-1.5 py-0.5 font-medium text-violet-800 hover:underline dark:bg-violet-950/50 dark:text-violet-200"
+                  onClick={() => ui.go("borc-plani")} aria-label={`${j.debt.label}: borç planını aç`}>{j.debt.label}</button>
+                {j.debt.state === "acik" && j.debt.remaining != null && <span className="text-stone-500 tabular-nums">borçta kalan {tl(j.debt.remaining)}</span>}
+              </p>
+            )}
+            {j.debt?.suggestion && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 p-2 text-xs text-stone-700 dark:bg-stone-900 dark:text-stone-300" role="note" data-testid="kumbara-borc-oneri">
+                <span className="min-w-0 flex-1 basis-48">{j.debt.suggestion.text}</span>
+                <button className="btn-ghost border border-stone-300 px-2 py-0.5 dark:border-stone-700" disabled={patch.isPending}
+                  onClick={() => patch.mutate({ id: j.id, body: { closed: true } })}>{j.debt.suggestion.close}</button>
+                <button className="btn-ghost border border-stone-300 px-2 py-0.5 dark:border-stone-700" disabled={unlink.isPending}
+                  onClick={() => unlink.mutate(j, { onError: (e) => ui.error(e.message) })}>{j.debt.suggestion.convert}</button>
+              </div>
+            )}
             {shares(j) && <p className="text-xs text-stone-500">{shares(j)}</p>}
             {j.goal != null && (
               <div className="mt-1 h-2 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800">
                 <div className={cx("h-full rounded-full", TON[tonOf(j.goal_status) ?? "iyi"].cubuk)} style={{ width: `${j.pct ?? 0}%` }} />
               </div>
             )}
-            <HedefDurumu j={j} />
+            {j.debt?.plan && !j.closed_at ? <div className="mt-1.5"><JarPlanLine p={j.debt.plan} /></div> : <HedefDurumu j={j} />}
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
               <span>
                 {j.closed_at ? `kapandı ${dateTR(j.closed_at)}`
@@ -342,7 +363,7 @@ export default function Jars() {
                     j.monthly && (isUnit(j) ? `her ayın ${j.auto_day}. günü ${qty(j.monthly, j.unit_symbol ?? sym(j.unit))} al`
                       : `her ayın ${j.auto_day}. günü ${tl(j.monthly)} otomatik`), j.account_name && `yeri: ${j.account_name}`]
                     .filter(Boolean).join(" · ")}
-                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && !j.goal_status && (
+                {!j.closed_at && j.goal && (j.left ?? 0) > 0 && !j.goal_status && !j.debt?.plan && (
                   <span className={cx("block", j.eta ? (j.on_track === false ? "text-amber-600" : "text-green-700 dark:text-green-400") : "text-stone-500")}>
                     {j.eta ? `Bu hızla (ayda ${isUnit(j) ? qty(j.pace, j.unit_symbol ?? sym(j.unit)) : tl(j.pace)}) ${monthLabel(j.eta)}'de ulaşırsın${j.on_track === false ? ", son tarihe yetişmiyor" : ""}`
                       : "Son 3 ayda ayırma yok; ayır ya da otomatik ayırmayı aç"}

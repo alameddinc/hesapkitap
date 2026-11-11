@@ -93,6 +93,15 @@ Aynı hesap (monthly_interest) Kartlar ekranındaki faiz satırını da verir (c
 her ay büyür", gün gelmemiş kısmi ödemede "kalanı son ödeme gününe kadar öde: yaklaşık ₺Y faizden kurtulursun",
 yoksa "tamamını ödersen faiz işlemez".
 
+Borca bağlı kumbara (yetenek "debt_jar"; Premium "kumbara" kuralı, plan ücretsiz kalır): "tek seferde" borç ve faizli
+kredinin erken kapatılması birikimi bir kumbarada tutulabilir (jars.debt_id; bir borca en çok bir açık kumbara). Kumbara
+varsa plan birikimi kumbaranın GERÇEK bakiyesinden başlatır (simulate: tek seferde borçta saved, kredide pot; kalan
+aylık birikim buna göre yeniden hesaplanır), bu ay kumbaraya ayrılan bu ayın tutarından düşer (ödenen gibi) ve plan
+takibi (commitment) varsayılan birikim yerine kumbaradaki bakiyeyi sayar. Kumbara kapanır/silinirse ya da bağı
+kaldırılırsa plan eski davranışa döner. debts[].jar: offer ("Kumbara aç") | locked (Premium değil: nötr öneri) |
+linked (bakiye, "Kumbaradan öde" pay); this_month.items[] jar_action ("Kumbaraya ayır": POST /api/jars/{id}/moves) ve
+jar_pay ("Kumbaradan öde": POST /api/jars/{id}/pay-debt). Değer ilkesi aynı: metinler faize yönlendirmez.
+
 Ortak defter: kartlar ve hesaplar db süzgeçlerinden geçer (gizli kart yok); Borç / Alacak sayfası üyeye kapalıysa
 diğer borçlar plana girmez; faiz gizliyse faiz tutarı yazılmaz. Ayar (aylık tutar, sıralama) defterindir: "Görür ve
 ekler" ya da tam yetkili üye değiştirir (Aile birlikte planlar), "Sadece görür" yalnız önizler.
@@ -374,7 +383,77 @@ def _people(today: date) -> tuple[list[dict], list[dict], list[dict], list[dict]
         if gold:
             item.update({"qty": d["remaining"], "price": price, "qty_text": finance.fmt_asset(d["remaining"], d["asset"])})
         open_.append(item)
+    _attach_jars([*open_, *fixed], today)
     return open_, other, done, fixed
+
+
+def _debt_jars() -> dict[int, dict]:
+    """Borç id → açık, borca bağlı TL kumbarası. Hesaplar (kumbara) sayfası üyeye kapalıysa yok sayılır."""
+    from app import book
+
+    r = book.active()
+    if r and "hesaplar" in r["hidden_pages"]:
+        return {}
+    out: dict[int, dict] = {}
+    for j in db.debt_jar_rows():
+        out.setdefault(j["debt_id"], j)
+    return out
+
+
+def _jar_usable(d: dict) -> bool:
+    """Plan bu borcun birikimini kumbaradan sayar mı: tek seferde ödenecek TL borç ya da erken kapatma planı olan kredi."""
+    if d["kind"] == "fixed":
+        return bool(d.get("payoff_base"))
+    return _is_tek(d) and (d.get("asset") or "TRY") == "TRY"
+
+
+def _attach_jars(debts: list[dict], today: date) -> None:
+    """Bağlı kumbara: jar (list_jars satırı), jar_saved (plan birikimi buradan başlar), jar_now (bu ay ayrılan net)."""
+    if not debts:
+        return
+    jars = _debt_jars()
+    month = _ym(today)
+    for d in debts:
+        j = jars.get(d["id"])
+        if not j:
+            continue
+        d["jar"] = j
+        if _jar_usable(d):
+            d["jar_used"] = True
+            d["jar_saved"] = _r(max(0.0, j["balance"]))
+            d["jar_now"] = _r(max(0.0, sum(m["amount"] for m in j["moves"]
+                                           if m["move_date"][:7] == month and not m.get("debt_payment_id"))))
+
+
+def _jar_now(debts) -> float:
+    """Bu ay bağlı kumbaralara ayrılan (gerçek)."""
+    return _r(sum(d.get("jar_now") or 0.0 for d in debts))
+
+
+def _jar_deduct(cards: list[dict], people: list[dict], fixed: list[dict], monthly: float | None, order: str, start: str,
+                paid_now: float) -> float:
+    """Bu ay kumbaraya ayrılandan aylık tutardan sayılan kısım: her borçta en çok planın bu ay o borca ayırdığı kadar
+    (kumbara yokmuş gibi, ayın başındaki bakiyeyle hesaplanır). Fazlası aylık tutarın dışından gelmiş sayılır (ör.
+    birikmiş para): kumbarada birikim olarak durur ama bu ayın taksitlerini ve kart ödemesini kısmaz."""
+    jn = [d for d in (*people, *fixed) if d.get("jar_now")]
+    if not jn or not monthly:
+        return 0.0
+
+    def pre(ds):
+        return [{**d, "jar_saved": _r(max(0.0, (d.get("jar_saved") or 0.0) - d["jar_now"]))} if d.get("jar_now") else d
+                for d in ds]
+
+    sim = simulate(cards, pre(people), monthly, order, start, first_budget=_r(max(0.0, monthly - paid_now)),
+                   fixed=pre(fixed))
+    m0 = sim["months"][0] if sim["months"] and sim["months"][0]["month"] == start else None
+    if not m0:
+        return 0.0
+    out = 0.0
+    for d in jn:
+        key = d["key"] + (PK if d["kind"] == "fixed" else "")
+        planned = sum(p["amount"] for p in m0["payments"] if p["key"] == key)
+        out += min(d["jar_now"], planned)
+    return _r(out)
 
 
 def _salary_day(today: date) -> int | None:
@@ -680,7 +759,8 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
     fixed = fixed or []
     people = [_norm_person(d) for d in people]
     rem = {d["key"]: d["remaining"] for d in (*fixed, *cards, *people)}
-    saved = {d["key"]: 0.0 for d in people}
+    # bağlı kumbara: tek seferde borcun birikimi kumbaradaki gerçek bakiyeden başlar
+    saved = {d["key"]: (_r(min(d.get("jar_saved") or 0.0, d["remaining"])) if _is_tek(d) else 0.0) for d in people}
     cards_s = _sort_cards(cards)
     people_s = _sort_people(people, order)
     fixed_s = sorted(fixed, key=lambda d: (d.get("day") or 1, d["id"]))
@@ -700,7 +780,8 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
     payoffs = sorted((d for d in fixed_s if d.get("payoff_base") and d["remaining"] > 0),
                      key=lambda d: (-(d["payoff_base"].get("rate") or 0),
                                     debt_schedule.payoff_at(d["payoff_base"], d["remaining"]) / d["remaining"], d["id"]))
-    pot = {d["key"]: 0.0 for d in payoffs}
+    pot = {d["key"]: _r(d.get("jar_saved") or 0.0) for d in payoffs}  # bağlı kumbara: birikim oradan başlar
+    pot_jar = dict(pot)  # kumbaradaki para aylık tutara geri dönmez (yalnız plandan ayrılan döner)
     payoff_by: dict[str, dict] = {}
     for d in payoffs:
         titles[d["key"] + PK] = d["title"]
@@ -718,6 +799,13 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
         pays: dict[str, float] = {}     # yeni para: ödeme
         saves: dict[str, float] = {}    # yeni para: birikim (tek seferde borç)
         from_saved: dict[str, float] = {}
+        for d in people_s:  # kumbaradaki birikim borcun tamamına yetiyor: tek seferde öde (yeni para gerekmez)
+            key = d["key"]
+            if rem[key] > 0 and saved[key] > 0 and money.ge(saved[key], rem[key]):
+                from_saved[key] = saved[key]
+                saved[key] = 0.0
+                pays[key] = 0.0
+                rem[key] = 0.0
 
         def give(key: str, amt: float, cap: bool = True) -> float:
             """Bütçeden bir borca ver (tek seferde borçta birikime; birikim yetince tamamı ödenir). Dönen: verilen.
@@ -817,15 +905,16 @@ def simulate(cards: list[dict], people: list[dict], monthly: float, order: str, 
             amount = debt_schedule.payoff_at(b, rest)
             if rest <= 0 or not money.gt(rest - amount, 1.0):
                 # taksitler bitti ya da erken kapatma artık faiz kazandırmıyor: birikim diğer borçlara
-                budget = _r(budget + pot[key])
-                pot[key] = 0.0
+                budget = _r(budget + max(0.0, pot[key] - pot_jar[key]))
+                pot[key] = pot_jar[key] = 0.0
                 continue
             need_new = _r(amount - pot[key])
             if money.ge(budget, need_new):
                 new = max(0.0, need_new)
                 payoff_from[pk] = _r(min(pot[key], amount))
                 pays[pk] = _r(new)
-                budget = _r(budget - new + max(0.0, -need_new))  # birikim kapatma tutarından fazlaysa artanı geri
+                # birikim kapatma tutarından fazlaysa plandan ayrılan artan geri (kumbaradaki artan kumbarada kalır)
+                budget = _r(budget - new + max(0.0, min(-need_new, pot[key] - pot_jar[key])))
                 payoff_by[key] = {"month": m, "amount": amount, "installments": rest, "saved": _r(rest - amount)}
                 rem[key] = 0.0
                 pot[key] = 0.0
@@ -1115,7 +1204,9 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
     cards, cards_done = _cards(today)
     people, other, people_done, fixed = _people(today)
     paid_now = _paid_now(cards, [*people, *fixed], cards_done, people_done)
-    need = min_monthly(cards, start, paid_now, fixed) if cards else 0.0
+    # bu ay bağlı kumbaraya ayrılan: planın bu ay o borca ayırdığı kadarı bu ayın tutarından düşer (ödenen gibi)
+    jar_now = _jar_deduct(cards, people, fixed, monthly, order, start, paid_now) if monthly is not None else 0.0
+    need = min_monthly(cards, start, paid_now + jar_now, fixed) if cards else 0.0
     if source == "suggestion" and sug and need > 0:
         # öneri artanın 100'e aşağı yuvarlısı: artan faizsiz tutara yetiyorsa öneri en az o tutar olsun (yuvarlama
         # yüzünden faizli bir plan önerilmesin); yetmiyorsa öneri cümlesi faizsiz tutarı da söyler
@@ -1124,16 +1215,17 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             monthly = need
         elif sug["amount"] < need:
             sug = {**sug, "text": sug["text"] + f" Faizsiz kapatmak için ayda {_tl(need)} gerekiyor."}
-    first = _r(max(0.0, (monthly or 0) - paid_now))
+    first = _r(max(0.0, (monthly or 0) - paid_now - jar_now))
     sim = simulate(cards, people, monthly or 0.0, order, start, first_budget=first, fixed=fixed) \
         if monthly is not None else None
+    jflags = _jar_flags()
     fixed_s = sorted(fixed, key=lambda d: (d["due_date"] or "9999", d["id"]))
     salary_day = _salary_day(today) if (fixed or any(d["strict"] for d in people)) else None
 
     debts = []
     for i, d in enumerate([*fixed_s, *_sort_cards(cards), *_sort_people(people, order)]):
         item = {k: v for k, v in d.items() if k not in ("paid_now", "debt_date", "period_end", "dues", "price",
-                                                        "payoff_base")}
+                                                        "payoff_base", "jar", "jar_used", "jar_saved", "jar_now")}
         item["order"] = i + 1
         item["progress"] = round(d["paid"] / d["total"], 3) if d["total"] else 0.0
         item["due_label"] = _day_label(d["due_date"]) if d["due_date"] else None
@@ -1165,7 +1257,7 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             if sim and monthly and d["strict"] and d["due_date"]:
                 dl = max(d["due_date"][:7], start)
                 if not (close and close <= dl):
-                    nm = need_monthly(d["key"], dl, cards, people, fixed, order, start, paid_now)
+                    nm = need_monthly(d["key"], dl, cards, people, fixed, order, start, paid_now + jar_now)
             late = _late(d, sim, start, close, nm) if sim and monthly else None
             if late and late["kind"] == "soz" and late.get("action"):
                 ag = agreed_month(d["key"], close, cards, people, fixed, monthly, order, start, first)
@@ -1177,6 +1269,8 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
             if d.get("price"):
                 item["approx_note"] = PRICE_NOTE
                 item["tl_text"] = f"{d['qty_text']} · ≈{_tl(d['remaining'])}"
+        if d["kind"] != "card":
+            item["jar"] = _jar_info(d, item, sim, start, jflags, fees_hidden)
         debts.append(item)
 
     warnings = []
@@ -1248,7 +1342,7 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         for p in sim["months"][0]["payments"]:
             d = by_key[p["key"].removesuffix(PK)]
             if p.get("payoff"):
-                items.append(_payoff_item(p, d, sim, start, fees_hidden, subs.get(d["key"])))
+                items.append(_jar_item(_payoff_item(p, d, sim, start, fees_hidden, subs.get(d["key"])), d, jflags))
                 continue
             full = money.ge(p["amount"] + (p.get("from_saved") or 0.0), d["remaining"])
             harm = d.get("harm")
@@ -1281,15 +1375,24 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                 text += f" · {p['units_text']} (≈{_tl(p['amount'])})"
                 extra.update({"asset": p["asset"], "units": p["units"], "units_text": p["units_text"],
                               "approx_note": PRICE_NOTE})
-            items.append({"key": p["key"], "kind": d["kind"], "title": d["title"], "amount": p["amount"],
-                          "full": full and not p.get("saving"), "done": False, "due_date": d["due_date"],
-                          "due_label": d["due_label"], "min_left": asg, "text": text, "sub": subs.get(p["key"]),
-                          "payable": d["payable"], **extra})
+            items.append(_jar_item({"key": p["key"], "kind": d["kind"], "title": d["title"], "amount": p["amount"],
+                                    "full": full and not p.get("saving"), "done": False, "due_date": d["due_date"],
+                                    "due_label": d["due_label"], "min_left": asg, "text": text, "sub": subs.get(p["key"]),
+                                    "payable": d["payable"], **extra}, d, jflags))
     for d in (*fixed, *cards, *people):
         if d["paid_now"] > 0:
             items.append({"key": d["key"], "kind": d["kind"], "title": d["title"], "amount": d["paid_now"], "full": False,
                           "done": True, "due_date": d["due_date"], "due_label": None, "sub": subs.get(d["key"]),
                           "text": f"Bu ay {_tl(d['paid_now'])} ödendi", "payable": d["payable"]})
+    for d in (*fixed, *people):  # bu ay bağlı kumbaraya ayrılan (birikim; borç düşmez)
+        if d.get("jar_now"):
+            j = d["jar"]
+            items.append({"key": d["key"] + (PK if d["kind"] == "fixed" else ""), "kind": d["kind"], "title": d["title"],
+                          "amount": d["jar_now"], "full": False, "done": True, "saving": True, "due_date": None,
+                          "due_label": None, "sub": subs.get(d["key"]), "jar_id": j["id"],
+                          "text": f"Bu ay kumbaraya {_tl(d['jar_now'])} ayrıldı",
+                          "payable": d["payable"] if d["kind"] == "person" else None,
+                          **({"payoff": True} if d["kind"] == "fixed" else {})})
     for d in (*cards_done, *people_done):
         items.append({"key": d["key"], "kind": d["kind"], "title": d["title"], "amount": d["paid"], "full": True,
                       "done": True, "due_date": None, "due_label": None, "sub": subs.get(d["key"]), "text": "Bu ay kapandı",
@@ -1329,7 +1432,7 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
                 "label": f"Önceki plan: {month_in(h['start_month'], start)} başladı · ayda {_tl(h['monthly'])}"}
                for h in commit_raw["history"]]
 
-    return {
+    out = {
         "available": True,
         "today": today.isoformat(), "month": start, "month_label": month_label(start),
         "settings": saved, "monthly": monthly, "monthly_source": source, "suggestion": sug,
@@ -1361,12 +1464,69 @@ def build(monthly: float | None = None, order: str | None = None, today: date | 
         "hidden": {"fees": fees_hidden, "people": people_hidden},
         "can_edit": _can_edit(),
         "commitment": commitment, "commit_offer": offer, "commit_history": history, "faiz_info": FAIZ_INFO,
+        # borca bağlı kumbara (yetenek debt_jar): istemci düğmeleri buna göre gösterir; Premium değilse lock (nötr)
+        "debt_jar": {**jflags, "lock": None if jflags["premium"] else JAR_LOCK,
+                     "saved_this_month": _jar_now([*people, *fixed])},
         "summary_card": {"eligible": len(cards) + len(people) + len(fixed) >= 2},
         "empty": None if cards or people or fixed else {
             "title": "Açık borcun görünmüyor",
             "text": "Kart ekstrelerin ödenmiş, Borç / Alacak'ta açık borcun yok. Başka bir borcun varsa Borç / "
                     "Alacak'tan ekle."},
     }
+    plus = _plus()
+    out["plus"] = {"available": plus, "had_plan": bool(commit_raw["current"]),
+                   "lock": None if plus else {"commit": PLUS_LOCK_COMMIT, "payoff": PLUS_LOCK_PAYOFF}}
+    if not plus:
+        _lock_plus(out)
+    return out
+
+
+# ---------------------------------------------------------------- Premium: takip ve erken kapatma hesabı
+
+PLUS_FEATURE = "borc_plani_plus"
+PLUS_LOCK_COMMIT = {"key": "commit", "title": "Planı başlat", "badge": "Premium",
+                    "text": "Planı başlatıp her ay takip etmek Premium'da."}
+PLUS_LOCK_PAYOFF = {"key": "payoff", "title": "Erken kapatma", "badge": "Premium",
+                    "text": "Erken kapatmanın faizden ne kadar kurtaracağını görmek Premium'da."}
+PLUS_PAYOFF_SAVE = "Krediyi erken kapatmak için birikim"
+PLUS_PAYOFF_CLOSE = "Erken kapatma birikimi"
+
+
+def _plus() -> bool:
+    """Borç planının gelişmiş kısmı (Premium "borc_plani_plus"; kendi sunucusunda açık): planı başlat ve takip, faizli
+    kredide erken kapatma hesabı. Planın kendisi, sırası ve tutarları her pakette aynı."""
+    from app import plans
+
+    return plans.allows(db.current_user(), PLUS_FEATURE)
+
+
+def _lock_plus(out: dict) -> None:
+    """Ücretsiz pakette: takip (commitment, öneri, geçmiş) gönderilmez (kayıtlı veri silinmez, Premium'la geri gelir);
+    erken kapatmada kapatma tutarı, ayı, kurtulunan faiz ve "Kapattım" önerisi yok. Sıra ve ay ay tutarlar aynı kalır
+    (faizden çıkış ücrete bağlanmaz): kredi birikimi plandaki gibi ayrılır, yalnız hesap metni kilitli."""
+    out["commitment"] = None
+    out["commit_offer"] = None
+    out["commit_history"] = []
+    out["totals"]["payoff_saving"] = None
+    for d in out["debts"]:
+        if d.get("kind") == "fixed" and d.get("payoff"):
+            d["payoff"] = {"state": "locked", "title": PLUS_LOCK_PAYOFF["title"], "badge": PLUS_LOCK_PAYOFF["badge"],
+                           "text": PLUS_LOCK_PAYOFF["text"]}
+    for mo in out["months"]:
+        for row in (*mo["payments"], *mo.get("groups", [])):
+            if row.get("payoff"):
+                for k in ("interest_saved", "pay_total", "from_saved"):
+                    row.pop(k, None)
+    rows = [*out["this_month"]["items"], *out["this_month"]["groups"]]
+    for g in out["this_month"]["groups"]:
+        rows += g.get("items", [])
+    for it in rows:
+        if it.get("payoff") and not it.get("done"):
+            for k in ("close_early", "pay_total", "from_saved", "interest_saved"):
+                it.pop(k, None)
+            it["text"] = PLUS_PAYOFF_SAVE if it.get("saving") else PLUS_PAYOFF_CLOSE
+            it["full"] = False
+            it["plus_locked"] = True
 
 
 PAYOFF_NOTE = ("Kapatma tutarı ödenen her taksitle azalır; buradaki tutarlar yaklaşık. Kapatmadan önce güncel tutarı "
@@ -1441,6 +1601,287 @@ def _payoff_item(p: dict, d: dict, sim: dict, start: str, fees_hidden: bool, sub
                                        "bankanın almadığı kalan faiz düşer."}}
 
 
+# ---------------------------------------------------------------- borca bağlı kumbara (yetenek debt_jar)
+
+JAR_LOCK = {"state": "locked", "label": "Kumbarayla takip et", "badge": "Premium",
+            "text": "Bu birikimi kumbarada ayrı tutmak Premium'da. Plan birikimi bugünkü gibi gösterir."}
+JAR_OFFER_TEXT = ("Bu birikimi kumbarada ayrı tut: her ay ayırdığın orada durur, harcanabilir paradan düşer; plan "
+                  "kumbaradaki gerçek birikime göre hesaplanır.")
+JAR_PAY_LABEL = "Kumbaradan öde"
+JAR_MOVE_LABEL = "Kumbaraya ayır"
+JAR_MOVE_NOTE = "Borç planı"
+
+
+def _jar_flags() -> dict:
+    """Kumbara düğmeleri: available (kumbara sayfası açık), premium (yeni kumbara açma hakkı), can_open (sahip / tam
+    yetkili ve Premium), can_move (ayırma: "Sadece görür" hariç; var olan kumbara her pakette kullanılır), can_pay
+    (borç ödemesi: sahip / tam yetkili). Yetkiler sunucuda da uygulanır (book.denied, plans.gate_for)."""
+    from app import book, plans
+
+    r = book.active()
+    available = not (r and "hesaplar" in r["hidden_pages"])
+    m = book.member()
+    role = book.role(m) if m else "owner"
+    premium = plans.allows(db.current_user(), "kumbara")
+    manage = available and role in ("owner", "full")
+    return {"available": available, "premium": premium, "can_open": manage and premium,
+            "can_move": available and role != "viewer", "can_pay": manage}
+
+
+def _month_end(month: str) -> str:
+    import calendar
+
+    y, m = map(int, month.split("-"))
+    return f"{month}-{calendar.monthrange(y, m)[1]:02d}"
+
+
+def _saving_rows(sim: dict | None, key: str) -> list[float]:
+    return [p["amount"] for mo in (sim or {}).get("months", []) for p in mo["payments"]
+            if p["key"] == key and p.get("saving") and p["amount"] > 0]
+
+
+def _payoff_now(d: dict) -> float | None:
+    info = (d.get("schedule") or {}).get("payoff") or {}
+    return info.get("now")
+
+
+def _jar_schedule(d: dict, sim: dict | None) -> list[tuple[str, float]]:
+    """Planın bu borç için kumbaraya koyduğu para ay ay: birikim satırları + ödeme ayındaki yeni para (kumbarayla
+    ödenen ayda da para önce kumbaraya konur, sonra kumbaradan ödenir). Kredide erken kapatma satırı."""
+    key = d["key"] + (PK if d["kind"] == "fixed" else "")
+    out: list[tuple[str, float]] = []
+    for mo in (sim or {}).get("months", []):
+        a = _r(sum(p["amount"] for p in mo["payments"] if p["key"] == key))
+        if a > 0:
+            out.append((mo["month"], a))
+    return out
+
+
+def _jar_pay_month(d: dict, sim: dict | None) -> str | None:
+    if d["kind"] == "fixed":
+        pb = (sim or {}).get("payoff_by", {}).get(d["key"])
+        return pb["month"] if pb else None
+    return (sim or {}).get("closes", {}).get(d["key"])
+
+
+def schedule_text(sched: list[tuple[str, float]], start: str, pay: str | None = None) -> str:
+    """"Ocak 2027'de ₺12.600 · Şubat 2027'de ₺27.400 · Şubat 2027'de kumbaradan öde"; art arda aynı tutarlar tek
+    parça ("Aralık–Mart ayda ₺3.000")."""
+    runs: list[list] = []
+    for m, a in sched:
+        if runs and runs[-1][2] == a and _add(runs[-1][1], 1) == m:
+            runs[-1][1] = m
+        else:
+            runs.append([m, m, a])
+    parts = [f"{month_in(m1, start)} {_tl(a)}" if m1 == m2 else
+             f"{AYLAR[int(m1[5:]) - 1]}{' ' + m1[:4] if m1[:4] != m2[:4] else ''}–{month_label(m2)} ayda {_tl(a)}"
+             for m1, m2, a in runs]
+    if pay:
+        parts.append(f"{month_in(pay, start)} kumbaradan öde")
+    return " · ".join(parts)
+
+
+def _jar_plan(d: dict, j: dict, sim: dict | None, start: str, fees_hidden: bool) -> dict:
+    """Bağlı kumbaranın durumu planın takviminden (kumbara kartında tek kaynak borç planı): status tamam | bu_ay |
+    yolunda | baslamadi | plansiz, badge, line, detail, this_month (bu ay ayrılacak kalan), schedule, pay_month."""
+    sched = _jar_schedule(d, sim)
+    pay = _jar_pay_month(d, sim)
+    bal = _r(max(0.0, j["balance"]))
+    this = next((a for m, a in sched if m == start), 0.0)
+    done = _r(d.get("jar_now") or 0.0)
+    nxt = next(((m, a) for m, a in sched if m > start), None)
+    if d["kind"] == "fixed":
+        pb = (sim or {}).get("payoff_by", {}).get(d["key"])
+        target = pb["amount"] if pb else (_payoff_now(d) or 0.0)
+    else:
+        target = d["remaining"]
+    text = schedule_text(sched, start, pay)
+    out = {"schedule": [{"month": m, "label": month_label(m), "amount": a} for m, a in sched], "this_month": this,
+           "pay_month": pay, "pay_label": month_label(pay) if pay else None, "badge": None, "detail": text or None}
+    if target and money.ge(bal + TOL, target):
+        what = "Kapatma tutarı" if d["kind"] == "fixed" else "Borcun tamamı"
+        out.update(status="tamam", badge="Tamamlandı", line=f"{what} kumbarada",
+                   detail="Kumbaradan öde ile kapat." if d["kind"] == "fixed" else "Kumbaradan öde ile tek seferde öde.")
+    elif this > 0:
+        out.update(status="bu_ay", badge="Bu ay", line=f"Bu ay {_tl(this)} ayır")
+    elif done > 0:
+        out.update(status="yolunda", badge="Yolunda", line=f"Bu ay {_tl(done)} ayırdın")
+    elif nxt:
+        out.update(status="baslamadi", line=f"Plan {month_in(nxt[0], start)} başlıyor: {_tl(nxt[1])}")
+    else:
+        out.update(status="plansiz", line="Plan bu borç için şimdilik birikim ayırmıyor",
+                   detail="Kendin ayırırsan plan kumbaradaki parayı sayar.")
+    if fees_hidden and d["kind"] == "fixed":
+        out["detail"] = out["detail"] if out["status"] == "tamam" else None
+    return out
+
+
+def _jar_offer(d: dict, sim: dict | None, start: str) -> dict:
+    """"Kumbara aç"ın değerleri (sunucu POST /api/debts/{id}/jar aynısını kullanır): ad, hedef, son tarih, aylık."""
+    if d["kind"] == "fixed":
+        obj = "kredisini kapat" if d.get("creditor_type") == "banka" else "borcunu kapat"
+        name = f"{d['title']} {obj}"
+        goal = _payoff_now(d)
+        pb = (sim or {}).get("payoff_by", {}).get(d["key"])
+        month = pb["month"] if pb else None
+        rows = _saving_rows(sim, d["key"] + PK)
+    else:
+        name = f"{d['title']} borcu"
+        goal = d["remaining"]
+        month = (sim or {}).get("closes", {}).get(d["key"]) or _due_m(d)
+        rows = _saving_rows(sim, d["key"])
+    monthly = _r(sum(rows) / len(rows)) if rows else None
+    sched = _jar_schedule(d, sim)
+    return {"name": name[:60], "goal": _r(goal) if goal else None,
+            "deadline": _month_end(max(month, start)) if month else None,
+            "deadline_label": month_label(month) if month else None, "monthly": monthly or None,
+            # planın takvimi ("Ocak 2027'de ₺12.600 · Şubat 2027'de ₺27.400 · …"): istemci aylık yerine bunu gösterir
+            "plan_text": schedule_text(sched, start, month) or None}
+
+
+def _jar_pay(d: dict, j: dict, item: dict, sim: dict | None, start: str, fees_hidden: bool) -> dict | None:
+    """"Kumbaradan öde": ödeme ayı geldiyse ya da kumbara hedefe ulaştıysa. Tek seferde borçta tutar kumbaradaki kadar
+    (en çok kalan borç; azsa kısmi), kredide güncel tahmini kapatma tutarı (kullanıcı bankanın tutarını yazar)."""
+    bal = _r(j["balance"])
+    if bal <= 0:
+        return None
+    t = d["title"]
+    if d["kind"] == "fixed":
+        est = _payoff_now(d)
+        pb = (sim or {}).get("payoff_by", {}).get(d["key"])
+        if not est or not (money.ge(bal + TOL, est) or (pb and pb["month"] <= start)):
+            return None
+        # plan bu ay kapatıyorsa planın tutarı (bu ayın taksitinden sonra; satırdaki tutarla aynı), yoksa bugünkü tahmin
+        amount = _r(pb["amount"] if pb and pb["month"] <= start else est)
+        return {"label": JAR_PAY_LABEL, "jar_id": j["id"], "debt_id": d["id"], "amount": amount,
+                "from_jar": _r(min(bal, amount)), "close_early": True, "partial": False,
+                "leftover": _r(max(0.0, bal - amount)),
+                "text": (f"Kumbarada {_tl(bal)} birikti. Bankana güncel kapatma tutarını sor, krediyi kumbaradan kapat."
+                         if not fees_hidden else "Kumbaradaki birikimle krediyi kapatabilirsin."),
+                "confirm": f"{t}: bankaya ödediğin kapatma tutarını yaz. Tutar kumbaradan düşer, borç bu ödemeyle "
+                           "kapanır; bankanın almadığı kalan faiz düşer."}
+    rem = d["remaining"]
+    close = (sim or {}).get("closes", {}).get(d["key"])
+    due = _due_m(d)
+    if not (money.ge(bal + TOL, rem) or (close and close <= start) or (due and due <= start)):
+        return None
+    amount = _r(min(bal, rem))
+    partial = money.lt(bal + TOL, rem)
+    extra = _r(bal - rem) if money.gt(bal, rem + TOL) else 0.0
+    if partial:
+        text = f"Ödeme zamanı geldi: kumbarada {_tl(bal)}, borç {_tl(rem)}."
+        confirm = (f"{t}: kumbaradaki {_tl(amount)} ödensin mi? Kalan {_tl(rem - amount)} borçta kalır; kumbara boşalır, "
+                   "kalanı için ayırmaya devam edersin.")
+    elif extra:
+        text = f"Kumbarada {_tl(bal)} var; borcun tamamı kumbaradan ödenebilir."
+        confirm = (f"{t}: {_tl(amount)} kumbaradan ödensin mi? Borç kapanır; artan {_tl(extra)} kumbarada kalır, "
+                   "sonra ne yapacağını seçersin.")
+    else:
+        text = "Borcun tamamı kumbarada birikti."
+        confirm = f"{t}: {_tl(amount)} kumbaradan ödensin mi? Borç kapanır, kumbara kapanır."
+    return {"label": JAR_PAY_LABEL, "jar_id": j["id"], "debt_id": d["id"], "amount": amount, "from_jar": amount,
+            "close_early": False, "partial": partial, "leftover": extra, "text": text, "confirm": confirm}
+
+
+def _jar_info(d: dict, item: dict, sim: dict | None, start: str, flags: dict, fees_hidden: bool) -> dict | None:
+    """debts[].jar: linked (bağlı kumbara: bakiye, hedef, pay) · offer ("Kumbara aç": ad, hedef, son tarih, aylık) ·
+    locked (Premium değil: nötr öneri; plan bugünkü gibi) · None (uygun değil, kumbara sayfası kapalı ya da yetki yok)."""
+    j = d.get("jar")
+    if j:
+        bal, goal = _r(j["balance"]), j.get("goal")
+        out = {"state": "linked", "id": j["id"], "name": j["name"], "balance": bal, "goal": goal,
+               "pct": min(100.0, round(bal / goal * 100, 1)) if goal else None, "used": bool(d.get("jar_used")),
+               "text": f"Kumbarada {_tl(bal)} birikti" + (f" · hedef {_tl(goal)}" if goal else ""),
+               "can_move": flags["can_move"], "pay": None, "plan": None, "put": None}
+        if flags["can_pay"] and (d["kind"] != "fixed" or d.get("payoff_base")):
+            out["pay"] = _jar_pay(d, j, item, sim, start, fees_hidden)
+        if d.get("jar_used") and sim:
+            out["plan"] = _jar_plan(d, j, sim, start, fees_hidden)
+        if flags["can_move"]:  # her zaman: plan bu ay ayırmıyorsa da isteyen ayırır (tutar sorulur; bu ayın tutarı önerilir)
+            out["put"] = {"label": JAR_MOVE_LABEL, "jar_id": j["id"], "note": JAR_MOVE_NOTE,
+                          "amount": (out["plan"] or {}).get("this_month") or None}
+        return out
+    if not flags["available"] or not _jar_usable(d):
+        return None
+    if d["kind"] == "fixed" and (item.get("payoff") or {}).get("state") != "plan":
+        return None  # erken kapatma planı yoksa (tutar girilmemiş, kazandırmıyor) kumbara önerilmez
+    if d["kind"] != "fixed" and not item.get("saving"):
+        return None  # plan bu borç için birikim ayırmıyor (bu ay tek seferde kapanıyor ya da aylık tutar yok)
+    if not flags["premium"]:
+        return dict(JAR_LOCK)
+    if not flags["can_open"]:
+        return None
+    return {"state": "offer", "label": "Kumbara aç", "text": JAR_OFFER_TEXT, **_jar_offer(d, sim, start)}
+
+
+def jar_plans(today: date | None = None) -> dict[int, dict]:
+    """Borç id → bağlı kumbaranın plan durumu (GET /api/jars debt.plan; kumbara kartında tek kaynak borç planı)."""
+    try:
+        plan = build(today=today)
+    except Exception:  # noqa: BLE001 - plan hesaplanamazsa kumbara kartı kendi hedef durumuyla kalır
+        return {}
+    return {d["id"]: d["jar"]["plan"] for d in plan["debts"]
+            if d["kind"] != "card" and (d.get("jar") or {}).get("state") == "linked" and d["jar"].get("plan")}
+
+
+def jar_open_message(debt_id: int, today: date | None = None) -> tuple[str, dict | None]:
+    """Kumbara açılınca planın o ayki durumuna göre doğru söz (toast) ve plan durumu."""
+    today = today or date.today()
+    start = _ym(today)
+    plan = jar_plans(today).get(debt_id)
+    title = next((d["person"] for d in db.list_debts() if d["id"] == debt_id), "")
+    if not plan:
+        return "Kumbara açıldı; istediğinde \"Kumbaraya ayır\"la para koy.", None
+    if plan["status"] == "bu_ay":
+        return f"Kumbara açıldı. Bu ay {_tl(plan['this_month'])} ayır: \"Kumbaraya ayır\"a dokun.", plan
+    if plan["status"] == "tamam":
+        return "Kumbara açıldı; borcun tamamı kumbarada.", plan
+    sched = [(x["month"], x["amount"]) for x in plan["schedule"] if x["month"] >= start]
+    if not sched:
+        return ("Kumbara açıldı. Plan şimdilik bu borca birikim ayırmıyor; istediğinde \"Kumbaraya ayır\"la para koy.",
+                plan)
+    return f"Kumbara açıldı. Plan {title} için {schedule_text(sched, start).replace(' · ', ', ')} ayırır.", plan
+
+
+def jar_offer_for(debt_id: int, today: date | None = None) -> dict:
+    """POST /api/debts/{id}/jar için değerler (planın "Kumbara aç" satırıyla aynı): {name, goal, deadline, monthly}.
+    LookupError: borç planda yok; db.DebtJarExists: açık kumbarası var; ValueError: kumbara bu borca uygun değil."""
+    today = today or date.today()
+    plan = build(today=today)
+    it = next((d for d in plan["debts"] if d["kind"] != "card" and d["id"] == debt_id), None)
+    if it is None:
+        raise LookupError("Bu borç planda yok")
+    j = it.get("jar") or {}
+    if j.get("state") == "linked":
+        raise db.DebtJarExists("Bu borcun zaten bir kumbarası var")
+    if j.get("state") == "offer":
+        return {k: j[k] for k in ("name", "goal", "deadline", "monthly")}
+    tek = it["kind"] == "person" and it.get("terms") == "tek" and (it.get("asset") or "TRY") == "TRY"
+    loan = it["kind"] == "fixed" and (it.get("payoff") or {}).get("state") in ("plan", "not_reached", "known")
+    if not (tek or loan):
+        raise ValueError("Kumbara, tek seferde ödenecek borçta ya da erken kapatma tutarı girilmiş kredide açılır")
+    o = _jar_offer(it, None, _ym(today))  # plan bu ay birikim ayırmıyor: ad ve hedef yine borçtan
+    return {k: o[k] for k in ("name", "goal", "deadline", "monthly")}
+
+
+def _jar_item(row: dict, d: dict, flags: dict) -> dict:
+    """"Bu ay ödenecekler" satırına kumbara düğmesi (d: debts[] satırı, jar bilgisiyle): birikimde "Kumbaraya ayır" (bu
+    ayın birikimi tek dokunuşla kumbaraya), ödeme/kapatma satırında hazırsa "Kumbaradan öde"."""
+    info = d.get("jar")
+    if not info or info.get("state") != "linked" or not info.get("used"):
+        return row
+    if d["kind"] == "fixed" and not row.get("payoff"):
+        return row  # taksit satırı: kumbara yalnız erken kapatma içindir
+    row["jar_id"] = info["id"]
+    if row.get("saving"):
+        if flags["can_move"]:
+            row["jar_action"] = {"label": JAR_MOVE_LABEL, "jar_id": info["id"], "amount": row["amount"],
+                                 "note": JAR_MOVE_NOTE}
+    elif info.get("pay"):
+        row["jar_pay"] = info["pay"]
+    return row
+
+
 RULES_INFO = (f"Önce kart borçları, o ayın taksitleri ve tarihi kesin borçlar: tutar yetmezse önce her birinin "
               "gecikmesi önlenir (kartta asgari, taksitte o ayın taksiti), kalanı karta. Tarihi kesin bir borç ileride "
               "ise ona yalnız tarihine yetişmek için gereken kadar ayrılır. Sonra diğer borçlar söz tarihine göre: aynı "
@@ -1482,7 +1923,7 @@ def group_items(items: list[dict]) -> list[dict]:
         g["payable"] = xs[0]["payable"] if n == 1 else None
         if n == 1:
             g["text"] = xs[0]["text"]
-            for k in ("units_text", "from_saved", "pay_total"):
+            for k in ("units_text", "from_saved", "pay_total", "jar_id", "jar_action", "jar_pay"):
                 if xs[0].get(k) is not None:
                     g[k] = xs[0][k]
         elif g["done"]:
@@ -1611,6 +2052,7 @@ def commit_plan(monthly: float | None = None, order: str | None = None, today: d
     if not cards and not people and not fixed:
         raise ValueError("Açık borcun görünmüyor; başlatılacak bir plan yok.")
     paid_now = _paid_now(cards, [*people, *fixed], cards_done, people_done)
+    paid_now += _jar_deduct(cards, people, fixed, monthly, order, start, paid_now)
     sim = simulate(cards, people, monthly, order, start, first_budget=_r(max(0.0, monthly - paid_now)), fixed=fixed)
     people = [*fixed, *people]
     ids = {d["key"]: _ident(d) for d in (*cards, *people)}
@@ -1658,11 +2100,14 @@ def _past_saves(snap: dict, start: str) -> dict[str, float]:
     return out
 
 
-def _credited(snap: dict, people_hidden: bool, start: str | None = None) -> dict[str, float]:
+def _credited(snap: dict, people_hidden: bool, start: str | None = None,
+              jars: dict[str, dict] | None = None) -> dict[str, float]:
     """Plan başladıktan sonra plandaki her borca ödenen (borcun plandaki toplam hedefiyle sınırlı). Kartta: başlangıç
     ekstresine o günden sonra ödenen + aynı kartın sonraki ekstrelerine ödenen. Silinen / vazgeçilen borç tamam sayılır.
-    Tek seferde ödenecek borçta geçmiş ayların birikim hedefi ödenene kadar biriktirildi sayılır."""
+    Tek seferde ödenecek borçta geçmiş ayların birikim hedefi ödenene kadar biriktirildi sayılır; borca bağlı kumbara
+    varsa (jars: kimlik → kumbara) varsayım yerine kumbaradaki gerçek bakiye sayılır."""
     saves = _past_saves(snap, start) if start else {}
+    jars = jars or {}
     stmts = db.list_statements()
     by_id = {s["id"]: s for s in stmts}
     debts = {d["id"]: d for d in db.list_debts()} if not people_hidden else {}
@@ -1689,7 +2134,10 @@ def _credited(snap: dict, people_hidden: bool, start: str | None = None) -> dict
                 # ödeme planlı borçta birikim yalnız erken kapatma içindir: taksitler ayrıca ödenir (kapanınca ödenen
                 # kapatma tutarı birikimi de içerir)
                 if d is not None and not d["settled_at"]:
-                    got += saves.get(x["ident"], 0.0)
+                    j = jars.get(x["ident"])
+                    got += j["balance"] if j else saves.get(x["ident"], 0.0)
+            elif x["ident"] in jars:
+                got += max(0.0, jars[x["ident"]]["balance"])
             else:
                 got = max(got, saves.get(x["ident"], 0.0))
         out[x["ident"]] = _r(min(got, x["planned"]))
@@ -1702,12 +2150,14 @@ def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | N
     yetmiyorsa) son ödeme gününden önce en az asgariyi önerir; başka yol önermez."""
     start = _ym(today)
     skip = (lambda i: i.startswith("debt:")) if people_hidden else (lambda i: False)
-    credited = _credited(snap, people_hidden, start)
+    fixed = fixed or []
+    # bağlı kumbara: varsayılan birikim yerine kumbaradaki gerçek bakiye
+    jmap = {_ident(d): d["jar"] for d in (*people, *fixed) if d.get("jar_used")}
+    credited = _credited(snap, people_hidden, start, jmap)
     got = _r(sum(credited.values()))
     before = _r(sum(a for mo in snap["months"] if mo["month"] < start for i, a in mo["pays"].items() if not skip(i)))
     target = _r(sum(a for mo in snap["months"] if mo["month"] == start for i, a in mo["pays"].items() if not skip(i)))
     expected = _r(before + target)
-    fixed = fixed or []
     total_open = _r(sum(d["remaining"] for d in (*cards, *people, *fixed)))
     df = snap.get("debt_free")
     # aynı tutar ve sıralamayla bugünkü borçlardan hesaplanan plan (önizleme farklıysa ayrı hesaplanır)
@@ -1717,6 +2167,7 @@ def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | N
     if differs or live is None:
         cards_now, people_now = cards, people
         paid_now = _r(sum(d["paid_now"] for d in (*cards_now, *people_now, *fixed)))
+        paid_now += _jar_deduct(cards_now, people_now, fixed, snap["monthly"], snap_order, start, paid_now)
         live = simulate(cards_now, people_now, snap["monthly"], snap_order, start,
                         first_budget=_r(max(0.0, snap["monthly"] - paid_now)), fixed=fixed)
     behind = _r(before - got)
@@ -1770,7 +2221,13 @@ def _commitment(snap: dict, cards: list[dict], people: list[dict], sim: dict | N
                    "text": (f"{titles.get(i, '')}: erken kapatma için biriktirildi: {_tl(a)}" if i in payoff_open else
                             f"{titles.get(i, '')} için biriktirildi: {_tl(a)}")}
                   for i, a in _past_saves(snap, start).items()
-                  if a > 0 and not skip(i) and (paid_real.get(i, 0.0) <= TOL or i in payoff_open)]
+                  if a > 0 and not skip(i) and i not in jmap and (paid_real.get(i, 0.0) <= TOL or i in payoff_open)]
+    for i, j in jmap.items():  # kumbaradaki gerçek birikim
+        if i in titles and j["balance"] > 0 and not skip(i):
+            t = titles[i]
+            saved_rows.append({"ident": i, "title": t, "amount": _r(j["balance"]), "jar_id": j["id"],
+                               "text": (f"{t}: erken kapatma için kumbarada {_tl(j['balance'])}" if i.startswith("debt:")
+                                        and i in payoff_open else f"{t} için kumbarada {_tl(j['balance'])}")})
     return {"started_at": snap["started_at"], "start_month": snap["start_month"],
             "start_label": month_label(snap["start_month"]), "monthly": snap["monthly"], "order": snap_order,
             "order_label": ORDER_INFO[snap_order][0], "saved": saved_rows,

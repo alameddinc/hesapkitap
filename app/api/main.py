@@ -3903,6 +3903,7 @@ class JarPatch(BaseModel):
     auto_day: int | None = Field(None, ge=1, le=28)
     note: str | None = None
     closed: bool | None = None
+    unlink_debt: bool | None = None  # "Başka hedefe çevir": borçla bağı kaldır (yetenek debt_jar)
 
 
 class JarMoveIn(BaseModel):
@@ -3912,12 +3913,40 @@ class JarMoveIn(BaseModel):
     note: str | None = None
 
 
-def _jar_view(j: dict, today: date) -> dict:
+def _jar_debt(j: dict, debts: dict[int, dict] | None) -> dict | None:
+    """Borca bağlı kumbara (yetenek debt_jar): "Borç: <ad> için" etiketi ve borcun durumu. Borç kapandı / silindiyse
+    nötr öneri (kumbarayı kapat ya da başka hedefe çevir); kumbara kapalıysa öneri yok. debts None: Borç / Alacak
+    sayfası kapalı (yalnız etiket)."""
+    title = j.get("debt_title")
+    if not j.get("debt_id") and not title:
+        return None
+    out = {"id": j.get("debt_id"), "title": title, "label": f"Borç: {title} için", "route": "borc-plani",
+           "state": None, "remaining": None, "suggestion": None}
+    if debts is None:
+        return out
+    d = debts.get(j["debt_id"]) if j.get("debt_id") else None
+    if d is None:
+        out["state"] = "silindi"
+        text = "Borç silindi: kumbarayı kapat ya da başka bir hedefe çevir."
+    elif d["settled_at"] or d["written_off_at"]:
+        out["state"] = "kapandi"
+        text = "Borç kapandı: kumbarayı kapat ya da başka bir hedefe çevir."
+    else:
+        out["state"] = "acik"
+        out["remaining"] = round(d["remaining"], 2)
+        text = None
+    if text and not j.get("closed_at"):
+        out["suggestion"] = {"text": text, "close": "Kumbarayı kapat", "convert": "Başka hedefe çevir"}
+    return out
+
+
+def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans: dict[int, dict] | None = None) -> dict:
     """Hedef ilerlemesi, son tarihe göre ayda gereken ve bu hızla ne zaman ulaşılacağı.
     Hız: otomatik aylık ayırma varsa o; yoksa son 3 ayda ayrılan (başlangıç ayırması hariç) aylık ortalaması."""
     from datetime import timedelta
 
     out = {**j}
+    out["debt"] = _jar_debt(j, debts)
     unit = j.get("unit") or "TRY"
     if unit != "TRY":  # altın/döviz: miktar, bugünkü değer, ödenen, kâr/zarar, bu ayki alım
         from app import zakat
@@ -3953,14 +3982,47 @@ def _jar_view(j: dict, today: date) -> dict:
             out["need_per_month"] = round(left / months, 2)
             out["on_track"] = bool(out.get("eta") and out["eta"] <= j["deadline"][:7])
     # hedef durumu (rozet + "ayda ₺… ayır"): gerçek ayırma hızına göre yolunda / geride / önde / tarihsiz
-    out["goal_status"] = jar_goal.jar_goal_status(j, today, out.get("unit_price"))
+    out["goal_status"] = jar_goal.jar_goal_status(j, today, out.get("unit_price"),
+                                                  include_current=bool(j.get("debt_id")))
+    if (out["debt"] or {}).get("suggestion"):
+        out["goal_status"] = None  # borç kapandı / silindi: "ayda ₺… ayır" yerine "kumbarayı kapat ya da çevir" önerisi
+    plan = (plans or {}).get(j.get("debt_id")) if out["debt"] and out["debt"]["state"] == "acik" and not j.get("closed_at") else None
+    if out["debt"]:
+        out["debt"]["plan"] = plan
+    if plan:  # borca bağlı kumbarada tek kaynak borç planı: kumbaranın kendi aylık hesabı çelişmesin
+        out["goal_status"] = None
+        for k in ("need_per_month", "eta", "on_track"):
+            out.pop(k, None)
     return out
+
+
+def _jar_debts(jars: list[dict]) -> dict[int, dict] | None:
+    """Borca bağlı kumbaraların borçları (Borç / Alacak sayfası üyeye kapalıysa None)."""
+    from app import book
+
+    if not any(j.get("debt_id") or j.get("debt_title") for j in jars):
+        return {}
+    r = book.active()
+    if r and "borclar" in r["hidden_pages"]:
+        return None
+    return {d["id"]: d for d in db.list_debts()}
 
 
 @app.get("/api/jars")
 def list_jars():
     today = date.today()
-    return [_jar_view(j, today) for j in db.list_jars(today)]
+    jars = db.list_jars(today)
+    debts = _jar_debts(jars)
+    return [_jar_view(j, today, debts, _jar_plans(jars, debts)) for j in jars]
+
+
+def _jar_plans(jars: list[dict], debts: dict[int, dict] | None) -> dict[int, dict]:
+    """Açık borca bağlı açık kumbara varsa borç planından durumları (plan bir kez hesaplanır)."""
+    from app import debt_plan as dp
+
+    if not debts or not any(j.get("debt_id") in debts and not j.get("closed_at") for j in jars):
+        return {}
+    return dp.jar_plans()
 
 
 @app.post("/api/jars")
@@ -3981,8 +4043,16 @@ def patch_jar(jid: int, body: JarPatch):
     data = body.model_dump(exclude_unset=True)
     if "deadline" in data and data["deadline"]:
         data["deadline"] = data["deadline"].isoformat()
+    if data.pop("unlink_debt", None):
+        if not db.unlink_jar_debt(jid):
+            raise HTTPException(404, "Kumbara yok")
+        if not data:
+            return {"ok": True}
     if "closed" in data:
+        reopen = not data["closed"]
         data["closed_at"] = date.today().isoformat() if data.pop("closed") else None
+        if reopen and db.reopen_conflict(jid):
+            raise HTTPException(409, "Bu borcun açık bir kumbarası daha var; bunu açmadan önce ötekini kapat")
     if not db.update_jar(jid, data):
         raise HTTPException(404, "Kumbara yok")
     return {"ok": True}
@@ -4004,6 +4074,85 @@ def add_jar_move(jid: int, body: JarMoveIn):
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+class DebtJarIn(BaseModel):
+    """Borca bağlı kumbara (yetenek debt_jar). Boş alanlar plandan: ad "<Kişi> borcu" / "<Banka> kredisini kapat",
+    hedef borcun kalanı (kredide güncel tahmini kapatma tutarı), son tarih plandaki ödeme ayı, aylık plandaki birikim."""
+    name: str | None = Field(None, min_length=1, max_length=60)
+    goal: Money | None = Field(None, gt=0)
+    deadline: date | None = None
+    monthly: Money | None = Field(None, gt=0)
+    account_id: int | None = None
+
+
+@app.post("/api/debts/{did}/jar")
+def create_debt_jar(did: int, body: DebtJarIn):
+    """Borç planındaki birikim için kumbara aç (Premium: 402 kumbara; ortak defterde sahip / tam yetkili). 409: bu
+    borcun açık kumbarası var; 422: bu borç için birikim yok (tek seferde ödenecek borç ya da erken kapatma planı olan
+    kredi değil). Dönüş: {id, jar}."""
+    from app import debt_plan as dp
+
+    _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
+    try:
+        offer = dp.jar_offer_for(did)
+    except db.DebtJarExists as e:
+        raise HTTPException(409, str(e)) from None
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    data = body.model_dump(exclude_unset=True)
+    deadline = data["deadline"].isoformat() if data.get("deadline") else (None if "deadline" in data else offer["deadline"])
+    try:
+        # aylık tutar saklanmaz (verilmedikçe): bağlı kumbarada ay ay tutarlar borç planından gelir
+        jid = db.create_debt_jar(did, data.get("name") or offer["name"], data.get("goal") or offer["goal"], deadline,
+                                 data.get("monthly"), data.get("account_id"))
+    except db.DebtJarExists as e:
+        raise HTTPException(409, str(e)) from None
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    today = date.today()
+    jars = db.list_jars(today)
+    j = next(x for x in jars if x["id"] == jid)
+    message, plan = dp.jar_open_message(did, today)
+    return {"id": jid, "message": message, "jar": _jar_view(j, today, _jar_debts([j]), {did: plan} if plan else {})}
+
+
+class DebtFromJarIn(BaseModel):
+    amount: Money | None = Field(None, gt=0)  # boş: kumbaradaki kadar (en çok kalan borç); kredide zorunlu
+    paid_at: date
+    account_id: int | None = None             # verilmezse kumbaranın hesabı
+
+
+@app.post("/api/jars/{jid}/pay-debt")
+def pay_debt_from_jar(jid: int, body: DebtFromJarIn):
+    """"Kumbaradan öde" (yetenek debt_jar): borç ödemesi + kumbaradan çekim; kredide erken kapatma (Kapattım). Artan
+    kalırsa kumbara açık kalır ve ask döner (kumbarayı kapat / başka hedefe çevir); azsa kısmi ödeme. Geri al: DELETE
+    /api/debt-payments/{payment_id} (kumbara hareketi de geri gelir, kumbara yeniden açılır)."""
+    _visible_or_404("account", body.account_id)
+    try:
+        out = db.pay_debt_from_jar(jid, body.amount, body.paid_at.isoformat(), body.account_id,
+                                   account_given="account_id" in body.model_fields_set)
+    except LookupError as e:
+        raise HTTPException(404, errors.user_text(e, 404)) from e
+    except ValueError as e:  # OverpayError dahil
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    ask = None
+    if out["close_early"]:
+        msg = "Kredi kumbaradan kapandı"
+    elif not out["debt_closed"]:
+        msg = f"{money.tl(out['paid'], trim=True)} ödendi; borçta {money.tl(out['debt_left'], trim=True)} kaldı. Kumbara açık, kalanı için ayırmaya devam edebilirsin."
+    else:
+        msg = "Borç kumbaradan ödendi" + ("; kumbara kapandı" if out["jar_closed"] else "")
+    if out["leftover"] > 0 and out["debt_closed"]:
+        ask = {"key": "leftover", "amount": out["leftover"],
+               "text": f"Borç kapandı; kumbarada {money.tl(out['leftover'], trim=True)} kaldı. Kumbarayı kapatırsan para serbest kalır; "
+                       "istersen başka bir hedefe çevir.",
+               "close": "Kumbarayı kapat", "convert": "Başka hedefe çevir"}
+    return {"ok": True, **out, "message": msg, "ask": ask}
 
 
 @app.post("/api/jars/{jid}/buy")

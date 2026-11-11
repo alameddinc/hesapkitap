@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, PiggyBank, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, Crown, Lock, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, PiggyBank, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
@@ -12,6 +12,10 @@ import { useUI } from "../ui";
 import { DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
 import { aylikTutarHatasi, debtPlanUrl, KAYDET_MS, ONIZLE_MS, type DebtOrder, type DebtPlanData, type PlanCommitment, type PlanGroup, type PlanHarm, type PlanItem, type PlanKind, type PlanDebt, type PlanLate, type PlanPayoff, type PlanCloseEarly } from "../lib/debtPlan";
 import { DebtForm } from "../components/Debts";
+import { JarBox, JarRowButton } from "../components/DebtJar";
+import { jarBox, jarButton } from "../lib/borcKumbara";
+import { plusCommitText } from "../lib/debtPlan";
+import { useGoPlan } from "../components/DocQuota";
 
 const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="px-1 text-xs font-semibold tracking-wide text-stone-500 uppercase">{children}</h2>;
 const trimTl = (x: number) => tl(x).replace(/,00(?=\D*$)/, "");
@@ -28,6 +32,7 @@ export default function DebtPlan() {
   const ui = useUI();
   const qc = useQueryClient();
   const on = useCap("debt_plan");
+  const jarCap = useCap("debt_jar"); // eski sunucu: kumbara düğmeleri yok
   const book = useBook().data;
   // önizleme: kullanıcı tutarı / sıralamayı değiştirdi (sorgu bu değerlerle; sunucu kaydetmez, kayıt ayrıca PUT)
   const [draft, setDraft] = useState<{ monthly?: number | null; order?: DebtOrder }>({});
@@ -259,6 +264,8 @@ export default function DebtPlan() {
         </section>
 
         {(p.commitment || (p.commit_history?.length ?? 0) > 0) && takip(p, p.commitment ?? null)}
+        {/* Premium değil, daha önce başlatılmış plan: takip kartı kilitli (veri kayıtlı, Premium'la geri gelir) */}
+        {p.plus?.lock && p.plus.had_plan && <PlusLock title="Başlattığın plan" text={plusCommitText(p.plus)!} />}
 
         <section className="card space-y-3 p-4" aria-label="Plan ayarı">
           <label className="block space-y-1">
@@ -298,6 +305,7 @@ export default function DebtPlan() {
             ))}
           </div>
           {!p.can_edit && <p className="text-xs text-stone-500">Bu defterde sadece görüntüleme yetkin var: değişiklikler kaydedilmez, yalnız burada denersin.</p>}
+          {p.plus?.lock && !p.plus.had_plan && p.monthly != null && <PlusLock title={p.plus.lock.commit.title} text={plusCommitText(p.plus)!} />}
           {p.can_edit && !p.commitment && p.commit_offer && (p.commit_offer.secondary || p.shortfall ? (
             // faizli plan: ikincil seçenek (uyarı en üstte, ana düğme "Bu tutarı kullan")
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 p-3 dark:bg-stone-800/60" data-testid="plan-baslat">
@@ -340,6 +348,7 @@ export default function DebtPlan() {
               {(p.this_month.groups ?? asGroups(p.this_month.items)).map((g) => {
                 const many = g.count > 1;
                 const open = openGroup === g.key;
+                const jb = many ? null : jarButton(g, p.debt_jar, jarCap);
                 return (
                   <li key={`${g.key}-${g.done ? "d" : "p"}`} data-testid="bu-ay">
                     <div className="flex items-center gap-3 p-3">
@@ -360,10 +369,11 @@ export default function DebtPlan() {
                       )}
                       {/* dar ekranda tutar ve düğme alt alta: ad ve açıklama sıkışmasın */}
                       <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-3">
-                        <span className="font-semibold tabular-nums">{tl(g.amount)}</span>
-                        {!g.done && !g.saving && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
+                        <span className="font-semibold tabular-nums">{tl(g.pay_total ?? g.amount)}</span>
+                        {jb && <JarRowButton kind={jb} action={g.jar_action} pay={g.jar_pay} title={g.title} />}
+                        {jb !== "ode" && !g.done && !g.saving && p.can_edit && g.payable && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.openPay(g.payable!)}
                           aria-label={`${g.title}: ödedim`}>Ödedim</button>}
-                        {!g.done && p.can_edit && g.close_early && <button className="btn-ghost px-2 py-1 text-sm" disabled={closeEarly.isPending}
+                        {jb !== "ode" && !g.done && p.can_edit && g.close_early && <button className="btn-ghost px-2 py-1 text-sm" disabled={closeEarly.isPending}
                           onClick={() => void askCloseEarly(g.close_early!)} aria-label={`${g.title}: ${g.close_early.label}`} data-testid="kapattim">{g.close_early.label}</button>}
                       </span>
                     </div>
@@ -374,8 +384,9 @@ export default function DebtPlan() {
                             <span className="min-w-0 flex-1">
                               <span className="block break-words">{i.sub ? maskText(i.sub) : `${n + 1}. borç`}</span>
                               <span className="block text-xs text-stone-500">{maskText(i.text)}</span></span>
-                            <span className="tabular-nums">{tl(i.amount)}</span>
-                            {!i.done && !i.saving && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
+                            <span className="tabular-nums">{tl(i.pay_total ?? i.amount)}</span>
+                            {(() => { const b = jarButton(i, p.debt_jar, jarCap); return b && <JarRowButton kind={b} action={i.jar_action} pay={i.jar_pay} title={i.title} small />; })()}
+                            {jarButton(i, p.debt_jar, jarCap) !== "ode" && !i.done && !i.saving && p.can_edit && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => ui.openPay(i.payable)}
                               aria-label={`${i.title} ${n + 1}. borç: ödedim`}>Ödedim</button>}
                           </li>
                         ))}
@@ -431,6 +442,7 @@ export default function DebtPlan() {
                   Sıradaki: {d.schedule.next.no}. taksit · {maskText(trimTl(d.schedule.next.left))} · {d.due_label}
                   {d.schedule.interest_label ? ` · ${d.schedule.interest_label}` : ""}</p>}
                 {d.payoff && <Payoff p={d.payoff} />}
+                {jarBox(d.jar, jarCap) && <JarBox jar={d.jar!} debtId={d.id} title={d.title} />}
               </li>
             ))}
           </ul>
@@ -534,6 +546,7 @@ function Late({ l, canEdit, busy, onAgree, n = 1 }: { l: PlanLate; canEdit: bool
 /** Faizli ödeme planında erken kapatma (yetenek debt_payoff): plan kapatma ayını ve kurtulunan faizi söyler; tutar
  *  girilmemişse nötr ipucu. Metinler sunucudan. */
 function Payoff({ p }: { p: PlanPayoff }) {
+  if (p.state === "locked") return <PlusLock title={p.title} text={p.text} small />;
   const tone = p.state === "plan" ? "bg-green-50 text-green-950 dark:bg-green-950/40 dark:text-green-50"
     : p.state === "ask" ? "bg-blue-50 text-blue-950 dark:bg-blue-950/40 dark:text-blue-50" : "bg-stone-50 text-stone-700 dark:bg-stone-800/60 dark:text-stone-200";
   return (
@@ -541,6 +554,21 @@ function Payoff({ p }: { p: PlanPayoff }) {
       <p className="flex gap-1.5 text-xs font-medium">{p.state === "plan" ? <TrendingDown size={14} className="mt-0.5 shrink-0" aria-hidden />
         : <Info size={14} className="mt-0.5 shrink-0" aria-hidden />}<span className="min-w-0">{maskText(p.text)}</span></p>
       {p.note && p.state !== "ask" && <p className="text-[11px] opacity-80">{p.note}</p>}
+    </div>
+  );
+}
+
+/** Premium'daki gelişmiş kısım (yetenek debt_plan_plus): nötr satır + paket sayfası. Faize yönlendiren söz yok. */
+function PlusLock({ title, text, small }: { title: string; text: string; small?: boolean }) {
+  const goPlan = useGoPlan();
+  return (
+    <div className={cx("flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 text-stone-700 dark:bg-stone-800/60 dark:text-stone-200", small ? "p-2.5 text-xs" : "card p-3 text-sm")}
+      data-testid="premium-kilit">
+      <Lock size={small ? 14 : 16} className="shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 basis-48"><span className="font-medium text-stone-900 dark:text-stone-100">{title}</span>
+        <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">Premium</span>
+        <span className="block">{text}</span></span>
+      <button className="btn-ghost border border-stone-300 px-2 py-1 text-sm dark:border-stone-700" onClick={goPlan}><Crown size={14} aria-hidden /> Paketleri gör</button>
     </div>
   );
 }
