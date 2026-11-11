@@ -71,9 +71,13 @@ def _apple_keys_ok() -> bool:
 # ---------------------------------------------------------------- tek kullanımlık nonce (D1: belge tekrar oynatma)
 # Uygulama girişten önce POST /api/auth/social/nonce ile bir nonce alır, Google/Apple'a verir; belge o nonce'ı taşır
 # (Google: aynen; Apple: çoğu kütüphane SHA-256 özetini koyar, ikisi de kabul). Nonce bir kez kullanılır, 10 dk geçerli:
-# sızan bir kimlik belgesi (günlük, vekil) başka bir oturumda yeniden kullanılamaz. Nonce'suz eski istemci şimdilik
-# kabul edilir; HESAPKITAP_SOCIAL_NONCE=required ile zorunlu olur (mobil sürüm nonce gönderince açılacak).
-# Süreç belleğinde (hız sınırı sayaçları gibi): sunucu tek süreç; yeniden başlarsa kullanıcı yalnız tekrar dener.
+# sızan bir kimlik belgesi (günlük, vekil) başka bir oturumda yeniden kullanılamaz.
+# Zorunlu (varsayılan, 11.11): Google/Apple girişi yalnız mobil uygulamada; uygulama 1.0.1'den (a55954f, 01.11) beri
+# sunucu "social_nonce" yeteneğini görünce nonce ister ve belgeye koyar; web'de sosyal giriş yok. Mağazada zorunlu
+# güncelleme min 1.0.2. Geri dönüş: HESAPKITAP_SOCIAL_NONCE=optional → nonce'suz belge de kabul (geçiş dönemi davranışı).
+# Süreç belleğinde (hız sınırı sayaçları gibi): sunucu tek süreç (Dockerfile CMD uvicorn, --workers yok; WEB_CONCURRENCY
+# verilirse uvicorn çok süreç açar → aşağıdaki uyarı). Nonce bir süreçte verilip başka süreçte doğrulanamaz; çok süreçte
+# önce sistem veritabanına taşınmalı. Yeniden başlarsa kullanıcı yalnız tekrar dener (nonce 10 dk).
 NONCE_TTL = 600
 NONCE_MAX = 20000
 _nonces: dict[str, float] = {}
@@ -81,7 +85,24 @@ _nonce_lock = __import__("threading").Lock()
 
 
 def nonce_required() -> bool:
-    return os.environ.get("HESAPKITAP_SOCIAL_NONCE", "").strip().lower() == "required"
+    """Varsayılan zorunlu; yalnız HESAPKITAP_SOCIAL_NONCE=optional (ya da off) iken nonce'suz belge kabul edilir."""
+    return os.environ.get("HESAPKITAP_SOCIAL_NONCE", "").strip().lower() not in ("optional", "off")
+
+
+def _warn_multi_process() -> None:
+    try:
+        n = int(os.environ.get("WEB_CONCURRENCY") or "1")
+    except ValueError:
+        n = 1
+    if n > 1:
+        import logging
+
+        logging.getLogger("hesapkitap.auth").warning(
+            "WEB_CONCURRENCY=%d: sosyal giriş nonce'u ve hız sınırları süreç belleğinde; çok süreçte Google/Apple girişi "
+            "rastgele 'süresi doldu' der. Tek süreç çalıştırın (Dockerfile CMD) ya da nonce'u sistem veritabanına taşıyın.", n)
+
+
+_warn_multi_process()
 
 
 def issue_nonce() -> str:
@@ -103,7 +124,8 @@ def check_nonce(claims: dict, nonce: str | None) -> None:
     düşürür. Nonce'suz istek yalnız zorunlu değilken geçer."""
     if not nonce:
         if nonce_required():
-            raise SocialError("Giriş belgesi eski: uygulamayı güncelleyip yeniden dene")
+            # nonce alınamadıysa (ağ) uygulama nonce'suz dener; eski sürüm de nonce göndermez
+            raise SocialError("Giriş doğrulanamadı. Yeniden dene; olmazsa uygulamayı güncelle")
         return
     claim = str(claims.get("nonce") or "")
     import hashlib

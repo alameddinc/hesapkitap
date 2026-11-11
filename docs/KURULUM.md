@@ -149,7 +149,7 @@ ve Apple düğmeleri görünmez (`/api/auth/status` → `google: false`, `apple:
 |---|---|---|
 | `HESAPKITAP_GOOGLE_CLIENT_IDS` | `<web-client-id>.apps.googleusercontent.com` | Kabul edilen Google OAuth client ID'leri, virgülle. Mobil uygulama hem iOS'ta hem Android'de belgeyi **web client ID** için ister; bu yüzden listede en az web client ID olmalı. |
 | `HESAPKITAP_APPLE_CLIENT_IDS` | `com.ornek.hesapkitap` | Kabul edilen Apple `aud` değerleri, virgülle. iOS uygulamasından girişte bu, uygulamanın **bundle ID**'sidir. |
-| `HESAPKITAP_SOCIAL_NONCE` | `required` | Tek kullanımlık nonce zorunlu (bkz. Güvenlik başlıkları). |
+| `HESAPKITAP_SOCIAL_NONCE` | `optional` | Varsayılan: tek kullanımlık nonce zorunlu. `optional` yalnız geri dönüş içindir (bkz. Güvenlik başlıkları). |
 | `HESAPKITAP_APPLE_TEAM_ID` | `<TEAM_ID>` | Apple Developer Team ID (token iptali; aşağıya bak). |
 | `HESAPKITAP_APPLE_KEY_ID` | `<KEY_ID>` | *Sign in with Apple* yetkili anahtarın Key ID'si. |
 | `HESAPKITAP_APPLE_PRIVATE_KEY` | `-----BEGIN PRIVATE KEY-----\n…` | O anahtarın `.p8` içeriği (PEM; tek satırda `\n` olabilir). Ya da `HESAPKITAP_APPLE_PRIVATE_KEY_FILE` = dosya yolu. |
@@ -232,12 +232,18 @@ HTTPS ile gelen isteklere (TLS'i vekil bitiriyorsa `X-Forwarded-Proto: https`) `
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `HESAPKITAP_HSTS_MAX_AGE` | `15552000` (180 gün) | HSTS süresi, saniye. `0`: gönderilmez. `includeSubDomains` eklenmez. |
-| `HESAPKITAP_CSP` | `report` | `report`: CSP yalnız rapor modunda (`Content-Security-Policy-Report-Only`), hiçbir şey engellenmez. `enforce`: engelleyen başlık. `off`: gönderilmez. |
-| `HESAPKITAP_SOCIAL_NONCE` | (boş) | `required`: Google/Apple girişinde sunucudan alınan tek kullanımlık nonce zorunlu olur. Yalnız nonce gönderen mobil sürüm yayındayken açın. |
+| `HESAPKITAP_CSP` | `enforce` | `enforce` (boş ya da tanınmayan değer de): engelleyen `Content-Security-Policy`. Geri dönüş: `report` → yalnız rapor (`Content-Security-Policy-Report-Only`), hiçbir şey engellenmez; `off` → gönderilmez. |
+| `HESAPKITAP_SOCIAL_NONCE` | (boş = zorunlu) | Google/Apple girişinde sunucudan alınan tek kullanımlık nonce zorunlu (mobil uygulama 1.0.1'den beri gönderir). Geri dönüş: `optional` → nonce'suz belge de kabul. |
 
 CSP raporları `POST /api/csp-report` ucuna gelir ve günlüğe `hesapkitap.csp` adıyla `CSP raporu: …` satırı olarak
 düşer. Satırda yalnız yönerge, engellenecek kaynağın alan adı ve sayfanın yolu yazılır, sorgu dizgesi yazılmaz.
-Dakikada en çok 30 satır yazılır. Birkaç gün boyunca rapor gelmezse `HESAPKITAP_CSP=enforce` yapılabilir.
+Dakikada en çok 30 satır yazılır. Satırda `engellendi` (engelleyen kip) ya da `engellenecekti` (rapor kipi) yazar.
+Okumak için: `docker logs <kapsayıcı> 2>&1 | grep "CSP raporu"` (ya da `HESAPKITAP_LOG_FILE` verildiyse o dosyada).
+Bir sayfa beklenmedik biçimde boş/bozuk görünürse önce bu satırlara bakın; acil geri dönüş `HESAPKITAP_CSP=report` ve
+kapsayıcıyı yeniden başlatmak.
+
+Sunucu tek süreç çalışmalıdır (Dockerfile `uvicorn`, `--workers` yok): sosyal giriş nonce'u ve hız sınırları süreç
+belleğindedir. `WEB_CONCURRENCY` 1'den büyük verilirse açılışta uyarı yazılır.
 
 ## Yedekten geri dönüş ve silinen hesaplar
 
