@@ -310,7 +310,9 @@ CAPABILITIES = (
                               # last_amount eklendi
     "summary_interest_paid",  # GET /api/summary interest_paid {total, interest, tax, fee, count, statements, has_cards,
                               # state var|yok|ekstre_yok} | null (ortak defterde faiz gizli): Özet "Bu dönem ödenen faiz
-                              # ve ücret ₺X" kartı; total = totals.fees = Faiz sayfasının o ayı (finance.interest_paid)
+                              # ve ücret ₺X" kartı; total = totals.fees = Faiz sayfasının o ayı (finance.interest_paid);
+                              # last_period {month, name, label, total, interest, tax, fee, count, statements, state} |
+                              # null: ekstre_yok iken son ekstreli dönem ("Ekim döneminde …")
     "first_look",             # İlk gün özeti: POST /api/statements/upload kaydedilen ekstrede statement_id; GET
                               # /api/first-look?ids=1,2 → {first (ilk hafta), statement_count, statements, to_pay {total,
                               # items [{statement_id, card, amount, due_date, days_left, status}], note}, past_due, fees

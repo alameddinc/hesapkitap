@@ -597,24 +597,40 @@ def interest_paid(month: str, rows: list[dict] | None = None, statements: list[d
     interest: geri kalan faiz ve vade farkı). state: "var" (total > 0) | "yok" (bu dönemin kart ekstresi var, faiz yok) |
     "ekstre_yok" (kart var, bu dönemin ekstresi henüz yüklenmedi: "faiz ödemedin" demek için erken). has_cards: hiç kart
     ekstresi yoksa false (kart gösterilmez). Faiz GELİRİ burada yok (totals.interest_income, ayrı satır).
+    last_period: state "ekstre_yok" iken kart ekstresi olan EN SON önceki dönem {month, name ("Ekim"), label, total,
+    interest, tax, fee, count, statements, state var|yok} — Özet "Ekim döneminde ödenen faiz ve ücret ₺X" ("Bu dönemin
+    ekstresi gelince güncellenir"); öncesinde de ekstre yoksa null. Dönem anahtarı Özet'le aynı (kart satırı ekstrenin
+    kesim ayına yazılır; otomatik ay dönümü en geç kesim gününün ertesi olduğundan kesim o dönemin içindedir).
     Ortak defterde faiz gizliyse None."""
     from app import book
 
     if book.hide_fees():
         return None
-    rows = transactions(month) if rows is None else rows
+    all_st = db.list_statements()
+    here = len([s for s in all_st if s["period"] == month]) if statements is None else len(statements)
+    out = {**_fee_parts(transactions(month) if rows is None else rows), "statements": here, "has_cards": bool(all_st)}
+    out["state"] = "var" if money.gt(out["total"], 0) else "yok" if here else "ekstre_yok"
+    out["last_period"] = None
+    if out["state"] == "ekstre_yok":
+        prev = max((s["period"] for s in all_st if s["period"] < month), default=None)
+        if prev:
+            lp = _fee_parts(transactions(prev))
+            out["last_period"] = {"month": prev, "name": period_name(prev, year=False), "label": period_name(prev), **lp,
+                                  "statements": len([s for s in all_st if s["period"] == prev]),
+                                  "state": "var" if money.gt(lp["total"], 0) else "yok"}
+    return out
+
+
+def _fee_parts(rows: list[dict]) -> dict:
+    """Dönem satırlarından faiz/ücret toplamı ve kırılımı (_totals ile aynı süzgeç): total, interest, tax, fee, count."""
     live = [r for r in rows if r["kind"] == FEE and not (r.get("deleted") or r.get("skipped") or r.get("pending")
                                                          or r.get("linked"))]
     by: dict[str, float] = defaultdict(float)
     for r in live:
         t = interest_type(r.get("description") or "")
         by["tax" if t in TAX_KINDS else "fee" if t in FEE_KINDS else "interest"] += r["amount"]
-    total = _round(sum(r["amount"] for r in live))
-    all_st = db.list_statements()
-    here = len([s for s in all_st if s["period"] == month]) if statements is None else len(statements)
-    return {"total": total, "interest": _round(by["interest"]), "tax": _round(by["tax"]), "fee": _round(by["fee"]),
-            "count": len(live), "statements": here, "has_cards": bool(all_st),
-            "state": "var" if money.gt(total, 0) else "yok" if here else "ekstre_yok"}
+    return {"total": _round(sum(r["amount"] for r in live)), "interest": _round(by["interest"]), "tax": _round(by["tax"]),
+            "fee": _round(by["fee"]), "count": len(live)}
 
 
 def _vs_prev(month: str, totals: dict, by_month: dict, today: date) -> dict | None:

@@ -322,6 +322,8 @@ export interface Summary {
 export interface InterestPaid {
   total: number; interest: number; tax: number; fee: number; count: number; statements: number; has_cards: boolean;
   state: "var" | "yok" | "ekstre_yok";
+  /** ekstre_yok iken son ekstreli dönem ("Ekim döneminde …"); öncesinde de ekstre yoksa null (eski sunucuda alan yok) */
+  last_period?: { month: string; name: string; label: string; total: number; interest: number; tax: number; fee: number; count: number; statements: number; state: "var" | "yok" } | null;
 }
 
 /** İlk gün özeti (GET /api/first-look, yetenek first_look; sunucu app/first_look.py). Asgari ödeme bilerek yok. */

@@ -42,3 +42,19 @@ test("geçmiş dönem öbeği; metinde asgari / faize yönlendirme yok", () => {
     assert.doesNotMatch(`${m.title} ${m.sub}`.toLowerCase(), /asgari/);
   }
 });
+
+test("bu dönemin ekstresi yok: son ekstreli dönemin değeri (sunucu last_period)", () => {
+  const lp = { month: "2026-11", name: "Ekim", label: "Ekim 2026", total: 126.46, interest: 97.28, tax: 29.18, fee: 0, count: 6, statements: 2 };
+  const m = faizKartMetni(p({ state: "ekstre_yok", statements: 0, last_period: { ...lp, state: "var" } }), para)!;
+  assert.equal(m.title, "Ekim döneminde ödenen faiz ve ücret");
+  assert.equal(m.value, "₺126.46");
+  assert.equal(m.sub, "Bu dönemin ekstresi gelince güncellenir");
+  assert.equal(m.tone, "warn");
+  // Sade "Bu ay" öbeği verse de son dönemin adı yazılır
+  const y = faizKartMetni(p({ state: "ekstre_yok", statements: 0, last_period: { ...lp, total: 0, interest: 0, tax: 0, count: 0, state: "yok" } }), para, "Bu ay")!;
+  assert.equal(y.title, "Ekim döneminde faiz ödemedin");
+  assert.equal(y.value, null);
+  assert.equal(y.tone, "ok");
+  // önceki dönemde de ekstre yok (null): eski nötr metin
+  assert.equal(faizKartMetni(p({ state: "ekstre_yok", statements: 0, last_period: null }), para)!.tone, "neutral");
+});

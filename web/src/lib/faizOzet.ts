@@ -23,5 +23,15 @@ export function faizKartMetni(p: InterestPaid | null | undefined, para: (x: numb
     return { title: `${donem} ödenen faiz ve ücret`, value: para(p.total), sub: parts.join(" · ") || "Faiz ve ücretlerin ayrıntısı", tone: "warn" };
   }
   if (p.state === "yok") return { title: `${donem} faiz ödemedin`, value: null, sub: "Kart ekstrelerinde faiz ya da ücret yok", tone: "ok" };
+  // bu dönemin ekstresi yok: son ekstreli dönemin değeri (sunucu last_period; ayın ilk yarısında hep bu durum)
+  const lp = p.last_period;
+  if (lp) {
+    const o = `${lp.name} döneminde`;
+    return lp.state === "var"
+      ? { title: `${o} ödenen faiz ve ücret`, value: para(lp.total), sub: SONRA_GUNCELLENIR, tone: "warn" }
+      : { title: `${o} faiz ödemedin`, value: null, sub: SONRA_GUNCELLENIR, tone: "ok" };
+  }
   return { title: `${donem} faiz ve ücret görünmüyor`, value: null, sub: "Bu dönemin kart ekstresi gelince kesinleşir", tone: "neutral" };
 }
+
+export const SONRA_GUNCELLENIR = "Bu dönemin ekstresi gelince güncellenir";

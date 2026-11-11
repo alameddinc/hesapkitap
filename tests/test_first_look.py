@@ -45,7 +45,7 @@ def test_summary_interest_paid_states(client, tmpdb):
     # hiç kart yok: kart gösterilmez (has_cards false)
     p = client.get("/api/summary", params={"month": "2026-09"}).json()["interest_paid"]
     assert p == {"total": 0.0, "interest": 0.0, "tax": 0.0, "fee": 0.0, "count": 0, "statements": 0, "has_cards": False,
-                 "state": "ekstre_yok"}
+                 "state": "ekstre_yok", "last_period": None}
     with tmpdb.connect() as c:
         _statement(c, "2026-09-15", "2026-09-25", 5000.00)
     # bu dönemin ekstresi var, faiz yok: "Bu dönem faiz ödemedin"
@@ -53,6 +53,29 @@ def test_summary_interest_paid_states(client, tmpdb):
     # kart var ama bu dönemin ekstresi henüz yok: "faiz ödemedin" demek için erken
     p = client.get("/api/summary", params={"month": "2026-10"}).json()["interest_paid"]
     assert p["state"] == "ekstre_yok" and p["has_cards"] is True and p["total"] == 0
+    # son ekstreli dönem: faizsiz → "Eylül döneminde faiz ödemedin"
+    assert p["last_period"]["month"] == "2026-09" and p["last_period"]["state"] == "yok" and p["last_period"]["total"] == 0
+    assert client.get("/api/summary", params={"month": "2026-09"}).json()["interest_paid"]["last_period"] is None
+
+
+def test_summary_interest_paid_last_period_with_cycle(client, tmpdb):
+    """Ay dönümü 16 (kesim 15): 15 Eylül'de kesilen ekstre 2026-09 anahtarına (16 Ağu – 15 Eyl = "Ağustos dönemi") yazılır;
+    20 Eylül'de içinde bulunulan dönem 2026-10 ("Eylül dönemi", ekstresi yok) → kart son ekstreli dönemi gösterir."""
+    from app import finance
+
+    with tmpdb.connect() as c:
+        _statement(c, "2026-09-15", "2026-09-25", 34000.00)
+        _fee(c, "2026-09-15", "Vade Farki - ORNEK MOBILYA", 120.00)
+        _fee(c, "2026-09-15", "BSMV", 18.00)
+        _fee(c, "2026-09-15", "KKDF", 18.00)
+    tmpdb.set_cycle_start_day(16)
+    assert tmpdb.period_of("2026-09-15") == "2026-09" and finance.current_period(date(2026, 9, 20)) == "2026-10"
+    p = client.get("/api/summary", params={"month": "2026-10"}).json()["interest_paid"]
+    assert p["state"] == "ekstre_yok" and p["total"] == 0
+    lp = p["last_period"]
+    assert (lp["month"], lp["name"], lp["state"], lp["total"], lp["interest"], lp["tax"]) == ("2026-09", "Ağustos", "var", 156.0, 120.0, 36.0)
+    # son dönemin tutarı o dönemin Özet'iyle aynı
+    assert client.get("/api/summary", params={"month": "2026-09"}).json()["totals"]["fees"] == lp["total"]
 
 
 def test_summary_interest_paid_excludes_interest_income(client, tmpdb):
