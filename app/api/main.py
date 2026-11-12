@@ -1672,6 +1672,260 @@ def admin_feedback_patch(fid: int, body: FeedbackPatch):
     return out
 
 
+# ---------------------------------------------------------------- Destek yazışması (app/support.py; yetenek support_chat)
+
+def _support_uid() -> int:
+    """Yazışma hesaba bağlı: oturumsuz ve demoda yok (onların bildirimi /api/feedback ile yöneticiye gider)."""
+    u = db.current_user() or {}
+    if not u.get("id") or u.get("demo"):
+        raise HTTPException(403, "Destek yazışması için hesabınla giriş yap")
+    return u["id"]
+
+
+def _support_error(e) -> HTTPException:
+    return HTTPException(e.status, str(e))
+
+
+@app.get("/api/support")
+def support_thread():
+    """Kendi destek yazışman: mesajlar (author user | admin | system), okundu bilgisi (user mesajında seen), ekstre
+    bildiriminde ve "tekrar dene" eyleminde bekleyen dosya (pending: {id, filename, expires_at} | null)."""
+    from app import support
+
+    return support.thread(_support_uid())
+
+
+@app.get("/api/support/unread")
+def support_unread():
+    """Rozet: yöneticinin / sistemin okunmamış mesajı. Oturumsuz ve demoda 0."""
+    from app import support
+
+    u = db.current_user() or {}
+    if not u.get("id") or u.get("demo"):
+        return {"unread": 0, "status": None}
+    return support.unread(u["id"])
+
+
+@app.post("/api/support/seen")
+def support_seen():
+    from app import support
+
+    support.mark_user_seen(_support_uid())
+    return {"ok": True}
+
+
+@app.get("/api/support/messages/{fid}/screenshot/{n}")
+def support_screenshot(fid: int, n: int):
+    """Kendi mesajının ekran görüntüsü (başkasınınki 404)."""
+    from app import support
+
+    got = support.screenshot(_support_uid(), fid, n)
+    if not got:
+        raise HTTPException(404, "Görüntü yok")
+    data, ctype = got
+    return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=3600",
+                                                     "Content-Security-Policy": "default-src 'none'"})
+
+
+@app.post("/api/support/report")
+@_heavy
+def support_report(request: Request, report: str = Form("{}"), bank_name: str | None = Form(None),
+                   note: str | None = Form(None), send_doc: bool = Form(False), file: UploadFile | None = File(None)):
+    """Okunamayan ekstreyi bildir (yetenek upload_report). report: yükleme satırındaki report (+ app_version, platform).
+    send_doc (varsayılan kapalı, kullanıcının açık onayı): dosya gönderilir ama yöneticiye yalnız maskeli yapı + teşhis
+    gider; dosya kullanıcının kendi defterinde 30 gün bekler ("tekrar dene"). Saatte 10 (Sorun bildir'le ortak)."""
+    from app import feedback, support
+
+    uid = _support_uid()
+    rep = support.check_report(report)
+    key = feedback.client_key(client_ip(request))
+    if feedback.limited(uid, key):
+        raise HTTPException(429, "Bu saat içinde çok fazla bildirim gönderildi; biraz sonra tekrar dene.",
+                            headers={"Retry-After": "600"})
+    doc = None
+    if send_doc:
+        if file is None:
+            raise HTTPException(422, "Belge eklenmedi")
+        data = _upload_bytes(file, limits.max_file_bytes())
+        try:
+            limits.check_size(data)
+        except limits.LimitError as e:
+            raise HTTPException(413, errors.user_text(e)) from e
+        if not data or _sniff_image(data, file.content_type, (file.filename or "").lower()):
+            raise HTTPException(422, "Yalnız ekstre dosyası (PDF, Excel, CSV) gönderilebilir")
+        doc = (data, (file.filename or "ekstre.pdf")[:200])
+    book_owner = support.upload_book()  # yüklendiği defter: "Tekrar dene" oraya kaydeder
+    try:
+        passwords = db.pdf_passwords()  # açık defterin hatırlanan şifreleri (yükleme de bunlarla denedi)
+        with support.own_space(uid):
+            passwords += [p for p in db.pdf_passwords() if p not in passwords]
+            if doc:
+                support.pending_room(*doc)
+        out = support.create_report(uid, key, rep, bank_name, note, doc, passwords, book_owner)
+    except support.SupportError as e:
+        raise _support_error(e) from e
+    try:
+        support.notify_report_async(out["id"], uid, out["summary"])
+    except Exception:  # noqa: BLE001
+        logging.getLogger("hesapkitap.support").exception("ekstre bildirimi bildirimi başlatılamadı")
+    return {"ok": True, "id": out["id"], "pending": out["pending"]}
+
+
+@app.get("/api/support/pending")
+def support_pending():
+    """Kendi defterinde bekleyen (okunamamış, bildirilmiş) ekstreler."""
+    from app import support
+
+    with support.own_space(_support_uid()):
+        return {"items": support.pending_list(), "days": support.PENDING_DAYS}
+
+
+@app.delete("/api/support/pending/{pid}")
+def support_pending_delete(pid: int):
+    from app import support
+
+    with support.own_space(_support_uid()):
+        if not support.pending_delete(pid):
+            raise HTTPException(404, "Bekleyen dosya yok")
+    return {"ok": True}
+
+
+class RetryIn(BaseModel):
+    password: str | None = Field(None, max_length=200)
+    remember: bool = False
+
+
+RETRY_ACCOUNT_MSG = ("Bu belge hesap dökümüne benziyor; Ekstreler → Hesap hareketleri bölümünden yükle. Dosya "
+                     "bekleyenlerde duruyor.")
+
+
+@app.post("/api/support/pending/{pid}/retry")
+@_heavy
+def support_pending_retry(pid: int, body: RetryIn | None = None):
+    """Bekleyen dosyayı yeniden yüklemeden oku (yetenek upload_retry): yükleme ucuyla aynı yol, okuma hakkı kuralları
+    aynen (ekstre bulunamazsa hak düşmez). Kendi defterine kaydedilir. saved / duplicate → dosya bekleyenlerden düşer,
+    yazışmaya sistem satırı. Dönen: yükleme sonucunun tek satırı (status, message, bank, …)."""
+    import io
+
+    from app import support, undo
+
+    uid = _support_uid()
+    body = body or RetryIn()
+    # dosya kişinin kendi alanında; kayıt yüklendiği deftere (yetkisi/defter yoksa "Benim" defterine)
+    with support.own_space(uid):
+        row = support.pending_get(pid)
+        if not row:
+            raise HTTPException(404, "Bekleyen dosya bulunamadı; süresi dolmuş ya da silinmiş olabilir")
+        data = support.pending_file(row)
+        if data is None:
+            support.pending_delete(pid)
+            raise HTTPException(404, "Bekleyen dosya bulunamadı; süresi dolmuş ya da silinmiş olabilir")
+    uf = UploadFile(file=io.BytesIO(data), filename=row["filename"], size=len(data))
+    with support.target_space(uid, row.get("book_owner")) as moved:
+        with undo.batch(f"Ekstre (tekrar): {row['filename'][:110]}") as b:
+            results = _upload_statements([uf], body.password, body.remember)
+            b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
+                                                    "message")} for r in results]
+    r = {**results[0], **{k: v for k, v in results[-1].items() if k in ("cycle_day", "storage_warning")}}
+    ok = r.get("status") in ("saved", "duplicate")
+    if ok:
+        with support.own_space(uid):
+            support.pending_delete(pid)
+        support.record_retry(uid, row["feedback_id"], True, moved)
+        if moved:
+            r["moved"] = moved
+    elif r.get("status") in ("account_statement", "ask"):
+        r = {**r, "status": "error", "message": RETRY_ACCOUNT_MSG}
+    r.pop("report", None)
+    return r | {"pending_id": pid, "done": ok}
+
+
+# yönetici: destek gelen kutusu
+
+class SupportReply(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    retry_ref: int | None = None   # "Düzeltildi — tekrar dene": kullanıcının ekstre bildirimi (feedback id)
+    resolve: bool = False          # yanıtla birlikte çözüldü işaretle
+
+
+class SupportStatus(BaseModel):
+    status: Literal["acik", "cozuldu"]
+
+
+@app.get("/api/admin/support")
+def admin_support(status: Literal["acik", "cozuldu"] | None = None):
+    """Gelen kutusu: kişi başı yazışma (okunmamış önce, sonra yeniden eskiye), son mesaj, bağlam (platform, sürüm, ekran);
+    counts {acik, cozuldu, okunmamis}; anon {count, new}: oturumsuz / demo bildirimleri (yanıtlanamaz; uid 0)."""
+    from app import support
+
+    _require_admin()
+    return support.inbox(status)
+
+
+@app.get("/api/admin/support/{uid}")
+def admin_support_thread(uid: int):
+    """Yazışma (okundu işaretlemez: POST .../seen). uid 0: oturumsuz ve demo bildirimleri."""
+    from app import support
+
+    _require_admin()
+    if uid == 0:
+        return support.anon_thread()
+    out = support.admin_thread(uid)
+    if not out:
+        raise HTTPException(404, "Yazışma yok")
+    return out
+
+
+@app.post("/api/admin/support/{uid}/seen")
+def admin_support_seen(uid: int):
+    from app import support
+
+    _require_admin()
+    if uid == 0:
+        support.mark_anon_seen()
+    else:
+        support.mark_admin_seen(uid)
+    return {"ok": True}
+
+
+@app.post("/api/admin/support/{uid}/reply")
+def admin_support_reply(uid: int, body: SupportReply):
+    """Yanıt yaz; retry_ref verilirse "Düzeltildi — tekrar dene" (kullanıcı bekleyen dosyasını yeniden yüklemeden okur).
+    Kullanıcıya push "destek" (kişisel veri yok)."""
+    from app import support
+
+    _require_admin()
+    if uid == 0:
+        raise HTTPException(409, "Oturumsuz ve demo bildirimleri yanıtlanamaz")
+    try:
+        return support.reply(uid, (db.current_user() or {}).get("id"), body.message, body.retry_ref, body.resolve)
+    except support.SupportError as e:
+        raise _support_error(e) from e
+
+
+@app.patch("/api/admin/support/{uid}")
+def admin_support_status(uid: int, body: SupportStatus):
+    from app import support
+
+    _require_admin()
+    if not support.admin_thread(uid):
+        raise HTTPException(404, "Yazışma yok")
+    support.set_status(uid, body.status)
+    return {"ok": True, "status": body.status}
+
+
+@app.get("/api/admin/support/messages/{fid}/structure")
+def admin_support_structure(fid: int):
+    """Ekstre bildiriminin maskeli yapısı ve teşhisi (dosyanın kendisi sunucuda yöneticiye açık değil)."""
+    from app import support
+
+    _require_admin()
+    out = support.structure(fid)
+    if not out:
+        raise HTTPException(404, "Bu bildirimde yapı yok")
+    return out
+
+
 @app.get("/api/me/ai")
 def my_ai():
     """Okuma kotası. unit "docs": hazır sürüm, günlük tek okuma hakkı (app/doc_reads.py; kişi başı).
@@ -6217,7 +6471,7 @@ def upload_statements(files: list[UploadFile] = File(...), password: str | None 
 
 def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
                        forced: str | None = None, docs: bool = False) -> list[dict]:
-    from app import doc_cache, doc_reads, mailbox
+    from app import doc_cache, doc_reads, mailbox, support
     from app.parsers import PasswordRequired
     from app.parsers.ai import NotAStatement
 
@@ -6251,7 +6505,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             try:
                 imp = card_excel.import_file(data, f.filename or "kart.xlsx")
             except limits.LimitError as e:  # zip bombası vb.: hesap hareketleri akışına da gönderilmez
-                results.append({**res, "status": "error", "message": errors.user_text(e)})
+                results.append({**res, "status": "error", "message": errors.user_text(e),
+                                "report": support.upload_report("sinir", name, data, None)})
                 continue
             except Exception:  # noqa: BLE001 - okunamazsa hesap hareketleri akışı denesin
                 imp = None
@@ -6267,7 +6522,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         try:
             guess = _statement_kind(data, tried)
         except limits.LimitError as e:  # çok sayfalı / çok uzun süren PDF: bu dosya okunmaz, diğerleri sürer
-            results.append({**res, "status": "error", "message": errors.user_text(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e),
+                            "report": support.upload_report("sinir", name, data, None)})
             continue
         text = next((t for t in (_try_text(data, pw) for pw in [None, *tried]) if t), None) if guess else None
         if not forced and guess != "dekont" and mailbox.looks_like_bill(text):
@@ -6314,11 +6570,14 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             if forced != "card" and mailbox.mentions_bill(text):
                 results.append(_upload_document(res, data, "application/pdf") if docs
                                else {**res, "status": "error", "message": UPLOAD_BILL_MSG})
-            else:
-                results.append({**res, "status": "error", "message": errors.user_text(e)})
+            else:  # "Bildir" (yetenek upload_report): istemci formu bu bilgiyle doldurur
+                results.append({**res, "status": "error", "message": errors.user_text(e),
+                                "report": support.upload_report("ekstre_bulunamadi", name, data, text)})
             continue
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
-            results.append({**res, "status": "error", "message": errors.user_text(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e),
+                            "report": support.upload_report("sinir" if isinstance(e, limits.LimitError) else "okunamadi",
+                                                            name, data, text)})
             continue
         if password and remember:
             db.remember_pdf_password(password)

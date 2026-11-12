@@ -84,7 +84,11 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("PUT", r"/api/push/prefs"), ("PUT", r"/api/me/price-share"),  # fiyat paylaşımı kişinin kararı
                    ("PUT", r"/api/donations/reminder"),  # sadaka hatırlatmasının ritmi kişiye özel
                    ("POST", r"/api/book/leave"), ("POST", r"/api/book/join/[\w-]+"),  # üyelik kişinin kendi kararı
-                   ("POST", r"/api/feedback")]  # "Sorun bildir": yöneticiye gider, deftere yazmaz
+                   ("POST", r"/api/feedback"),  # "Sorun bildir": yöneticiye gider, deftere yazmaz
+                   # destek yazışması ve ekstre bildirimi: bekleyen dosya ve tekrar denemesi kişinin KENDİ defterinde
+                   # (app/support.own_space), ortak deftere yazmaz
+                   ("POST", r"/api/support/(seen|report)"), ("POST", r"/api/support/pending/\d+/retry"),
+                   ("DELETE", r"/api/support/pending/\d+")]
 
 
 def member() -> dict | None:

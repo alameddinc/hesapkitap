@@ -43,6 +43,9 @@ NAME_RES = {
     "receipts": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # fiş fotoğrafı; havale dekontu fotoğraf ya da PDF
     "statements-bank": re.compile(r"^[0-9a-f]{64}\.(?:pdf|xlsx|xls|csv)$"),
     "warranty": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # garanti belgesi: fatura / garanti belgesi fotoğrafı ya da PDF
+    # okunamayan ekstrenin "bekleyen" kopyası (app/support.py): kullanıcı onayıyla en çok 30 gün, okununca silinir. KINDS'ta
+    # değil: yedeğe, dışa aktarmaya ve alan sınırına girmez; hesap silinince defter klasörüyle gider
+    "pending": re.compile(r"^[0-9a-f]{64}\.(?:pdf|xlsx|xls|csv)$"),
 }
 CONTENT_TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 _PREFIX_RE = re.compile(r"^(?:main/|users/[0-9A-Za-z_-]{1,64}(?:/[0-9A-Za-z_-]{1,64})*/|deleted/[0-9]+-[0-9]+(?:-\d+)?/)$")

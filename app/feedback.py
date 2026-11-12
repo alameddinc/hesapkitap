@@ -117,7 +117,8 @@ def limited(uid: int | None, key: str) -> bool:
     since = (datetime.now(timezone.utc) - timedelta(seconds=RATE_WINDOW)).strftime("%Y-%m-%d %H:%M:%S")
     with system.connect() as c:
         if uid:
-            n = c.execute("SELECT COUNT(*) FROM feedback WHERE user_id = ? AND created_at >= ?", (uid, since)).fetchone()[0]
+            n = c.execute("SELECT COUNT(*) FROM feedback WHERE user_id = ? AND author = 'user' AND created_at >= ?",
+                          (uid, since)).fetchone()[0]
         else:
             n = c.execute("SELECT COUNT(*) FROM feedback WHERE user_id IS NULL AND client_key = ? AND created_at >= ?",
                           (key, since)).fetchone()[0]
@@ -138,6 +139,10 @@ def create(message: str, context: dict, shots: list[tuple[bytes, str]], uid: int
     if names:
         with system.connect() as c:
             c.execute("UPDATE feedback SET shots = ? WHERE id = ?", (json.dumps(names), fid))
+    if uid:  # destek yazışması: açık, son mesaj (app/support.py)
+        from app import support
+
+        support.touch(uid)
     return fid
 
 
@@ -156,7 +161,7 @@ def _out(r, names: dict[int, str]) -> dict:
         ctx = {}
     uid = r["user_id"]
     return {"id": r["id"], "created_at": r["created_at"], "message": r["message"], "context": ctx, "status": r["status"],
-            "admin_note": r["admin_note"], "demo": bool(r["demo"]), "screenshots": len(_shots(r)),
+            "admin_note": r["admin_note"], "demo": bool(r["demo"]), "screenshots": len(_shots(r)), "kind": r["kind"],
             "user": {"id": uid, "username": names.get(uid)} if uid else None}
 
 
@@ -166,12 +171,13 @@ def _names() -> dict[int, str]:
 
 def list_items(status: str | None = None, limit: int = 100) -> dict:
     with system.connect() as c:
-        q, args = "SELECT * FROM feedback", []
+        # yalnız kullanıcıların mesajları (yöneticinin yanıtı ve sistem satırları destek yazışmasında; app/support.py)
+        q, args = "SELECT * FROM feedback WHERE author = 'user'", []
         if status:
-            q, args = q + " WHERE status = ?", [status]
+            q, args = q + " AND status = ?", [status]
         rows = c.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
         counts = {s: 0 for s in STATUSES} | {r[0]: r[1] for r in c.execute(
-            "SELECT status, COUNT(*) FROM feedback GROUP BY status")}
+            "SELECT status, COUNT(*) FROM feedback WHERE author = 'user' GROUP BY status")}
     names = _names()
     return {"items": [_out(r, names) for r in rows], "counts": counts}
 
@@ -244,12 +250,15 @@ def notify_admins(fid: int, message: str, uid: int | None, demo: bool, first_sho
     """Push (yöneticilerin telefonu) ve yöneticinin Telegram'ı. Her adım ayrı korunur; hiçbiri istisna fırlatmaz."""
     from app import push
 
+    from app import support
+
     who = _who(uid, demo)
     short = message if len(message) <= 180 else message[:177] + "…"
     for a in admins():
-        try:
+        try:  # yeni uygulamada Destek gelen kutusu, eskisinde Ayarlar
+            route = push.R_DESTEK_ADMIN if push.has_app(a["id"], support.DESTEK_MIN_APP) else push.R_AYARLAR
             push.notify(a["id"], [push.item("geri_bildirim", f"geri-bildirim:{fid}", f"Geri bildirim: {who}", short,
-                                            push.R_AYARLAR)])
+                                            route)])
         except Exception:  # noqa: BLE001
             log.exception("geri bildirim push")
     try:

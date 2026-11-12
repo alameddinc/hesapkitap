@@ -17,6 +17,7 @@ import FirstLook from "../components/FirstLook";
 import { QuotaFullModal, ReadsLine, useDocQuota, type QuotaFull } from "../components/DocQuota";
 import { prepare, uploadInBatches } from "../lib/batchUpload";
 import { ReportProblem } from "../components/Feedback";
+import { ReportButton, useCap } from "../components/Support";
 import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 
 export default function Statements() {
@@ -39,8 +40,11 @@ export default function Statements() {
   const qc = useQueryClient();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const busy = progress != null;
+  const [sent, setSent] = useState(() => new Map<string, File>()); // "Bildir": satırın dosyası (yalnız onayla gönderilir)
+  const canReport = useCap("upload_report");
   const sendFiles = async (files: File[], password?: string, kind?: DocKind) => {
     if (busy) return;
+    setSent((m) => new Map([...m, ...files.map((f) => [f.name, f] as const)]));
     const retry = !!password || !!kind; // şifre / tür sorusunun cevabı: o dosyaların sonucu listede yerini alır
     setProgress({ done: 0, total: files.length });
     try {
@@ -197,7 +201,8 @@ export default function Statements() {
                 <div className="font-medium">{r.filename}</div>
                 {r.status === "error" && <div className="space-y-1">
                   <div className="text-red-600 dark:text-red-400">{r.message}</div>
-                  <ReportProblem subject="Ekstre okunamadı" error={`${r.filename}: ${r.message ?? ""}`} code="statement_unreadable" />
+                  {r.report && canReport ? <ReportButton row={r} file={sent.get(r.filename) ?? null} />
+                    : <ReportProblem subject="Ekstre okunamadı" error={`${r.filename}: ${r.message ?? ""}`} code="statement_unreadable" />}
                 </div>}
                 {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500 dark:text-stone-400">{r.message ?? "Zaten yüklü, atlandı."}</div>}

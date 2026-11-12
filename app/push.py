@@ -92,6 +92,8 @@ TYPES = {
     "zekat": ("Zekât ve mübarek günler", True),
     "aile": ("Aile koltukları", True),
     "geri_bildirim": ("Kullanıcı geri bildirimi", True),  # yalnız yöneticiye (app/feedback.py)
+    # destek yazışmasında yöneticinin yanıtı ve "Düzeltildi — tekrar dene" (app/support.py); metinde kişisel veri yok
+    "destek": ("Destek yanıtları", True),
     "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
@@ -118,7 +120,7 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
          "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
          "kumbara": "kumbara hatırlatması", "kumbara_pay": "kumbara payı", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
-         "garanti": "garanti hatırlatması"}
+         "garanti": "garanti hatırlatması", "destek": "destek yanıtı"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -136,6 +138,8 @@ R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<i
 R_GARANTI = "#/diger/garantiler"  # /<id> ile ürünün ayrıntısı
 GARANTI_MIN_APP = (1, 0, 7)  # Garantiler ekranı bu sürümde; eski uygulamada dokununca "Yakında" açılırdı
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
+# Destek yazışması (kullanıcı) ve yöneticinin destek gelen kutusu; app/support.DESTEK_MIN_APP'ten eski uygulamada R_AYARLAR
+R_DESTEK, R_DESTEK_ADMIN = "#/diger/ayarlar/destek", "#/diger/ayarlar/destek-gelen"
 
 
 def _b64e(b: bytes) -> str:
