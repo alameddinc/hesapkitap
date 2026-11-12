@@ -5,7 +5,8 @@ import { call, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
-import { useSave } from "./hooks";
+import { useCap, useSave } from "./hooks";
+import { SubPaymentsFor } from "./SubDetail";
 import { shrink } from "./AddSheet";
 import Modal from "./Modal";
 import Segmented from "./Segmented";
@@ -164,6 +165,7 @@ function Detail({ s, help, onClose }: { s: AppSub; help: Help; onClose: () => vo
   const delSrc = useSave(() => call("DELETE", `/api/subscriptions/apps/sources/${s.source_id}`), () => { ui.toast("Abonelik silindi"); onClose(); });
   const run = (b: Record<string, unknown>) => act.mutate(b, { onError: (e) => ui.error(e) });
   const busy = act.isPending || delSrc.isPending;
+  const detailCap = useCap("subscription_detail"); // tüm tahsilatlar, toplam, ay ay; yoksa son 12 tahsilat (eski sunucu)
   return (
     <>
       <Modal title={s.title} onClose={onClose} hidden={picking || editing}>
@@ -232,7 +234,10 @@ function Detail({ s, help, onClose }: { s: AppSub; help: Help; onClose: () => vo
             <ManageLinks help={help} />
           </div>
 
-          {s.charges.length > 0 && (
+          {detailCap && !s.pending && (
+            <div className="border-t border-stone-100 pt-3 dark:border-stone-800"><SubPaymentsFor r={{ app: s.id }} /></div>
+          )}
+          {!detailCap && s.charges.length > 0 && (
             <div className="border-t border-stone-100 pt-3 dark:border-stone-800">
               <div className="mb-1 text-xs font-semibold text-stone-500">Tahsilatlar</div>
               <ul className="divide-y divide-stone-100 dark:divide-stone-800">

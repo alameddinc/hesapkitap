@@ -68,6 +68,9 @@ def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "isolated.db"))
     monkeypatch.setattr(db, "UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr(db, "BILL_DIR", str(tmp_path / "bills"))
+    from app import textnorm
+
+    textnorm.reload_gateways()  # onaylı ödeme aracısı listesi (system.db) önceki testten kalmasın
     db.init_db()
 
 

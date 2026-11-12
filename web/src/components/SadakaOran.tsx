@@ -10,6 +10,8 @@ import Segmented from "./Segmented";
 export interface RatioMonth {
   month: string; label: string; short: string; sadaka: number; income: number | null; ratio: number | null;
   note: string | null; zakat: number | null; partial: boolean;
+  /** içinde bulunulan ayın tabanına eklenen, henüz gelmemiş beklenen gelir (eski sunucuda yok) */
+  expected_income?: number | null;
 }
 export interface SadakaRatio {
   available: boolean; months: RatioMonth[]; sentence: string | null; ratio_available: boolean;
@@ -69,7 +71,7 @@ function OranTablo({ rows, m, ratio, zakat }: { rows: RatioMonth[]; m: (x: numbe
             <tr key={r.month}>
               <td className="py-1.5 pr-2">{periodLabel(r.month, true)}{r.partial && <span className="text-xs text-stone-500"> · sürüyor</span>}</td>
               <td className="py-1.5 pr-2 text-right">{m(r.sadaka)}</td>
-              {ratio && <><td className="py-1.5 pr-2 text-right">{m(r.income)}</td>
+              {ratio && <><td className="py-1.5 pr-2 text-right">{m(r.income)}{r.expected_income ? <div className="text-xs text-stone-500">{m(r.expected_income)} beklenen dahil</div> : null}</td>
                 <td className="py-1.5 text-right">{r.ratio != null ? pctTR(r.ratio) : <span className="text-xs text-stone-500">{r.note ?? "—"}</span>}</td></>}
               {zakat && <td className="py-1.5 pl-2 text-right text-stone-500">{r.zakat ? m(r.zakat) : "—"}</td>}
             </tr>
@@ -142,7 +144,7 @@ function OranGrafik({ rows, m }: { rows: RatioMonth[]; m: (x: number | null) => 
           <div className="font-medium">{periodLabel(h.month)}{h.partial ? " · sürüyor" : ""}</div>
           <div className="mt-0.5 tabular-nums">{h.ratio != null ? <>Oran <b>{pctTR(h.ratio)}</b></> : <span className="text-stone-500">{h.note ?? "Oran yok"}</span>}</div>
           <div className="tabular-nums text-stone-600 dark:text-stone-300">Sadaka {m(h.sadaka)}</div>
-          {h.income != null && <div className="tabular-nums text-stone-600 dark:text-stone-300">Gelir {m(h.income)}</div>}
+          {h.income != null && <div className="tabular-nums text-stone-600 dark:text-stone-300">Gelir {m(h.income)}{h.expected_income ? ` (${m(h.expected_income)} beklenen dahil)` : ""}</div>}
         </div>
       )}
     </div>

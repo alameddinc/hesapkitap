@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertOctagon, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
+import { Activity, AlertOctagon, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, Route, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AiCosts as Costs } from "../api";
-import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
+import { useFeedbackCounts } from "../components/AdminFeedback";
+import AdminSupport, { useSupportCounts } from "../components/AdminSupport";
 import AdminIncidents, { useIncidentCounts } from "../components/AdminIncidents";
 import AiCosts from "../components/AiCosts";
 import Announce from "../components/Announce";
@@ -10,6 +11,7 @@ import AppUpdate from "../components/AppUpdate";
 import CardTemplates from "../components/CardTemplates";
 import DemoStats from "../components/DemoStats";
 import Olcum from "../components/Olcum";
+import PaymentGateways, { type GatewayOverview } from "../components/PaymentGateways";
 import PlanTable from "../components/PlanTable";
 import ReceiptTemplates from "../components/ReceiptTemplates";
 import UpdateNotice from "../components/UpdateNotice";
@@ -21,19 +23,20 @@ import { cx } from "../format";
 // Yönetici paneli (#/yonetici/<alt sayfa>): eskiden Ayarlar'ın altındaki yönetici bölümleri burada, her biri kendi
 // sayfasında. Adres alt sayfayı tutar: yenileyince aynı sayfa açılır. Bölümlerin kendisi (bileşenler) değişmedi.
 
-type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "sorunlar" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
+type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "sorunlar" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "odeme-araclari" | "mobil" | "demo";
 
 const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "genel", label: "Genel", icon: LayoutDashboard, hint: "Özet ve sürüm" },
   { key: "olcum", label: "Ölçüm", icon: Activity, hint: "Demo → hesap → aktivasyon → tutunma → abonelik" },
   { key: "kullanicilar", label: "Kullanıcılar", icon: UsersIcon, hint: "Hesaplar, davetler, paketler, silinenler" },
-  { key: "geri-bildirim", label: "Geri bildirim", icon: MessageSquareWarning, hint: "Sorun bildir mesajları" },
+  { key: "geri-bildirim", label: "Destek", icon: MessageSquareWarning, hint: "Kullanıcı yazışmaları, ekstre bildirimleri" },
   // kullanıcıların karşılaştığı hatalar (sunucu yeteneği incidents): türe göre gruplu, durum, "düzelttik" haberi
   { key: "sorunlar", label: "Sorunlar", icon: AlertOctagon, hint: "Hata türleri, kaç kişi, düzeltildi haberi" },
   { key: "duyuru", label: "Duyuru gönder", icon: Megaphone, hint: "Telefonlara bildirim: yeni sürüm, duyuru" },
   { key: "yapay-zeka", label: "Yapay zekâ maliyeti", icon: Coins, hint: "Aylık maliyet, kullanıcı başı, sınırla" },
   { key: "paket-tablosu", label: "Paket tablosu", icon: TableProperties, hint: "Hangi sayfa hangi pakette" },
   { key: "sablonlar", label: "Fiş şablonları", icon: Receipt, hint: "Yapay zekâsız okunan zincirler" },
+  { key: "odeme-araclari", label: "Ödeme aracıları", icon: Route, hint: "Ekstrede satıcıdan ayrılan ön ekler: adaylar, onay" },
   { key: "mobil", label: "Mobil sürüm", icon: Smartphone, hint: "Son / en düşük sürüm, mağaza" },
   { key: "demo", label: "Canlı demo", icon: FlaskConical, hint: "Demo kullanımı" },
 ];
@@ -54,6 +57,9 @@ export default function Admin() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   const fb = useFeedbackCounts();
+  const sup = useSupportCounts(); // destek yazışması varsa rozet okunmamış yazışma sayısı
+  const gw = useQuery({ queryKey: ["admin-payment-gateways"], retry: false, enabled: admin,
+    queryFn: () => call<GatewayOverview>("GET", "/api/admin/payment-gateways") });
   const sorunVar = useCap("incidents");
   const inc = useIncidentCounts(admin && sorunVar);
   if (auth.isLoading) return <></>;
@@ -66,7 +72,9 @@ export default function Admin() {
     );
   }
   const cur = SUBS.find((x) => x.key === sub)!;
-  const badge = (k: Sub) => (k === "geri-bildirim" && fb.data?.yeni ? fb.data.yeni : k === "sorunlar" && inc.data?.yeni ? inc.data.yeni : null);
+  const gwN = gw.data?.candidates.length ?? 0;
+  const badge = (k: Sub) => (k === "geri-bildirim" ? (sup ? sup.okunmamis : fb.data?.yeni) || null
+    : k === "odeme-araclari" && gwN ? gwN : k === "sorunlar" && inc.data?.yeni ? inc.data.yeni : null);
   const subs = SUBS.filter((x) => x.key !== "sorunlar" || sorunVar);
   return (
     <div className="space-y-4">
@@ -94,12 +102,13 @@ export default function Admin() {
           {sub === "genel" && <Overview />}
           {sub === "olcum" && <Olcum />}
           {sub === "kullanicilar" && <Users />}
-          {sub === "geri-bildirim" && <AdminFeedback />}
+          {sub === "geri-bildirim" && <AdminSupport />}
           {sub === "sorunlar" && sorunVar && <AdminIncidents />}
           {sub === "duyuru" && <Announce />}
           {sub === "yapay-zeka" && <AiCosts />}
           {sub === "paket-tablosu" && <PlanTable />}
           {sub === "sablonlar" && <><ReceiptTemplates /><CardTemplates /></>}
+          {sub === "odeme-araclari" && <PaymentGateways />}
           {sub === "mobil" && <AppUpdate />}
           {sub === "demo" && <Demo />}
         </div>

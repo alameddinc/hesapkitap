@@ -670,14 +670,22 @@ def _vs_prev(month: str, totals: dict, by_month: dict, today: date) -> dict | No
 
 # ---------------------------------------------------------------- tasarruf: abonelikler + kısma hedefleri
 
-def subscriptions() -> list[dict]:
-    """Abonelik kategorisindeki işyerleri: son tutar, görüldüğü aylar, iptal durumu, iptalden sonra çekim var mı."""
-    states = db.subscription_states()
+def subscription_groups(states: dict | None = None) -> dict[str, list[dict]]:
+    """Abonelik sayılan kart işlemleri işyerine göre (merchant_name; ödeme aracısı ön ekleri atılmış). subscriptions()
+    ve abonelik ayrıntısı (app/sub_detail.py) AYNI gruplamayı buradan alır. Ortak defter süzgeci card_transactions'ta."""
+    states = db.subscription_states() if states is None else states
     by_m: dict[str, list] = defaultdict(list)
     for t in db.card_transactions():
         if t["txn_type"] == PURCHASE and t["installment_no"] is None and (
                 t["category"] in SUBSCRIPTION_CATEGORIES or merchant_name(t["description"]) in states):
             by_m[merchant_name(t["description"])].append(t)
+    return by_m
+
+
+def subscriptions() -> list[dict]:
+    """Abonelik kategorisindeki işyerleri: son tutar, görüldüğü aylar, iptal durumu, iptalden sonra çekim var mı."""
+    states = db.subscription_states()
+    by_m = subscription_groups(states)
     out = []
     for m, ts in by_m.items():
         last_period = max(t["period"] for t in ts)

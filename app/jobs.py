@@ -184,9 +184,16 @@ def run_zakat(today: date) -> float:
     return zakat.nightly(today)
 
 
+def run_pending_cleanup(today: date) -> int:
+    """Okunamayan ekstrenin bekleyen kopyası (app/support.py): 30 günü dolan dosyalar bu defterden silinir."""
+    from app import support
+
+    return support.prune_pending()
+
+
 INTEGRITY_HOUR = 4
 JOBS = [("zakat", 1, run_zakat), ("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads),
-        ("sessions", 3, run_session_cleanup), ("integrity", INTEGRITY_HOUR, run_integrity)]
+        ("sessions", 3, run_session_cleanup), ("integrity", INTEGRITY_HOUR, run_integrity), ("pending", 2, run_pending_cleanup)]
 MAIN_ONLY = {"remind", "sessions"}  # Telegram'a yazan ve sistem veritabanına bakan işler yalnız yöneticinin alanında
 
 
@@ -295,6 +302,14 @@ def run_global(now: datetime) -> list[str] | None:
             product_groups.consistency(c)
     except Exception:  # noqa: BLE001 - gece bakımını engellemesin
         log.exception("ürün grubu sınıflandırma başarısız")
+    try:  # ödeme aracısı adayları: bütün defterlerde "ÖN EK / SAĞ" kalıbı (yalnız ön ek ve sayılar; app/gateways.py);
+        # ardından liste değiştiyse kaçan defterlerde işyeri adına bağlı ayarlar taşınır (sync_all)
+        from app import gateways
+
+        if got := gateways.nightly(now):
+            log.info("ödeme aracısı taraması: %s", got)
+    except Exception:  # noqa: BLE001 - gece bakımını engellemesin
+        log.exception("ödeme aracısı taraması başarısız")
     return system.purge_archived(now=now.timestamp())
 
 

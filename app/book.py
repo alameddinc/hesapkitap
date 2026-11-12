@@ -50,6 +50,7 @@ MEMBER_WRITES = [
     ("PUT", r"/api/entries/\d+/receipt-items"), ("POST", r"/api/entries/\d+/receipt-reread"), ("POST", r"/api/receipts/reread"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir
+    ("PATCH", r"/api/jar-moves/\d+"),  # kumbara hareketini düzelt: yalnız kendi eklediği TL hareketi (uçta denetlenir)
     ("PUT", r"/api/spender"), ("PUT", r"/api/cards/[^/]+/spender"),  # kim harcadı: kayıtta ve kartta (görebildiği)
     ("POST", r"/api/shopping-list"), ("PATCH", r"/api/shopping-list/\d+"),  # ortak alışveriş listesi
     ("DELETE", r"/api/shopping-list/\d+"), ("DELETE", r"/api/shopping-list"),
@@ -83,7 +84,11 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("PUT", r"/api/push/prefs"), ("PUT", r"/api/me/price-share"),  # fiyat paylaşımı kişinin kararı
                    ("PUT", r"/api/donations/reminder"),  # sadaka hatırlatmasının ritmi kişiye özel
                    ("POST", r"/api/book/leave"), ("POST", r"/api/book/join/[\w-]+"),  # üyelik kişinin kendi kararı
-                   ("POST", r"/api/feedback")]  # "Sorun bildir": yöneticiye gider, deftere yazmaz
+                   ("POST", r"/api/feedback"),  # "Sorun bildir": yöneticiye gider, deftere yazmaz
+                   # destek yazışması ve ekstre bildirimi: bekleyen dosya ve tekrar denemesi kişinin KENDİ defterinde
+                   # (app/support.own_space), ortak deftere yazmaz
+                   ("POST", r"/api/support/(seen|report)"), ("POST", r"/api/support/pending/\d+/retry"),
+                   ("DELETE", r"/api/support/pending/\d+")]
 PERSONAL_WRITES.append(("POST", r"/api/incidents/client"))  # hata kaydı (app/incidents.py): deftere yazmaz
 
 

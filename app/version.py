@@ -91,6 +91,18 @@ CAPABILITIES = (
     "feedback",               # uygulama içi "Sorun bildir": POST /api/feedback multipart message (1–2000), screenshots
                               # (0–3 jpeg/png/webp, ≤ 5 MB), context (JSON ≤ 4 KB) → {ok, id}; oturumsuz/demo/üye açık,
                               # saatte 10 (429)
+    "support_chat",           # destek yazışması (app/support.py): GET /api/support {thread {status, unread}, messages[]
+                              # author user|admin|system, seen, report, pending, action {type retry, ref, pending, done}},
+                              # GET /api/support/unread, POST /api/support/seen, GET .../messages/{id}/screenshot/{n};
+                              # mesaj POST /api/feedback ile; yönetici GET /api/admin/support (gelen kutusu),
+                              # GET|PATCH /api/admin/support/{uid} (0: oturumsuz/demo), POST .../{uid}/seen|reply
+                              # {message, retry_ref, resolve}, GET .../messages/{id}/structure; push türü "destek"
+    "feedback_reply",         # yöneticinin yanıtı kullanıcıya ulaşır (support_chat ile aynı sürüm; eş ad)
+    "upload_report",          # yükleme hata satırında report {code, file_type, pages, bank_guess, has_text};
+                              # POST /api/support/report multipart report (JSON), bank_name, note, send_doc, file →
+                              # {ok, id, pending}; yöneticiye yalnız maskeli yapı + teşhis (dosya değil)
+    "upload_retry",           # GET /api/support/pending, DELETE /api/support/pending/{id}, POST .../{id}/retry {password,
+                              # remember} → yükleme sonucu satırı + {pending_id, done}; 30 gün, kendi defterinde
     "save_book_choice",       # fiş/fatura onayında defter ve harcayan: POST /api/entries ve /api/bills spender u<id>|ortak
                               # (ortak defterde; değilse yok sayılır, defterde olmayan kişi 400); X-HK-Book: kendi|ortak
                               # başlığı hk_book çerezinden önce gelir; okumadaki receipt_file/file_name üyenin öbür
@@ -382,6 +394,26 @@ CAPABILITIES = (
                               # (Geri al: DELETE /api/debt-payments/{payment_id}: kumbara hareketi de geri gelir).
                               # GET /api/jars [].debt {id, title, state acik|kapandi|silindi, label, remaining?, suggestion?}
                               # | null; PATCH /api/jars/{id} {unlink_debt: true} ("başka hedefe çevir")
+    "kumbara_shares",         # kumbara katılımcıları ve aylık pay (yalnız TL kumbarası): POST /api/jars/{id}/people
+                              # {user_id | name, share?} (402 kumbara, 409 zaten var, 400 defterde değil), PATCH
+                              # /api/jars/{id}/people/{pid} {name?, share? (null: eşit böl), sort?} (402 kumbara), DELETE
+                              # (katkısı varsa geçmiş kalır: result removed|deleted); PATCH /api/jars/{id} {remind_day 1–28, share_monthly (ayda toplam;
+                              # null: hedef ve son tarihten)};
+                              # POST /api/jars/{id}/moves {person_id?, outside?} (kim attı; para hesaplarda değil: harcanabilirden
+                              # düşmez); PATCH /api/jar-moves/{id} TL hareketinde {amount?, move_date?, note?, person_id?,
+                              # outside?}; GET /api/jars [].shares {month, target, basis aylik|hedef|tamam|null, total, paid,
+                              # remind_day, needed (paylar toplamı hedefin gerektirdiğinden azsa ayda
+                              # gereken; yoksa null), people [{id, user_id, name, app, me, manual, share, paid, left, over, state
+                              # tamam|eksik|bekliyor|paysiz, total, months_full, months_counted}], removed, behind, all_done}
+                              # | null, [].outside, moves[].person_id/outside; push türü "kumbara_pay"
+    "kumbara_shares_v2",      # kumbara payları v2: altın/döviz kumbarasında da (pay kumbaranın biriminde; shares.unit, scale:
+                              # TL/gram/döviz 100, adet 1; POST /api/jars/{id}/buy person_id); tarihli pay: PATCH
+                              # /api/jars/{id}/people/{pid} {share, from_month YYYY-MM|all} ve PATCH /api/jars/{id}
+                              # {share_monthly, share_from}; eksik devri: people[].due [{month, amount}], due_total; yeni katkı
+                              # önce en eski tamamlanacak aya (shares.allocations {hareket id: {person_id, past, month,
+                              # month_amount, extra}}); PATCH /api/jars/{id} {carry_over}: fazla sonraki aylara (people[].
+                              # carried_in, credit); "Bu ay yok": PUT/DELETE /api/jars/{id}/people/{pid}/exempt/{YYYY-MM}
+                              # (state muaf, exempt, exempt_months; PUT Premium "kumbara"); people[].paid_for_month, to_past; shares.paid_month
     "debt_plan_plus",         # borç planının gelişmiş kısmı Premium (plans "borc_plani_plus"; plan, sıra ve tutarlar ücretsiz):
                               # GET /api/debt-plan plus {available, had_plan, lock {commit, payoff} | null}; ücretsizde
                               # commitment/commit_offer null, commit_history [], debts[].payoff {state "locked", title,
@@ -418,6 +450,9 @@ CAPABILITIES = (
                               # store?; 1 görüntü = 1 okuma); POST …/apps/manual; PATCH|DELETE …/apps/sources/{id};
                               # /api/savings subscriptions[].store + logo. Push "abonelik" yenilemeye 3 gün kala, yol
                               # #/diger/tasarruf/abonelik/<id>
+    "subscription_detail",    # abonelik ayrıntısı (app/sub_detail.py): GET /api/subscriptions/detail?merchant=|app= →
+                              # toplam ödenen (tümü / son 12 ay, dövizli: döviz toplamı + not), ay ay tutar (zam/indirim/
+                              # kur), işlemler (uid → mevcut işlem ayrıntısı). Yoksa istemci abonelik satırını açmaz
     "card_early_close",       # taksitleri erken kapattım (app/early_close.py): GET /api/cards/summary cards[].early_close
                               # {available, rest, fee_left (faiz gizliyse null), hint, months [{month, label}], default_month,
                               # record {month, label, amount, total, rest, saved, at, text, saved_text} | null, detected
@@ -432,6 +467,10 @@ CAPABILITIES = (
                               # aynı; okuma hakkı orada, tek sayım) → {status "document", doc_type bill|receipt, doc,
                               # message}; okunamadıysa status "error". docs yoksa (eski istemci) aynı belgeler Türkçe
                               # nedenle "error"; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez
+    "payment_gateways",       # yönetici: GET /api/admin/payment-gateways (adaylar, onaylı, reddedilen, sabit liste),
+                              # /preview?prefix=, POST approve | reject | forget {prefix}, POST (elle ekle). Gece
+                              # taramasında yeni aday: "sistem" push'u (haftada en çok bir), route
+                              # #/diger/ayarlar/odeme-araclari
     "incidents",              # sorun kaydı (app/incidents.py): POST /api/incidents/client {events [{code js_hatasi|
                               # ekran_coktu|ag_zaman_asimi|sunucuya_ulasilamadi|eklenti_hatasi, screen?, detail?,
                               # app_version?, platform?, plugin?}] ≤10} → {ok, accepted} (oturumsuz da; saatlik sınır);

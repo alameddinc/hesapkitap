@@ -3,13 +3,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { cx } from "../format";
 import { useUI } from "../ui";
-import { yardimAl, type DestekBaglam } from "../lib/destek";
+import { yardimAl, type YardimBaglami } from "../lib/destek";
 import { ekranAdi } from "./HataKutusu";
 
 // hata: adim (ikinci satır, yapılabilecek adım) ve yardim ("Yardım al" bağlamı; lib/hataAcikla.ts, lib/destek.ts)
 export interface ToastState {
   msg: string; kind: "ok" | "error"; undo?: () => Promise<unknown>; action?: { label: string; run: () => void }; id?: number;
-  adim?: string; yardim?: DestekBaglam;
+  adim?: string; yardim?: YardimBaglami;
 }
 
 /** Okuma süresi: kelime başına 0,3 sn, en az 3 sn; geri alınabilir işlemde en az 8 sn (düğmeye yetişilsin). */

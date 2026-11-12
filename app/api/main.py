@@ -1443,6 +1443,76 @@ def admin_card_templates(days: int = Query(30, ge=1, le=365)):
     return templates.card_overview(days)
 
 
+class GatewayIn(BaseModel):
+    prefix: str = Field(min_length=1, max_length=40)
+
+
+@app.get("/api/admin/payment-gateways")
+def admin_payment_gateways():
+    """Ödeme aracıları (sunucu geneli): gece taramasının adayları (ön ek, farklı işyeri / defter sayısı, ilk görülme,
+    en çok 5 örnek işyeri, onaylanırsa ayrılacak satır), onaylılar, reddedilenler ve sabit liste. Kişisel veri yok
+    (app/gateways.py)."""
+    from app import gateways
+
+    _require_admin()
+    return gateways.overview()
+
+
+@app.get("/api/admin/payment-gateways/preview")
+def admin_payment_gateways_preview(prefix: str = Query(min_length=1, max_length=40)):
+    """Elle eklenecek ön ek: bütün defterlerde kaç satır ayrılır, kaç farklı işyeri (anlık tarama)."""
+    from app import gateways
+
+    _require_admin()
+    try:
+        return gateways.preview(prefix)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+def _gateway_action(fn, prefix: str) -> dict:
+    from app import gateways
+
+    _require_admin()
+    try:
+        fn(prefix)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return gateways.overview()
+
+
+@app.post("/api/admin/payment-gateways/approve")
+def admin_payment_gateways_approve(body: GatewayIn):
+    """Adayı onayla: deploy beklemeden bütün sunucuda aracı sayılır; defterlerde ada bağlı ayarlar arka planda taşınır."""
+    from app import gateways
+
+    return _gateway_action(gateways.approve, body.prefix)
+
+
+@app.post("/api/admin/payment-gateways/reject")
+def admin_payment_gateways_reject(body: GatewayIn):
+    """Adayı reddet ya da onaylıyı kaldır: bir daha aday olmaz, benzer yazımla da eşleşmez."""
+    from app import gateways
+
+    return _gateway_action(gateways.reject, body.prefix)
+
+
+@app.post("/api/admin/payment-gateways")
+def admin_payment_gateways_add(body: GatewayIn):
+    """Elle ekle (onaylı olarak)."""
+    from app import gateways
+
+    return _gateway_action(gateways.add, body.prefix)
+
+
+@app.post("/api/admin/payment-gateways/forget")
+def admin_payment_gateways_forget(body: GatewayIn):
+    """Reddedileni geri al: kayıt silinir, yeniden aday olabilir."""
+    from app import gateways
+
+    return _gateway_action(gateways.forget, body.prefix)
+
+
 @app.get("/api/admin/ai-costs/users")
 def admin_ai_cost_users(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
     """Kullanıcı başı aylık yapay zekâ maliyeti (en pahalı üstte): çağrı, okuma, tahmini ₺, paket, eşik, kısıtlama."""
@@ -1685,6 +1755,260 @@ def admin_feedback_patch(fid: int, body: FeedbackPatch):
     out = feedback.update(fid, body.status, body.admin_note)
     if not out:
         raise HTTPException(404, "Geri bildirim yok")
+    return out
+
+
+# ---------------------------------------------------------------- Destek yazışması (app/support.py; yetenek support_chat)
+
+def _support_uid() -> int:
+    """Yazışma hesaba bağlı: oturumsuz ve demoda yok (onların bildirimi /api/feedback ile yöneticiye gider)."""
+    u = db.current_user() or {}
+    if not u.get("id") or u.get("demo"):
+        raise HTTPException(403, "Destek yazışması için hesabınla giriş yap")
+    return u["id"]
+
+
+def _support_error(e) -> HTTPException:
+    return HTTPException(e.status, str(e))
+
+
+@app.get("/api/support")
+def support_thread():
+    """Kendi destek yazışman: mesajlar (author user | admin | system), okundu bilgisi (user mesajında seen), ekstre
+    bildiriminde ve "tekrar dene" eyleminde bekleyen dosya (pending: {id, filename, expires_at} | null)."""
+    from app import support
+
+    return support.thread(_support_uid())
+
+
+@app.get("/api/support/unread")
+def support_unread():
+    """Rozet: yöneticinin / sistemin okunmamış mesajı. Oturumsuz ve demoda 0."""
+    from app import support
+
+    u = db.current_user() or {}
+    if not u.get("id") or u.get("demo"):
+        return {"unread": 0, "status": None}
+    return support.unread(u["id"])
+
+
+@app.post("/api/support/seen")
+def support_seen():
+    from app import support
+
+    support.mark_user_seen(_support_uid())
+    return {"ok": True}
+
+
+@app.get("/api/support/messages/{fid}/screenshot/{n}")
+def support_screenshot(fid: int, n: int):
+    """Kendi mesajının ekran görüntüsü (başkasınınki 404)."""
+    from app import support
+
+    got = support.screenshot(_support_uid(), fid, n)
+    if not got:
+        raise HTTPException(404, "Görüntü yok")
+    data, ctype = got
+    return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=3600",
+                                                     "Content-Security-Policy": "default-src 'none'"})
+
+
+@app.post("/api/support/report")
+@_heavy
+def support_report(request: Request, report: str = Form("{}"), bank_name: str | None = Form(None),
+                   note: str | None = Form(None), send_doc: bool = Form(False), file: UploadFile | None = File(None)):
+    """Okunamayan ekstreyi bildir (yetenek upload_report). report: yükleme satırındaki report (+ app_version, platform).
+    send_doc (varsayılan kapalı, kullanıcının açık onayı): dosya gönderilir ama yöneticiye yalnız maskeli yapı + teşhis
+    gider; dosya kullanıcının kendi defterinde 30 gün bekler ("tekrar dene"). Saatte 10 (Sorun bildir'le ortak)."""
+    from app import feedback, support
+
+    uid = _support_uid()
+    rep = support.check_report(report)
+    key = feedback.client_key(client_ip(request))
+    if feedback.limited(uid, key):
+        raise HTTPException(429, "Bu saat içinde çok fazla bildirim gönderildi; biraz sonra tekrar dene.",
+                            headers={"Retry-After": "600"})
+    doc = None
+    if send_doc:
+        if file is None:
+            raise HTTPException(422, "Belge eklenmedi")
+        data = _upload_bytes(file, limits.max_file_bytes())
+        try:
+            limits.check_size(data)
+        except limits.LimitError as e:
+            raise HTTPException(413, errors.user_text(e)) from e
+        if not data or _sniff_image(data, file.content_type, (file.filename or "").lower()):
+            raise HTTPException(422, "Yalnız ekstre dosyası (PDF, Excel, CSV) gönderilebilir")
+        doc = (data, (file.filename or "ekstre.pdf")[:200])
+    book_owner = support.upload_book()  # yüklendiği defter: "Tekrar dene" oraya kaydeder
+    try:
+        passwords = db.pdf_passwords()  # açık defterin hatırlanan şifreleri (yükleme de bunlarla denedi)
+        with support.own_space(uid):
+            passwords += [p for p in db.pdf_passwords() if p not in passwords]
+            if doc:
+                support.pending_room(*doc)
+        out = support.create_report(uid, key, rep, bank_name, note, doc, passwords, book_owner)
+    except support.SupportError as e:
+        raise _support_error(e) from e
+    try:
+        support.notify_report_async(out["id"], uid, out["summary"])
+    except Exception:  # noqa: BLE001
+        logging.getLogger("hesapkitap.support").exception("ekstre bildirimi bildirimi başlatılamadı")
+    return {"ok": True, "id": out["id"], "pending": out["pending"]}
+
+
+@app.get("/api/support/pending")
+def support_pending():
+    """Kendi defterinde bekleyen (okunamamış, bildirilmiş) ekstreler."""
+    from app import support
+
+    with support.own_space(_support_uid()):
+        return {"items": support.pending_list(), "days": support.PENDING_DAYS}
+
+
+@app.delete("/api/support/pending/{pid}")
+def support_pending_delete(pid: int):
+    from app import support
+
+    with support.own_space(_support_uid()):
+        if not support.pending_delete(pid):
+            raise HTTPException(404, "Bekleyen dosya yok")
+    return {"ok": True}
+
+
+class RetryIn(BaseModel):
+    password: str | None = Field(None, max_length=200)
+    remember: bool = False
+
+
+RETRY_ACCOUNT_MSG = ("Bu belge hesap dökümüne benziyor; Ekstreler → Hesap hareketleri bölümünden yükle. Dosya "
+                     "bekleyenlerde duruyor.")
+
+
+@app.post("/api/support/pending/{pid}/retry")
+@_heavy
+def support_pending_retry(pid: int, body: RetryIn | None = None):
+    """Bekleyen dosyayı yeniden yüklemeden oku (yetenek upload_retry): yükleme ucuyla aynı yol, okuma hakkı kuralları
+    aynen (ekstre bulunamazsa hak düşmez). Kendi defterine kaydedilir. saved / duplicate → dosya bekleyenlerden düşer,
+    yazışmaya sistem satırı. Dönen: yükleme sonucunun tek satırı (status, message, bank, …)."""
+    import io
+
+    from app import support, undo
+
+    uid = _support_uid()
+    body = body or RetryIn()
+    # dosya kişinin kendi alanında; kayıt yüklendiği deftere (yetkisi/defter yoksa "Benim" defterine)
+    with support.own_space(uid):
+        row = support.pending_get(pid)
+        if not row:
+            raise HTTPException(404, "Bekleyen dosya bulunamadı; süresi dolmuş ya da silinmiş olabilir")
+        data = support.pending_file(row)
+        if data is None:
+            support.pending_delete(pid)
+            raise HTTPException(404, "Bekleyen dosya bulunamadı; süresi dolmuş ya da silinmiş olabilir")
+    uf = UploadFile(file=io.BytesIO(data), filename=row["filename"], size=len(data))
+    with support.target_space(uid, row.get("book_owner")) as moved:
+        with undo.batch(f"Ekstre (tekrar): {row['filename'][:110]}") as b:
+            results = _upload_statements([uf], body.password, body.remember)
+            b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
+                                                    "message")} for r in results]
+    r = {**results[0], **{k: v for k, v in results[-1].items() if k in ("cycle_day", "storage_warning")}}
+    ok = r.get("status") in ("saved", "duplicate")
+    if ok:
+        with support.own_space(uid):
+            support.pending_delete(pid)
+        support.record_retry(uid, row["feedback_id"], True, moved)
+        if moved:
+            r["moved"] = moved
+    elif r.get("status") in ("account_statement", "ask"):
+        r = {**r, "status": "error", "message": RETRY_ACCOUNT_MSG}
+    r.pop("report", None)
+    return r | {"pending_id": pid, "done": ok}
+
+
+# yönetici: destek gelen kutusu
+
+class SupportReply(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    retry_ref: int | None = None   # "Düzeltildi — tekrar dene": kullanıcının ekstre bildirimi (feedback id)
+    resolve: bool = False          # yanıtla birlikte çözüldü işaretle
+
+
+class SupportStatus(BaseModel):
+    status: Literal["acik", "cozuldu"]
+
+
+@app.get("/api/admin/support")
+def admin_support(status: Literal["acik", "cozuldu"] | None = None):
+    """Gelen kutusu: kişi başı yazışma (okunmamış önce, sonra yeniden eskiye), son mesaj, bağlam (platform, sürüm, ekran);
+    counts {acik, cozuldu, okunmamis}; anon {count, new}: oturumsuz / demo bildirimleri (yanıtlanamaz; uid 0)."""
+    from app import support
+
+    _require_admin()
+    return support.inbox(status)
+
+
+@app.get("/api/admin/support/{uid}")
+def admin_support_thread(uid: int):
+    """Yazışma (okundu işaretlemez: POST .../seen). uid 0: oturumsuz ve demo bildirimleri."""
+    from app import support
+
+    _require_admin()
+    if uid == 0:
+        return support.anon_thread()
+    out = support.admin_thread(uid)
+    if not out:
+        raise HTTPException(404, "Yazışma yok")
+    return out
+
+
+@app.post("/api/admin/support/{uid}/seen")
+def admin_support_seen(uid: int):
+    from app import support
+
+    _require_admin()
+    if uid == 0:
+        support.mark_anon_seen()
+    else:
+        support.mark_admin_seen(uid)
+    return {"ok": True}
+
+
+@app.post("/api/admin/support/{uid}/reply")
+def admin_support_reply(uid: int, body: SupportReply):
+    """Yanıt yaz; retry_ref verilirse "Düzeltildi — tekrar dene" (kullanıcı bekleyen dosyasını yeniden yüklemeden okur).
+    Kullanıcıya push "destek" (kişisel veri yok)."""
+    from app import support
+
+    _require_admin()
+    if uid == 0:
+        raise HTTPException(409, "Oturumsuz ve demo bildirimleri yanıtlanamaz")
+    try:
+        return support.reply(uid, (db.current_user() or {}).get("id"), body.message, body.retry_ref, body.resolve)
+    except support.SupportError as e:
+        raise _support_error(e) from e
+
+
+@app.patch("/api/admin/support/{uid}")
+def admin_support_status(uid: int, body: SupportStatus):
+    from app import support
+
+    _require_admin()
+    if not support.admin_thread(uid):
+        raise HTTPException(404, "Yazışma yok")
+    support.set_status(uid, body.status)
+    return {"ok": True, "status": body.status}
+
+
+@app.get("/api/admin/support/messages/{fid}/structure")
+def admin_support_structure(fid: int):
+    """Ekstre bildiriminin maskeli yapısı ve teşhisi (dosyanın kendisi sunucuda yöneticiye açık değil)."""
+    from app import support
+
+    _require_admin()
+    out = support.structure(fid)
+    if not out:
+        raise HTTPException(404, "Bu bildirimde yapı yok")
     return out
 
 
@@ -3949,6 +4273,7 @@ class JarBuy(BaseModel):
     payment: Literal["havale", "nakit", "kredi_karti"] = "havale"
     account_id: int | None = None
     note: str | None = None
+    person_id: int | None = None  # kumbara_shares_v2: kim için (katılımcılı altın/döviz kumbarası)
 
 
 class JarIn(BaseModel):
@@ -3972,6 +4297,10 @@ class JarPatch(BaseModel):
     auto_day: int | None = Field(None, ge=1, le=28)
     note: str | None = None
     closed: bool | None = None
+    remind_day: int | None = Field(None, ge=1, le=28)  # kumbara_shares: payı gelmeyene hatırlatma günü (boş: 25)
+    share_monthly: float | None = Field(None, gt=0)     # kumbara_shares: ayda toplam pay, kumbaranın biriminde (null: hedeften)
+    share_from: str | None = Field(None, pattern=r"^(\d{4}-(0[1-9]|1[0-2])|all)$")  # v2: bu aydan itibaren (varsayılan bu ay)
+    carry_over: bool | None = None                      # v2: fazla atılan sonraki ayların payına sayılsın
     unlink_debt: bool | None = None  # "Başka hedefe çevir": borçla bağı kaldır (yetenek debt_jar)
 
 
@@ -3980,6 +4309,36 @@ class JarMoveIn(BaseModel):
     direction: Literal["yatir", "cek"] = "yatir"
     move_date: date | None = None
     note: str | None = None
+    person_id: int | None = None  # kumbara_shares: kim attı (boş: ekleyen / sahip)
+    outside: bool = False         # kumbara_shares: para hesaplarda değil (elden / kişide): harcanabilirden düşmez
+
+
+class JarPersonIn(BaseModel):
+    """Kumbara katılımcısı: defterdeki kullanıcı (user_id) ya da uygulamayı kullanmayan biri (name)."""
+    user_id: int | None = None
+    name: str | None = Field(None, min_length=1, max_length=40)
+    share: float | None = Field(None, gt=0)  # elle aylık pay, kumbaranın biriminde (₺, gram, adet, $); boş: eşit böl
+
+
+class JarPersonPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=40)
+    share: float | None = Field(None, gt=0)  # null gönderilirse eşit bölüşe döner
+    # v2: pay değişikliği bu aydan itibaren (varsayılan bu ay); "all": tüm aylar (geçmiş de bu payla)
+    from_month: str | None = Field(None, pattern=r"^(\d{4}-(0[1-9]|1[0-2])|all)$")
+    sort: int | None = Field(None, ge=0, le=1000)
+
+
+def _share_value(jid: int, v: float | None) -> float | None:
+    """Pay kumbaranın birim hassasiyetinde: TL kuruş, gram/döviz 0,01, adet tam sayı (adette küsurat 422)."""
+    from app import jar_shares
+
+    if v is None:
+        return None
+    j = next((x for x in db.list_jars() if x["id"] == jid), None)
+    sc = jar_shares.scale_of((j or {}).get("unit"))
+    if sc == 1 and abs(v - round(v)) > 1e-9:
+        raise HTTPException(422, "Adetle biriken kumbarada pay tam sayı olur")
+    return round(v * sc) / sc
 
 
 def _jar_debt(j: dict, debts: dict[int, dict] | None) -> dict | None:
@@ -4009,12 +4368,30 @@ def _jar_debt(j: dict, debts: dict[int, dict] | None) -> dict | None:
     return out
 
 
-def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans: dict[int, dict] | None = None) -> dict:
+def _jar_ctx() -> dict:
+    """Katılımcı adları ve kimlikler (kumbara_shares): defterdeki kişiler, giriş yapan, defter sahibi."""
+    from app import book
+
+    u = db.current_user()
+    ppl = book.people() if u else []
+    return {"names": {p["id"]: p["name"] for p in ppl}, "me": u.get("id") if u else None,
+            "owner": (u.get("member_of") or u.get("id")) if u else None}
+
+
+def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans: dict[int, dict] | None = None,
+              ctx: dict | None = None) -> dict:
     """Hedef ilerlemesi, son tarihe göre ayda gereken ve bu hızla ne zaman ulaşılacağı.
     Hız: otomatik aylık ayırma varsa o; yoksa son 3 ayda ayrılan (başlangıç ayırması hariç) aylık ortalaması."""
     from datetime import timedelta
 
+    from app import jar_shares
+
     out = {**j}
+    ctx = ctx if ctx is not None else _jar_ctx()
+    # katılımcılar ve bu ayki paylar (yetenek kumbara_shares; katılımcı yoksa null). people ham satırlar istemciye gitmez
+    out.pop("people", None)
+    out["shares"] = jar_shares.status(j, today, ctx["names"], ctx["me"], ctx["owner"])
+    out["outside"] = round(max(0.0, j["balance"] - j.get("in_accounts", j["balance"])), 2)
     out["debt"] = _jar_debt(j, debts)
     unit = j.get("unit") or "TRY"
     if unit != "TRY":  # altın/döviz: miktar, bugünkü değer, ödenen, kâr/zarar, bu ayki alım
@@ -4062,6 +4439,12 @@ def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans:
         out["goal_status"] = None
         for k in ("need_per_month", "eta", "on_track"):
             out.pop(k, None)
+    # katılımcılı kumbara: paylar toplamı hedefin gerektirdiğinden azsa (hedef + son tarih) "ayda ₺X gerekiyor" notu ve
+    # "Toplamı ₺X yap" eylemi (PATCH share_monthly; elle paylar korunur). Rakam hedef kutusundakiyle aynı (goal_status)
+    if out["shares"] is not None:
+        need = (out["goal_status"] or {}).get("needed_monthly") if j.get("deadline") else None
+        sh = out["shares"]
+        sh["needed"] = need if need and sh["basis"] != "hedef" and sh["total"] + 1e-9 < need else None
     return out
 
 
@@ -4082,7 +4465,8 @@ def list_jars():
     today = date.today()
     jars = db.list_jars(today)
     debts = _jar_debts(jars)
-    return [_jar_view(j, today, debts, _jar_plans(jars, debts)) for j in jars]
+    plans_, ctx = _jar_plans(jars, debts), _jar_ctx()
+    return [_jar_view(j, today, debts, plans_, ctx) for j in jars]
 
 
 def _jar_plans(jars: list[dict], debts: dict[int, dict] | None) -> dict[int, dict]:
@@ -4122,6 +4506,14 @@ def patch_jar(jid: int, body: JarPatch):
         data["closed_at"] = date.today().isoformat() if data.pop("closed") else None
         if reopen and db.reopen_conflict(jid):
             raise HTTPException(409, "Bu borcun açık bir kumbarası daha var; bunu açmadan önce ötekini kapat")
+    share_from = data.pop("share_from", None)
+    if "share_monthly" in data:  # ayda toplam: tarihli (bu aydan itibaren)
+        if not db.set_jar_total(jid, _share_value(jid, data.pop("share_monthly")), share_from):
+            raise HTTPException(404, "Kumbara yok")
+        if not data:
+            return {"ok": True}
+    if "carry_over" in data:
+        data["carry_over"] = 1 if data["carry_over"] else 0
     if not db.update_jar(jid, data):
         raise HTTPException(404, "Kumbara yok")
     return {"ok": True}
@@ -4134,15 +4526,107 @@ def delete_jar(jid: int):
     return {"ok": True}
 
 
+def _member_jar_person_guard(jid: int, person_id: int | None) -> None:
+    """"Görür ve ekler" üyesi kendi katkısını ya da uygulamayı kullanmayan birinin katkısını ekler; başka bir üyenin
+    (ya da sahibin) adına ekleyemez (o kişi kendisi ya da defter sahibi / tam yetkili ekler)."""
+    from app import book
+
+    m = book.member()
+    if not m or person_id is None or book.role(m) == "full":
+        return
+    p = next((x for x in db.jar_people(jid) if x["id"] == person_id), None)
+    if p and p["user_id"] is not None and p["user_id"] != m["id"]:
+        raise HTTPException(403, "Başka bir üyenin katkısını kendisi ya da defter sahibi ekler")
+
+
 @app.post("/api/jars/{jid}/moves")
 def add_jar_move(jid: int, body: JarMoveIn):
     amt = body.amount if body.direction == "yatir" else -body.amount
+    _member_jar_person_guard(jid, body.person_id if amt > 0 else None)
     try:
-        return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note)}
+        return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note,
+                                      body.person_id, body.outside)}
     except LookupError as e:
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+# ---------------------------------------------------------------- kumbara katılımcıları (yetenek kumbara_shares)
+
+def _jar_or_404(jid: int) -> dict:
+    j = next((x for x in db.list_jars() if x["id"] == jid), None)
+    if not j:
+        raise HTTPException(404, "Kumbara yok")
+    return j
+
+
+@app.post("/api/jars/{jid}/people")
+def add_jar_person(jid: int, body: JarPersonIn):
+    """Katılımcı ekle (Premium "kumbara"; ortak defterde sahip / tam yetkili). user_id: defterdeki kişi (sahip ya da
+    üye; değilse 400); yoksa name (uygulamayı kullanmayan). 409: zaten kumbarada; 422: TL kumbarası değil / kapalı."""
+    from app import book
+
+    _jar_or_404(jid)
+    if body.user_id is not None:
+        p = next((x for x in book.people() if x["id"] == body.user_id), None)
+        if not p:
+            raise HTTPException(400, "Bu kişi defterde değil")
+        name = p["name"]
+    elif body.name and body.name.strip():
+        name = body.name.strip()
+    else:
+        raise HTTPException(422, "Ad yaz ya da defterden birini seç")
+    try:
+        pid = db.add_jar_person(jid, name, body.user_id, _share_value(jid, body.share))
+    except db.JarPersonExists as e:
+        raise HTTPException(409, str(e)) from None
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"id": pid}
+
+
+@app.patch("/api/jars/{jid}/people/{pid}")
+def patch_jar_person(jid: int, pid: int, body: JarPersonPatch):
+    """Ad (uygulamayı kullanmayanda), elle aylık pay (null: eşit böl; from_month'tan itibaren, varsayılan bu ay), sıra."""
+    data = body.model_dump(exclude_unset=True)
+    if "share" in data:
+        data["share"] = _share_value(jid, data["share"])
+    try:
+        ok = db.update_jar_person(jid, pid, data)
+    except db.JarPersonExists as e:
+        raise HTTPException(409, str(e)) from None
+    if not ok:
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True}
+
+
+@app.put("/api/jars/{jid}/people/{pid}/exempt/{month}")
+def put_jar_exempt(jid: int, pid: int, month: str):
+    """"Bu ay yok" (kumbara_shares_v2): kişinin o ayki payı 0; geçmişte tam sayılır, eksiği devretmez. Geri al: DELETE."""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(422, "Ay YYYY-AA biçiminde")
+    if not db.set_jar_exempt(jid, pid, month, True):
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True}
+
+
+@app.delete("/api/jars/{jid}/people/{pid}/exempt/{month}")
+def delete_jar_exempt(jid: int, pid: int, month: str):
+    if not db.set_jar_exempt(jid, pid, month, False):
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True}
+
+
+@app.delete("/api/jars/{jid}/people/{pid}")
+def delete_jar_person(jid: int, pid: int):
+    """Katılımcıyı çıkar: katkısı varsa geçmişi kalır (removed), yoksa silinir (deleted)."""
+    r = db.remove_jar_person(jid, pid)
+    if not r:
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True, "result": r}
 
 
 class DebtJarIn(BaseModel):
@@ -4228,9 +4712,10 @@ def pay_debt_from_jar(jid: int, body: DebtFromJarIn):
 def buy_into_jar(jid: int, body: JarBuy):
     """Altın/döviz kumbarası: aldım → varlık + gider kaydı + kumbara hareketi."""
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
+    _member_jar_person_guard(jid, body.person_id)
     try:
         return {"id": db.buy_into_jar(jid, body.quantity, body.cost, (body.buy_date or date.today()).isoformat(),
-                                      body.account_id, body.payment, body.note)}
+                                      body.account_id, body.payment, body.note, body.person_id)}
     except LookupError as e:
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
@@ -4241,13 +4726,39 @@ class JarMovePatch(BaseModel):
     quantity: float | None = Field(None, gt=0)
     cost: Money | None = Field(None, gt=0)
     move_date: date | None = None
+    # TL kumbarası hareketi (kumbara_shares): tutar, not, kim attı, para nerede
+    amount: Money | None = Field(None, gt=0)
+    note: str | None = Field(None, max_length=120)
+    person_id: int | None = None
+    outside: bool | None = None
 
 
 @app.patch("/api/jar-moves/{mid}")
 def patch_jar_purchase(mid: int, body: JarMovePatch):
-    """Altın/döviz kumbarası alımını düzelt (kuyumcuda ödenen farklıysa)."""
-    if not db.update_jar_purchase(mid, body.quantity, body.cost, body.move_date.isoformat() if body.move_date else None):
-        raise HTTPException(404, "Alım bulunamadı")
+    """Altın/döviz kumbarası alımını düzelt (kuyumcuda ödenen farklıysa). TL kumbarası hareketinde (kumbara_shares)
+    tutar, tarih, not, kim attı ve para nerede düzelir; "Görür ve ekler" üyesi yalnız kendi eklediğini düzeltir."""
+    from app import book
+
+    m = db.get_jar_move(mid)
+    if not m:
+        raise HTTPException(404, "Hareket yok")
+    mem = book.member()
+    if mem and book.role(mem) != "full":
+        if m["created_by"] != mem["id"] or m["cost"] is not None:
+            raise HTTPException(403, "Bu hareketi ekleyen ya da defter sahibi düzeltir")
+        if "person_id" in body.model_fields_set:
+            _member_jar_person_guard(m["jar_id"], body.person_id)
+    if m["cost"] is not None:
+        if not db.update_jar_purchase(mid, body.quantity, body.cost, body.move_date.isoformat() if body.move_date else None):
+            raise HTTPException(404, "Alım bulunamadı")
+        return {"ok": True}
+    data = body.model_dump(include={"amount", "note", "person_id", "outside"}, exclude_unset=True)
+    if body.move_date:
+        data["move_date"] = body.move_date.isoformat()
+    try:
+        db.update_jar_move(mid, data)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"ok": True}
 
 
@@ -6065,7 +6576,7 @@ def _upload_incident(r: dict, had_password: bool) -> str | None:
 
 def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
                        forced: str | None = None, docs: bool = False) -> list[dict]:
-    from app import doc_cache, doc_reads, mailbox
+    from app import doc_cache, doc_reads, mailbox, support
     from app.parsers import PasswordRequired
     from app.parsers.ai import NotAStatement
 
@@ -6099,7 +6610,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             try:
                 imp = card_excel.import_file(data, f.filename or "kart.xlsx")
             except limits.LimitError as e:  # zip bombası vb.: hesap hareketleri akışına da gönderilmez
-                results.append({**res, "status": "error", "message": errors.user_text(e)})
+                results.append({**res, "status": "error", "message": errors.user_text(e),
+                                "report": support.upload_report("sinir", name, data, None)})
                 continue
             except Exception:  # noqa: BLE001 - okunamazsa hesap hareketleri akışı denesin
                 imp = None
@@ -6115,7 +6627,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         try:
             guess = _statement_kind(data, tried)
         except limits.LimitError as e:  # çok sayfalı / çok uzun süren PDF: bu dosya okunmaz, diğerleri sürer
-            results.append({**res, "status": "error", "message": errors.user_text(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e),
+                            "report": support.upload_report("sinir", name, data, None)})
             continue
         text = next((t for t in (_try_text(data, pw) for pw in [None, *tried]) if t), None) if guess else None
         if not forced and guess != "dekont" and mailbox.looks_like_bill(text):
@@ -6162,11 +6675,14 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             if forced != "card" and mailbox.mentions_bill(text):
                 results.append(_upload_document(res, data, "application/pdf") if docs
                                else {**res, "status": "error", "message": UPLOAD_BILL_MSG})
-            else:
-                results.append({**res, "status": "error", "message": errors.user_text(e)})
+            else:  # "Bildir" (yetenek upload_report): istemci formu bu bilgiyle doldurur
+                results.append({**res, "status": "error", "message": errors.user_text(e),
+                                "report": support.upload_report("ekstre_bulunamadi", name, data, text)})
             continue
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
-            results.append({**res, "status": "error", "message": errors.user_text(e)})
+            results.append({**res, "status": "error", "message": errors.user_text(e),
+                            "report": support.upload_report("sinir" if isinstance(e, limits.LimitError) else "okunamadi",
+                                                            name, data, text)})
             continue
         if password and remember:
             db.remember_pdf_password(password)
@@ -7493,6 +8009,25 @@ def put_subscription(body: SubState):
     db.set_subscription_state(body.merchant, body.status, (body.changed_at or date.today()).isoformat(), body.note,
                               body.new_amount)
     return {"ok": True}
+
+
+@app.get("/api/subscriptions/detail")
+def subscription_detail(merchant: str | None = Query(None, min_length=1, max_length=200),
+                        app_id: str | None = Query(None, alias="app", min_length=1, max_length=40)):
+    """Abonelik ayrıntısı (yetenek subscription_detail; app/sub_detail.py): ?merchant=<Tasarruf satırının merchant'ı>
+    ya da ?app=<mağaza adayı id>. {kind card|store, key, title, logo, status, status_text, status_date, amount, per,
+    totals {all, last12: {amount, count, since, first_date, fx_text, text}}, since12, months [{month, label, amount,
+    count, fx_text, change {kind zam|indirim|kur|adet, diff, from, to, fx_text}|null, after_cancel, over}],
+    transactions [{uid, date, month, amount, label, via kart|hesap, fx, description, after_cancel}], fx, fx_note,
+    after_cancel {amount, count}|null}. İşleme dokununca: uid ile mevcut işlem ayrıntısı (month: satırın dönemi)."""
+    from app import sub_detail
+
+    if bool(merchant) == bool(app_id):
+        raise HTTPException(422, "merchant ya da app verilmeli")
+    out = sub_detail.card_detail(merchant) if merchant else sub_detail.store_detail(app_id)
+    if not out:
+        raise HTTPException(404, "Abonelik bulunamadı")
+    return out
 
 
 # ---------------------------------------------------------------- uygulama mağazası abonelikleri (app/store_subs.py)

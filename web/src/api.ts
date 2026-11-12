@@ -668,6 +668,8 @@ export interface UploadResult {
   reason?: "quota"; kind?: ReadKind; extra_left?: number; // hak doldu: hangi sayaç (belge / fiş), ek paket bakiyesi
   /** S6 (sunucu 48d6cc2): ekstre denklemi tuttu mu; dogrulanamadi ise verification_text nedeni söyler */
   verified?: boolean; verification?: Verification; verification_text?: string | null; equation_diff?: number | null;
+  /** yetenek upload_report: okunamayan ekstre/döküm satırında "Bildir" formunun hazır bilgisi (lib/destek.ts) */
+  report?: { code: string; file_type?: string; pages?: number | null; bank_guess?: string; has_text?: boolean };
 }
 
 /** Belge doğrulama durumu: dogrulandi (rakamlar tuttu), dogrulanamadi (tutmadı), onaylandi (kullanıcı doğru dedi). */

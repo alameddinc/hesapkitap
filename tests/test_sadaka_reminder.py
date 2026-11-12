@@ -508,3 +508,23 @@ def test_text_scan_tone():
                 "vermedin", "bozul", "kaçırdın", "daha fazla", "daha çok", "₺", " tl", "rozet", "puan", "seri"):
         assert bad not in allowed, bad
     assert "hayırlı cumalar" in text
+
+
+def test_ratio_current_month_counts_expected_income(client, tmpdb):
+    """12.11 cihaz testi: maaş henüz yatmadan ayın küçük geliri kadar sadaka %100 görünüyordu; bu ayın tabanına
+    gelmemiş sabit gelir (Özet "Beklenen" / Planlama ile aynı kaynak) eklenir."""
+    from app import finance, sadaka_reminder as sr
+
+    today = date.today()
+    cur = finance.current_period(today)
+    day = min(28, max(today.day + 1, 2))  # maaş günü bugünden sonra: henüz yatmadı
+    if day <= today.day:
+        return  # ayın son günleri: beklenen kalmaz (test anlamsız)
+    assert client.post("/api/recurring", json={"description": "ORNEK AS MAAS", "amount": 40000, "kind": "gelir",
+                                               "category": "Maaş", "day_of_month": day,
+                                               "start_month": finance.add_months(cur, -3)}).status_code == 200
+    d = today.isoformat()
+    _entry(tmpdb, d, 10000, kind="gelir", category="Ek Gelir", desc="ORNEK SERBEST IS")
+    _don(d, amount=10000)
+    row = next(x for x in sr.ratio(6, today)["months"] if x["month"] == cur)
+    assert row["partial"] and row["expected_income"] == 40000 and row["income"] == 50000 and row["ratio"] == 20.0
