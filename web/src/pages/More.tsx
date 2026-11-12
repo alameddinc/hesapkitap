@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { useState } from "react";
-import { ArrowLeftRight, ListChecks, BadgePercent, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
+import { ArrowLeftRight, BadgeCheck, ListChecks, BadgePercent, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
 import { inSharedBook, routeVisible, useBook, useIsAdmin, useMeta } from "../components/hooks";
@@ -72,6 +72,9 @@ export default function More() {
         <Item icon={<TagIcon size={18} />} label="Fiyatlar: fişlerden ürün fiyat takibi" onClick={() => ui.go("fiyatlar")} route="fiyatlar" />
         {meta.data?.capabilities?.includes("shopping_list") && (
           <Item icon={<ShoppingCart size={18} />} label="Alışveriş listesi: en ucuz nerede" onClick={() => ui.go("alisveris")} route="alisveris" />
+        )}
+        {meta.data?.capabilities?.includes("warranty") && (
+          <Item icon={<BadgeCheck size={18} />} label="Garantiler: fatura, garanti belgesi, bitiş hatırlatması" onClick={() => ui.go("garantiler")} route="garantiler" />
         )}
         {meta.data?.capabilities?.includes("interest_page") && !(inSharedBook(book.data) && book.data?.hide_fees) && (
           <Item icon={<BadgePercent size={18} />} label="Faiz ve ücretler: hangi karttan, neden, nasıl önlenir" onClick={() => ui.go("faiz")} route="faiz" />

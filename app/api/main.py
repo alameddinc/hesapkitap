@@ -8507,6 +8507,217 @@ def export_receipts(from_: date | None = Query(None, alias="from"), to: date | N
                     headers={"Content-Disposition": f'attachment; filename="hesapkitap-fisler-{span}.xlsx"'})
 
 
+# ---------------------------------------------------------------- garanti arşivi (app/warranty.py)
+
+class WarrantyIn(BaseModel):
+    """Ürün. entry_id / txn_id: kayıtlı fiş ya da kart harcamasından eklendi. receipt_file: okuma yanıtındaki ya da
+    kayıttaki fiş fotoğrafı (belge olarak bağlanır; bu defterde saklanmış olmalı). attach_receipt: kaydın fiş fotoğrafı
+    bağlansın (varsayılan evet)."""
+    name: str = Field(min_length=1, max_length=120)
+    brand: str | None = Field(None, max_length=80)
+    model: str | None = Field(None, max_length=80)
+    store: str | None = Field(None, max_length=120)
+    purchase_date: date
+    price: Money | None = Field(None, ge=0)
+    months: int | None = Field(None, ge=0, le=240)
+    extra_months: int | None = Field(None, ge=0, le=240)
+    serial_no: str | None = Field(None, max_length=80)
+    note: str | None = Field(None, max_length=1000)
+    entry_id: int | None = None
+    txn_id: int | None = None
+    receipt_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.(?:jpg|pdf)$")
+    attach_receipt: bool = True
+
+
+class WarrantyPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=120)
+    brand: str | None = Field(None, max_length=80)
+    model: str | None = Field(None, max_length=80)
+    store: str | None = Field(None, max_length=120)
+    purchase_date: date | None = None
+    price: Money | None = Field(None, ge=0)
+    months: int | None = Field(None, ge=0, le=240)
+    extra_months: int | None = Field(None, ge=0, le=240)
+    serial_no: str | None = Field(None, max_length=80)
+    note: str | None = Field(None, max_length=1000)
+
+
+def _warranty_or_404(wid: int) -> dict:
+    from app import warranty
+
+    w = warranty.get(wid)
+    if not w:
+        raise HTTPException(404, "Ürün bulunamadı")
+    return w
+
+
+def _warranty_call(fn, *a):
+    from app import warranty
+
+    try:
+        return fn(*a)
+    except KeyError as e:
+        raise HTTPException(404, "Ürün bulunamadı") from e
+    except warranty.Forbidden as e:
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:  # TooMany dahil
+        raise HTTPException(422, str(e)) from e
+
+
+@app.get("/api/warranties")
+def warranties(q: str | None = Query(None, max_length=100), status: Literal["aktif", "yakinda", "bitti", "all"] | None = None):
+    """Garantiler: {items, counts {aktif, yakinda, bitti, all}, quota {limit, used, locked, need}, default_months,
+    soon_days, max_files, doc_types}. items: bitişi yakın önce, bitenler sonda; q ad/marka/model/mağaza/seri no/notta."""
+    from app import warranty
+
+    return warranty.listing(db.current_user(), q, status)
+
+
+@app.get("/api/warranties/draft")
+def warranty_draft(entry_id: int | None = None, txn_id: int | None = None):
+    """"Garantiye ekle" formu kayıttan / kart harcamasından: {source, entry_id, txn_id, name, store, purchase_date, price,
+    items [{name, qty, amount}] (fiş kalemleri; seçilen kalem ad ve fiyatı doldurur), receipt_file, total}."""
+    from app import warranty
+
+    if (entry_id is None) == (txn_id is None):
+        raise HTTPException(422, "entry_id ya da txn_id gerekli")
+    _visible_or_404("entry" if entry_id is not None else "txn", entry_id if entry_id is not None else txn_id)
+    d = warranty.draft_from_entry(entry_id) if entry_id is not None else warranty.draft_from_txn(txn_id)
+    if not d:
+        raise HTTPException(404, "Kayıt bulunamadı")
+    return d
+
+
+@app.get("/api/warranties/receipts")
+def warranty_receipts(q: str | None = Query(None, max_length=100), limit: int = Query(30, ge=1, le=100)):
+    """"Kayıtlı fişten ekle": fotoğrafı ya da kalemleri olan son gider kayıtları [{entry_id, date, store, amount, items,
+    photo, preview}]."""
+    from app import warranty
+
+    return warranty.receipts(q, limit)
+
+
+@app.get("/api/warranties/{wid}")
+def warranty_get(wid: int):
+    return _warranty_or_404(wid)
+
+
+@app.post("/api/warranties")
+def warranty_create(body: WarrantyIn, request: Request):
+    """Ürün ekle. Ücretsiz pakette (plans "garanti") defterde en çok plans.FREE_WARRANTIES ürün: 402. Idempotency-Key
+    satıra yazılır (çevrimdışı kuyruğun tekrarı aynı ürünü döner)."""
+    from app import warranty
+
+    if body.entry_id is not None:
+        _visible_or_404("entry", body.entry_id)
+    if body.txn_id is not None:
+        _visible_or_404("txn", body.txn_id)
+    key = _client_key(request)
+    with db.connect() as c:
+        dup = key and c.execute("SELECT id FROM warranties WHERE client_key = ?", (key,)).fetchone()
+    if dup:
+        return _warranty_or_404(dup[0])
+    q = warranty.quota(db.current_user())
+    if q["locked"]:
+        raise HTTPException(402, detail=str(plans.PlanRequired("garanti")), headers={"X-Plan-Required": "garanti"})
+    receipt_name = body.receipt_file
+    if body.entry_id is not None and body.attach_receipt and not receipt_name:
+        with db.connect() as c:
+            r = c.execute("SELECT receipt_file FROM entries WHERE id = ?", (body.entry_id,)).fetchone()
+        receipt_name = r[0] if r else None
+    if receipt_name and not _adopt_file("receipts", receipt_name):
+        receipt_name = None  # bu defterde (ya da üyenin öbür defterinde) saklanmış bir fotoğraf değil: bağlanmaz
+    data = body.model_dump(include=set(warranty.FIELDS), exclude_unset=False)
+    data["purchase_date"] = body.purchase_date.isoformat()
+    try:
+        wid = warranty.create(data, body.entry_id, body.txn_id, key)
+        if receipt_name:
+            warranty.link_file(wid, "receipts", receipt_name, "fatura", None, None, check=False)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return _warranty_or_404(wid)
+
+
+@app.patch("/api/warranties/{wid}")
+def warranty_patch(wid: int, body: WarrantyPatch):
+    from app import warranty
+
+    data = body.model_dump(exclude_unset=True)
+    if data.get("purchase_date"):
+        data["purchase_date"] = data["purchase_date"].isoformat()
+    for k in ("name", "purchase_date"):
+        if k in data and data[k] is None:
+            raise HTTPException(422, "Ürün adı ve alış tarihi boş olamaz")
+    _warranty_call(warranty.update, wid, data)
+    return _warranty_or_404(wid)
+
+
+@app.delete("/api/warranties/{wid}")
+def warranty_delete(wid: int):
+    from app import warranty
+
+    _warranty_call(warranty.delete, wid)
+    return {"ok": True}
+
+
+WARRANTY_FULL_MSG = ("Dosya alanın doldu: belge saklanmadı. Eski belgeleri silerek ya da paketini yükselterek yer "
+                     "açabilirsin.")
+
+
+@app.post("/api/warranties/{wid}/files")
+def warranty_file_add(wid: int, file: UploadFile = File(...), doc_type: str = Form("diger")):
+    """Belge ekle: fotoğraf (EXIF/konum silinir, küçültülür; JPEG saklanır) ya da PDF. Ürün başına en çok
+    warranty.MAX_FILES; yapay zekâ okuması yok (okuma hakkı düşmez). Alan doluysa 507."""
+    from app import images, warranty
+
+    _warranty_or_404(wid)
+    _warranty_call(warranty.can_add_file, wid)
+    data = _file_bytes(file)
+    limits.check_size(data, file.filename)
+    mime = (file.content_type or "").lower()
+    if data[:5] == b"%PDF-":
+        name, blob = f"{db.file_hash(data)}.pdf", data
+    elif mime.startswith("image/") or data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+        blob = images.prepare(data)
+        if blob is None:
+            raise HTTPException(422, "Bu fotoğraf açılamadı; JPEG, PNG ya da PDF yükle")
+        name = f"{db.file_hash(blob)}.jpg"
+    else:
+        raise HTTPException(422, "Yalnız fotoğraf ya da PDF eklenebilir")
+    try:
+        stored = db.store_file("warranty", name, blob)
+    except Exception as e:  # noqa: BLE001 - depo hatası
+        raise HTTPException(503, "Dosya şu an saklanamadı; biraz sonra tekrar dene") from e
+    if not stored:
+        db.take_storage_warning()
+        raise HTTPException(507, WARRANTY_FULL_MSG)
+    _warranty_call(warranty.link_file, wid, "warranty", name, doc_type, file.filename, len(blob))
+    return _warranty_or_404(wid)
+
+
+@app.get("/api/warranties/{wid}/files/{fid}")
+def warranty_file(wid: int, fid: int, download: bool = False):
+    """Belgenin kendisi (inline; download=1 ile indirme). "Arıza / servis": istemci bunu paylaşır."""
+    from app import warranty
+
+    r = warranty.file_row(wid, fid)
+    if not r:
+        raise HTTPException(404, "Belge yok")
+    w = r["warranty"]
+    slug = re.sub(r"[^0-9A-Za-zçğıöşüÇĞİÖŞÜ]+", "-", w["name"]).strip("-")[:40] or "urun"
+    label = {"fatura": "fatura", "garanti": "garanti-belgesi"}.get(r["doc_type"], "belge")
+    return _stored_file(r["kind"], r["name"], f"{slug}-{label}-{fid}", inline=not download)
+
+
+@app.delete("/api/warranties/{wid}/files/{fid}")
+def warranty_file_delete(wid: int, fid: int):
+    from app import warranty
+
+    _warranty_or_404(wid)
+    _warranty_call(warranty.unlink_file, wid, fid)
+    return _warranty_or_404(wid)
+
+
 @app.post("/api/settings/backup/restore")
 @_heavy
 def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(None)):

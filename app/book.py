@@ -35,10 +35,11 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "tasarruf": ("/api/savings", "/api/goals", "/api/subscriptions", "/api/targets"),
     "fiyatlar": ("/api/prices",),
     "alisveris": ("/api/shopping-list", "/api/shopping-trips"),
+    "garantiler": ("/api/warranties",),
 }
 PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ekstreler", "hesaplar": "Hesaplar",
                "transferler": "Transferler", "borclar": "Borç / Alacak", "zekat": "Zekât ve Sadaka",
-               "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar", "alisveris": "Alışveriş listesi"}
+               "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar", "alisveris": "Alışveriş listesi", "garantiler": "Garantiler"}
 # üyenin yapabileceği değişiklikler (geri kalan her yazma sahibe ait)
 MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
@@ -57,6 +58,9 @@ MEMBER_WRITES = [
     ("POST", r"/api/shopping-trips/\d+/reuse"),
     ("PUT", r"/api/debt-plan"),  # borç kapatma planı: aylık tutar ve sıralama (Aile birlikte planlar)
     ("POST", r"/api/debt-plan/commit"),  # planı başlat / yeniden oluştur (anlık görüntü)
+    # garanti arşivi: görür ve ekler; düzenleme, silme ve belge ekleme/kaldırma yalnız kendi eklediği üründe (uçta denetlenir)
+    ("POST", r"/api/warranties"), ("PATCH", r"/api/warranties/\d+"), ("DELETE", r"/api/warranties/\d+"),
+    ("POST", r"/api/warranties/\d+/files"), ("DELETE", r"/api/warranties/\d+/files/\d+"),
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",

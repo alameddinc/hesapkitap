@@ -4,7 +4,7 @@ app/backup.py tek bir veritabanının (kullanıcının kendi alanının) yedeği
 system.db + her kullanıcının ekstre.db'si (SQLite online backup API ile, uygulama çalışırken tutarlı kopya) → tar →
 AES-256-GCM ile parça parça şifreli tek dosya (bellek kullanımı sabit, ~1 MB).
 
-Belgeler (uploads/ bills/ receipts/ statements-bank/, app/storage.py):
+Belgeler (uploads/ bills/ receipts/ statements-bank/ warranty/, app/storage.py):
   - Dosyalar nesne deposundaysa (HESAPKITAP_FILES_S3_* ya da yedek container'ında HESAPKITAP_FILES_IN_S3=1) arşive
     GİRMEZ: zaten depodadırlar; arşiv yalnız veritabanlarıdır.
   - Yerel diskteyse artımlı: içerik adlı dosyalar değişmez, her gün yeniden arşivlenmez. Her dosya bir kez, SHA-256
@@ -62,7 +62,7 @@ NAME_RE = re.compile(r"^hesapkitap-(\d{8}T\d{6}Z)" + re.escape(SUFFIX) + "$")
 SKIP_DIRS = {"backups", "_silinen"}
 SKIP_SUFFIXES = ("-wal", "-shm", "-journal")
 SQLITE_HEADER = b"SQLite format 3\x00"
-DOC_DIRS = {"uploads", "bills", "receipts", "statements-bank"}  # app/storage.KINDS
+DOC_DIRS = {"uploads", "bills", "receipts", "statements-bank", "warranty"}  # app/storage.KINDS
 BLOB_DIR = "files"
 BLOB_SUFFIX = ".hkenc"
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")

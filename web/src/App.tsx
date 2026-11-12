@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BadgePercent, ListChecks, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, ShoppingCart, Tags, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BadgeCheck, BadgePercent, ListChecks, BarChart3, CalendarRange, HandCoins, Landmark, Tag, Eye, EyeOff, LayoutDashboard, List, Menu, Moon, Coins, Plus, ReceiptText, Settings2, Sheet, ShieldCheck, ShoppingCart, Tags, Zap, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type BillDraft, type Payable, type Row } from "./api";
 import AddSheet from "./components/AddSheet";
@@ -38,6 +38,7 @@ import Uncategorized from "./pages/Uncategorized";
 import Admin from "./pages/Admin";
 import Interest from "./pages/Interest";
 import DebtPlan from "./pages/DebtPlan";
+import Garantiler from "./pages/Garantiler";
 import { FeedbackButton } from "./components/Feedback";
 import { UIContext, type EntryDraft, type Route, type ToastOptions, type UI } from "./ui";
 import Toast, { type ToastState } from "./components/Toast";
@@ -80,6 +81,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   alisveris: Shopping, // yalnız sunucu "shopping_list" yeteneğini verirse
   faiz: Interest, // yalnız sunucu "interest_page" yeteneğini verirse; ortak defterde faiz gizliyse yok
   "borc-plani": DebtPlan, // yalnız sunucu "debt_plan" yeteneğini verirse
+  garantiler: Garantiler, // yalnız sunucu "warranty" yeteneğini verirse; #/garantiler/<id> ürünün ayrıntısı
   hesaplar: Accounts,
   zekat: Zakat,
   istatistik: Stats,
@@ -104,6 +106,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "zekat", label: "Zekât ve Sadaka", icon: Moon },
   { route: "fiyatlar", label: "Fiyatlar", icon: Tag },
   { route: "alisveris", label: "Alışveriş listesi", icon: ShoppingCart },
+  { route: "garantiler", label: "Garantiler", icon: BadgeCheck },
   { route: "faiz", label: "Faiz ve ücretler", icon: BadgePercent },
   { route: "ekstreler", label: "Ekstreler", icon: ReceiptText },
   { route: "kurallar", label: "Kurallar", icon: Tags },
@@ -209,6 +212,7 @@ function Shell() {
   const canSee = (r: Route) => (r === "yonetici" ? admin
     : r === "alisveris" && !meta.data?.capabilities?.includes("shopping_list") ? false // eski sunucu: sayfa yok
     : r === "borc-plani" && !meta.data?.capabilities?.includes("debt_plan") ? false
+    : r === "garantiler" && !meta.data?.capabilities?.includes("warranty") ? false
     : r === "faiz" && (!meta.data?.capabilities?.includes("interest_page") || (inSharedBook(book.data) && !!book.data?.hide_fees)) ? false
     : prefs.simple ? SIMPLE.includes(r) : routeVisible(book.data, r, meta.data?.modules));
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -342,7 +346,7 @@ function Shell() {
             n ? (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex flex-col items-center gap-0.5 pt-2 pb-1 text-[11px] transition-colors active:opacity-60",
-                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "borc-plani", "fiyatlar", "alisveris", "faiz", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
+                  route === n.route || (n.route === "diger" && ["ekstreler", "kurallar", "ayarlar", "tasarruf", "tablo", "transferler", "borclar", "borc-plani", "fiyatlar", "alisveris", "garantiler", "faiz", "hesaplar", "zekat", "istatistik", "faturalar", "yonetici"].includes(route))
                     ? "font-semibold text-blue-600 dark:text-blue-400" : "text-stone-500")}>
                 <n.icon size={20} /> {n.label}
               </a>

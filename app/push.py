@@ -101,6 +101,8 @@ TYPES = {
     # "Hayırlı Cumalar": seçilen ritimde (Her Cuma / ayın ilk Cuması) o dönemde sadaka kaydı yoksa; seçim yapılmamışsa
     # ilk Cuma ve (kayıt olmazsa) sonraki ayın ilk Cuması, en çok 2 kez (app/sadaka_reminder.py)
     "sadaka": ("Sadaka hatırlatması", True),
+    # garanti arşivindeki ürünün garantisi bitmeden: 30 gün kala ve 7 gün kala birer kez (app/warranty.push_stage)
+    "garanti": ("Garanti bitişi", True),
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -109,7 +111,8 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
          "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
-         "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması"}
+         "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
+         "garanti": "garanti hatırlatması"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -123,6 +126,8 @@ R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
 R_BORC_PLANI = "#/diger/borc-plani"
 R_SADAKA = "#/diger/zekat/sadaka"  # Zekât ve Sadaka, sadaka formu açık (eski uygulama: Zekât ve Sadaka ana sayfası)
 R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<id> ile o kumbaranın sayfası
+R_GARANTI = "#/diger/garantiler"  # /<id> ile ürünün ayrıntısı
+GARANTI_MIN_APP = (1, 0, 7)  # Garantiler ekranı bu sürümde; eski uygulamada dokununca "Yakında" açılırdı
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 
 
@@ -955,6 +960,42 @@ def _kart_suresi(today: date) -> list[dict]:
     return out
 
 
+def _app_version(v: str | None) -> tuple[int, ...]:
+    """Cihaz kaydındaki sürüm ("1.0.7 (39)", "1.0.7") → (1, 0, 7); okunamazsa ()."""
+    try:
+        return tuple(int(x) for x in (v or "").split(" ")[0].split("."))
+    except ValueError:
+        return ()
+
+
+def has_app(uid: int | None, at_least: tuple[int, ...]) -> bool:
+    """Kişinin bu sürüm ya da sonrası bir telefonu var mı (bildirimin açtığı ekran o sürümde)."""
+    return uid is not None and any(_app_version(d.get("app_version")) >= at_least for d in devices(uid))
+
+
+def _garanti(u: dict, today: date) -> list[dict]:
+    """Garantisi bitmek üzere ürün: bitişe 30 gün kala (7 günden fazla kaldıysa) ve 7 gün kala birer kez; kimlik bitiş
+    tarihine ve aşamaya bağlı (süre değişirse yeni bitiş için yine birer kez). Yalnız Garantiler ekranı olan
+    uygulamaya (GARANTI_MIN_APP). Ortak defterde üyenin göremediği kayda bağlı ürün yok (app/warranty.py)."""
+    from app import book, warranty
+
+    r = book.active()
+    if (r and "garantiler" in r["hidden_pages"]) or not has_app(u.get("id"), GARANTI_MIN_APP):
+        return []
+    out = []
+    for w in warranty.all_visible(today):
+        stage = warranty.push_stage(w["days_left"])
+        if not stage:
+            continue
+        end = date.fromisoformat(w["ends_at"])
+        left = w["days_left"]
+        when = "bugün bitiyor" if left == 0 else f"bitmesine {left} gün kaldı"
+        out.append(item("garanti", f"garanti:{w['id']}:{end.isoformat()}:{stage}", f"{w['name']}: garantinin {when}",
+                        f"Garanti {end.day} {AY[end.month - 1]} {end.year} tarihinde bitiyor. Arızası varsa şimdi servise "
+                        "götür; fatura ve garanti belgesi Garantiler'de.", f"{R_GARANTI}/{w['id']}"))
+    return out
+
+
 def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     """Bugünün zamanlı bildirimleri (açık türler), kullanıcının defterinde ve görebildiği kadarıyla. Bağlam: use_space."""
     on = (prefs or get_prefs(u["id"]))["types"]
@@ -964,7 +1005,7 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
                      ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
                      ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today)),
                      ("kumbara", lambda: _kumbara(today)), ("kart_suresi", lambda: _kart_suresi(today)),
-                     ("sadaka", lambda: _sadaka(today))):
+                     ("sadaka", lambda: _sadaka(today)), ("garanti", lambda: _garanti(u, today))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:

@@ -1,4 +1,4 @@
-"""Excel'e aktarma: işlemler, sabit kalemler, hesaplar, borç/alacak. Başka bir programa taşımak ya da kendi tablonu
+"""Excel'e aktarma: işlemler, sabit kalemler, hesaplar, borç/alacak, garantiler (varsa). Başka bir programa taşımak ya da kendi tablonu
 yapmak için; geri yükleme için değil (onun için zip yedek).
 """
 import csv
@@ -73,6 +73,10 @@ def workbook() -> bytes:
     _sheet(wb, "Borç-alacak", ["Kişi", "Yön", "Birim", "Tutar", "Kalan", "Vade", "Not"],
            [[d["person"], "Alacak" if d["direction"] == "alacak" else "Borç", d["asset"], d["amount"], d.get("remaining"),
              d.get("due_date"), d.get("note")] for d in db.list_debts()])
+    from app import warranty
+
+    if g := warranty.export_rows():  # garanti arşivi (varsa): ürün, süre, bitiş; belgeler zip yedekte (warranty/)
+        _sheet(wb, "Garantiler", warranty.EXPORT_HEAD, g)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
