@@ -37,10 +37,10 @@ export function planFarki(kalan: number, taksit: number, sayi: number): PlanFark
   return { toplam, kalan, fark: r2(toplam - kalan), sayi, adet, son };
 }
 
-/** Nötr bilgi: "Taksitler toplamı ₺12.000, kalan borç ₺11.500. Son taksit ₺1.500 sayılır." */
-export function planFarkMetni(f: PlanFarki, tl: (n: number) => string): string {
-  const bas = `Taksitler toplamı ${tl(f.toplam)}, kalan borç ${tl(f.kalan)}.`;
+/** Nötr bilgi: "Taksitler toplamı ₺12.000, kalan borç ₺11.500. Son taksit ₺1.500 sayılır." (alacakta ad "alacak") */
+export function planFarkMetni(f: PlanFarki, tl: (n: number) => string, ad: "borç" | "alacak" = "borç"): string {
+  const bas = `Taksitler toplamı ${tl(f.toplam)}, kalan ${ad} ${tl(f.kalan)}.`;
   return f.adet < f.sayi
-    ? `${bas} Bu taksitlerle borç ${f.adet}. taksitte biter; son taksit ${tl(f.son)} sayılır.`
+    ? `${bas} Bu taksitlerle ${ad} ${f.adet}. taksitte biter; son taksit ${tl(f.son)} sayılır.`
     : `${bas} Son taksit ${tl(f.son)} sayılır.`;
 }

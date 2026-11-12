@@ -144,7 +144,12 @@ def test_create_scheduled_debt_via_api_and_validation(client):
     bad = client.post("/api/debts", json={"person": "X", "direction": "borc", "plan_installment": 2000, "plan_count": 6,
                                           "amount": 5000})
     assert bad.status_code == 422 and "Toplam" in bad.json()["detail"]
-    fx = client.post("/api/debts", json={"person": "X", "direction": "alacak", "plan_installment": 100, "plan_count": 2})
+    # alacakta da ödeme planı (yetenek debt_terms_receivable); TL dışında yok
+    fx = client.post("/api/debts", json={"person": "X", "direction": "alacak", "plan_installment": 1, "plan_count": 2,
+                                         "asset": "GRAM_ALTIN"})
+    assert fx.status_code == 422 and "TL alacakta" in fx.json()["detail"]
+    fx = client.post("/api/debts", json={"person": "X", "direction": "borc", "plan_installment": 1, "plan_count": 2,
+                                         "asset": "USD"})
     assert fx.status_code == 422 and "TL borçta" in fx.json()["detail"]
     nocount = client.post("/api/debts", json={"person": "X", "direction": "borc", "plan_installment": 100})
     assert nocount.status_code == 422 and "Taksit sayısını" in nocount.json()["detail"]

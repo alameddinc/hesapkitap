@@ -11,7 +11,9 @@ DELETE /api/debts/{id}/schedule). İlk taksit ayından ÖNCE yapılmış ödemel
 taksitler "kalan" (amount - plan öncesi ödenen) üzerinden kurulur, ödenen taksitler plan başlangıcından sonraki
 ödemelerle eşleşir. Böylece "ödeme planlı oluştur" ile "diğer borç oluştur + sonradan plan ekle" aynı planı verir.
 
-Borcun koşulları (yalnız "borcum"; borç planı bunlara göre sıralar, app/debt_plan.py). Sütun boşsa eski davranış:
+Borcun koşulları (borç planı "borcum"u bunlara göre sıralar, app/debt_plan.py; alacak plana girmez). Alacakta da aynı
+sütunlar (yetenek debt_terms_receivable): kimden (kisi | kurum | diger), nasıl geri ödenecek, tarih türü (boşsa söz) ve
+ödeme planı (taksitler yalnız kaydedilir; günü gelince push "borc" nötr hatırlatır). Sütun boşsa eski davranış:
   creditor_type  kime: kisi | vergi_sgk | banka | magaza ("Mağaza / senet") | diger (kurum). Planı olmayan borçta da
                  durur; plan kaldırılınca silinmez.
   pay_terms      ödeme koşulu: taksitli (= ödeme planı var) | parca (parça parça ödenebilir) | tek (tek seferde
@@ -34,10 +36,17 @@ from datetime import date
 from app import money
 
 CREDITORS = {"vergi_sgk": "Vergi / SGK", "banka": "Banka", "magaza": "Mağaza / senet", "kisi": "Kişi",
-             "diger": "Diğer"}
+             "diger": "Diğer", "kurum": "Kurum / firma"}
 KURUM = ("vergi_sgk", "banka", "magaza", "diger")  # kurum türleri: tarih varsayılanı kesin
+# Alacakta (yetenek debt_terms_receivable) "Kimden": Kişi · Kurum / firma · Diğer. Vergi / banka / mağaza borçta anlamlı,
+# alacakta yok; "kurum" yalnız alacakta. Yön değişince tür karşı tarafın en yakın türüne çevrilir (alacak_type / borc_type)
+BORC_TYPES = ("vergi_sgk", "banka", "magaza", "kisi", "diger")
+ALACAK_TYPES = ("kisi", "kurum", "diger")
 TERMS = {"taksitli": "Taksitli (ödeme planı)", "parca": "Parça parça ödenebilir", "tek": "Tek seferde ödenecek",
          "bilinmiyor": "Bilmiyorum"}
+# alacakta "Nasıl geri ödenecek" (karşı taraf öder): kısa etiketler
+TERMS_ALACAK = {"taksitli": "Taksitli (ödeme planı)", "parca": "Parça parça", "tek": "Tek seferde",
+                "bilinmiyor": "Bilmiyorum"}
 INTEREST = {"yok": "Faiz / gecikme zammı yok", "var": "Faiz ya da gecikme zammı var",
             "bilmiyorum": "Faiz / gecikme zammı bilinmiyor"}
 MAX_COUNT = 240  # en çok 20 yıl
@@ -58,11 +67,27 @@ def terms_of(d: dict) -> str:
 
 
 def strict_of(d: dict) -> bool:
-    """Tarih kesin mi: kayıtlıysa o; boşsa planlı borçta ve kurumda kesin, kişide (ve türü boş eski kayıtta) söz."""
+    """Tarih kesin mi: kayıtlıysa o; boşsa planlıda kesin; borçta kurumda kesin, kişide (ve türü boş eski kayıtta) söz;
+    alacakta söz ("Söz verdi (esnek)" varsayılan)."""
     v = d.get("due_strict")
     if v is not None:
         return bool(v)
-    return is_scheduled(d) or d.get("creditor_type") in KURUM
+    if is_scheduled(d):
+        return True
+    return d.get("direction") != "alacak" and d.get("creditor_type") in KURUM
+
+
+def type_for(direction: str | None, ctype: str | None) -> str | None:
+    """Kaydın yönüne uyan tür: alacakta vergi / banka / mağaza → kurum; borçta kurum → diğer (boş: boş)."""
+    if not ctype:
+        return ctype
+    if direction == "alacak":
+        return ctype if ctype in ALACAK_TYPES else "kurum"
+    return "diger" if ctype == "kurum" else ctype
+
+
+def terms_labels(direction: str | None) -> dict:
+    return TERMS_ALACAK if direction == "alacak" else TERMS
 
 
 def paid_before(payments: list[dict], start_month: str | None) -> float:
@@ -215,7 +240,7 @@ def info(d: dict, today: date) -> dict:
         money.money(max(0.0, min(due_through(d, month) - paid, base(d) - paid)))
     overdue = bool(nxt and nxt["date"] < today.isoformat())
     last = rows[-1] if rows else None
-    ctype = d.get("creditor_type") or "diger"
+    ctype = d.get("creditor_type") or ("kisi" if d.get("direction") == "alacak" else "diger")
     return {
         "installment": money.money(d["plan_installment"]), "count": len(rows) or int(d["plan_count"]),
         "start_month": d["plan_start"],

@@ -300,7 +300,8 @@ def test_debt_terms_api(client):
     al = _post(client, person="Ali", amount=100, debt_date="2026-10-01", pay_terms="tek", due_strict=True)
     client.patch(f"/api/debts/{al}", json={"direction": "alacak"})
     x = next(x for x in client.get("/api/debts").json() if x["id"] == al)
-    assert x["terms"] is None and x["strict"] is None
+    # alacakta da koşullar (yetenek debt_terms_receivable): kayıtlı koşul kalır, alacak etiketiyle
+    assert x["terms"] == "tek" and x["terms_label"] == "Tek seferde" and x["strict"] is True
     # taksitli: plan alanlarıyla; PUT schedule / plan_off ödeme koşulunu yönetir, alacaklı türü kalır
     sid = _post(client, person="Örnek Mağaza", amount=6000, debt_date="2026-10-01", creditor_type="magaza")
     assert client.put(f"/api/debts/{sid}/schedule", json={"plan_installment": 1000, "plan_count": 6}).status_code == 200

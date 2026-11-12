@@ -95,7 +95,9 @@ TYPES = {
     "fiyat": ("Fiyat artışı", True),  # sık aldığın üründe topluluk fiyatı arttı (app/price_alerts.py), günde en çok bir
     "sistem": ("Sistem uyarısı", True),  # yalnız yöneticiye: fiyat toplama işi aksadı (POST /api/ops/alert)
     "liste": ("Alışveriş listesi", True),  # ortak listeye başkası ürün ekledi / alışverişi tamamladı (after_list_add)
-    "borc": ("Borç ödeme günü", True),  # borçta söz verilen ya da kesin gün ve ödeme planlı borcun taksit günü (2 gün kala ve o gün)
+    # borçta ve alacakta söz verilen ya da kesin gün ve ödeme planındaki taksit günü (2 gün kala ve o gün). Ad ve anahtar
+    # aynı kalır (kişinin tercihi korunur); alacak hatırlatması nötr: "Ahmet: 2. taksit günü bugün"
+    "borc": ("Borç ödeme günü", True),
     "duyuru": ("Duyurular ve yeni sürümler", True),  # yöneticinin duyurusu (app/announce.py)
     "kumbara": ("Kumbara hedef tarihi", True),  # hedef tarihine 7 gün kala, hedefin gerisindeyse (_kumbara)
     "kart_suresi": ("Yemek / hediye kartı son kullanma", True),  # son kullanmaya 30 ve 7 gün kala, bakiye varsa
@@ -125,6 +127,7 @@ R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
 R_BORC_PLANI = "#/diger/borc-plani"
+R_BORCLAR = "#/diger/borclar"  # /kayit/<id> ile o kayıt açık (alacak hatırlatması)
 R_SADAKA = "#/diger/zekat/sadaka"  # Zekât ve Sadaka, sadaka formu açık (eski uygulama: Zekât ve Sadaka ana sayfası)
 R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<id> ile o kumbaranın sayfası
 R_GARANTI = "#/diger/garantiler"  # /<id> ile ürünün ayrıntısı
@@ -726,17 +729,20 @@ def _fatura(today: date) -> list[dict]:
 
 def _borc(today: date) -> list[dict]:
     """Borçta (Borç / Alacak "borcum") söz verilen ya da kesin ödeme günü ve ödeme planındaki her taksit: 2 gün kala ve
-    o gün. Borç / Alacak ortak defterde üyeye kapalıysa yok. Dokununca Borç planı."""
+    o gün. Dokununca Borç planı. Alacakta (yetenek debt_terms_receivable) aynı günler, nötr metin ("Ahmet: 2. taksit günü
+    bugün"); dokununca Borç / Alacak'ta o kayıt. Borç / Alacak ortak defterde üyeye kapalıysa yok."""
     from app import debt_plan, money
 
     if debt_plan._hidden_people():
         return []
     out = []
     for d in db.list_debts(open_only=True):
-        if d["direction"] != "borc" or d["written_off_at"] or d["remaining"] <= 0:
+        if d["written_off_at"] or d["remaining"] <= 0:
             continue
+        alacak = d["direction"] == "alacak"
+        route = f"{R_BORCLAR}/kayit/{d['id']}" if alacak else R_BORC_PLANI
         sch = d.get("schedule")
-        if sch:  # ödeme planı olan borç: her taksitten 2 gün önce ve o gün (ödenmişse yok)
+        if sch:  # ödeme planı: her taksitten 2 gün önce ve o gün (ödenmişse yok)
             nx = sch["next"]
             if not nx:
                 continue
@@ -744,10 +750,14 @@ def _borc(today: date) -> list[dict]:
             if left not in (0, 2):
                 continue
             when = "bugün" if left == 0 else "2 gün sonra"
-            out.append(item("borc", f"borc:{d['id']}:taksit{nx['no']}:{nx['date']}:{'songun' if left == 0 else '2gun'}",
-                            f"{d['person']}: {nx['no']}. taksitin günü {when}",
-                            f"Taksit {money.tl(max(nx['left'], sch['due_now']), trim=True)}. Ödediysen Borç planında "
-                            "işaretle.", R_BORC_PLANI))
+            amt = money.tl(max(nx["left"], sch["due_now"]), trim=True)
+            key = f"borc:{d['id']}:taksit{nx['no']}:{nx['date']}:{'songun' if left == 0 else '2gun'}"
+            if alacak:
+                out.append(item("borc", key, f"{d['person']}: {nx['no']}. taksit günü {when}",
+                                f"Taksit {amt}. Geldiyse Borç / Alacak'ta işaretle.", route))
+            else:
+                out.append(item("borc", key, f"{d['person']}: {nx['no']}. taksitin günü {when}",
+                                f"Taksit {amt}. Ödediysen Borç planında işaretle.", route))
             continue
         if not d["due_date"]:
             continue
@@ -756,10 +766,15 @@ def _borc(today: date) -> list[dict]:
             continue
         amt = money.tl(d["remaining"], trim=True) if d["asset"] == "TRY" else f"{d['remaining']:g} {d['asset']}"
         when = "bugün" if left == 0 else "2 gün sonra"
+        key = f"borc:{d['id']}:{d['due_date']}:{'songun' if left == 0 else '2gun'}"
+        if alacak:
+            what = "ödeme günü" if d.get("strict") else "söz verdiği gün"
+            out.append(item("borc", key, f"{d['person']}: {what} {when}",
+                            f"Kalan {amt}. Geldiyse Borç / Alacak'ta işaretle.", route))
+            continue
         what = "ödeme günü" if d.get("strict") else "söz verdiğin ödeme günü"  # kesin tarih: vade
-        out.append(item("borc", f"borc:{d['id']}:{d['due_date']}:{'songun' if left == 0 else '2gun'}",
-                        f"{d['person']}: {what} {when}",
-                        f"Kalan {amt}. Ödediysen Borç planında işaretle.", R_BORC_PLANI))
+        out.append(item("borc", key, f"{d['person']}: {what} {when}",
+                        f"Kalan {amt}. Ödediysen Borç planında işaretle.", route))
     return out
 
 

@@ -10,7 +10,8 @@ export type PlanKind = "card" | "person" | "fixed";
 /** Ödeme planı olan borcun durumu (GET /api/debts [].schedule ile aynı) */
 export interface DebtSchedule {
   installment: number; count: number; start_month: string; end_month: string; day: number;
-  creditor_type: "vergi_sgk" | "banka" | "magaza" | "kisi" | "diger"; creditor_label: string;
+  /** alacakta (yetenek debt_terms_receivable) kisi | kurum | diger */
+  creditor_type: "vergi_sgk" | "banka" | "magaza" | "kisi" | "diger" | "kurum"; creditor_label: string;
   interest: "yok" | "var" | "bilmiyorum" | null; interest_label: string | null; paid_count: number;
   next: { no: number; month: string; date: string; amount: number; left: number } | null; due_now: number; overdue: boolean; text: string;
   /** yetenek debt_schedule_edit: planın kapsadığı tutar (borç eksi ilk taksit ayından önce ödenen), plan öncesi ödenen,
