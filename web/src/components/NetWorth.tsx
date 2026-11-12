@@ -15,6 +15,7 @@ import Wallets from "./Wallets";
 import CycleLine from "./CardCycle";
 import CardLimit, { useCardLimits } from "./CardLimit";
 import CardInterestLine from "./CardInterestLine";
+import EarlyCloseLine from "./EarlyClose";
 import { CardSpender } from "./Spender";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "./SorguDurumu";
 
@@ -286,6 +287,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
                       {c.cycle && <CycleLine c={c.cycle} />}
                       {c.unpaid > 0 && <CardInterestLine i={limits.data?.get(c.card_no)?.interest} />}
                       <CardLimit info={limits.data?.get(c.card_no)} />
+                      <EarlyCloseLine cardNo={c.card_no} info={limits.data?.get(c.card_no)?.early_close} compact={compact} />
                       {!compact && <CardSpender cardNo={c.card_no} />}
                     </span>
                     <span className={cx("shrink-0 tabular-nums", c.unpaid > 0 ? "text-red-600" : "text-stone-500")}>

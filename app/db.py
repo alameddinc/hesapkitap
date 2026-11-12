@@ -1147,7 +1147,12 @@ def _read_source(stmt: Statement) -> str | None:
 def save_statement(data: bytes, filename: str, stmt: Statement, source: str | None = None) -> int:
     """source='excel': kart işlem dökümünden üretilmiş ekstre (borç alanı kurgu: borç ve ödendi eşleşmesine girmez).
     Verilmezse okumanın kaynağı yazılır (stmt.source: parser | sablon | yapay_zeka).
-    PDF ekstresi kaydedilince aynı kartın aynı dönemindeki (±5 gün) Excel ekstresi silinir: harcamalar bir kez sayılır."""
+    PDF ekstresi kaydedilince aynı kartın aynı dönemindeki (±5 gün) Excel ekstresi silinir: harcamalar bir kez sayılır.
+    Erken kapanan taksitler (kapama satırı, aynı ekstrede tek tek listelenen kalan taksitler) tek çekim yazılır
+    (card_reader.close_installments): sonraki aylara yeniden yayılmaz."""
+    from app.card_reader import close_installments
+
+    close_installments(stmt)
     with connect() as c:
         rules = load_rules_sub(c)
         if source != "excel":

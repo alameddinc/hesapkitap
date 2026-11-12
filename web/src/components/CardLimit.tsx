@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { call } from "../lib/apiError";
 import type { CardInterest } from "../api";
+import type { EarlyCloseInfo } from "./EarlyClose";
 import { cx, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
 import { isLimited, useBook, useMeta, useSave } from "./hooks";
@@ -14,6 +15,8 @@ export interface CardLimitInfo {
   used: number | null; used_pct: number | null;
   /** son ekstrenin faiz satırı (yetenek card_interest; eski sunucuda yok) */
   interest?: CardInterest | null;
+  /** taksit erken kapama (yetenek card_early_close; eski sunucuda yok) */
+  early_close?: EarlyCloseInfo | null;
 }
 interface Summary { cards: CardLimitInfo[] }
 

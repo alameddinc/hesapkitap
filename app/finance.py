@@ -922,20 +922,32 @@ def _latest_statement_per_account() -> dict[str, dict]:
 
 
 def card_projection() -> dict:
-    """Hesap bazında: kalan taksitler, abonelik tahmini, değişken harcama ortalaması."""
+    """Hesap bazında: kalan taksitler, abonelik tahmini, değişken harcama ortalaması.
+    Taksit erken kapama (app/early_close.py): etkin elle kayıtta kalan taksitler seçilen ayda tek satır ("early_close":
+    True; vade farkı/vergi dilimleri yok); son ekstrede tek seferde gelmiş (kapanmış) satırlar yeniden yayılmaz.
+    early_close: kartın kapama bilgisi (early_close.apply) ya da None."""
+    from app import early_close
+
     txns = db.card_transactions()
     latest = _latest_statement_per_account()
     by_acc_period: dict[tuple, list] = defaultdict(list)
     for t in txns:
         by_acc_period[(t["account"], t["period"])].append(t)
+    closes = early_close.records()
 
     out = {}
     for acc, st in latest.items():
         period = st["period"]
         cur = by_acc_period[(acc, period)]
+        before = sorted(p for (a, p) in by_acc_period if a == acc and p < period)
+        prev = by_acc_period[(acc, before[-1])] if before else []
+        detected = early_close.detect(cur, prev) if prev else None
+        skip = detected["skip_ids"] if detected else set()
 
         installments = []  # (ay, tutar, açıklama, taksit)
         for t in cur:
+            if t["id"] in skip:
+                continue
             if t["installments_left"] and t["installment_left_amount"] and t["txn_type"] in (*CARD_SPEND, FEE):
                 sign = -1 if t["txn_type"] == REFUND else 1
                 total_n = t["installment_no"] + t["installments_left"]
@@ -972,10 +984,11 @@ def card_projection() -> dict:
                 sub["amount"] = states[m]["new_amount"]
                 sub["description"] = f"{m} (yeni paket)"
 
+        installments, close = early_close.apply(acc, st, installments, closes.get(acc), detected)
         out[acc] = {
             "account": acc, "bank": st["bank"], "latest_period": period,
             "next_due_date": st["next_due_date"], "next_period_end": st["next_period_end"],
-            "installments": installments,
+            "installments": installments, "early_close": close,
             "subscriptions": [{**s, "amount": _round(s["amount"])} for s in subs.values()],
             "variable_avg": _round(median(variable)) if variable else 0.0,
             "variable_periods": len(variable),
@@ -1026,9 +1039,11 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         # "bugüne kadar"ın kalemleri: ekran toplamı bunlarla açıklar (ekstre kesilmeden işlem listesi yok)
         # uid kalıcı: taksit/abonelik → kaynak kart işlemi (c<id>, GET /api/transactions/...'daki uid ile aynı), harcama →
         # kayıt (m<id>); dokununca o satırın düzenlemesi açılır
-        items = ([{"type": "taksit", "uid": f"c{i['txn_id']}:{i.get('installment')}", "txn_id": i.get("txn_id"),
+        # taksit erken kapama satırı (early_close): txn_id kapanan en büyük alışveriş; istemci kapama formunu açar
+        items = ([{"type": "taksit", "uid": f"c{i['txn_id']}:{i.get('installment') or 'kapama'}", "txn_id": i.get("txn_id"),
                    "entry_id": None, "description": i["description"], "amount": _round(i["amount"]),
-                   "installment": i.get("installment")} for i in inst_items]
+                   "installment": i.get("installment"), **({"early_close": True} if i.get("early_close") else {})}
+                  for i in inst_items]
                  + [{"type": "abonelik", "uid": f"c{x['txn_id']}:abonelik", "txn_id": x.get("txn_id"), "entry_id": None,
                      "description": x["description"], "amount": _round(x["amount"])} for x in p["subscriptions"]])
         out[acc] = {"account": acc, "bank": p["bank"], "start": start.isoformat(), "cut": cut.isoformat(),
@@ -1125,6 +1140,8 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
     """Kartlar ekranının açılışı için kart başına özet (tam işlem geçmişini çekmeden): son ekstre (kalan dahil),
     açık dönem (bugüne kadar / kesimde tahmini, kalemleri), kalan taksitler ve abonelikler, son N işlem.
     Toplamlar net durumla aynı kural (kart başına yalnız son ekstrenin kalanı)."""
+    from app import early_close
+
     today = today or date.today()
     nw = net_worth(today)
     proj = card_projection()
@@ -1160,6 +1177,8 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
             # son ekstrenin faiz satırı (yetenek card_interest): son ödeme günü geçtiyse bu ay eklenecek faiz ve vergi,
             # kısmi ödemede kalanı ödersen kurtulacağın faiz, yoksa "tamamını ödersen faiz işlemez"
             "interest": interest(card_no, c["unpaid"], latest) if latest else None,
+            # taksit erken kapama (yetenek card_early_close, app/early_close.card_info): eylem, kazanç tahmini, kayıt
+            "early_close": early_close.card_info(p.get("early_close"), c["bank"]),
         })
     so_far = sum((c["cycle"] or {}).get("so_far", 0) for c in cards)
     at_cut = sum((c["cycle"] or {}).get("at_cut", 0) for c in cards)
@@ -1253,7 +1272,7 @@ def installments_due(month: str, today: date | None = None) -> dict:
             if i["month"] > month:
                 remaining += i["amount"]
                 if not i["fee"] and i["amount"] > 0:
-                    remaining_keys.add(("c", i["txn_id"]))
+                    remaining_keys.add(("e", acc) if i.get("early_close") else ("c", i["txn_id"]))
                 continue
             if i["month"] != month or p["latest_period"] >= month:
                 continue  # bu dönemin ekstresi var (ya da geçmiş dönem): gerçek satırlar yukarıda
@@ -1261,6 +1280,15 @@ def installments_due(month: str, today: date | None = None) -> dict:
             if not t:
                 continue
             row = _card_row(t, states, merchant_aliases)
+            if i.get("early_close"):
+                # erken kapama: kalan taksitler tek satır (row: kapanan en büyük alışveriş; yeni istemci kapama formunu
+                # açar, eski istemci o alışverişi). no/of: kapanan alışveriş sayısı ("son taksit" gibi okunmasın diye 1/1)
+                items.append({"uid": f"e{acc}:{month}", "source": "projected", "title": i["description"],
+                              "description": f"{_card_short(p['bank'], acc)} kalan taksitleri tek seferde",
+                              "card": _card_short(p["bank"], acc), "installment": "1/1", "no": 1, "of": 1,
+                              "amount": _round(i["amount"]), "in_spend": False, "fee": False, "early_close": True,
+                              "card_no": acc, "count": i.get("count") or 1, "due_date": due_for(acc, month), "row": row})
+                continue
             no, of = _inst_parts(i["installment"]) or (0, 0)
             items.append({"uid": f"c{i['txn_id']}:{i['installment']}", "source": "projected", "title": row["merchant"],
                           "description": t["description"], "card": _card_short(p["bank"], acc),
@@ -1489,7 +1517,9 @@ def plan(months: int = 6, today: date | None = None) -> dict:
             for i in p["installments"]:
                 if i["month"] == m:
                     lines.append({"type": "taksit", "kind": EXPENSE, "amount": _round(i["amount"]),
-                                  "description": f"{i['description']} ({i['installment']})", "account": acc})
+                                  "description": f"{i['description']} ({i['installment']})" if i["installment"] else
+                                  f"{i['description']} ({p['bank']} …{acc[-4:]}, kalan taksitler tek seferde)",
+                                  "account": acc, **({"early_close": True} if i.get("early_close") else {})})
             for s in p["subscriptions"]:
                 lines.append({"type": "abonelik", "kind": EXPENSE, "amount": s["amount"],
                               "description": s["description"], "account": acc})
@@ -2011,7 +2041,7 @@ def interest_report(months: int = 12, today: date | None = None) -> dict:
     cur = current_period(today)
     empty = {"hidden": False, "months": months, "from": None, "to": cur, "total": 0.0, "interest": 0.0, "tax": 0.0,
              "fee": 0.0, "count": 0, "by_month": [], "by_card": [], "by_type": [], "statements": [], "items": [],
-             "tips": [], "income": {"total": 0.0, "items": []}}
+             "tips": [], "income": {"total": 0.0, "items": []}, "early_close": []}
     if book.hide_fees():
         return {**empty, "hidden": True}
     start = add_months(cur, -(months - 1)) if months > 0 else None
@@ -2059,6 +2089,7 @@ def interest_report(months: int = 12, today: date | None = None) -> dict:
     fee = _round(sum(i["amount"] for i in items if i["type"] in FEE_KINDS))
     # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): interest_alarm ile aynı ölçüt
     inc = [r for r in transactions(None) if is_interest_income(r) and not r.get("pending") and r["month"] >= start]
+    ec = early_close_cards()
     return {
         **empty, "from": start, "total": total, "interest": _round(total - tax - fee), "tax": tax, "fee": fee,
         "count": len(items),
@@ -2068,16 +2099,37 @@ def interest_report(months: int = 12, today: date | None = None) -> dict:
                           key=lambda x: -x["total"]),
         "statements": sorted(by_s.values(), key=lambda x: x["period_end"], reverse=True),
         "items": items,
-        "tips": _interest_tips(items, list(by_s.values()), stmts, f"Son {months} ayda" if months > 0 else "Şimdiye dek"),
+        "tips": _interest_tips(items, list(by_s.values()), stmts, f"Son {months} ayda" if months > 0 else "Şimdiye dek", ec),
+        # kalan taksitlerinde vade farkı olan (ya da erken kapatılmış) kartlar: "Erken kapattım" eylemi ve kazanç
+        "early_close": ec,
         "income": {"total": _round(sum(r["amount"] for r in inc)),
                    "items": [{"uid": r["uid"], "date": r["date"], "description": r["description"], "amount": _round(r["amount"])}
                              for r in sorted(inc, key=lambda r: r["date"], reverse=True)]},
     }
 
 
-def _interest_tips(items: list[dict], stmts: list[dict], all_stmts: dict[int, dict], span: str) -> list[dict]:
+def early_close_cards() -> list[dict]:
+    """Faiz sayfası: kalan taksitlerinde vade farkı/vergi olan kartlar (yalnız taksitlendirme kaynaklı; gecikme faizi
+    olan kartta bu eylem yok) ve erken kapama kaydı ya da ekstreden tanınmış kapaması olanlar. Kart başına
+    {card_no, bank, last4, card, **early_close.card_info}; vade farkı en büyük önce. Faiz gizliyse boş."""
+    from app import book, early_close
+
+    if book.hide_fees():
+        return []
+    out = []
+    for acc, p in card_projection().items():
+        raw = p.get("early_close")
+        info = early_close.card_info(raw, p["bank"])
+        if not info or not (money.gt(raw["fee_left"], 0) or info["record"] or info["detected"]):
+            continue
+        out.append({"card_no": acc, "bank": p["bank"], "last4": acc[-4:], "card": f"{p['bank']} …{acc[-4:]}", **info})
+    return sorted(out, key=lambda c: -(c["fee_left"] or 0))
+
+
+def _interest_tips(items: list[dict], stmts: list[dict], all_stmts: dict[int, dict], span: str,
+                   early: list[dict] | None = None) -> list[dict]:
     """Faizi önleme önerileri: yalnız kullanıcının verisinde karşılığı olanlar (ör. vade farkı yoksa "tek çekim" yok).
-    span: cümlenin zaman öbeği ("Son 12 ayda")."""
+    span: cümlenin zaman öbeği ("Son 12 ayda"). early: early_close_cards (kalan vade farkı varsa "erken kapat")."""
     def total(*kinds):
         return _round(sum(i["amount"] for i in items if i["type"] in kinds))
 
@@ -2106,6 +2158,12 @@ def _interest_tips(items: list[dict], stmts: list[dict], all_stmts: dict[int, di
         out.append({"key": "tek_cekim", "title": "Taksit yerine tek çekim",
                     "detail": f"{span} {n} taksitli alışverişe {_tl(total('vade_farki'))} vade farkı eklendi. Tek çekim yaparsan "
                               "ya da biriktirip peşin alırsan bu tutarı ve vergisini ödemezsin."})
+    left = sum(c["fee_left"] or 0 for c in early or [])
+    if money.gt(left, 0):
+        out.append({"key": "erken_kapat", "title": "Kalan taksitleri erken kapat",
+                    "detail": f"Kalan taksitlerinde {_tl(left)} vade farkı ve vergi var; taksitleri erken kapatırsan en "
+                              "çok bu kadarını ödemezsin. Kesin tutarı bankandan öğren; kapattıysan aşağıda kartın "
+                              "satırında \"Erken kapattım\" de."})
     if total("nakit_avans"):
         out.append({"key": "nakit_avans", "title": "Karttan nakit çekme",
                     "detail": f"{span} nakit avans için {_tl(total('nakit_avans'))} faiz ödedin. Nakit avansta faiz ilk günden "
@@ -2322,7 +2380,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
         months_left = len({i["month"] for i in fee_inst})
         out.append({"level": "uyari", "title": f"Taksitlendirme sana {_tl(total)} daha vade farkı ve vergi ödetecek",
                     "detail": f"Önümüzdeki {months_left} ay boyunca. Taksitli alışverişte vade farkı tutarın ~%25-35'ine "
-                              "çıkabiliyor; mümkünse tek çekim yap ya da taksitleri erken kapat.",
+                              f"çıkabiliyor; mümkünse tek çekim yap. Taksitleri erken kapatırsan en çok {_tl(total)} vade "
+                              "farkı ve vergi ödemezsin; kesin tutarı bankandan öğren.",
                     "filter": {"kind": FEE}, "key": f"vade_farki:{current_period(today)}:{_round(total):g}",
                     "target": {"screen": "taksitler"}})
 
@@ -2330,6 +2389,8 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     ending: dict[str, list] = defaultdict(list)
     for acc in p["projection"]:
         for i in acc["installments"]:
+            if i.get("early_close"):
+                continue  # erken kapama: taksit bitişi değil, tek seferlik ödeme
             n, total = map(int, i["installment"].split("/"))
             if n == total and i["amount"] > 0 and not i.get("fee"):
                 ending[i["month"]].append(i)
