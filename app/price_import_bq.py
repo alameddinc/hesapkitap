@@ -235,7 +235,7 @@ def import_region(day: str, region: str, force: bool = False, mode: str = "full"
     regional_chains kipinde yalnız bu çalışmada gelen zincirlerin satırları değişir (ulusal zincirlerin — BİM, A101,
     ŞOK, Migros — o ildeki satırları silinmez)."""
     mode = _mode(mode)
-    from app import market_ref, price_import, product_groups, system
+    from app import market_ref, price_import, system
 
     d = date.fromisoformat(day)
     got = bq.query(offers_sql(), {"d": d, "d7": d - timedelta(days=7), "d30": d - timedelta(days=30), "region": region},
@@ -270,7 +270,7 @@ def import_region(day: str, region: str, force: bool = False, mode: str = "full"
         market_ref.summarize_day(c, day, region)  # günlük piyasa özeti (400 gün; bant zamanla büyür)
         c.execute("DELETE FROM official_prices WHERE day < ?", (cut,))
         c.execute("DELETE FROM official_imports WHERE run_date < ?", (cut,))
-    product_groups.kick()  # kuyruğa giren adlar: arka planda yapay zekâ (açıksa)
+    # kuyruğa giren adlar: yapay zekâ gecede bir kez toplu (product_groups.classify_pending, sert maliyet tavanıyla)
     log.info("resmî fiyat içe aktarıldı: %s %s %s", day, region, stats)
     return stats
 

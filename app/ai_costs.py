@@ -29,6 +29,11 @@ PRICES_KEY, FX_KEY = "ai_prices", "ai_usd_try"
 # kullanıcı başı aylık tahmini ₺ eşiği: yönetici listesinde kırmızı satır, "eşiği geçen N hesap" uyarısı
 ALERT_KEY, DEFAULT_ALERT_TRY = "ai_alert_try", 50.0  # Premium net ~₺35–57/ay: zarar başlamadan görünsün
 KEEP_MONTHS = 13
+# ürün gruplama (kind "grup") sunucu geneli sert maliyet tavanı, ₺ (yönetici ayarı; app/product_groups.py _ask her
+# çağrıdan önce bakar, toplu / liste / elle çalıştırılan her yol). 07.11.2026: elle başlatılan toplu iş modül
+# sabitini (AI_CALLS_PER_DAY) ezip 316 çağrı yaptı; tavan ai_calls'tan hesaplanır, kod sabitiyle aşılamaz.
+GROUP_CAP_DAY_KEY, GROUP_CAP_MONTH_KEY = "groups_ai_cap_day_try", "groups_ai_cap_month_try"
+DEFAULT_GROUP_CAP_DAY_TRY, DEFAULT_GROUP_CAP_MONTH_TRY = 5.0, 50.0
 
 
 def record(uid: int | None, kind: str, model: str, usage: dict) -> None:
@@ -82,8 +87,52 @@ def usd_try() -> float:
         return DEFAULT_USD_TRY
 
 
-def set_settings(new_prices: dict | None = None, fx: float | None = None, alert: float | None = None) -> None:
+def _float_setting(key: str, default: float) -> float:
     from app import system
+
+    try:
+        v = float(system.get(key) or default)
+    except ValueError:
+        return default
+    return v if v >= 0 else default
+
+
+def group_caps() -> tuple[float, float]:
+    """Ürün gruplama tavanı (₺): (günlük, aylık). 0: o dönemde yapay zekâyla gruplama kapalı."""
+    return (_float_setting(GROUP_CAP_DAY_KEY, DEFAULT_GROUP_CAP_DAY_TRY),
+            _float_setting(GROUP_CAP_MONTH_KEY, DEFAULT_GROUP_CAP_MONTH_TRY))
+
+
+def spent_try(kind: str) -> tuple[float, float]:
+    """Bir türün tahmini harcaması (₺): (bugün — UTC günü, ai_calls.at; bu ay — ai_calls.month)."""
+    from app import system
+
+    table, fx = prices(), usd_try()
+    day, month = datetime.now(timezone.utc).date().isoformat(), date.today().strftime("%Y-%m")
+    q = "SELECT model, SUM(input), SUM(output), SUM(thoughts), SUM(cached) FROM ai_calls WHERE kind = ? AND {} GROUP BY model"
+    with system.connect() as c:
+        d_rows = c.execute(q.format("at LIKE ?"), (kind, day + "%")).fetchall()
+        m_rows = c.execute(q.format("month = ?"), (kind, month)).fetchall()
+
+    def total(rows) -> float:
+        return sum(_cost(m, i or 0, o or 0, t or 0, table, ca or 0) for m, i, o, t, ca in rows) * fx
+    return round(total(d_rows), 4), round(total(m_rows), 4)
+
+
+def estimate_try(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Bir çağrının en kötü tahmini (₺): girdi + izin verilen en çok çıktı."""
+    return _cost(model, input_tokens, output_tokens, 0, prices()) * usd_try()
+
+
+def set_settings(new_prices: dict | None = None, fx: float | None = None, alert: float | None = None,
+                 group_day: float | None = None, group_month: float | None = None) -> None:
+    from app import system
+
+    for key, v in ((GROUP_CAP_DAY_KEY, group_day), (GROUP_CAP_MONTH_KEY, group_month)):
+        if v is not None:
+            if not 0 <= v < 1_000_000:
+                raise ValueError("Gruplama tavanı 0 ya da daha büyük olmalı")
+            system.put(key, str(v))
 
     if new_prices is not None:
         clean = {}
@@ -190,8 +239,15 @@ def summary(month: str | None = None) -> dict:
                           for uid, v in top],
             "prices": table, "usd_try": fx, "default_prices": DEFAULT_PRICES,
             "alert_try": (alert := alert_try()),
+            "group_cap": _group_cap_out(),
             "over_alert": sum(1 for uid, v in users.items() if uid is not None and v["cost_usd"] * fx > alert),
             "months": months()}
+
+
+def _group_cap_out() -> dict:
+    day, month = group_caps()
+    sd, sm = spent_try("grup")
+    return {"day_try": day, "month_try": month, "spent_day_try": round(sd, 2), "spent_month_try": round(sm, 2)}
 
 
 def months() -> list[str]:

@@ -134,7 +134,7 @@ def rows_from(data: dict, today: date | None = None) -> tuple[list[tuple], dict]
 
 def import_data(data: dict, today: date | None = None) -> dict:
     """İçe aktar (aynı zincir / şube / ürün / gün yeniden gelirse üzerine yazılır); KEEP_DAYS'ten eskiler silinir."""
-    from app import product_groups, system
+    from app import system
 
     rows, stats = rows_from(data, today)
     cut = ((today or date.today()) - timedelta(days=KEEP_DAYS)).isoformat()
@@ -142,7 +142,7 @@ def import_data(data: dict, today: date | None = None) -> dict:
         c.executemany("INSERT OR REPLACE INTO official_prices (chain, group_key, title, brand, price, unit_price, day, "
                       "depot_id, discount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
         c.execute("DELETE FROM official_prices WHERE day < ?", (cut,))
-    product_groups.kick()  # çözülemeyen adlar: arka planda yapay zekâ (açıksa)
+    # çözülemeyen adlar kuyrukta: yapay zekâ gecede bir kez toplu (product_groups.classify_pending)
     return stats
 
 

@@ -388,7 +388,6 @@ def _quiet():
             patch(push, name, lambda *a, **k: None)
         patch(push, "notify", lambda *a, **k: [])
         patch(db, "_store_quietly", lambda *a, **k: False)
-        patch(product_groups, "kick", lambda *a, **k: None)
         patch(product_groups, "kick_names", lambda *a, **k: None)
         yield
     finally:
