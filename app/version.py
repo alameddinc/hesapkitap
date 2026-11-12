@@ -388,6 +388,16 @@ CAPABILITIES = (
     "sadaka_ratio",           # GET /api/donations/ratio?months=6|12 {available, months [{month, label, short, sadaka,
                               # income|null, ratio (%)|null, note "gelir kaydı yok"|null, zakat|null (ayrı, oranda yok),
                               # partial}], sentence|null, ratio_available, basis kisi|defter, min_income, note}
+    "warranty",               # garanti arşivi (app/warranty.py): GET /api/warranties?q&status → {items [{id, name, brand, model,
+                              # store, purchase_date, price, months, extra_months, ends_at, days_left, status aktif|yakinda|bitti,
+                              # status_label, left_text, serial_no, note, entry_id, txn_id, files [{id, doc_type, doc_label,
+                              # filename, pdf, from_receipt}], can_edit}], counts, quota {limit, used, locked, need}, default_months,
+                              # soon_days, max_files, doc_types}; POST /api/warranties (402 plan_required "garanti": ücretsizde 3
+                              # ürün), GET/PATCH/DELETE /api/warranties/{id}, POST /api/warranties/{id}/files (file, doc_type
+                              # fatura|garanti|diger; foto/PDF, okuma hakkı düşmez), GET /api/warranties/{id}/files/{fid}[?download=1],
+                              # DELETE …/files/{fid}; "Garantiye ekle": GET /api/warranties/draft?entry_id|txn_id, kayıtlı fişler
+                              # GET /api/warranties/receipts?q; yeni fotoğraf POST /api/receipts/parse → receipt_file. Push "garanti";
+                              # ortak defter sayfası "garantiler"
 )
 
 

@@ -26,6 +26,7 @@ import { MatchPanel } from "./MatchInfo";
 import ReceiptItems, { checkSentence } from "./receipt/ReceiptItems";
 import { BankText, userNote } from "./BankText";
 import SavedReceiptItems from "./receipt/SavedReceiptItems";
+import GarantiyeEkle from "./GarantiyeEkle";
 import TaxCard, { SavedTax, type TaxInfo } from "./receipt/TaxCard";
 import { AlertTriangle } from "lucide-react";
 import { checkItems, toServer, type ReceiptItem } from "./receipt/check";
@@ -490,6 +491,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
             receiptFile={editingEntry.receipt_file} readOnly={viewer} onToast={onSaved} />
         )}
         {editingEntry && kind === "gider" && <SavedTax row={editingEntry} readOnly={viewer} />}
+        {editingEntry && kind === "gider" && <GarantiyeEkle source="entry" id={editingEntry.id} onClose={onClose} />}
         {!editingEntry && kind === "gider" && wholeCat && !parts?.length && (
           <p className="rounded-lg bg-violet-50 p-2 text-xs text-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
             Fişin tamamı kalem kuralına uydu; kategori <b>{wholeCat}</b> yapıldı. Yanlışsa yukarıdan değiştir.

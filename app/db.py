@@ -455,6 +455,40 @@ CREATE TABLE IF NOT EXISTS shopping_trips (
     entry_ids TEXT NOT NULL DEFAULT '[]',
     created_by INTEGER
 );
+-- Garanti arşivi (app/warranty.py): ürün, alış tarihi, garanti süresi (ay) ve belgeleri. Bitiş = alış + months +
+-- extra_months (takvim ayı). Fiş / harcamadan eklendiyse entry_id / txn_id (kayıt silinse de ürün kalır).
+CREATE TABLE IF NOT EXISTS warranties (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    brand TEXT,
+    model TEXT,
+    store TEXT,
+    purchase_date DATE NOT NULL,
+    price REAL CHECK (price IS NULL OR price >= 0),
+    months INTEGER NOT NULL DEFAULT 24,      -- yasal / üretici garantisi (Türkiye'de tüketici ürününde en az 2 yıl)
+    extra_months INTEGER NOT NULL DEFAULT 0, -- ek (uzatılmış) garanti
+    serial_no TEXT,
+    note TEXT,
+    entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+    txn_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+    created_by INTEGER,
+    client_key TEXT,                         -- istemcinin işlem kimliği (çevrimdışı kuyruğun tekrarı çift ürün açmasın)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+-- Garantinin belgeleri: kind "warranty" (bu ürüne yüklenen fotoğraf/PDF) ya da "receipts" (bağlı fişin fotoğrafı,
+-- kayıtla ortak dosya: kayıt silinse de bu bağ dosyayı tutar)
+CREATE TABLE IF NOT EXISTS warranty_files (
+    id INTEGER PRIMARY KEY,
+    warranty_id INTEGER NOT NULL REFERENCES warranties(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    doc_type TEXT NOT NULL DEFAULT 'diger',  -- fatura | garanti | diger
+    filename TEXT,
+    size INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_warranty_files_w ON warranty_files(warranty_id);
 """
 
 # Eski şemaya sonradan eklenen kolonlar: (tablo, kolon, tanım)
@@ -1678,13 +1712,14 @@ def update_entry(entry_id: int, data: dict) -> None:
 
 
 def delete_entry(entry_id: int) -> None:
-    """Kaydı sil; fiş fotoğrafı başka kayıtta kullanılmıyorsa o da gider."""
+    """Kaydı sil; fiş fotoğrafı başka kayıtta ya da bir garantinin belgesi olarak kullanılmıyorsa o da gider."""
     with connect() as c:
         r = c.execute("SELECT receipt_file FROM entries WHERE id = ?", (entry_id,)).fetchone()
         c.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
         drop_orphan_spenders(c)
         name = r[0] if r else None
-        used = name and c.execute("SELECT 1 FROM entries WHERE receipt_file = ?", (name,)).fetchone()
+        used = name and (c.execute("SELECT 1 FROM entries WHERE receipt_file = ?", (name,)).fetchone()
+                         or c.execute("SELECT 1 FROM warranty_files WHERE kind = 'receipts' AND name = ?", (name,)).fetchone())
     if name and not used:
         remove_file("receipts", name)
 
@@ -2305,7 +2340,10 @@ def gc_files(min_age_hours: int = 24) -> list[str]:
             "bills": {r[0] for r in c.execute("SELECT file_name FROM bills WHERE file_name IS NOT NULL")},
             "receipts": {r[0] for r in c.execute("SELECT receipt_file FROM entries WHERE receipt_file IS NOT NULL")},
             "statements-bank": {r[0] for r in c.execute("SELECT file_name FROM bank_documents WHERE stored = 1")},
+            "warranty": set(),
         }
+        for kind, name in c.execute("SELECT kind, name FROM warranty_files"):  # garanti belgeleri (bağlı fiş dahil)
+            refs.setdefault(kind, set()).add(name)
         pending = _pending_inbox_docs(c)
     removed = []
     for kind, name in cands:

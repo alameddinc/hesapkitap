@@ -5,7 +5,7 @@ Anahtar düzeni (iki arka uçta da aynı):
     users/<klasör>/<tür>/<ad>          kullanıcı defteri (klasör = veritabanının data/users/ altındaki klasörü, ör. 7)
     deleted/<id>-<unix zamanı>/...     silinen hesabın nesneleri (yalnız S3; 30 gün sonra kalıcı silinir)
 tür: uploads (ekstre PDF'i, <sha256>.pdf), bills (fatura, <sha256[:24]>.<uzantı>), receipts (fiş fotoğrafı,
-<sha256>.jpg), statements-bank (hesap dökümü, <sha256>.<uzantı>).
+<sha256>.jpg), statements-bank (hesap dökümü, <sha256>.<uzantı>), warranty (garanti belgesi, <sha256>.jpg|pdf).
 
 Yerel arka uç bugünkü yollarla birebir aynıdır: main/uploads → data/uploads, main/bills → data/bills,
 users/7/uploads → data/users/7/uploads ... Kendi sunucusunu kuranda hiçbir dosya yer değiştirmez.
@@ -35,13 +35,14 @@ import sys
 log = logging.getLogger("ekstre.storage")
 
 ENV = "HESAPKITAP_FILES_S3_"
-KINDS = ("uploads", "bills", "receipts", "statements-bank")
+KINDS = ("uploads", "bills", "receipts", "statements-bank", "warranty")
 # türün kabul ettiği adlar: yalnız onaltılık hash + izinli uzantı ("..", "/", boşluk vb. hiçbir zaman geçmez)
 NAME_RES = {
     "uploads": re.compile(r"^[0-9a-f]{64}\.pdf$"),
     "bills": re.compile(r"^[0-9a-f]{24,64}\.(?:pdf|jpg|png|webp|heic)$"),
     "receipts": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # fiş fotoğrafı; havale dekontu fotoğraf ya da PDF
     "statements-bank": re.compile(r"^[0-9a-f]{64}\.(?:pdf|xlsx|xls|csv)$"),
+    "warranty": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # garanti belgesi: fatura / garanti belgesi fotoğrafı ya da PDF
 }
 CONTENT_TYPES = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 _PREFIX_RE = re.compile(r"^(?:main/|users/[0-9A-Za-z_-]{1,64}(?:/[0-9A-Za-z_-]{1,64})*/|deleted/[0-9]+-[0-9]+(?:-\d+)?/)$")
@@ -336,7 +337,8 @@ def _local_files() -> list[tuple[str, str]]:
     main_base = os.path.dirname(os.path.abspath(db.DB_PATH))
     dirs = [("main/uploads/", db.UPLOAD_DIR), ("main/bills/", db.BILL_DIR),
             ("main/receipts/", os.path.join(main_base, "receipts")),
-            ("main/statements-bank/", os.path.join(main_base, "statements-bank"))]
+            ("main/statements-bank/", os.path.join(main_base, "statements-bank")),
+            ("main/warranty/", os.path.join(main_base, "warranty"))]
     root = system.data_root()
     if os.path.isdir(root):
         for d, subdirs, _ in os.walk(root):

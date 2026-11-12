@@ -220,6 +220,8 @@ def space(sid: str) -> tuple[str, dict]:
 def closed(path: str) -> bool:
     if path in OPEN:
         return False
+    if re.fullmatch(r"/api/warranties/\d+/files", path):  # demoda kendi dosyası yüklenmez (garanti belgesi)
+        return True
     return any(path == p.rstrip("/") or path.startswith(p.rstrip("/") + "/") for p in CLOSED)
 
 

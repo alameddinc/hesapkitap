@@ -202,6 +202,11 @@ TABLES = [
       label=("given_date", "amount", "recipient", "kind")),
     T("shared_inbox", keys=(("kind", "doc"),), when="created_at", label=("created_at", None, "filename", "kind")),
     T("account_separate", pk=None, keys=(("a", "b"),), fks={"a": "accounts", "b": "accounts"}, required=("a", "b"), child=True),
+    T("warranties", keys=(("client_key",), _opt("name", "purchase_date", "store")),
+      fks={"entry_id": "entries", "txn_id": "transactions"}, when="created_at",
+      label=("purchase_date", "price", "name", "garanti")),
+    T("warranty_files", keys=(("warranty_id", "kind", "name"),), fks={"warranty_id": "warranties"},
+      required=("warranty_id",), when=("parent", "warranty_id"), child=True),
     T("stored_files", pk=None, keys=(("kind", "name"),), mode="files", child=True),
     T("settings", pk=None, keys=(("key",),), mode="settings", child=True),
     T("idempotency", pk=None, mode="target", child=True),
@@ -216,6 +221,7 @@ FILE_REFS = {  # kaynak defterden: tür → dosya adları
     "bills": "SELECT file_name FROM bills WHERE file_name IS NOT NULL",
     "receipts": "SELECT receipt_file FROM entries WHERE receipt_file IS NOT NULL",
     "statements-bank": "SELECT file_name FROM bank_documents WHERE stored = 1",
+    "warranty": "SELECT name FROM warranty_files WHERE kind = 'warranty'",
 }
 
 

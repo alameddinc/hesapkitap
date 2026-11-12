@@ -53,6 +53,8 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("tablo", "Tablo", "sayfa", PREMIUM, True, "Aylar ve kategoriler yan yana"),
     ("kurallar", "Kategori kuralları", "sayfa", FREE, True, "İşyerine göre kendiliğinden kategori"),
     ("zekat", "Zekât ve Sadaka", "sayfa", FREE, False, "Her pakette ücretsiz (değiştirilemez)"),
+    ("garanti", "Sınırsız garanti arşivi", "ozellik", PREMIUM, True,
+     "Ücretsizde 3 ürün; ürün, fatura ve garanti belgesi, bitişten önce hatırlatma"),
 ]
 _ROWS = {k: (label, kind, tier, editable, desc) for k, label, kind, tier, editable, desc in CATALOG}
 DEFAULT_TIERS = {k: r[2] for k, r in _ROWS.items()}
@@ -135,6 +137,7 @@ FEATURES = {k: _tierset(t) for k, t in DEFAULT_TIERS.items()}
 FREE_HISTORY_MONTHS = 1  # ücretsiz: bu dönem + geçen dönem
 FREE_PLAN_MONTHS = 1
 FREE_BUDGETS = 2
+FREE_WARRANTIES = 3  # garanti arşivi: "garanti" satırının paketinde değilse defterde en çok bu kadar ürün (app/warranty.py)
 # Verini indirmek (zip/Excel) ve hesabı silmek her pakette serbest: KVKK erişim ve taşınabilirlik hakkı.
 
 # ---------------------------------------------------------------- okuma hakları (app/doc_reads.py)

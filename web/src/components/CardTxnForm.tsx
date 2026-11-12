@@ -14,6 +14,7 @@ import { taslakla, taslakSonuc } from "../lib/idem";
 import SplitEditor from "./SplitEditor";
 import { TxnSpender } from "./Spender";
 import MarkDonation from "./MarkDonation";
+import GarantiyeEkle from "./GarantiyeEkle";
 import { send } from "../lib/apiError";
 import { AdDuzelt } from "../pages/Uncategorized";
 import { useUI } from "../ui";
@@ -178,6 +179,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
           <p className="text-sm text-red-600 dark:text-red-400" role="alert">{((save.error || subSave.error) as Error).message}</p>
         )}
         {row.kind === "harcama" && !row.deleted && <MarkDonation source="card" id={row.id} />}
+        {row.kind === "harcama" && !row.deleted && <GarantiyeEkle source="txn" id={row.id} onClose={onClose} />}
         {row.deleted && <p className="text-sm text-amber-600 dark:text-amber-400">Bu işlem hesaba katılmıyor; toplamlara ve raporlara dahil değil. "Hesaba kat" ile geri alırsın.</p>}
       </div>
     </Modal>
