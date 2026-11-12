@@ -8,7 +8,7 @@ ay ne ödedim", işlemler (dokununca işlemin kendisi açılır).
   ekstresinden ve hesap dökümünden.
 
 Ay: işlemin tarihinin takvim ayı ("Ekim 2026'da ne ödedim"). Ay satırında değişim bir önceki ödemeli aya göre: dövizli
-abonelikte döviz tutarı değiştiyse zam/indirim, yalnız TL değiştiyse "kur" (zam sayılmaz). Aynı ayda birden çok çekim
+abonelikte döviz tutarı değiştiyse zam/indirim, yalnız TL %3'ten fazla değiştiyse "kur" (zam sayılmaz; azı gösterilmez). Aynı ayda birden çok çekim
 "adet" farkıdır, zam sayılmaz.
 
 Toplamlar sunucuda (istemci toplamaz): tümü ve son 12 ay (bu ay dahil 12 takvim ayı); dövizli olanlarda döviz toplamı.
@@ -24,6 +24,7 @@ from app.textnorm import merchant_name
 
 AY = store_subs.AY
 LAST_N = 12
+KUR_ESIK = 0.03  # dövizlide yalnız TL değişimi: önceki ayın %3'ünden büyükse "kur farkı" gösterilir (küçüğü gürültü)
 
 
 def title_of(s: str) -> str:
@@ -92,7 +93,7 @@ def _change(cur: dict, prev: dict | None) -> dict | None:
         if abs(b - a) >= max(money.CENT, a / 100):
             return {"kind": "zam" if b > a else "indirim", "diff": diff, "from": prev["amount"], "to": cur["amount"],
                     "fx_text": f"{money.money(a):g} {k} → {money.money(b):g} {k}"}
-        if not money.is_zero(diff):
+        if abs(diff) > prev["amount"] * KUR_ESIK:
             return {"kind": "kur", "diff": diff, "from": prev["amount"], "to": cur["amount"], "fx_text": None}
         return None
     if abs(diff) >= max(0.5, prev["amount"] / 100):

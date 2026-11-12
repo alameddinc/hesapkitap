@@ -40,7 +40,7 @@ def ai14(tmpdb):
     for k in range(14):
         y, m = _ym(2025, 9, k)
         usd = 25 if (y, m) >= (2026, 6) else 20
-        rate = 40 + k * 0.5
+        rate = 40 + k * 0.5 + (3 if (y, m) >= (2026, 2) else 0)  # Şubat 2026'da kur sıçraması (%8)
         rows = [(date(y, m, 5), "ORNEKAI SUBSCRIPTION", round(usd * rate, 2), (usd, "USD"))]
         if k >= 5:
             rows.append((date(y, m, 9), "ORNEK MUZIK", 99.99 if (y, m) < (2026, 5) else 119.99, None))
@@ -71,8 +71,10 @@ def test_card_detail_totals_months_fx(ai14):
     assert months[-1]["change"] is None and months[0]["fx_text"] == "25 USD" and months[0]["label"] == "Ekim 2026"
     jun = next(m for m in months if m["month"] == "2026-06")
     assert jun["change"]["kind"] == "zam" and jun["change"]["fx_text"] == "20 USD → 25 USD"
-    # döviz tutarı aynı, TL kurla değişti: zam değil
-    assert {m["change"]["kind"] for m in months if m["change"] and m["month"] != "2026-06"} == {"kur"}
+    # döviz tutarı aynı, TL kurla değişti: zam değil; %3'ten küçük kur oynaması gösterilmez (ayda ~%1)
+    feb = next(m for m in months if m["month"] == "2026-02")
+    assert feb["change"] == {"kind": "kur", "diff": 70.0, "from": 840.0, "to": 910.0, "fx_text": None}
+    assert [m["month"] for m in months if m["change"] and m["month"] not in ("2026-06", "2026-02")] == []
     t0 = d["transactions"][0]
     assert t0["date"] == "2026-10-05" and t0["label"] == "Örnek Bank …1111" and t0["fx"] == "25 USD" and t0["via"] == "kart"
     assert t0["month"] == "2026-10"  # satırın dönemi (istemci işlemi bu dönemde bulur)

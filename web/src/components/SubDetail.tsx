@@ -11,7 +11,8 @@ import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import { SubLogoBox, type SubLogo } from "./AppSubs";
 
 // Abonelik ayrıntısı (sunucu app/sub_detail.py, yetenek subscription_detail): toplam ödenen (son 12 ay / tümü), ay ay
-// tutar (zam/indirim belirgin, dövizlide kur farkı ayrı), işlemler (dokununca mevcut işlem düzenleme penceresi).
+// tutar (zam/indirim belirgin, dövizlide kur farkı ayrı; kur farkı yalnız TL %3+ değişince, eşik sunucuda), işlemler (dokununca
+// mevcut işlem düzenleme penceresi).
 // Toplamlar sunucudan; istemci toplamaz. Tutarlar tl() ile (göz kapalıysa ••••).
 
 interface Total { amount: number; count: number; since: string | null; first_date: string | null; fx_text: string | null; text: string | null }
