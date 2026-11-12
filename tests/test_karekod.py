@@ -519,3 +519,22 @@ def test_paid_bill_dekont_unchanged(hosted, gemini):  # noqa: F811
     gemini["replies"].append({**AI_SAYS_BILL, "paid": True, "paid_at": _day(3).isoformat(), "pay_method": "kredi_karti"})
     d = _parse(c, restaurant_text() + "\nTahsil edildi, dekont", [gib(total=108.0)]).json()
     assert d["type"] == "bill" and d["paid"] is True
+
+
+def test_bill_without_due_and_no_qr_becomes_receipt():
+    """Karekodu okunamayan restoran e-Arşivi: okuma "fatura" dese de son ödeme / kurum işareti yoksa fiş (12.11)."""
+    from app import karekod
+
+    txt = ("ORNEK CAFE RESTORAN\nORNEK MAH. ORNEK CAD. NO:1\nTARIH 12.11.2026 SAAT 13:05\nE-ARSIV FATURA\n"
+           "LATTE 1 X 85,00 85,00\nSU 1 X 23,00 23,00\nTOPKDV 9,82\nTOPLAM 108,00\nKREDI KARTI 108,00\n")
+    doc = {"type": "bill", "provider": "Ornek Cafe Restoran", "amount": 108.0, "due_date": None, "paid": False,
+           "category": "Faturalar"}
+    r = karekod.apply_hints(doc, None, txt, ["Kafe & Restoran", "Diğer"])
+    assert r["type"] == "receipt" and r["total"] == 108.0 and r["date"] == "2026-11-12"
+    elec = "ORNEK ELEKTRIK PERAKENDE\nABONE NO 123\nTUKETIM 210 KWH\nODENECEK 450,00\n"
+    d2 = {"type": "bill", "provider": "Ornek Elektrik", "amount": 450.0, "due_date": None, "paid": False,
+          "category": "Elektrik"}
+    assert karekod.apply_hints(d2, None, elec, [])["type"] == "bill"
+    d3 = dict(doc, due_date="2026-11-30")
+    assert karekod.apply_hints(d3, None, txt, [])["type"] == "bill"  # son ödeme tarihi okunduysa fatura kalır
+    assert karekod.apply_hints(dict(doc), None, None, [])["type"] == "bill"  # metin yoksa eski davranış

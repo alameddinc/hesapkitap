@@ -471,13 +471,46 @@ def bill_doc(qr: dict, text: str | None) -> dict | None:
             "payment": None, "confidence": "yüksek", "source": "karekod", "rule": "qr_bill", "qr": {"kind": "gib"}}
 
 
+_BILL_KEEP = {"Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Kira & Aidat"}
+
+
+def bill_without_due(doc: dict, text: str | None, categories: list[str] | None = None) -> dict:
+    """Karekod okunamadı (ya da GİB değil) ve okuma "fatura" dedi: son ödeme tarihi yok, kurum işareti yok, kategori
+    abonelik değil ve ödeme dekontu değilse alışveriş belgesidir (restoran / market e-Arşivi; 12.11 cihaz testi: karekodu
+    okunamayan restoran fişi Ödemeler'e düşüyordu) → fiş. Telefon metni yoksa karar verilmez (eski davranış)."""
+    from app import bill_templates
+
+    if doc.get("type") != "bill" or doc.get("paid") or doc.get("due_date") or not text:
+        return doc
+    if (doc.get("category") or "") in _BILL_KEEP or bill_like(None, text) or bill_templates.is_paid_doc(text):
+        return doc
+    amount = doc.get("amount")
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        return doc
+    date = doc.get("issue_date") or doc.get("date")
+    if not _date_ok(date):
+        from app import ocr
+
+        try:
+            date = ocr.parse_text(text, categories or ["Diğer"]).get("date")
+        except ValueError:
+            date = None
+    pseudo = {"kind": "metin", "total": round(float(amount), 2), "date": date, "vkn": doc.get("tax_no"),
+              "currency": "TRY"}
+    out = as_receipt(doc, pseudo, text, categories)
+    out["qr_fixed"] = ["type"]
+    return out
+
+
 def apply_hints(doc: dict, qr: dict | None, text: str | None = None, categories: list[str] | None = None) -> dict:
     """Yapay zekâ (ya da yerel) okumasından sonra GİB karekodu: tutar karekodla tutmuyorsa karekodunki (e-belgenin
     resmi tutarı), boş tarih / VKN / KDV dökümü karekoddan. Pompa karekodu: boş tarih / VKN. doc['qr_fixed'] alanları.
     Okuma "fatura" dedi ama belge alışveriş e-Arşivi (shopping: son ödeme / kurum işareti yok, ödenmiş fatura değil)
     → fiş (as_receipt): Ödemeler'e değil harcama olarak İşlemler'e girer."""
-    if not doc or not qr or qr.get("kind") not in ("gib", "pompa"):
+    if not doc:
         return doc
+    if not qr or qr.get("kind") not in ("gib", "pompa"):
+        return bill_without_due(doc, text, categories)
     if doc.get("type") == "bill" and qr["kind"] == "gib" and not doc.get("paid") \
             and shopping(qr, text, doc.get("due_date")):
         doc = as_receipt(doc, qr, text, categories)

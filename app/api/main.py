@@ -8077,7 +8077,12 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     qr_part = ("\n" + "\n".join(qr)) if qr else ""  # karekod da sonucu değiştirir (yoksa anahtar eskisiyle aynı)
     ckey = hashlib.sha256(hashlib.sha256(key).digest() + f"{ocr_source or ''}\n{ocr_text}{qr_part}".encode()).digest() \
         if ocr_text or qr else key
-    if (hit := doc_cache.get(ckey, doc_cache.BELGE)) is not None:  # aynı belge bu defterde okunmuştu: yapay zekâ yok
+    from app import karekod
+
+    hit = doc_cache.get(ckey, doc_cache.BELGE)
+    if hit is not None and hit.get("type") == "bill" and karekod.bill_without_due(dict(hit), ocr_text).get("type") != "bill":
+        hit = None  # eski sürümde son ödemesiz alışveriş belgesi "fatura" okunmuş: yeniden okunur (12.11)
+    if hit is not None:  # aynı belge bu defterde okunmuştu: yapay zekâ yok
         if hit.get("type") != "bill":
             return _cached_receipt(hit, photo)
         out = doc_cache.hit(hit)
@@ -8096,7 +8101,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
     split = sorted({r["category"] for r in db.list_item_rules()})
     qr_by_server = False
-    from app import karekod, receipt_templates
+    from app import receipt_templates
 
     if not qr and (mime.startswith("image/") or mime == "application/pdf"):
         # telefon karekod göndermedi (eski uygulama, web, PDF): sunucuda yedek okuma (süre sınırlı, sonuç belirlenimci:
