@@ -106,6 +106,8 @@ TYPES = {
     "sadaka": ("Sadaka hatırlatması", True),
     # garanti arşivindeki ürünün garantisi bitmeden: 30 gün kala ve 7 gün kala birer kez (app/warranty.push_stage)
     "garanti": ("Garanti bitişi", True),
+    # yönetici bir sorunu "düzeltildi" işaretleyince o hatayı son 30 günde yaşamış kişiye bir kez (app/incidents.py)
+    "duzeltme": ("Düzelttiğimiz sorunlar", True),
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -115,7 +117,8 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
          "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
          "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
-         "garanti": "garanti hatırlatması"}
+         "garanti": "garanti hatırlatması",
+         "duzeltme": "düzeltilen sorun"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")

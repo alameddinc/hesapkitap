@@ -432,6 +432,13 @@ CAPABILITIES = (
                               # aynı; okuma hakkı orada, tek sayım) → {status "document", doc_type bill|receipt, doc,
                               # message}; okunamadıysa status "error". docs yoksa (eski istemci) aynı belgeler Türkçe
                               # nedenle "error"; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez
+    "incidents",              # sorun kaydı (app/incidents.py): POST /api/incidents/client {events [{code js_hatasi|
+                              # ekran_coktu|ag_zaman_asimi|sunucuya_ulasilamadi|eklenti_hatasi, screen?, detail?,
+                              # app_version?, platform?, plugin?}] ≤10} → {ok, accepted} (oturumsuz da; saatlik sınır);
+                              # yönetici: GET /api/admin/incidents?status&severity&days, GET …/{id}, GET …/users/{uid},
+                              # PATCH …/{id} {status yeni|inceleniyor|duzeltildi, note, fixed_version, user_text,
+                              # notify_users}. Push "sistem" (yöneticiye, yol #/diger/ayarlar/sorunlar) ve "duzeltme"
+                              # (kullanıcıya: "… düzelttik, tekrar deneyebilirsin")
 )
 
 

@@ -25,6 +25,9 @@ from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 from app import logs as _logs  # noqa: E402
 
 _logs.install()  # günlükte kişisel veri maskeleme, erişim günlüğünde sorgu dizgesi yok (S8)
+from app import incidents as _incidents  # noqa: E402
+
+_incidents.install()  # arka plan işi hataları → sorun kaydı (app/incidents.py)
 db.init_db()
 auth.ensure_admin()
 
@@ -92,6 +95,7 @@ MACHINE_CODES = {"consent_required": "Devam etmek için koşulları ve açık r�
 async def _validation_error(request: Request, exc: RequestValidationError):
     """Geçersiz istek gövdesi/parametre: Türkçe tek cümle (istemciler detail metnini gösterir). errors: alan ve tür."""
     errs = exc.errors()
+    _incidents.mark_validation()  # biçim hatası sorun kaydına girmez
     return JSONResponse({"detail": errors.validation_text(errs),
                          "errors": [{"loc": list(e.get("loc", ())), "type": e.get("type")} for e in errs]}, status_code=422)
 
@@ -111,6 +115,7 @@ async def _http_error(request: Request, exc: StarletteHTTPException):
         detail = errors.GENERIC.get(exc.status_code, errors.GENERIC[400 if exc.status_code < 500 else 500])
     if exc.status_code == 404:
         extra["refresh"] = True  # istemci listeyi tazelesin (kayıt başka cihazda silinmiş/değişmiş olabilir)
+    _incidents.mark_detail(detail)  # sorun kaydının kısa özeti (süzülür)
     return JSONResponse({"detail": detail, **extra}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
 
@@ -355,12 +360,20 @@ async def require_login(request: Request, call_next):
     yoksa Starlette'in en dıştaki hata katmanı CORS'un DIŞINDA yanıt üretir, mobil uygulama başlıksız yanıtı CORS
     hatası ("Sunucuya ulaşılamadı") sanar. Bütün erken dönüşler (401/402/403/404/409/413/422/429/503) zaten CORS içinde."""
     mark = config.mark_request()  # oturumsuz istekte config.is_admin() False (D3)
+    inc = _incidents.begin(request)  # sorun kaydı: kullanıcıya dönen hata (app/incidents.py; tampona, arka planda yazılır)
     try:
-        return await _require_login(request, call_next)
-    except Exception:  # noqa: BLE001
+        response = await _require_login(request, call_next)
+        if response.status_code >= 400:
+            _incidents.finish(request, response.status_code)
+        elif _incidents.has_notes():
+            _incidents.finish(request, response.status_code)
+        return response
+    except Exception as e:  # noqa: BLE001
         logging.getLogger("hesapkitap.api").exception("işlenmemiş hata: %s %s", request.method, request.url.path)
+        _incidents.finish(request, 500, exc=e)
         return JSONResponse({"detail": errors.GENERIC[500]}, status_code=500)
     finally:
+        _incidents.end(inc)
         config._in_request.reset(mark)
 
 
@@ -448,9 +461,12 @@ async def _require_login(request: Request, call_next):
             user = system.token_owner(_bearer(request) or "") if _bearer(request) else None
         if not user and path == "/api/feedback":  # "Sorun bildir" giriş ekranından da: oturumsuz gider (user_id yok)
             pass
+        elif not user and path == "/api/incidents/client":  # istemci hata kaydı: oturumsuz da (sınırlı)
+            pass
         elif not user:
             return JSONResponse({"detail": "Giriş gerekli"}, status_code=401)
         else:
+            _incidents.set_user(user)
             gate = _access(request, request.method, path, user)
             if isinstance(gate, JSONResponse):
                 return gate
@@ -3122,6 +3138,7 @@ class QuotaFull(HTTPException):
 
 @app.exception_handler(QuotaFull)
 async def _quota_full(request: Request, exc: QuotaFull):
+    _incidents.note("okuma_hakki_doldu")
     return JSONResponse({"detail": exc.detail, **exc.extra}, status_code=exc.status_code)
 
 
@@ -5989,15 +6006,17 @@ def _upload_document(res: dict, data: bytes, mime: str) -> dict:
     """Yükleme kuyruğuna gelen fiş/fatura (yetenek upload_docs): belge okuma yolu (_read_document; okuma hakkı orada,
     her okuma düşer — önceki ekstre denemesi hak düşürmemiştir). Sonuç {status "document", doc_type bill|receipt, doc
     (POST /api/documents/parse yanıtı), message}; okunamadıysa status "error" (Türkçe neden, hak kuralları aynen)."""
+    kind = "fatura_okunamadi" if mime == "application/pdf" else "fis_okunamadi"
     try:
         doc = _read_document(data, mime)
     except QuotaFull as e:
         return {**res, "status": "error", "message": str(e.detail), **e.extra}
     except HTTPException as e:
-        return {**res, "status": "error", "message": errors.user_text(str(e.detail), e.status_code)}
+        return {**res, "status": "error", "message": errors.user_text(str(e.detail), e.status_code),
+                "_inc": "okuma_servisi" if e.status_code >= 500 else kind}
     except Exception as e:  # noqa: BLE001 - kuyruktaki öbür dosyalar sürsün
         logging.getLogger("hesapkitap.api").warning("yüklemede belge okunamadı", exc_info=True)
-        return {**res, "status": "error", "message": errors.user_text(e, 502)}
+        return {**res, "status": "error", "message": errors.user_text(e, 502), "_inc": "okuma_servisi"}
     if doc.get("unreadable"):
         return {**res, "status": "error", "message": doc.get("message") or UNREADABLE_MSG,
                 **({"charged": doc["charged"]} if doc.get("charged") else {})}
@@ -6025,7 +6044,23 @@ def upload_statements(files: list[UploadFile] = File(...), password: str | None 
         results = _upload_statements(files, password, remember, kind, docs)
         b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
                                                 "message")} for r in results]
+    for r in results:  # okunamayan dosyalar sorun kaydına (yalnız neden kodu; dosya adı/içerik yok)
+        if code := r.pop("_inc", None) or _upload_incident(r, bool(password)):
+            _incidents.note(code, r.get("message") if code == "ekstre_okunamadi" else None)
     return results
+
+
+def _upload_incident(r: dict, had_password: bool) -> str | None:
+    """Yükleme sonucunun sorun kodu (app/incidents.KODLAR); başarılıysa None."""
+    st, msg = r.get("status"), r.get("message")
+    if st == "password_required":
+        return "pdf_sifre" if had_password else None
+    if st != "error":
+        return None
+    if r.get("quota_full"):
+        return "okuma_hakki_doldu"
+    return {UPLOAD_IMAGE_MSG: "ekstre_yerine_foto", UPLOAD_BILL_MSG: "ekstre_yerine_fatura",
+            UPLOAD_IMAGE_TYPE_MSG: "foto_bicimi"}.get(msg) or "ekstre_okunamadi"
 
 
 def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
@@ -7318,6 +7353,8 @@ def _mark_unreadable(doc: dict, msg: str) -> None:
     from app import doc_reads
 
     doc.update(unreadable=True, message=msg)
+    _incidents.note("dekont_okunamadi" if msg == DEKONT_UNREADABLE else "fatura_okunamadi" if doc.get("type") == "bill"
+                    else "fis_okunamadi" if msg == UNREADABLE_MSG else "belge_okunamadi")  # sorun kaydı: yalnız kod
     if charged := doc_reads.charge_unreadable():
         doc.update(charged=charged, message=f"{msg} {doc_reads.UNREADABLE_CHARGED_MSG}")
 
@@ -7795,6 +7832,7 @@ def parse_bill(file: UploadFile = File(...), transfer_check: bool = Form(False))
         parsed = receipt.parse_bill(read, read_mime) if receipt.enabled() else {}
     except receipt.ReceiptError as e:
         parsed = {"error": errors.user_text(e, 502), **(e.fields() if isinstance(e, doc_reads.QuotaError) else {})}
+        _incidents.note("okuma_hakki_doldu" if isinstance(e, doc_reads.QuotaError) else "fatura_okunamadi", parsed["error"])
     if parsed and "error" not in parsed:
         if charged := doc_reads.charge(data):
             parsed["charged"] = charged
@@ -7902,6 +7940,7 @@ def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)
             _mark_unreadable(out, DEKONT_UNREADABLE)
         else:  # metin okuması (yapay zekâ yok): hak düşmez
             out.update(unreadable=True, message=DEKONT_UNREADABLE)
+            _incidents.note("dekont_okunamadi")
     elif hit is not None:
         out["cached"] = True  # önbellekten: hak düşmez
     elif charged := doc_reads.charge(data):
@@ -9156,6 +9195,94 @@ def backup_download(name: str):
     if name not in {b["name"] for b in backup.list_backups()}:
         raise HTTPException(404, errors.GENERIC[404])
     return FileResponse(os.path.join(backup.backup_dir(), name), filename=name, media_type="application/octet-stream")
+
+
+# ---------------------------------------------------------------- sorun kaydı (app/incidents.py; yetenek "incidents")
+
+class ClientIncident(BaseModel):
+    code: str = Field(max_length=40)
+    screen: str | None = Field(None, max_length=200)       # ekran yolu ("#/diger/ekstreler/12"); kimlikler atılır
+    detail: str | None = Field(None, max_length=1000)      # hata adı + kısa metin; sunucuda süzülür (kisa_ozet)
+    app_version: str | None = Field(None, max_length=40)
+    platform: Literal["ios", "android", "web"] | None = None
+    plugin: str | None = Field(None, max_length=40)        # eklenti_hatasi: kamera | dosya | paylas | push …
+
+
+class ClientIncidentsIn(BaseModel):
+    events: list[ClientIncident] = Field(max_length=10)
+
+
+@app.post("/api/incidents/client")
+def incidents_client(request: Request, body: ClientIncidentsIn):
+    """İstemcinin hata kaydı (yakalanmamış JS hatası, ekran çökmesi, ağ zaman aşımı, sunucuya ulaşılamadı, telefon
+    eklentisi). Oturumsuz da kabul (giriş ekranı); saatte kişi başı 60, oturumsuzda bağlantı başı 20 olay (fazlası
+    sessizce atılır). Bilinmeyen kod yok sayılır. Yanıt {ok, accepted}."""
+    from app import funnel, incidents
+
+    u = db.current_user() or {}
+    uid = u.get("id") if u.get("id") and not u.get("demo") else None
+    key = f"u{uid}" if uid else incidents.anon_key(client_ip(request))
+    events = [e.model_dump() for e in body.events if e.code in incidents.CLIENT_CODES]
+    ok = incidents.client_allowed(key, len(events), incidents.RATE_USER if uid else incidents.RATE_ANON)
+    plat = funnel.platform_of(request.headers)
+    n = incidents.client_events(events[:ok], uid, plat if plat in incidents.PLATFORMS else None)
+    return {"ok": True, "accepted": n}
+
+
+@app.get("/api/admin/incidents")
+def admin_incidents(status: Literal["yeni", "inceleniyor", "duzeltildi"] | None = None,
+                    severity: Literal["kritik", "uyari", "bilgi"] | None = None, days: int = Query(30, ge=1, le=90)):
+    """Sorunlar: türe göre gruplu (kaç kişi, kaç kez, ilk/son görülme, sürüm ve platform dağılımı, örnek bağlam).
+    {items, counts {yeni, inceleniyor, duzeltildi}, days, thresholds}."""
+    from app import incidents
+
+    _require_admin()
+    return incidents.list_kinds(status, days, severity)
+
+
+@app.get("/api/admin/incidents/users/{uid}")
+def admin_incidents_user(uid: int, days: int = Query(30, ge=1, le=90)):
+    """Bir kişinin sorun zaman çizelgesi (en yeni üstte)."""
+    from app import incidents
+
+    _require_admin()
+    return incidents.user_timeline(uid, days)
+
+
+@app.get("/api/admin/incidents/{kid}")
+def admin_incident(kid: int, days: int = Query(30, ge=1, le=90)):
+    """Tür ayrıntısı: günlük sayılar (days), kişiler (people; son görülen üstte; oturumsuzlar tek satır)."""
+    from app import incidents
+
+    _require_admin()
+    out = incidents.kind_detail(kid, days)
+    if out is None:
+        raise HTTPException(404, "Bu sorun kaydı bulunamadı")
+    return out
+
+
+class IncidentPatch(BaseModel):
+    status: Literal["yeni", "inceleniyor", "duzeltildi"] | None = None
+    note: str | None = Field(None, max_length=2000)
+    fixed_version: str | None = Field(None, max_length=20)
+    user_text: str | None = Field(None, max_length=160)
+    notify_users: bool = True  # "düzeltildi"ye geçişte yaşayan kişilere haber
+
+
+@app.patch("/api/admin/incidents/{kid}")
+def admin_incident_patch(kid: int, body: IncidentPatch):
+    """Durum / not / düzeltme sürümü / kullanıcı metni. "duzeltildi"ye geçişte (notify_users) türü son 30 günde yaşamış
+    kişilere bir kez "duzeltme" push'u. {kind, notified (kişi sayısı | null)}."""
+    from app import incidents
+
+    _require_admin()
+    try:
+        out = incidents.update_kind(kid, body.status, body.note, body.fixed_version, body.user_text, body.notify_users)
+    except incidents.IncidentError as e:
+        raise HTTPException(e.status, str(e)) from e
+    if out is None:
+        raise HTTPException(404, "Bu sorun kaydı bulunamadı")
+    return out
 
 
 # ---------------------------------------------------------------- evrensel bağlantı (davet → uygulama)

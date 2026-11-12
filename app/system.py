@@ -358,6 +358,38 @@ CREATE TABLE IF NOT EXISTS store_event_seen (  -- webhook tekrarı iki kez sayı
     id TEXT PRIMARY KEY,
     at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS incident_kinds (  -- sorun türü (app/incidents.py): kod + yer; kişisel veri yok, 90 gün
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL,                  -- sabit sözlük (incidents.KODLAR)
+    place TEXT NOT NULL DEFAULT '-',     -- uç kalıbı ("POST /api/entries") ya da ekran yolu ("diger/ekstreler")
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'yeni', -- yeni | inceleniyor | duzeltildi
+    note TEXT,                           -- yöneticinin notu (sürüm/commit)
+    fixed_version TEXT,                  -- düzeltmenin geldiği uygulama sürümü (altındakine "güncelle")
+    fixed_at TEXT,
+    fix_seq INTEGER NOT NULL DEFAULT 0,  -- kaçıncı düzeltme (haber bir kez: duzeltme:<id>:<seq>)
+    user_text TEXT,                      -- kullanıcıya gidecek "düzelttik" metni (boşsa koda göre)
+    notified INTEGER NOT NULL DEFAULT 0,
+    notified_at TEXT,
+    reopened INTEGER NOT NULL DEFAULT 0,
+    alerted_at TEXT,
+    sample TEXT,                         -- JSON {ozet (süzülmüş kısa özet), http, platform, app_version}
+    UNIQUE (code, place)
+);
+CREATE TABLE IF NOT EXISTS incidents (  -- sorun sayacı: tür + kişi (0 = oturumsuz) + gün tek satır (app/incidents.py)
+    kind_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL DEFAULT 0,
+    day TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    first_at TEXT,
+    last_at TEXT,
+    app_version TEXT,
+    platform TEXT,
+    PRIMARY KEY (kind_id, user_id, day)
+);
+CREATE INDEX IF NOT EXISTS incidents_user ON incidents(user_id, day);
+CREATE INDEX IF NOT EXISTS incidents_day ON incidents(day);
 CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feedback_status ON feedback(status, id);
 """
@@ -628,6 +660,7 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             for t in ("doc_cache", "read_book_daily"):  # defterin okuma önbelleği ve aile günlük toplamı
                 c.execute(f"DELETE FROM {t} WHERE book_id = ?", (uid,))
+            c.execute("DELETE FROM incidents WHERE user_id = ?", (uid,))  # sorun sayaçları (app/incidents.py)
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))
@@ -641,6 +674,10 @@ def delete_user(uid: int) -> None:
                     c.execute(sql, (uid,))
                 except sqlite3.OperationalError:
                     pass
+    if gone:  # sorun kaydı tamponunda bekleyenler (app/incidents.py)
+        from app import incidents
+
+        incidents.forget_user(uid)
     if gone:  # geri bildirimleri ve ekran görüntüleri (depo çağrısı bağlantı dışında)
         from app import feedback
 

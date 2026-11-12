@@ -84,6 +84,7 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("PUT", r"/api/donations/reminder"),  # sadaka hatırlatmasının ritmi kişiye özel
                    ("POST", r"/api/book/leave"), ("POST", r"/api/book/join/[\w-]+"),  # üyelik kişinin kendi kararı
                    ("POST", r"/api/feedback")]  # "Sorun bildir": yöneticiye gider, deftere yazmaz
+PERSONAL_WRITES.append(("POST", r"/api/incidents/client"))  # hata kaydı (app/incidents.py): deftere yazmaz
 
 
 def member() -> dict | None:

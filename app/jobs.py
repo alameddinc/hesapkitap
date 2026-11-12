@@ -283,6 +283,9 @@ def run_global(now: datetime) -> list[str] | None:
     from app import community_prices
 
     community_prices.prune()  # KEEP_DAYS'ten eski anonim topluluk fiyatları
+    from app import incidents
+
+    incidents.prune()  # 90 günden eski sorun sayaçları ve o tarihten beri görülmeyen türler (app/incidents.py)
     try:  # gün içinde kuyruğa giren ürün adları: gecede bir kez toplu yapay zekâ (günlük çağrı + sert ₺ tavanıyla)
         from app import product_groups
 
