@@ -418,6 +418,9 @@ CAPABILITIES = (
                               # store?; 1 görüntü = 1 okuma); POST …/apps/manual; PATCH|DELETE …/apps/sources/{id};
                               # /api/savings subscriptions[].store + logo. Push "abonelik" yenilemeye 3 gün kala, yol
                               # #/diger/tasarruf/abonelik/<id>
+    "subscription_detail",    # abonelik ayrıntısı (app/sub_detail.py): GET /api/subscriptions/detail?merchant=|app= →
+                              # toplam ödenen (tümü / son 12 ay, dövizli: döviz toplamı + not), ay ay tutar (zam/indirim/
+                              # kur), işlemler (uid → mevcut işlem ayrıntısı). Yoksa istemci abonelik satırını açmaz
     "card_early_close",       # taksitleri erken kapattım (app/early_close.py): GET /api/cards/summary cards[].early_close
                               # {available, rest, fee_left (faiz gizliyse null), hint, months [{month, label}], default_month,
                               # record {month, label, amount, total, rest, saved, at, text, saved_text} | null, detected

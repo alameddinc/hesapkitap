@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { call, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
-import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
+import { AlertOctagon, ArrowDownRight, Ban, ChevronRight, Plus, RotateCcw, Target, Trash2 } from "lucide-react";
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import Jars from "../components/Jars";
@@ -12,6 +12,7 @@ import { addMonths, cx, dateTR, parseAmount, tl, periodLabel, periodNameMonth, p
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
 import AppSubs, { SubLogoBox, type AppsData, type SubLogo } from "../components/AppSubs";
+import SubDetailModal from "../components/SubDetail";
 
 interface Sub {
   merchant: string;
@@ -152,6 +153,9 @@ export default function Savings() {
   const apps = useQuery({ queryKey: ["subscription-apps"], queryFn: () => send<AppsData>("/api/subscriptions/apps"), enabled: storeCap });
   const [adding, setAdding] = useState(false);
   const [downgrade, setDowngrade] = useState<Sub | null>(null);
+  // abonelik ayrıntısı (toplam ödenen, ay ay, işlemler); eski sunucuda satır açılmaz
+  const detailCap = useCap("subscription_detail");
+  const [detail, setDetail] = useState<Sub | null>(null);
   const setSub = useSave((b: { merchant: string; status: string }) => j("PUT", "/api/subscriptions", b),
     () => ui.toast("Abonelik güncellendi, planlama yeniden hesaplandı"));
   const patchGoal = useSave((b: { id: number; active: boolean }) => j("PATCH", `/api/goals/${b.id}`, { active: b.active }));
@@ -188,7 +192,9 @@ export default function Savings() {
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
           {subs.map((s) => (
             <li key={s.merchant} className={cx("px-4 py-2.5", s.status === "iptal" && !s.charged_after_cancel && "opacity-60")}>
-              <div className="flex items-start justify-between gap-3">
+              <div className={cx("flex items-start justify-between gap-3", detailCap && "-mx-2 cursor-pointer rounded-lg px-2 hover:bg-stone-50 dark:hover:bg-stone-800/50")}
+                {...(detailCap ? { role: "button", tabIndex: 0, "aria-label": `${title(s.merchant)}: ödemeler`, onClick: () => setDetail(s),
+                  onKeyDown: (e: { key: string; preventDefault: () => void }) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDetail(s); } } } : {})}>
                 {s.logo && <SubLogoBox logo={s.logo} />}
                 <div className="min-w-0 flex-1">
                   <div className={cx("font-medium", s.status === "iptal" && "line-through")}>{title(s.merchant)}</div>
@@ -203,6 +209,7 @@ export default function Savings() {
                     : tl(s.monthly)}
                   <span className="text-xs font-normal text-stone-500"> /ay</span>
                 </span>
+                {detailCap && <ChevronRight size={16} className="mt-0.5 shrink-0 text-stone-400" aria-hidden="true" />}
               </div>
               {s.status === "dusuruldu" && (
                 <div className="mt-0.5 text-xs text-green-700 dark:text-green-400">Paket düşürüldü · aylık {tl(s.saving)} tasarruf</div>
@@ -280,6 +287,7 @@ export default function Savings() {
 
       {adding && d && <GoalForm data={d} onClose={() => setAdding(false)} />}
       {downgrade && <DowngradeForm sub={downgrade} onClose={() => setDowngrade(null)} />}
+      {detail && <SubDetailModal r={{ merchant: detail.merchant }} title={title(detail.merchant)} onClose={() => setDetail(null)} />}
     </div>
   );
 }
