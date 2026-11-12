@@ -33,7 +33,7 @@ def _daily(uid):
 
 def test_multi_file_document_weight_is_sum_of_files(hosted, gemini):  # noqa: F811
     c, u = _user(hosted)
-    _set_reads(u["id"], day=2)  # ücretsiz: 3 haktan 1 kaldı
+    _set_reads(u["id"], day=4)  # ücretsiz: ayda 5 haktan 1 kaldı
     pdf = make_pdf(30)  # 30 sayfa = 3 hak
     r = c.post("/api/documents/parse", files=[("file", ("fatura.pdf", pdf, "application/pdf"))])
     assert r.status_code == 502 and r.json().get("needed") == 3
@@ -41,7 +41,7 @@ def test_multi_file_document_weight_is_sum_of_files(hosted, gemini):  # noqa: F8
     r = c.post("/api/documents/parse", files=[("file", ("fatura.pdf", pdf, "application/pdf")),
                                               ("file", ("x.jpg", _jpeg(), "image/jpeg"))])
     assert r.status_code == 502 and r.json().get("needed") == 3
-    assert gemini == [] and _daily(u["id"]) == 2
+    assert gemini == [] and _daily(u["id"]) == 4
 
 
 def test_multi_photo_receipt_still_one_read(hosted, gemini):  # noqa: F811
@@ -57,10 +57,10 @@ def test_pdf_header_after_1024_bytes_still_counts_pages(hosted, gemini):  # noqa
     padded = b" " * 2000 + make_pdf(30)
     assert doc_reads.pages(padded) == 30 and doc_reads.weight(padded) == 3
     c, u = _user(hosted)
-    _set_reads(u["id"], day=2)
+    _set_reads(u["id"], day=4)
     r = c.post("/api/documents/parse", files=[("file", ("fatura.pdf", padded, "application/pdf"))])
     assert r.status_code == 502 and r.json().get("needed") == 3
-    assert gemini == [] and _daily(u["id"]) == 2
+    assert gemini == [] and _daily(u["id"]) == 4
 
 
 # ---------------------------------------------------------------- yapay zekâ çağrıldıysa hak düşer
@@ -92,7 +92,7 @@ def test_share_new_content_counts_and_cache_expiry_recounts(hosted, gemini):  # 
 
 def test_share_quota_full_is_refused_before_ai(hosted, gemini):  # noqa: F811
     c, u = _user(hosted)
-    _set_reads(u["id"], day=3)
+    _set_reads(u["id"], day=5)
     r = c.post("/api/share", files=[("file", ("h.jpg", b"paylas-2", "image/jpeg"))], headers={"accept": "application/json"})
     assert r.status_code == 200 and gemini == [] and c.get("/api/inbox").json() == []
 
@@ -130,7 +130,7 @@ def test_concurrent_request_sees_reserved_read(hosted):
     from app import db, doc_reads, system
 
     _, u = _user(hosted)
-    _set_reads(u["id"], day=2)
+    _set_reads(u["id"], day=4)
     u = system.user(u["id"])
     with db.use_space(system.user_db_path(u), u):
         with doc_reads.scope():
@@ -158,7 +158,7 @@ def test_parallel_uploads_with_one_read_left_only_one_is_read(hosted, monkeypatc
     from app.api.main import app
 
     c, u = _user(hosted)
-    _set_reads(u["id"], day=2)
+    _set_reads(u["id"], day=4)
     monkeypatch.setenv("GEMINI_API_KEY", "AIzaTEST0000")
     calls = []
     doc = {"doc_type": "fis", "merchant": "Ornek", "date": "2026-10-20", "total": 10.5, "items": []}
@@ -181,4 +181,4 @@ def test_parallel_uploads_with_one_read_left_only_one_is_read(hosted, monkeypatc
         t.start()
     for t in ts:
         t.join()
-    assert sorted(out) == [200, 502] and len(calls) == 1 and _daily(u["id"]) == 3
+    assert sorted(out) == [200, 502] and len(calls) == 1 and _daily(u["id"]) == 5

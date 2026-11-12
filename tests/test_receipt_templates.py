@@ -335,3 +335,24 @@ def test_api_template_read_charges_and_no_ai_cost(hosted, gemini):  # noqa: F811
     assert a["total"] == 1 and a["templates"][0]["uses"] == 1 and a["templates"][0]["signature"] == "VKN"
     assert VKN not in json.dumps(a) and "rnekzincir" not in json.dumps(a)
     assert c.get("/api/admin/receipt-templates").status_code == 403
+
+
+def test_template_read_counts_like_ai_read_hosted_free(hosted, gemini):  # noqa: F811
+    """Hazır sürüm, ücretsiz (ayda 5): şablonla (yapay zekâsız) okunan fiş de 1 hak düşer; kullanıcı yöntemi bilmez.
+    İlk fiş yapay zekâyla (şablon öğrenilir), sonraki dördü şablonla; altıncı fiş okunmaz."""
+    c, u = _user(hosted)
+    gemini["replies"].append(market_ai(FIRST, _day(5)))
+
+    def read(i: int, items, day):
+        return c.post("/api/documents/parse", files=[("file", (f"f{i}.jpg", _photo(f"#{i:02d}{i:02d}{i:02d}"), "image/jpeg"))],
+                      data={"ocr_text": market(items, day), "ocr_source": "mlkit"})
+
+    r = read(1, FIRST, _day(5))
+    assert r.status_code == 200 and r.json()["source"] == "yapay_zeka" and r.json()["charged"] == {"daily": 1, "extra": 0}
+    for i in range(2, 6):
+        r = read(i, SECOND, _day(i))
+        assert r.status_code == 200, r.text
+        assert r.json()["source"] == "sablon" and r.json()["charged"] == {"daily": 1, "extra": 0}
+    assert gemini["calls"] == 1 and _used(u["id"]) == 5
+    r = read(6, SECOND, _day(6))
+    assert r.status_code == 502 and r.json()["quota_full"] is True and "Bu ayın 5 okuması doldu" in r.json()["detail"]

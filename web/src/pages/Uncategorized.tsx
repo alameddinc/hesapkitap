@@ -6,6 +6,7 @@ import Modal from "../components/Modal";
 import MonthPicker from "../components/MonthPicker";
 import Segmented from "../components/Segmented";
 import { useMeta } from "../components/hooks";
+import { useDocQuota } from "../components/DocQuota";
 import { ApiError, send } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { cx, dayMonthTR, tl, periodLabel } from "../format";
@@ -74,6 +75,7 @@ export default function Uncategorized() {
   const secilen = groups.filter((g) => sec.has(g.key));
   const secAkis = secilen[0]?.flow ?? null;
   const ai = q.data?.ai;
+  const quotaReads = useDocQuota().reads; // tek sayaç: hak dolu metni ve dönem sunucudan
   const gelirKat = meta?.income_categories ?? [];
   const giderKat = (meta?.categories ?? []).filter((c) => c !== "Kategorisiz" && c !== "Borç / Alacak" && !gelirKat.includes(c));
 
@@ -229,12 +231,12 @@ export default function Uncategorized() {
               <p className="text-sm">{sorulacak.length} işyeri için öneri yok. Yapay zekâya yalnız işyeri adları gönderilir; tutar ve kişi adı gitmez.</p>
               {sorulacak.length > aiMax && <p className="text-xs text-stone-500 dark:text-stone-400">Tek seferde en çok {aiMax} işyeri sorulur; kalanı için bir daha sorabilirsin.</p>}
               {ai.left === 0 ? (
-                <p className="text-xs text-stone-500 dark:text-stone-400">Bu ayki okuma hakkın doldu; ay başında yenilenir.</p>
+                <p className="text-xs text-stone-500 dark:text-stone-400">{quotaReads?.texts ? `${quotaReads.texts.title}. ${quotaReads.texts.when}` : "Bu ayki okuma hakkın doldu; ay başında yenilenir."}</p>
               ) : (
                 <div className="flex flex-wrap items-center gap-3">
                   <button className="btn border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-700" disabled={sor.isPending}
                     onClick={() => sor.mutate(sorulacak.slice(0, aiMax).map((g) => g.key))}><Sparkles size={16} aria-hidden /> {sor.isPending ? "Soruluyor…" : sorulacak.length > 1 ? "Yapay zekâya hepsini sor" : "Yapay zekâya sor"}</button>
-                  {ai.left != null && <span className="text-xs text-stone-500 dark:text-stone-400">1 okuma hakkı kullanır · bu ay {ai.left} hakkın var</span>}
+                  {ai.left != null && <span className="text-xs text-stone-500 dark:text-stone-400">1 okuma hakkı kullanır · {quotaReads?.limited_by === "day" ? "bugün" : "bu ay"} {ai.left} hakkın var</span>}
                 </div>
               )}
             </section>

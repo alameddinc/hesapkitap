@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { bodyOf } from "../lib/apiError";
 import { Crown, FileWarning } from "lucide-react";
-import type { ReadCounter, ReadKind, ReadPack, ReadStatus } from "../api";
+import type { QuotaTexts, ReadCounter, ReadKind, ReadPack, ReadStatus } from "../api";
 import { useUI } from "../ui";
 import { useMeta } from "./hooks";
 import Modal from "./Modal";
-import { isDaily, KIND_LABEL, PackNote, ReadCounts } from "./Plan";
+import { isDaily, KIND_LABEL, PackNote, ReadCounts, readsUpgrade } from "./Plan";
 
 /** GET /api/me/ai. unit "docs": hazır sürüm, aylık okuma hakkı; belge ve fiş iki ayrı sayaç (kişi başı) + ek okuma
  *  paketi (extra, ikisinde ortak). used/quota: belge sayacı (eski gösterim). "ai": kendi sunucusu, yapay zekâ kotası.
@@ -50,6 +50,8 @@ export interface QuotaFull {
   limited_by?: "day" | "month";
   monthly_cap?: number | null;
   reread?: boolean;
+  /** hak dolu başlığı, yenilenme ve öneri (sunucu; eski sunucuda yok) */
+  texts?: QuotaTexts;
 }
 
 export const isQuotaFull = (j: unknown): j is QuotaFull =>
@@ -73,7 +75,8 @@ export function renewDate(today = new Date()): string {
 export const readsOf = (d: AiUsage | null | undefined): ReadStatus | null =>
   d?.unit === "docs" && d.belge && d.fis ? { ...(d.reads ?? {}), belge: d.belge, fis: d.fis, extra: d.extra ?? 0 } : null;
 
-/** Hak dolu başlığı ve ne zaman yenilendiği. */
+/** Hak dolu başlığı ve ne zaman yenilendiği. Sunucu metni (texts) varsa o ("Bu ayın 5 okuması doldu" / "1 Aralık'ta
+ *  yenilenir."); uzun PDF ve yeniden okuma sayılardan. */
 export function fullTexts(info: Partial<QuotaFull> | null | undefined, reads: ReadStatus | null): { title: string; when: string } {
   const daily = isDaily(reads) || info?.daily_limit != null;
   if (!daily) {
@@ -84,14 +87,17 @@ export function fullTexts(info: Partial<QuotaFull> | null | undefined, reads: Re
   const monthWhen = `Ay başında yenilenir (${renewDate()}).`;
   if (info?.reread) {
     return { title: `Yeniden okuma ${info.needed ?? 2} hak ister`,
-      when: `${month ? "Bu ay" : "Bugün"} ${info.left ?? 0} hakkın kaldı. ${month ? monthWhen : "Yarın yenilenir."}` };
+      when: `${month ? "Bu ay" : "Bugün"} ${info.left ?? 0} hakkın kaldı. ${info.texts?.when ?? (month ? monthWhen : "Yarın yenilenir.")}` };
   }
+  if ((info?.needed ?? 1) > 1 && (info?.left ?? 0) > 0) {
+    return { title: `Bu belge ${info?.needed} okuma hakkı ister`,
+      when: `${month ? "Bu ay" : "Bugün"} ${info?.left} hakkın kaldı. ${info?.texts?.when ?? (month ? monthWhen : "Yarın yenilenir.")}` };
+  }
+  const st = info?.texts ?? reads?.texts;
+  if (st) return { title: st.title, when: st.when };
   if (month) return { title: `Bu ayki ${info?.monthly_cap ?? reads?.monthly_cap ?? ""} okuma hakkın doldu`.replace("  ", " "), when: monthWhen };
   const lim = info?.daily_limit ?? reads?.limit;
   const used = info?.daily_used ?? reads?.used;
-  if ((info?.needed ?? 1) > 1 && (info?.left ?? 0) > 0) {
-    return { title: `Bu belge ${info?.needed} okuma hakkı ister`, when: `Bugün ${info?.left} hakkın kaldı. Yarın yenilenir.` };
-  }
   return { title: `Bugünkü okuma hakkın doldu${lim != null && used != null ? ` (${used}/${lim})` : ""}`, when: "Yarın yenilenir." };
 }
 
@@ -132,7 +138,8 @@ export function useGoPlan() {
   };
 }
 
-/** Yükleme ekranları: "Okuma: Bugün 2/30 · Ek paket 0" (eski sunucu: "Bu ay: Belge 3/200 · Fiş 12/300 · Ek 0"). */
+/** Yükleme ekranları: "Okuma: Bugün 3/10 · Bu ay 45/300 · Ek paket 0" (ücretsiz "Okuma: Bu ay 2/5 · Ek paket 0"; eski
+ *  sunucu: "Bu ay: Belge 3/200 · Fiş 12/300 · Ek 0"). */
 export function ReadsLine({ className }: { className?: string }) {
   const { reads } = useDocQuota();
   if (!reads) return null;
@@ -159,7 +166,7 @@ export function QuotaFullModal({ onClose, manual, upgrade, hasPhoto, info }: {
   const noun = KIND_LABEL[kind];
   const showUpgrade = upgrade ?? info?.upgrade ?? plan?.plan === "free";
   const premium = plan?.reads_by_plan?.premium?.[kind];
-  const premDaily = plan?.daily_reads_by_plan?.premium.day;
+  const up = readsUpgrade(plan); // "Premium ile günde 10 okuma" (sunucu)
   const t = fullTexts(info, reads);
   const trial = info?.trial ?? plan?.trial;
   const daysLeft = info?.trial_days_left ?? plan?.trial_days_left;
@@ -182,7 +189,7 @@ export function QuotaFullModal({ onClose, manual, upgrade, hasPhoto, info }: {
           {showUpgrade && (
             <button className="btn-ghost mt-1 border border-amber-300 px-3 py-1.5 text-sm text-amber-800 dark:border-amber-800 dark:text-amber-300"
               onClick={() => { onClose(); goPlan(); }}>
-              <Crown size={14} aria-hidden="true" /> {premDaily ? `Premium: günde ${premDaily} okuma` : premium ? `Premium: ayda ${premium} ${noun}` : "Paketleri gör"}
+              <Crown size={14} aria-hidden="true" /> {up ?? (premium ? `Premium: ayda ${premium} ${noun}` : "Paketleri gör")}
             </button>
           )}
         </div>
@@ -198,10 +205,10 @@ export function DocQuotaNote() {
   const goPlan = useGoPlan();
   const free = plan?.plan === "free";
   const prem = plan?.reads_by_plan?.premium;
-  const premDaily = plan?.daily_reads_by_plan?.premium.day;
+  const up = readsUpgrade(plan);
   if (isDaily(reads)) {
     const out = reads.left <= 0 && reads.extra <= 0;
-    const low = reads.left + reads.extra <= reads.limit * 0.2;
+    const low = reads.left + reads.extra <= Math.max(1, reads.limit * 0.2);
     if (!free && !low) return null;
     const t = fullTexts(null, reads);
     return (
@@ -211,7 +218,7 @@ export function DocQuotaNote() {
           {free && (
             <button className={out ? "btn-primary px-3 py-1.5 text-sm" : "btn-ghost border border-stone-300 px-3 py-1.5 text-sm dark:border-stone-700"}
               onClick={goPlan}>
-              <Crown size={14} aria-hidden="true" /> {out || !premDaily ? "Paketleri gör" : `Premium: günde ${premDaily} okuma`}
+              <Crown size={14} aria-hidden="true" /> {up ?? "Paketleri gör"}
             </button>
           )}
         </div>

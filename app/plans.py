@@ -1,8 +1,8 @@
 """Paketler (yalnızca barındırılan sürümde, HESAPKITAP_HOSTED=1): ücretsiz / premium / aile.
 
 Kendi sunucusuna kuranda paket yoktur: her şey açık, yapay zekâ kotası yöneticinin ayarı (system.ai_quota).
-Hazır sürümde kota GÜNLÜK tek sayaçlı "okuma hakkı"dır (DAILY_READS, ücretsizde MONTHLY_CAP; app/doc_reads.py); ek
-okuma paketi (PACKS).
+Hazır sürümde kota tek sayaçlı "okuma hakkı"dır (app/doc_reads.py): ücretsizde AYDA 5, Premium ve Aile'de (kişi başı)
+GÜNDE 10 ve AYDA EN ÇOK 300 (DAILY_READS + MONTHLY_CAP, okuma hakları bölümü); ek okuma paketi (PACKS) ikisinin üstüne.
 Hangi sayfa/özellik hangi pakette: CATALOG (tek tablo; yönetici panelinden değiştirilir, system.db'de saklanır).
 Paket defter sahibinindir; ortak deftere davet edilen üye sahibin paketini kullanır (okuma sayacı kişi başı).
 Abonelik mağazadan (App Store / Google Play) RevenueCat üzerinden gelir: plan + bitiş tarihi kullanıcıya yazılır.
@@ -141,19 +141,31 @@ FREE_WARRANTIES = 3  # garanti arşivi: "garanti" satırının paketinde değils
 # Verini indirmek (zip/Excel) ve hesabı silmek her pakette serbest: KVKK erişim ve taşınabilirlik hakkı.
 
 # ---------------------------------------------------------------- okuma hakları (app/doc_reads.py)
-# TEK günlük sayaç (Türkiye günü): fiş, fatura, ekstre, hesap dökümü, dekont, posta belgesi, yapay zekâ kategori önerisi
-# aynı haktan düşer. PDF her 10 sayfa 1 hak; elle yeniden okuma 2 hak. Kişi başıdır: ortak defterde her üyenin kendi
-# sayacı (aile paketi kişi başı günde 30). Ücretsizde ayrıca aylık tavan (günde 3 VE ayda en çok 40).
-# Deneme süresinde özel sınır yok: paketin normal hakları.
+# TEK sayaç, kişi başı (ortak defterde her üyenin kendi sayacı): fiş, fatura, ekstre, hesap dökümü, dekont, posta belgesi,
+# yapay zekâ kategori önerisi aynı haktan düşer. HER okuma düşer: yapay zekâ, fiş/fatura şablonu, banka şablonu ya da
+# yerel ayrıştırıcı fark etmez (kullanıcı hangisi olduğunu bilmez; şablon yalnız bizim maliyetimizi düşürür). PDF her 10
+# sayfa 1 hak; elle yeniden okuma 2 hak.
+# Kural (12.11.2026, sahibin kararı; önceki: ücretsiz günde 3 / ayda 40, Premium ve Aile günde 30):
+#   Ücretsiz: ayda 5 okuma (günlük ayrı sınır yok)
+#   Premium : günde 10, ayda en çok 300
+#   Aile    : kişi başı Premium ile aynı (günde 10, ayda en çok 300); ortak defterin günlük aile tavanı
+#             DAILY_READS[aile] × FAMILY_SEATS (+ kendi aboneliği olan üye başına o paketin günlük hakkı), bkz. doc_reads
+# Gün Türkiye saatiyle gece yarısı, ay takvim ayı. Aylık sayım ay içinde günlük haktan düşenlerin toplamıdır: kural
+# değiştiği gün o ay zaten kullanılmış haklar da sayılır. Ek paket iki sınıra da girmez (satın alınmış hak).
+# Sayılar TEK YER burası (yönetici panelinden değiştirilmez; değişiklik deploy ister). İstemci sayı yazmaz: /api/meta
+# plan.daily_reads_by_plan ve okuma durumu (doc_reads.status) bunlardan üretilir. Deneme süresinde özel sınır yok.
 BELGE, FIS = "belge", "fis"
-DAILY_READS = {FREE: 3, PREMIUM: 30, FAMILY: 30}
-MONTHLY_CAP = {FREE: 40}
+FREE_MONTHLY_READS = 5
+# Ücretsizde günlük ayrı sınır yok: günlük hak aylık hakla aynı sayı (etkisi "günlük sınır yok"; eski istemci günlük
+# bir sayı bekler). Sınırı aylık tavan belirler (doc_reads._state: eşitlikte "month").
+DAILY_READS = {FREE: FREE_MONTHLY_READS, PREMIUM: 10, FAMILY: 10}
+MONTHLY_CAP = {FREE: FREE_MONTHLY_READS, PREMIUM: 300, FAMILY: 300}
 # geriye uyum (eski istemci: iki aylık sayaç belge/fiş): ikisi de aynı günlük hakkı gösterir
 READS = {p: {BELGE: n, FIS: n} for p, n in DAILY_READS.items()}
 DOC_READS = dict(DAILY_READS)  # geriye uyum (eski istemci: plan.ai_docs)
 KIND_LABELS = {BELGE: "belge", FIS: "fiş"}
-# Ek okuma paketi (mağazada tüketilebilir ürün): bitene kadar geçerli, günlük sınırı yok, paket değişince de kalır.
-# Önce günlük hak, o bitince ek hak düşer.
+# Ek okuma paketi (mağazada tüketilebilir ürün): bitene kadar geçerli, günlük/aylık sınırı yok, paket değişince de
+# kalır. Önce paketin hakkı (günlük ve aylık), o bitince (hangisi önce dolarsa) ek paketten düşer.
 PACKS = {"okuma_100": 100, "okuma_300": 300}
 LABELS = {FREE: "Ücretsiz", PREMIUM: "Premium", FAMILY: "Aile", SELF: "Kendi sunucun"}
 FEATURE_LABELS = {k: r[0] for k, r in _ROWS.items()}
@@ -464,10 +476,17 @@ def read_limit(u: dict, kind: str = BELGE) -> int:
 
 
 def monthly_cap(u: dict) -> int | None:
-    """Ücretsiz paketin aylık tavanı (günlük haktan düşenlerin ay toplamı); None = tavan yok."""
+    """Paketin aylık tavanı (günlük haktan düşenlerin ay toplamı); None = tavan yok (kişisel kota)."""
     if u.get("ai_quota") is not None:
         return None
     return MONTHLY_CAP.get(plan_of(u))
+
+
+def day_limited(p: str) -> bool:
+    """Paketin günlük sınırı gerçekten bağlıyor mu (ücretsizde hayır: yalnız aylık hak). İstemci "Bugün" sayacını buna
+    göre gösterir."""
+    cap = MONTHLY_CAP.get(p)
+    return cap is None or DAILY_READS[p] < cap
 
 
 def ai_limit(u: dict) -> int | None:
@@ -476,10 +495,23 @@ def ai_limit(u: dict) -> int | None:
 
 
 def reads_text(p: str) -> str:
-    """Paket ekranı / yönetici tablosu metni."""
+    """Paket ekranı / yönetici tablosu metni: "Ayda 5 okuma", "Günde 10, ayda en çok 300 okuma"."""
     cap = MONTHLY_CAP.get(p)
-    return (f"Günde {DAILY_READS[p]}, ayda en çok {cap} okuma" if cap
-            else f"Günde {DAILY_READS[p]} okuma (fiş, fatura, ekstre)")
+    if not day_limited(p):
+        return f"Ayda {cap} okuma"
+    head = "Kişi başı günde" if p == FAMILY else "Günde"
+    return f"{head} {DAILY_READS[p]}, ayda en çok {cap} okuma" if cap else f"{head} {DAILY_READS[p]} okuma"
+
+
+def upgrade_text() -> str:
+    """Ücretsizde hak dolunca / paket ekranında Premium önerisi: "Premium ile günde 10 okuma"."""
+    return f"Premium ile günde {DAILY_READS[PREMIUM]} okuma"
+
+
+def daily_reads_by_plan() -> dict:
+    """/api/meta plan.daily_reads_by_plan ve yönetici tablosu: {paket: {day, month, day_limited, text}}."""
+    return {p: {"day": DAILY_READS[p], "month": MONTHLY_CAP.get(p), "day_limited": day_limited(p), "text": reads_text(p)}
+            for p in TIERS}
 
 
 def trial(u: dict | None) -> dict:
@@ -502,7 +534,7 @@ def trial(u: dict | None) -> dict:
 
 def upgrade_yearly(u: dict | None) -> bool:
     """Hak dolunca "yıllığa geç" önerilsin mi: yalnız yönetici açtıysa (varsayılan kapalı) ve kullanıcı aylık mağaza
-    aboneliğini kendisi ödüyorsa. Yıllık plan daha fazla okuma hakkı VERMEZ (günlük haklar iki planda aynı); deneme
+    aboneliğini kendisi ödüyorsa. Yıllık plan daha fazla okuma hakkı VERMEZ (haklar iki planda aynı); deneme
     sırasında aylıktan yıllığa geçişin mağazada ne zaman başladığı docs/magaza-abonelik.md'de (hesapkitap-cloud)."""
     if not (u and hosted() and upgrade_yearly_enabled()) or u.get("member_of"):
         return False
@@ -531,9 +563,9 @@ def info(u: dict | None) -> dict:
         out["tiers"] = tiers()
         out["table"] = table()
         out["reads_by_plan"] = READS  # geriye uyum: {paket: {belge, fis}} = günlük hak
-        # günlük tek sayaç (version.CAPABILITIES "daily_reads"): {paket: {day, month, text}}
-        out["daily_reads_by_plan"] = {p_: {"day": DAILY_READS[p_], "month": MONTHLY_CAP.get(p_), "text": reads_text(p_)}
-                                      for p_ in TIERS}
+        # tek sayaç (version.CAPABILITIES "daily_reads"): {paket: {day, month, day_limited, text}}; Premium önerisi
+        out["daily_reads_by_plan"] = daily_reads_by_plan()
+        out["reads_upgrade"] = upgrade_text()
         # paket başı sınırlar (karşılaştırma tablosu; None = sınırsız), sayfa tablosuna göre
         out["limits_by_plan"] = {p_: {"history_months": None if p_ in _tierset(tier("gecmis")) else FREE_HISTORY_MONTHS,
                                       "plan_months": None if p_ in _tierset(tier("uzun_plan")) else FREE_PLAN_MONTHS,

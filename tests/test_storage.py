@@ -402,7 +402,8 @@ def test_hosted_storage_limit_keeps_record_drops_file_warns_once(client, tmpdb, 
     admin = _login_admin(client, monkeypatch)
     c, u = _register(admin, "dolu")
     monkeypatch.setitem(plans.STORAGE_BYTES, plans.FREE, 1000)
-    monkeypatch.setitem(plans.DAILY_READS, plans.FREE, 10)  # dört okuma: günlük hak (3) bu testin konusu değil
+    monkeypatch.setitem(plans.DAILY_READS, plans.FREE, 10)  # dört okuma: okuma hakkı (ayda 5) bu testin konusu değil
+    monkeypatch.setitem(plans.MONTHLY_CAP, plans.FREE, 10)
     lim = c.get("/api/meta").json()["plan"]["limits"]
     assert lim["storage_bytes"] == 1000 and lim["storage_used"] == 0
     first = _parse_photo(c)

@@ -1,6 +1,6 @@
 """Okuma hakkı delikleri (hazır sürüm): aynı içerik önbellekten (yapay zekâ yok, hak düşmez; defter başı, 30 gün; elle
 yeniden okuma atlar ve tazeler), okunamayan fotoğraf günde 5'ten sonra 1 hak, ortak defterin günlük aile tavanı (üye
-döndürmek yeni hak getirmez). Kişiler, işyerleri ve tutarlar uydurma."""
+döndürmek yeni hak getirmez; 10 × 4 = 40). Kişiler, işyerleri ve tutarlar uydurma."""
 import json
 from datetime import timedelta
 
@@ -58,7 +58,7 @@ def test_repeat_document_is_cached_no_ai_no_charge(hosted, gemini):  # noqa: F81
 def test_cache_served_even_when_quota_is_full(hosted, gemini):  # noqa: F811
     c, u = _user(hosted)
     _doc(c)
-    _set_reads(u["id"], day=3)  # ücretsiz: bugünkü 3 hak bitti
+    _set_reads(u["id"], day=5)  # ücretsiz: bu ayki 5 hak bitti
     assert _doc(c)["cached"] is True and len(gemini) == 1
     assert c.post("/api/documents/parse", files=[("file", ("b.jpg", b"fis-yeni", "image/jpeg"))]).status_code == 502
 
@@ -276,27 +276,28 @@ def _in(u, own=False):
     return db.use_space(system.own_db_path(u) if own else system.user_db_path(u), {**u, "own_book": True} if own else u)
 
 
-def test_family_cap_120_with_seated_members(tmpdb, monkeypatch):
+def test_family_cap_40_with_seated_members(tmpdb, monkeypatch):
     from app import doc_reads
 
     o, (m1, m2, m3) = _family(tmpdb, monkeypatch)
     st = doc_reads.status(m1)
-    assert (st["family_limit"], st["family_left"], st["left"]) == (120, 120, 30)
+    assert (st["family_limit"], st["family_left"], st["left"]) == (40, 40, 10)
     with _in(m1):
         assert doc_reads.charge(b"belge-1") == {"daily": 1, "extra": 0}
     with _in(o):
         assert doc_reads.charge(b"belge-2")
     assert _book_used(o["id"]) == 2  # sahip ve üye aynı defter toplamına
-    _set_book(o["id"], 119)
+    _set_book(o["id"], 39)
     with _in(m2):
         doc_reads.check(b"belge-3")  # 1 kaldı
         doc_reads.charge(b"belge-3")
         with pytest.raises(doc_reads.QuotaError) as e:
             doc_reads.check(b"belge-4")
-    assert str(e.value).startswith("Ailenin bugünkü toplam okuma hakkı (120) doldu; yarın yenilenir.")
+    assert str(e.value).startswith("Ailenin bugünkü toplam okuma hakkı (40) doldu; yarın yenilenir.")
     f = e.value.fields()
-    assert f["family_full"] is True and f["family_limit"] == 120 and f["family_left"] == 0 and f["limited_by"] == "day"
-    assert f["limit"] == 120
+    assert f["family_full"] is True and f["family_limit"] == 40 and f["family_left"] == 0 and f["limited_by"] == "day"
+    assert f["limit"] == 40
+    assert f["texts"]["title"] == "Ailenin bugünkü toplam okuma hakkı (40) doldu" and f["texts"]["when"] == "Yarın yenilenir."
     for u in (o, m1, m3):  # kişisel hakkı dolmamış olsa da ortak defterde kimse okuyamaz
         with _in(u), pytest.raises(doc_reads.QuotaError, match="Ailenin bugünkü toplam"):
             doc_reads.check(b"x")
@@ -308,10 +309,10 @@ def test_own_premium_member_raises_family_cap(tmpdb, monkeypatch):
     from app import doc_reads
 
     o, ms = _family(tmpdb, monkeypatch, members=3, own_premium=2)
-    assert doc_reads.status(o)["family_limit"] == 120 + 2 * 30
-    _set_book(o["id"], 150)
+    assert doc_reads.status(o)["family_limit"] == 40 + 2 * 10
+    _set_book(o["id"], 50)
     with _in(ms[2]):
-        doc_reads.check(b"belge-151")  # 180'lik tavanın 30'u kaldı
+        doc_reads.check(b"belge-51")  # 60'lık tavanın 10'u kaldı
 
 
 def test_own_subscription_members_own_book_not_counted_nor_capped(tmpdb, monkeypatch):
@@ -319,11 +320,11 @@ def test_own_subscription_members_own_book_not_counted_nor_capped(tmpdb, monkeyp
     from app import doc_reads
 
     o, (m1, *_) = _family(tmpdb, monkeypatch, own_premium=1)
-    _set_book(o["id"], 150)  # ortak defter dolu (120 + üyenin kendi 30'u)
+    _set_book(o["id"], 50)  # ortak defter dolu (40 + üyenin kendi 10'u)
     with _in(m1, own=True):
         doc_reads.check(b"benim-1")
         assert doc_reads.charge(b"benim-1") == {"daily": 1, "extra": 0}
-    assert _book_used(o["id"]) == 150 and _book_used(m1["id"]) == 0
+    assert _book_used(o["id"]) == 50 and _book_used(m1["id"]) == 0
     assert "family_limit" not in doc_reads.status({**m1, "own_book": True})
     assert doc_reads.status(m1)["family_left"] == 0
 
@@ -338,15 +339,15 @@ def test_seated_members_own_book_counted_and_capped(tmpdb, monkeypatch):
     with _in(m1, own=True):
         assert doc_reads.charge(b"benim-1") == {"daily": 1, "extra": 0}
     assert _book_used(o["id"]) == 1 and _book_used(m1["id"]) == 0
-    assert doc_reads.status(me)["family_limit"] == 120
-    _set_book(o["id"], 120)
+    assert doc_reads.status(me)["family_limit"] == 40
+    _set_book(o["id"], 40)
     with _in(m1, own=True), pytest.raises(doc_reads.QuotaError, match="Ailenin bugünkü toplam"):
         doc_reads.check(b"benim-2")
 
 
-def test_rotating_existing_accounts_through_seats_capped_at_120(tmpdb, monkeypatch):
+def test_rotating_existing_accounts_through_seats_capped_at_40(tmpdb, monkeypatch):
     """Tek Aile aboneliğiyle var olan hesaplar sırayla katılıp koltukta "Benim" defterinde okuyup ayrılınca günlük
-    toplam aile tavanını (120) aşamaz."""
+    toplam aile tavanını (40) aşamaz."""
     from app import auth, doc_reads, system
 
     o, _ = _family(tmpdb, monkeypatch, members=0)
@@ -365,24 +366,24 @@ def test_rotating_existing_accounts_through_seats_capped_at_120(tmpdb, monkeypat
                 total += doc_reads.charge(f"r{i}-{j}".encode())["daily"]
         with system.connect() as c:  # koltuğu bırak, sıradaki gelsin
             c.execute("UPDATE users SET member_of = NULL WHERE id = ?", (u["id"],))
-    assert total == 120 and _book_used(o["id"]) == 120
+    assert total == 40 and _book_used(o["id"]) == 40
 
 
 def test_rotating_invited_member_gets_no_fresh_family_reads(tmpdb, monkeypatch):
     from app import auth, doc_reads, system
 
     o, (m1,) = _family(tmpdb, monkeypatch, members=1)
-    _set_book(o["id"], 119)
+    _set_book(o["id"], 39)
     with _in(m1):
         doc_reads.charge(b"belge-son")
     system.delete_user(m1["id"])  # sahip davetle açılan üyeyi çıkardı: hesap silindi
-    assert _book_used(o["id"]) == 120  # defterin bugünkü toplamı kalır
+    assert _book_used(o["id"]) == 40  # defterin bugünkü toplamı kalır
     new = auth.create_user("yeni@ornek.com", "yeni-sifre-12345")
     with system.connect() as c:
         c.execute("UPDATE users SET member_of = ? WHERE id = ?", (o["id"], new["id"]))
     new = system.user(new["id"])
     assert doc_reads.status(new)["used"] == 0  # kişisel sayacı yeni ...
-    with _in(new), pytest.raises(doc_reads.QuotaError, match=r"Ailenin bugünkü toplam okuma hakkı \(120\)"):
+    with _in(new), pytest.raises(doc_reads.QuotaError, match=r"Ailenin bugünkü toplam okuma hakkı \(40\)"):
         doc_reads.check(b"belge-yeni")  # ... ama aile tavanı dolu
 
 
@@ -390,12 +391,12 @@ def test_pack_still_usable_when_family_cap_full(tmpdb, monkeypatch):
     from app import doc_reads
 
     o, (m1, *_) = _family(tmpdb, monkeypatch)
-    _set_book(o["id"], 120)
+    _set_book(o["id"], 40)
     doc_reads.add_pack(m1["id"], "okuma_100", "tx-aile-1", 5)
     with _in(m1):
         doc_reads.check(b"paket-1")
         assert doc_reads.charge(b"paket-1") == {"daily": 0, "extra": 1}  # satın alınmış hak tavana girmez
-    assert _book_used(o["id"]) == 120
+    assert _book_used(o["id"]) == 40
 
 
 def test_single_user_status_has_no_family_fields(hosted):
@@ -418,7 +419,7 @@ def test_family_fields_in_me_ai(hosted):
     assert m.post("/api/auth/register", json={"consent": test_plans.CONSENT, "code": inv["code"],
                                               "username": "es@ornek.com", "password": "es-sifre-12345"}).status_code == 200
     st = m.get("/api/me/ai").json()["reads"]
-    assert (st["family_limit"], st["family_left"]) == (120, 120)
+    assert (st["family_limit"], st["family_left"]) == (40, 40)
     assert (st["family_limit"], st["family_left"]) == tuple(c.get("/api/me/ai").json()["reads"][k]
                                                             for k in ("family_limit", "family_left"))
 

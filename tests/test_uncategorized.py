@@ -242,15 +242,15 @@ def test_ai_suggest_quota_hosted(hosted, gemini, tmpdb):
     c.post("/api/entries", json={"entry_date": f"{_month()}-05", "description": "Örneksoft", "amount": 9,
                                  "kind": "gider", "category": "Kategorisiz", "payment": "nakit"})
     g = c.get("/api/uncategorized/groups").json()
-    assert g["ai"]["available"] is True and g["ai"]["left"] == 3  # ücretsiz: günde 3 okuma (öneri aynı günlük sayaçtan)
+    assert g["ai"]["available"] is True and g["ai"]["left"] == 5  # ücretsiz: ayda 5 okuma (öneri aynı sayaçtan)
     r = c.post("/api/uncategorized/ai-suggest", json={"keys": [x["key"] for x in g["groups"]]})
     assert r.status_code == 200 and _used(u["id"]) == 1  # 1 çağrı = 1 hak
     from tests.test_doc_reads import _set_reads
 
-    _set_reads(u["id"], day=3)
+    _set_reads(u["id"], day=5)
     r = c.post("/api/uncategorized/ai-suggest", json={"keys": [x["key"] for x in g["groups"]]})
     assert r.status_code == 402 and r.json()["quota_full"] is True and r.json()["kind"] == "belge"
-    assert "hakkın doldu" in r.json()["detail"] and len(gemini) == 1
+    assert "Bu ayın 5 okuması doldu" in r.json()["detail"] and len(gemini) == 1
 
 
 def test_ai_suggest_same_names_same_day_still_counted(hosted, gemini, tmpdb):
@@ -260,11 +260,11 @@ def test_ai_suggest_same_names_same_day_still_counted(hosted, gemini, tmpdb):
     c.post("/api/entries", json={"entry_date": f"{_month()}-05", "description": "Örneksoft", "amount": 9,
                                  "kind": "gider", "category": "Kategorisiz", "payment": "nakit"})
     keys = [x["key"] for x in c.get("/api/uncategorized/groups").json()["groups"]]
-    for i in range(3):
+    for i in range(5):
         assert c.post("/api/uncategorized/ai-suggest", json={"keys": keys}).status_code == 200
         assert len(gemini) == i + 1 and _used(u["id"]) == i + 1
-    r = c.post("/api/uncategorized/ai-suggest", json={"keys": keys})  # ücretsiz günde 3: doldu
-    assert r.status_code == 402 and len(gemini) == 3
+    r = c.post("/api/uncategorized/ai-suggest", json={"keys": keys})  # ücretsiz ayda 5: doldu
+    assert r.status_code == 402 and len(gemini) == 5
 
 
 def test_ai_suggest_quota_self_hosted(client, gemini, monkeypatch):

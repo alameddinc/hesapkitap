@@ -558,18 +558,22 @@ export type Tier = "free" | "premium" | "aile";
 /** Okuma sayacı türü: "belge" (ekstre, hesap dökümü, fatura, posta belgesi, yapay zekâ kategori önerisi) ve "fis". */
 export type ReadKind = "belge" | "fis";
 export interface ReadCounter { used: number; limit: number; left: number }
-/** Okuma hakları (kişi başı); extra: ek okuma paketi bakiyesi. Günlük tek sayaç (sunucu "daily_reads"): period "day",
- *  limit/used/left bugünkü, monthly_cap ücretsizde aylık tavan; belge ve fiş (eski iki sayaç) ikisi de aynı sayaç. */
+/** Hak dolu metinleri (sunucu app/doc_reads.py texts): "Bu ayın 5 okuması doldu" / "1 Aralık'ta yenilenir." / öneri */
+export interface QuotaTexts { title: string; when: string; offer: string }
+/** Okuma hakları (kişi başı); extra: ek okuma paketi bakiyesi. Tek sayaç (sunucu "daily_reads"): period "day",
+ *  limit/used/left bugünkü, monthly_cap aylık tavan; day_limited false (ücretsiz: yalnız ayda N) ise "Bugün" gösterilmez;
+ *  belge ve fiş (eski iki sayaç) ikisi de aynı sayaç. */
 export interface ReadStatus {
   belge: ReadCounter; fis: ReadCounter; extra: number;
   period?: "day"; limit?: number; used?: number; left?: number; resets_at?: string;
+  day_limited?: boolean; texts?: QuotaTexts;
   monthly_cap?: number | null; monthly_used?: number | null; monthly_resets_at?: string | null;
   limited_by?: "day" | "month"; extra_left?: number; reread_cost?: number; pages_per_read?: number;
-  /** Aile ortak günlük hak (isteğe bağlı): kişinin kalanından azsa "Aile bugün 12/120 kaldı" */
+  /** Aile ortak günlük hak (isteğe bağlı): kişinin kalanından azsa "Aile bugün 12/40 kaldı" */
   family_left?: number | null; family_limit?: number | null;
 }
-/** Paket başı günlük hak: {day, month (ücretsizde aylık tavan), text: "Günde 30 okuma (fiş, fatura, ekstre)"} */
-export interface DailyReads { day: number; month: number | null; text: string }
+/** Paket başı hak: {day, month (aylık tavan), day_limited, text: "Günde 10, ayda en çok 300 okuma"} */
+export interface DailyReads { day: number; month: number | null; text: string; day_limited?: boolean }
 /** Sayfa / özellik tablosunun bir satırı (sunucu app/plans.py CATALOG). tier: açık olduğu en düşük paket. */
 export interface PlanTableRow {
   key: string;
@@ -600,6 +604,8 @@ export interface PlanInfo {
   table?: PlanTableRow[];
   reads_by_plan?: Record<Tier, Record<ReadKind, number>>;
   daily_reads_by_plan?: Record<Tier, DailyReads>;
+  /** ücretsizde Premium önerisi (sunucu): "Premium ile günde 10 okuma" */
+  reads_upgrade?: string;
   packs?: ReadPack[];
   family_seats?: number;
   trial?: boolean;

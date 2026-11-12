@@ -1259,9 +1259,9 @@ def _plan_table_out() -> dict:
     return {"rows": plans.table(), "tiers": list(plans.TIERS), "labels": {k: plans.LABELS[k] for k in plans.TIERS},
             "upgrade_yearly": plans.upgrade_yearly_enabled(), "hosted": plans.hosted(),
             "reads": plans.READS, "packs": [{"id": k, "reads": n} for k, n in plans.PACKS.items()],
-            # günlük tek sayaç: {paket: {day, month, text}} ("Günde 30 okuma (fiş, fatura, ekstre)")
-            "daily_reads": {p: {"day": plans.DAILY_READS[p], "month": plans.MONTHLY_CAP.get(p), "text": plans.reads_text(p)}
-                            for p in plans.TIERS}}
+            # tek sayaç: {paket: {day, month, day_limited, text}} ("Günde 10, ayda en çok 300 okuma"); sayılar
+            # app/plans.py'de sabit (bu panelden değişmez)
+            "daily_reads": plans.daily_reads_by_plan()}
 
 
 @app.get("/api/admin/plan-table")

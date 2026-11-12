@@ -7,6 +7,7 @@ import { cx, dateTR, tsDateTR } from "../format";
 import { useUI } from "../ui";
 import type { ReadStatus } from "../api";
 import { isEmail, useLoginKind, useMeta, useSave } from "./hooks";
+import { dayLimited } from "./Plan";
 
 interface UserRow {
   id: number; username: string; role: "admin" | "user"; created_at: string; last_login: string | null;
@@ -99,7 +100,7 @@ export default function Users() {
               </span>
               <span className="text-xs text-stone-500">
                 {u.last_login ? `son giriş ${tsDateTR(u.last_login)}` : "hiç girmedi"}
-                {u.reads?.period === "day" ? <> · <span className="whitespace-nowrap">bugün {u.reads.used}/{u.reads.limit}</span>
+                {u.reads?.period === "day" ? <>{dayLimited(u.reads) && <> · <span className="whitespace-nowrap">bugün {u.reads.used}/{u.reads.limit}</span></>}
                   {u.reads.monthly_cap != null && <> · <span className="whitespace-nowrap">ay {u.reads.monthly_used ?? 0}/{u.reads.monthly_cap}</span></>} · ek {u.reads.extra}</>
                   : u.reads ? <> · <span className="whitespace-nowrap">belge {u.reads.belge.used}/{u.reads.belge.limit}</span> · <span className="whitespace-nowrap">fiş {u.reads.fis.used}/{u.reads.fis.limit}</span> · ek {u.reads.extra}</>
                   : u.ai_quota !== null && !(d?.hosted && u.role === "admin") && <> · {d?.hosted ? "belge okuma" : "yapay zekâ"} {u.ai_used}/{u.ai_quota}</>}

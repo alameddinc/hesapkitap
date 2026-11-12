@@ -269,7 +269,7 @@ def test_lapse_when_full_grace_then_free_access_continues(hosted, pushes):
     assert plans.seat_state(u) == "none" and plans.plan_of(u) == "free"
     assert c.get("/api/prices").status_code == 402
     assert c.get("/api/prices", headers=OWN).status_code == 402
-    assert c.get("/api/meta").json()["plan"]["ai_docs"] == 3  # günde 3 okuma
+    assert c.get("/api/meta").json()["plan"]["ai_docs"] == 5  # ücretsiz: ayda 5 okuma
     assert [x["description"] for x in c.get("/api/transactions").json()] == ["Ortak market"]
     assert [x["description"] for x in c.get("/api/transactions", headers=OWN).json()] == ["Ayşe kitap"]
     assert c.get("/api/book/me").json()["seat"]["state"] == "none"
