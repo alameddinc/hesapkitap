@@ -14,11 +14,15 @@ gruplar: aynı boydaki süt hangi markadan olursa olsun aynı gruptur.
    Tartılı satırda (unit kg / lt) boy "kg" / "1 L" (birim fiyat kilo/litre fiyatıdır). Her grubun ana kategorisi
    (CATEGORIES) ve alt kategorisi (TAXONOMY: "Süt ve Kahvaltılık › Peynir") vardır.
 2. Önbellek: sunucu geneli product_groups tablosu (system.db; ad → grup, sonsuza dek). Kural sonuçları da yazılır.
-3. Yapay zekâ: kuralın çözemediği ad kuyruğa girer (product_group_queue); classify_pending toplu (en çok BATCH ad /
-   çağrı) ucuz modelle (receipt.DEFAULT_MODEL, lite) genel ürün adını sorar, JSON alır, sonucu önbelleğe yazar (source
-   'ai'). Boyu yine kurallar okur (model yalnız genel adı verir). Günde en çok AI_CALLS_PER_DAY çağrı (sunucu geneli);
-   maliyet ai_calls'a kind "grup" olarak yazılır. Modele yalnız ürün adı gider: fiş, işyeri, fiyat, kişi bilgisi gitmez.
-   Kuyruk boşalana kadar ad geçici gruptadır (pending: true; aynı yazılış aynı geçici grup).
+3. Yapay zekâ: kuralın çözemediği ad kuyruğa girer (product_group_queue); fiş / içe aktarım anında çağrı YAPMAZ.
+   Kuyruk gecede bir kez (jobs.run_global → classify_pending) toplu sorulur: çağrı başına en çok BATCH ad, ucuz model
+   (receipt.DEFAULT_MODEL, lite), kısa JSON ({"r": [[sıra, genel ad, alt kategori]]}); sonuç önbelleğe yazılır (source
+   'ai'). Sormadan önce artık çözülen (kural / katalog) ya da başka yoldan önbelleğe girmiş ad kuyruktan düşer. Boyu
+   yine kurallar okur (model yalnız genel adı verir). Günde en çok AI_CALLS_PER_DAY çağrı; her yapay zekâ çağrısı
+   (_ask: toplu, liste, elle çalıştırılan) önce SERT MALİYET TAVANINA bakar (ai_costs.group_caps: günlük / aylık ₺,
+   yönetici ayarı; harcama ai_calls'tan): aşacaksa çağrı yapılmaz, yöneticiye "sistem" push'u gider. Maliyet ai_calls'a
+   kind "grup" olarak yazılır. Modele yalnız ürün adı gider: fiş, işyeri, fiyat, kişi bilgisi gitmez.
+   Kuyruk boşalana kadar (ertesi sabah) ad geçici gruptadır (pending: true; aynı yazılış aynı geçici grup).
    Alışveriş listesine yazılan ad beklemez (classify_names / kick_names): eklenince arka planda yalnız o adlar tek
    çağrıda sorulur (kişi başı ve sunucu geneli günlük sınırlarla; önbellekteki ad hiç sorulmaz).
 
@@ -34,8 +38,9 @@ from app.textnorm import normalize
 
 log = logging.getLogger("hesapkitap.product_groups")
 
-BATCH = 50              # yapay zekâ çağrısı başına en çok ad
-AI_CALLS_PER_DAY = 20   # sunucu geneli günlük çağrı tavanı (≈ 1000 yeni ad / gün)
+BATCH = 150             # yapay zekâ çağrısı başına en çok ad (gecelik toplu; kısa yanıtta ~10-20 token / ad)
+OUT_TOKENS_PER_NAME = 32  # maxOutputTokens = 64 + bu × ad (kısa yanıt biçiminde en uzun satır ~25 token)
+AI_CALLS_PER_DAY = 20   # sunucu geneli günlük çağrı sayısı (≈ 3000 yeni ad / gün); asıl sınır ₺ tavanı (_budget_gate)
 QUEUE_MAX_TRIES = 3     # yanıtı bozuk gelen ad en çok bu kadar denenir
 
 # ---------------------------------------------------------------- kurallar
@@ -952,13 +957,15 @@ Süt", "KEÇİ SÜTÜ" → "Keçi Sütü"; protein / whey içecek süt değildir
 marka olan kelimeyi at ("HARRAS GÜNLÜK SÜT 1L" → "Süt"). Yalnız markasıyla anılan üründe markanın ürününü yaz
 (""" + "; ".join(f'"{b.title()}" → "{g}"' for g, b in {g: b for b, g in reversed(BRAND_PRODUCTS.items())}.items()) + """); "Gazlı İçecek",
 "İçecek", "Gıda" gibi raf adı YAZMA, ürünün kendisini yaz ("COLA TURKA 330ML" → "Kola"). Kısaltmaları aç. Ürün değilse (poşet, indirim, hizmet,
-depozito) g = null. Her ad için bir satır, sırayı koru.
-c = kategori, yalnız şu listeden biri (tırnaksız yaz): """ + "; ".join(f'"{c}"' for c in CATEGORIES) + """.
-s = alt kategori, c'nin altındakilerden biri (uymuyorsa yazma): """ + "; ".join(
-    f"{c}: {', '.join(subs)}" for c, subs in SUBCATEGORIES.items() if subs) + """.
-Yanıt yalnız JSON: {"items": [{"i": 0, "g": "Süt", "c": "Süt ve Kahvaltılık", "s": "Süt"}, ...]}
+depozito) g = null.
+k = alt kategori, yalnız şu listeden biri, tırnaksız (biçim "Kategori: alt / alt"; alt kategorisi olmayan kategoride
+kategorinin adı): """ + "; ".join(f"{c}: {' / '.join(subs)}" if subs else c for c, subs in SUBCATEGORIES.items()) + """.
+Yanıt yalnız kısa JSON, her ad için bir satır [sıra, g, k]; ürün değilse [sıra, null]. Başka alan, açıklama yazma:
+{"r": [[0, "Süt", "Süt"], [1, "Gofret", "Bisküvi ve Gofret"], [2, null]]}
 Adlar:
 """
+# kısa yanıtın k'si → (kategori, alt kategori): alt kategori adları tekil; alt kategorisi olmayan kategori kendi adıyla
+_K = {**{c: (c, None) for c in CATEGORIES}, **{s: (c, s) for c, subs in SUBCATEGORIES.items() for s in subs}}
 _LOCK = threading.Lock()
 
 
@@ -985,13 +992,66 @@ def _valid(g) -> str | None:
 GENERATION = 0  # yapay zekâ sonucu önbelleğe her yazılınca artar (app/shopping_known.py önbelleği bununla tazelenir)
 
 
+class GroupBudgetError(Exception):
+    """Ürün gruplama maliyet tavanı doldu: çağrı yapılmadı (adlar kuyrukta kalır)."""
+
+
+def _budget_gate(prompt: str, max_out: int, model: str) -> None:
+    """Sert tavan (ai_costs.group_caps, yönetici ayarı): bugünün / bu ayın "grup" harcaması (ai_calls) + bu çağrının
+    en kötü tahmini (girdi ≈ karakter / 2 token, çıktı = max_out) tavanı aşacaksa GroupBudgetError; yöneticilere
+    "sistem" push'u (gün / ay başına bir kez). Modül sabiti değil kayıtlı harcama sayıldığı için toplu, liste ya da elle
+    çalıştırılan hiçbir yol tavanı geçemez (07.11.2026: elle başlatılan iş AI_CALLS_PER_DAY'i ezip 316 çağrı yaptı)."""
+    from app import ai_costs
+
+    cap_day, cap_month = ai_costs.group_caps()
+    spent_day, spent_month = ai_costs.spent_try("grup")
+    est = ai_costs.estimate_try(model, len(prompt) // 2 + 1, max_out)
+    for scope, cap, spent in (("günlük", cap_day, spent_day), ("aylık", cap_month, spent_month)):
+        if spent + est > cap:
+            log.warning("ürün gruplama %s maliyet tavanı: harcanan ₺%.2f + bu çağrı ≤ ₺%.2f > ₺%.2f; çağrı yapılmadı",
+                        scope, spent, est, cap)
+            _cap_alert(scope, cap, spent)
+            raise GroupBudgetError(f"{scope} tavan ₺{cap:.2f}")
+
+
+def _cap_alert(scope: str, cap: float, spent: float) -> None:
+    from app import push
+
+    period = date.today().isoformat() if scope == "günlük" else date.today().strftime("%Y-%m")
+    try:
+        push.system_alert(f"sistem:grup-tavan:{scope}:{period}", f"Ürün gruplama durdu: {scope} tavan",
+                          f"Yapay zekâ gruplama harcaması ₺{spent:.2f}, tavan ₺{cap:.2f}. Yeni ürün adları kuyrukta "
+                          "bekliyor; tavan yönetici yapay zekâ maliyeti ayarından değişir.")
+    except Exception:  # noqa: BLE001 - bildirim gitmese de çağrı yapılmaz
+        log.warning("gruplama tavanı bildirimi gönderilemedi", exc_info=True)
+
+
 def _ask(batch: list[dict]) -> dict:
-    """Tek toplu çağrı: [{name_norm, name}] → modelin yanıtı (dict). Hata fırlatabilir (çağıran yakalar)."""
+    """Tek toplu çağrı: [{name_norm, name}] → modelin yanıtı (dict). Önce sert maliyet tavanı (_budget_gate:
+    GroupBudgetError). Hata fırlatabilir (çağıran yakalar)."""
     from app import receipt
 
     names = "\n".join(f"{i}. {b['name']}" for i, b in enumerate(batch))
-    data, _meta = receipt.gemini_text_json(PROMPT + names, max_output_tokens=2048, kind="grup", model=receipt.DEFAULT_MODEL)
+    prompt, model, max_out = PROMPT + names, receipt.DEFAULT_MODEL, 64 + OUT_TOKENS_PER_NAME * len(batch)
+    _budget_gate(prompt, max_out, model)
+    data, _meta = receipt.gemini_text_json(prompt, max_output_tokens=max_out, kind="grup", model=model)
     return data if isinstance(data, dict) else {}
+
+
+def _rows(data: dict, n: int) -> dict[int, tuple]:
+    """Yanıt → {sıra: (genel ad, kategori, alt kategori)}. Kısa biçim {"r": [[i, g, k]]} (k: alt kategori ya da alt
+    kategorisi olmayan kategori); eski biçim {"items": [{"i", "g", "c", "s"}]} de okunur."""
+    out = {}
+    for row in data.get("r") or []:
+        if isinstance(row, list) and row and isinstance(row[0], int) and not isinstance(row[0], bool) \
+                and 0 <= row[0] < n:
+            cat, sub = _K.get(row[2], (None, None)) if len(row) > 2 and isinstance(row[2], str) else (None, None)
+            out[row[0]] = (row[1] if len(row) > 1 else None, cat, sub)
+    for row in data.get("items") or []:
+        if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < n:
+            cat = valid_category(row.get("c"))
+            out[row["i"]] = (row.get("g"), cat, valid_subcategory(cat, row.get("s")))
+    return out
 
 
 def _apply(batch: list[dict], data: dict) -> int:
@@ -999,20 +1059,16 @@ def _apply(batch: list[dict], data: dict) -> int:
     global GENERATION
     from app import community_prices, system
 
-    got, cats, subs = {}, {}, {}
-    for row in data.get("items") or []:
-        if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < len(batch):
-            got[row["i"]] = row.get("g")
-            cats[row["i"]] = valid_category(row.get("c"))
-            subs[row["i"]] = valid_subcategory(cats[row["i"]], row.get("s"))
+    rows = _rows(data, len(batch))
     done = 0
     with system.connect() as c:
         for i, b in enumerate(batch):
-            if i not in got:
+            if i not in rows:
                 continue  # yanıtta yok: kuyrukta kalır (deneme sayısı arttı)
-            g = refine(_valid(got[i]), b["name_norm"].split())
+            gen, cat, sub = rows[i]
+            g = refine(_valid(gen), b["name_norm"].split())
             size, _ = parse_size(b["name_norm"].split())
-            grp = _compose(g, size, category=cats.get(i), subcategory=subs.get(i)) if g else None
+            grp = _compose(g, size, category=cat, subcategory=sub) if g else None
             _store(c, b["name_norm"], grp, "ai")
             c.execute("DELETE FROM product_group_queue WHERE name_norm = ?", (b["name_norm"],))
             community_prices.relabel(c, b["name_norm"], grp)  # geçici gruptaki topluluk satırları
@@ -1022,15 +1078,45 @@ def _apply(batch: list[dict], data: dict) -> int:
     return done
 
 
+def _drop_known(limit: int) -> int:
+    """Sormadan önce (önbellek): kuyruktaki ad başka yoldan önbelleğe girdiyse (kural, katalog, tutarlılık; source
+    'ai' dışı) ya da bugün kural / katalogla çözülüyorsa kuyruktan düşer, yapay zekâya gitmez. Önbellekteki yapay zekâ
+    sonucu kuyruktaysa (regroup bilerek yeniden sordurur) kalır. limit: bu gece sorulacak ilk adlar denenir. Dönen:
+    düşen ad."""
+    from app import community_prices, product_catalog, system
+
+    product_catalog.size()  # dizin yazma işleminden önce (iç içe okuma bağlantısı)
+    with system.connect() as c:
+        n = c.execute("DELETE FROM product_group_queue WHERE name_norm IN "
+                      "(SELECT name_norm FROM product_groups WHERE source != 'ai')").rowcount
+        queued = [dict(r) for r in c.execute(
+            "SELECT q.name_norm, q.name FROM product_group_queue q LEFT JOIN product_groups g USING (name_norm) "
+            "WHERE q.tries < ? AND g.name_norm IS NULL ORDER BY q.added_at, q.name_norm LIMIT ?",
+            (QUEUE_MAX_TRIES, limit))]
+    found = [(q["name_norm"], *resolve(q["name"])) for q in queued]
+    found = [(nn, g, src) for nn, g, src in found if g]
+    if found:
+        with system.connect() as c:
+            for nn, g, src in found:
+                _store(c, nn, g, src or "rule")
+                c.execute("DELETE FROM product_group_queue WHERE name_norm = ?", (nn,))
+                community_prices.relabel(c, nn, g)
+    return n + len(found)
+
+
 def classify_pending(max_calls: int = 1) -> int:
-    """Kuyruktaki adları toplu sınıflandır (en çok max_calls çağrı, günlük tavan AI_CALLS_PER_DAY). Dönen: önbelleğe
-    yazılan ad sayısı. Yapay zekâ kapalıysa (anahtar yok) 0. Bir çağrının hatası kuyruğu bozmaz (deneme sayısı artar)."""
+    """Kuyruktaki adları toplu sınıflandır (gecelik iş: jobs.run_global). En çok max_calls çağrı, günlük AI_CALLS_PER_DAY
+    çağrı ve sert maliyet tavanı (_ask → _budget_gate; dolunca durur, adlar kuyrukta kalır). Önce önbellek/kural ile
+    çözülen adlar düşer (_drop_known). Dönen: yapay zekâyla önbelleğe yazılan ad sayısı. Yapay zekâ kapalıysa (anahtar
+    yok) 0. Bir çağrının hatası kuyruğu bozmaz (deneme sayısı artar)."""
     from app import receipt, system
 
     if not receipt.enabled() or not _LOCK.acquire(blocking=False):
         return 0
     done = 0
     try:
+        if (n := _drop_known(max(1, max_calls) * BATCH)):
+            log.info("ürün grubu kuyruğu: %d ad yapay zekâsız çözüldü", n)
         for _ in range(max_calls):
             if ai_calls_today() >= AI_CALLS_PER_DAY:
                 break
@@ -1042,12 +1128,18 @@ def classify_pending(max_calls: int = 1) -> int:
                     break
                 c.execute(f"UPDATE product_group_queue SET tries = tries + 1 WHERE name_norm IN "
                           f"({','.join('?' * len(batch))})", [b["name_norm"] for b in batch])
-            system.put(_day_key(), str(ai_calls_today() + 1))
             try:
                 data = _ask(batch)
+            except GroupBudgetError:  # tavan: çağrı yapılmadı, deneme sayılmaz
+                with system.connect() as c:
+                    c.execute(f"UPDATE product_group_queue SET tries = tries - 1 WHERE name_norm IN "
+                              f"({','.join('?' * len(batch))})", [b["name_norm"] for b in batch])
+                break
             except Exception:  # noqa: BLE001 - ağ / model hatası: adlar kuyrukta kalır, sonra yeniden denenir
+                system.put(_day_key(), str(ai_calls_today() + 1))
                 log.warning("ürün grubu yapay zekâ çağrısı başarısız", exc_info=True)
                 break
+            system.put(_day_key(), str(ai_calls_today() + 1))
             done += _apply(batch, data)
     finally:
         _LOCK.release()
@@ -1116,6 +1208,8 @@ def classify_names(names: list[str], uid: int | None = None) -> int:
             return 0
         try:
             data = _ask(batch)  # kişinin günlük sınırı burada (receipt._daily_gate) sayılır / durdurur
+        except GroupBudgetError:  # sert maliyet tavanı: çağrı yapılmadı, ad kuyrukta gece beklenir
+            return 0
         except receipt.ReceiptError as e:
             if isinstance(e, receipt.DailyLimitError):
                 return 0
@@ -1160,20 +1254,6 @@ def kick_names(names: list[str]) -> None:
             _safe(classify_names, names, (u or {}).get("id"))
 
     _spawn(go)
-
-
-def kick() -> None:
-    """Kuyrukta ad varsa arka planda tek çağrı (istek yolu yavaşlamaz). Yapay zekâ kapalıysa hiçbir şey."""
-    from app import receipt
-
-    if not receipt.enabled():
-        return
-    try:
-        if not pending():
-            return
-    except Exception:  # noqa: BLE001
-        return
-    threading.Thread(target=lambda: _safe(classify_pending, 1), daemon=True, name="product-groups").start()
 
 
 def _safe(fn, *a):

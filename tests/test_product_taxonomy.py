@@ -115,7 +115,7 @@ def test_ai_subcategory_is_validated(monkeypatch):
     pg.groups_for([{"name": "ORNEKMARKA KURABIYE HAMURU 400G"}, {"name": "ORNEKMARKA SILGI"}])
 
     def fake(prompt, max_output_tokens=None, kind="kategori", model=None):
-        assert "Temel Gıda: Bakliyat" in prompt and '"s": "Süt"' in prompt               # alt kategori listesi
+        assert "Temel Gıda: Bakliyat" in prompt and '[0, "Süt", "Süt"]' in prompt        # alt kategori listesi, kısa biçim
         lines = [ln for ln in prompt.splitlines() if ln[:1].isdigit() and ". " in ln]
         return {"items": [{"i": int(ln.split(".")[0]), **(
             {"g": "Kurabiye Hamuru", "c": "Temel Gıda", "s": "Pasta Malzemeleri"} if "HAMURU" in ln

@@ -148,9 +148,7 @@ def contribute(uid: int | None, merchant: str | None, legal_name: str | None, it
     with system.connect() as c:
         c.executemany("INSERT INTO community_prices (chain, group_key, name_norm, unit_price, day, contributor, region, "
                       "discounted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", out)
-    if any(g and g.get("pending") for g in groups):
-        product_groups.kick()
-    return len(out)
+    return len(out)  # geçici gruptaki satırlar gece gruplanınca taşınır (relabel)
 
 
 def relabel(c, nn: str, group: dict | None) -> None:

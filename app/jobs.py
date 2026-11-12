@@ -283,7 +283,7 @@ def run_global(now: datetime) -> list[str] | None:
     from app import community_prices
 
     community_prices.prune()  # KEEP_DAYS'ten eski anonim topluluk fiyatları
-    try:  # gün içinde kuyrukta kalan ürün adları: toplu yapay zekâ (günlük tavanla; app/product_groups.py)
+    try:  # gün içinde kuyruğa giren ürün adları: gecede bir kez toplu yapay zekâ (günlük çağrı + sert ₺ tavanıyla)
         from app import product_groups
 
         if n := product_groups.classify_pending(max_calls=product_groups.AI_CALLS_PER_DAY):

@@ -1379,6 +1379,8 @@ class AiCostSettingsIn(BaseModel):
     prices: dict[str, dict[str, float]] | None = None  # {"model": {"input": $/1M, "output": $/1M}}; {}: varsayılana dön
     usd_try: float | None = None
     alert_try: float | None = None  # kullanıcı başı aylık ₺ eşiği (ai_alert_try)
+    group_day_try: float | None = None    # ürün gruplama sert tavanı, günlük ₺ (0: kapalı)
+    group_month_try: float | None = None  # ürün gruplama sert tavanı, aylık ₺
 
 
 @app.get("/api/admin/ai-costs")
@@ -1397,7 +1399,7 @@ def admin_put_ai_costs(body: AiCostSettingsIn):
 
     _require_admin()
     try:
-        ai_costs.set_settings(body.prices, body.usd_try, body.alert_try)
+        ai_costs.set_settings(body.prices, body.usd_try, body.alert_try, body.group_day_try, body.group_month_try)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     return ai_costs.summary()

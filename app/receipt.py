@@ -315,7 +315,11 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
         raise ReceiptError("Yapay zekâ boş yanıt verdi; tekrar dene ya da elle gir") from e
     _count_usage()
     usage = resp.get("usageMetadata", {})
-    out = _extract_json(text)
+    try:
+        out = _extract_json(text)
+    except (ReceiptError, ValueError):  # bozuk / yarım yanıt da ücretlidir: maliyet tavanları (ai_costs) saysın
+        _record_cost(AUTO_KINDS.get(kind, kind), model, usage)
+        raise
     if kind in AUTO_KINDS:
         kind = "belge" if out.get("doc_type") == "fatura" or out.get("due_date") else AUTO_KINDS[kind]
     _record_cost(kind, model, usage)

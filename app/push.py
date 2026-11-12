@@ -673,13 +673,18 @@ def notify(uid: int, items: list[dict], now: datetime | None = None, daily: bool
 def ops_alert(status: str, region: str | None, text: str, today: date | None = None) -> int:
     """Fiyat verisi aksadı (toplayıcı işin POST /api/ops/alert'i, içe aktarım anomalisi): yöneticilerin telefonuna
     "sistem" türü push (sessiz saate uyar). Aynı gün + durum + bölge bir kez gider. Dönen: kuyruğa giren bildirim."""
-    from app import feedback
-
     if status == "test":  # toplayıcının deneme çağrısı: ne olduğu açık yazsın
         title, text = "Fiyat toplama: test", "Test bildirimi: fiyat toplama uyarıları çalışıyor."
     else:
         title = f"Fiyat toplama: {status}" + (f" · {region}" if region else "")
-    pid = f"sistem:{(today or date.today()).isoformat()}:{status}:{region or '-'}"
+    return system_alert(f"sistem:{(today or date.today()).isoformat()}:{status}:{region or '-'}", title, text)
+
+
+def system_alert(pid: str, title: str, text: str) -> int:
+    """Yöneticilerin telefonuna "sistem" türü push (sessiz saate uyar); aynı pid bir kez gider (claim). Dönen: kuyruğa
+    giren bildirim."""
+    from app import feedback
+
     return sum(len(notify(a["id"], [item("sistem", pid, title, text, R_SISTEM)])) for a in feedback.admins())
 
 

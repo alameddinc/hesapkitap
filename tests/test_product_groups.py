@@ -54,6 +54,7 @@ def test_classify_pending_batches_and_caps(monkeypatch):
     from app import ai_costs, receipt, system
 
     monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setattr(pg, "BATCH", 50)  # parçalamayı küçük sayıyla sına (gerçek BATCH daha büyük)
     names = [f"ORNEKURUN{i} 1L" for i in range(60)] + ["POSET"]
     pg.groups_for([{"name": n} for n in names])
     calls = []
@@ -232,7 +233,7 @@ def test_ai_category_is_stored(monkeypatch):
     pg.groups_for([{"name": "ORNEKMARKA MANTI 500G"}, {"name": "ORNEKMARKA KALEM"}])
 
     def fake(prompt, max_output_tokens=None, kind="kategori", model=None):
-        assert '"Konserve ve Hazır Gıda"' in prompt
+        assert "Konserve ve Hazır Gıda: Konserve" in prompt                     # kısa biçim: kategori listesi
         lines = [ln for ln in prompt.splitlines() if ln[:1].isdigit() and ". " in ln]
         return {"items": [{"i": int(ln.split(".")[0]), **({"g": "Mantı", "c": "Dondurulmuş Gıda"} if "MANTI" in ln
                                                            else {"g": "Kalem", "c": "Uydurma"})} for ln in lines]}, {}

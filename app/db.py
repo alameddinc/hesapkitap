@@ -4686,7 +4686,8 @@ def priced_items(visible_only: bool = True) -> list[dict]:
 def attach_groups(items: list[dict], learn: bool = True) -> None:
     """Her fiş satırına group ({key, label[, category, subcategory, pending]} | None; app/product_groups.py), aynı
     yazılış bir kez çözülür.
-    Kuralın çözemediği ad kuyruğa girer; yapay zekâ açıksa arka planda tek toplu çağrı (product_groups.kick)."""
+    Kuralın çözemediği ad kuyruğa girer (geçici grup, pending); yapay zekâ gecede bir kez toplu sorar
+    (product_groups.classify_pending, jobs.run_global) — fiş eklenince çağrı yapılmaz."""
     from app import product_groups
 
     sig = lambda it: (it.get("name"), it.get("product"), it.get("brand"), it.get("unit"))  # noqa: E731
@@ -4694,8 +4695,6 @@ def attach_groups(items: list[dict], learn: bool = True) -> None:
     got = dict(zip((sig(u) for u in uniq), product_groups.groups_for(uniq, learn=learn))) if uniq else {}
     for it in items:
         it["group"] = got.get(sig(it))
-    if learn and any(g and g.get("pending") for g in got.values()):
-        product_groups.kick()
 
 
 def products(since: str | None = None, store: str | None = None, brand: str | None = None) -> dict:
