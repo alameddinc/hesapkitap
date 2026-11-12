@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db, money, rawnote, terms
+from app import db, money, rawnote, store_subs, sub_catalog, terms
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
@@ -696,6 +696,10 @@ def subscriptions() -> list[dict]:
             over = _round(sum(v - new_amount for v in per.values() if v > new_amount * 1.15))
         out.append({
             "merchant": m, "category": ts[0]["category"],
+            # mağaza tahsilatı (APPLE.COM/BILL, GOOGLE *…): yeni istemci bunları "Uygulama mağazası" grubunda gösterir
+            # (GET /api/subscriptions/apps); eski istemci bu satırı eskisi gibi görür. logo: katalogdan renkli baş harf
+            "store": store_subs.merchant_store(ts[0]["description"]),
+            "logo": sub_catalog.view(sub_catalog.match_description(ts[0]["description"])) or sub_catalog.glyph_for(m.title()),
             "monthly": monthly, "new_amount": new_amount, "prev_monthly": prev_monthly, "last_period": last_period,
             "saving": _round(monthly if st and st["status"] == "iptal" else max(0.0, monthly - new_amount) if new_amount is not None else 0),
             "overcharged": over,
@@ -945,10 +949,11 @@ def card_projection() -> dict:
         subs: dict[str, dict] = {}
         states = db.subscription_states()
         cancelled = {m for m, st in states.items() if st["status"] == "iptal"}
+        not_sub = store_subs.excluded_txn_ids()  # mağaza adayında "abonelik değil" / iptal
         for t in cur:
             if t["category"] in SUBSCRIPTION_CATEGORIES and t["txn_type"] == PURCHASE and t["installment_no"] is None:
                 m = merchant_name(t["description"])
-                if m in cancelled:
+                if m in cancelled or t["id"] in not_sub:
                     continue
                 subs.setdefault(m, {"description": m, "amount": 0.0, "category": t["category"], "txn_id": t["id"]})
                 subs[m]["amount"] += t["amount"]
@@ -2374,6 +2379,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                         "detail": f"Yeni paket {_tl(sub['new_amount'])} olmalıydı; {_tl(sub['overcharged'])} fazla çekildi.",
                         "link": "tasarruf", "key": f"paket:{_slug(sub['merchant'])}:{_round(sub['overcharged']):g}",
                         "target": {"screen": "abonelikler"}})
+    out += store_subs.cancel_alerts(today)  # mağaza aboneliği (App Store / Google Play) iptalden sonra yine çekildi
     # 7a) Aynı abonelik satıcısına kısa sürede benzer tutarlı birden çok ödeme: çift üyelik / çift çekim olabilir
     out += duplicate_charges(today)
     subs = [s for acc in p["projection"] for s in acc["subscriptions"]]

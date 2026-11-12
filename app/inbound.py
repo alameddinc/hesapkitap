@@ -6,7 +6,10 @@ Akış: banka / kurum maili → Cloudflare Email Routing → Email Worker → PO
 Kimden kabul edilir (DKIM imzası From alan adıyla uyuşmalı):
 - banka alan adları (mailbox.allowed_domains) → ekstre / döküm / dekont / işlem bildirimi
 - kurum alan adları (BILL_DOMAINS)             → fatura (Ödemeler'e "bu ay geldi")
-- defterdeki kişilerin kendi e-postası         → kullanıcının elle ilettiği belge (önce banka belgesi, olmazsa fatura)
+- mağaza alan adları (STORE_DOMAINS)           → App Store / Google Play makbuzu (isteğe bağlı; app/store_screens.py):
+  uygulama adı, tutar, yenileme → abonelik adayıyla eşleşir. Gmail filtresiyle iletilen mail From ve imzasını korur.
+- defterdeki kişilerin kendi e-postası         → kullanıcının elle ilettiği belge (önce mağaza makbuzu, banka belgesi,
+  olmazsa fatura)
 Diğer her şey "atlandı" diye posta günlüğüne düşer. Aynı mail (Message-ID) ikinci kez işlenmez.
 
 Adres defterin sahibine (ortak defter) ya da üyenin kendi defterine bağlıdır; kod tahmin edilemez, yenilenebilir.
@@ -51,6 +54,9 @@ BILL_DOMAINS = (
     # e-fatura altyapıları (kurum adına gönderen)
     "efatura.gov.tr", "edm.com.tr", "logo.com.tr", "uyumsoft.com.tr", "izibiz.com.tr", "foriba.com", "mysoft.com.tr",
 )
+
+# App Store ("no_reply@email.apple.com") ve Google Play ("googleplay-noreply@google.com") makbuzları
+STORE_DOMAINS = ("apple.com", "google.com")
 
 
 def domain() -> str:
@@ -148,6 +154,8 @@ def classify_sender(msg: Message, raw: bytes, people: list[str], verify=_dkim_do
         kind = "banka"
     elif _match(dom, BILL_DOMAINS):
         kind = "fatura"
+    elif _match(dom, STORE_DOMAINS):
+        kind = "magaza"
     elif addr in people:
         kind = "kendi"
     else:
@@ -189,6 +197,35 @@ def _bill(name: str, data: bytes, mime: str) -> str:
     if parsed.get("paid") and parsed.get("paid_at"):
         return f"🧾 {parsed['provider']} faturası: {money.tl(parsed['amount'])} · ödendi {parsed['paid_at'][8:]}.{parsed['paid_at'][5:7]}"
     return f"🧾 {parsed['provider']} faturası: {money.tl(parsed['amount'])} · son ödeme {parsed['due_date'][8:]}.{parsed['due_date'][5:7]}{change}"
+
+
+def _store_receipt(msg: Message, entry: dict, subject: str, received: str, kind: str) -> dict | None:
+    """App Store / Google Play makbuzu → abonelik kaynağı (app/store_subs.py). Kendi adresinden iletilen mail makbuz
+    değilse None (normal belge akışı sürer); mağazadan gelen ama makbuz olmayan mail atlanır."""
+    from app import mailbox, store_screens, store_subs
+
+    body = mailbox._body_text(msg)
+    rec = store_screens.parse_receipt(subject, body, date.fromisoformat(received),
+                                      entry["sender"] if kind == "magaza" else "")
+    if rec is None:
+        return None if kind == "kendi" else {**entry, "kind": "-", "status": "skip", "detail": "Mağaza makbuzu değil"}
+    rows = [{**x, "ref": rec.get("order")} for x in rec["items"] if x.get("active", True)]
+    if not rows:
+        return {**entry, "kind": "makbuz", "status": "skip", "detail": "Makbuzda abonelik satırı okunamadı"}
+    res = store_subs.ingest(rows, "makbuz", rec["date"])
+    label = store_subs.STORES.get(rec["store"], "Mağaza")
+    lines = []
+    for o in res["rows"]:
+        bits = [f"🧾 {label} makbuzu: {o['name']}"]
+        if o.get("amount"):
+            bits.append(money.tl(o["amount"]))
+        if o.get("date") and o.get("date_kind") == "yenileme":
+            d = date.fromisoformat(o["date"])
+            bits.append(f"yenileme {d.day:02d}.{d.month:02d}")
+        if o.get("match"):
+            bits.append("henüz ekstrede yok, listeye eklendi" if o["match"]["pending"] else "ekstredeki tahsilatla eşleşti")
+        lines.append(" · ".join(bits))
+    return {**entry, "kind": "makbuz", "status": "ok", "detail": "\n".join(lines)}
 
 
 def _max_pdfs(kind: str | None, ctx: dict) -> int:
@@ -286,6 +323,12 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
                  "detail": f"Tanınan bir banka/kurum değil ya da imza doğrulanamadı ({dom or 'bilinmiyor'})"}
             db.log_mail(r)
             return r
+        if kind in ("magaza", "kendi"):  # mağaza makbuzu: kural okuması (yapay zekâ yok, okuma hakkı düşmez)
+            r = _store_receipt(msg, entry, subject, received, kind)
+            if r is not None:
+                db.log_mail(r)
+                db.trim_mail_log(LOG_KEEP)
+                return r
         if not doc_reads.allowed():  # hazır sürüm: bugünkü okuma hakkı (ve ek paket) bitti; hiçbir şey okunmaz
             r = {**entry, "kind": "-", "status": "skip", "detail": "Belge okuma hakkı doldu"}
             db.log_mail(r)

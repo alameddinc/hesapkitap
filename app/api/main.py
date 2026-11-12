@@ -7296,6 +7296,189 @@ def put_subscription(body: SubState):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- uygulama mağazası abonelikleri (app/store_subs.py)
+
+@app.get("/api/subscriptions/catalog")
+def subscriptions_catalog():
+    """Hazır abonelik kataloğu (yerli + global): {items [{id, name, glyph, color, fg, group, stores}], groups}.
+    Logo yok: renkli baş harf. Eşleşme kalıpları sunucuda kalır (app/sub_catalog.py)."""
+    from app import sub_catalog
+
+    return sub_catalog.public()
+
+
+@app.get("/api/subscriptions/apps")
+def subscriptions_apps():
+    """App Store / Google Play abonelikleri (yetenek store_subscriptions): {available, items [aday: id, title, name|null,
+    store, store_label, logo, status abonelik|aday|degil|iptal, cycle aylik|yillik|null, cycle_text, amount, monthly,
+    yearly, counted, next_date, next_text, first_text, price_up, guesses [Olabilir], charges, manage, pending …], other
+    (elle eklenen, mağaza dışı), totals {monthly, yearly, count, text}, candidates, help}."""
+    from app import store_subs
+
+    return store_subs.overview()
+
+
+class StoreSubAct(BaseModel):
+    action: Literal["adlandir", "abonelik", "degil", "iptal", "aktif", "bilmiyorum", "sifirla"]
+    catalog_id: str | None = Field(None, max_length=40)
+    name: str | None = Field(None, max_length=60)
+    cycle: Literal["aylik", "yillik"] | None = None
+    when: date | None = Field(None, alias="date")  # iptal günü (varsayılan bugün)
+
+
+@app.put("/api/subscriptions/apps/{sid}")
+def subscriptions_app_act(sid: str, body: StoreSubAct):
+    """Adaya karar: adlandır (katalog ya da yazılan ad), abonelik (dönem verilebilir), değil (tek seferlik satın alma),
+    iptal (iptal ettim), aktif (geri al), bilmiyorum (fiyattan tahmin önerme), sıfırla. Dönen: güncel aday."""
+    from app import store_subs
+
+    try:
+        store_subs.act(sid, body.action, body.catalog_id, body.name, body.cycle,
+                       body.when.isoformat() if body.when else None)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"ok": True, "item": store_subs.find(sid)}
+
+
+class ManualSubIn(BaseModel):
+    catalog_id: str | None = Field(None, max_length=40)
+    name: str | None = Field(None, max_length=60)
+    plan: str | None = Field(None, max_length=60)
+    amount: Money = Field(gt=0, le=1_000_000)
+    cycle: Literal["aylik", "yillik"] = "aylik"
+    next_date: date
+    store: Literal["apple", "google", "diger"] = "diger"
+
+
+class SourcePatch(BaseModel):
+    catalog_id: str | None = Field(None, max_length=40)
+    name: str | None = Field(None, min_length=1, max_length=60)
+    plan: str | None = Field(None, max_length=60)
+    amount: Money | None = Field(None, gt=0, le=1_000_000)
+    cycle: Literal["aylik", "yillik"] | None = None
+    next_date: date | None = None
+    store: Literal["apple", "google", "diger"] | None = None
+
+
+@app.post("/api/subscriptions/apps/manual")
+def subscriptions_manual(body: ManualSubIn):
+    """Elle abonelik (katalogdan seç ya da adını yaz): ekstreye düşünce aynı mağaza + tutar + günle adayla birleşir."""
+    from app import store_subs, sub_catalog
+
+    cat = sub_catalog.get(body.catalog_id)
+    if body.catalog_id and not cat:
+        raise HTTPException(422, "Katalogda yok")
+    name = (cat or {}).get("name") or (body.name or "").strip()
+    if not name:
+        raise HTTPException(422, "Bir ad seç ya da yaz")
+    sid, _new = store_subs.save_source("elle", {"name": name, "plan": body.plan, "catalog_id": body.catalog_id,
+                                                "store": body.store, "amount": body.amount, "cycle": body.cycle,
+                                                "date": body.next_date, "active": True}, date.today())
+    return {"ok": True, "source_id": sid, "item": next((i for i in store_subs.items() if i.get("source_id") == sid), None)}
+
+
+@app.patch("/api/subscriptions/apps/sources/{src_id}")
+def subscriptions_source_patch(src_id: int, body: SourcePatch):
+    """Elle eklenen ya da ekran görüntüsünden gelen aboneliği düzelt (ad, tutar, dönem, sonraki gün, mağaza)."""
+    from app import store_subs
+
+    data = body.model_dump(exclude_unset=True)
+    if "next_date" in data:
+        data["renews"] = data.pop("next_date")
+    try:
+        ok = store_subs.update_source(src_id, data)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if not ok:
+        raise HTTPException(404, "Abonelik bulunamadı")
+    return {"ok": True}
+
+
+@app.delete("/api/subscriptions/apps/sources/{src_id}")
+def subscriptions_source_delete(src_id: int):
+    from app import store_subs
+
+    if not store_subs.delete_source(src_id):
+        raise HTTPException(404, "Abonelik bulunamadı")
+    return {"ok": True}
+
+
+SUB_SCREEN_UNREADABLE = "Ekran görüntüsünde abonelik listesi bulunamadı. Mağazanın Abonelikler sayfasının görüntüsü mü?"
+
+
+@app.post("/api/subscriptions/apps/screenshot")
+@_heavy
+def subscriptions_screenshot(files: list[UploadFile] = File(...), ocr_text: list[str] = Form(default=[]),
+                             store: str | None = Form(None)):
+    """Abonelik listesi ekran görüntüleri (1–5; iPhone Ayarlar → Abonelikler, Play Store → Ödemeler ve abonelikler →
+    Abonelikler). Her görüntü 1 okuma hakkı (okunamayan: günün ilk denemeleri ücretsiz, aynı görüntü tekrar: önbellek).
+    ocr_text[i]: telefonun o görüntüden okuduğu yazı (varsa önce kural okuması, yapay zekâsız). Okunan satırlar adaylarla
+    mağaza + tutar + günden eşleşir, eşleşmeyen etkin olanlar "henüz ekstreye düşmemiş" olarak eklenir.
+    Yanıt: {rows [{name, plan, amount, cycle, date, active, match {id, pending, title}|null}], matched, pending, skipped,
+    message, read [{file, source metin|yapay_zeka|onbellek|null, rows, unreadable?}], charged?}"""
+    from app import doc_cache, doc_reads, store_screens, store_subs
+
+    if not 1 <= len(files) <= 5:
+        raise HTTPException(422, "En çok 5 ekran görüntüsü")
+    st = store if store in ("apple", "google") else None
+    today = date.today()
+    found: list[dict] = []
+    read: list[dict] = []
+    charged = None
+    for idx, f in enumerate(files):
+        data = _file_bytes(f)
+        mime = f.content_type or ""
+        if not mime.startswith("image/"):
+            raise HTTPException(422, "Yalnız ekran görüntüsü (fotoğraf) yüklenebilir")
+        limits.check_size(data, f.filename)
+        text = (ocr_text[idx] if idx < len(ocr_text) else "").replace("\r\n", "\n").strip()[:receipt.MAX_OCR_CHARS]
+        hit = doc_cache.get(data, "abonelik")
+        if hit is not None:
+            rows = hit.get("rows") or []
+            read.append({"file": f.filename, "source": "onbellek", "rows": len(rows)})
+            found += rows
+            continue
+        try:
+            doc_reads.check(data)
+        except doc_reads.QuotaError as e:
+            raise QuotaFull(502, e) from e
+        parsed = store_screens.parse_screen_text(text, today, st) if text else {"items": []}
+        source = "metin" if parsed["items"] else None
+        if not parsed["items"] and receipt.enabled():
+            img, img_mime, _photo = _prepare_photo(data, mime)
+            try:
+                doc_reads.forget(data)
+                raw, _meta = receipt._gemini_json(store_screens.SCREEN_PROMPT.format(today=today.isoformat())
+                                                  + (f"\nTelefonun okuduğu yazı (yardımcı):\n{text[:6000]}" if text else ""),
+                                                  img, img_mime, max_output_tokens=2000, kind="belge")
+            except doc_reads.QuotaError as e:
+                raise QuotaFull(502, e) from e
+            except receipt.ReceiptError as e:
+                raise HTTPException(502, errors.user_text(e, 502)) from e
+            parsed = store_screens.from_ai(raw, today, st)
+            source = "yapay_zeka"
+        rows = [{**x, "date": x["date"].isoformat() if isinstance(x.get("date"), date) else x.get("date"),
+                 "store": x.get("store") or parsed.get("store") or st} for x in parsed["items"]]
+        if not rows:
+            note = {"file": f.filename, "source": source, "rows": 0, "unreadable": True}
+            if source == "yapay_zeka":
+                _mark_unreadable(note, SUB_SCREEN_UNREADABLE)
+            read.append(note)
+            continue
+        if c := doc_reads.charge(data):
+            charged = c
+        doc_cache.put(data, "abonelik", {"rows": rows})
+        read.append({"file": f.filename, "source": source, "rows": len(rows)})
+        found += rows
+    res = store_subs.ingest(found, "ekran", today)
+    out = {**res, "message": store_subs.summary_text(res) if found else SUB_SCREEN_UNREADABLE, "read": read}
+    if charged:
+        out["charged"] = charged
+    return out
+
+
 @app.post("/api/goals")
 def create_goal(body: GoalIn):
     return {"id": db.create_goal(body.model_dump())}

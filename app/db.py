@@ -455,6 +455,39 @@ CREATE TABLE IF NOT EXISTS shopping_trips (
     entry_ids TEXT NOT NULL DEFAULT '[]',
     created_by INTEGER
 );
+-- Uygulama mağazası abonelikleri (app/store_subs.py): kullanıcının adaya verdiği karar. Aday her istekte tahsilatlardan
+-- yeniden kurulur; karar adayın tahsilat parmak izlerine (fps: "mağaza:tarih:kuruş" JSON listesi) bağlıdır, yeni
+-- ekstre yüklenip adayın kimliği değişse de karar onu bulur.
+CREATE TABLE IF NOT EXISTS store_sub_labels (
+    id TEXT PRIMARY KEY,           -- karar anındaki aday kimliği
+    fps TEXT NOT NULL DEFAULT '[]',
+    status TEXT CHECK (status IN ('abonelik', 'degil', 'iptal')),  -- NULL: yalnız ad / "Bilmiyorum"
+    catalog_id TEXT,
+    name TEXT,
+    cycle TEXT CHECK (cycle IN ('aylik', 'yillik')),
+    unknown INTEGER NOT NULL DEFAULT 0,  -- "Bilmiyorum": fiyattan tahmin önerilmez
+    changed_at DATE NOT NULL,
+    created_by INTEGER
+);
+-- Abonelik bilgisi gelen kaynaklar: abonelik listesi ekran görüntüsü (ekran), mağaza makbuzu e-postası (makbuz),
+-- elle eklenen (elle). Ekstredeki adayla tutar + gün + mağazadan eşleşir; eşleşmeyen "henüz ekstreye düşmemiş" olur.
+CREATE TABLE IF NOT EXISTS store_sub_sources (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL CHECK (source IN ('ekran', 'makbuz', 'elle')),
+    store TEXT,                    -- apple | google | diger | NULL (bilinmiyor)
+    name TEXT NOT NULL,
+    plan TEXT,
+    catalog_id TEXT,
+    amount REAL,
+    cycle TEXT,                    -- aylik | yillik | haftalik | NULL
+    renews DATE,                   -- sonraki yenileme (ekran/makbuz/elle); iptalde bitiş günü
+    seen_date DATE NOT NULL,       -- ekran görüntüsünün / makbuzun günü
+    status TEXT NOT NULL DEFAULT 'aktif' CHECK (status IN ('aktif', 'iptal')),
+    ref TEXT,                      -- makbuz sipariş numarası
+    dedupe TEXT UNIQUE,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # Eski şemaya sonradan eklenen kolonlar: (tablo, kolon, tanım)

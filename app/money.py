@@ -117,6 +117,7 @@ TL_COLUMNS = {
     "saving_targets": ("amount", "already"),
     "savings_goals": ("baseline", "target"),
     "subscription_state": ("new_amount",),
+    "store_sub_sources": ("amount",),
     "jar_moves": ("cost",),
 }
 _OFF = "{col} IS NOT NULL AND ABS({col} * 100 - ROUND({col} * 100)) > 1e-6"
