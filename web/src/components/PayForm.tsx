@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { ask } from "../lib/ask";
@@ -176,7 +177,7 @@ export default function PayForm({ p, onClose, onSaved }: { p: Payable; onClose: 
             <div className="mt-2"><button className="btn-primary px-3 py-1 text-xs" onClick={onClose}>Tamam</button></div>
           </div>
         )}
-        {(save.error || undo.error) && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{((save.error || undo.error) as Error).message}</p>}
+        {(save.error || undo.error) && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{hataMetni(save.error || undo.error)}</p>}
       </div>
     </Modal>
   );

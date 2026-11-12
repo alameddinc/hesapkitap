@@ -43,12 +43,12 @@ export function useReceiptActions(onDone?: () => void) {
     mutationFn: (a: ShoppingAsk) => send<ShoppingLinked>("/api/shopping-list/link-receipt", { method: "POST",
       json: { entry_id: a.entry_id, target: a.target, trip_id: a.trip_id ?? null } }),
     onSuccess: (r) => { ui.toast(linkedText({ ...r, status: "linked" }, money)); refresh(); onDone?.(); },
-    onError: (e: Error) => { ui.error(e.message); refresh(); onDone?.(); },
+    onError: (e: Error) => { ui.error(e); refresh(); onDone?.(); },
   });
   const dismiss = useMutation({
     mutationFn: (a: ShoppingAsk) => send("/api/shopping-list/receipt-dismiss", { method: "POST", json: { entry_id: a.entry_id } }),
     onSuccess: () => { refresh(); onDone?.(); },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
   });
   return { link, dismiss, busy: link.isPending || dismiss.isPending };
 }

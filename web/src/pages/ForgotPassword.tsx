@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hataMetni } from "../lib/hataAcikla";
 import { send as request } from "../lib/apiError";
 import { Eye, EyeOff, KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -78,7 +79,7 @@ export default function ForgotPassword() {
       setCode("");
       if (again) codeRef.current?.focus();
     } catch (x) {
-      setErr({ field: "form", msg: (x as Error).message });
+      setErr({ field: "form", msg: hataMetni(x, "Kod gönderilemedi") });
     } finally {
       setBusy(false);
     }
@@ -103,7 +104,7 @@ export default function ForgotPassword() {
       const body = (x as { body?: unknown }).body;
       if (st === 409 && isPendingDeletion(body)) { setPending(body); setBusy(false); return; } // yeni şifre geçerli; geri almayı sor
       if (st === 400) { setCode(""); codeRef.current?.focus(); }
-      setErr({ field: st === 400 ? "code" : st === 422 ? "pw" : "form", msg: (x as Error).message });
+      setErr({ field: st === 400 ? "code" : st === 422 ? "pw" : "form", msg: hataMetni(x, "Şifre yenilenemedi") });
       setBusy(false);
     }
   }

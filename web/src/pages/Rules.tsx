@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { ArrowLeftRight, Plus, Sparkles, Trash2 } from "lucide-react";
@@ -29,7 +30,7 @@ function RuleRow({ r, cats }: { r: Rule; cats: string[] }) {
             <div className="mt-1"><SubcategoryPicker category={category} value={sub} onChange={setSub} /></div>
           )}
         </div>
-        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}
+        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>}
         <button className="btn-danger p-2" aria-label="Sil" disabled={del.isPending} onClick={() => void ask("Kural silinsin mi?").then((ok) => { if (ok) del.mutate(undefined); })}>
           <Trash2 size={16} />
         </button>
@@ -47,7 +48,7 @@ function LearnedMatches() {
   const rules = q.data ?? [];
   const remove = async (r: MatchRule) => {
     if (!(await ask(`“${r.bank_label} ↔ ${r.entry_label}” eşleşmesi unutulsun mu?\n\nŞimdiye kadar birleşen kayıtlar olduğu gibi kalır; bundan sonra bu ikisi yeniden sorulur.`))) return;
-    del.mutate(r.id, { onError: (e) => ui.error(e.message) });
+    del.mutate(r.id, { onError: (e) => ui.error(e) });
   };
   return (
     <section className="card p-3 sm:p-4" aria-labelledby="learned-h">
@@ -61,7 +62,7 @@ function LearnedMatches() {
         </div>
       </div>
       {q.error ? (
-        <p className="mt-3 text-sm text-red-600 dark:text-red-400">{(q.error as Error).message}</p>
+        <p className="mt-3 text-sm text-red-600 dark:text-red-400">{hataMetni(q.error)}</p>
       ) : !rules.length ? (
         <p className="mt-3 rounded-lg border border-dashed border-stone-300 px-3 py-4 text-center text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
           Bir dökümdeki kalıbı aynı elle kayıtla iki kez eşleştirince burada kural olur.
@@ -136,7 +137,7 @@ export default function Rules() {
           <input className="input font-mono text-base sm:flex-1 sm:text-xs" placeholder="ör. NETFLIX|DISNEY" value={np} onChange={(e) => setNp(e.target.value)} />
           <div className="sm:w-56"><CategoryPicker value={nc} onChange={(c) => { if (c !== nc) setNs(""); setNc(c); }} options={meta.data?.categories ?? []} placeholder="Kategori" /></div>
           <button className="btn-primary justify-center" disabled={!np || !nc}
-            onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e.message) })}><Plus size={16} /> Ekle</button>
+            onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e) })}><Plus size={16} /> Ekle</button>
         </div>
         <SubcategoryPicker id="r-sub" category={nc} value={ns} onChange={setNs} />
         <input className="input" placeholder="Test için örnek açıklama yaz: IYZICO/SPOTIFY.COM/ISTANBUL" value={sample} onChange={(e) => setSample(e.target.value)} />
@@ -145,7 +146,7 @@ export default function Rules() {
             <code>{test.data.normalized}</code> → {test.data.match ? <span className="text-green-700">eşleşti ✓</span> : <span className="text-red-600">eşleşmedi</span>}
           </p>
         )}
-        {test.error && <p className="text-xs text-red-600">{(test.error as Error).message}</p>}
+        {test.error && <p className="text-xs text-red-600">{hataMetni(test.error)}</p>}
       </section>
 
       <section className="card p-3 sm:p-4">

@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { temizMetin } from "../lib/hataAcikla";
 import { send as apiSend } from "../lib/apiError";
 import { AlertTriangle, CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -107,7 +108,7 @@ export default function Statements() {
           <div className="font-medium">Demoda kendi dosyan yüklenmez — örnek bir ekstreyi okut</div>
           <div className="flex flex-wrap justify-center gap-2">
             {demo.samples.filter((s) => s.kind === "statement").map((s) => (
-              <button key={s.key} className="btn-primary" disabled={sample.isPending} onClick={() => sample.mutate(s.key, { onError: (e) => ui.error(e.message) })}>
+              <button key={s.key} className="btn-primary" disabled={sample.isPending} onClick={() => sample.mutate(s.key, { onError: (e) => ui.error(e) })}>
                 {sample.isPending && sample.variables === s.key ? <Loader2 size={16} className="animate-spin" /> : <FileUp size={16} />} {s.label}
               </button>
             ))}
@@ -196,10 +197,11 @@ export default function Statements() {
               <div>
                 <div className="font-medium">{r.filename}</div>
                 {r.status === "error" && <div className="space-y-1">
-                  <div className="text-red-600 dark:text-red-400">{r.message}</div>
-                  <ReportProblem subject="Ekstre okunamadı" error={`${r.filename}: ${r.message ?? ""}`} code="statement_unreadable" />
+                  <div className="text-red-600 dark:text-red-400">{temizMetin(r.message) ?? "Bu dosya okunamadı."}</div>
+                  {/* dosya adı bağlama gitmez (kişisel veri olabilir) */}
+                  <ReportProblem subject="Ekstre okunamadı" error={temizMetin(r.message)} code="statement_unreadable" />
                 </div>}
-                {r.status === "password_required" && <div className="text-amber-600">{r.message} — yukarıdan şifreyi gir</div>}
+                {r.status === "password_required" && <div className="text-amber-600">{temizMetin(r.message) ?? "PDF şifreli"} — yukarıdan şifreyi gir</div>}
                 {r.status === "duplicate" && <div className="text-stone-500 dark:text-stone-400">{r.message ?? "Zaten yüklü, atlandı."}</div>}
                 {r.status === "ask" && (() => {
                   const file = asking.find((f) => f.name === r.filename);

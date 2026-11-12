@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { Landmark, Link2, Loader2, PenLine, Undo2 } from "lucide-react";
 import { ask } from "../lib/ask";
 import { useState } from "react";
@@ -41,7 +42,7 @@ export function MatchPanel({ entryId, m, onUndone }: { entryId: number; m: Entry
     const what = m.source === "dokum" ? "dökümdeki satır" : "ekstredeki işlem";
     if (!(await ask(`Eşleşme geri alınsın mı?\n\nElle girdiğin kayıt ile ${what} yeniden iki ayrı kayıt olur ve ikisi de sayılır. Bu ikisi bir daha kendiliğinden birleşmez.`))) return;
     setErr(null);
-    undo.mutate(undefined, { onError: (e) => setErr(e.message) });
+    undo.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) });
   };
   return (
     <section aria-label="Banka eşleşmesi" className="rounded-xl border border-green-200 bg-green-50/70 p-3 text-sm dark:border-green-900/70 dark:bg-green-950/30">

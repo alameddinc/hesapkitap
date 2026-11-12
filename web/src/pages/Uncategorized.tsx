@@ -96,7 +96,7 @@ export default function Uncategorized() {
         undo: async () => { await send("/api/uncategorized/undo", { method: "POST", json: { undo_id: r.undo_id } }); tazele(); },
       } : undefined);
     },
-    onError: (e) => ui.error(e instanceof Error ? e.message : "Kategori verilemedi"),
+    onError: (e) => ui.error(e, { yedek: "Kategori verilemedi" }),
   });
 
   const cikar = (keys: string[]) => qc.setQueryData<Yanit>(["uncategorized", ay], (d) => {
@@ -118,7 +118,7 @@ export default function Uncategorized() {
       const ek = r.also_changed > 0 ? ` (+${r.also_changed} başka dönemde)` : "";
       ui.toast(`${r.changed} işlem, ${r.groups} grup kategorilendi${ek}.`, geriAl(r.undo_id));
     },
-    onError: (e) => ui.error(e instanceof Error ? e.message : "Kategori verilemedi"),
+    onError: (e) => ui.error(e, { yedek: "Kategori verilemedi" }),
   });
   const hepsiniUygula = () => toplu.mutate({ items: hazir.map((g) => ({ key: g.key, category: oneri(g)!.category })), hatirla: remember });
   const tekleriDiger = async () => {
@@ -141,7 +141,7 @@ export default function Uncategorized() {
       tazele();
       ui.toast(r.display ? `Ad düzeltildi: ${r.display} (${r.changed} işlem)` : "Ekstredeki ada dönüldü", geriAl(r.undo_id));
     },
-    onError: (e) => ui.error(e instanceof Error ? e.message : "Ad düzeltilemedi"),
+    onError: (e) => ui.error(e, { yedek: "Ad düzeltilemedi" }),
   });
 
   const sor = useMutation({
@@ -156,7 +156,7 @@ export default function Uncategorized() {
     },
     onError: (e) => {
       if (e instanceof ApiError && e.status === 402) qc.setQueryData<Yanit>(["uncategorized", ay], (d) => d && { ...d, ai: { ...d.ai, left: 0 } });
-      ui.error(e instanceof Error ? e.message : "Yapay zekâya ulaşılamadı");
+      ui.error(e, { yedek: "Yapay zekâya ulaşılamadı" });
     },
   });
 

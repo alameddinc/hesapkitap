@@ -65,7 +65,7 @@ function KeyRow({ c }: { c: ConfigItem }) {
   const save = useSave((v: string | null) => send("/api/settings/config", { method: "PUT", json: { name: c.name, value: v } }), () => { setValue(""); ui.toast("Kaydedildi"); });
   const test = useSave(() => post<{ detail: string }>(`/api/settings/config/test/${c.name}`), (r) => ui.toast(r.detail));
   const gen = useSave(() => post<{ passphrase: string }>("/api/settings/config/generate-backup-passphrase"), (r) => setShown(r.passphrase));
-  const onErr = { onError: (e: Error) => ui.error(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e) };
   const locked = c.source === "env";
   const testable = c.name === "GEMINI_API_KEY" || c.name === "TELEGRAM_BOT_TOKEN" || c.name === "MAIL_PASSWORD";
 
@@ -205,7 +205,7 @@ function PriceShareForm() {
     <section className="card p-4">
       <label className="flex cursor-pointer items-start gap-2 text-sm">
         <input type="checkbox" className="mt-0.5" checked={prefs.price_share} disabled={save.isPending}
-          onChange={(e) => save.mutate({ price_share: e.target.checked }, { onError: (er) => ui.error(er.message) })} />
+          onChange={(e) => save.mutate({ price_share: e.target.checked }, { onError: (er) => ui.error(er) })} />
         <span className="font-semibold">Fiyatlarımı adsız katkı olarak paylaş
           <span className="block text-xs font-normal text-stone-500">Ürün fiyatları adın ve şuben olmadan, en az 3 kişiden gelince ortalama olarak kullanılır.</span></span>
       </label>
@@ -229,7 +229,7 @@ function PasswordForm() {
         <input className="input" type="password" placeholder="Mevcut şifre" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} />
         <input className="input" type="password" placeholder="Yeni şifre (10+ karakter)" autoComplete="new-password" value={nw} onChange={(e) => setNw(e.target.value)} />
         <button className="btn-primary justify-center" disabled={!cur || nw.length < 10}
-          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Değiştir</button>
+          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Değiştir</button>
       </div>
     </section>
   );
@@ -380,7 +380,7 @@ function AdminLink() {
 function OwnerSettings({ ownBook, seat }: { ownBook?: boolean; seat?: Seat | null }) {
   const ui = useUI();
   const st = useQuery({ queryKey: ["settings"], queryFn: () => send<SettingsStatus>("/api/settings") });
-  const onErr = { onError: (e: Error) => ui.error(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e) };
   const [pairInfo, setPairInfo] = useState<{ code: string; bot: string; link: string } | null>(null);
   const pair = useSave(() => post<{ code: string; bot: string; link: string }>("/api/settings/telegram/pair"), setPairInfo);
   const connect = useSave(() => post<{ name: string }>("/api/settings/telegram/connect"), (r) => {
@@ -605,7 +605,7 @@ function MailSection({ keys }: { keys: ConfigItem[] }) {
         <>
           <div className="flex flex-wrap items-center gap-2">
             <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={poll.isPending}
-              onClick={() => poll.mutate(undefined, { onError: (e) => ui.error(e.message) })}>
+              onClick={() => poll.mutate(undefined, { onError: (e) => ui.error(e) })}>
               <RefreshCw size={16} className={cx(poll.isPending && "animate-spin")} /> Şimdi kontrol et
             </button>
             <span className="text-xs text-stone-500">Son kontrol: {s.last_poll ? s.last_poll.replace("T", " ").slice(0, 16) : "henüz yok"}</span>

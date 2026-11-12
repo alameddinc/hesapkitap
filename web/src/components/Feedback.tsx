@@ -1,4 +1,6 @@
-import { CheckCircle2, ImagePlus, MessageSquareWarning, X } from "lucide-react";
+import { hataMetni } from "../lib/hataAcikla";
+import { yardimAl } from "../lib/destek";
+import { CheckCircle2, ImagePlus, MessageCircleQuestion, MessageSquareWarning, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../lib/apiError";
 import Modal from "./Modal";
@@ -57,7 +59,7 @@ export default function FeedbackDialog({ onClose, context, title = "Sorun bildir
       await call("POST", "/api/feedback", fd);
       setDone(true);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(hataMetni(e, "Gönderilemedi; tekrar dene."));
     } finally {
       setBusy(false);
     }
@@ -140,7 +142,6 @@ const ISSUES = "https://github.com/alameddinc/hesapkitap/issues/new";
 /** Hata ekranındaki "Sorun bildir" (fiş / ekstre okunamadı): hata metni ve kodu bağlama eklenir (konu: hatanın
  *  görüldüğü yer, metnin önüne). Sunucu "feedback" bilmiyorsa GitHub'da konu açılır ("Bize bildir"). */
 export function ReportProblem({ subject, error, code, className }: { subject: string; error?: string | null; code: string; className?: string }) {
-  const [open, setOpen] = useState(false);
   const on = !!useMeta().data?.capabilities?.includes("feedback");
   const cls = className ?? "inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline dark:text-blue-400";
   if (!on) return (
@@ -148,10 +149,9 @@ export function ReportProblem({ subject, error, code, className }: { subject: st
       href={`${ISSUES}?title=${encodeURIComponent(subject)}&body=${encodeURIComponent(`Hata: ${error ?? "?"} (${code})\nİstemci: web`)}`}>
       <MessageSquareWarning size={14} aria-hidden />Bize bildir</a>
   );
+  // "Yardım al" (destek sohbeti, lib/destek.ts): okunamayan belge, dekont, ekstre satırları
   return (
-    <>
-      <button type="button" className={cls} onClick={() => setOpen(true)}><MessageSquareWarning size={14} aria-hidden />Sorun bildir</button>
-      {open && <FeedbackDialog onClose={() => setOpen(false)} context={{ error: [subject, error].filter(Boolean).join(": "), code }} />}
-    </>
+    <button type="button" data-testid="yardim-al" className={cls} onClick={() => yardimAl({ nerede: subject, kod: code, ayrinti: error ?? undefined })}>
+      <MessageCircleQuestion size={14} aria-hidden />Yardım al</button>
   );
 }

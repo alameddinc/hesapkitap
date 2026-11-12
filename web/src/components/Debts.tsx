@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { Check, Handshake, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { ask } from "../lib/ask";
@@ -435,7 +436,7 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
       {!planEkle && (
         <div className="flex gap-2">
           <button className="btn-primary" disabled={save.isPending}
-            onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>{debt ? "Güncelle" : "Kaydet"}</button>
+            onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) }); }}>{debt ? "Güncelle" : "Kaydet"}</button>
           <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
         </div>
       )}
@@ -475,7 +476,7 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
         ? (d.direction === "alacak" ? `Sıradaki taksit yazılı; tamamını aldıysan kalanın tamamını (${fmtAsset(d.remaining, "TRY")}) yaz.`
           : `Sıradaki taksit yazılı; bütün borcu ödediysen kalanın tamamını (${fmtAsset(d.remaining, "TRY")}) yaz.`)
         : "Kalanın tamamı kapatır; azını yazarsan kısmi ödeme olarak düşer."}</p>
-      {save.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
+      {save.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{hataMetni(save.error)}</p>}
       <div className="flex gap-2">
         <button className="btn-primary" disabled={!(parseAmount(amount) > 0) || save.isPending} onClick={() => save.mutate(undefined)}>Kaydet</button>
         <button className="btn-ghost" onClick={onDone}>Vazgeç</button>

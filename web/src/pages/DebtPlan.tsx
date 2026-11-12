@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hataMetni } from "../lib/hataAcikla";
 import { AlertTriangle, Crown, Lock, CalendarCheck, CalendarClock, Check, ChevronDown, ChevronRight, CreditCard, Flag, HandCoins, History, Info, LayoutDashboard, PiggyBank, Plus, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, send } from "../lib/apiError";
@@ -60,7 +61,7 @@ export default function DebtPlan() {
     onMutate: () => setKayit("bekliyor"),
     // refetchType "all": açık olmayan parametresiz plan (Özet kartı, ilk açılış) da tazelensin; kutu ile plan ayrışmasın
     onSuccess: () => { setKayit("kaydedildi"); void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" }); },
-    onError: (e: Error) => { setKayit(null); sent.current = undefined; ui.toast(`${e.message || "Kaydedilemedi"} · plan yalnız bu ekranda değişti`); },
+    onError: (e: Error) => { setKayit(null); sent.current = undefined; ui.toast(`${hataMetni(e, "Kaydedilemedi").replace(/[.]$/, "")} · plan yalnız bu ekranda değişti`); },
   });
   const persist = (body: { monthly?: number | null; order?: DebtOrder }) => {
     if (!canEdit) return;
@@ -108,7 +109,7 @@ export default function DebtPlan() {
       setDraft({}); setText(null); sent.current = undefined;
       void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" });
     },
-    onError: (e: Error) => ui.toast(e.message || "Plan kaydedilemedi"),
+    onError: (e: Error) => ui.error(e, { yedek: "Plan kaydedilemedi" }),
   });
   const commitPlan = async (p: DebtPlanData, confirm?: { action: string; text: string }) => {
     if (confirm && !(await ask(confirm.text, { title: `${confirm.action}?`, confirm: confirm.action }))) return;
@@ -119,7 +120,7 @@ export default function DebtPlan() {
     mutationFn: ({ ids, date }: { ids: number[]; date: string }) =>
       Promise.all(ids.map((id) => send(`/api/debts/${id}`, { method: "PATCH", json: { due_date: date } }))),
     onSuccess: () => { ui.toast("Söz tarihi kaydedildi"); void qc.invalidateQueries({ queryKey: ["debt-plan"], refetchType: "all" }); },
-    onError: (e: Error) => ui.toast(e.message || "Kaydedilemedi"),
+    onError: (e: Error) => ui.error(e, { yedek: "Kaydedilemedi" }),
   });
   // aynı kişiye aynı söz tarihli birden çok kayıt: tek kutu, düğme hepsinin söz tarihini günceller
   const agreeNewDate = async (ids: number[], l: PlanLate) => {
@@ -143,7 +144,7 @@ export default function DebtPlan() {
     mutationFn: (c: PlanCloseEarly) => send(`/api/debts/${c.debt_id}/pay`, { method: "POST",
       json: { amount: c.amount, paid_at: new Date().toISOString().slice(0, 10), close_early: true } }),
     onSuccess: () => { ui.toast("Kredi kapandı; kalan faizden kurtuldun"); void qc.invalidateQueries({ refetchType: "all" }); },
-    onError: (e: Error) => ui.toast(e.message || "Kaydedilemedi"),
+    onError: (e: Error) => ui.error(e, { yedek: "Kaydedilemedi" }),
   });
   const askCloseEarly = async (c: PlanCloseEarly) => {
     if (await ask(c.confirm, { title: `${c.label}?`, confirm: c.label, danger: false })) closeEarly.mutate(c);

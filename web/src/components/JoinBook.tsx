@@ -1,6 +1,7 @@
 // Var olan hesapla ortak deftere katılma (yetenek book_join; mobil components/defter/DavetKatil.tsx ve
 // screens/OrtakDefter.tsx ile aynı akış ve metinler). GET /api/book/join/{kod} önizleme → "Katıl" POST aynı adres;
 // POST /api/book/leave üye ayrılır (Benim defteri kalır). Eski sunucuda uç yok: önce çıkış yap.
+import { hataMetni, temizMetin } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronRight, Lock, LogOut, Star, Users2 } from "lucide-react";
 import { useState } from "react";
@@ -70,7 +71,7 @@ export function JoinPreviewModal({ code, onClose }: { code: string; onClose: () 
           <p className="text-stone-500" aria-busy="true">Davet kontrol ediliyor…</p>
         ) : pv.error ? (
           <>
-            <Banner kind="warn">{(pv.error as Error).message}</Banner>
+            <Banner kind="warn">{hataMetni(pv.error)}</Banner>
             <div className="flex gap-2">
               <button className="btn-primary flex-1 justify-center py-2" onClick={() => void pv.refetch()}>Tekrar dene</button>
               <button className="btn-ghost flex-1 justify-center py-2" onClick={onClose}>Vazgeç</button>
@@ -96,7 +97,7 @@ export function JoinPreviewModal({ code, onClose }: { code: string; onClose: () 
             <Banner kind="info" icon={Lock}>Kendi verilerin “Benim” defterinde kalır, kimse göremez. Ortak defter ile Benim arasında
               istediğin an geçersin.</Banner>
             {d.own_subscription && <Banner kind="info" icon={Star}>Premium'un devam ettiği için Aile koltuğu kullanmıyorsun.</Banner>}
-            {join.error && <Banner kind="warn">{join.error.message}</Banner>}
+            {join.error && <Banner kind="warn">{hataMetni(join.error)}</Banner>}
             <div className="flex gap-2">
               <button className="btn-primary flex-1 justify-center py-2" disabled={join.isPending} onClick={() => join.mutate(undefined)}>
                 {join.isPending ? "Katılınıyor…" : "Katıl"}</button>
@@ -106,7 +107,7 @@ export function JoinPreviewModal({ code, onClose }: { code: string; onClose: () 
         ) : d ? (
           <>
             {owner && <p className="text-stone-600 dark:text-stone-300"><b className="text-stone-900 dark:text-stone-100">{owner}</b> seni ortak defterine davet ediyor.</p>}
-            <Banner kind="warn">{d.message ?? "Bu davetle katılamazsın."}</Banner>
+            <Banner kind="warn">{temizMetin(d.message) ?? "Bu davetle katılamazsın."}</Banner>
             <div className="flex gap-2">
               {PATH[reason] && <button className="btn-primary flex-1 justify-center py-2"
                 onClick={() => { onClose(); ui.go("ayarlar"); }}>{PATH[reason]}</button>}

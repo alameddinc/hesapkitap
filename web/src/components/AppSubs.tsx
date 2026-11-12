@@ -162,7 +162,7 @@ function Detail({ s, help, onClose }: { s: AppSub; help: Help; onClose: () => vo
   const act = useSave((b: Record<string, unknown>) => call<{ item: AppSub | null }>("PUT", `/api/subscriptions/apps/${s.id}`, b),
     (_r, b) => { ui.toast(MSG[String(b.action)] ?? "Kaydedildi"); if (b.action === "degil" || b.action === "sifirla") onClose(); });
   const delSrc = useSave(() => call("DELETE", `/api/subscriptions/apps/sources/${s.source_id}`), () => { ui.toast("Abonelik silindi"); onClose(); });
-  const run = (b: Record<string, unknown>) => act.mutate(b, { onError: (e) => ui.error(e.message) });
+  const run = (b: Record<string, unknown>) => act.mutate(b, { onError: (e) => ui.error(e) });
   const busy = act.isPending || delSrc.isPending;
   return (
     <>
@@ -223,7 +223,7 @@ function Detail({ s, help, onClose }: { s: AppSub; help: Help; onClose: () => vo
             {s.pending && s.source_id != null && <>
               <button className="btn-ghost text-xs" disabled={busy} onClick={() => setEditing(true)}>Düzenle</button>
               <button className="btn-danger text-xs" disabled={busy}
-                onClick={() => void ask(`${s.title} listeden silinsin mi?`).then((ok) => ok && delSrc.mutate(undefined, { onError: (e) => ui.error(e.message) }))}>Sil</button>
+                onClick={() => void ask(`${s.title} listeden silinsin mi?`).then((ok) => ok && delSrc.mutate(undefined, { onError: (e) => ui.error(e) }))}>Sil</button>
             </>}
           </div>
 
@@ -278,7 +278,7 @@ function SubForm({ edit, onClose }: { edit?: AppSub; onClose: () => void }) {
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
         <button className="btn-primary" disabled={!pick || !(n > 0) || !next || save.isPending}
-          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>
+          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>
       </>}>
         <div className="space-y-3">
           <button type="button" className="flex w-full items-center gap-2 rounded-lg border border-stone-200 p-2 text-left dark:border-stone-700" onClick={() => setPicking(true)}>
@@ -338,7 +338,7 @@ function Screenshot({ help, onClose }: { help: Help; onClose: () => void }) {
           <span className="label">Ekran görüntüleri (en çok 5)</span>
           <input type="file" accept="image/*" multiple className="input" onChange={(e) => setFiles([...(e.target.files ?? [])].slice(0, 5))} />
         </label>
-        <button className="btn-primary w-full" disabled={!files.length || up.isPending} onClick={() => up.mutate(undefined, { onError: (e) => ui.error(e.message) })}>
+        <button className="btn-primary w-full" disabled={!files.length || up.isPending} onClick={() => up.mutate(undefined, { onError: (e) => ui.error(e) })}>
           <Camera size={16} /> {up.isPending ? "Okunuyor…" : `${files.length || ""} görüntüyü oku`.trim()}
         </button>
         {res && (

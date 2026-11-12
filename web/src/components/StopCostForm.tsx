@@ -18,7 +18,7 @@ export default function StopCostForm() {
   const [val, setVal] = useState("");
   if (cur == null) return null;
   const isCustom = custom ?? !PRESETS.includes(cur);
-  const put = (v: number) => save.mutate({ stop_cost: v }, { onSuccess: () => ui.toast(`Ekstra durak için en az ₺${v.toLocaleString("tr-TR")}`), onError: (e) => ui.error(e.message) });
+  const put = (v: number) => save.mutate({ stop_cost: v }, { onSuccess: () => ui.toast(`Ekstra durak için en az ₺${v.toLocaleString("tr-TR")}`), onError: (e) => ui.error(e) });
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const n = Math.round(Number(val.replace(",", ".")));

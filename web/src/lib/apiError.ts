@@ -80,6 +80,21 @@ export function networkText(): string {
     : "Sunucuya ulaşılamadı. İnternetin çalışıyorsa sunucu geçici olarak kapalı olabilir; biraz sonra tekrar dene.";
 }
 
+// ---------------------------------------------------------------- sorun kaydı (lib/olay.ts dinler)
+// Bağlantı varken sunucuya ulaşılamama ve vekilin (Cloudflare) zaman aşımı / hata sayfası (gövde JSON değil: sunucu hiç
+// görmedi): kaydı lib/olay.ts gönderir. Kendi ucunun hatası kaydedilmez (döngü yok); çevrimdışılık kaydedilmez.
+export type AgOlayi = (tur: "ag_zaman_asimi" | "sunucuya_ulasilamadi", detail: string) => void;
+let agOlayi: AgOlayi | null = null;
+export const agOlayiDinle = (f: AgOlayi | null) => { agOlayi = f; };
+function yolOf(url: string): string {
+  try { return new URL(url, typeof location !== "undefined" ? location.href : "http://x").pathname; } catch { return url.split("?")[0]; }
+}
+export function agKaydet(tur: "ag_zaman_asimi" | "sunucuya_ulasilamadi", method: string, url: string): void {
+  const p = yolOf(url);
+  if (!agOlayi || p.startsWith("/api/incidents/") || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+  try { agOlayi(tur, `${method ? `${method} ` : ""}${p.replace(/\/\d+(?=\/|$)/g, "/{id}")}`); } catch { /* yok */ }
+}
+
 /** Vekil/sunucu yanıt vermiyor (502/503/504, gövde JSON değil). */
 const GATEWAY = new Set([502, 503, 504]);
 
@@ -114,6 +129,8 @@ export async function bodyOf(res: Response): Promise<unknown> {
  *  ("Unexpected token '<'" ya da "[object Object]" hiçbir zaman görünmez). */
 export async function readBody<T = unknown>(res: Response): Promise<T> {
   const body = await bodyOf(res);
+  if (!res.ok && body === null && GATEWAY.has(res.status) && res.url)  // vekilin sayfası: sunucu bu isteği görmedi
+    agKaydet(res.status === 504 ? "ag_zaman_asimi" : "sunucuya_ulasilamadi", "", res.url);
   if (!res.ok) throw new ApiError(failureText(res.status, body), res.status, body);
   if (body === null) throw new ApiError(UNEXPECTED, res.status);
   return body as T;
@@ -130,6 +147,7 @@ export async function send<T = unknown>(url: string, init: RequestInit & { json?
   } catch (e) {
     if (e && typeof e === "object" && (e as { taslak?: boolean }).taslak) throw e; // bağlantısız kayıt taslağa alındı (lib/idem.ts)
     // offline bayrağı: ortak durum bileşeni ve bağlantısız kayıt kutusu bunu tanır (lib/durum.ts cevrimdisiHata)
+    agKaydet("sunucuya_ulasilamadi", (rest.method ?? "GET").toUpperCase(), url);
     throw new ApiError(networkText(), 0, { network: true, offline: typeof navigator !== "undefined" && navigator.onLine === false });
   }
   return readBody<T>(res);

@@ -1,6 +1,7 @@
 // Fişin vergi bilgisi (yetenek receipt_tax; mobil components/fis/VergiKarti.tsx ve KayitliVergi.tsx): KDV toplamı ve
 // oran oran dökümü, satıcının vergi numarası, vergi dairesi, unvan. Fiş onayında ve kayıtlı giderde aynı kart; dokununca
 // düzenlenir. Eski sunucuda (alan yok) gösterilmez.
+import { hataMetni } from "../../lib/hataAcikla";
 import { ChevronRight } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { api, type Row } from "../../api";
@@ -117,7 +118,7 @@ function TaxEdit({ value, onClose, onSave }: { value: TaxInfo; onClose: () => vo
     try {
       await onSave({ vat_total: tot ?? linesSum, vat_lines: lines, tax_no: no || null, tax_office: office.trim() || null, legal_name: legal.trim() || null });
     } catch (e) {
-      setErr((e as Error).message || "Kaydedilemedi");
+      setErr(hataMetni(e, "Kaydedilemedi"));
     } finally {
       setBusy(false);
     }

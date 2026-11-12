@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { call } from "../lib/apiError";
@@ -73,13 +74,13 @@ function CardLimitForm({ info, onClose }: { info: CardLimitInfo; onClose: () => 
     const n = parseAmount(v);
     if (!(n > 0)) { setErr("Limiti yaz"); return; }
     setErr(null);
-    save.mutate(n, { onError: (e) => setErr(e.message) });
+    save.mutate(n, { onError: (e) => setErr(hataMetni(e)) });
   };
   return (
     <Modal title="Kart limiti" onClose={onClose} footer={
       <>
         {info.limit_source === "elle" && (
-          <button className="btn-ghost" disabled={save.isPending} onClick={() => save.mutate(null, { onError: (e) => setErr(e.message) })}>
+          <button className="btn-ghost" disabled={save.isPending} onClick={() => save.mutate(null, { onError: (e) => setErr(hataMetni(e)) })}>
             {info.statement_limit ? "Ekstredeki limite dön" : "Limiti kaldır"}</button>
         )}
         <div className="flex-1" />

@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { CalendarClock, Pencil, X } from "lucide-react";
 import { useState } from "react";
 import { call } from "../lib/apiError";
@@ -214,7 +215,7 @@ export function ScheduleForm({ d, onDone, creditor: fixedCreditor }: { d: Debt; 
       {err && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{err}</p>}
       <div className="flex gap-2">
         <button className="btn-primary" disabled={save.isPending}
-          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>Kaydet</button>
+          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) }); }}>Kaydet</button>
         <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
       </div>
     </div>

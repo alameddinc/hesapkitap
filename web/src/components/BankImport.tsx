@@ -1,3 +1,5 @@
+import { hataMetni } from "../lib/hataAcikla";
+import { HataSatiri } from "./HataKutusu";
 import { AlertTriangle, Check, Landmark, Loader2, Plus, X } from "lucide-react";
 import { TERIM } from "../lib/terimler";
 import { errorText } from "../lib/apiError";
@@ -151,7 +153,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
   const [full, setFull] = useState<Partial<QuotaFull> | null>(null); // belge okuma hakkı doldu uyarısı
   const onFail = (e: unknown) => {
     if (e instanceof QuotaFullError) setFull(e.info);
-    setErr((e as Error).message);
+    setErr(hataMetni(e));
   };
 
   const preview = async (f: File, mapping?: Preview["mapping"], headerRow?: number, pw?: string) => {
@@ -236,7 +238,7 @@ export default function BankImport({ incoming, onDone }: { incoming?: { file: Fi
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setFile(f); preview(f); } }} />
       </>}
       {busy && <Loader2 size={18} className="animate-spin text-blue-600" />}
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      {err && <HataSatiri metin={err} nerede="Hesap dökümü" kod="dokum_okunamadi" />}
 
       {pv && file && (
         <div className="space-y-3">

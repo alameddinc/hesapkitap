@@ -1,10 +1,16 @@
-import { AlertCircle, CheckCircle2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, MessageCircleQuestion, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { cx } from "../format";
 import { useUI } from "../ui";
+import { yardimAl, type DestekBaglam } from "../lib/destek";
+import { ekranAdi } from "./HataKutusu";
 
-export interface ToastState { msg: string; kind: "ok" | "error"; undo?: () => Promise<unknown>; action?: { label: string; run: () => void }; id?: number }
+// hata: adim (ikinci satır, yapılabilecek adım) ve yardim ("Yardım al" bağlamı; lib/hataAcikla.ts, lib/destek.ts)
+export interface ToastState {
+  msg: string; kind: "ok" | "error"; undo?: () => Promise<unknown>; action?: { label: string; run: () => void }; id?: number;
+  adim?: string; yardim?: DestekBaglam;
+}
 
 /** Okuma süresi: kelime başına 0,3 sn, en az 3 sn; geri alınabilir işlemde en az 8 sn (düğmeye yetişilsin). */
 export const toastMs = (msg: string, undo: boolean) =>
@@ -31,7 +37,7 @@ export default function Toast({ t, onClose }: { t: ToastState; onClose: () => vo
       void qc.invalidateQueries();
       ui.toast("Geri alındı");
     } catch (e) {
-      ui.error((e as Error).message);
+      ui.error(e, { yedek: "Geri alınamadı" });
     } finally {
       setBusy(false);
     }
@@ -45,12 +51,26 @@ export default function Toast({ t, onClose }: { t: ToastState; onClose: () => vo
             : "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900")}>
         {error ? <AlertCircle size={18} className="mt-px shrink-0 text-red-600 dark:text-red-400" aria-hidden />
           : <CheckCircle2 size={18} className="mt-px shrink-0 text-green-400 dark:text-green-700" aria-hidden />}
-        <span className="min-w-0 flex-1 py-px">{t.msg}</span>
+        <span className={cx("min-w-0 flex-1 py-px", error && "space-y-0.5")}>
+          <span className={cx("block", error && "font-semibold")}>{t.msg}</span>
+          {error && t.adim && <span className="block text-red-900/80 dark:text-red-100/80">{t.adim}</span>}
+          {error && (
+            <span className="flex flex-wrap gap-2 pt-1.5">
+              {t.action && (
+                <button className="-ml-1 rounded-lg border border-red-300 px-2.5 py-1 font-semibold hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
+                  onClick={() => { t.action!.run(); onClose(); }}>{t.action.label}</button>
+              )}
+              <button data-testid="yardim-al" className="inline-flex items-center gap-1.5 rounded-lg bg-white/70 px-2.5 py-1 font-semibold text-blue-700 hover:bg-white dark:bg-black/30 dark:text-blue-300 dark:hover:bg-black/50"
+                onClick={() => { const y = t.yardim ?? { nerede: ekranAdi(), kod: "hata" }; onClose(); yardimAl(y); }}>
+                <MessageCircleQuestion size={15} aria-hidden />Yardım al</button>
+            </span>
+          )}
+        </span>
         {t.undo && (
           <button className="-my-1 shrink-0 rounded-lg px-2 py-1 font-semibold text-blue-300 hover:bg-white/10 disabled:opacity-60 dark:text-blue-700 dark:hover:bg-black/5"
             disabled={busy} onClick={() => void undo()}>{busy ? "Geri alınıyor…" : "Geri al"}</button>
         )}
-        {t.action && (
+        {t.action && !error && (
           <button className="-my-1 shrink-0 rounded-lg px-2 py-1 font-semibold text-blue-300 hover:bg-white/10 dark:text-blue-700 dark:hover:bg-black/5"
             onClick={() => { t.action!.run(); onClose(); }}>{t.action.label}</button>
         )}

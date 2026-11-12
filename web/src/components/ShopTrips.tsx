@@ -68,7 +68,7 @@ export function useComplete(onDone: () => void) {
       ui.toast(`Alışveriş kaydedildi · ${t.bought_count} ürün${t.carried ? ` · ${t.carried} ürün listede kaldı` : ""}`,
         { action: { label: "Gör", run: () => goTrips(t.id) } }); // mobil Tamamla ile aynı
     },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
     onSettled: () => { for (const k of [["shopping-list"], ["shopping-plan"], ["shopping-optimize"], TRIPS, SAVINGS, ["shopping-frequent"], ["shopping-due"]]) void qc.invalidateQueries({ queryKey: k }); },
   });
 }
@@ -136,12 +136,12 @@ export function TripDetail({ id }: { id: number }) {
       ui.toast(r.added ? `${r.added} ürün listeye eklendi${r.skipped ? ` · ${r.skipped} ürün zaten listede` : ""}` : "Hepsi zaten listede");
       goList();
     },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
   });
   const del = useMutation({
     mutationFn: () => send(`/api/shopping-trips/${id}`, { method: "DELETE" }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: TRIPS }); void qc.invalidateQueries({ queryKey: SAVINGS }); ui.toast("Alışveriş silindi"); goTrips(); },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
   });
   const t = q.data;
   const copy = t ? savingCopy(t, money) : null;

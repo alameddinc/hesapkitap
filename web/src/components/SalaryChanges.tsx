@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
@@ -265,11 +266,11 @@ export default function SalaryChanges({ rid, advance = false }: { rid: number; a
               </p>
             </div>
           )}
-          {preview.error && draft && <p className="text-xs text-red-600">{preview.error.message}</p>}
+          {preview.error && draft && <p className="text-xs text-red-600">{hataMetni(preview.error)}</p>}
           {err && <p className="text-xs text-red-600">{err}</p>}
           <div className="flex gap-2">
             <button type="button" className="btn-primary" disabled={!draft || add.isPending}
-              onClick={() => { setErr(null); add.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>
+              onClick={() => { setErr(null); add.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) }); }}>
               Kaydet
             </button>
             <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>Vazgeç</button>

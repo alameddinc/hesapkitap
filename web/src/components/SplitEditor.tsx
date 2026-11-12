@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { call, send } from "../lib/apiError";
 import { Plus, Scissors, Trash2 } from "lucide-react";
@@ -103,7 +104,7 @@ export default function SplitEditor({ target, id, total, onDone }: {
       {err && <p className="text-xs text-red-600">{err}</p>}
       <div className="flex gap-2">
         <button type="button" className="btn-primary" disabled={rest < 0 || save.isPending}
-          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); }}>Kaydet</button>
+          onClick={() => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) }); }}>Kaydet</button>
         <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>Vazgeç</button>
         {saved.length > 0 && (
           <button type="button" className="btn-ghost ml-auto text-red-600"

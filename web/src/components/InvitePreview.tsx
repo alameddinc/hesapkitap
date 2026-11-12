@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { temizMetin } from "../lib/hataAcikla";
 import { Smartphone, Users2, XCircle } from "lucide-react";
 import { send } from "../lib/apiError";
 import { dateTR } from "../format";
@@ -57,7 +58,7 @@ export default function InvitePreview({ code }: { code: string }) {
       <SorguDurumu q={q} kompakt etiket="Davet kontrol ediliyor" />
       {d && !d.valid && (
         <p className="flex gap-2 rounded-lg bg-red-50 p-2 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300" role="alert">
-          <XCircle size={16} className="mt-0.5 shrink-0" aria-hidden />{d.message || "Bu davet geçerli değil"}</p>
+          <XCircle size={16} className="mt-0.5 shrink-0" aria-hidden />{temizMetin(d.message) ?? "Bu davet geçerli değil"}</p>
       )}
       {d?.valid && d.kind === "book" && (
         <p className="flex gap-2 rounded-lg bg-green-50 p-2 text-sm text-green-900 dark:bg-green-950/40 dark:text-green-200" role="status">

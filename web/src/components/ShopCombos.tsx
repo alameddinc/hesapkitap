@@ -218,7 +218,7 @@ export function ComboSheet({ itemId, chain, onClose, onDone, back }: {
       onDone?.(p);
       onClose();
     } catch (e) {
-      ui.error((e as Error).message);
+      ui.error(e);
     } finally {
       setBusy(false);
       for (const k of ["shopping-list", "shopping-optimize", "shopping-plan", "shopping-sizes", COMBOS]) void qc.invalidateQueries({ queryKey: [k] });

@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, FolderTree, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -20,16 +21,16 @@ function Item({ s, first, last, onMove, canEdit }: {
   const remove = async () => {
     const msg = s.count ? `“${s.category} › ${s.name}” silinsin mi?\n\n${s.count} işlemden kaldırılır; ana kategorileri (${s.category}) değişmez.`
       : `“${s.category} › ${s.name}” silinsin mi?`;
-    if (await ask(msg)) del.mutate(undefined, { onError: (e) => ui.error(e.message) });
+    if (await ask(msg)) del.mutate(undefined, { onError: (e) => ui.error(e) });
   };
   return (
     <li className="flex items-center gap-2 py-1.5">
       <input className="input min-w-0 flex-1" value={name} disabled={!canEdit} aria-label={`${s.category} alt kategorisi`}
         onChange={(e) => setName(e.target.value)} maxLength={40}
-        onKeyDown={(e) => { if (e.key === "Enter" && dirty) save.mutate(undefined, { onError: (er) => ui.error(er.message) }); }} />
+        onKeyDown={(e) => { if (e.key === "Enter" && dirty) save.mutate(undefined, { onError: (er) => ui.error(er) }); }} />
       <span className="w-16 shrink-0 text-right text-xs text-stone-500 tabular-nums">{s.count} işlem</span>
       {canEdit && <>
-        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}
+        {dirty && <button className="btn-primary" onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>}
         <button className="btn-ghost p-1.5" aria-label="Yukarı taşı" disabled={first} onClick={() => onMove(-1)}><ArrowUp size={14} /></button>
         <button className="btn-ghost p-1.5" aria-label="Aşağı taşı" disabled={last} onClick={() => onMove(1)}><ArrowDown size={14} /></button>
         <button className="btn-danger p-2" aria-label={`${s.name} alt kategorisini sil`} disabled={del.isPending} onClick={() => void remove()}>
@@ -59,7 +60,7 @@ export default function Subcategories() {
   const move = (list: Subcategory[], i: number, d: -1 | 1) => {
     const ids = list.map((x) => x.id);
     [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
-    order.mutate({ category: list[0].category, ids }, { onError: (e) => ui.error(e.message) });
+    order.mutate({ category: list[0].category, ids }, { onError: (e) => ui.error(e) });
   };
   const cats = (meta.data?.categories ?? []).filter((c) => c !== "Kategorisiz");
   return (
@@ -79,12 +80,12 @@ export default function Subcategories() {
           <div className="sm:w-56"><CategoryPicker value={cat} onChange={setCat} options={cats} placeholder="Ana kategori" /></div>
           <input className="input sm:flex-1" placeholder="Alt kategori adı (ör. Temizlik)" value={name} maxLength={40}
             onChange={(e) => setName(e.target.value)} aria-label="Alt kategori adı"
-            onKeyDown={(e) => { if (e.key === "Enter" && cat && name.trim()) add.mutate(undefined, { onError: (er) => ui.error(er.message) }); }} />
+            onKeyDown={(e) => { if (e.key === "Enter" && cat && name.trim()) add.mutate(undefined, { onError: (er) => ui.error(er) }); }} />
           <button className="btn-primary justify-center" disabled={!cat || !name.trim() || add.isPending}
-            onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e.message) })}><Plus size={16} /> Ekle</button>
+            onClick={() => add.mutate(undefined, { onError: (e) => ui.error(e) })}><Plus size={16} /> Ekle</button>
         </div>
       )}
-      {q.error ? <p className="text-sm text-red-600 dark:text-red-400">{(q.error as Error).message}</p>
+      {q.error ? <p className="text-sm text-red-600 dark:text-red-400">{hataMetni(q.error)}</p>
         : !groups.size ? (
           <p className="rounded-lg border border-dashed border-stone-300 px-3 py-4 text-center text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">
             Henüz alt kategori yok{canEdit ? " — ana kategoriyi seçip adını yaz." : "."}

@@ -6,6 +6,7 @@ import "./components/InstallApp"; // beforeinstallprompt erken yakalansın
 import App from "./App";
 import { setRefreshHandler } from "./lib/apiError";
 import { installIdempotency, setStuckHandler, setUnauthorizedHandler } from "./lib/idem";
+import { olayDinle } from "./lib/olay";
 import "./index.css";
 
 // Mağaza uygulaması (Capacitor): <html class="in-app">. Android'de kenardan kenara çizilir; güvenli alan değerleri
@@ -45,6 +46,8 @@ const qc = new QueryClient({
     onError: (e, vars, _ctx, m) => { if (cevrimdisiHata(e)) tekrarBagla(e, () => m.execute(vars)); },
   }),
 });
+// sorun kaydı: yakalanmamış hata, sunucuya ulaşılamama (lib/olay.ts; sunucu yeteneği "incidents")
+olayDinle();
 // 404 + refresh: true (kayıt başka cihazda silinmiş/değişmiş): ekrandaki listeler tazelensin
 setRefreshHandler(() => void qc.invalidateQueries());
 // yazma isteklerine Idempotency-Key ve güvenli yeniden deneme (lib/idem.ts)

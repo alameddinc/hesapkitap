@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, EyeOff, FileText, ListPlus, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -93,7 +94,7 @@ export function AddRowSheet({ s, onClose }: { s: Statement; onClose: () => void 
             <input className="input w-full" value={aciklama} placeholder={def.desc} maxLength={120} onChange={(e) => setAciklama(e.target.value)} /></label>
         </div>
         <Onizleme check={q.data?.check} loading={loading} />
-        {(save.error || q.error) && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{((save.error || q.error) as Error).message}</p>}
+        {(save.error || q.error) && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{hataMetni(save.error || q.error)}</p>}
       </div>
     </Modal>
   );
@@ -133,7 +134,7 @@ function RowEditor({ sid, row, onDone }: { sid: number; row: StatementRow; onDon
         <button className="btn-ghost" onClick={onDone}>Vazgeç</button>
         <button className="btn-primary" disabled={!changed || save.isPending} onClick={() => save.mutate(undefined)}>{DUZELT.kaydet}</button>
       </div>
-      {save.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
+      {save.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{hataMetni(save.error)}</p>}
     </div>
   );
 }

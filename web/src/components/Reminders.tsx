@@ -121,7 +121,7 @@ function useAnswers() {
   const ui = useUI();
   const qc = useQueryClient();
   const stale = (e: Error) => {
-    ui.error(errStatus(e) === 409 ? "Bu soru artık geçerli değil" : e.message);
+    ui.error(errStatus(e) === 409 ? "Bu soru artık geçerli değil" : e);
     void qc.invalidateQueries({ queryKey: ["reminders"] });
   };
   const match = useSave(({ r, same }: { r: Reminder; same: boolean }) => api.matchEntry(r.entry_id!, r.other!, same), (res) => {
@@ -202,7 +202,7 @@ function useAnswerError() {
   const qc = useQueryClient();
   return (e: Error) => {
     const s = errStatus(e);
-    ui.error(s === 409 ? "Bu soru artık geçerli değil" : s === 404 ? "Kayıt bulunamadı (silinmiş olabilir)" : e.message);
+    ui.error(s === 409 ? "Bu soru artık geçerli değil" : s === 404 ? "Kayıt bulunamadı (silinmiş olabilir)" : e);
     void qc.invalidateQueries({ queryKey: ["reminders"] });
   };
 }

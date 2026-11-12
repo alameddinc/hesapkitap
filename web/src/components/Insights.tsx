@@ -51,7 +51,7 @@ export default function Insights({ items, active, onFilter }: {
       await api.dismissInsight(k);
     } catch (e) {
       mark(k, false);
-      ui.error(e instanceof Error ? e.message : "Uyarı gizlenemedi");
+      ui.error(e, { yedek: "Uyarı gizlenemedi" });
       return;
     }
     void qc.invalidateQueries({ queryKey: ["summary"] });
@@ -144,7 +144,7 @@ export function HiddenInsights({ count, month }: { count: number; month?: string
       await Promise.all([qc.invalidateQueries({ queryKey: ["summary"] }), qc.invalidateQueries({ queryKey: ["insights-hidden"] })]);
       ui.toast("Uyarı geri getirildi");
     } catch (e) {
-      ui.error(e instanceof Error ? e.message : "Uyarı geri getirilemedi");
+      ui.error(e, { yedek: "Uyarı geri getirilemedi" });
     } finally { setBusy(null); }
   };
   return (

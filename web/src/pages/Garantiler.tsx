@@ -1,3 +1,4 @@
+import { hataMetni, temizMetin } from "../lib/hataAcikla";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BadgeCheck, Camera, ChevronRight, Copy, FileText, Paperclip, Plus, ReceiptText, Search, Share2, Trash2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -48,7 +49,7 @@ export default function Garantiler() {
     const txn = Number(p.get("txn")) || null;
     if (!entry && !txn) return;
     clearHash();
-    garanti.taslak(entry ? { entry_id: entry } : { txn_id: txn! }).then((d) => setForm({ mode: "new", draft: d }), (e: Error) => ui.error(e.message));
+    garanti.taslak(entry ? { entry_id: entry } : { txn_id: txn! }).then((d) => setForm({ mode: "new", draft: d }), (e: Error) => ui.error(e));
   }, [ui]); // adres temizlendi: ui değişse de ikinci kez açılmaz
   useEffect(() => {
     const on = () => { const id = hashParts().id; if (id) setAcik(id); };
@@ -77,10 +78,10 @@ export default function Garantiler() {
         return;
       }
       if (!res.ok || !body) throw new Error(failureText(res.status, body));
-      if (body.unreadable) ui.toast(String(body.message || "Fotoğraf net değil; bilgileri elle yazabilirsin."));
+      if (body.unreadable) ui.toast(temizMetin(String(body.message ?? "")) ?? "Fotoğraf net değil; bilgileri elle yazabilirsin.");
       setForm({ mode: "new", draft: okumadanTaslak(body as Parameters<typeof okumadanTaslak>[0]) });
     } catch (e) {
-      ui.error((e as Error).message);
+      ui.error(e);
     } finally {
       setOkuyor(false);
       void docq.refresh();
@@ -142,7 +143,7 @@ export default function Garantiler() {
       {kaynak === "fisler" && (
         <FisSec onClose={() => setKaynak(null)} onPick={(f) => {
           setKaynak(null);
-          garanti.taslak({ entry_id: f.entry_id }).then((dr) => setForm({ mode: "new", draft: dr }), (e: Error) => ui.error(e.message));
+          garanti.taslak({ entry_id: f.entry_id }).then((dr) => setForm({ mode: "new", draft: dr }), (e: Error) => ui.error(e));
         }} />
       )}
       {form && <GarantiForm form={form} d={d} onClose={() => setForm(null)} onSaved={(g) => { setForm(null); setAcik(g.id); clearHash(g.id); }} />}
@@ -269,13 +270,13 @@ function GarantiForm({ form, d, onClose, onSaved }: { form: Form; d?: GarantiLis
         : await garanti.ekle({ ...body, entry_id: dr?.entry_id ?? null, txn_id: dr?.txn_id ?? null, receipt_file: dr?.source === "photo" ? dr.receipt_file : null });
       for (const x of files) {
         try { out = await garanti.belgeEkle(out.id, x.f, x.f.name || "belge", x.t); }
-        catch (e2) { ui.error(`${x.f.name}: ${(e2 as Error).message}`); }
+        catch (e2) { ui.error(`${x.f.name}: ${hataMetni(e2)}`); }
       }
       void qc.invalidateQueries({ queryKey: ["warranties"] });
       ui.toast(g ? "Kaydedildi" : "Garantilere eklendi");
       onSaved(out);
     } catch (e2) {
-      setErr((e2 as Error).message);
+      setErr(hataMetni(e2));
     } finally {
       setBusy(false);
     }
@@ -382,7 +383,7 @@ function Ayrinti({ id, d, onClose, onEdit }: { id: number; d?: GarantiListe; onC
 
   if (!g) return (
     <Modal title="Ürün" onClose={onClose}>
-      {q.error ? <p className="text-sm text-stone-600 dark:text-stone-300">{(q.error as Error).message}</p> : <SatirIskelet n={3} kart={false} />}
+      {q.error ? <p className="text-sm text-stone-600 dark:text-stone-300">{hataMetni(q.error)}</p> : <SatirIskelet n={3} kart={false} />}
     </Modal>
   );
 
@@ -394,15 +395,15 @@ function Ayrinti({ id, d, onClose, onEdit }: { id: number; d?: GarantiListe; onC
       for (const f of [...fl]) out = await garanti.belgeEkle(g.id, f, f.name || "belge", tur);
       tazele(out);
       ui.toast("Belge eklendi");
-    } catch (e) { ui.error((e as Error).message); tazele(); } finally { setBusy(false); }
+    } catch (e) { ui.error(e); tazele(); } finally { setBusy(false); }
   }
   async function belgeSil(fid: number) {
     if (!g || !(await ask("Bu belge kaldırılsın mı?", { confirm: "Kaldır", danger: true }))) return;
-    try { tazele(await garanti.belgeSil(g.id, fid)); ui.toast("Belge kaldırıldı"); } catch (e) { ui.error((e as Error).message); }
+    try { tazele(await garanti.belgeSil(g.id, fid)); ui.toast("Belge kaldırıldı"); } catch (e) { ui.error(e); }
   }
   async function sil() {
     if (!g || !(await ask(`“${g.name}” garantilerden silinsin mi?`, { confirm: "Sil", danger: true, irreversible: true, title: "Ürün silinsin mi?" }))) return;
-    try { await garanti.sil(g.id); tazele(); ui.toast("Ürün silindi"); onClose(); } catch (e) { ui.error((e as Error).message); }
+    try { await garanti.sil(g.id); tazele(); ui.toast("Ürün silindi"); onClose(); } catch (e) { ui.error(e); }
   }
   const metin = servisMetni(g, dateTR, tl);
   async function paylas() {
@@ -417,7 +418,7 @@ function Ayrinti({ id, d, onClose, onEdit }: { id: number; d?: GarantiListe; onC
       if (paylasilabilir && (!navigator.canShare || navigator.canShare(data))) await navigator.share(data);
       else if (paylasilabilir) await navigator.share({ title: data.title, text: metin });
       else for (const f of g.files) window.open(garanti.belgeAdresi(g.id, f.id, true), "_blank", "noopener");
-    } catch (e) { if ((e as Error).name !== "AbortError") ui.error((e as Error).message); }
+    } catch (e) { if ((e as Error).name !== "AbortError") ui.error(e); }
   }
 
   return (

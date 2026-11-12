@@ -1,3 +1,5 @@
+import { hataMetni } from "../lib/hataAcikla";
+import { temizMetin } from "../lib/hataAcikla";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { LockKeyhole } from "lucide-react";
@@ -44,7 +46,7 @@ export default function Login() {
       const b = body as { detail?: string; email?: string; message?: string } | null;
       if (status === 403 && b?.detail === "email_unverified") setVerify({ email: b.email || user.trim(), message: b.message });
       else if (status === 409 && isPendingDeletion(body)) setPending(body);
-      else setErr((x as Error).message || "Giriş başarısız");
+      else setErr(hataMetni(x, "Giriş başarısız"));
     } finally {
       setBusy(false); // ağ hatasında da düğme kilitli kalmaz
     }
@@ -52,7 +54,7 @@ export default function Login() {
 
   if (verify) return (
     <VerifyEmail email={verify.email} onBack={() => { setVerify(null); setPw(""); }}
-      intro={`${verify.message || "E-postana gönderdiğimiz kodla hesabını doğrula."} Yeni bir kod gönderdik.`} />
+      intro={`${temizMetin(verify.message) ?? "E-postana gönderdiğimiz kodla hesabını doğrula."} Yeni bir kod gönderdik.`} />
   );
   if (pending) return <PendingDeletion info={pending} onCancel={() => { setPending(null); setPw(""); }} />;
 

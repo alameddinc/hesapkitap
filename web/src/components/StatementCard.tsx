@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, FileText, ListPlus, ListTree, RefreshCw, Trash2, Undo2 } from "lucide-react";
 import { TERIM } from "../lib/terimler";
 import { ask } from "../lib/ask";
@@ -200,7 +201,7 @@ export default function StatementCard({ s }: { s: Statement }) {
               <Trash2 size={14} aria-hidden /> Ekstreyi sil</button>
           </div>
           {(confirm.error || del.error || unconfirm.error) && (
-            <p className="text-xs text-red-600 dark:text-red-400" role="alert">{((confirm.error || del.error || unconfirm.error) as Error).message}</p>
+            <p className="text-xs text-red-600 dark:text-red-400" role="alert">{hataMetni(confirm.error || del.error || unconfirm.error)}</p>
           )}
         </div>
       )}

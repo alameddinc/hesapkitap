@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { UserPlus } from "lucide-react";
@@ -57,7 +58,7 @@ export default function Register() {
         qc.invalidateQueries();
       } else setDone(true);
     } catch (x) {
-      setErr((x as Error).message || "Kayıt başarısız");
+      setErr(hataMetni(x, "Kayıt başarısız"));
     } finally {
       setBusy(false);
     }

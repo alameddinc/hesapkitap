@@ -64,7 +64,7 @@ export function ShopStoresSheet({ onClose }: { onClose: () => void }) {
       await send("/api/me/ui", { method: "PUT", json: { shop_hidden: body } });
     } catch (e) {
       if (prev) qc.setQueryData(STORES, prev);
-      ui.error((e as Error).message);
+      ui.error(e);
     } finally {
       setBusy(false);
       for (const k of [...AFFECTED, ...STORES]) void qc.invalidateQueries({ queryKey: [k] });

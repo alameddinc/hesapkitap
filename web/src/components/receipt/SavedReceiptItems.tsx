@@ -1,6 +1,7 @@
 // Kayıtlı giderin "Ürünler" bölümü (kayıt düzenleme penceresi): GET /api/entries/{id}/receipt-items; düzenlenince
 // "Kalemleri kaydet" → PUT aynı yol (kalemleri tamamen değiştirir; kaydın tutarı, kategorisi, bölmesi değişmez).
 // "Fişten yeniden oku": POST /api/entries/{id}/receipt-reread — sonuç karşılaştırılır, seçilirse yine PUT ile yazılır.
+import { hataMetni } from "../../lib/hataAcikla";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../api";
@@ -36,7 +37,7 @@ export default function SavedReceiptItems({ entryId, total, receiptFile, readOnl
       void qc.invalidateQueries({ queryKey: ["prices"] });
       onToast?.(`${r.saved} kalem kaydedildi`);
     } catch (e) {
-      setErr((e as Error).message || "Kaydedilemedi");
+      setErr(hataMetni(e, "Kaydedilemedi"));
     } finally {
       setBusy(false);
     }

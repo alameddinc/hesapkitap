@@ -1,3 +1,5 @@
+import { hataMetni } from "../lib/hataAcikla";
+import { HataSatiri } from "./HataKutusu";
 import { FileText, Trash2 } from "lucide-react";
 import { ask } from "../lib/ask";
 import { useState } from "react";
@@ -27,7 +29,7 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
   // kaydedilmemiş değişiklik: okunan ya da yazılan fatura kaydedilmeden kapanırken sorulur (UX denetimi 09.11)
   const [ilk] = useState(() => JSON.stringify([provider, amount, due, category, description, note]));
   const dirty = (isNew && !!draft.file_name) || JSON.stringify([provider, amount, due, category, description, note]) !== ilk;
-  const saveNow = () => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(e.message) }); };
+  const saveNow = () => { setErr(null); save.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) }); };
   const save = useSave(async () => {
     const amt = parseAmount(amount);
     if (!provider.trim() || !(amt >= 0) || !amount || !due) throw new Error("Kurum, tutar ve son ödeme tarihi gerekli");
@@ -85,7 +87,7 @@ export default function BillForm({ draft, onClose, onSaved }: { draft: BillDraft
           <input id="b-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="ör. otomatik ödeme talimatı var" />
         </div>
         {isNew && <SaveSpender t={st} />}
-        {err && <p className="text-sm text-red-600">{err}</p>}
+        {err && <HataSatiri metin={err} nerede="Fatura" kod="fatura_kaydet" />}
       </div>
     </Modal>
   );

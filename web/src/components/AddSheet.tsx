@@ -1,3 +1,5 @@
+import { hataMetni } from "../lib/hataAcikla";
+import { HataSatiri } from "./HataKutusu";
 import { ArrowLeftRight, Camera, FileText, Info, Loader2, Minus, Plus, Repeat } from "lucide-react";
 import { bodyOf, failureText, UNEXPECTED } from "../lib/apiError";
 import type { BillDraft } from "../api";
@@ -170,7 +172,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }:
       await handle(res, parts[0]?.blob);
     } catch (e) {
       setErrKind("fis");
-      setErr((e as Error).message);
+      setErr(hataMetni(e));
     } finally {
       setBusy(false);
       setPages([]);
@@ -185,7 +187,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }:
     try {
       await handle(await fetch(`/api/demo/sample/${key}`, { method: "POST" }));
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(hataMetni(e));
     } finally {
       setBusy(false);
     }
@@ -216,7 +218,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }:
     try {
       setPages([...pages, await shrink(f)]);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(hataMetni(e));
     }
   }
 
@@ -229,7 +231,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }:
       onTransfer(await parseDekont(f));
     } catch (e) {
       if (e instanceof ApiError && isQuotaFull(e.body)) { setFullDekont(true); setFull(e.body); }
-      else { setErrKind("dekont"); setErr((e as Error).message || "Dekont okunamadı"); }
+      else { setErrKind("dekont"); setErr(hataMetni(e, "Dekont okunamadı")); }
     } finally {
       setBusy(false);
       setRedirect(null);
@@ -252,7 +254,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }:
     try {
       parse(await Promise.all(files.slice(0, 4).map(async (f, i) => ({ blob: await shrink(f), name: `parca${i + 1}.jpg` }))));
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(hataMetni(e));
     }
   }
 
@@ -273,7 +275,7 @@ export default function AddSheet({ onClose, onPick, onBill, onTransfer, okuma }:
         <button className="btn-primary w-full justify-center py-2" disabled={busy} onClick={() => void readDekont(redirect)}>{busy ? "Okunuyor…" : "Transfer olarak ekle"}</button>
         <button className="btn-ghost w-full justify-center border border-stone-300 py-2 dark:border-stone-700" disabled={busy}
           onClick={() => { const f = redirect; setRedirect(null); void parse([{ blob: f, name: f.name }]); }}>Yine de fatura olarak ekle</button>
-        {err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+        {err && <HataSatiri metin={err} nerede="Belge ekleme" kod="belge_okunamadi" />}
       </div>
     </Modal>
   );

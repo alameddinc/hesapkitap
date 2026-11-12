@@ -90,7 +90,7 @@ function History({ p }: { p: Person }) {
       </ul>
       {payY && <ZakatPay title="Geçmiş yılın zekâtını ödedim" note={`${dateTR(payY.end)}'de biten yıl için.`}
         amount={payY.remaining ?? 0} date={today()} busy={pay.isPending} onClose={() => setPayY(null)} golds={altinVarliklari(p.plus)}
-        onSave={(b) => pay.mutate({ y: payY, b }, { onError: (e) => ui.error(e.message) })} />}
+        onSave={(b) => pay.mutate({ y: payY, b }, { onError: (e) => ui.error(e) })} />}
       {d.notes.map((n) => <p key={n} className="text-xs text-stone-500">• {n}</p>)}
       <p className="text-xs text-stone-500">• Ödenmeyen zekât, Hanefî'ye göre borç olarak kalır ve sonraki yılın hesabından düşülür. Kesin karar için müftülüğe danış.</p>
     </div>
@@ -104,7 +104,7 @@ function PersonCard({ p, d }: { p: Person; d: ZakatData }) {
   const [paying, setPaying] = useState(false);
   const [editPay, setEditPay] = useState<Payment | null>(null);
   const [hist, setHist] = useState(false);
-  const onErr = { onError: (e: Error) => ui.error(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e) };
   const setStart = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { hawl_start: v }));
   const setMinor = useSave((v: boolean) => json("PATCH", `/api/zakat/people/${p.id}`, { is_minor: v }));
   const setCheck = useSave((v: string | null) => json("PATCH", `/api/zakat/people/${p.id}`, { check_date: v }));
@@ -322,7 +322,7 @@ function ZakatTab() {
   const [newPerson, setNewPerson] = useState("");
   const [showRules, setShowRules] = useState(false);
   const [closing, setClosing] = useState(false);
-  const onErr = { onError: (e: Error) => ui.error(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e) };
   const addPerson = useSave(() => json("POST", "/api/zakat/people", { name: newPerson }), () => setNewPerson(""));
   const settings = useSave((b: object) => json("PUT", "/api/zakat/settings", b));
   const refresh = useSave(() => json("POST", "/api/zakat/prices/refresh"), () => ui.toast("Fiyatlar güncellendi"));
@@ -425,14 +425,14 @@ function Unexpensed({ items }: { items: NonNullable<ZakatData["unexpensed"]> }) 
             <span>{dateTR(x.pay_date)} · {x.person} · <b className="tabular-nums">{tl(x.amount)}</b></span>
             <span className="flex gap-2">
               <button className="btn-primary px-2 py-1 text-xs" onClick={() => setOpen(x)}>Gider olarak ekle</button>
-              <button className="btn-ghost px-2 py-1 text-xs" onClick={() => skip.mutate(x.id, { onError: (e) => ui.error(e.message) })}>Gerek yok</button>
+              <button className="btn-ghost px-2 py-1 text-xs" onClick={() => skip.mutate(x.id, { onError: (e) => ui.error(e) })}>Gerek yok</button>
             </span>
           </li>
         ))}
       </ul>
       {open && <ZakatPay title="Gider olarak ekle" note={`${open.person} · ${dateTR(open.pay_date)} tarihli zekât ödemesi.`}
         amount={open.amount} date={open.pay_date} fixedAmount busy={add.isPending} onClose={() => setOpen(null)}
-        onSave={(b) => add.mutate({ id: open.id, b }, { onError: (e) => ui.error(e.message) })} />}
+        onSave={(b) => add.mutate({ id: open.id, b }, { onError: (e) => ui.error(e) })} />}
     </section>
   );
 }

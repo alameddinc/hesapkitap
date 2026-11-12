@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { call } from "../lib/apiError";
 import { useState } from "react";
@@ -35,7 +36,7 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
   return (
     <Modal title="Varlık ekle" onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(qty) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Ekle</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Ekle</button>}>
       <div className="space-y-3">
         <div>
           <label className="label" htmlFor="z-owner">Kimin?</label>
@@ -111,7 +112,7 @@ export default function AssetForm({ people, kinds, personId, onClose }: {
                     const r = await json<{ quantity: number; gram_price: number; unit_value: number; unit: string }>("GET",
                       `/api/holdings/estimate?kind=${kind}&cost=${parseAmount(cost)}&day=${acquired}`);
                     setEst(r); setQty(String(r.quantity).replace(".", ","));
-                  } catch (e) { setEstErr((e as Error).message); }
+                  } catch (e) { setEstErr(hataMetni(e)); }
                 }}>
                 {kinds[kind]?.unit === "gr" ? "Gramı" : "Adedi"} bilmiyorum, tutar ve tarihten tahmin et
               </button>

@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { CheckCircle2, PiggyBank } from "lucide-react";
 import { useState } from "react";
 import { call } from "../lib/apiError";
@@ -82,13 +83,13 @@ export function EarlyCloseForm({ cardNo, info, onClose }: { cardNo: string; info
     const n = v.trim() ? parseAmount(v) : null;
     if (n != null && !(n > 0)) { setErr("Tutarı doğru yaz ya da boş bırak"); return; }
     setErr(null);
-    save.mutate({ month, amount: n }, { onError: (e) => setErr(e.message) });
+    save.mutate({ month, amount: n }, { onError: (e) => setErr(hataMetni(e)) });
   };
   return (
     <Modal title="Taksitleri erken kapattım" onClose={onClose} footer={
       <>
         {rec && <button className="btn-ghost text-red-600" disabled={undo.isPending}
-          onClick={() => void ask("Erken kapama geri alınsın mı? Kalan taksitler yeniden aylara yayılır.").then((ok) => { if (ok) undo.mutate(undefined, { onError: (e) => setErr(e.message) }); })}>Geri al</button>}
+          onClick={() => void ask("Erken kapama geri alınsın mı? Kalan taksitler yeniden aylara yayılır.").then((ok) => { if (ok) undo.mutate(undefined, { onError: (e) => setErr(hataMetni(e)) }); })}>Geri al</button>}
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
         <button className="btn-primary" disabled={save.isPending || !month} onClick={submit}>Kaydet</button>

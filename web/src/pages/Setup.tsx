@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { ShieldCheck } from "lucide-react";
@@ -24,7 +25,7 @@ export default function Setup({ codeNeeded }: { codeNeeded: boolean }) {
       await send("/api/auth/setup", { method: "POST", json: { username: user.trim() || "admin", password: pw, code: code || null, share_templates: share } });
       qc.invalidateQueries();
     } catch (x) {
-      setErr((x as Error).message || "Kurulum başarısız");
+      setErr(hataMetni(x, "Kurulum başarısız"));
     } finally {
       setBusy(false);
     }

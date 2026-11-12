@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { FileSpreadsheet, FolderDown, Receipt, Upload } from "lucide-react";
 import { call } from "../lib/apiError";
 import { useRef, useState } from "react";
@@ -95,7 +96,7 @@ export default function BackupTools() {
             </button>
             <button className="btn-ghost" onClick={() => setFile(null)}>Vazgeç</button>
           </div>
-          {restore.error && <p className="text-red-600">{(restore.error as Error).message}</p>}
+          {restore.error && <p className="text-red-600">{hataMetni(restore.error)}</p>}
         </div>
       )}
     </div>

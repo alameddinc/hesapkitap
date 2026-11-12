@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hataMetni } from "../lib/hataAcikla";
 import { AlertTriangle, Ban, Coins, Save } from "lucide-react";
 import { useState } from "react";
 import type { AiCosts as Costs, AiCostUser, AiCostUsers } from "../api";
@@ -111,7 +112,7 @@ export default function AiCosts() {
           Okuma: aylık haktan düşen belge / fiş sayısı. Çağrı: yapay zekâya giden istek (bir belge birden çok çağrı olabilir;
           yerel okuyucuyla okunan belge çağrı yapmaz). Belge içeriği kaydedilmez, yalnız token sayıları.
         </p>
-        <UserCosts data={uq.data} loading={uq.isLoading} error={uq.isError ? (uq.error as Error).message : null} />
+        <UserCosts data={uq.data} loading={uq.isLoading} error={uq.isError ? hataMetni(uq.error) : null} />
         <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); save.mutate(undefined); }}>
           {Object.entries(f.prices).map(([m, p]) => (
             <div key={m} className="flex flex-wrap items-end gap-2">

@@ -3,6 +3,7 @@
 // - 15 MB üstü dosya gönderilmez, sonuçta nedeniyle görünür
 // - aynı içerikli dosyalar (SHA-256) bir kez gönderilir
 // - en fazla 5'erli partiler sırayla gider; bir parti hata verirse sonrakiler sürer, o partinin dosyaları nedeniyle listelenir
+import { temizMetin } from "./hataAcikla";
 import { api, errStatus, type DocKind, type UploadResult } from "../api";
 
 export const MAX_FILE_MB = 15;
@@ -11,8 +12,7 @@ export const BATCH = 5;
 /** 413 / 503 ve ağ hatası için anlamlı Türkçe neden. */
 export function uploadError(e: unknown): string {
   const s = errStatus(e);
-  const msg = (e as Error)?.message ?? "";
-  const server = msg && !/^\d{3}\b/.test(msg) ? msg : "";
+  const server = temizMetin((e as Error)?.message) ?? "";
   if (s === 413) return server || `Dosya çok büyük ya da bir seferde çok dosya (en fazla ${MAX_FILE_MB} MB)`;
   if (s === 503) return "Sunucu şu an başka belgeleri okuyor; biraz sonra bu dosyayı yeniden yükle";
   if (s === 504 || s === 502) return "Okuma zaman aşımına uğradı; dosyayı tek başına yeniden yükle";

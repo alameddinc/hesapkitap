@@ -1,6 +1,7 @@
 // Fiş kalemleri: toplam denetimi, tutmayan satır, önerilen kaydırma (önce/sonra), elle kaydırma, birleştirme,
 // satır düzenle/sil/ekle, fiş fotoğrafı (tıklayınca büyür), "Fişten yeniden oku" (karşılaştırıp seç).
 // Fiş önizlemesinde (EntryForm taslağı) ve kayıtlı giderde (SavedReceiptItems) aynı parça. Mobil: fis/Kalemler.tsx.
+import { hataMetni, temizMetin } from "../../lib/hataAcikla";
 import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Combine, Maximize2, Plus, RefreshCw, Tag, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api";
@@ -18,11 +19,10 @@ function rereadError(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 429) return "Bugün bu fişi 3 kez okuttun; yarın tekrar dene ya da kalemleri elle düzelt.";
     if (e.status === 404) return "Bu kaydın fiş fotoğrafı saklanmamış; yeniden okunamaz.";
-    if (e.status === 422) return e.message && !/^\d+/.test(e.message) ? e.message : "Yeniden okuma bu sunucuda kapalı.";
+    if (e.status === 422) return temizMetin(e.message) ?? "Yeniden okuma bu sunucuda kapalı.";
     if (e.status === 502) return "Fiş yeniden okunamadı. Biraz sonra tekrar dene.";
-    if (e.message && !/^\d+/.test(e.message)) return e.message;
   }
-  return (e as Error)?.message || "Fiş yeniden okunamadı";
+  return hataMetni(e, "Fiş yeniden okunamadı");
 }
 
 /** Toplam tutmuyor mu: üstteki uyarı cümlesi (Kaydet'in yanında da kullanılır). */

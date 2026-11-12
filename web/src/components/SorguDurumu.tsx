@@ -5,7 +5,8 @@
 //   veri geldi  → hiçbir şey çizmez (çağıran veriyi kendisi çizer)
 // Kullanım:  <SorguDurumu q={q}><SatirIskelet n={3} /></SorguDurumu>   {q.data && …}
 // Birden çok sorgu: q={[a, b]} (biri hatalıysa hata, biri bekliyorsa iskelet).
-import { AlertTriangle, WifiOff } from "lucide-react";
+import { WifiOff } from "lucide-react";
+import HataKutusu from "./HataKutusu";
 import type { ReactNode } from "react";
 import { cx } from "../format";
 import { cevrimdisiHata, DURUM, useBekleme, useCevrimici } from "../lib/durum";
@@ -101,15 +102,9 @@ export function Cevrimdisi({ retry, className }: { retry?: () => void; className
   );
 }
 
-/** Hata kutusu: sunucunun Türkçe metni + "Tekrar dene". */
-export function HataNotu({ error, retry, className }: { error: unknown; retry?: () => void; className?: string }) {
-  return (
-    <div role="alert" className={cx("flex items-center gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-100", className)}>
-      <AlertTriangle size={18} className="shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1">{(error as Error)?.message || "Bir şey ters gitti"}</span>
-      {retry && <button className="btn-ghost -my-1 min-h-11 font-semibold text-amber-900 dark:text-amber-100" onClick={retry}>{DURUM.tekrar}</button>}
-    </div>
-  );
+/** Hata kutusu: tek hata bileşeni (HataKutusu: neden + adım + Tekrar dene + Yardım al; teknik metin gösterilmez). */
+export function HataNotu({ error, retry, className, nerede, yedek }: { error: unknown; retry?: () => void; className?: string; nerede?: string; yedek?: string }) {
+  return <HataKutusu error={error} retry={retry} className={className} nerede={nerede} yedek={yedek} />;
 }
 
 /** Kabuk şeridi: bağlantı yokken üst çubuğun altında ince "Çevrimdışı · son görülen veri" (akışta; içeriği örtmez). */

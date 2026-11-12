@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { call, send } from "../lib/apiError";
@@ -358,7 +359,7 @@ function RenamePerson({ name, merge, people, count, debts, onClose, onDone }: {
           <p className="rounded-lg bg-blue-50 p-2 text-xs text-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
             “{joins}” zaten var: iki kişi tek kişi olur, hareketleri birlikte görünür.</p>
         )}
-        {save.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
+        {save.error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{hataMetni(save.error)}</p>}
       </div>
     </Modal>
   );
@@ -414,7 +415,7 @@ function OwnTransferForm({ o, onClose }: { o: Own; onClose: () => void }) {
             ).then((ok) => { if (ok) convert.mutate(undefined); })}>
             Kendi hesaplarım arası değil → {kindWord.toLocaleLowerCase("tr")} olarak say</button>
         </div>
-        {err && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{err.message}</p>}
+        {err && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{hataMetni(err)}</p>}
       </div>
     </Modal>
   );

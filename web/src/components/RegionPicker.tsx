@@ -19,7 +19,7 @@ export function RegionPicker({ onClose }: { onClose: () => void }) {
   const list = searchProvinces(q);
   const cur = prefs.region ?? null;
   const pick = (region: string | null) =>
-    save.mutate({ region }, { onSuccess: () => { ui.toast(region ? `Bölgen: ${region}` : "Bölge seçimi kaldırıldı"); onClose(); }, onError: (e) => ui.error(e.message) });
+    save.mutate({ region }, { onSuccess: () => { ui.toast(region ? `Bölgen: ${region}` : "Bölge seçimi kaldırıldı"); onClose(); }, onError: (e) => ui.error(e) });
   return (
     <Modal title="Bölgem (il)" onClose={onClose}>
       <div className="space-y-3" data-testid="bolge-secici">

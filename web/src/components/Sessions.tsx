@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hataMetni } from "../lib/hataAcikla";
 import { LogOut, Monitor, Smartphone, KeyRound } from "lucide-react";
 import { cx, dateTimeTR, parseTs } from "../format";
 import { ask } from "../lib/ask";
@@ -82,7 +83,7 @@ export default function Sessions() {
             { confirm: "Her yerden çık", danger: true, irreversible: false }).then((ok) => { if (ok) all.mutate(undefined); })}>
           <LogOut size={15} aria-hidden /> Her yerden çık</button>
       </div>
-      {err && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{err.message}</p>}
+      {err && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{hataMetni(err)}</p>}
     </section>
   );
 }

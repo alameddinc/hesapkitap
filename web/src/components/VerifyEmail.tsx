@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MailCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -40,7 +41,7 @@ export default function VerifyEmail({ email, intro, onBack }: { email: string; i
       window.location.hash = "/ozet";
       await qc.invalidateQueries();
     } catch (x) {
-      setErr((x as Error).message);
+      setErr(hataMetni(x));
       setCode("");
       ref.current?.focus();
     } finally {
@@ -59,7 +60,7 @@ export default function VerifyEmail({ email, intro, onBack }: { email: string; i
       setNow(n);
       setUntil(n + WAIT * 1000);
     } catch (x) {
-      setErr((x as Error).message);
+      setErr(hataMetni(x));
     }
   }
 

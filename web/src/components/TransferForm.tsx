@@ -3,6 +3,7 @@
 // Dekonttan (yetenek dekont_parse): POST /api/dekont/parse (foto/PDF → taslak, kaydetmez) formu doldurur; kayıt
 // POST /api/dekont/save ile tek işlem olur, dekont dosyası ekli; hesap dökümü gelince aynı işlemle birleşir.
 // Aynı dekont kayıtlıysa 409 "Bu dekont zaten eklenmiş" + entry_id → "Kayda git".
+import { hataMetni, temizMetin } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Camera, FileText, Info, Receipt, Users2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -95,7 +96,7 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
   const [dup, setDup] = useState<number | null>(initial?.duplicate?.entry_id ?? null);
   const [reading, setReading] = useState(false);
   const [full, setFull] = useState<Partial<QuotaFull> | null>(null);
-  const [readErr, setReadErr] = useState<string | null>(initial?.unreadable ? initial.message || "Dekont okunamadı; bilgileri elle gir." : null);
+  const [readErr, setReadErr] = useState<string | null>(initial?.unreadable ? temizMetin(initial.message) ?? "Dekont okunamadı; bilgileri elle gir." : null);
   const fileRef = useRef<HTMLInputElement>(null);
   const tr = useQuery({ queryKey: ["transfers", "form"], queryFn: () => send<TransfersData>("/api/transfers"), retry: false });
   const accs = useAccounts();
@@ -128,7 +129,7 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
     setDk(d);
     setDebtAns(null);
     setDup(d.duplicate?.entry_id ?? null);
-    setReadErr(d.unreadable ? d.message || "Dekont okunamadı; bilgileri elle gir." : null);
+    setReadErr(d.unreadable ? temizMetin(d.message) ?? "Dekont okunamadı; bilgileri elle gir." : null);
     if (d.unreadable) return; // dosya ekli kalır, alanlar elle
     setDir(dirKind(d.direction));
     setPerson(d.counterparty ?? "");
@@ -153,7 +154,7 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
       apply(await parseDekont(f));
     } catch (e) {
       if (e instanceof ApiError && isQuotaFull(e.body)) setFull(e.body);
-      else setReadErr((e as Error).message || "Dekont okunamadı");
+      else setReadErr(hataMetni(e, "Dekont okunamadı"));
     } finally {
       setReading(false);
       void quota.refresh();
@@ -183,7 +184,7 @@ export default function TransferForm({ initial, onClose }: { initial?: DekontRes
     kayitBildir(r.debt_settled ? (dk ? "Kaydedildi · borç/alacak kaydına işlendi" : "Kaydedildi · açık borç/alacak kapandı") : "Kaydedildi", date);
     onClose();
   }, { inline: true });
-  const saveErr = save.error && dupOf(save.error) == null ? save.error.message : null;
+  const saveErr = save.error && dupOf(save.error) == null ? hataMetni(save.error) : null;
   const doSave = () => save.mutate(undefined, { onError: (e) => { const id = dupOf(e); if (id != null) setDup(id); } });
 
   if (full) return (

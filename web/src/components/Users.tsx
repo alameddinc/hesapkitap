@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { call as apiCall } from "../lib/apiError";
@@ -29,7 +30,7 @@ export default function Users() {
   const rbp = useMeta().data?.plan?.reads_by_plan; // okuma hakları (sunucudan; sabit yazılmaz)
   const drp = useMeta().data?.plan?.daily_reads_by_plan; // günlük tek sayaç (yeni sunucu)
   const q = useQuery({ queryKey: ["admin-users"], queryFn: () => call<AdminData>("/api/admin/users", "GET") });
-  const onErr = { onError: (e: Error) => ui.error(e.message) };
+  const onErr = { onError: (e: Error) => ui.error(e) };
   const [note, setNote] = useState("");
   const [name, setName] = useState("");
   const email = useLoginKind() === "email"; // hazır sürüm: hesap e-postayla açılır
@@ -207,7 +208,7 @@ function DeletedAccounts() {
         <button className="btn-ghost border border-stone-300 dark:border-stone-700">Ara</button>
         {term && <button type="button" className="btn-ghost text-xs" onClick={() => { setQ(""); setTerm(""); }}>Temizle</button>}
       </form>
-      {list.isError && <p className="mt-2 text-sm text-red-600">{(list.error as Error).message}</p>}
+      {list.isError && <p className="mt-2 text-sm text-red-600">{hataMetni(list.error)}</p>}
       {open && list.data && !rows.length && <p className="mt-2 text-sm text-stone-500">{term ? "Bu e-postayla silinmiş hesap yok." : "Kayıt yok."}</p>}
       <ul className="mt-1 divide-y divide-stone-100 text-sm dark:divide-stone-800">
         {rows.map((r) => (

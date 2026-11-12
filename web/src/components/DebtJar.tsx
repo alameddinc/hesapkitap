@@ -31,7 +31,7 @@ export function useJarPut() {
       refresh();
       ui.toast(`${trimTl(a.amount)} kumbaraya ayrıldı`, { undo: async () => { await send(`/api/jar-moves/${r.id}`, { method: "DELETE" }); refresh(); } });
     },
-    onError: (e: Error) => ui.error(e.message || "Kaydedilemedi"),
+    onError: (e: Error) => ui.error(e, { yedek: "Kaydedilemedi" }),
   });
 }
 
@@ -50,11 +50,11 @@ export function JarPayDialog({ pay, title, onClose }: { pay: PlanJarPay; title: 
       refresh();
       ui.toast(r.message, { undo: async () => { await send(`/api/debt-payments/${r.payment_id}`, { method: "DELETE" }); refresh(); } });
       if (r.ask && await ask(r.ask.text, { title: "Kumbarada para kaldı", confirm: r.ask.close, cancel: "Sonra karar veririm", danger: false })) {
-        await send(`/api/jars/${pay.jar_id}`, { method: "PATCH", json: { closed: true } }).catch((e: Error) => ui.error(e.message));
+        await send(`/api/jars/${pay.jar_id}`, { method: "PATCH", json: { closed: true } }).catch((e: Error) => ui.error(e));
         refresh();
       }
     },
-    onError: (e: Error) => ui.error(e.message || "Kaydedilemedi"),
+    onError: (e: Error) => ui.error(e, { yedek: "Kaydedilemedi" }),
   });
   return (
     <Modal title={`${title} · ${pay.label.toLowerCase()}`} onClose={onClose} footer={
@@ -86,7 +86,7 @@ export function JarBox({ jar, debtId, title }: { jar: PlanJar; debtId: number; t
       ui.toast(openToast(r),
         { undo: async () => { await send(`/api/jars/${r.id}`, { method: "DELETE" }); refresh(); } });
     },
-    onError: (e: Error) => ui.error(e.message || "Kumbara açılamadı"),
+    onError: (e: Error) => ui.error(e, { yedek: "Kumbara açılamadı" }),
   });
   if (jar.state === "locked") {
     return (
@@ -191,7 +191,7 @@ export function JarPutDialog({ put, title, onClose }: { put: PlanJarPut; title: 
       refresh();
       ui.toast(`${trimTl(amount)} kumbaraya ayrıldı`, { undo: async () => { await send(`/api/jar-moves/${r.id}`, { method: "DELETE" }); refresh(); } });
     },
-    onError: (e: Error) => ui.error(e.message || "Kaydedilemedi"),
+    onError: (e: Error) => ui.error(e, { yedek: "Kaydedilemedi" }),
   });
   return (
     <Modal title={`${title} · ${put.label.toLowerCase()}`} onClose={onClose} footer={

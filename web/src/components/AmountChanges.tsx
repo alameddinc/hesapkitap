@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
@@ -59,7 +60,7 @@ export default function AmountChanges({ rid, base }: { rid: number; base: number
           <button type="button" className="btn-ghost px-2 py-1.5 text-sm" onClick={() => setOpen(false)}>Vazgeç</button>
         </div>
       )}
-      {add.error && <p className="text-xs text-red-600">{(add.error as Error).message}</p>}
+      {add.error && <p className="text-xs text-red-600">{hataMetni(add.error)}</p>}
     </div>
   );
 }

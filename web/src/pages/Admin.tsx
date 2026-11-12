@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
+import { Activity, AlertOctagon, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AiCosts as Costs } from "../api";
 import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
+import AdminIncidents, { useIncidentCounts } from "../components/AdminIncidents";
 import AiCosts from "../components/AiCosts";
 import Announce from "../components/Announce";
 import AppUpdate from "../components/AppUpdate";
@@ -13,20 +14,22 @@ import PlanTable from "../components/PlanTable";
 import ReceiptTemplates from "../components/ReceiptTemplates";
 import UpdateNotice from "../components/UpdateNotice";
 import Users from "../components/Users";
-import { useIsAdmin } from "../components/hooks";
+import { useCap, useIsAdmin } from "../components/hooks";
 import { call, send } from "../lib/apiError";
 import { cx } from "../format";
 
 // Yönetici paneli (#/yonetici/<alt sayfa>): eskiden Ayarlar'ın altındaki yönetici bölümleri burada, her biri kendi
 // sayfasında. Adres alt sayfayı tutar: yenileyince aynı sayfa açılır. Bölümlerin kendisi (bileşenler) değişmedi.
 
-type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
+type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "sorunlar" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
 
 const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "genel", label: "Genel", icon: LayoutDashboard, hint: "Özet ve sürüm" },
   { key: "olcum", label: "Ölçüm", icon: Activity, hint: "Demo → hesap → aktivasyon → tutunma → abonelik" },
   { key: "kullanicilar", label: "Kullanıcılar", icon: UsersIcon, hint: "Hesaplar, davetler, paketler, silinenler" },
   { key: "geri-bildirim", label: "Geri bildirim", icon: MessageSquareWarning, hint: "Sorun bildir mesajları" },
+  // kullanıcıların karşılaştığı hatalar (sunucu yeteneği incidents): türe göre gruplu, durum, "düzelttik" haberi
+  { key: "sorunlar", label: "Sorunlar", icon: AlertOctagon, hint: "Hata türleri, kaç kişi, düzeltildi haberi" },
   { key: "duyuru", label: "Duyuru gönder", icon: Megaphone, hint: "Telefonlara bildirim: yeni sürüm, duyuru" },
   { key: "yapay-zeka", label: "Yapay zekâ maliyeti", icon: Coins, hint: "Aylık maliyet, kullanıcı başı, sınırla" },
   { key: "paket-tablosu", label: "Paket tablosu", icon: TableProperties, hint: "Hangi sayfa hangi pakette" },
@@ -51,6 +54,8 @@ export default function Admin() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   const fb = useFeedbackCounts();
+  const sorunVar = useCap("incidents");
+  const inc = useIncidentCounts(admin && sorunVar);
   if (auth.isLoading) return <></>;
   if (!admin) {
     return (
@@ -61,7 +66,8 @@ export default function Admin() {
     );
   }
   const cur = SUBS.find((x) => x.key === sub)!;
-  const badge = (k: Sub) => (k === "geri-bildirim" && fb.data?.yeni ? fb.data.yeni : null);
+  const badge = (k: Sub) => (k === "geri-bildirim" && fb.data?.yeni ? fb.data.yeni : k === "sorunlar" && inc.data?.yeni ? inc.data.yeni : null);
+  const subs = SUBS.filter((x) => x.key !== "sorunlar" || sorunVar);
   return (
     <div className="space-y-4">
       <h1 className="flex items-center gap-2 text-xl font-semibold"><ShieldCheck size={22} aria-hidden /> Yönetici paneli</h1>
@@ -69,12 +75,12 @@ export default function Admin() {
       <div className="md:hidden">
         <label className="label" htmlFor="admin-sub">Bölüm</label>
         <select id="admin-sub" className="input" value={sub} onChange={(e) => goSub(e.target.value as Sub)}>
-          {SUBS.map((x) => <option key={x.key} value={x.key}>{x.label}{badge(x.key) ? ` (${badge(x.key)} yeni)` : ""}</option>)}
+          {subs.map((x) => <option key={x.key} value={x.key}>{x.label}{badge(x.key) ? ` (${badge(x.key)} yeni)` : ""}</option>)}
         </select>
       </div>
       <div className="md:flex md:items-start md:gap-4">
         <nav aria-label="Yönetici bölümleri" className="sticky top-4 hidden w-48 shrink-0 space-y-0.5 md:block">
-          {SUBS.map((x) => (
+          {subs.map((x) => (
             <a key={x.key} href={`#/yonetici/${x.key}`} aria-current={sub === x.key ? "page" : undefined}
               className={cx("flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                 sub === x.key ? "bg-white font-medium shadow-sm dark:bg-stone-800" : "text-stone-600 hover:bg-white/60 dark:text-stone-400 dark:hover:bg-stone-800/50")}>
@@ -89,6 +95,7 @@ export default function Admin() {
           {sub === "olcum" && <Olcum />}
           {sub === "kullanicilar" && <Users />}
           {sub === "geri-bildirim" && <AdminFeedback />}
+          {sub === "sorunlar" && sorunVar && <AdminIncidents />}
           {sub === "duyuru" && <Announce />}
           {sub === "yapay-zeka" && <AiCosts />}
           {sub === "paket-tablosu" && <PlanTable />}
@@ -110,6 +117,7 @@ function Overview() {
   const users = useQuery({ queryKey: ["admin-users"], queryFn: () => call<AdminUsers>("GET", "/api/admin/users") });
   const costs = useQuery({ queryKey: ["admin-ai-costs", null], queryFn: () => call<Costs>("GET", "/api/admin/ai-costs") });
   const fb = useFeedbackCounts();
+  const sorunVar = useCap("incidents");
   const u = users.data;
   const active = u?.users.filter((x) => !x.deleted_at && !x.disabled) ?? [];
   const paid = active.filter((x) => x.plan && x.plan !== "free").length;
@@ -136,7 +144,7 @@ function Overview() {
       </section>
       <OfficialPrices />
       <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
-        {SUBS.filter((x) => x.key !== "genel").map((x) => (
+        {SUBS.filter((x) => x.key !== "genel" && (x.key !== "sorunlar" || sorunVar)).map((x) => (
           <li key={x.key}>
             <a href={`#/yonetici/${x.key}`} className="flex items-center gap-3 px-4 py-3">
               <x.icon size={18} aria-hidden />

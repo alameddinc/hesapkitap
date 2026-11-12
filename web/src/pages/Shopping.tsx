@@ -177,7 +177,7 @@ function ShoppingList() {
       qc.setQueryData<ListData>(LIST, (cur) => ({ saved_plan: cur?.saved_plan ?? null, items: apply(cur?.items ?? [], a) }));
       return { prev };
     },
-    onError: (e: Error, _a: A, ctx?: { prev?: ListData }) => { if (ctx?.prev) qc.setQueryData(LIST, ctx.prev); ui.error(e.message); },
+    onError: (e: Error, _a: A, ctx?: { prev?: ListData }) => { if (ctx?.prev) qc.setQueryData(LIST, ctx.prev); ui.error(e); },
     onSettled: refresh,
   });
   const add = useMutation({ ...optimistic(
@@ -202,19 +202,19 @@ function ShoppingList() {
     mutationFn: (sel: Due[]) => send<{ added: number; skipped: number }>(`${BASE}/bulk`, { method: "POST",
       json: { items: sel.map((x) => ({ text: x.text, qty: x.qty, unit: x.unit, ...(x.group_key && { group_key: x.group_key }) })) } }),
     onSuccess: (r) => { setFill(null); ui.toast(r.added ? `${r.added} ürün listeye eklendi` : "Hepsi zaten listede"); }, // mobil Doldur ile aynı
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
     onSettled: refresh,
   });
   const savePlan = useMutation({
     mutationFn: (a: { k: number; chains?: string[] }) => send<SavedPlan>(`${BASE}/saved-plan`, { method: "PUT", json: a.chains?.length ? { k: a.k, chains: a.chains } : { k: a.k } }),
     onSuccess: (p) => { setPlanOpen(false); ui.toast(`Plan kaydedildi · ${p.chains.map((c) => chainName(c.chain)).join(" + ")}`); window.scrollTo({ top: 0, behavior: "smooth" }); },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
     onSettled: () => void qc.invalidateQueries({ queryKey: LIST }),
   });
   const clearPlan = useMutation({
     mutationFn: () => send(`${BASE}/saved-plan`, { method: "DELETE" }),
     onSuccess: () => { setPlanOpen(false); ui.toast("Plan kaldırıldı"); },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
     onSettled: () => void qc.invalidateQueries({ queryKey: LIST }),
   });
   const complete = useComplete(() => setCompleting(false));

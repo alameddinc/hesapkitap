@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownRight, Ban, EyeOff, Pencil, Repeat, RotateCcw } from "lucide-react";
 import { useState } from "react";
@@ -63,7 +64,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
         undo: async () => { await send("/api/uncategorized/undo", { method: "POST", json: { undo_id: id } }); tazeleAd(); },
       } : undefined);
     },
-    onError: (e) => ui.error(e instanceof Error ? e.message : "Ad düzeltilemedi"),
+    onError: (e) => ui.error(e, { yedek: "Ad düzeltilemedi" }),
   });
 
   const categoryChanged = category !== row.category && category !== "";
@@ -176,7 +177,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
         </div>
         {row.kind === "harcama" && !row.deleted && <SplitEditor target="card" id={row.id} total={row.original_amount ?? row.amount} />}
         {(save.error || subSave.error) && (
-          <p className="text-sm text-red-600 dark:text-red-400" role="alert">{((save.error || subSave.error) as Error).message}</p>
+          <p className="text-sm text-red-600 dark:text-red-400" role="alert">{hataMetni(save.error || subSave.error)}</p>
         )}
         {row.kind === "harcama" && !row.deleted && <MarkDonation source="card" id={row.id} />}
         {row.kind === "harcama" && !row.deleted && <GarantiyeEkle source="txn" id={row.id} onClose={onClose} />}

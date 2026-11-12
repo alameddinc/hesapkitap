@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { KeyRound } from "lucide-react";
@@ -21,7 +22,7 @@ export default function ChangePassword({ username }: { username: string }) {
       await send("/api/settings/password", { method: "POST", json: { current: cur, new: pw } });
       qc.invalidateQueries();
     } catch (x) {
-      setErr((x as Error).message || "Değiştirilemedi");
+      setErr(hataMetni(x, "Değiştirilemedi"));
     } finally {
       setBusy(false);
     }

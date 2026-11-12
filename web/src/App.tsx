@@ -49,6 +49,10 @@ import ConfirmHost from "./components/ConfirmHost";
 import { ShopStoresHost } from "./components/ShopStores";
 import { ReceiptLinkHost } from "./components/ShopReceiptLink";
 import PageBoundary from "./components/PageBoundary";
+import DestekKapisi from "./components/DestekKapisi";
+import { ekranAdi } from "./components/HataKutusu";
+import { hataAcikla, hataMetni } from "./lib/hataAcikla";
+import { olayDestek } from "./lib/olay";
 import { LockBadge, lockOf, ROUTE_FEATURE, RouteLock } from "./components/Plan";
 import { send } from "./lib/apiError";
 import { JoinPreviewModal } from "./components/JoinBook";
@@ -149,7 +153,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   if (auth.isLoading) return null;
-  if (auth.error && !auth.data) return <Unreachable message={(auth.error as Error).message} retry={() => void auth.refetch()} busy={auth.isFetching} />;
+  if (auth.error && !auth.data) return <Unreachable message={hataMetni(auth.error, "Sunucuya ulaşılamadı")} retry={() => void auth.refetch()} busy={auth.isFetching} />;
   if (auth.data?.setup_required) return <Setup codeNeeded={!!auth.data.setup_code_needed} />;
   if (auth.data && !auth.data.authenticated) return hash.startsWith("#/kayit") ? <Register /> : hash.startsWith("#/sifre") ? <ForgotPassword /> : <Login />;
   if (auth.data?.user?.must_change_password) return <ChangePassword username={auth.data.user.username} />;
@@ -202,6 +206,8 @@ function Shell() {
   const meta = useMeta();
   const caps = meta.data?.capabilities;
   useEffect(() => { demoKaydiniGonder(caps); }, [caps]); // demodan gelip hesap açtıysa bir kez (lib/olcum.ts)
+  // sorun kaydı (lib/olay.ts): sunucu yeteneği "incidents" bilinince; bilinmezse ilk olayda /api/auth/status'a bakılır
+  useEffect(() => { if (caps) olayDestek(caps.includes("incidents")); }, [caps]);
   const book = useBook();
   const { ui: prefs } = useUiPrefs();
   // sade görünüm: her şey orantılı büyür (rem), menüde sadece temel sayfalar
@@ -229,11 +235,16 @@ function Shell() {
   const [toast, setToastState] = useState<ToastState | null>(() => { const f = readFlash(); return f ? { msg: f, kind: "ok" } : null; });
   const setToast = useCallback((msg: string, opts?: ToastOptions) =>
     setToastState({ msg, kind: "ok", undo: opts?.undo, action: opts?.action, id: Date.now() }), []);
-  const setError = useCallback((msg: string, opts?: Pick<ToastOptions, "action">) => setToastState({ msg, kind: "error", action: opts?.action, id: Date.now() }), []);
+  // tek açıklama: Türkçe neden + adım; teknik/İngilizce metin gösterilmez; "Yardım al" bağlamla destek (lib/destek.ts)
+  const setError = useCallback((e: unknown, opts?: Pick<ToastOptions, "action"> & { yedek?: string }) => {
+    const a = hataAcikla(e, opts?.yedek);
+    setToastState({ msg: a.neden, adim: a.adim || undefined, kind: "error", action: opts?.action, id: Date.now(),
+      yardim: { nerede: ekranAdi(), kod: a.kod, ayrinti: a.ayrinti } });
+  }, []);
   // bağlantı yokken kaydedilemedi (UX denetimi 09.11): askıda beklemez; "Tekrar dene" aynı kaydı aynı anahtarla yeniden gönderir
   const fail = useCallback(function hata(e: unknown): void {
     const tekrar = tekrarFor(e);
-    if (!tekrar) return setError((e as Error)?.message || "Bir şey ters gitti; tekrar dene.");
+    if (!tekrar) return setError(e);
     setError(DURUM.kaydedilemedi, { action: { label: DURUM.tekrar, run: () => {
       void tekrar().then(() => setToast("Kaydedildi"), (e2: unknown) => hata(e2));
     } } });
@@ -381,6 +392,7 @@ function Shell() {
       <ShopStoresHost />
       <ReceiptLinkHost />
       {toast && <Toast key={toast.id} t={toast} onClose={() => setToastState(null)} />}
+      <DestekKapisi />{/* "Yardım al" (lib/destek.ts) */}
     </UIContext.Provider>
   );
 }

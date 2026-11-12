@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useQuery } from "@tanstack/react-query";
 import { send, bodyOf } from "../lib/apiError";
 import { CircleCheck, Download, ExternalLink, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
@@ -51,7 +52,7 @@ export default function DeleteAccount() {
     try {
       j = await send("/api/me/delete", { method: "POST", json: body });
     } catch (x) {
-      return setErr((x as Error).message);
+      return setErr(hataMetni(x));
     } finally {
       setBusy(false);
     }

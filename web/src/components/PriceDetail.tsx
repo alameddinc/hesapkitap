@@ -143,7 +143,7 @@ export default function PriceDetail({ p, onChain }: { p: PriceDetailProduct; onC
     mutationFn: () => send("/api/shopping-list", { method: "POST", json: { text: p.product,
       qty: p.advice?.kind === "cheaper_at" && p.advice.qty > 1 ? p.advice.qty : 1, ...(p.group && !p.group.pending && { group_key: p.group.key }) } }),
     onSuccess: () => { setAdded(true); ui.toast("Alışveriş listesine eklendi", { action: { label: "Listeyi aç", run: () => ui.go("alisveris") } }); void qc.invalidateQueries({ queryKey: ["shopping-list"] }); void qc.invalidateQueries({ queryKey: ["shopping-plan"] }); },
-    onError: (e: Error) => ui.error(e.message),
+    onError: (e: Error) => ui.error(e),
   });
   const adv = p.advice;
 

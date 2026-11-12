@@ -1,4 +1,5 @@
 import { ArrowRight, CheckCircle2, GitMerge, Loader2, Undo2 } from "lucide-react";
+import { hataMetni } from "../lib/hataAcikla";
 import { ask } from "../lib/ask";
 import { useId, useState } from "react";
 import { api, errStatus, movedCount, type AccountMergeResult } from "../api";
@@ -22,7 +23,7 @@ export default function AccountMerge({ from, accounts, onClose }: { from: MergeA
 
   const merge = useSave(() => api.mergeAccount(from.id, into!), (r) => setDone({ ...r, target: target?.name ?? "" }));
   const undo = useSave(({ id, force }: { id: string; force?: boolean }) => api.undoImport(id, force));
-  const fail = (e: Error) => setErr(errStatus(e) === 403 ? "Hesap birleştirmeyi defterin sahibi ya da tam yetkili üye yapabilir." : e.message);
+  const fail = (e: Error) => setErr(errStatus(e) === 403 ? "Hesap birleştirmeyi defterin sahibi ya da tam yetkili üye yapabilir." : hataMetni(e));
 
   const runUndo = () => {
     if (!done) return;

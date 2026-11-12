@@ -55,8 +55,10 @@ export interface UI {
   openTransfer: (dekont?: DekontResult | null) => void;
   /** Başarı/bilgi bildirimi: süre metnin uzunluğuna göre (en az 3 sn); undo/action verilirse düğme (en az 8 sn). */
   toast: (msg: string, opts?: ToastOptions) => void;
-  /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. */
-  error: (msg: string, opts?: Pick<ToastOptions, "action">) => void;
+  /** Hata bildirimi: kırmızı, ekran okuyucuya alert; kendiliğinden kapanmaz, kullanıcı kapatır. Metin ya da hata nesnesi:
+   *  lib/hataAcikla.ts'ten geçer (Türkçe neden + adım; teknik/İngilizce metin gösterilmez) ve "Yardım al" düğmesi taşır.
+   *  yedek: sunucu metni gösterilemezse ekrana özgü cümle ("Kaydedilemedi"). */
+  error: (e: unknown, opts?: Pick<ToastOptions, "action"> & { yedek?: string }) => void;
   /** Hata nesnesinden bildirim: bağlantısız kayıtta "Bağlantı yok, kaydedilemedi" + "Tekrar dene" (lib/durum.ts tekrarFor). */
   fail: (e: unknown) => void;
 }

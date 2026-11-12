@@ -79,7 +79,7 @@ function GoalForm({ data, onClose }: { data: SavingsData; onClose: () => void })
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
         <button className="btn-primary" disabled={!name || !target || save.isPending}
-          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>
+          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>
       </>
     }>
       <div className="space-y-3">
@@ -128,7 +128,7 @@ export function DowngradeForm({ sub, onClose }: { sub: { merchant: string; month
         <div className="flex-1" />
         <button className="btn-ghost" onClick={onClose}>Vazgeç</button>
         <button className="btn-primary" disabled={!amount || !(n >= 0) || save.isPending}
-          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>
+          onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>
       </>
     }>
       <div className="space-y-3">

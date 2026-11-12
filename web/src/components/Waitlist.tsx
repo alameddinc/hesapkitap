@@ -1,3 +1,4 @@
+import { hataMetni } from "../lib/hataAcikla";
 import { useMutation } from "@tanstack/react-query";
 import { send as apiSend } from "../lib/apiError";
 import { CheckCircle2 } from "lucide-react";
@@ -58,7 +59,7 @@ export default function Waitlist({ onClose }: { onClose: () => void }) {
           <span><b>Android testine katılırım.</b> Uygulamayı Google Play'den ücretsiz kurup <b>14 gün</b> telefonumda tutarım.
             <span className="block text-xs text-stone-500">Google Play'de kullandığın e-postayı yaz (genelde Gmail).</span></span>
         </label>
-        {send.error && <p className="text-sm text-red-600">{(send.error as Error).message}</p>}
+        {send.error && <p className="text-sm text-red-600">{hataMetni(send.error)}</p>}
         <p className="text-xs text-stone-500">
           E-postanı yalnızca bu sürüm açıldığında sana haber vermek için kullanırız; kimseyle paylaşmayız. Teste katılırsan
           e-postan yalnızca test daveti için Google Play'in test listesine eklenir. Listeden çıkmak

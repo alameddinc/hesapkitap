@@ -88,7 +88,7 @@ export function JarForm({ jar, onClose, preset, onSaved }: { jar?: Jar; onClose:
   return (
     <Modal title={jar ? "Kumbarayı düzenle" : "Yeni kumbara"} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!name.trim() || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>}>
       <div className="space-y-3">
         {!jar && (
           <div>
@@ -150,7 +150,7 @@ function MoveForm({ jar, dir, onClose }: { jar: Jar; dir: "yatir" | "cek"; onClo
   return (
     <Modal title={`${jar.name} · ${dir === "yatir" ? "para ayır" : "para çek"}`} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{dir === "yatir" ? "Ayır" : "Çek"}</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>{dir === "yatir" ? "Ayır" : "Çek"}</button>}>
       <div className="space-y-3">
         <input className="input text-right text-lg" inputMode="decimal" autoFocus placeholder="Tutar" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <input className="input" placeholder="Not (ops.)" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -199,7 +199,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
       if (d.date) setDay(d.date);
       ui.toast(d.total ? `Fişten ${tl(d.total)} okundu; kontrol et` : "Tutar okunamadı; elle yaz");
     } catch (e) {
-      ui.error((e as Error).message);
+      ui.error(e);
     } finally {
       setReading(false);
       void quota.refresh();
@@ -212,7 +212,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
   return (
     <Modal title={`${jar.name} · aldım`} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0 || est > 0) || needAccount || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs">Ne kadar ({s})
@@ -252,7 +252,7 @@ function EditPurchase({ jar, move, onClose }: { jar: Jar; move: Move; onClose: (
   return (
     <Modal title={`${jar.name} · alımı düzelt`} onClose={onClose} footer={
       <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0) || save.isPending}
-        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
+        onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e) })}>Kaydet</button>}>
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs">Miktar ({s})
@@ -345,7 +345,7 @@ export default function Jars() {
                 <button className="btn-ghost border border-stone-300 px-2 py-0.5 dark:border-stone-700" disabled={patch.isPending}
                   onClick={() => patch.mutate({ id: j.id, body: { closed: true } })}>{j.debt.suggestion.close}</button>
                 <button className="btn-ghost border border-stone-300 px-2 py-0.5 dark:border-stone-700" disabled={unlink.isPending}
-                  onClick={() => unlink.mutate(j, { onError: (e) => ui.error(e.message) })}>{j.debt.suggestion.convert}</button>
+                  onClick={() => unlink.mutate(j, { onError: (e) => ui.error(e) })}>{j.debt.suggestion.convert}</button>
               </div>
             )}
             {shares(j) && <p className="text-xs text-stone-500">{shares(j)}</p>}

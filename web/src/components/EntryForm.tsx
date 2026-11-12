@@ -1,3 +1,5 @@
+import { hataMetni } from "../lib/hataAcikla";
+import { HataSatiri } from "./HataKutusu";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ask } from "../lib/ask";
 import { send } from "../lib/apiError";
@@ -228,7 +230,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
   }, () => done("Silindi"));
 
   useEffect(() => { if (ilk === "") setIlk(snap); }, [ilk, snap]);
-  const saveNow = () => { setErr(null); save.mutate(false, { onError: (e) => setErr(e.message) }); };
+  const saveNow = () => { setErr(null); save.mutate(false, { onError: (e) => setErr(hataMetni(e)) }); };
 
   const cats = kind === "gelir" ? meta.data?.income_categories ?? [] : meta.data?.categories ?? [];
   const title = rec ? "Sabit kalemi düzenle" : editingEntry ? "Kaydı düzenle" : kind === "gelir" ? "Gelir ekle" : "Gider ekle";
@@ -248,13 +250,13 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
         <button className="btn-ghost" onClick={() => void kirliyseSor(dirty && !viewer, onClose, saveNow)}>Vazgeç</button>
         {canAgain && !viewer && (
           <button className="btn-ghost whitespace-nowrap" disabled={save.isPending} aria-label="Kaydet, yenisini ekle"
-            onClick={() => { setErr(null); save.mutate(true, { onError: (e) => setErr(e.message) }); }}>
+            onClick={() => { setErr(null); save.mutate(true, { onError: (e) => setErr(hataMetni(e)) }); }}>
             {/* dar ekranda footer'a sığsın */}
             <span className="sm:hidden">Kaydet + yeni</span><span className="hidden sm:inline">Kaydet, yenisini ekle</span>
           </button>
         )}
         <button className="btn-primary" disabled={save.isPending || viewer} title={viewer ? "Sadece görme yetkin var" : undefined}
-          onClick={() => { setErr(null); save.mutate(false, { onError: (e) => setErr(e.message) }); }}>
+          onClick={() => { setErr(null); save.mutate(false, { onError: (e) => setErr(hataMetni(e)) }); }}>
           Kaydet
         </button>
       </>
@@ -533,7 +535,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
                   const j = await send<{ message: string }>(`/api/entries/${editingEntry.id}/to-opening`, { method: "POST", json: { account_id: accountId } });
                   qc.invalidateQueries();
                   done(j.message);
-                } catch (e) { setErr((e as Error).message); }
+                } catch (e) { setErr(hataMetni(e)); }
               }}>{accountId ? "Hesap bakiyesine çevir" : "Önce hesabı seç"}</button>
           </div>
         )}
@@ -579,7 +581,7 @@ export default function EntryForm({ row, draft, recurring: rec, spenderRow, onCl
             <MarkDonation source="entry" id={editingEntry.id} />
           </>
         )}
-        {err && <p className="text-sm text-red-600">{err}</p>}
+        {err && <HataSatiri metin={err} nerede="Kayıt" kod="kayit_kaydet" />}
       </div>
     </Modal>
   );
