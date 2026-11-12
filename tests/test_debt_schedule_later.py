@@ -100,9 +100,11 @@ def test_edit_and_reject_rules(client):
     s = client.put(f"/api/debts/{did}/schedule", json={"plan_installment": 2000, "plan_start": "2026-11",
                                                         "plan_end": "2027-04"}).json()["debt"]["schedule"]
     assert s["count"] == 6 and s["end_month"] == "2027-04"
-    # alacak, döviz, kapanmış borç: plan yok
-    al = client.post("/api/debts", json={"person": "Örnek Kişi", "direction": "alacak", "amount": 500}).json()["id"]
-    assert client.put(f"/api/debts/{al}/schedule", json=PLAN).status_code == 422
+    # döviz, kapanmış borç: plan yok (alacakta plan var: yetenek debt_terms_receivable, tests/test_receivable_terms.py)
+    al = client.post("/api/debts", json={"person": "Örnek Kişi", "direction": "alacak", "amount": 5,
+                                         "asset": "GRAM_ALTIN"}).json()["id"]
+    r = client.put(f"/api/debts/{al}/schedule", json=PLAN)
+    assert r.status_code == 422 and "TL alacakta" in r.json()["detail"]
     fx = client.post("/api/debts", json={"person": "Örnek Kişi", "direction": "borc", "amount": 5, "asset": "GRAM_ALTIN"}).json()["id"]
     r = client.put(f"/api/debts/{fx}/schedule", json=PLAN)
     assert r.status_code == 422 and "TL borçta" in r.json()["detail"]

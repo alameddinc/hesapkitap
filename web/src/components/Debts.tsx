@@ -10,7 +10,7 @@ import CategoryPicker from "./CategoryPicker";
 import { useCap, useSave } from "./hooks";
 import Segmented from "./Segmented";
 import type { DebtSchedule } from "../lib/debtPlan";
-import { ALACAKLI, KOSULLAR, TARIH_TURU, kosulGovdesi, kosulOzeti, varsayilanKesin, type CreditorType, type PayTerms } from "../lib/borcKosul";
+import { kosulGovdesi, kosulMetni, kosulRozetleri, varsayilanKesin, yoneUygun, type CreditorType, type PayTerms } from "../lib/borcKosul";
 import DebtScheduleSection, { PayoffFields, ScheduleForm, payoffBody } from "./DebtScheduleSection";
 
 export interface Debt {
@@ -34,7 +34,7 @@ export interface Debt {
   creditor_type?: CreditorType | null; plan_interest?: DebtSchedule["interest"];
   /** erken kapatma (yetenek debt_payoff): girilen bugün kapatma tutarı, öğrenildiği gün, aylık oran (yüzde) */
   payoff_amount?: number | null; payoff_date?: string | null; plan_rate?: number | null;
-  /** borcun koşulları (yetenek debt_terms; alacakta ve eski sunucuda null/yok): kayıtlı değerler ve geçerli olanlar */
+  /** kaydın koşulları (yetenek debt_terms; alacakta debt_terms_receivable; eski sunucuda null/yok): kayıtlı değerler ve geçerli olanlar */
   pay_terms?: PayTerms | null; due_strict?: boolean | null;
   terms?: PayTerms | null; terms_label?: string | null; strict?: boolean | null; creditor_label?: string | null;
 }
@@ -115,20 +115,25 @@ export default function Debts({ debts, people }: { debts: Debt[]; people: string
               {d.direction === "borc" ? "borcum" : "alacağım"}
             </span>
           </div>
-          {d.direction === "borc" && !d.settled_at && !d.schedule && kosulOzeti(d) && (
-            <div className="text-xs text-stone-600 dark:text-stone-300" data-testid="borc-kosul-ozet">{kosulOzeti(d)}</div>
+          {/* koşul rozetleri: borçta ve alacakta aynı (Kişi · Parça parça); tarih türü alttaki "söz / vade" yazısında */}
+          {!d.settled_at && !d.schedule && kosulRozetleri(d, false).length > 0 && (
+            <div className="mt-0.5 flex flex-wrap gap-1" data-testid="borc-kosul-ozet">
+              {kosulRozetleri(d, false).map((r) => (
+                <span key={r} className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[11px] leading-tight text-stone-700 dark:bg-stone-800 dark:text-stone-300">{r}</span>
+              ))}
+            </div>
           )}
           {d.schedule && !d.settled_at && (
             <div className="text-xs text-stone-600 dark:text-stone-300" data-testid="borc-taksit">
-              Ödeme planı · {d.schedule.creditor_label} · {d.schedule.paid_count}/{d.schedule.count} taksit ödendi
+              Ödeme planı · {d.schedule.creditor_label} · {d.schedule.paid_count}/{d.schedule.count} taksit {d.direction === "alacak" ? "alındı" : "ödendi"}
               {d.schedule.next && <span className={cx(d.schedule.overdue && "font-medium text-red-600 dark:text-red-400")}>
                 {" "}· sıradaki {dateTR(d.schedule.next.date)} {fmtAsset(dueInstallment(d), "TRY")}</span>}
             </div>
           )}
           <div className="text-xs text-stone-500">
             {d.schedule ? maskText(d.schedule.text) : dateTR(d.debt_date)}
-            {d.due_date && <span className={cx(late && "font-medium text-red-600")}> · {d.direction === "borc" && d.strict === false ? "söz" : "vade"} {dateTR(d.due_date)}</span>}
-            {d.paid_amount > 0 && !d.settled_at && ` · ${fmtAsset(d.paid_amount, d.asset)} ödendi`}
+            {d.due_date && <span className={cx(late && "font-medium text-red-600")}> · {d.strict === false ? "söz" : "vade"} {dateTR(d.due_date)}</span>}
+            {d.paid_amount > 0 && !d.settled_at && ` · ${fmtAsset(d.paid_amount, d.asset)} ${d.direction === "alacak" ? "alındı" : "ödendi"}`}
             {d.settled_at && (d.written_off_at ? ` · vazgeçildi ${dateTR(d.written_off_at)}` : ` · kapandı ${dateTR(d.settled_at)}`)}
             {d.note && ` · ${d.note}`}
             {d.asset === "TRY" && !d.schedule && (accName(d.account_id) ? ` · ${accName(d.account_id)}` : " · hesap?")}
@@ -224,17 +229,21 @@ function Chips<T extends string>({ value, onChange, options, label, cols = "grid
 }
 
 /** Yeni borç/alacak ya da (debt verilirse) var olanı düzenle: PATCH /api/debts/{id}. Borçta (yetenek debt_terms) kime,
- *  nasıl ödenecek ve tarih türü; "Taksitli (ödeme planı)" seçilince plan alanları açılır (yeni borçta bu formda, var
- *  olan borçta Ödeme planı formu). Taksitliden başka koşula geçmek planı kaldırır (onay sorulur). borcOnly: Borç
- *  planı'ndan açılır (yön "borç aldım"). Mobil screens/BorcAlacak.tsx AddDebt aynı alanlar, aynı sözler. */
+ *  nasıl ödenecek ve tarih türü; alacakta (yetenek debt_terms_receivable) aynı yapı: kimden, nasıl geri ödenecek, tarih
+ *  türü (söz / kesin). "Taksitli (ödeme planı)" seçilince plan alanları açılır (yeni kayıtta bu formda, var olanda Ödeme
+ *  planı formu). Taksitliden başka koşula geçmek planı kaldırır (onay sorulur). borcOnly: Borç planı'ndan açılır (yön
+ *  "borç aldım"). Alacakta faiz sorulmaz. Mobil screens/BorcAlacak.tsx AddDebt aynı alanlar, aynı sözler. */
 export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[]; onDone: () => void; debt?: Debt; borcOnly?: boolean }) {
   const ui = useUI();
   const termsCap = useCap("debt_terms");
+  const recvCap = useCap("debt_terms_receivable");
   const known = !debt || ASSETS.some((a) => a.value === debt.asset);
-  const [direction, setDirection] = useState<Debt["direction"]>(borcOnly ? "borc" : debt?.direction ?? "borc");
-  const [creditor, setCreditor] = useState<CreditorType>(debt?.creditor_type ?? (debt?.schedule ? "diger" : "kisi"));
+  const [direction, setDir] = useState<Debt["direction"]>(borcOnly ? "borc" : debt?.direction ?? "borc");
+  const [creditor, setCreditor] = useState<CreditorType>(debt?.creditor_type ?? (debt?.schedule && debt.direction === "borc" ? "diger" : "kisi"));
+  // yön değişince tür yeni yöne uysun (alacakta Vergi / Banka / Mağaza yok)
+  const setDirection = (v: Debt["direction"]) => { setDir(v); setCreditor((c) => yoneUygun(v, c)); };
   const [terms, setTerms] = useState<PayTerms>(debt?.terms ?? (debt?.schedule ? "taksitli" : "parca"));
-  // null: kullanıcı değiştirmedi (sunucu varsayılanı: kurumda kesin, kişide söz); düzenlemede kayıtlı açık değer
+  // null: kullanıcı değiştirmedi (sunucu varsayılanı: borçta kurumda kesin, kişide söz; alacakta söz); düzenlemede kayıtlı açık değer
   const [strict, setStrict] = useState<boolean | null>(debt?.due_strict ?? null);
   const [person, setPerson] = useState(debt?.person ?? "");
   const [asset, setAsset] = useState(debt ? (known ? debt.asset : "_") : "TRY");
@@ -244,7 +253,7 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
   const [due, setDue] = useState(debt?.due_date ?? "");
   const [note, setNote] = useState(debt?.note ?? "");
   const [accountId, setAccountId] = useState<number | null>(debt?.account_id ?? null);
-  // yalnız yeni borçta: ödeme planlı oluştur (var olan borcun planı DebtScheduleSection'da)
+  // yalnız yeni kayıtta: ödeme planlı oluştur (var olanın planı DebtScheduleSection'da)
   const [inst, setInst] = useState("");
   const [count, setCount] = useState("");
   const [endMonth, setEndMonth] = useState("");
@@ -257,27 +266,30 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
   const [rate, setRate] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const borc = direction === "borc";
-  const kosulOn = borc && termsCap; // eski sunucu: yalnız eski alanlar
-  const taksitli = borc && terms === "taksitli";
+  // eski sunucu: yalnız eski alanlar (alacakta debt_terms_receivable yoksa eski form)
+  const kosulOn = termsCap && (borc || recvCap);
+  const metin = kosulMetni(direction);
+  const taksitli = (borc || kosulOn) && terms === "taksitli";
   const plan = !debt && taksitli;
-  // var olan, planı olmayan borçta taksitli seçildi: plan aşağıda Ödeme planı formunda kaydedilir
+  // var olan, planı olmayan kayıtta taksitli seçildi: plan aşağıda Ödeme planı formunda kaydedilir
   const planEkle = !!debt && taksitli && !debt.schedule;
-  const effStrict = strict ?? varsayilanKesin(creditor, terms);
+  const effStrict = strict ?? varsayilanKesin(creditor, terms, direction);
   const kosul = kosulOn ? kosulGovdesi({ creditor, terms, strict, hasDue: !!due }) : {};
   const save = useSave(async () => {
     if (plan) {
       const i = parseAmount(inst);
       const n = Number(count);
       const t = total.trim() ? parseAmount(total) : null;
-      if (!person.trim()) throw new Error("Kime borçlu olduğunu yaz");
+      if (!person.trim()) throw new Error(borc ? "Kime borçlu olduğunu yaz" : "Kimden alacaklı olduğunu yaz");
       if (!(i > 0)) throw new Error("Aylık taksit tutarını yaz");
       if (!(n >= 1) && !endMonth) throw new Error("Taksit sayısını ya da son taksit ayını yaz");
       const dd = Number(day);
       if (!(dd >= 1 && dd <= 31)) throw new Error("Ödeme günü 1 ile 31 arasında olmalı");
-      const body = { person: person.trim(), direction: "borc", asset: "TRY", plan_installment: i,
+      // alacakta faiz sorulmaz (plan_interest ve erken kapatma yok)
+      const body = { person: person.trim(), direction, asset: "TRY", plan_installment: i,
         ...(n >= 1 ? { plan_count: Math.round(n) } : { plan_end: endMonth }), plan_start: startMonth, plan_day: dd,
-        creditor_type: creditor, plan_interest: interest || null, note: note.trim() || null, ...(t != null && t > 0 ? { amount: t } : {}),
-        ...(payoffCap && interest === "var" ? payoffBody(payoff, rate) : {}) };
+        creditor_type: creditor, ...(borc ? { plan_interest: interest || null } : {}), note: note.trim() || null, ...(t != null && t > 0 ? { amount: t } : {}),
+        ...(borc && payoffCap && interest === "var" ? payoffBody(payoff, rate) : {}) };
       return json("POST", "/api/debts", body);
     }
     const a = parseAmount(amount);
@@ -287,17 +299,19 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
     if (debt && a + 1e-9 < debt.paid_amount) throw new Error(`Bu kayda ${fmtAsset(debt.paid_amount, debt.asset)} ödeme yapılmış; miktar bundan az olamaz`);
     // ödeme planı kalkıyor (taksitliden başka koşula): onay; borç silinmez, tutar ve ödemeler değişmez
     const planOff = !!debt?.schedule && kosulOn && !taksitli;
-    if (planOff && !(await ask("Ödeme planı kaldırılsın mı?\n\nBorç silinmez: diğer borç olarak kalır; tutar ve ödemeler değişmez.",
+    if (planOff && !(await ask(borc ? "Ödeme planı kaldırılsın mı?\n\nBorç silinmez: diğer borç olarak kalır; tutar ve ödemeler değişmez."
+      : "Ödeme planı kaldırılsın mı?\n\nAlacak silinmez; tutar ve alınanlar değişmez.",
       { confirm: "Planı kaldır", danger: false }))) throw new Error("Ödeme planı duruyor; koşulu değiştirmedin");
     // ödeme planlı borçta vade taksitlerden gelir: söz tarihi gönderilmez (plan aşağıdaki bölümde)
     const keepPlan = !!debt?.schedule && !planOff;
     const body = { person: person.trim(), direction, asset: unit, amount: a, debt_date: date,
       ...(keepPlan ? {} : { due_date: due || null }), note: note.trim() || null, account_id: unit === "TRY" ? accountId : null,
-      ...(borc && !planEkle ? kosul : {}), ...(planOff ? { plan_off: true } : {}) };
+      ...(!planEkle ? kosul : {}), ...(planOff ? { plan_off: true } : {}) };
     return debt ? json("PATCH", `/api/debts/${debt.id}`, body) : json("POST", "/api/debts", body);
   }, () => { ui.toast(debt ? "Güncellendi" : "Kaydedildi"); onDone(); });
-  const c = ALACAKLI.find((x) => x.value === creditor) ?? ALACAKLI[0];
-  const kosulNot = KOSULLAR.find((x) => x.value === terms)?.note;
+  const c = metin.turler.find((x) => x.value === creditor) ?? metin.turler[0];
+  const kosulNot = metin.kosullar.find((x) => x.value === terms)?.note;
+  const tarihSecili = metin.tarih.find((x) => x.value === (effStrict ? "kesin" : "soz"))!;
   const tlOnly = asset === "TRY" || plan;
 
   return (
@@ -307,14 +321,14 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
       ]} />}
       {kosulOn && (<>
         <div className="space-y-1">
-          <span className="label">Kime</span>
-          <Chips value={creditor} onChange={setCreditor} label="Kime" cols="grid-cols-2 sm:grid-cols-5" testid="borc-kime"
-            options={ALACAKLI.map((x) => ({ value: x.value, label: x.label }))} />
+          <span className="label">{metin.kime}</span>
+          <Chips value={creditor} onChange={setCreditor} label={metin.kime} cols={borc ? "grid-cols-2 sm:grid-cols-5" : "grid-cols-3"} testid="borc-kime"
+            options={metin.turler.map((x) => ({ value: x.value, label: x.label }))} />
         </div>
         <div className="space-y-1">
-          <span className="label">Nasıl ödenecek</span>
-          <Chips value={terms} onChange={setTerms} label="Nasıl ödenecek" testid="borc-kosul"
-            options={KOSULLAR.filter((x) => x.value !== "taksitli" || tlOnly || !!debt?.schedule).map((x) => ({ value: x.value, label: x.label }))} />
+          <span className="label">{metin.nasil}</span>
+          <Chips value={terms} onChange={setTerms} label={metin.nasil} testid="borc-kosul"
+            options={metin.kosullar.filter((x) => x.value !== "taksitli" || tlOnly || !!debt?.schedule).map((x) => ({ value: x.value, label: x.label }))} />
           {kosulNot && <p className="text-xs text-stone-500 dark:text-stone-400" data-testid="borc-turu-not">{kosulNot}</p>}
         </div>
       </>)}
@@ -323,7 +337,7 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
       )}
       {plan ? (<>
         <div>
-          <span className="label">Alacaklının adı</span>
+          <span className="label">{borc ? "Alacaklının adı" : creditor === "kisi" ? "Kişi" : "Adı"}</span>
           <CategoryPicker value={person} onChange={setPerson} options={people} placeholder={c.hint} />
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -354,20 +368,23 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
             <input className="input text-right" inputMode="decimal" placeholder="taksit × sayı" value={total} onChange={(e) => setTotal(e.target.value)} />
           </label>
         </div>
-        <label className="block text-xs">
-          <span className="label">Bu planın faizi / gecikme zammı var mı?</span>
-          <select className="input" value={interest} onChange={(e) => setInterest(e.target.value)}>
-            <option value="">Belirtme</option><option value="yok">Yok</option><option value="var">Var</option><option value="bilmiyorum">Bilmiyorum</option>
-          </select>
-        </label>
-        {payoffCap && interest === "var" && <div className="grid grid-cols-2"><PayoffFields payoff={payoff} setPayoff={setPayoff} rate={rate} setRate={setRate} /></div>}
+        {borc && (
+          <label className="block text-xs">
+            <span className="label">Bu planın faizi / gecikme zammı var mı?</span>
+            <select className="input" value={interest} onChange={(e) => setInterest(e.target.value)}>
+              <option value="">Belirtme</option><option value="yok">Yok</option><option value="var">Var</option><option value="bilmiyorum">Bilmiyorum</option>
+            </select>
+          </label>
+        )}
+        {borc && payoffCap && interest === "var" && <div className="grid grid-cols-2"><PayoffFields payoff={payoff} setPayoff={setPayoff} rate={rate} setRate={setRate} /></div>}
+        {!borc && <p className="text-xs text-stone-500 dark:text-stone-400" data-testid="alacak-plan-not">Taksit günü gelince hatırlatılır; geldiğinde "Aldım" dersin.</p>}
         <input className="input" placeholder="Not (opsiyonel)" value={note} onChange={(e) => setNote(e.target.value)} />
       </>) : planEkle ? (
         <ScheduleForm d={{ ...debt!, creditor_type: creditor }} creditor={creditor} onDone={onDone} />
       ) : (<>
       <div>
-        <span className="label">{borc && kosulOn && creditor !== "kisi" ? "Alacaklının adı" : "Kişi"}</span>
-        <CategoryPicker value={person} onChange={setPerson} options={people} placeholder={borc && kosulOn ? c.hint : "Seç veya yaz"} />
+        <span className="label">{kosulOn && creditor !== "kisi" ? (borc ? "Alacaklının adı" : "Adı") : "Kişi"}</span>
+        <CategoryPicker value={person} onChange={setPerson} options={people} placeholder={kosulOn ? c.hint : "Seç veya yaz"} />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs">
@@ -392,7 +409,7 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
         </label>
         {!(debt?.schedule && taksitli) && (
           <label className="text-xs">
-            <span className="label">{borc && kosulOn ? (effStrict ? "Son ödeme tarihi" : "Söz verdiğin tarih") : "Vade"} (opsiyonel)</span>
+            <span className="label">{kosulOn ? (borc ? (effStrict ? "Son ödeme tarihi" : "Söz verdiğin tarih") : (effStrict ? "Ödeme tarihi" : "Söz verdiği tarih")) : "Vade"} (opsiyonel)</span>
             <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)} />
           </label>
         )}
@@ -401,8 +418,8 @@ export function DebtForm({ people, onDone, debt, borcOnly }: { people: string[];
         <div className="space-y-1">
           <span className="label">Tarih türü</span>
           <Chips value={effStrict ? "kesin" : "soz"} onChange={(v) => setStrict(v === "kesin")} label="Tarih türü" cols="grid-cols-2" testid="borc-tarih-turu"
-            options={TARIH_TURU.map((x) => ({ value: x.value, label: x.label }))} />
-          <p className="text-xs text-stone-500 dark:text-stone-400">{TARIH_TURU.find((x) => x.value === (effStrict ? "kesin" : "soz"))!.note}</p>
+            options={metin.tarih.map((x) => ({ value: x.value, label: x.label }))} />
+          <p className="text-xs text-stone-500 dark:text-stone-400">{tarihSecili.note}</p>
         </div>
       )}
       {asset === "TRY" && (
@@ -455,7 +472,8 @@ function PayDebt({ d, onDone }: { d: Debt; onDone: () => void }) {
           label={d.direction === "borc" ? "Hangi hesaptan ödedin? (nakitse boş)" : "Hangi hesaba geldi? (nakitse boş)"} />
       )}
       <p className="text-xs text-stone-500">{d.schedule?.next
-        ? `Sıradaki taksit yazılı; bütün borcu ödediysen kalanın tamamını (${fmtAsset(d.remaining, "TRY")}) yaz.`
+        ? (d.direction === "alacak" ? `Sıradaki taksit yazılı; tamamını aldıysan kalanın tamamını (${fmtAsset(d.remaining, "TRY")}) yaz.`
+          : `Sıradaki taksit yazılı; bütün borcu ödediysen kalanın tamamını (${fmtAsset(d.remaining, "TRY")}) yaz.`)
         : "Kalanın tamamı kapatır; azını yazarsan kısmi ödeme olarak düşer."}</p>
       {save.error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{(save.error as Error).message}</p>}
       <div className="flex gap-2">

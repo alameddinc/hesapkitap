@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ALACAKLI, KOSULLAR, TARIH_TURU, kosulGovdesi, kosulOzeti, varsayilanKesin } from "./borcKosul.ts";
+import { ALACAKLI, KIMDEN, KOSULLAR, KOSULLAR_ALACAK, TARIH_TURU, TARIH_TURU_ALACAK, kosulGovdesi, kosulMetni, kosulOzeti,
+  kosulRozetleri, varsayilanKesin, yoneUygun } from "./borcKosul.ts";
 
 // tests/test_debt_plan.py BANNED + test_debt_schedule.py RESTRUCTURE
 const BANNED = [/kredi\s*(çek|al|kullan)/, /taksitlendir/, /borç\s*transfer/, /nakit\s*avans/, /ertele/, /refinans/,
@@ -29,7 +30,7 @@ test("gövde: tarih türü yalnız kullanıcı değiştirdiyse ve tarih varsa gi
 
 test("özet satırı", () => {
   assert.equal(kosulOzeti({ creditor_type: "magaza", terms: "tek", strict: true, due_date: "2026-12-01" }),
-    "Mağaza / senet · Tek seferde ödenecek · Kesin tarih");
+    "Mağaza / senet · Tek seferde · Kesin tarih");
   assert.equal(kosulOzeti({ creditor_type: null, terms: "bilinmiyor", strict: false, due_date: null }), "");
 });
 
@@ -37,4 +38,44 @@ test("metinler faizli bir yol önermez", () => {
   const all = [...ALACAKLI.flatMap((x) => [x.label, x.hint]), ...KOSULLAR.flatMap((x) => [x.label, x.note]),
     ...TARIH_TURU.flatMap((x) => [x.label, x.note])].join(" | ").toLocaleLowerCase("tr-TR");
   for (const p of BANNED) assert.doesNotMatch(all, p);
+});
+
+// alacak (yetenek debt_terms_receivable): aynı yapı, yöne göre sözler
+test("alacak: Kimden, Nasıl geri ödenecek, söz varsayılan", () => {
+  const m = kosulMetni("alacak");
+  assert.equal(m.kime, "Kimden");
+  assert.equal(m.nasil, "Nasıl geri ödenecek");
+  assert.deepEqual(m.turler.map((x) => x.label), ["Kişi", "Kurum / firma", "Diğer"]);
+  assert.deepEqual(m.kosullar.map((x) => x.label), ["Parça parça", "Tek seferde", "Taksitli (ödeme planı)", "Bilmiyorum"]);
+  assert.deepEqual(m.tarih.map((x) => x.label), ["Söz verdi (esnek)", "Kesin tarih"]);
+  assert.equal(kosulMetni("borc").kime, "Kime");
+  // tarih türü: alacakta kurumda da söz; taksitlide kesin
+  assert.equal(varsayilanKesin("kurum", "parca", "alacak"), false);
+  assert.equal(varsayilanKesin("kisi", "taksitli", "alacak"), true);
+  // tür yöne uysun (sunucu type_for)
+  assert.equal(yoneUygun("alacak", "banka"), "kurum");
+  assert.equal(yoneUygun("alacak", "kisi"), "kisi");
+  assert.equal(yoneUygun("borc", "kurum"), "diger");
+  assert.equal(yoneUygun("borc", "magaza"), "magaza");
+  // gövde aynı: tarih türü yalnız değiştirilince
+  assert.deepEqual(kosulGovdesi({ creditor: "kurum", terms: "tek", strict: true, hasDue: true }),
+    { creditor_type: "kurum", pay_terms: "tek", due_strict: true });
+});
+
+test("alacak rozetleri", () => {
+  assert.deepEqual(kosulRozetleri({ direction: "alacak", creditor_type: "kisi", terms: "parca", strict: false, due_date: "2026-12-01" }),
+    ["Kişi", "Parça parça", "Söz"]);
+  assert.deepEqual(kosulRozetleri({ direction: "alacak", creditor_type: "kurum", terms: "taksitli", strict: true, due_date: null, schedule: {} }),
+    ["Kurum / firma", "Taksitli"]);
+  assert.deepEqual(kosulRozetleri({ direction: "alacak", creditor_type: "kisi", terms: "parca", strict: false, due_date: "2026-12-01" }, false),
+    ["Kişi", "Parça parça"]);
+  assert.equal(kosulOzeti({ direction: "borc", creditor_type: "magaza", terms: "tek", strict: true, due_date: "2026-12-01" }),
+    "Mağaza / senet · Tek seferde · Kesin tarih");
+});
+
+test("alacak metinleri faiz sormaz, faizli yol önermez", () => {
+  const all = [...KIMDEN.flatMap((x) => [x.label, x.hint]), ...KOSULLAR_ALACAK.flatMap((x) => [x.label, x.note]),
+    ...TARIH_TURU_ALACAK.flatMap((x) => [x.label, x.note])].join(" | ").toLocaleLowerCase("tr-TR");
+  for (const p of BANNED) assert.doesNotMatch(all, p);
+  assert.doesNotMatch(all, /faiz/);
 });

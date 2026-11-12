@@ -347,6 +347,13 @@ CAPABILITIES = (
                               # döviz: fiyatı varsa plana girer); months[].payments[] saving/saved/from_saved/units_text;
                               # this_month.items[] saving/from_saved/pay_total; day_notes, price_note; commitment.saved
                               # [{title, amount, text}]; push "borc" kesin tarihte "ödeme günü"
+    "debt_terms_receivable",  # alacakta da koşullar ve ödeme planı (borçla aynı yapı): POST/PATCH /api/debts direction
+                              # "alacak" {creditor_type kisi|kurum|diger ("Kimden"; yöne uymayan tür çevrilir: vergi/banka/
+                              # mağaza → kurum, borçta kurum → diger), pay_terms taksitli|parca|tek|bilinmiyor, due_strict
+                              # (boşsa söz), plan_* (TL; plan_interest alacakta yok sayılır)}; PUT/DELETE /api/debts/{id}/
+                              # schedule alacakta da; GET /api/debts alacakta da terms, terms_label (Parça parça, Tek
+                              # seferde…), strict, creditor_label ("Kurum / firma"). Borç planı alacağı almaz; push "borc"
+                              # alacakta nötr ("Ahmet: 2. taksit günü bugün", "söz verdiği gün"), rota #/diger/borclar/kayit/<id>
     "card_interest",          # Kartlar ekranında faiz satırı (sunucu hesaplar; debt_plan.card_interest, planla aynı hesap):
                               # GET /api/cards/summary cards[].interest ve GET /api/payables (statement, in_total) [].interest
                               # {state after_due|partial|before_due, level bad|warn|info, remaining, amount (faiz + vergi;

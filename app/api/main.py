@@ -5423,9 +5423,11 @@ class DebtPlanFields(BaseModel):
     plan_end: str | None = Field(default=None, pattern=_YM)     # son taksit ayı (sayı yerine)
     plan_start: str | None = Field(default=None, pattern=_YM)   # ilk taksit ayı
     plan_day: int | None = Field(default=None, ge=1, le=31)
-    creditor_type: Literal["vergi_sgk", "banka", "magaza", "kisi", "diger"] | None = None
+    # borçta kime: vergi_sgk | banka | magaza | kisi | diger; alacakta kimden (yetenek debt_terms_receivable): kisi | kurum |
+    # diger (yöne uymayan tür en yakınına çevrilir: debt_schedule.type_for)
+    creditor_type: Literal["vergi_sgk", "banka", "magaza", "kisi", "diger", "kurum"] | None = None
     plan_interest: Literal["yok", "var", "bilmiyorum"] | None = None
-    # borcun koşulları (yetenek debt_terms; yalnız "borcum", boşsa eski davranış): ödeme koşulu ve tarih türü
+    # kaydın koşulları (yetenek debt_terms, alacakta debt_terms_receivable; boşsa eski davranış): ödeme koşulu, tarih türü
     pay_terms: Literal["taksitli", "parca", "tek", "bilinmiyor"] | None = None
     due_strict: bool | None = None  # true: tarihinde ödenmesi şart (kesin) · false: söz (esnek) · null: varsayılan
     # erken kapatma (yetenek debt_payoff; yalnız faizli planda): bankadan öğrenilen bugün kapatma tutarı, öğrenildiği
@@ -5484,16 +5486,24 @@ class DebtIn(DebtPlanFields):
 
     @model_validator(mode="after")
     def _tl(self):
-        if self.direction == "alacak":  # koşullar yalnız borçta
-            self.pay_terms = self.due_strict = None
+        from app import debt_schedule
+
+        alacak = self.direction == "alacak"
+        noun = "alacakta" if alacak else "borçta"
+        # alacakta da koşullar ve ödeme planı (yetenek debt_terms_receivable); faiz sorusu yok (alacağa faiz sorulmaz)
+        self.creditor_type = debt_schedule.type_for(self.direction, self.creditor_type)
+        if alacak:
+            self.plan_interest = None
+            if self.plan_installment is not None and not self.creditor_type:
+                self.creditor_type = "kisi"
         if self.plan_installment is not None:
-            if self.direction != "borc" or (self.asset or "TRY") != "TRY":
-                raise ValueError("Ödeme planı yalnız TL borçta girilir")
+            if (self.asset or "TRY") != "TRY":
+                raise ValueError(f"Ödeme planı yalnız TL {noun} girilir")
             self.amount = self._plan(self.amount)
             self.due_date = None  # vade taksitlerden gelir
             self.pay_terms = "taksitli"
         elif self.pay_terms == "taksitli":
-            raise ValueError("Taksitli borçta aylık taksiti ve taksit sayısını yaz")
+            raise ValueError(f"Taksitli {noun} aylık taksiti ve taksit sayısını yaz")
         if self.amount is None:
             raise ValueError("Miktar gerekli")
         if (self.asset or "TRY") == "TRY":  # TL borç: kuruşa; gram/adet olduğu gibi
@@ -5565,8 +5575,23 @@ def create_debt(body: DebtIn):
 
 @app.patch("/api/debts/{did}")
 def patch_debt(did: int, body: DebtPatch):
+    from app import debt_schedule
+
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
     data = body.model_dump(exclude_unset=True, exclude={"plan_end", "plan_off", *_PAYOFF_COLS})
+    with db.connect() as c:
+        cur = c.execute("SELECT direction, creditor_type FROM debts WHERE id = ?", (did,)).fetchone()
+    direction = data.get("direction") or (cur["direction"] if cur else None)
+    noun = "alacakta" if direction == "alacak" else "borçta"
+    if cur is not None and ("creditor_type" in data or "direction" in data):
+        # tür kaydın yönüne uysun (alacakta kurum; borçta vergi / banka / mağaza): yön değişince kayıtlı tür de çevrilir
+        ctype = data["creditor_type"] if "creditor_type" in data else cur["creditor_type"]
+        fixed = debt_schedule.type_for(direction, ctype)
+        if fixed != ctype or "creditor_type" in data:
+            data["creditor_type"] = fixed
+            body.creditor_type = fixed
+    if direction == "alacak" and "plan_interest" in data:  # alacağa faiz sorulmaz
+        data["plan_interest"] = body.plan_interest = None
     payoff = body._payoff()
     if any(v is not None for v in payoff.values()):
         with db.connect() as c:
@@ -5589,7 +5614,7 @@ def patch_debt(did: int, body: DebtPatch):
         with db.connect() as c:
             row = c.execute("SELECT plan_installment FROM debts WHERE id = ?", (did,)).fetchone()
         if row is not None and not row["plan_installment"]:
-            raise HTTPException(422, "Taksitli borçta ödeme planını ekle (aylık taksit ve taksit sayısı)")
+            raise HTTPException(422, f"Taksitli {noun} ödeme planını ekle (aylık taksit ve taksit sayısı)")
     if data.get("amount") is not None:  # ödenmiş kısımdan aşağı indirilemez (fazla ödeme kalırdı)
         with db.connect() as c:
             paid = c.execute("SELECT COALESCE(SUM(amount), 0) FROM debt_payments WHERE debt_id = ?", (did,)).fetchone()[0]
@@ -5628,10 +5653,11 @@ def put_debt_schedule(did: int, body: DebtScheduleIn):
         pays = db.rows(c.execute("SELECT amount, paid_at FROM debt_payments WHERE debt_id = ?", (did,)))
     if not d:
         raise HTTPException(404, "Kayıt yok")
-    if d["direction"] != "borc" or (d["asset"] or "TRY") != "TRY":
-        raise HTTPException(422, "Ödeme planı yalnız TL borçta eklenir")
+    alacak = d["direction"] == "alacak"  # alacakta da (yetenek debt_terms_receivable); borç planı alacağı almaz
+    if (d["asset"] or "TRY") != "TRY":
+        raise HTTPException(422, f"Ödeme planı yalnız TL {'alacakta' if alacak else 'borçta'} eklenir")
     if d["settled_at"] or d["written_off_at"]:
-        raise HTTPException(422, "Bu borç kapanmış; ödeme planı eklenemez")
+        raise HTTPException(422, f"Bu {'alacak' if alacak else 'borç'} kapanmış; ödeme planı eklenemez")
     inst = money.money(body.plan_installment)
     start = body.plan_start or date.today().isoformat()[:7]
     amount = money.money(body.amount) if body.amount is not None else d["amount"]
@@ -5646,13 +5672,14 @@ def put_debt_schedule(did: int, body: DebtScheduleIn):
         raise HTTPException(422, "Taksit sayısını ya da son taksit ayını yaz")
     if count > debt_schedule.MAX_COUNT:
         raise HTTPException(422, f"Taksit sayısı 1 ile {debt_schedule.MAX_COUNT} arasında olmalı")
+    ctype = debt_schedule.type_for(d["direction"], body.creditor_type or d["creditor_type"]) or ("kisi" if alacak else "diger")
     data = {"plan_installment": inst, "plan_count": count, "plan_start": start, "plan_day": body.plan_day or 1,
-            "creditor_type": body.creditor_type or d["creditor_type"] or "diger", "plan_interest": body.plan_interest,
+            "creditor_type": ctype, "plan_interest": None if alacak else body.plan_interest,
             "due_date": None, "pay_terms": "taksitli"}  # vade taksitlerden gelir
     # erken kapatma: yalnız gönderilen alanlar yazılır (eski istemci planı düzenleyince girilen tutar silinmez); faiz
     # "var" değilse silinir
     payoff = body._payoff()
-    if body.plan_interest != "var":
+    if data["plan_interest"] != "var":
         if any(v is not None for v in payoff.values()):
             raise HTTPException(422, _PAYOFF_ONLY_INTEREST)
         payoff = {k: None for k in _PAYOFF_COLS}
