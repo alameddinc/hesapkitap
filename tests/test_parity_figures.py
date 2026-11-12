@@ -121,6 +121,8 @@ def test_cross_endpoint_invariants(clients):
     # harcanabilir = parçaların işaretli toplamı (istemci yalnız gösterir)
     parts = nw["spendable_parts"]
     assert round(sum(p["amount"] if p["sign"] == "+" else -p["amount"] for p in parts), 2) == nw["spendable"]
-    for k in ("card_debt", "cash", "spendable", "net"):
+    for k in ("card_debt", "cash", "spendable", "net", "net_display"):
         assert nw["totals"][k] == nw[k], k
+    # gösterilen Net durum = eski net − kesilecek kart ekstresi (tahmini); eski ad net_after_estimates aynı rakam
+    assert nw["net_display"] == round(nw["net"] - nw["card_estimated"], 2) == nw["net_after_estimates"]
     assert nw["reserved"] > 0 and nw["receivable"] == s["receivable"]

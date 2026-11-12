@@ -197,3 +197,83 @@ def test_statement_help_single_source(client):
     assert {x.get("platform") for x in allp["tips"]} == {"web", "mobile", None}
     assert client.get("/api/statement-help", params={"platform": "tv"}).status_code == 422
     assert "statement_help" in client.get("/api/meta").json()["capabilities"]
+
+
+# ---------------------------------------------------------------- Özet sade: son ekstrelerdeki faiz ve "Bu ay ödenecek"
+
+def _st(c, bank, card, period_end, due, total):
+    c.execute("INSERT INTO statements (file_hash, filename, bank, card_no, period_end, due_date, total_debt) "
+              "VALUES (?, 'x.pdf', ?, ?, ?, ?, ?)", (f"h{card}{period_end}", bank, card, period_end, due, total))
+
+
+def test_interest_latest_uses_last_statements_not_period_name(client, tmpdb):
+    """Ay dönümü maaş günü (16): Kasım başında kesilen ekstreler dönem adına göre "Eylül/Ekim döneminde" görünüyordu.
+    interest_latest kart başına SON ekstreye bakar; kaynak "Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri"."""
+    with tmpdb.connect() as c:
+        _st(c, "Mavi Bank", "4111***1111", "2026-10-07", "2026-10-17", 9000.00)  # eski ekstre: sayılmaz
+        _fee(c, "2026-10-07", "ALIŞVERİŞ FAİZİ (Oran:3.75)", 999.00)
+        _st(c, "Mavi Bank", "4111***1111", "2026-11-07", "2026-11-17", 12000.00)
+        _fee(c, "2026-11-07", "ALIŞVERİŞ FAİZİ (Oran:3.75)", 800.00)
+        _fee(c, "2026-11-07", "BSMV", 120.00)
+        _st(c, "Örnek Bank", "5400***2222", "2026-11-05", "2026-11-15", 4000.00)
+        _fee(c, "2026-11-05", "YILLIK KART AIDATI", 194.82, card="5400***2222")
+    tmpdb.set_cycle_start_day(16)
+    from app import finance, first_look
+
+    today = date(2026, 11, 11)
+    p = first_look.latest_fees(today)
+    assert (p["total"], p["interest"], p["tax"], p["fee"], p["count"], p["state"]) == (1114.82, 800.0, 120.0, 194.82, 3, "var")
+    assert p["source"] == "Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri"
+    assert [(s["bank"], s["last4"], s["total"]) for s in p["statements"]] == [("Mavi Bank", "1111", 920.0), ("Örnek Bank", "2222", 194.82)]
+    # Özet yanıtında (içinde bulunulan dönem ne olursa olsun aynı) ve yetenek listesinde
+    s = finance.summary(finance.current_period(today), today=today)
+    assert s["interest_latest"]["total"] == 1114.82
+    assert "summary_interest_latest" in client.get("/api/meta").json()["capabilities"]
+    # tek ekstre: "… ekstresi"; üç kart: "3 ekstre"; aynı bankanın iki kartı son dört haneyle
+    with tmpdb.connect() as c:
+        _st(c, "Mavi Bank", "4111***3333", "2026-11-03", "2026-11-13", 100.00)
+    assert first_look.latest_fees(today)["source"] == "3 ekstre"
+    assert first_look.latest_fees(date(2026, 11, 4))["source"] == "Mavi Bank …3333 3 Kas · Mavi Bank …1111 7 Eki ekstreleri"
+
+
+def test_interest_latest_states_and_stale_card(client, tmpdb):
+    from app import first_look
+
+    assert first_look.latest_fees(date(2026, 11, 11)) is None  # hiç kart ekstresi yok: satır yok
+    with tmpdb.connect() as c:
+        _st(c, "Mavi Bank", "4111***1111", "2026-11-07", "2026-11-17", 12000.00)
+        _st(c, "Örnek Bank", "5400***2222", "2026-05-05", "2026-05-15", 4000.00)  # aylardır ekstresi yok: sayılmaz
+        _fee(c, "2026-05-05", "ALIŞVERİŞ FAİZİ (Oran:3.75)", 50.00, card="5400***2222")
+    p = first_look.latest_fees(date(2026, 11, 11))
+    assert (p["state"], p["total"], p["statement_count"], p["source"]) == ("yok", 0.0, 1, "Mavi Bank 7 Kas ekstresi")
+
+
+def test_interest_latest_hidden_for_member(owner):  # noqa: F811
+    _setup_book(owner)
+    m = _member(owner)
+    owner.put("/api/book/rules", json={"hide_fees": True})
+    assert m.get("/api/summary").json()["interest_latest"] is None
+
+
+def test_payables_this_period(client, tmpdb):
+    """Özet "Bu ay ödenecek": dönem sonuna kadar vadesi gelen (geçmiş dahil), toplama giren kalemlerin kalanı."""
+    from app import finance
+
+    today = date(2026, 11, 11)
+    with tmpdb.connect() as c:
+        _st(c, "Mavi Bank", "4111***1111", "2026-11-07", "2026-11-17", 12000.00)
+        _st(c, "Örnek Bank", "5400***2222", "2026-10-28", "2026-11-08", 3000.00)  # günü geçti
+        _st(c, "Örnek Bank", "5400***4444", "2026-11-25", "2026-12-05", 700.00)  # vadesi dönem dışında (henüz kesilmedi)
+    tmpdb.create_bill({"provider": "Örnek Elektrik", "amount": 450.0, "due_date": "2026-11-20", "category": "Elektrik"})
+    t = finance.payables_totals(today=today)["this_period"]
+    assert t["month"] == finance.current_period(today) and t["end"] == "2026-11-30"
+    bill = 450.0
+    assert t["total"] == 15000.0 + bill and t["overdue"] == 3000.0 and t["overdue_count"] == 1
+    assert t["next_due"] == "2026-11-17"
+    assert "payables_this_period" in client.get("/api/meta").json()["capabilities"]
+    # yarısı ödenince kalanı
+    with tmpdb.connect() as c:
+        c.execute("UPDATE statements SET paid_amount = 6000 WHERE card_no = '4111***1111'")
+    assert finance.payables_totals(today=today)["this_period"]["total"] == 9000.0 + bill
+    # API: ?totals=1 yanıtında
+    assert "this_period" in client.get("/api/payables", params={"totals": 1}).json()["totals"]

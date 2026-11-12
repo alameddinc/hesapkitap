@@ -587,7 +587,16 @@ def summary(month: str, today: date | None = None) -> dict:
         # "Bu dönem ödenen faiz ve ücret" kartı (yetenek "summary_interest_paid"; interest_paid). Ortak defterde faiz
         # gizliyse null (kart yok)
         "interest_paid": paid,
+        # Özet faiz satırı (yetenek "summary_interest_latest"; first_look.latest_fees): kart başına son ekstredeki faiz ve
+        # ücret, dönem adı yerine ekstreye dayalı ("Son ekstrelerinde faiz ve ücret ₺X"). Ortak defterde gizliyse null
+        "interest_latest": _latest_fees(today),
     }
+
+
+def _latest_fees(today: date | None) -> dict | None:
+    from app import first_look
+
+    return first_look.latest_fees(today)
 
 
 def interest_paid(month: str, rows: list[dict] | None = None, statements: list[dict] | None = None) -> dict | None:
@@ -1779,8 +1788,18 @@ def payables_totals(today: date | None = None, items: list[dict] | None = None, 
     paid_m = [p for p in items if p["status"] == "odendi" and (p.get("paid_at") or "")[:7] == this_month]
     out_paid = {"month": this_month, "total": _round(sum(p["paid_amount"] or p["amount"] for p in paid_m)),
                 "count": len(paid_m)}
+    # Özet "Bu ay ödenecek" (yetenek "payables_this_period"): içinde bulunulan dönemin sonuna kadar vadesi gelen (ya da
+    # geçmiş) ve toplama giren kalemlerin kalanı — ekstreler (taksitler içinde), faturalar, borç taksitleri. Kesilmemiş
+    # ekstrenin tahmini toplama girmez, ayrı: estimated
+    p_end = period_bounds(current_period(today))[1].isoformat()
+    in_p = [p for p in inc if p["due_date"] <= p_end and money.gt(rem(p), 0)]
+    out_period = {"month": current_period(today), "end": p_end, "total": _round(sum(rem(p) for p in in_p)),
+                  "count": len(in_p), "overdue": _round(sum(rem(p) for p in in_p if p["days_left"] < 0)),
+                  "overdue_count": len([p for p in in_p if p["days_left"] < 0]),
+                  "next_due": min((p["due_date"] for p in in_p if p["days_left"] >= 0), default=None),
+                  "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate" and p["due_date"] <= p_end))}
     return {"open": _round(sum(rem(p) for p in inc)), "open_count": len(inc), "window": out_window,
-            "paid_this_month": out_paid,
+            "paid_this_month": out_paid, "this_period": out_period,
             "card_debt": db.card_debt_at(today.isoformat()), "statements": by["statement"], "bills": by["bill"],
             "debts": by["debt"], "overdue": _round(sum(rem(p) for p in rolled)), "overdue_count": len(rolled),
             "estimated": _round(sum(p["amount"] for p in items if p["type"] == "estimate"))}
@@ -2539,7 +2558,16 @@ def simulate_purchase(amount: float, installments: int, monthly_rate: float = 0.
 # ---------------------------------------------------------------- net varlık (hesaplar tamponu)
 
 def net_worth(today: date | None = None) -> dict:
-    """Bankada/nakitte ne var, kartlara ne borçlusun, alacak/borç → bugünkü net durum."""
+    """Bankada/nakitte ne var, kartlara ne borçlusun, alacak/borç → bugünkü net durum.
+
+    Net durum alanları:
+    - net_display (yetenek "net_display"; totals.net_display aynı): ekranda gösterilen Net durum. = nakit + yemek/hediye
+      kartı + altın/döviz ("Ben") − kart ekstresi (kesilmiş, ödenmemiş) − kesilecek kart ekstresi (tahmini, card_estimated)
+      + alacak − TL borç − ödenmemiş zekât. Yeni istemci bunu gösterir, alt metni "kesilecek kart ekstresi dahil".
+      net_after_estimates ile aynı rakam (o eski adıyla da kalır).
+    - net (ve totals.net): eski tanım, kesilecek ekstre DÜŞÜLMEZ. Eski istemciler bunu "Net durum" diye gösteriyor;
+      anlamı değişmez (kırılmasın).
+    Harcanabilir (spendable) değişmedi: yalnız kesilmiş ekstre düşülür."""
     today = today or date.today()
     accounts = db.list_accounts()
     cash = sum(a["current"] for a in accounts if a["current"] is not None)
@@ -2607,18 +2635,21 @@ def net_worth(today: date | None = None) -> dict:
         ("payable", "TL borçların" + (" (kumbarada ayrılan kısmı hariç)" if in_jar else ""), payable_sp, "−"),
         ("reserved", "Kumbaraya ayrılan", jars["total"], "−"),
         ("zakat_due", "Ödenmemiş zekât", zakat_due, "−"))]
+    # ekranda gösterilen Net durum: kesilecek kart ekstresi (tahmini) de düşülür (docstring)
+    net_disp = _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable - zakat_due)
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "spendable": _round(spendable), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
             "card_estimated": _round(card_est), "receivable": _round(receivable), "payable": _round(payable),
             "wallets": wallets, "in_wallets": _round(in_wallets), "credit_cards": credit_cards, "unknown_banks": seen_banks,
             "holdings": hold["self_total"], "family_holdings": hold["family_total"], "zakat_due": zakat_due,
             "net": _round(cash + in_wallets + hold["self_total"] - card_debt + receivable - payable - zakat_due),
-            "net_after_estimates": _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable
-                                          - zakat_due),
+            "net_after_estimates": net_disp,
+            "net_display": net_disp,
             "card_overdue": overdue,  # ödenmemiş eski ekstreler (kalanı son ekstrede; toplamlara girmez)
             "totals": {"card_debt": _round(card_debt), "card_estimated": _round(card_est),
                        "card_overdue": _round(sum(o["amount"] for o in overdue)), "cash": _round(cash),
                        "spendable": _round(spendable), "net": _round(cash + in_wallets + hold["self_total"] - card_debt
-                                                                    + receivable - payable - zakat_due)},
+                                                                    + receivable - payable - zakat_due),
+                       "net_display": net_disp},
             "spendable_parts": spendable_parts,  # formülün kalemleri (sign '+'/'−'); istemci yalnız gösterir
             "spendable_explain": SPENDABLE_EXPLAIN + (SPENDABLE_JAR_NOTE if in_jar else ""),
             "stale": stale}
@@ -2636,7 +2667,10 @@ SPENDABLE_JAR_NOTE = (" Bir borç için kumbarada biriktirdiğin para o borcun k
 
 def net_worth_at(day: date) -> dict:
     """Geçmiş bir günün net durumu (yaklaşık): o günkü banka bakiyeleri (bugünkü çapadan geriye hareketlerle),
-    o gün ödenmemiş kart ekstreleri, açık borç/alacak, o günün fiyatıyla altın/döviz ("Ben"). Yemek kartları dahil değil."""
+    o gün ödenmemiş kart ekstreleri, açık borç/alacak, o günün fiyatıyla altın/döviz ("Ben"). Yemek kartları dahil değil.
+    Tanım: o güne kadar KESİLMİŞ ekstreler düşülür; o gün henüz kesilmemiş kart harcaması (bugünkü net_display'deki
+    "kesilecek kart ekstresi (tahmini)") düşülmez — geçmiş günün tahmini yok. İstemci alt metni "kesilmiş ekstreler
+    dahil" yazar."""
     from app import zakat
 
     d = day.isoformat()

@@ -315,10 +315,21 @@ export interface Summary {
   vs_prev?: VsPrev | null;
   /** "Bu dönem ödenen faiz ve ücret" kartı (yetenek summary_interest_paid; eski sunucuda yok). null: ortak defterde faiz gizli */
   interest_paid?: InterestPaid | null;
+  /** Özet faiz satırı (yetenek summary_interest_latest; eski sunucuda yok): kart başına son ekstredeki faiz ve ücret.
+   *  null: ortak defterde faiz gizli ya da hiç kart ekstresi yok */
+  interest_latest?: InterestLatest | null;
 }
 
 /** Sunucu finance.interest_paid: total = totals.fees = Faiz sayfasının o ayı. state: var (faiz/ücret var) | yok (bu dönemin
  *  ekstresi var, faiz yok) | ekstre_yok (bu dönemin kart ekstresi henüz yok). has_cards false: hiç kart ekstresi yok. */
+/** Sunucu first_look.latest_fees: kart başına SON ekstredeki faiz/vergi/ücret (dönem adına bakmaz). source: "Mavi Bank 7 Kas ·
+ *  Örnek Bank 5 Kas ekstreleri" ya da "3 ekstre" (metin sunucuda). */
+export interface InterestLatest {
+  total: number; interest: number; tax: number; fee: number; count: number; state: "var" | "yok"; statement_count: number;
+  statements: { id: number; bank: string; last4: string; period_end: string; total: number }[];
+  source: string;
+}
+
 export interface InterestPaid {
   total: number; interest: number; tax: number; fee: number; count: number; statements: number; has_cards: boolean;
   state: "var" | "yok" | "ekstre_yok";
@@ -412,6 +423,8 @@ export interface PayableTotals {
   open: number; open_count: number; card_debt: number; statements: number; bills: number; debts: number;
   overdue: number; overdue_count: number; estimated: number;
   window?: { days: number; total: number; count: number; overdue: number; estimated: number } | null;
+  /** Özet "Bu ay ödenecek" (yetenek payables_this_period): dönem sonuna kadar vadesi gelen ya da geçmiş, toplama girenler */
+  this_period?: { month: string; end: string; total: number; count: number; overdue: number; overdue_count: number; next_due: string | null; estimated: number };
 }
 
 export interface BillDraft {

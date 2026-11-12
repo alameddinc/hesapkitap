@@ -26,7 +26,7 @@
     "web_src": "web/src/pages/Transactions.tsx", "mobile_src": "src/screens/Islemler.tsx"},
   "net.harcanabilir": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "spendable",
     "web_src": "web/src/components/NetWorth.tsx", "mobile_src": "src/screens/Ozet.tsx"},
-  "net.durum": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "net",
+  "net.durum": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "net_display",
     "web_src": "web/src/components/NetWorth.tsx", "mobile_src": "src/screens/Ozet.tsx"},
   "net.ekstre_sonrasi": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "net_after_estimates",
     "web_src": "web/src/components/NetWorth.tsx", "mobile_src": "src/components/para/NetDurum.tsx"},
@@ -53,5 +53,9 @@
   "borc_plani.toplam": {"web": "/api/debt-plan", "mobile": "/api/debt-plan", "path": "totals.open",
     "web_src": "web/src/pages/DebtPlan.tsx", "mobile_src": "src/screens/BorcPlani.tsx"},
   "borc_plani.kart": {"web": "/api/debt-plan", "mobile": "/api/debt-plan", "path": "totals.cards",
-    "web_src": "web/src/pages/DebtPlan.tsx", "mobile_src": "src/screens/BorcPlani.tsx"}
+    "web_src": "web/src/pages/DebtPlan.tsx", "mobile_src": "src/screens/BorcPlani.tsx"},
+  "ozet.bu_ay_odenecek": {"web": "/api/payables?totals=1&days=15", "mobile": "/api/payables?totals=1&days=15", "path": "totals.this_period.total",
+    "web_src": "web/src/components/TekBakis.tsx", "mobile_src": "src/components/ozet/TekBakis.tsx"},
+  "ozet.son_ekstre_faiz": {"web": "/api/summary?month={month}", "mobile": "/api/summary?month={month}", "path": "interest_latest.total",
+    "web_src": "web/src/components/TekBakis.tsx", "mobile_src": "src/components/ozet/TekBakis.tsx"}
 }

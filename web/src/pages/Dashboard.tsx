@@ -3,7 +3,7 @@ import { rowTotals } from "../lib/counts";
 import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "../components/TerimBilgi";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { api, type Insight, type Row, type VsPrev } from "../api";
 import BarList from "../components/BarList";
 import { BudgetForm, BudgetList } from "../components/Budgets";
@@ -33,7 +33,8 @@ import { DonemSonuKarti } from "../components/Beklenen";
 import DebtPlanCard from "../components/DebtPlanCard";
 import SadakaOzetKarti from "../components/SadakaOzet";
 import FaizOzetKarti from "../components/FaizOzet";
-import { kayitDuzeni, ozetDuzeni } from "../lib/ozetDuzen";
+import { kayitDuzeni, ozetDuzeni, SADE_RED, sadeMi, sadeOnerisi, sadeyeGecir } from "../lib/ozetDuzen";
+import TekBakis, { AyrintiBaslik, ayrintiAcikMi, ayrintiKaydet, SadeOneri } from "../components/TekBakis";
 import { boundsOf, cx, signed, tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
@@ -93,9 +94,13 @@ function Section({ title, children, right }: { title: string; children: React.Re
 
 // Özet bileşenleri: sırası ve hangilerinin görüneceği kişiye özel (Düzenle). module: ait olduğu özellik/sayfa.
 export const WIDGETS: Record<string, { title: string; module?: string; cap?: string }> = {
+  // sade düzenin üstü (hep en üstte, kaldırılmaz): Harcanabilir + dönem sonu tahmini, uyarı şeridi, en önemli 3 satır
+  sade: { title: "Tek bakış" },
+  // ayraç (kaldırılmaz, taşınır): ardındakiler kapalı "Ayrıntılar" bölümünde
+  ayrinti: { title: "Ayrıntılar" },
   kartlar: { title: "Gelir · gider · net · faiz" },
   // dokununca Faiz ve ücretler; sunucu interest_paid vermiyorsa (eski sunucu) listede yok
-  "faiz-ucret": { title: "Bu dönem ödenen faiz ve ücret", cap: "summary_interest_paid" },
+  "faiz-ucret": { title: "Son ekstrelerdeki faiz ve ücret", cap: "summary_interest_paid" },
   "donem-sonu": { title: "Dönem sonu", module: "plan" },
   gelenler: { title: "Telefondan gelenler" },
   baslarken: { title: "Başlarken" },
@@ -119,8 +124,13 @@ export const WIDGETS: Record<string, { title: string; module?: string; cap?: str
   // ritim (Her Cuma / Ayda bir) seçiliyse son sadakadan beri geçen süre ve süreklilik; seçim yoksa görünmez
   sadaka: { title: "Sadaka", module: "zekat", cap: "sadaka_reminder" },
 };
-export const DEFAULT_LAYOUT = ["kartlar", "faiz-ucret", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "sadaka", "butceler", "kategoriler", "isyerleri",
-  "istatistik-link", "odemeler"];
+// Varsayılan sade: üstte Tek bakış (ve kurulum / telefondan gelenler: yalnız iş varken görünür), gerisi kapalı Ayrıntılar'da.
+// Faiz kartı yok: Tek bakış'ın 3. satırı aynı bilgi (Düzenle'den eklenebilir). Kendi düzenini kaydetmiş kullanıcının düzeni
+// değişmez; bir kez "Yeni sade Özet'i dene" önerisi (lib/ozetDuzen).
+export const DEFAULT_LAYOUT = ["sade", "baslarken", "gelenler", "ayrinti", "kartlar", "donem-sonu", "uyarilar", "odemeler", "net", "zekat", "sadaka",
+  "kumbaralar", "borc-plani", "butceler", "kategoriler", "isyerleri", "istatistik-link"];
+/** Sadeye geçerken Ayrıntılar'ın üstünde kalanlar (yalnız iş varken görünür). */
+const SADE_UST = ["baslarken", "gelenler"];
 
 export default function Dashboard() {
   const ui = useUI();
@@ -161,7 +171,25 @@ export default function Dashboard() {
   const [editing, setEditing] = useState(false);
   // sonradan eklenen bileşen (Dönem sonu) kayıtlı düzende de görünür; kaldırılınca işaretiyle saklanır (lib/ozetDuzen)
   const layout = ozetDuzeni(prefs.layout, (id) => !!WIDGETS[id], DEFAULT_LAYOUT);
-  const setLayout = (next: string[]) => savePrefs.mutate({ layout: kayitDuzeni(next) });
+  const red = !!prefs.layout?.includes(SADE_RED); // sade öneriye "Kalsın" demiş: işaret korunur
+  const setLayout = (next: string[]) => savePrefs.mutate({ layout: kayitDuzeni(next, red) });
+  const current = month === (meta?.current_month ?? month);
+  // sade düzen (Tek bakış + kapalı Ayrıntılar) yalnız içinde bulunulan dönemde; geçmiş dönemde bileşenler açık sırayla,
+  // gelir/gider kartları en üstte (Harcanabilir ve "Bu ay ödenecek" bugünün rakamı)
+  const sadeDuzen = sadeMi(layout);
+  const sade = sadeDuzen && current;
+  const gorunen = sadeDuzen && !current ? ["kartlar", ...layout.filter((id) => id !== "sade" && id !== "ayrinti" && id !== "kartlar")] : layout;
+  const [acik, setAcik] = useState(ayrintiAcikMi);
+  const toggleAcik = () => { ayrintiKaydet(!acik); setAcik(!acik); };
+  // Tek bakış satırından Ayrıntılar'daki bileşene: kapalıysa açılır, sonra kayar
+  const kaydir = (id: string) => {
+    if (!acik) { ayrintiKaydet(true); setAcik(true); }
+    setTimeout(() => {
+      const el = document.getElementById(`w-${id}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      else ui.toast(`${WIDGETS[id]?.title ?? "Bu bölüm"} Özet'te kapalı; Düzenle'den ekleyebilirsin`);
+    }, 60);
+  };
   const move = (id: string, d: number) => {
     const next = [...layout];
     const i = next.indexOf(id);
@@ -195,7 +223,13 @@ export default function Dashboard() {
   const render = (id: string): React.ReactNode => {
     if (!s) return null;
     switch (id) {
-      case "kartlar": return (<>
+      // sade düzende gelir/gider kartları Ayrıntılar'da: büyük rakam yok (Tek bakış'ın 2. satırı), kartlar her boyda
+      case "kartlar": return sade ? (<>
+        <div className={cx("grid grid-cols-2 gap-2 sm:gap-3", feesHidden ? "lg:grid-cols-3" : "lg:grid-cols-4")}>{kpis}</div>
+        <EstimateNote summary={s} />
+        <TaksitSatiri summary={s} />
+        <YearShortcut />
+      </>) : (<>
         {/* telefon: tek büyük rakam + üç küçük; ayrıntılar masaüstündeki kartlarda */}
         <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 p-5 text-white shadow-lg shadow-blue-600/20 sm:hidden">
           <div aria-hidden className="pointer-events-none absolute -top-16 -right-10 size-48 rounded-full bg-white/10 blur-2xl" />
@@ -225,7 +259,22 @@ export default function Dashboard() {
             )}
           </div>
         </section>
-        <div className={cx("hidden grid-cols-2 gap-2 sm:grid sm:gap-3", feesHidden ? "lg:grid-cols-3" : "lg:grid-cols-4")}>
+        <div className={cx("hidden grid-cols-2 gap-2 sm:grid sm:gap-3", feesHidden ? "lg:grid-cols-3" : "lg:grid-cols-4")}>{kpis}</div>
+        <div className="hidden sm:block"><EstimateNote summary={s} /></div>
+        {/* harcamanın taksit kırılımı: harcamaya eklenmez (sunucu finance.installments_due) */}
+        <TaksitSatiri summary={s} />
+        {/* Aralık sonu / Ocak başı: "2026 yılın nasıl geçti?" → yıl özeti (yalnız içinde bulunulan dönemde) */}
+        {month === meta?.current_month && <YearShortcut />}
+      </>);
+      case "sade": return current ? <TekBakis s={s} kiyas={kiyas} kaydir={kaydir} /> : null;
+      // ayraç: düzenlerken çizgi, değilse bölüm başlığı ayrıca çizilir
+      case "ayrinti": return editing ? (
+        <div className="flex items-center gap-2 rounded-xl border border-dashed border-stone-300 px-3 py-2 text-xs text-stone-500 dark:border-stone-700">
+          <ChevronDown size={14} /> Bunun altındakiler kapalı "Ayrıntılar" bölümünde</div>) : null;
+      default: return renderDiger(id);
+    }
+  };
+  const kpis: ReactNode = !s ? null : (<>
           <Kpi label="Gelir" value={s.totals.income} tone="green"
             sub={s.pending.income || (s.totals.interest_income ?? 0) > 0 ? <>
               {s.pending.income ? <span className="block">+{tl(s.pending.income)} bekliyor</span> : null}
@@ -237,15 +286,16 @@ export default function Dashboard() {
           <Kpi label={<>{TERIM.artan.ad} (bu dönem) <TerimBilgi id="artan" metin={s.definitions?.left} /></>} value={left} tone={left < 0 ? "red" : "green"}
             sub={s.totals.debt_flow ? `borç/alacak hareketleri ayrı: ${signed(s.totals.debt_flow > 0 ? "+" : "", tl(s.totals.debt_flow))}` : TERIM.artan.kisa} />
           {!feesHidden && (
-            <Kpi label="Faiz & ücret" value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
-              sub={s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
-        </div>
-        <div className="hidden sm:block"><EstimateNote summary={s} /></div>
-        {/* harcamanın taksit kırılımı: harcamaya eklenmez (sunucu finance.installments_due) */}
-        <TaksitSatiri summary={s} />
-        {/* Aralık sonu / Ocak başı: "2026 yılın nasıl geçti?" → yıl özeti (yalnız içinde bulunulan dönemde) */}
-        {month === meta?.current_month && <YearShortcut />}
-      </>);
+            // sade düzende (Ayrıntılar'daki kartlar) dönem bazlı olduğu açık yazılır; bu dönem 0 iken son ekstrelerde faiz
+            // varsa küçük not (Tek bakış'ın 3. satırıyla çelişkili görünmesin)
+            <Kpi label={sade ? "Bu dönem faiz" : "Faiz & ücret"} value={s.totals.fees} tone={s.totals.fees > 0 ? "red" : undefined}
+              sub={sade && s.totals.fees <= 0 && s.interest_latest?.state === "var"
+                ? <span data-testid="faiz-son-ekstre">son ekstrede {tl(s.interest_latest.total)}</span>
+                : s.totals.refunds ? `İade ${tl(s.totals.refunds)}` : undefined} />)}
+  </>);
+  const renderDiger = (id: string): React.ReactNode => {
+    if (!s) return null;
+    switch (id) {
       // dönem sonu tahmini (Planlama'nın bu ayı): yalnız bu ve ileri dönemde (geçmişte expected null → kart yok)
       case "donem-sonu": return <DonemSonuKarti summary={s} />;
       // ortak defterde faiz gizliyse sunucu interest_paid null → kart yok
@@ -311,6 +361,43 @@ export default function Dashboard() {
     }
   };
 
+  // bir bileşen (düzenlerken çerçevesi ve taşıma/kaldırma düğmeleriyle); görünmeyen ya da boş bileşen null
+  const item = (id: string) => {
+    const w = WIDGETS[id];
+    if (!w || !shown(id)) return null;
+    const body = render(id);
+    if (!body) return null;
+    const i = layout.indexOf(id);
+    const kilit = sadeDuzen && id === "sade"; // Tek bakış hep en üstte
+    const ilk = sadeDuzen ? 1 : 0; // sade düzende kimse Tek bakış'ın üstüne çıkamaz
+    return (
+      <div key={id} id={`w-${id}`} className={editing ? "relative rounded-xl ring-2 ring-blue-300 ring-offset-2 dark:ring-blue-800 dark:ring-offset-stone-950" : undefined}>
+        {editing && (
+          <div className="mb-1 flex items-center gap-1 text-xs">
+            <span className="mr-auto font-medium text-blue-700 dark:text-blue-400">{w.title}{kilit ? " · hep en üstte" : ""}</span>
+            {!kilit && <>
+              <button className="btn-ghost p-1" aria-label="Yukarı" disabled={i <= ilk} onClick={() => move(id, -1)}><ArrowUp size={14} /></button>
+              <button className="btn-ghost p-1" aria-label="Aşağı" disabled={i === layout.length - 1} onClick={() => move(id, 1)}><ArrowDown size={14} /></button>
+              {id !== "ayrinti" && <button className="btn-ghost p-1 text-red-600" aria-label="Kaldır" onClick={() => setLayout(layout.filter((x) => x !== id))}><X size={14} /></button>}
+            </>}
+          </div>
+        )}
+        {body}
+        {id === "uyarilar" && detailBlock}
+      </div>
+    );
+  };
+  // sade: ayracın üstü açık, altı (ve geçen ayın özeti, faturalar) kapalı Ayrıntılar'da
+  const ayr = layout.indexOf("ayrinti");
+  const ust = ayr < 0 ? layout : layout.slice(0, ayr);
+  const alt = (ayr < 0 ? [] : layout.slice(ayr + 1)).map((id) => [id, item(id)] as const).filter(([, n]) => n);
+  const sadeIcerik = (<>
+    {ust.map(item)}
+    <AyrintiBaslik open={acik} onToggle={toggleAcik} names={alt.map(([id]) => WIDGETS[id]!.title)} />
+    {acik && <><MonthDigest /><BillsLine month={month} />{alt.map(([, n]) => n)}</>}
+  </>);
+  const oneri = !editing && current && sadeOnerisi(prefs.layout, (id) => !!WIDGETS[id]);
+
   if (prefs.simple) return <SimpleDashboard />;
   return (
     <div className="space-y-4">
@@ -328,9 +415,15 @@ export default function Dashboard() {
 
       {meta && meta.modules_chosen === false && !inSharedBook(book) && !demo && <Features intro />}
 
-      <MonthDigest />
+      {!sade && <MonthDigest />}
 
-      <BillsLine month={month} />
+      {!sade && <BillsLine month={month} />}
+
+      {oneri && s && (
+        <SadeOneri busy={savePrefs.isPending}
+          onApply={() => { savePrefs.mutate({ layout: kayitDuzeni(sadeyeGecir(layout, SADE_UST)) }); ui.toast("Sade Özet açıldı; Düzenle'den değiştirebilirsin"); }}
+          onKeep={() => { savePrefs.mutate({ layout: kayitDuzeni(layout, true) }); ui.toast("Özet'in olduğu gibi kaldı"); }} />
+      )}
 
       <SorguDurumu q={summary} etiket="Özet yükleniyor">
         <div className="space-y-3"><KartIskelet satir={2} /><div className="grid grid-cols-2 gap-3"><KartIskelet satir={0} /><KartIskelet satir={0} /></div><SatirIskelet n={3} /></div>
@@ -338,37 +431,18 @@ export default function Dashboard() {
 
       {s && (
         <>
-          {layout.map((id) => {
-            const w = WIDGETS[id];
-            if (!w || !shown(id)) return null;
-            const body = render(id);
-            if (!body) return null;
-            const i = layout.indexOf(id);
-            return (
-              <div key={id} id={`w-${id}`} className={editing ? "relative rounded-xl ring-2 ring-blue-300 ring-offset-2 dark:ring-blue-800 dark:ring-offset-stone-950" : undefined}>
-                {editing && (
-                  <div className="mb-1 flex items-center gap-1 text-xs">
-                    <span className="mr-auto font-medium text-blue-700 dark:text-blue-400">{w.title}</span>
-                    <button className="btn-ghost p-1" aria-label="Yukarı" disabled={i === 0} onClick={() => move(id, -1)}><ArrowUp size={14} /></button>
-                    <button className="btn-ghost p-1" aria-label="Aşağı" disabled={i === layout.length - 1} onClick={() => move(id, 1)}><ArrowDown size={14} /></button>
-                    <button className="btn-ghost p-1 text-red-600" aria-label="Kaldır" onClick={() => setLayout(layout.filter((x) => x !== id))}><X size={14} /></button>
-                  </div>
-                )}
-                {body}
-                {id === "uyarilar" && detailBlock}
-              </div>
-            );
-          })}
+          {sade && !editing && sadeIcerik}
+          {(!sade || editing) && gorunen.map(item)}
           {!layout.includes("uyarilar") && detailBlock}
           {editing && (
             <section className="card space-y-2 p-3">
               <div className="text-sm font-medium">Bileşen ekle</div>
               <div className="flex flex-wrap gap-2">
-                {Object.entries(WIDGETS).filter(([id]) => !layout.includes(id) && shown(id)).map(([id, w]) => (
+                {Object.entries(WIDGETS).filter(([id]) => !layout.includes(id) && shown(id) && id !== "sade" && id !== "ayrinti").map(([id, w]) => (
                   <button key={id} className="btn-ghost border border-stone-300 px-2 py-1 text-xs dark:border-stone-700"
                     onClick={() => setLayout([...layout, id])}><Plus size={13} /> {w.title}</button>
                 ))}
-                {Object.keys(WIDGETS).filter((id) => !layout.includes(id) && shown(id)).length === 0 && <span className="text-xs text-stone-500">Hepsi ekli.</span>}
+                {Object.keys(WIDGETS).filter((id) => !layout.includes(id) && shown(id) && id !== "sade" && id !== "ayrinti").length === 0 && <span className="text-xs text-stone-500">Hepsi ekli.</span>}
               </div>
               <div className="flex gap-2">
                 <button className="btn-primary" onClick={() => setEditing(false)}>Bitti</button>

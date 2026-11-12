@@ -12,11 +12,13 @@ from app.parsers import kuveytturk, vakifbank
 
 FIX = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 SALARY_DAY = 15
-# Özet düzeni (ui:owner; demo kullanıcısının id'si 0): varsayılan düzen + Borç planı kartı. Web DEFAULT_LAYOUT
-# (web/src/pages/Dashboard.tsx) ve mobil OZET_VARSAYILAN (hesapkitap-mobile src/lib/endpoints/islem.ts) ile aynı sıra.
-DEMO_LAYOUT = ["kartlar", "donem-sonu", "borc-plani", "gelenler", "baslarken", "uyarilar", "net", "zekat", "butceler",
-               "kategoriler", "isyerleri", "istatistik-link", "odemeler"]
-DEMO_LAYOUT_MOBILE = ["donem", "donemsonu", "borcplani", "bakiye", "uyarilar", "odemeler", "gecen"]
+# Özet düzeni (ui:owner; demo kullanıcısının id'si 0): sade varsayılan (Tek bakış + kapalı Ayrıntılar; Borç planı kartı
+# Ayrıntılar'da). Web DEFAULT_LAYOUT (web/src/pages/Dashboard.tsx) ve mobil OZET_VARSAYILAN (hesapkitap-mobile
+# src/lib/endpoints/islem.ts) ile aynı sıra. Eski istemci "sade" / "ayrinti" adlarını bilmez, atar (eski düzen gibi görünür).
+DEMO_LAYOUT = ["sade", "baslarken", "gelenler", "ayrinti", "kartlar", "donem-sonu", "uyarilar", "odemeler", "net", "zekat", "sadaka",
+               "kumbaralar", "borc-plani", "butceler", "kategoriler", "isyerleri", "istatistik-link"]
+DEMO_LAYOUT_MOBILE = ["sade", "ayrinti", "donem", "donemsonu", "bakiye", "uyarilar", "odemeler", "sadaka", "kumbaralar", "borcplani",
+                      "gecen"]
 
 
 def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "kuveytturk.txt"), bills: bool = True) -> None:

@@ -1,15 +1,16 @@
 import { BadgePercent, CheckCircle2, ChevronRight } from "lucide-react";
 import type { Summary } from "../api";
 import { cx, tl } from "../format";
-import { donemObegi, faizKartMetni } from "../lib/faizOzet";
+import { donemObegi, ozetFaizMetni } from "../lib/faizOzet";
 import { useUI } from "../ui";
 
-/** Özet bileşeni "faiz-ucret": "Bu dönem ödenen faiz ve ücret ₺X" (0 ise "Bu dönem faiz ödemedin"); dokununca Faiz ve
- *  ücretler sayfası. Tutar sunucuda (summary.interest_paid); ortak defterde faiz gizliyse sunucu null döner → kart yok.
+/** Özet bileşeni "faiz-ucret": "Son ekstrelerinde faiz ve ücret ₺X" (0 ise "Son ekstrelerinde faiz yok"; sunucu
+ *  interest_latest, kart başına son ekstre); geçmiş dönemde ve eski sunucuda "Eylül döneminde ödenen faiz ve ücret"
+ *  (interest_paid). Dokununca Faiz ve ücretler sayfası. Ortak defterde faiz gizliyse sunucu null döner → kart yok.
  *  Faiz GELİRİ ayrı ("içinde faiz geliri ₺X · arındırılacak", Gelir kutusunun altında). */
 export default function FaizOzetKarti({ summary, past }: { summary: Summary; past: boolean }) {
   const ui = useUI();
-  const m = faizKartMetni(summary.interest_paid, tl, donemObegi(past, summary.period?.name));
+  const m = ozetFaizMetni(summary, tl, past, donemObegi(past, summary.period?.name));
   if (!m) return null;
   return (
     <button data-testid="faiz-ozet" className="card flex w-full items-center gap-3 p-3 text-left active:bg-stone-50 dark:active:bg-stone-800"
