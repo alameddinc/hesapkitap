@@ -224,9 +224,36 @@ def test_normal_next_statement_not_detected(client, card):
         _t("ORNEK TELEFON 6/6", 500.0, no=6, left=0, d=date(2026, 5, 3)),
     ]))
     ec = _summary_card(client)["early_close"]
-    assert ec["detected"] is None and ec["record"] is None  # kayıt eski ekstreye bağlı: devre dışı
+    assert ec["detected"] is None and ec["record"] is None  # kapama ayının ekstresi geldi: kayıt devre dışı
     assert _by_month() == {"2026-12": 1150.0, "2027-01": 1150.0, "2027-02": 1150.0}
     assert ec["fee_left"] == 450.0 and ec["months"][0]["month"] == "2026-12"
+
+
+def test_intermediate_statement_keeps_record_until_closing_month(client, card):
+    # aralıkta kapatılacak: kasım ekstresi (araya giren dönem) normal dilimleri getirir, kayıt düşmez
+    _put(client, "2026-12")
+    card.save_statement(b"st-kasim", "kasim.pdf", _st(L_END, [
+        _t("ORNEK MOBILYA 3/6 TAKSIT", 1000.0, no=3, left=3, per=1000.0),
+        _t("VADE FARKI ORNEK MOBILYA 3/6", 150.0, FEE, no=3, left=3, per=150.0),
+        _t("ORNEK TELEFON 6/6", 500.0, no=6, left=0, d=date(2026, 5, 3)),
+    ]))
+    ec = _summary_card(client)["early_close"]
+    assert ec["detected"] is None and ec["record"]["month"] == "2026-12"
+    assert ec["record"]["total"] == 3000.0 and ec["record"]["saved"] == 450.0
+    assert _by_month() == {"2026-12": 3000.0}  # kalan dilimler kapama ayında tek satır, vade farkı yok
+    dec = client.get("/api/installments", params={"month": "2026-12"}).json()
+    assert [i["amount"] for i in dec["items"] if i.get("early_close")] == [3000.0]
+    # düzenlenebilir (yeni son ekstrenin aylarıyla)
+    assert _put(client, "2027-01").status_code == 200 and _by_month() == {"2026-12": 1150.0, "2027-01": 2000.0}
+    _put(client, "2026-12")
+    # kapama ayının ekstresi: kayıt devre dışı, tanıma doğrular
+    card.save_statement(b"st-aralik", "aralik.pdf", _st(date(2026, 12, 15), [
+        _t("TAKSIT ERKEN KAPAMA ORNEK MOBILYA", 3000.0, d=date(2026, 12, 2)),
+    ]))
+    ec = _summary_card(client)["early_close"]
+    assert ec["record"] is None and not ec["available"] and _proj()["installments"] == []
+    assert ec["detected"]["verified"] and ec["detected"]["saved"] == 450.0
+    assert ec["detected"]["text"].endswith("Ekstreyle doğrulandı.")
 
 
 def test_push_once_for_detected(client, card, monkeypatch):

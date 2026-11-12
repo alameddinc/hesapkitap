@@ -984,8 +984,7 @@ def card_projection() -> dict:
                 sub["amount"] = states[m]["new_amount"]
                 sub["description"] = f"{m} (yeni paket)"
 
-        installments, close = early_close.apply(acc, st, installments, closes.get(acc), detected,
-                                                prev[0]["period_end"] if prev else None)
+        installments, close = early_close.apply(acc, st, installments, closes.get(acc), detected)
         out[acc] = {
             "account": acc, "bank": st["bank"], "latest_period": period,
             "next_due_date": st["next_due_date"], "next_period_end": st["next_period_end"],

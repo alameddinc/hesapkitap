@@ -2287,8 +2287,8 @@ def _early_close_card(card_no: str) -> dict:
 @app.put("/api/cards/early-close")
 def put_card_early_close(body: EarlyCloseIn):
     """Taksitleri erken kapattım (yetenek card_early_close, app/early_close.py): kartın son ekstresindeki kalan taksitler
-    seçilen ekstrede tek seferde; vade farkı/vergi taksitleri düşer. Kayıt kartın şimdiki son ekstresine bağlıdır (yeni
-    ekstre gelince kendiliğinden devre dışı). Tekrar göndermek düzenler. Yanıt: kartın early_close alanı (cards/summary
+    seçilen ekstrede tek seferde; vade farkı/vergi taksitleri düşer. Kayıt kapama ayının ekstresi (ya da daha yenisi)
+    gelene kadar etkin; araya giren ekstre düşürmez. Tekrar göndermek düzenler. Yanıt: kartın early_close alanı (cards/summary
     ile aynı). Ortak defterde gizli kart bulunamaz; yazma: sahip ve tam yetkili (app/book.py)."""
     from app import early_close
 

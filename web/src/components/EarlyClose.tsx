@@ -96,8 +96,8 @@ export function EarlyCloseForm({ cardNo, info, onClose }: { cardNo: string; info
     }>
       <div className="space-y-3">
         <p className="text-sm text-stone-600 dark:text-stone-300">
-          Bankan kalan taksitleri tek seferde ekstrene yazar, kalan vade farkı ve vergisi silinir. Yeni ekstre gelene kadar
-          Planlama ve Özet buna göre hesaplar.</p>
+          Bankan kalan taksitleri tek seferde ekstrene yazar, kalan vade farkı ve vergisi silinir. Seçtiğin ekstre gelene
+          kadar Planlama ve Özet buna göre hesaplar.</p>
         <div className="space-y-1">
           <label className="label" htmlFor="ek-ay">Hangi ekstrede gelecek</label>
           <select id="ek-ay" className="input" value={month} onChange={(e) => setMonth(e.target.value)}>

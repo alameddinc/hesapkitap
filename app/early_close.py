@@ -4,9 +4,11 @@ Kullanıcı bankayı arayıp vade farklı taksitlerini erken kapattırınca kala
 seferde gelir, kalan vade farkı ve vergisi (BSMV/KKDF) silinir. Yeni ekstre gelene kadar Planlama, Özet, Kartlar ve Borç
 planı son ekstrenin "kalan taksit" bilgisini (finance.card_projection) kullanır; bu modül o bilgiyi düzeltir.
 
-Elle kayıt (defter ayarı SETTING, kart başına tek): {card_no: {period_end, month, amount, at}}. Kartın O ANKİ son
-ekstresine (period_end) bağlıdır; daha yeni ekstre yüklenince kendiliğinden devre dışı kalır (projeksiyon yeni ekstreden;
-kapama satırı tek çekim okunur: card_reader.close_installments). Etkin kayıtta son ekstrenin kalan taksitlerinden
+Elle kayıt (defter ayarı SETTING, kart başına tek): {card_no: {period_end, month, amount, at}}; period_end: kaydedildiği
+andaki son ekstre. Kayıt kapama ayının (`month`) ekstresi ya da daha yenisi gelene kadar etkindir: araya giren ekstre
+(kapama ayından önceki dönem) kaydı düşürmez — o ekstrede normal dilimler gelir, kalanlar yine `month`ta tek satır.
+Kapama ayının ekstresi gelince devre dışı kalır (projeksiyon o ekstreden; kapama satırı tek çekim okunur:
+card_reader.close_installments) ve tanıma kapamayı görürse "ekstreyle doğrulandı". Etkin kayıtta son ekstrenin kalan taksitlerinden
 `month` ve sonrasına düşenler: vade farkı/vergi taksitleri düşer, alışveriş taksitleri `month`ta tek satır "Taksit
 erken kapama" olur (tutar: bankanın söylediği kapatma tutarı, yoksa kalan alışveriş taksitlerinin toplamı). `month`tan
 önceki aylara düşen taksitler olduğu gibi kalır. Kazanç: tutar girildiyse kalan toplam (vade farkı dahil) − tutar,
@@ -15,8 +17,8 @@ yoksa düşen vade farkı/vergi toplamı; eksiye düşmez.
 Ekstreden tanıma (kendiliğinden): kartın son ekstresinde (L) bir önceki ekstrenin (P) kalan taksitleri tek seferde
 geldiyse — kapama satırı (card_reader.is_close_line) ya da P'deki alışverişin kalan dilimlerinin toplamı L'de tek
 seferde (tek satır ya da aynı ekstrede tek tek) — kart için erken kapama tanınır. Kazanç = P'nin kalan vade farkı/vergi
-taksitleri − L'de süren vade farkı/vergi taksitleri. P'ye bağlı elle kayıt varsa "ekstreyle doğrulandı" (çift sayım
-yok: kayıt zaten devre dışı, tutar L'nin gerçek satırlarında). L'de kalan taksit gibi yazılmış kapanmış satırlar
+taksitleri − L'de süren vade farkı/vergi taksitleri. Kapama ayı L'nin dönemi ya da öncesi olan elle kayıt varsa "ekstreyle
+doğrulandı" (çift sayım yok: kayıt zaten devre dışı, tutar L'nin gerçek satırlarında). L'de kalan taksit gibi yazılmış kapanmış satırlar
 (ör. "3/6" ama tutarı kalanların toplamı) projeksiyona girmez (skip_ids).
 
 Ortak defter: veri okuma fonksiyonları süzüldüğü için gizli kartın kaydı da tanıması da görünmez; faiz gizliyse
@@ -131,8 +133,8 @@ def detect(cur: list[dict], prev: list[dict]) -> dict | None:
 
 # ---------------------------------------------------------------- projeksiyon
 
-def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None, detected: dict | None,
-          prev_period_end: str | None) -> tuple[list[dict], dict | None]:
+def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None,
+          detected: dict | None) -> tuple[list[dict], dict | None]:
     """Kartın son ekstresinden kurulan taksit dilimleri (finance.card_projection biçimi) → (düzeltilmiş dilimler, bilgi).
     bilgi (card_projection'da early_close; istemciye card_info ile gider): kalan toplamlar ham dilimlerden (kayıt
     öncesi), etkin kayıt, ekstreden tanıma."""
@@ -142,9 +144,10 @@ def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None, de
             "rest": _r(sum(i["amount"] for i in buy)), "fee_left": _r(sum(i["amount"] for i in fee)),
             "last_month": max((i["month"] for i in buy), default=None), "record": None, "detected": None}
     if detected:
-        verified = bool(rec and prev_period_end and rec.get("period_end") == prev_period_end)
+        verified = bool(rec and rec.get("month") and rec["month"] <= st["period"])
         info["detected"] = {"saved": detected["saved"], "verified": verified, "by_line": detected["by_line"]}
-    active = rec and rec.get("period_end") == st["period_end"] and rec.get("month")
+    # kapama ayının ekstresi (ya da daha yenisi) gelene kadar etkin; araya giren ekstre kaydı düşürmez
+    active = rec and rec.get("month") and rec["month"] > st["period"]
     m = rec["month"] if active else None
     closing = [i for i in buy if m and i["month"] >= m]
     if not closing:
