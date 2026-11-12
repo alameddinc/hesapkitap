@@ -501,7 +501,8 @@ def _iso(d) -> str | None:
 
 DOC_PROMPT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapılmış, POS/yazar kasa fişi) ya da
 ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). Bir faturanın banka ödeme
-dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). PDF veya fotoğraf olabilir.
+dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). Restoran, kafe, market, mağaza ya da akaryakıtın
+"e-Arşiv Fatura" / "e-Fatura" başlıklı SATIŞ belgesi (ödenmiş, son ödeme tarihi yok) "fis"tir. PDF veya fotoğraf olabilir.
 SADECE şu JSON'u döndür:
 {{
   "doc_type": "fis | fatura",
@@ -550,7 +551,8 @@ Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin deği
 # HESAPKITAP_RECEIPT_COMPACT=0: eski istem (DOC_PROMPT, uzun anahtarlar, girintili JSON).
 DOC_PROMPT_COMPACT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapılmış, POS/yazar kasa fişi) ya da
 ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). Bir faturanın banka ödeme
-dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). PDF veya fotoğraf olabilir.
+dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). Restoran, kafe, market, mağaza ya da akaryakıtın
+"e-Arşiv Fatura" / "e-Fatura" başlıklı SATIŞ belgesi (ödenmiş, son ödeme tarihi yok) "fis"tir. PDF veya fotoğraf olabilir.
 SADECE şu JSON'u TEK SATIR, girintisiz döndür (null olan alanı ve kalemde q 1, u "adet", up null değerini YAZMA):
 {{
   "doc_type": "fis | fatura",
