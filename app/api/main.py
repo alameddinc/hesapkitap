@@ -1404,13 +1404,15 @@ def admin_put_ai_costs(body: AiCostSettingsIn):
 
 
 @app.get("/api/admin/receipt-templates")
-def admin_receipt_templates():
+def admin_receipt_templates(days: int = Query(30, ge=1, le=365)):
     """Zincir / akaryakıt fişi şablonları (sunucu geneli): şablon başına isabet, hata, son kullanım, devre dışı durumu.
-    Kişisel veri yok: ad yalnız bilinen zincirse, değilse imzanın kısa özeti (app/receipt_templates.py)."""
-    from app import receipt_templates
+    Kişisel veri yok: ad yalnız bilinen zincirse, değilse imzanın kısa özeti (app/receipt_templates.py). hit_rate: son
+    `days` günde fiş / kart ekstresi / hesap dökümü okumalarının yüzde kaçı yapay zekâsız (şablon ya da bankaya özel
+    okuyucu), yapay zekâya gidenlerin neden kodları ve fiş şablonu öğrenme sonuçları (app/template_stats.py)."""
+    from app import receipt_templates, template_stats
 
     _require_admin()
-    return receipt_templates.overview()
+    return {**receipt_templates.overview(), "hit_rate": template_stats.overview(days)}
 
 
 @app.get("/api/admin/card-templates")
@@ -5982,6 +5984,10 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                    reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source,
                    **({"cached": True} if slot.hit else {}))
         ai_called = stmt.ai_parsed and not slot.hit
+        if not slot.hit:  # şablon isabet ölçümü (önbellekten dönen okuma sayılmaz)
+            from app import template_stats
+
+            template_stats.record_statement(stmt)
         if ai_called:  # yapay zekâ gerçekten okudu (önbellekte yoktu): tekrar muafiyeti yok, okuma sayılır
             doc_reads.forget(data)
         if db.statement_exists(data, stmt):
@@ -8075,6 +8081,9 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
     split = sorted({r["category"] for r in db.list_item_rules()})
+    from app import receipt_templates
+
+    receipt_templates.reset_miss()
     try:
         if ocr_text and receipt.enabled() and receipt.text_first():
             doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
@@ -8123,6 +8132,10 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         receipt_verify.apply(doc, text)
         if not doc.get("unreadable"):
             _auto_reread(doc, data, mime, more, text)
+            if ocr_text and (doc.get("reread") or {}).get("used"):
+                # güçlü model kalemleri düzeltti: ilk okumadan öğrenilemeyen düzen düzeltilmiş okumadan öğrenilir
+                receipt_templates.learn(ocr_text, doc)
+        _count_receipt(doc, ocr_text, original_mime)
         # digit_fix: metin kalemin yanında düzeltilmiş tutarı gösteriyor mu, KDV grupları, fiyat geçmişi
         _digit_evidence(doc.get("check"), doc.get("items") or [], text, doc.get("vat_lines"), doc.get("merchant"))
     if not doc.get("unreadable"):
@@ -8132,6 +8145,20 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     if warn := db.take_storage_warning():
         doc["storage_warning"] = warn
     return doc
+
+
+def _count_receipt(doc: dict, ocr_text: str | None, mime: str) -> None:
+    """Şablon isabet ölçümü (app/template_stats.py): fiş şablonla mı, yapay zekâyla mı okundu; yapay zekâya gittiyse
+    neden (telefon metni yok, PDF, şablon yok, kalem toplamı tutmadı …). İçerik yazılmaz."""
+    from app import receipt_templates, template_stats
+
+    if doc.get("source") == "sablon":
+        template_stats.record("fis", "sablon")
+    elif doc.get("engine") == "yerel":
+        template_stats.record("fis", "yerel")
+    else:
+        why = receipt_templates.last_miss() if ocr_text else ("pdf" if mime == "application/pdf" else "no_text")
+        template_stats.record("fis", "ai", "unreadable" if doc.get("unreadable") else why or "not_tried")
 
 
 # ---------------------------------------------------------------- kayıtlı fişin kalemleri ve yeniden okuma

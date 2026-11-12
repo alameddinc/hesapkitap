@@ -25,12 +25,19 @@ OCR metninden yerelde okunur (maliyet sıfır). Mimari fatura şablonuyla (app/b
 - Kalemler: tarih satırından toplam/KDV satırına kadar; "ad … *tutar" satırı (KDV sütunu, *·+ işaretleri, OCR'ın böldüğü
   ad/tutar satırları, barkod satırları), miktar satırı (adet / KG / LT), indirim satırı (DISCOUNT_WORDS → eksi).
 - Öğrenme (learn): yapay zekâ okuması doğrulamadan geçerse seçenekler denenir; aynı metne uygulanınca yapay zekânın
-  sonucunu (toplam, tarih, kalem sayısı ve tutarları) AYNEN veren ilk tanım kaydedilir.
+  sonucunu (toplam, tarih, kalem sayısı ve tutarları) AYNEN veren ilk tanım kaydedilir. Tek-rakam yolu (explain_build):
+  birebir tutmazsa, yalnız bir kalemin tek rakamı termal fişte karışan eşiyse (89,00 ↔ 69,00) ve şablon okuması ya kendi
+  başına kabul ölçütünü geçiyor (yapay zekâ yanlış okumuş) ya da yapay zekânın kalemleri tutuyor (telefon metni bozuk)
+  düzen yine öğrenilir. Otomatik yeniden okuma (güçlü model) kalemleri düzeltirse düzeltilmiş okumadan da öğrenilir
+  (app/api/main.py _read_document). Her denemenin sonucu sayılır (app/template_stats.py: learned, known, ai_sum …).
 - Okuma (read) — kabul ölçütleri: toplam, şablonun TOPLAM (ya da eşdeğer) etiketinin satırında/altında bulundu (metnin
   herhangi bir yerinde geçmesi yetmez; ARA TOPLAM / TOPLAM KDV / KDV TUTARI sayılmaz); kalemler (indirim dahil) toplamı
   ±TOL tutuyor; tarih bugünden en çok 1 gün ileri, 2 yıl geri; akaryakıtta litre × birim fiyat tutarı tutuyor. Eşleşen
-  şablonlar sırayla denenir, ölçütü geçen ilk sonuç alınır; hiçbiri geçmezse None (çağıran yapay zekâya gider), denenenlerin
-  hata sayısı artar, art arda MAX_FAILS → devre dışı. Yapay zekâ aynı kuralı yeniden öğretirse açılır.
+  şablonlar sırayla denenir, ölçütü geçen ilk sonuç alınır; hiçbiri geçmezse None (çağıran yapay zekâya gider; neden
+  kodu last_miss → app/template_stats.py), denenenlerin hata sayısı artar, art arda MAX_FAILS → devre dışı. Yapay zekâ
+  aynı kuralı yeniden öğretirse açılır. Farkı tek rakamın karışmasıyla kapanan okuma (ocr_digit) hata sayılmaz.
+- Metinde VKN okunduysa önce o VKN'nin şablonları, sonra yedek olarak VKN'siz (ilk fişte VKN okunamamış) ve unvan
+  kelimeleri tutan şablonlar denenir; yedekle okunursa şablonun VKN imzalı kopyası kaydedilir.
 - Bir imzada birden çok düzen: zincirin şubelerinde farklı yazar kasa yazılımı olabilir. Yeni düzen eskisini silmez,
   yanına eklenir; imza başına en çok MAX_PER_SIG (en az kullanılan düşer).
 
@@ -41,11 +48,14 @@ sync_community; shareable). Okuma hakkı (app/doc_reads.py) çağıranda aynen d
 Yönetici: GET /api/admin/receipt-templates (overview: isabet, hata, son kullanım, durum; ad yalnız bilinen zincirse).
 Ölçüm (04.11.2026, 40 gerçek fiş, repo dışı): öğrenmeden sonra gelen aynı-işyeri fişinin %55'i şablonla okundu, hepsi
 yapay zekâyla aynı (toplam, kalem, tarih); kalanı OCR bozması yüzünden kabul ölçütüne takılıp yapay zekâya düştü.
+Canlı ölçüm (12.11.2026, 30 gün, salt okuma): 53 fişte 37 ayrı işyeri (%70'i ilk ziyaret, şablon olamaz); 13 şablon
+öğrenildi, 4 okuma şablonla (~%7). Öğrenme yapay zekâ okumalarının ~%25'inde tuttu; nedenler kayıtlı değildi → sayaç.
 """
 import hashlib
 import json
 import logging
 import re
+from contextvars import ContextVar
 from datetime import date, timedelta
 
 from app import money
@@ -534,22 +544,66 @@ def apply(text: str, spec: dict, categories: list[str] | None = None) -> dict | 
     return doc
 
 
-def acceptable(doc: dict | None) -> bool:
+def acceptable(doc: dict | None, ignore_sum: bool = False) -> bool:
     """Kabul ölçütleri: toplam (etiketiyle) bulundu, kalemler (indirim dahil) toplamı ±TOL tutuyor, tarih makul
-    (bugünden en çok 1 gün ileri, 2 yıl geri), akaryakıtta litre × birim fiyat tutarı veriyor."""
-    if not doc or doc.get("_bad"):
-        return False
+    (bugünden en çok 1 gün ileri, 2 yıl geri), akaryakıtta litre × birim fiyat tutarı veriyor. ignore_sum: kalem toplamı
+    denetlenmez (yalnız öğrenmede: metindeki tek kalemin rakamı karışmış, düzen yine doğru; okuma hiç kullanmaz)."""
+    return reject_reason(doc, ignore_sum) is None
+
+
+# okuma kaçarsa neden kodları (app/template_stats.py; sıra: ne kadar ileri gidildi)
+MISS_REASONS = ("no_template", "no_structure", "no_total", "no_items", "qty", "sum", "ocr_digit", "date")
+
+
+def reject_reason(doc: dict | None, ignore_sum: bool = False) -> str | None:
+    """acceptable'ın tersi: kabul edilmiyorsa neden kodu (MISS_REASONS), ediliyorsa None. ocr_digit: kalem toplamı
+    tutmuyor ama fark tek kalemin tek rakamının karışmasıyla (6↔8, 3↔8 …) tam kapanıyor — düzen doğru, metin bozuk."""
+    if not doc:
+        return "no_total"
     total, items = doc.get("total"), doc.get("items") or []
-    if total is None or not 0 < total < 1_000_000 or not items:
-        return False
-    if any(not isinstance(it.get("amount"), (int, float)) for it in items) or not all(_qty_ok(it) for it in items):
-        return False
-    if abs(round(sum(it["amount"] for it in items), 2) - total) > TOL:
-        return False
+    if total is None or not 0 < total < 1_000_000:
+        return "no_total"
+    if not items:
+        return "no_items"
+    if doc.get("_bad") or any(not isinstance(it.get("amount"), (int, float)) for it in items) \
+            or not all(_qty_ok(it) for it in items):
+        return "qty"
+    if not ignore_sum and abs(round(sum(it["amount"] for it in items), 2) - total) > TOL:
+        return "ocr_digit" if _digit_explained(items, total) else "sum"
     if not doc.get("date"):
-        return False
+        return "date"
     d, today = date.fromisoformat(doc["date"]), _today()
-    return today - timedelta(days=730) <= d <= today + timedelta(days=1)
+    return None if today - timedelta(days=730) <= d <= today + timedelta(days=1) else "date"
+
+
+def _digit_explained(items: list[dict], total: float) -> bool:
+    """Kalem toplamı ile fiş toplamı arasındaki fark, TEK kalemin TEK rakamı termal fişte karışan eşiyle (receipt_check
+    CONFUSABLE) değişince tam kapanıyor mu."""
+    from app import receipt_check
+
+    need = money.kurus(total) - money.kurus(round(sum(it["amount"] for it in items), 2))
+    return any(it["amount"] > 0 and any(True for _ in receipt_check._swaps(it["amount"], need)) for it in items)
+
+
+def _one_digit_off(got: dict | None, doc: dict) -> bool:
+    """Şablonun bu metinden okuduğu fiş yapay zekânınkiyle aynı (toplam, tarih, kalem sayısı) ve kalem tutarlarından
+    yalnız BİRİ farklı, o da tek rakamın karışan eşi (69,00 ↔ 89,00): metinde ya da fotoğraf okumasında tek rakam
+    bozulmuş, düzen doğru. En az iki kalem (tek kalemde kalem = toplam, ayrım yok)."""
+    from collections import Counter
+
+    from app import receipt_check
+
+    if not got or got.get("total") is None or money.ne(got["total"], doc["total"]) or got.get("date") != doc["date"]:
+        return False
+    a = [round(it["amount"], 2) for it in got["items"] if isinstance(it.get("amount"), (int, float))]
+    b = [round(it["amount"], 2) for it in doc["items"]]
+    if len(a) != len(got["items"]) or len(a) != len(b) or len(a) < 2:
+        return False
+    only_a, only_b = list((Counter(a) - Counter(b)).elements()), list((Counter(b) - Counter(a)).elements())
+    if len(only_a) != 1 or len(only_b) != 1:
+        return False
+    v = receipt_check._variant(only_b[0], only_a[0])
+    return v is not None and "," not in v  # tek rakam
 
 
 # ---------------------------------------------------------------- imza
@@ -638,15 +692,27 @@ def shareable(spec: dict) -> bool:
 def ai_ok(doc: dict, text_lines: list[str]) -> bool:
     """Yapay zekâ okuması öğrenmeye uygun mu: fiş, toplam metinde geçiyor, kalemler (indirim dahil) toplamı tutuyor, tarih
     var, güven düşük değil."""
+    return ai_reason(doc, text_lines) is None
+
+
+def ai_reason(doc: dict, text_lines: list[str], need_sum: bool = True) -> str | None:
+    """ai_ok'un neden kodu (None: uygun). need_sum False: kalem toplamı denetlenmez (öğrenmenin tek-rakam yolu, build)."""
     total, items = doc.get("total"), doc.get("items") or []
-    if doc.get("type") != "receipt" or not total or total <= 0 or not doc.get("date") or not items \
-            or doc.get("confidence") == "düşük":
-        return False
-    if any(not isinstance(it.get("amount"), (int, float)) for it in items):
-        return False
-    if abs(round(sum(it["amount"] for it in items), 2) - total) > TOL:
-        return False
-    return any(money.eq(v, total) for ln in text_lines for num in ("tr", "dot") for _, _, v in _monies(ln, num))
+    if doc.get("type") != "receipt":
+        return "not_receipt"
+    if doc.get("confidence") == "düşük":
+        return "ai_low_conf"
+    if not total or total <= 0:
+        return "ai_no_total"
+    if not doc.get("date"):
+        return "ai_no_date"
+    if not items or any(not isinstance(it.get("amount"), (int, float)) for it in items):
+        return "ai_no_items"
+    if need_sum and abs(round(sum(it["amount"] for it in items), 2) - total) > TOL:
+        return "ai_sum"
+    if not any(money.eq(v, total) for ln in text_lines for num in ("tr", "dot") for _, _, v in _monies(ln, num)):
+        return "ai_total_not_in_text"
+    return None
 
 
 def _label_ok(label: list[str]) -> bool:
@@ -703,13 +769,24 @@ def _same(got: dict | None, doc: dict) -> bool:
 
 def build(text: str, doc: dict) -> dict | None:
     """Yapay zekâ sonucundan şablon (kaydetmeden); öğrenilemezse None."""
+    return explain_build(text, doc)[0]
+
+
+def explain_build(text: str, doc: dict) -> tuple[dict | None, str]:
+    """(şablon ya da None, neden kodu). Önce birebir: şablon aynı metinden yapay zekânın sonucunu AYNEN verir ve kabul
+    ölçütünü geçer ("ok"). Olmazsa tek-rakam yolu ("ok_digit"): şablonun okuduğu fiş yapay zekânınkiyle aynı, yalnız
+    bir kalemin tek rakamı karışan eşi (_one_digit_off) VE ya şablon okuması kendi başına kabul ölçütünü geçiyor (yapay
+    zekâ bir rakamı yanlış okumuş: 89 → 69) ya da yapay zekânın kalemleri toplamı tutuyor ve şablon okuması toplam dışı
+    bütün ölçütleri geçiyor (telefon metninde o kalemin rakamı bozuk). İki durumda da düzen (etiket, tarih, miktar
+    satırı) doğrulanmıştır; okumada kabul ölçütü yine aynen uygulanır (kalem toplamı tutmayan okuma alınmaz)."""
     _, lines = _lines(text)
-    if not ai_ok(doc, lines):
-        return None
+    if why := ai_reason(doc, lines, need_sum=False):
+        return None, why
+    ai_sum = ai_reason(doc, lines) is None  # yapay zekânın kalemleri fiş toplamını tutuyor
     vkn = vkn_of(text)
     ai_vkn = doc.get("tax_no")
     if vkn and ai_vkn and vkn != ai_vkn:
-        return None  # metin ile fotoğraf farklı VKN gösteriyor: güvenme
+        return None, "vkn_conflict"  # metin ile fotoğraf farklı VKN gösteriyor: güvenme
     words = _text_words(lines)
     br = _brand(doc.get("merchant"), doc.get("legal_name"), words)
     sig = {}
@@ -718,10 +795,10 @@ def build(text: str, doc: dict) -> dict | None:
     if w := _sig_words(doc.get("merchant"), doc.get("legal_name"), words, br[0] if br else None):
         sig["words"] = w
     if not sig:
-        return None
+        return None, "no_sig"
     dfmts = list(dict.fromkeys((d[1], d[2], d[4]) for d in _dates(lines) if d[3] == doc["date"]))
     if not dfmts:
-        return None
+        return None, "date_fmt"
     fuel = bool(_FUEL.search(" ".join(lines)))
     base = {"v": 1, "kind": "receipt", "sig": sig, "fuel": fuel}
     if br:
@@ -734,10 +811,22 @@ def build(text: str, doc: dict) -> dict | None:
     qty_lines = [q for ln in lines if (q := _QTY.match(ln))]
     fuel_qty = fuel and any(_qty(q, True)[1] == "lt" for q in qty_lines)
     singles = [False, True] if fuel and len(doc["items"]) == 1 else [False]
+    anchors = []
     for num in NUMS:
-        if not any(money.eq(v, doc["total"]) for ln in lines for _, _, v in _monies(ln, num)):
-            continue
-        for anchor in _total_anchors(lines, doc["total"], num)[:3]:
+        if any(money.eq(v, doc["total"]) for ln in lines for _, _, v in _monies(ln, num)):
+            anchors += [(num, a) for a in _total_anchors(lines, doc["total"], num)[:3]]
+    if not anchors:
+        return None, "no_anchor"
+
+    def exact(got):
+        return ai_sum and _same(got, doc) and acceptable(got)
+
+    def one_digit(got):
+        return _one_digit_off(got, doc) and (acceptable(got) or (ai_sum and acceptable(got, ignore_sum=True)))
+
+    fuel_unbound = False
+    for match, code in ((exact, "ok"), (one_digit, "ok_digit")):
+        for num, anchor in anchors:
             for sep, year, labeled in dfmts:
                 best = None  # (miktarı tutarlı bağlanan kalem sayısı, şablon): miktar satırı üstte mi altta mı
                 for qty in ("above", "below") if qty_lines else ("above",):
@@ -747,13 +836,14 @@ def build(text: str, doc: dict) -> dict | None:
                         if not is_safe(spec):
                             continue
                         got = apply(text, spec, [doc.get("category") or "Diğer"])
-                        if _same(got, doc) and acceptable(got):
+                        if match(got):
                             score = sum(1 for it in got["items"] if it.get("unit_price"))
                             if best is None or score > best[0]:
                                 best = (score, spec)
                 if best and not (fuel_qty and best[0] == 0):  # akaryakıtta litre satırı bağlanmalı
-                    return best[1]
-    return None
+                    return best[1], code
+                fuel_unbound |= bool(best)
+    return None, "fuel_qty" if fuel_unbound else ("ai_sum" if not ai_sum else "no_match")
 
 
 def _init(c) -> None:
@@ -788,46 +878,78 @@ def save(spec: dict, source: str = "learned") -> bool:
     return True
 
 
-def learn(text: str | None, doc: dict) -> dict | None:
-    """Yapay zekâ okumasından şablon öğren / yenile; zincir şablonuysa topluluğa gönder. Hata okumayı bozmaz."""
+def learn(text: str | None, doc: dict, record: bool = True) -> dict | None:
+    """Yapay zekâ okumasından şablon öğren / yenile; zincir şablonuysa topluluğa gönder. Hata okumayı bozmaz. Her deneme
+    sonucu (learned | learned_digit | known | neden kodu) sayılır (app/template_stats.py, içerik yok)."""
     if not text or len(text) > 200_000:
         return None
+    spec, reason = None, "error"
     try:
-        spec = build(text, doc)
-        if not spec:
-            return None
-        if save(spec) and shareable(spec):
-            from app import templates
+        spec, reason = explain_build(text, doc)
+        if spec:
+            if save(spec):
+                reason = "learned" if reason == "ok" else "learned_digit"
+                if shareable(spec):
+                    from app import templates
 
-            templates.share_async(spec)
-        return spec
+                    templates.share_async(spec)
+            else:
+                reason = "known"
     except Exception:  # noqa: BLE001
         log.warning("fiş şablonu öğrenilemedi", exc_info=True)
-        return None
+        spec = None
+    if record:
+        from app import template_stats
+
+        template_stats.record("fis", "learn", reason)
+    return spec
 
 
 # ---------------------------------------------------------------- okuma
 
-def _candidates(c, vkn: str | None, words: set[str]) -> list[tuple[dict, bool]]:
-    """(şablon satırı, VKN ile mi eşleşti). Metinde geçerli VKN varsa yalnız o VKN'nin şablonu; yoksa yedek imza."""
+def _candidates(c, vkn: str | None, words: set[str]) -> list[tuple[dict, bool, bool]]:
+    """(şablon satırı, VKN ile mi eşleşti, yedek mi). Metinde geçerli VKN varsa önce o VKN'nin şablonları; ardından
+    (yedek) VKN'siz öğrenilmiş — ilk fişte VKN okunamamıştı — ve unvan kelimeleri metinde geçen şablonlar: aynı işyerinin
+    VKN'si bu kez okundu diye şablonu boşa düşmesin. VKN yoksa yalnız yedek imza (kelimeler)."""
     rows = [dict(r) for r in c.execute("SELECT * FROM receipt_templates WHERE disabled = 0 ORDER BY uses DESC, id")]
+    hashed = {_h(w, 12) for w in words}
+
+    def by_words(r: dict) -> bool:
+        ws = json.loads(r["spec"])["sig"].get("words")
+        return bool(ws) and all(w in hashed for w in ws)
+
     if vkn:
         key = "vkn:" + _h(vkn, 16)
-        return [(r, True) for r in rows if r["sig"] == key]
-    hashed = {_h(w, 12) for w in words}
-    out = []
-    for r in rows:
-        ws = json.loads(r["spec"])["sig"].get("words")
-        if ws and all(w in hashed for w in ws):
-            out.append((r, False))
+        return [(r, True, False) for r in rows if r["sig"] == key] + \
+            [(r, False, True) for r in rows if r["sig"].startswith("w:") and by_words(r)]
+    out = [(r, False, False) for r in rows if by_words(r)]
     return sorted(out, key=lambda x: (not x[0]["sig"].startswith("vkn:"), -x[0]["uses"]))
+
+
+_LAST: ContextVar[str | None] = ContextVar("receipt_template_last", default=None)
+
+
+def reset_miss() -> None:
+    _LAST.set(None)
+
+
+def last_miss() -> str | None:
+    """Bu bağlamdaki son read() çağrısı şablonla okuyamadıysa neden kodu (MISS_REASONS), okuduysa ya da hiç
+    çağrılmadıysa None (app/api/main.py _read_document sayar)."""
+    return _LAST.get()
 
 
 def read(text: str | None, categories: list[str] | None = None) -> dict | None:
     """İmzası ve düzeni tutan şablonlar sırayla denenir; kabul ölçütünü geçen ilk sonuç döner. Hiçbiri geçmezse None
-    (çağıran yapay zekâya gider) ve denenenlerin hata sayısı artar (art arda MAX_FAILS → devre dışı)."""
+    (çağıran yapay zekâya gider; neden last_miss) ve denenenlerin hata sayısı artar (art arda MAX_FAILS → devre dışı).
+    Hata sayılmayanlar: yedek imzayla denenen (VKN'si okunan fişte VKN'siz şablon) ve farkı tek rakamın karışmasıyla
+    kapanan okuma (ocr_digit: düzen doğru, telefon metni bozuk — iki bozuk fotoğraf doğru şablonu kapatmasın).
+    Yedek imzayla okunan fişte VKN okunduysa şablonun VKN imzalı kopyası da kaydedilir (sonraki fiş doğrudan bulur)."""
+    _LAST.set(None)
     if not text or len(text) > 200_000:
+        _LAST.set("no_text")
         return None
+    reason = "no_template"
     try:
         from app import system, templates, vat
 
@@ -837,23 +959,44 @@ def read(text: str | None, categories: list[str] | None = None) -> dict | None:
         with system.connect() as c:
             _init(c)
             failed = []
-            for row, by_vkn in _candidates(c, vkn, _text_words(lines)):
+            for row, by_vkn, fallback in _candidates(c, vkn, _text_words(lines)):
                 spec = json.loads(row["spec"])
-                if not is_safe(spec) or not has_structure(lines, spec):
+                if not is_safe(spec):
+                    continue
+                if not has_structure(lines, spec):
+                    reason = _later(reason, "no_structure")
                     continue
                 doc = apply(text, spec, categories)
-                if acceptable(doc):
+                why = reject_reason(doc)
+                if why is None:
                     c.execute("UPDATE receipt_templates SET uses = uses + 1, fails = 0, last_used = CURRENT_TIMESTAMP "
                               "WHERE id = ?", (row["id"],))
-                    return vat.fill({**doc, "tax_no": vkn}, text)  # VKN imzadan (vat.from_text "VD: …"yu tanımaz)
-                # hata sayacı: VKN ile eşleşen (ya da VKN'siz) şablonda; yedek imzayla eşleşen başka işyeri düzeni sayılmaz
-                if by_vkn or not row["sig"].startswith("vkn:"):
+                    upgrade = {**spec, "sig": {**spec["sig"], "vkn": _h(vkn, 16)}} if fallback and vkn else None
+                    break
+                reason = _later(reason, why)
+                # hata sayacı: VKN ile eşleşen (ya da VKN'siz) şablonda; yedek imzayla eşleşen başka işyeri düzeni ve
+                # yedek denemesi sayılmaz; tek rakamın karıştığı okuma düzen hatası değildir
+                if why != "ocr_digit" and not fallback and (by_vkn or not row["sig"].startswith("vkn:")):
                     failed.append(row["id"])
-            c.executemany("UPDATE receipt_templates SET fails = fails + 1, disabled = (fails + 1 >= ?), "
-                          "updated_at = CURRENT_TIMESTAMP WHERE id = ?", [(MAX_FAILS, x) for x in failed])
+            else:
+                c.executemany("UPDATE receipt_templates SET fails = fails + 1, disabled = (fails + 1 >= ?), "
+                              "updated_at = CURRENT_TIMESTAMP WHERE id = ?", [(MAX_FAILS, x) for x in failed])
+                _LAST.set(reason)
+                return None
+        if upgrade and save(upgrade) and shareable(upgrade):
+            templates.share_async(upgrade)
+        return vat.fill({**doc, "tax_no": vkn}, text)  # VKN imzadan (vat.from_text "VD: …"yu tanımaz)
     except Exception:  # noqa: BLE001
         log.warning("fiş şablonu uygulanamadı", exc_info=True)
+        reason = "error"
+    _LAST.set(reason)
     return None
+
+
+def _later(a: str, b: str) -> str:
+    """İki neden kodundan okumada daha ileri gidilmiş olanı (MISS_REASONS sırası)."""
+    order = {r: i for i, r in enumerate(MISS_REASONS)}
+    return b if order.get(b, -1) > order.get(a, -1) else a
 
 
 def overview() -> dict:

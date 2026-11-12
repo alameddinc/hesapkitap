@@ -308,6 +308,9 @@ def handle_pdf(name: str, data: bytes) -> str:
         stmt = parse_statement(data, passwords=passwords)
     except PasswordRequired as e:
         raise MailError(f"{name}: PDF şifreli; Ekstreler'den bir kez elle yükleyip şifreyi hatırlat") from e
+    from app import template_stats
+
+    template_stats.record_statement(stmt)  # şablon isabet ölçümü
     if db.statement_exists(data, stmt):
         return f"Ekstre {stmt.bank} {stmt.card_no}: zaten vardı"
     if stmt.ai_parsed:  # yapay zekâ okudu ve denklem tutmadı: onay bekler (S6)

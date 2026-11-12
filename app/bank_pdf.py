@@ -145,14 +145,16 @@ def owner_from_text(text: str) -> str:
 
 
 def _parse_account_text(text: str, allow_ai: bool = True) -> dict:
+    from app import template_stats, templates
+
     ruled = parse_rule_based(text)
     if ruled and ruled["verified"]:
+        template_stats.record("dokum", "parser")
         return ruled
-    from app import templates
-
     templated = templates.read(text)  # kayıtlı şablon ya da yeni öğrenilen kural (yapay zekâsız)
     if templated and templated["verified"]:
         templated["bank"] = templated.get("bank") or templates.bank_of(text)
+        template_stats.record("dokum", "sablon")
         return templated
     if not allow_ai:
         raise BankPdfError("Bu döküm yapay zekâsız okunamadı")
@@ -164,6 +166,8 @@ def _parse_account_text(text: str, allow_ai: bool = True) -> dict:
     cache = doc_cache.current()
     if cache is not None and (hit := cache.get()) is not None:  # aynı döküm bu defterde yapay zekâyla okunmuştu
         return hit
+    # şablon isabet ölçümü: yapay zekâya gidiyor (neden: şablon okudu ama bakiye zinciri tutmadı / hiç okuyamadı)
+    template_stats.record("dokum", "ai", "unverified" if templated else "no_template")
     best = None
     for _attempt in range(2):  # model bazen bir satır atlar: bakiye zinciri tutmazsa bir kez daha (maliyet: en çok 2 çağrı)
         res = _parse_text(text)

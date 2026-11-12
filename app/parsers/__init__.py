@@ -144,6 +144,22 @@ def parse_text(text: str) -> Statement | None:
     return card_reader.read(text)
 
 
+def _template_miss(text: str) -> str:
+    """Kart ekstresi neden yapay zekâya gitti (sabit kod, içerik yok): text_cid (PDF yazı tipi kodlu, metin yok),
+    no_template (bu bankanın açık kart şablonu yok), unverified (şablon var ama okuması denklemi / tarihleri tutmadı)."""
+    from app import card_reader, templates
+
+    try:
+        if card_reader._cid_text(text):
+            return "text_cid"
+        if not any(t["spec"].get("kind") == "card" and not t.get("disabled") and card_reader.matches(text, t["spec"])
+                   for t in templates.all_templates()):
+            return "no_template"
+        return "unverified"
+    except Exception:  # noqa: BLE001 - ölçüm okumayı bozmaz
+        return "error"
+
+
 def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | None = None) -> Statement:
     """Sıra: bankaya özel parser → kayıtlı kart şablonu (ikisi de ücretsiz, yapay zekâsız) → GEMINI_API_KEY varsa yapay
     zekâ. Yapay zekâ okuması doğrulanırsa aynı bankanın sonraki ekstreleri için şablon öğretir (card_reader.learn_from_ai;
@@ -191,6 +207,7 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
         st.ai_parsed, st.source = True, "yapay_zeka"
         from app import card_reader
 
+        st.template_miss = _template_miss(text)  # şablon isabet ölçümü (app/template_stats.py)
         spec = card_reader.learn_from_ai(text, st)  # hata okumayı bozmaz
         # yapay zekânın işlemleri denklemi tutmuyor, aynı belgeden şablon tutuyor: kullanıcı düzeltilmiş okumayı görür
         st = card_reader.fixed_read(text, st, spec) or st
