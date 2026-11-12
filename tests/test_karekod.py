@@ -538,3 +538,12 @@ def test_bill_without_due_and_no_qr_becomes_receipt():
     d3 = dict(doc, due_date="2026-11-30")
     assert karekod.apply_hints(d3, None, txt, [])["type"] == "bill"  # son ödeme tarihi okunduysa fatura kalır
     assert karekod.apply_hints(dict(doc), None, None, [])["type"] == "bill"  # metin yoksa eski davranış
+
+
+def test_dine_in_consumption_is_not_utility(tmpdb):
+    """12.11 cihaz testi: karekodlu restoran e-Arşivinde "YERİNDE TÜKETİM" kurum işareti sayılıp fatura kalıyordu."""
+    q = karekod.parse(gib(total=108.0))
+    dine_in = restaurant_text() + "\nYERİNDE TÜKETİM"
+    assert not karekod.utility(dine_in) and karekod.shopping(q, dine_in) and not karekod.is_bill(q, dine_in)
+    for t in ("Tüketim: 210 kWh", "TÜKETİM MİKTARI 45", "Tüketim Dönemi 10.2026", "AKTİF TÜKETİM 210"):
+        assert karekod.utility("ÖRNEK ENERJİ\n" + t), t

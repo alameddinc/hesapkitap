@@ -358,8 +358,11 @@ def _provider(text: str, lines_orig: list[str], vkn: str | None) -> tuple[str | 
 
 # abonelik / kamu hizmeti faturasının açık işaretleri (katlanmış metin). Kategori kelimesi tek başına (elektrik,
 # doğalgaz, internet, gsm) sayılmaz: market/restoran e-Arşivinde ürün adı ya da telefon etiketi olabilir.
-_UTILITY = re.compile(r"(?<![a-z])(abone|aboneli[gk]|abone\s*no|tesisat|sozlesme\s*hesap|tuketim|kwh|endeks|sayac|m3|"
+_UTILITY = re.compile(r"(?<![a-z])(abone|aboneli[gk]|abone\s*no|tesisat|sozlesme\s*hesap|kwh|endeks|sayac|m3|"
                       r"okuma\s*tarihi|ilk\s*okuma|son\s*okuma)(?![a-z])")
+# "tüketim" tek başına kurum işareti değil: restoran fişinde "yerinde tüketim" / "paket" geçer (12.11 cihaz testi: karekodlu
+# restoran e-Arşivi fatura sayılıyordu). Yalnız miktar / dönem / bedel ya da sayıyla birlikte
+_CONSUMPTION = re.compile(r"(?<![a-z])(?<!yerinde\s)(?<!disarida\s)tuketim\s*(miktari|donemi|bedeli|degeri|tutari|\d)")
 
 
 def utility(text: str | None) -> bool:
@@ -368,7 +371,7 @@ def utility(text: str | None) -> bool:
     if not text:
         return False
     _, lines = _text_lines(text)
-    if any(_UTILITY.search(ln) for ln in lines):
+    if any(_UTILITY.search(ln) or _CONSUMPTION.search(ln) for ln in lines):
         return True
     from app import bill_templates, db
 
