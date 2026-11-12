@@ -3,6 +3,11 @@
     python -m app.receipt_bench --user-id 1 [--user-id 7] [--limit N] [--json] [--no-ai] [--reread]
                                 [--text-dir DIR] [--export-photos DIR]
     python -m app.receipt_bench --photo-dir DIR [--text-dir DIR] [--limit N] [--json] [--model M]
+    … [--thinking minimal|low|medium|high|off]   (fiş çağrısının düşünme düzeyi; app/receipt.py receipt_thinking)
+
+Düşünme ölçümü: aynı fişlerde --thinking off ile --thinking low (varsayılan) iki kez koşulur; özetteki doğruluk
+(toplam/tarih/işyeri, yapı) ve "thoughts" token / $ karşılaştırılır. Doğruluk düşerse canlıda
+HESAPKITAP_RECEIPT_THINKING=off (ya da system ayarı receipt_thinking=off) ile kapatılır.
 
 Yollar:
     A  yerel: app/ocr.py `parse` (yapay zekâsız; belge sunucudan çıkmaz)
@@ -796,8 +801,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--price-in", type=float, default=PRICE_IN)
     p.add_argument("--price-out", type=float, default=PRICE_OUT)
     p.add_argument("--usd-try", type=float, default=USD_TRY)
+    p.add_argument("--thinking", choices=("minimal", "low", "medium", "high", "off"),
+                   help="fiş çağrısının düşünme düzeyi (HESAPKITAP_RECEIPT_THINKING); verilmezse ortamdaki/varsayılan")
     a = p.parse_args(argv)
     from app import receipt
+
+    if a.thinking:
+        os.environ["HESAPKITAP_RECEIPT_THINKING"] = a.thinking
+    print(f"düşünme: {os.environ.get('HESAPKITAP_RECEIPT_THINKING') or receipt.THINKING_DEFAULT}", file=sys.stderr)
 
     if a.photo_dir:
         return run_dir(a.photo_dir, a.text_dir, a.limit, a.model, (a.price_in, a.price_out), a.usd_try, a.json,

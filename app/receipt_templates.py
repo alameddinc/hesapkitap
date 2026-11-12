@@ -767,23 +767,24 @@ def _same(got: dict | None, doc: dict) -> bool:
     return len(got["items"]) == len(doc["items"]) and a == b
 
 
-def build(text: str, doc: dict) -> dict | None:
-    """Yapay zekâ sonucundan şablon (kaydetmeden); öğrenilemezse None."""
-    return explain_build(text, doc)[0]
+def build(text: str, doc: dict, vkn: str | None = None) -> dict | None:
+    """Yapay zekâ sonucundan şablon (kaydetmeden); öğrenilemezse None. vkn: explain_build."""
+    return explain_build(text, doc, vkn=vkn)[0]
 
 
-def explain_build(text: str, doc: dict) -> tuple[dict | None, str]:
+def explain_build(text: str, doc: dict, vkn: str | None = None) -> tuple[dict | None, str]:
     """(şablon ya da None, neden kodu). Önce birebir: şablon aynı metinden yapay zekânın sonucunu AYNEN verir ve kabul
     ölçütünü geçer ("ok"). Olmazsa tek-rakam yolu ("ok_digit"): şablonun okuduğu fiş yapay zekânınkiyle aynı, yalnız
     bir kalemin tek rakamı karışan eşi (_one_digit_off) VE ya şablon okuması kendi başına kabul ölçütünü geçiyor (yapay
     zekâ bir rakamı yanlış okumuş: 89 → 69) ya da yapay zekânın kalemleri toplamı tutuyor ve şablon okuması toplam dışı
     bütün ölçütleri geçiyor (telefon metninde o kalemin rakamı bozuk). İki durumda da düzen (etiket, tarih, miktar
-    satırı) doğrulanmıştır; okumada kabul ölçütü yine aynen uygulanır (kalem toplamı tutmayan okuma alınmaz)."""
+    satırı) doğrulanmıştır; okumada kabul ölçütü yine aynen uygulanır (kalem toplamı tutmayan okuma alınmaz).
+    vkn: fişin karekodundaki satıcı VKN'si (app/karekod.py; OCR'ın bozabildiği metindeki VKN'den güvenilir, önce o)."""
     _, lines = _lines(text)
     if why := ai_reason(doc, lines, need_sum=False):
         return None, why
     ai_sum = ai_reason(doc, lines) is None  # yapay zekânın kalemleri fiş toplamını tutuyor
-    vkn = vkn_of(text)
+    vkn = vkn or vkn_of(text)
     ai_vkn = doc.get("tax_no")
     if vkn and ai_vkn and vkn != ai_vkn:
         return None, "vkn_conflict"  # metin ile fotoğraf farklı VKN gösteriyor: güvenme
@@ -878,14 +879,15 @@ def save(spec: dict, source: str = "learned") -> bool:
     return True
 
 
-def learn(text: str | None, doc: dict, record: bool = True) -> dict | None:
+def learn(text: str | None, doc: dict, record: bool = True, vkn: str | None = None) -> dict | None:
     """Yapay zekâ okumasından şablon öğren / yenile; zincir şablonuysa topluluğa gönder. Hata okumayı bozmaz. Her deneme
-    sonucu (learned | learned_digit | known | neden kodu) sayılır (app/template_stats.py, içerik yok)."""
+    sonucu (learned | learned_digit | known | neden kodu) sayılır (app/template_stats.py, içerik yok). vkn: karekoddaki
+    satıcı VKN'si (explain_build)."""
     if not text or len(text) > 200_000:
         return None
     spec, reason = None, "error"
     try:
-        spec, reason = explain_build(text, doc)
+        spec, reason = explain_build(text, doc, vkn=vkn)
         if spec:
             if save(spec):
                 reason = "learned" if reason == "ok" else "learned_digit"
@@ -939,12 +941,13 @@ def last_miss() -> str | None:
     return _LAST.get()
 
 
-def read(text: str | None, categories: list[str] | None = None) -> dict | None:
+def read(text: str | None, categories: list[str] | None = None, vkn: str | None = None) -> dict | None:
     """İmzası ve düzeni tutan şablonlar sırayla denenir; kabul ölçütünü geçen ilk sonuç döner. Hiçbiri geçmezse None
     (çağıran yapay zekâya gider; neden last_miss) ve denenenlerin hata sayısı artar (art arda MAX_FAILS → devre dışı).
     Hata sayılmayanlar: yedek imzayla denenen (VKN'si okunan fişte VKN'siz şablon) ve farkı tek rakamın karışmasıyla
     kapanan okuma (ocr_digit: düzen doğru, telefon metni bozuk — iki bozuk fotoğraf doğru şablonu kapatmasın).
-    Yedek imzayla okunan fişte VKN okunduysa şablonun VKN imzalı kopyası da kaydedilir (sonraki fiş doğrudan bulur)."""
+    Yedek imzayla okunan fişte VKN okunduysa şablonun VKN imzalı kopyası da kaydedilir (sonraki fiş doğrudan bulur).
+    vkn: fişin karekodundaki satıcı VKN'si (app/karekod.py): metindeki VKN okunamasa da şablon VKN imzasıyla bulunur."""
     _LAST.set(None)
     if not text or len(text) > 200_000:
         _LAST.set("no_text")
@@ -955,7 +958,7 @@ def read(text: str | None, categories: list[str] | None = None) -> dict | None:
 
         templates.sync_community()
         _, lines = _lines(text)
-        vkn = vkn_of(text)
+        vkn = vkn or vkn_of(text)
         with system.connect() as c:
             _init(c)
             failed = []

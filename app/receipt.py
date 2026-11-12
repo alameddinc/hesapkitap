@@ -271,10 +271,13 @@ AUTO_KINDS = {"otomatik": "fis", "otomatik_metin": "fis_metin", "otomatik_foto":
 
 def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: int | None = None,
                  more: list[tuple[bytes, str]] | None = None, model: str | None = None,
-                 kind: str = "belge", media_resolution: str | None = None) -> tuple[dict, dict]:
+                 kind: str = "belge", media_resolution: str | None = None,
+                 thinking: str | None = None) -> tuple[dict, dict]:
     """more: aynı belgenin devam görüntüleri (uzun fiş birden fazla fotoğraf). kind: maliyet ölçümünde tür
     (fis | fis_metin | fis_foto | belge | dokum | kategori; AUTO_KINDS'takiler yanıttaki belge türünden — fatura → belge,
-    diğeri → fiş türü). media_resolution: generationConfig.mediaResolution (ör. MEDIA_RESOLUTION_MEDIUM); None → modelin varsayılanı."""
+    diğeri → fiş türü). media_resolution: generationConfig.mediaResolution (ör. MEDIA_RESOLUTION_MEDIUM); None → modelin varsayılanı.
+    thinking: düşünme düzeyi (minimal | low | medium | high; receipt_thinking) — model destekliyorsa
+    generationConfig.thinkingConfig; model reddederse (400, düşünme ayarı) bir kez ayarsız yeniden denenir."""
     key = config.get("GEMINI_API_KEY")
     if not key:
         raise ReceiptError("Gemini API anahtarı tanımlı değil (Ayarlar → Anahtarlar)")
@@ -288,6 +291,7 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
     _check_ai_pages(docs)
     _daily_gate()
     model = model or config.get("GEMINI_MODEL") or DEFAULT_MODEL
+    think = _thinking_config(model, thinking)
     body = {
         "contents": [{"parts": [
             {"text": prompt},
@@ -295,11 +299,17 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
         ]}],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0,
                              **({"maxOutputTokens": max_output_tokens} if max_output_tokens else {}),
-                             **({"mediaResolution": media_resolution} if media_resolution else {})},
+                             **({"mediaResolution": media_resolution} if media_resolution else {}),
+                             **({"thinkingConfig": think} if think else {})},
     }
     try:
         r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=180,
                        headers={"x-goog-api-key": key})
+        if think and r.status_code == 400 and "think" in r.text.lower():  # model düşünme ayarını tanımıyor
+            log.warning("Gemini düşünme ayarını reddetti (%s, %s); ayarsız yeniden deneniyor", model, think)
+            body["generationConfig"].pop("thinkingConfig")
+            r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=180,
+                           headers={"x-goog-api-key": key})
     except httpx.HTTPError as e:
         log.warning("Gemini'ye ulaşılamadı: %s", e)
         raise ReceiptError("Yapay zekâ servisine ulaşılamadı; biraz sonra tekrar dene") from e
@@ -627,6 +637,46 @@ def media_resolution() -> str | None:
     return MEDIA_RES.get((os.environ.get("HESAPKITAP_RECEIPT_MEDIA_RES") or "").strip().lower())
 
 
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+THINKING_DEFAULT = "low"
+THINKING_OFF = ("off", "0", "none", "kapali", "kapalı", "default", "varsayilan", "varsayılan")
+THINKING_SETTING = "receipt_thinking"  # system ayarı (sunucu geneli); ortam değişkeni önce gelir
+# Gemini 2.5 düşünme bütçesi (token) — Gemini 3 thinkingLevel alır; 2.5 Pro 128'in altına inmez
+_THINKING_BUDGET = {"minimal": 0, "low": 512, "medium": 2048, "high": 8192}
+
+
+def receipt_thinking() -> str | None:
+    """Fiş/fatura okumasında modelin düşünme düzeyi: HESAPKITAP_RECEIPT_THINKING, yoksa system ayarı receipt_thinking,
+    yoksa THINKING_DEFAULT ("low"). minimal | low | medium | high; off (kapali/varsayilan) → ayar gönderilmez (modelin
+    kendi varsayılanı: Gemini 3'te dinamik "high"). Fiş çıkarımı akıl yürütme istemez: düşünme token'ı çıktı fiyatından
+    ödenir; düşük düzey maliyeti ve süreyi kısar. Doğruluk düşerse (app/receipt_bench.py --thinking ile ölç) off yapılır."""
+    v = (os.environ.get("HESAPKITAP_RECEIPT_THINKING") or "").strip().lower()
+    if not v:
+        try:
+            from app import system
+
+            v = (system.get(THINKING_SETTING) or "").strip().lower()
+        except Exception:  # noqa: BLE001 - ayar okunamazsa varsayılan
+            v = ""
+    if v in THINKING_OFF:
+        return None
+    return v if v in THINKING_LEVELS else THINKING_DEFAULT
+
+
+def _thinking_config(model: str | None, level: str | None) -> dict | None:
+    """Modelin anladığı biçim: Gemini 3 → {"thinkingLevel": düzey}; Gemini 2.5 → {"thinkingBudget": token}; başka
+    model (ya da düzey yok) → None (alan gönderilmez)."""
+    if not level or level not in THINKING_LEVELS or not model:
+        return None
+    m = model.lower().removeprefix("models/")
+    if m.startswith("gemini-3"):
+        return {"thinkingLevel": level}
+    if m.startswith("gemini-2.5"):
+        b = _THINKING_BUDGET[level]
+        return {"thinkingBudget": max(b, 128) if "pro" in m else b}
+    return None
+
+
 def doc_prompt(categories: list[str], split_categories: list[str] | None = None) -> str:
     """Fiş/fatura istemi (fotoğraf/PDF yolu): sıkı çıktı açıksa DOC_PROMPT_COMPACT, değilse DOC_PROMPT."""
     cats = ", ".join(split_categories or [])
@@ -655,28 +705,53 @@ def text_first() -> bool:
     return os.environ.get("HESAPKITAP_RECEIPT_TEXT_FIRST", "0").strip() == "1"
 
 
+def rule_read(text: str | None, qr: list[str] | None, categories: list[str]) -> dict | None:
+    """Yapay zekâsız kural okuması (app/karekod.py): karekodlu kurum faturası, karekodlu akaryakıt fişi (litre ×
+    birim fiyat metinle doğrulanır), kalemsiz POS slibi. Tutmazsa None. Okuma hakkı çağıranda aynen düşer."""
+    from app import karekod
+
+    code = karekod.best(qr)
+    doc = None
+    if code and code["kind"] == "gib":
+        doc = karekod.bill_doc(code, text)
+    elif code and code["kind"] == "pompa":
+        doc = karekod.fuel_doc(code, text, categories)
+    if doc is None and text:
+        doc = karekod.pos_slip(text, categories)
+    return doc  # sayım: app/api/main.py _count_receipt / _count_bill (doc["rule"])
+
+
 def parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
-                   more: list[tuple[bytes, str]] | None = None, ocr_text: str | None = None) -> dict:
+                   more: list[tuple[bytes, str]] | None = None, ocr_text: str | None = None,
+                   qr: list[str] | None = None) -> dict:
     """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract).
     ocr_text: fotoğrafla birlikte gelen telefon metni (yardımcı): yapay zekâya gitmez; önce kurumun fatura şablonu bu
-    metinle denenir, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yerel okuma Tesseract yerine bu metinle yapılır."""
-    from app import bill_templates, ocr, receipt_templates
+    metinle denenir, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yerel okuma Tesseract yerine bu metinle yapılır.
+    qr: telefonun fotoğrafta çözdüğü karekod içerikleri (app/karekod.py): kural okuması (fatura, akaryakıt), karekod
+    VKN'si fiş şablonu imzası olur, yapay zekâ okumasında tutar/tarih/VKN karekodla düzeltilir. Boş/None: eski davranış."""
+    from app import bill_templates, karekod, ocr, receipt_templates
 
     text = (ocr_text or "").replace("\r\n", "\n").strip()[:MAX_OCR_CHARS] or None
+    code = karekod.best(qr) if qr else None
     if text and (hit := bill_templates.read(text)):
         return bill_templates.as_doc(hit)  # telefon metni kurumun fatura şablonunu tutuyor: yapay zekâsız
-    if text and (hit := receipt_templates.read(text, categories)):
-        return hit  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
+    if (text or code) and (hit := rule_read(text, qr, categories)):
+        return hit  # karekod (fatura / akaryakıt) ya da POS slibi: yapay zekâsız (app/karekod.py)
+    qr_vkn = code.get("vkn") if code and not karekod.is_bill(code, text) else None
+    if text and (hit := receipt_templates.read(text, categories, vkn=qr_vkn)):
+        return karekod.apply_hints(hit, code)  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
     if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
         return bill_templates.as_doc(hit)  # kurumun fatura şablonu: yapay zekâsız (app/bill_templates.py)
     if not enabled():
-        return _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more, text)
+        return karekod.apply_hints(
+            _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more, text), code)
     try:
-        return _parse_document_ai(data, mime, categories, split_categories, more, ocr_text=text)
+        return karekod.apply_hints(
+            _parse_document_ai(data, mime, categories, split_categories, more, ocr_text=text, qr_vkn=qr_vkn), code)
     except ReceiptError as e:
         if not (text or ocr.available() or mime == "application/pdf"):
             raise
-        return _local(data, mime, categories, str(e), more, text)
+        return karekod.apply_hints(_local(data, mime, categories, str(e), more, text), code)
 
 
 def _local(data: bytes, mime: str, categories: list[str], reason: str, more: list[tuple[bytes, str]] | None = None,
@@ -694,16 +769,17 @@ def _local(data: bytes, mime: str, categories: list[str], reason: str, more: lis
 
 def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
                        more: list[tuple[bytes, str]] | None = None, kind: str = "otomatik",
-                       ocr_text: str | None = None) -> dict:
+                       ocr_text: str | None = None, qr_vkn: str | None = None) -> dict:
     """Tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri; model her fiş satırını bunlardan
     birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için). kind: maliyet türü (metin yolunun fotoğraf
     yedeği "otomatik_foto"). ocr_text: telefon metni (yapay zekâya gitmez): faturada şablon bundan öğrenilir, fişte
-    KDV/VKN boşsa bundan doldurulur."""
+    KDV/VKN boşsa bundan doldurulur. qr_vkn: karekodun satıcı VKN'si (fiş şablonu imzası; metindeki VKN'den önce)."""
     from app import bill_templates
 
     images_only = all((m or "").startswith("image/") for m in [mime, *(m for _, m in (more or []))])
     raw, _ = _gemini_json(doc_prompt(categories, split_categories), data, mime, max_output_tokens=8000, more=more,
-                          kind=kind, media_resolution=media_resolution() if images_only else None)
+                          kind=kind, media_resolution=media_resolution() if images_only else None,
+                          thinking=receipt_thinking())
     doc = _doc_of(raw, categories)
     # şablon metni: PDF metin katmanı; fotoğrafta (metin katmanı yok) telefon metni — metin yolu da ondan öğreniyordu
     own = bill_templates.text_of(data, mime)
@@ -714,7 +790,7 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
     if doc["type"] == "receipt" and ocr_text:  # fişin düzeni öğrenilir: aynı işyerinin sonraki fişi yapay zekâsız
         from app import receipt_templates
 
-        receipt_templates.learn(ocr_text, doc)
+        receipt_templates.learn(ocr_text, doc, vkn=qr_vkn)
     return doc
 
 
@@ -741,7 +817,8 @@ def parse_document_text(text: str, categories: list[str], split_categories: list
     split_rule = SPLIT_RULE.format(cats=", ".join(split_categories)) if split_categories else ""
     prompt = (TEXT_INTRO + DOC_PROMPT.format(categories=", ".join(categories), split_rule=split_rule)
               + "\nMETİN (satır sonları fişteki gibi):\n<<<\n" + text + "\n>>>\n")
-    raw, _ = _gemini_json(prompt, None, "text/plain", max_output_tokens=8000, kind="otomatik_metin")
+    raw, _ = _gemini_json(prompt, None, "text/plain", max_output_tokens=8000, kind="otomatik_metin",
+                          thinking=receipt_thinking())
     doc = _doc_of(raw, categories)
     if doc["type"] == "bill":
         bill_templates.learn(text, raw)
@@ -830,7 +907,7 @@ def _bill_paid(raw: dict) -> dict:
 
 def parse_receipt(image: bytes, mime: str, categories: list[str]) -> dict:
     raw, meta = _gemini_json(PROMPT.format(categories=", ".join(categories)), image, mime, max_output_tokens=8000,
-                             kind="fis")
+                             kind="fis", thinking=receipt_thinking())
 
     d = _iso(raw.get("date"))
     category = raw.get("category") if raw.get("category") in categories else "Diğer"

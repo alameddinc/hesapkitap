@@ -44,9 +44,11 @@ def test_receipt_and_bill_output_cap(fake):
     receipt.parse_receipt(b"foto", "image/jpeg", ["Market & Gıda"])
     receipt.parse_bill(b"%PDF-x", "image/jpeg")
     assert [b["generationConfig"]["maxOutputTokens"] for b in fake] == [8000, 8000]
-    # görüntü/düşünme ayarına dokunulmadı
-    assert all("thinkingConfig" not in b["generationConfig"] and "mediaResolution" not in b["generationConfig"]
-               for b in fake)
+    # görüntü ayarına dokunulmadı; fiş çağrısında düşünme düzeyi varsayılan "low" (app/receipt.py receipt_thinking),
+    # fatura çağrısında düşünme ayarı yok
+    assert all("mediaResolution" not in b["generationConfig"] for b in fake)
+    assert fake[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert "thinkingConfig" not in fake[1]["generationConfig"]
 
 
 def test_usage_recorded_without_content(fake):

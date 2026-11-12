@@ -12,18 +12,26 @@ interface Tpl {
 interface HitDoc {
   reads: number; free: number; rate: number | null; by_outcome: Record<string, number>;
   miss_reasons: Record<string, number>; learn: Record<string, number>; since: string | null;
+  /** yapay zekâsız kural okumaları (qr_bill, qr_fuel, pos_slip; eski sunucuda yok) */
+  rules?: Record<string, number>;
 }
-interface HitRate { days: number; since: string | null; fis: HitDoc; ekstre: HitDoc; dokum: HitDoc }
+/** fatura: eski sunucuda yok */
+interface HitRate { days: number; since: string | null; fis: HitDoc; ekstre: HitDoc; dokum: HitDoc; fatura?: HitDoc }
 interface Overview { templates: Tpl[]; total: number; active: number; uses: number; hit_rate?: HitRate }
 
-const DOC_LABEL: Record<"fis" | "ekstre" | "dokum", string> = { fis: "Fiş", ekstre: "Kart ekstresi", dokum: "Hesap dökümü" };
+const DOC_LABEL: Record<"fis" | "ekstre" | "dokum" | "fatura", string> = {
+  fis: "Fiş", ekstre: "Kart ekstresi", dokum: "Hesap dökümü", fatura: "Fatura",
+};
 // yapay zekâya gitme nedenleri (app/receipt_templates.py MISS_REASONS, app/parsers _template_miss, app/api/main.py _count_receipt)
 const REASON: Record<string, string> = {
   no_text: "telefon metni yok", pdf: "PDF fiş", no_template: "şablon yok", no_structure: "düzen farklı",
   no_total: "toplam satırı bulunamadı", no_items: "kalem yok", qty: "miktar tutmadı", sum: "kalem toplamı tutmadı",
   ocr_digit: "metinde rakam karışmış", date: "tarih okunamadı", unreadable: "okunamadı", not_tried: "denenmedi",
   text_cid: "PDF yazı tipi kodlu", unverified: "şablon tuttu, denklem tutmadı", error: "hata",
+  no_qr: "karekod yok", qr_no_due: "karekod var, son ödeme okunamadı",
 };
+// yapay zekâsız kural okumaları (app/karekod.py; template_stats RULES)
+const RULE: Record<string, string> = { qr_bill: "karekodlu fatura", qr_fuel: "karekodlu akaryakıt", pos_slip: "POS slibi" };
 // öğrenme sonuçları (receipt_templates.learn)
 const LEARN: Record<string, string> = {
   learned: "öğrenildi", learned_digit: "öğrenildi (tek rakam farkıyla)", known: "zaten vardı", ai_sum: "yapay zekâ kalemleri tutmadı",
@@ -38,17 +46,20 @@ const top = (m: Record<string, number>, names: Record<string, string>) =>
 
 /** "Son 30 gün: fiş %X şablonla" göstergesi (yapay zekâsız okuma oranı). */
 function HitRateRow({ h }: { h: HitRate }) {
-  const docs = Object.keys(DOC_LABEL) as (keyof typeof DOC_LABEL)[];
+  const docs = (Object.keys(DOC_LABEL) as (keyof typeof DOC_LABEL)[]).filter((d) => h[d]);
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {docs.map((d) => {
-          const x = h[d];
+          const x = h[d]!;
           return (
             <div key={d} className="min-w-0 rounded-lg border border-stone-200 p-2.5 dark:border-stone-800">
               <div className="text-xs text-stone-500">{DOC_LABEL[d]} · şablonla</div>
               <div className="text-xl font-semibold tabular-nums">{x.rate == null ? "—" : `%${x.rate}`}</div>
               <div className="text-xs text-stone-500 tabular-nums">{x.free} / {x.reads} okuma</div>
+              {x.rules && Object.keys(x.rules).length > 0 && (
+                <div className="mt-1 break-words text-xs text-stone-500">Kuralla: {top(x.rules, RULE)}</div>
+              )}
               {Object.keys(x.miss_reasons).length > 0 && (
                 <div className="mt-1 break-words text-xs text-stone-500">Yapay zekâya: {top(x.miss_reasons, REASON)}</div>
               )}
@@ -60,7 +71,7 @@ function HitRateRow({ h }: { h: HitRate }) {
         })}
       </div>
       <p className="text-xs text-stone-500">
-        Son {h.days} gün; yapay zekâsız = şablon ya da bankaya özel okuyucu (₺0).
+        Son {h.days} gün; yapay zekâsız = şablon, bankaya özel okuyucu ya da karekod/POS slibi kuralı (₺0).
         {h.since ? ` Ölçüm ${h.since} tarihinden beri.` : " Henüz ölçüm yok."}
       </p>
     </div>

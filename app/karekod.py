@@ -1,0 +1,456 @@
+"""Belge karekodları (QR) ve kalemsiz POS slibi: yapay zekâsız, kural ile okuma.
+
+Telefon fiş/fatura fotoğrafındaki karekodu cihazda çözer (iOS Vision VNDetectBarcodesRequest, Android ML Kit barcode
+scanning; hesapkitap-mobile MetinPlugin) ve içeriği metinle birlikte gönderir (POST /api/documents/parse `qr_text`,
+tekrarlanabilir alan; yetenek receipt_qr). Eski uygulama alanı göndermez: davranış aynen eskisi. Sunucuda görüntüden
+karekod çözülmez (opencv-contrib WeChat QR imajı ~170 MB büyütür; önce telefon).
+
+Tanınan içerikler (parse):
+- GİB e-Fatura / e-Arşiv karekodu (Karekod Standardı v1.1): JSON; anahtarlar küçük harf, bazı yazılımlarda boşluklu
+  ya da büyük harfli ("hesaplanankdv (8)", "KDVMatrah(20)"); tutarlar "1234.56" ya da "1.234,56"; tarih YYYY-AA-GG.
+  JSON bozuksa (tek tırnak, kesik) anahtar:değer çiftleri toleranslı ayıklanır. kind "gib".
+  Alıcının VKN/TCKN'si (avkntckn) ALINMAZ (kişisel veri). Satıcı TCKN'si (11 hane) saklanmaz (app/vat.py kuralı).
+- Akaryakıt pompası ÖKC karekodu: "VKN TARİH FİŞNO YAKIT_İSMİ YAKIT_MİKTARI" iki yazımda:
+  "@" ayırıcılı, tarih GG-AA-YYYY ("1234567890@05-11-2026@0012@MOTORIN@35,42") ve boşluklu, tarih YYYY-AA-GG + SSDD
+  ("1234567890 2026-11-05 1420 0012 MOTORIN 35,42"). SON ALAN LİTREDİR (toplam değil). kind "pompa".
+- Bağlantı (http/https): ileride e-belgeye erişim bağlantısı olabilir; TANINIR (kind "link") ama içeriğe ağdan
+  ERİŞİLMEZ ve okumada kullanılmaz.
+- Tanınmayan içerik: yok sayılır.
+
+Okuma (app/receipt.py rule_read, yapay zekâdan ÖNCE):
+- Fatura (gib + metinde "son ödeme" tarihi, ödeme dekontu değil, para birimi TL): tutar = odenecek (yoksa vergidahil),
+  son ödeme tarihi metinden, kurum: fatura şablonu imzası (app/bill_templates.py) → aynı VKN'li önceki kayıt
+  (entries.tax_no) → metindeki şirket satırı. Son ödeme tarihi okunamazsa yapay zekâ okur, karekod tutarı düzeltir
+  (apply_hints).
+- Akaryakıt (pompa): VKN + tarih + litre karekoddan, birim fiyat OCR metninden (litre satırı "35,42 LT X 52,49" ya da
+  10–200 TL aralığındaki bir tutar); toplam = litre × birim fiyat ve metinde bu değeri ±0,05 tutan TEK bir tutar
+  olmalı; metinde etiketli TOPLAM varsa o da tutmalı. Tutarsa yapay zekâsız kayıt: tek kalem "Akaryakıt · X L"
+  (adet X lt, birim fiyat). Toplam fişte yazan tutardır (pompa kuruş yuvarlar; L × fiyattan en çok 0,05 farklı).
+- POS slibi (pos_slip): kalemsiz kart slibi — yalnız toplam + tarih + işyeri. Sıkı ölçütler (market fişi sanılmasın):
+  SATIŞ/SALE + maskeli kart no + onay/provizyon kodu + işyeri/terminal no; KDV/TOPKDV/FİŞ NO/Z NO/EKÜ/ETTN YOK; metinde
+  tek bir tutar değeri; tek tarih (2 yıl geri, 1 gün ileri); iptal/iade değil; en çok 30 satır.
+Okuma hakkı (app/doc_reads.py) çağıranda AYNEN düşer (her okuma düşer; ₺0 yalnız yapay zekâ maliyeti). Yapay zekâ
+maliyet kaydı (ai_calls) yazılmaz; sonuç doc["rule"] (qr_bill | qr_fuel | pos_slip) ile işaretlenir ve
+app/template_stats.py'de outcome "parser", neden kodu rule olarak sayılır (app/api/main.py _count_receipt / _count_bill).
+"""
+import json
+import logging
+import re
+from datetime import date, timedelta
+
+from app import money
+
+log = logging.getLogger("hesapkitap.karekod")
+
+MAX_CODES = 8
+MAX_LEN = 4096
+TOL = 0.05
+FUEL_PRICE = (10.0, 200.0)  # TL/L: birim fiyat adayı aralığı (LPG ~25, benzin/motorin ~50–70)
+CURRENCY_TL = {"", "try", "tl", "trl"}
+
+
+def _today() -> date:
+    return date.today()
+
+
+# ---------------------------------------------------------------- sayı / tarih
+
+def _amount(v) -> float | None:
+    """GİB karekodundaki tutar: 1234.56 | "1234.56" | "1.234,56" | "1234,56" | "1,234.56"."""
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return round(float(v), 2)
+    s = re.sub(r"[\s₺]|TL|TRY", "", str(v), flags=re.I)
+    if not re.fullmatch(r"-?[\d.,]+", s or "x"):
+        return None
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    elif "," in s:
+        s = s.replace(".", "").replace(",", ".") if re.search(r",\d{1,2}$", s) else s.replace(",", "")
+    elif re.fullmatch(r"-?\d{1,3}(\.\d{3})+", s):
+        s = s.replace(".", "")
+    try:
+        return round(float(s), 2)
+    except ValueError:
+        return None
+
+
+def _litre(s: str) -> float | None:
+    s = s.strip()
+    if not re.fullmatch(r"\d{1,4}(?:[.,]\d{1,3})?", s):
+        return None
+    v = float(s.replace(",", "."))
+    return v if 0 < v < 2000 else None
+
+
+def _iso(s) -> str | None:
+    """YYYY-AA-GG | GG-AA-YYYY | GG.AA.YYYY | GG/AA/YYYY → ISO; geçersizse None."""
+    s = str(s or "").strip()
+    m = re.match(r"^(\d{4})[-./](\d{1,2})[-./](\d{1,2})", s)
+    y, mo, d = (m.group(1), m.group(2), m.group(3)) if m else (None, None, None)
+    if not m:
+        m = re.match(r"^(\d{1,2})[-./](\d{1,2})[-./](\d{4})", s)
+        if not m:
+            return None
+        d, mo, y = m.group(1), m.group(2), m.group(3)
+    try:
+        return date(int(y), int(mo), int(d)).isoformat()
+    except ValueError:
+        return None
+
+
+def _date_ok(iso: str | None) -> bool:
+    if not iso:
+        return False
+    d, t = date.fromisoformat(iso), _today()
+    return t - timedelta(days=730) <= d <= t + timedelta(days=1)
+
+
+# ---------------------------------------------------------------- karekod içeriği
+
+def _key(k: str) -> str:
+    """"hesaplanankdv (8)" / "HesaplananKDV(8)" / "kdv_matrah(20)" → "hesaplanankdv(8)"."""
+    k = str(k).strip().replace("İ", "i").replace("I", "i").lower().replace("ı", "i")
+    return re.sub(r"[\s_.\-]+", "", k)
+
+
+def _json_pairs(s: str) -> dict | None:
+    """JSON nesnesi; bozuksa (tek tırnak, kesik, sonda virgül) "anahtar": değer çiftleri."""
+    s = s.strip().lstrip("﻿")
+    i, j = s.find("{"), s.rfind("}")
+    body = s[i:j + 1] if i >= 0 and j > i else s[i:] if i >= 0 else None
+    if body is None:
+        return None
+    for cand in (body, body.replace("'", '"'), re.sub(r",\s*}", "}", body.replace("'", '"'))):
+        try:
+            v = json.loads(cand)
+            if isinstance(v, dict):
+                return v
+        except ValueError:
+            pass
+    pairs = re.findall(r"""["']([^"':{}]{1,40})["']\s*:\s*(?:["']([^"']{0,200})["']|([-\d.,]+))""", body)
+    return {k: (a if a or not b else b) for k, a, b in pairs} or None
+
+
+def _gib(raw: dict) -> dict | None:
+    from app import vat
+
+    d = {_key(k): v for k, v in raw.items()}
+    if not {"vkntckn", "tarih"} <= set(d) and not {"ettn", "tarih"} <= set(d):
+        return None
+    payable = _amount(d.get("odenecek"))
+    gross = _amount(d.get("vergidahil"))
+    total = payable if payable is not None else gross
+    if total is None or not 0 < total < 10_000_000:
+        return None
+    lines, vat_total = [], 0.0
+    for k, v in d.items():
+        m = re.fullmatch(r"hesaplanankdv\((\d{1,2})(?:[.,]0+)?\)", k)
+        if m and (a := _amount(v)) is not None and a > 0:
+            lines.append({"rate": int(m.group(1)), "amount": a})
+            vat_total += a
+    if not lines and (a := _amount(d.get("hesaplanankdv"))):
+        vat_total = a
+    seller = re.sub(r"\D", "", str(d.get("vkntckn") or ""))
+    return {"kind": "gib", "vkn": vat.vkn(seller), "tckn": len(seller) == 11, "date": _iso(d.get("tarih")),
+            "no": str(d.get("no") or "").strip()[:20] or None, "ettn": str(d.get("ettn") or "").strip()[:40] or None,
+            "scenario": str(d.get("senaryo") or "").strip().upper()[:20] or None,
+            "type": str(d.get("tip") or "").strip().upper()[:20] or None,
+            "currency": str(d.get("parabirimi") or "").strip().upper()[:5] or None,
+            "total": total, "gross": gross, "net": _amount(d.get("malhizmettoplam")),
+            "vat_total": round(vat_total, 2) or None, "vat_lines": sorted(lines, key=lambda x: x["rate"])}
+
+
+_PUMP_AT = re.compile(r"^(\d{10,11})@(\d{1,2}[-./]\d{1,2}[-./]\d{4})@([^@]*)@([^@]*)@\s*([\d.,]+)\s*$")
+_PUMP_SP = re.compile(r"^(\d{10,11})\s+(\d{4}-\d{1,2}-\d{1,2})\s+(\d{3,4})\s+(\S+)\s+(.+?)\s+([\d.,]+)\s*$")
+
+
+def _pump(s: str) -> dict | None:
+    from app import vat
+
+    s = s.strip()
+    if m := _PUMP_AT.match(s):
+        seller, day, no, fuel, lt = m.group(1), _iso(m.group(2)), m.group(3), m.group(4), _litre(m.group(5))
+    elif m := _PUMP_SP.match(s):
+        seller, day, no, fuel, lt = m.group(1), _iso(m.group(2)), m.group(4), m.group(5), _litre(m.group(6))
+    else:
+        return None
+    if not day or lt is None:
+        return None
+    return {"kind": "pompa", "vkn": vat.vkn(seller), "tckn": len(seller) == 11, "date": day,
+            "no": no.strip()[:20] or None, "fuel": re.sub(r"\s+", " ", fuel).strip()[:30] or None, "liters": lt}
+
+
+def parse(payload: str | None) -> dict | None:
+    """Tek karekod içeriği → {"kind": "gib" | "pompa" | "link", …} ya da None (tanınmadı)."""
+    if not payload or not isinstance(payload, str):
+        return None
+    s = payload.strip()[:MAX_LEN]
+    if re.match(r"^https?://", s, re.I):
+        host = re.sub(r"^https?://", "", s, flags=re.I).split("/")[0].split("?")[0].lower()[:80]
+        return {"kind": "link", "host": host}  # tanınır, erişilmez
+    if "{" in s:
+        raw = _json_pairs(s)
+        return _gib(raw) if raw else None
+    return _pump(s)
+
+
+def best(payloads: list[str] | None) -> dict | None:
+    """Belgedeki karekodlardan en kullanışlısı: gib > pompa > link."""
+    got = [x for p in (payloads or [])[:MAX_CODES] if (x := parse(p))]
+    for kind in ("gib", "pompa", "link"):
+        if hit := next((x for x in got if x["kind"] == kind), None):
+            return hit
+    return None
+
+
+def clean(payloads) -> list[str]:
+    """İstemciden gelen alan: en çok MAX_CODES, her biri MAX_LEN; boşlar atılır, sıra korunur, tekrar yok."""
+    out = []
+    for p in payloads or []:
+        s = str(p or "").strip()[:MAX_LEN]
+        if s and s not in out:
+            out.append(s)
+    return out[:MAX_CODES]
+
+
+# ---------------------------------------------------------------- metin yardımcıları
+
+def _text_lines(text: str):
+    from app import receipt_templates as rt
+
+    return rt._lines(text)
+
+
+def _amounts(lines: list[str]) -> list[float]:
+    from app import receipt_templates as rt
+
+    out = []
+    for ln in lines:
+        for num in ("tr", "dot"):
+            out += [v for _, _, v in rt._monies(ln, num) if v > 0]
+    return out
+
+
+_TOTAL_LABEL = re.compile(r"(?<![a-z])(toplam|genel toplam|tutar)(?![a-z])")
+_NOT_TOTAL = re.compile(r"(?<![a-z])(ara|kdv|topkdv|matrah|indirim|vergi)(?![a-z])")
+
+
+def _labeled_totals(lines: list[str]) -> list[float]:
+    from app import receipt_templates as rt
+
+    out = []
+    for ln in lines:
+        if _TOTAL_LABEL.search(ln) and not _NOT_TOTAL.search(ln):
+            out += [v for num in ("tr", "dot") for _, _, v in rt._monies(ln, num) if v > 0]
+    return out
+
+
+# ---------------------------------------------------------------- akaryakıt
+
+def fuel_doc(qr: dict, text: str | None, categories: list[str]) -> dict | None:
+    """Pompa karekodu + OCR metni → yapay zekâsız akaryakıt fişi; doğrulanamazsa None."""
+    if not qr or qr.get("kind") != "pompa" or not text or not _date_ok(qr.get("date")):
+        return None
+    from app import receipt_templates as rt, vat
+
+    orig, lines = _text_lines(text)
+    L = qr["liters"]
+    amounts = _amounts(lines)
+    prices: dict[float, int] = {}  # birim fiyat adayı → kanıt gücü (2: litre satırında "L LT X P")
+    for ln in lines:
+        if (q := rt._QTY.match(ln)) and (n := rt._qty(q, True))[1] == "lt" and round(n[0], 2) == round(L, 2):
+            prices[round(n[2], 2)] = 2
+    for p in amounts:
+        if FUEL_PRICE[0] < p < FUEL_PRICE[1]:
+            prices.setdefault(round(p, 2), 1)
+    pairs = {}  # metindeki toplam → birim fiyat
+    for p, strength in sorted(prices.items(), key=lambda x: -x[1]):
+        for a in amounts:
+            if a > p and abs(a - L * p) <= TOL:
+                pairs.setdefault(round(a, 2), (p, strength))
+    if len(pairs) != 1:
+        return None  # hiç ya da birden çok aday: belirsiz → yapay zekâ
+    total, (price, _) = next(iter(pairs.items()))
+    labeled = _labeled_totals(lines)
+    if labeled and not any(money.eq(v, total) for v in labeled):
+        return None  # etiketli TOPLAM başka bir şey söylüyor
+    merchant, legal = rt._merchant(orig, lines)
+    pay, meal, inst, last4 = rt._payment(" ".join(lines))
+    cats = categories or []
+    cat = "Ulaşım & Araç" if "Ulaşım & Araç" in cats or not cats else ("Diğer" if "Diğer" in cats else cats[0])
+    lt = f"{L:.3f}".rstrip("0").rstrip(".").replace(".", ",")
+    item = {"name": f"Akaryakıt · {lt} L", "product": _fuel_product(qr.get("fuel")), "brand": None, "qty": L,
+            "unit": "lt", "unit_price": price, "amount": total, "split": None}
+    doc = {"type": "receipt", "merchant": rt.chain_of(merchant, legal) or merchant, "date": qr["date"], "total": total,
+           "payment": pay, "payment_card": meal, "installments": inst, "card_last4": last4, "category": cat,
+           "items": [item], "legal_name": legal, "address": None, "branch": None, "confidence": "yüksek",
+           "source": "karekod", "rule": "qr_fuel", "qr": {"kind": "pompa"}}
+    doc = vat.fill(doc, text)
+    if qr.get("vkn"):
+        doc["tax_no"] = qr["vkn"]
+    return doc
+
+
+_FUELS = (("motorin", "Motorin"), ("diesel", "Motorin"), ("dizel", "Motorin"), ("kursunsuz", "Benzin"),
+          ("benzin", "Benzin"), ("lpg", "LPG"), ("otogaz", "LPG"))
+
+
+def _fuel_product(name: str | None) -> str | None:
+    from app.receipt_templates import fold
+
+    f = fold(name or "")
+    return next((p for k, p in _FUELS if k in f), None)
+
+
+# ---------------------------------------------------------------- fatura
+
+_DUE = re.compile(r"son\s*o?deme")
+
+
+def _due_date(lines: list[str], issued: str | None) -> str | None:
+    """Metindeki son ödeme tarihi: etiket satırında (etiketten sonra) ya da alttaki iki satırda; fatura tarihinden önce
+    ya da 120 günden sonra olamaz. Sütunlu düzende ("Fatura Tarihi  Son Ödeme Tarihi" / alt satırda iki tarih) en geç olanı."""
+    from app import receipt_templates as rt
+
+    lo = date.fromisoformat(issued) if issued else None
+    for i, ln in enumerate(lines):
+        if not (m := _DUE.search(ln)):
+            continue
+        for j in (i, i + 1, i + 2):
+            if j >= len(lines):
+                break
+            seg = lines[j][m.end():] if j == i else lines[j]
+            ds = sorted({d[3] for d in rt._dates([seg])})
+            ok = [d for d in ds if not lo or lo <= date.fromisoformat(d) <= lo + timedelta(days=120)]
+            if ok:
+                return ok[-1] if j != i and len(ok) > 1 else ok[0]
+    return None
+
+
+def _provider(text: str, lines_orig: list[str], vkn: str | None) -> tuple[str | None, str | None]:
+    """(kurum, kategori): fatura şablonu imzası → aynı VKN'li önceki kayıt → metindeki şirket satırı."""
+    from app import bill_templates, db, ocr
+
+    try:
+        with db.connect() as c:
+            bill_templates._init(c)
+            for t in bill_templates._templates(c):
+                if bill_templates.matches(text, t["spec"]["sig"], t["exclude"]):
+                    return t["spec"]["provider"], t["spec"].get("category")
+            if vkn:
+                r = c.execute("SELECT description, category FROM entries WHERE tax_no = ? AND description != '' "
+                              "ORDER BY entry_date DESC, id DESC LIMIT 1", (vkn,)).fetchone()
+                if r:
+                    return r["description"][:60], r["category"]
+    except Exception:  # noqa: BLE001 - kurum bulunamazsa metinden
+        log.warning("karekod faturasında kurum aranamadı", exc_info=True)
+    name = ocr._company(lines_orig)
+    return (name[:60] if name else None), None
+
+
+def is_bill(qr: dict | None, text: str | None) -> bool:
+    """GİB karekodlu belge kurum faturası mı: metinde "son ödeme" geçiyor ve ödeme dekontu değil."""
+    from app import bill_templates
+
+    if not qr or qr.get("kind") != "gib" or not text:
+        return False
+    _, lines = _text_lines(text)
+    return any(_DUE.search(ln) for ln in lines) and not bill_templates.is_paid_doc(text)
+
+
+def bill_doc(qr: dict, text: str | None) -> dict | None:
+    """GİB karekodu + metindeki son ödeme tarihi → yapay zekâsız fatura (receipt.parse_document biçimi)."""
+    from app import bill_templates
+
+    if not is_bill(qr, text) or (qr.get("currency") or "").lower() not in CURRENCY_TL or not _date_ok(qr.get("date")):
+        return None
+    orig, lines = _text_lines(text)
+    due = _due_date(lines, qr.get("date"))
+    if not due:
+        return None
+    provider, cat = _provider(text, orig, qr.get("vkn"))
+    cat = cat if cat in bill_templates.CATEGORIES else "Faturalar"
+    return {"type": "bill", "legal_name": None, "provider": provider or "Fatura", "category": cat,
+            "amount": qr["total"], "due_date": due,
+            "description": f"Fatura no {qr['no']}" if qr.get("no") else "", "paid": False, "paid_at": None,
+            "payment": None, "confidence": "yüksek", "source": "karekod", "rule": "qr_bill", "qr": {"kind": "gib"}}
+
+
+def apply_hints(doc: dict, qr: dict | None) -> dict:
+    """Yapay zekâ (ya da yerel) okumasından sonra GİB karekodu: tutar karekodla tutmuyorsa karekodunki (e-belgenin
+    resmi tutarı), boş tarih / VKN / KDV dökümü karekoddan. Pompa karekodu: boş tarih / VKN. doc['qr_fixed'] alanları."""
+    if not doc or not qr or qr.get("kind") not in ("gib", "pompa"):
+        return doc
+    fixed = []
+    tl = (qr.get("currency") or "").lower() in CURRENCY_TL
+    if doc.get("type") == "bill":
+        if qr["kind"] == "gib" and tl and (doc.get("amount") is None or not money.eq(doc["amount"], qr["total"])):
+            doc["amount"] = qr["total"]
+            fixed.append("amount")
+    elif doc.get("type") == "receipt":
+        if qr["kind"] == "gib" and tl and (doc.get("total") is None or abs(doc["total"] - qr["total"]) > TOL):
+            doc["total"] = qr["total"]
+            fixed.append("total")
+        if not doc.get("date") and _date_ok(qr.get("date")):
+            doc["date"] = qr["date"]
+            fixed.append("date")
+        if qr.get("vkn") and not doc.get("tax_no"):
+            doc["tax_no"] = qr["vkn"]
+            fixed.append("tax_no")
+        if qr["kind"] == "gib" and tl and qr.get("vat_lines") and not doc.get("vat_lines"):
+            doc["vat_lines"], doc["vat_total"] = qr["vat_lines"], qr["vat_total"]
+            fixed.append("vat")
+    if fixed:
+        doc["qr_fixed"] = fixed
+    doc.setdefault("qr", {"kind": qr["kind"]})
+    return doc
+
+
+# ---------------------------------------------------------------- POS slibi
+
+_POS_SALE = re.compile(r"(?<![a-z])(satis|sale)(?![a-z])")
+_POS_CARD = re.compile(r"(?:\d{4,6}|[*x]{4})[\s*x]*[*x]{4,}[\s*x]*\d{4}(?!\d)|[*x]{4,}\s?\d{4}(?!\d)")
+_POS_AUTH = re.compile(r"(?<![a-z])(onay|provizyon|prov|auth|approval)(?![a-z])")
+_POS_MERCH = re.compile(r"(?<![a-z])(isyeri|uye\s*isyeri|merchant|terminal|term|mid|tid)(?![a-z])")
+_NOT_POS = re.compile(r"(?<![a-z])(kdv|topkdv|fis\s*no|z\s*no|eku|ettn|ara\s*toplam|adet|ad\s*x|kg|matrah|fatura|"
+                      r"iptal|iade|void|refund|cancel|bakiye)(?![a-z])")
+_POS_MAX_LINES = 30
+
+
+def pos_slip(text: str | None, categories: list[str]) -> dict | None:
+    """Kalemsiz kart slibi → yalnız toplam + tarih + işyeri (sıkı ölçütler; tutmazsa None)."""
+    if not text or len(text) > 6000:
+        return None
+    from app import receipt_templates as rt
+
+    orig, lines = _text_lines(text)
+    if not 4 <= len(lines) <= _POS_MAX_LINES:
+        return None
+    u = " ".join(lines)
+    if not (_POS_SALE.search(u) and _POS_CARD.search(u) and _POS_AUTH.search(u) and _POS_MERCH.search(u)):
+        return None
+    if _NOT_POS.search(u):
+        return None
+    values = {round(v, 2) for v in _amounts(lines)}
+    if len(values) != 1:
+        return None  # slipte tek tutar olur (TUTAR / SATIŞ TUTARI); birden çok tutar: fiş ya da başka belge
+    total = values.pop()
+    if not 0 < total < 1_000_000:
+        return None
+    days = {d[3] for d in rt._dates(lines)}
+    if len(days) != 1 or not _date_ok(day := next(iter(days))):
+        return None
+    merchant, legal = rt._merchant(orig, lines)
+    if merchant == "Fiş":
+        return None  # işyeri adı yok
+    _, _, inst, last4 = rt._payment(u)
+    if not last4 and (m := re.search(r"[*x]{2,}[\s*x]*(\d{4})(?!\d)", u)):  # "4543 60** **** 1234"
+        last4 = m.group(1)
+    cats = categories or []
+    return {"type": "receipt", "merchant": rt.chain_of(merchant, legal) or merchant, "date": day, "total": total,
+            "payment": "kart", "payment_card": None, "installments": inst, "card_last4": last4,
+            "category": "Diğer" if "Diğer" in cats or not cats else cats[0], "items": [], "legal_name": legal,
+            "address": None, "branch": None, "vat_total": None, "vat_lines": [], "tax_no": None, "tax_office": None,
+            "confidence": "yüksek", "source": "pos", "rule": "pos_slip"}

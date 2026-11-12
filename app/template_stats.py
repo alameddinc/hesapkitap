@@ -4,8 +4,10 @@ Okuma hakkı her okumada düşer; yapay zekâ maliyetini sıfıra indiren tek yo
 gün / belge türü / sonuç / neden kodu olarak SAYAR (system.db → template_events). Belgeden içerik yok: işyeri, banka adı,
 tutar, metin yazılmaz; neden yalnız sabit bir kod.
 
-- doc: fis | ekstre | dokum
-- outcome: sablon (şablonla, ₺0) | parser (bankaya özel okuyucu, ₺0) | ai (yapay zekâ) | yerel (anahtarsız kural okuması)
+- doc: fis | ekstre | dokum | fatura (fotoğraf/PDF'ten okunan kurum faturası, /api/documents/parse)
+- outcome: sablon (şablonla, ₺0) | parser (bankaya özel okuyucu ya da karekod/POS kuralı, ₺0; neden kodu RULES:
+  qr_bill karekodlu fatura, qr_fuel karekodlu akaryakıt, pos_slip kalemsiz kart slibi — app/karekod.py)
+  | ai (yapay zekâ) | yerel (anahtarsız kural okuması)
   | learn (yapay zekâ okumasından şablon öğrenme denemesi; isabet oranına girmez)
 - reason: okuma kaçtıysa neden (receipt_templates.MISS_REASONS: no_text, no_template, no_structure, sum, ocr_digit,
   date, …); learn için sonuç (learned, known, ai_sum, no_match, …).
@@ -22,14 +24,15 @@ log = logging.getLogger("hesapkitap.template_stats")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS template_events (
     day TEXT NOT NULL,          -- YYYY-MM-DD
-    doc TEXT NOT NULL,          -- fis | ekstre | dokum
+    doc TEXT NOT NULL,          -- fis | ekstre | dokum | fatura
     outcome TEXT NOT NULL,      -- sablon | parser | ai | yerel | learn
     reason TEXT NOT NULL,       -- sabit neden kodu (içerik yok)
     n INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, doc, outcome, reason)
 );
 """
-DOCS = ("fis", "ekstre", "dokum")
+DOCS = ("fis", "ekstre", "dokum", "fatura")
+RULES = ("qr_bill", "qr_fuel", "pos_slip")  # yapay zekâsız kural okumaları (outcome parser; app/karekod.py)
 OUTCOMES = ("sablon", "parser", "ai", "yerel", "learn")
 FREE = ("sablon", "parser")  # yapay zekâsız okuma
 KEEP_DAYS = 400
@@ -100,8 +103,13 @@ def overview(days: int = 30) -> dict:
             if r["outcome"] not in FREE:
                 miss[r["reason"]] = miss.get(r["reason"], 0) + r["n"]
         learn = {r["reason"]: r["n"] for r in mine if r["outcome"] == "learn"}
+        rules = {}
+        for r in reads:
+            if r["outcome"] in FREE and r["reason"] in RULES:
+                rules[r["reason"]] = rules.get(r["reason"], 0) + r["n"]
         out[d] = {"reads": total, "free": free, "rate": round(100 * free / total) if total else None,
                   "by_outcome": by, "miss_reasons": dict(sorted(miss.items(), key=lambda x: -x[1])),
                   "learn": dict(sorted(learn.items(), key=lambda x: -x[1])),
+                  "rules": dict(sorted(rules.items(), key=lambda x: -x[1])),
                   "since": min((r["first"] for r in mine), default=None)}
     return {"days": days, "since": min((r["first"] for r in rows), default=None), **out}

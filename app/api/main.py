@@ -7982,14 +7982,16 @@ def delete_token(tid: int):
 @app.post("/api/documents/parse")
 @_heavy
 def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Form(None),
-                   ocr_source: str | None = Form(None)):
+                   ocr_source: str | None = Form(None), qr_text: list[str] = Form(default=[])):
     """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
     Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4).
     ocr_text (yetenek receipt_text): telefonda çıkarılmış metin (ocr_source "vision" | "mlkit"). Yapay zekâ yine
     FOTOĞRAFI okur (daha ucuz ve daha tutarlı, app/receipt_bench.py ölçümü); metin yardımcıdır: fatura şablonu metinle
     yerelde okunur, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yapay zekâ yoksa yerel okuma bu metinle yapılır
     (_read_with_text). HESAPKITAP_RECEIPT_TEXT_FIRST=1: eski yol — metin fotoğraf yerine gider, tutarsızsa fotoğrafla
-    bir kez daha okunur (_read_by_text)."""
+    bir kez daha okunur (_read_by_text).
+    qr_text (yetenek receipt_qr; tekrarlanabilir): telefonun fotoğrafta çözdüğü karekod içerikleri (app/karekod.py):
+    karekodlu fatura / akaryakıt fişi yapay zekâsız okunur; eski uygulama göndermez (davranış aynı)."""
     files = file[:4]
     data = _file_bytes(files[0])
     for f in files:
@@ -8001,26 +8003,33 @@ def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Fo
     text = (ocr_text or "").strip() if mime.startswith("image/") else ""
     if len(text) > receipt.MAX_OCR_CHARS:
         raise HTTPException(422, "Fişten çıkarılan metin çok uzun")
+    from app import karekod
+
+    qr = karekod.clean(qr_text) if mime.startswith("image/") else []
     return _read_document(data, mime, more, ocr_text=text or None,
-                          ocr_source=ocr_source if ocr_source in ("vision", "mlkit") else "diger")
+                          ocr_source=ocr_source if ocr_source in ("vision", "mlkit") else "diger", qr=qr or None)
 
 
-def _read_with_text(text: str, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
-                    more: list | None) -> dict:
+def _read_with_text(text: str | None, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
+                    more: list | None, qr: list[str] | None = None) -> dict:
     """Varsayılan yol (fotoğraf + telefon metni): yapay zekâ fotoğrafı okur (maliyet türü fis), metin yalnız yardımcı
     (receipt.parse_document ocr_text). doc['ocr'] = {source, used, fallback, helper}: used — sonuç metinden çıktı (fatura
     şablonu ya da yerel okuma); yapay zekâya metin gitmez."""
-    doc = receipt.parse_document(data, mime, cats, split, more=more, ocr_text=text)
-    from_text = doc.get("engine") == "yerel" or doc.get("source") == "sablon"
+    doc = receipt.parse_document(data, mime, cats, split, more=more, ocr_text=text, qr=qr)
+    from_text = doc.get("engine") == "yerel" or doc.get("source") in ("sablon", "karekod", "pos")
     doc["ocr"] = {"source": source, "used": from_text, "fallback": False, "helper": True}
     return doc
 
 
 def _read_by_text(text: str, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
-                  more: list | None) -> dict:
+                  more: list | None, qr: list[str] | None = None) -> dict:
     """Eski metin yolu (HESAPKITAP_RECEIPT_TEXT_FIRST=1, ölçüm için): telefonda çıkarılmış metin yapay zekâya gider.
     Metin okunamazsa ya da çıkan fiş tutarsızsa (toplam yok, fiyatsız kalem, kalem toplamı fişi tutmuyor) fotoğrafla
-    bir kez daha okunur; fotoğraf okuması da olmazsa metnin sonucu kalır. doc['ocr'] = {source, used, fallback}."""
+    bir kez daha okunur; fotoğraf okuması da olmazsa metnin sonucu kalır. doc['ocr'] = {source, used, fallback}.
+    Önce kural okuması (karekod, POS slibi; receipt.rule_read)."""
+    if hit := receipt.rule_read(text, qr, cats):
+        hit["ocr"] = {"source": source, "used": True, "fallback": False}
+        return hit
     try:
         doc = receipt.parse_document_text(text, cats, split)
     except receipt.ReceiptError:
@@ -8048,8 +8057,10 @@ def _read_by_text(text: str, source: str, data: bytes, mime: str, cats: list[str
 
 
 def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: str | None = None,
-                   ocr_source: str | None = None) -> dict:
-    """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır."""
+                   ocr_source: str | None = None, qr: list[str] | None = None) -> dict:
+    """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır. qr: telefonun
+    çözdüğü karekodlar (app/karekod.py). Okuma hakkı her başarılı okumada düşer — şablon, karekod ve POS slibi
+    (yapay zekâsız, ₺0) dahil (doc_reads.charge aşağıda okuma yolundan bağımsız)."""
     import hashlib
 
     from app import doc_cache, doc_reads
@@ -8063,8 +8074,9 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     data, mime, photo = _prepare_photo(data, mime)
     # önbellek anahtarı telefon metnini de içerir (sonuç metne göre değişebilir: şablon, KDV/VKN yedeği); metni
     # değiştirip önbelleği atlayan okuma forget ile yeniden sayılır
-    ckey = hashlib.sha256(hashlib.sha256(key).digest() + f"{ocr_source or ''}\n{ocr_text}".encode()).digest() \
-        if ocr_text else key
+    qr_part = ("\n" + "\n".join(qr)) if qr else ""  # karekod da sonucu değiştirir (yoksa anahtar eskisiyle aynı)
+    ckey = hashlib.sha256(hashlib.sha256(key).digest() + f"{ocr_source or ''}\n{ocr_text}{qr_part}".encode()).digest() \
+        if ocr_text or qr else key
     if (hit := doc_cache.get(ckey, doc_cache.BELGE)) is not None:  # aynı belge bu defterde okunmuştu: yapay zekâ yok
         if hit.get("type") != "bill":
             return _cached_receipt(hit, photo)
@@ -8088,9 +8100,9 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     receipt_templates.reset_miss()
     try:
         if ocr_text and receipt.enabled() and receipt.text_first():
-            doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
-        elif ocr_text:  # fotoğraf okunur, metin yardımcı (fatura şablonu, KDV/VKN yedeği, yerel okuma)
-            doc = _read_with_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more)
+            doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more, qr)
+        elif ocr_text or qr:  # fotoğraf okunur, metin/karekod yardımcı (fatura şablonu, karekod, KDV/VKN yedeği, yerel)
+            doc = _read_with_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more, qr)
         else:
             doc = receipt.parse_document(data, mime, cats, split, more=more)
     except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı, yerel okuma da olmadı)
@@ -8124,6 +8136,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     if doc["type"] == "bill":
         doc["file_name"] = db.save_bill_file(photo, ".jpg") if photo else \
             db.save_bill_file(original, BILL_TYPES.get(original_mime, ".pdf"))
+        _count_bill(doc, qr)
     else:
         doc["receipt_file"] = _store_receipt(photo)
         doc["check"] = receipt_check.check(doc.get("items") or [], doc.get("total"))
@@ -8154,13 +8167,32 @@ def _count_receipt(doc: dict, ocr_text: str | None, mime: str) -> None:
     neden (telefon metni yok, PDF, şablon yok, kalem toplamı tutmadı …). İçerik yazılmaz."""
     from app import receipt_templates, template_stats
 
-    if doc.get("source") == "sablon":
+    if doc.get("rule"):  # karekod / POS slibi kuralı (app/karekod.py): yapay zekâsız
+        template_stats.record("fis", "parser", doc["rule"])
+    elif doc.get("source") == "sablon":
         template_stats.record("fis", "sablon")
     elif doc.get("engine") == "yerel":
         template_stats.record("fis", "yerel")
     else:
         why = receipt_templates.last_miss() if ocr_text else ("pdf" if mime == "application/pdf" else "no_text")
         template_stats.record("fis", "ai", "unreadable" if doc.get("unreadable") else why or "not_tried")
+
+
+def _count_bill(doc: dict, qr: list[str] | None) -> None:
+    """Fatura okuması (fatura): karekod kuralı (parser qr_bill), fatura şablonu (sablon), yerel, ya da yapay zekâ — nedeni
+    karekod yok (no_qr) ya da karekod vardı ama kural okuyamadı (qr_no_due: son ödeme tarihi metinde bulunamadı, ödeme
+    dekontu, yabancı para). İçerik yazılmaz."""
+    from app import karekod, template_stats
+
+    if doc.get("rule"):
+        template_stats.record("fatura", "parser", doc["rule"])
+    elif doc.get("source") == "sablon":
+        template_stats.record("fatura", "sablon")
+    elif doc.get("engine") == "yerel":
+        template_stats.record("fatura", "yerel")
+    else:
+        code = karekod.best(qr) if qr else None
+        template_stats.record("fatura", "ai", "qr_no_due" if code and code["kind"] == "gib" else "no_qr")
 
 
 # ---------------------------------------------------------------- kayıtlı fişin kalemleri ve yeniden okuma
