@@ -88,12 +88,16 @@ export function kosulGovdesi(k: KosulGirdisi): { creditor_type: CreditorType; pa
   return out;
 }
 
+/** Rozette kısa koşul etiketi (borçta ve alacakta aynı; mobil para.ts KOSUL_KISA) */
+export const KOSUL_KISA: Partial<Record<PayTerms, string>> = { parca: "Parça parça", tek: "Tek seferde", taksitli: "Taksitli" };
+
 /** Satırdaki rozetler: ["Mağaza / senet", "Tek seferde ödenecek", "Kesin tarih"]; alacakta ["Kişi", "Parça parça", "Söz"].
  *  tarih: false → tarih türü yok (satırın tarih yazısı zaten "söz" / "vade" der; mobil de böyle). */
 export function kosulRozetleri(d: { direction?: Yon; creditor_type?: CreditorType | null; terms?: PayTerms | null;
   strict?: boolean | null; due_date?: string | null; schedule?: unknown }, tarih = true): string[] {
   const yon = d.direction ?? "borc";
-  const parts = [alacakliEtiketi(d.creditor_type ?? null), d.terms && d.terms !== "bilinmiyor" ? kosulEtiketi(d.terms, yon) : null,
+  // rozette kısa etiket (borçta da "Parça parça", "Tek seferde"); uzun etiket formda
+  const parts = [alacakliEtiketi(d.creditor_type ?? null), d.terms && d.terms !== "bilinmiyor" ? (KOSUL_KISA[d.terms] ?? kosulEtiketi(d.terms, yon)) : null,
     tarih && d.due_date && !d.schedule && d.strict != null ? (d.strict ? "Kesin tarih" : "Söz") : null];
   return parts.filter((x): x is string => !!x);
 }

@@ -30,7 +30,7 @@ test("gövde: tarih türü yalnız kullanıcı değiştirdiyse ve tarih varsa gi
 
 test("özet satırı", () => {
   assert.equal(kosulOzeti({ creditor_type: "magaza", terms: "tek", strict: true, due_date: "2026-12-01" }),
-    "Mağaza / senet · Tek seferde ödenecek · Kesin tarih");
+    "Mağaza / senet · Tek seferde · Kesin tarih");
   assert.equal(kosulOzeti({ creditor_type: null, terms: "bilinmiyor", strict: false, due_date: null }), "");
 });
 
@@ -66,11 +66,11 @@ test("alacak rozetleri", () => {
   assert.deepEqual(kosulRozetleri({ direction: "alacak", creditor_type: "kisi", terms: "parca", strict: false, due_date: "2026-12-01" }),
     ["Kişi", "Parça parça", "Söz"]);
   assert.deepEqual(kosulRozetleri({ direction: "alacak", creditor_type: "kurum", terms: "taksitli", strict: true, due_date: null, schedule: {} }),
-    ["Kurum / firma", "Taksitli (ödeme planı)"]);
+    ["Kurum / firma", "Taksitli"]);
   assert.deepEqual(kosulRozetleri({ direction: "alacak", creditor_type: "kisi", terms: "parca", strict: false, due_date: "2026-12-01" }, false),
     ["Kişi", "Parça parça"]);
   assert.equal(kosulOzeti({ direction: "borc", creditor_type: "magaza", terms: "tek", strict: true, due_date: "2026-12-01" }),
-    "Mağaza / senet · Tek seferde ödenecek · Kesin tarih");
+    "Mağaza / senet · Tek seferde · Kesin tarih");
 });
 
 test("alacak metinleri faiz sormaz, faizli yol önermez", () => {
