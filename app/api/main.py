@@ -5956,26 +5956,83 @@ def _classify_pdf(data: bytes, passwords: list[str]) -> tuple[str, bool] | None:
     return None
 
 
+# Yükleme ucunda ekstre olmayan belge (yetenek upload_docs). Eski istemci (docs gönderilmez) bu metinleri hata satırında
+# görür; yeni istemci belgeyi fiş/fatura olarak okutur (status "document").
+UPLOAD_IMAGE_MSG = ("Bu bir fotoğraf; kart ekstresi PDF, Excel ya da CSV olarak yüklenir. Fiş ya da fatura "
+                    "fotoğrafını Ekle (+) menüsünden ekle.")
+UPLOAD_BILL_MSG = ("Bu belge bir fatura, kart ekstresi değil. Faturayı Ekle (+) menüsünden fatura olarak ekle; "
+                   "ödemelerine düşer.")
+UPLOAD_IMAGE_TYPE_MSG = "Bu fotoğraf biçimi okunamıyor; JPG, PNG, WebP ya da HEIC olarak seç."
+
+
+def _sniff_image(data: bytes, content_type: str | None, name: str) -> str | None:
+    """Dosya fotoğraf mı? İçerikten (ilk baytlar) MIME türü; içerik tanınmıyorsa istemcinin bildirdiği image/* ya da
+    uzantı ("image/?" — okunamayan biçim). Fotoğraf değilse None. PDF ayrıştırıcıya fotoğraf gitmesin."""
+    head = data[:16]
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"mif1", b"msf1", b"hevc", b"heim", b"heis"):
+        return "image/heic"
+    if b"%PDF" in data[:1024]:
+        return None
+    if (content_type or "").startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif",
+                                                                     ".gif", ".bmp", ".tif", ".tiff")):
+        return "image/?"
+    return None
+
+
+def _upload_document(res: dict, data: bytes, mime: str) -> dict:
+    """Yükleme kuyruğuna gelen fiş/fatura (yetenek upload_docs): belge okuma yolu (_read_document; okuma hakkı orada,
+    her okuma düşer — önceki ekstre denemesi hak düşürmemiştir). Sonuç {status "document", doc_type bill|receipt, doc
+    (POST /api/documents/parse yanıtı), message}; okunamadıysa status "error" (Türkçe neden, hak kuralları aynen)."""
+    try:
+        doc = _read_document(data, mime)
+    except QuotaFull as e:
+        return {**res, "status": "error", "message": str(e.detail), **e.extra}
+    except HTTPException as e:
+        return {**res, "status": "error", "message": errors.user_text(str(e.detail), e.status_code)}
+    except Exception as e:  # noqa: BLE001 - kuyruktaki öbür dosyalar sürsün
+        logging.getLogger("hesapkitap.api").warning("yüklemede belge okunamadı", exc_info=True)
+        return {**res, "status": "error", "message": errors.user_text(e, 502)}
+    if doc.get("unreadable"):
+        return {**res, "status": "error", "message": doc.get("message") or UNREADABLE_MSG,
+                **({"charged": doc["charged"]} if doc.get("charged") else {})}
+    bill = doc.get("type") == "bill"
+    return {**res, "status": "document", "doc_type": "bill" if bill else "receipt", "doc": doc,
+            "message": "Fatura okundu — onayla" if bill else "Fiş okundu — onayla",
+            **({"charged": doc["charged"]} if doc.get("charged") else {})}
+
+
 @app.post("/api/statements/upload")
 @_heavy
 def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
                       remember: bool = Form(False),
-                      kind: Literal["card", "account", "dekont"] | None = Form(None)):
+                      kind: Literal["card", "account", "dekont"] | None = Form(None),
+                      docs: bool = Form(False)):
+    """Kart ekstresi, hesap dökümü, dekont, kart Excel'i. docs (yetenek upload_docs; yeni istemci): ekstre olmayan
+    fiş/fatura (fotoğraf, fatura PDF'i, kart ekstresi bulunamayan ama fatura işaretli PDF) belge okuma yoluyla okunur,
+    sonuç status "document" (istemci fiş/fatura onay ekranını açar). docs yoksa (eski istemci) aynı belgeler Türkçe
+    nedenle "error" döner; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez."""
     from app import undo
 
     limits.check_count(len(files))  # 413, Türkçe neden (web tüm seçimi tek istekte gönderir)
     names = ", ".join(f.filename or "dosya" for f in files)
     with undo.batch(f"Ekstre: {names[:120]}") as b:
-        results = _upload_statements(files, password, remember, kind)
+        results = _upload_statements(files, password, remember, kind, docs)
         b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
                                                 "message")} for r in results]
     return results
 
 
 def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
-                       forced: str | None = None) -> list[dict]:
-    from app import doc_cache, doc_reads
+                       forced: str | None = None, docs: bool = False) -> list[dict]:
+    from app import doc_cache, doc_reads, mailbox
     from app.parsers import PasswordRequired
+    from app.parsers.ai import NotAStatement
 
     results = []
     tried = ([password] if password else []) + db.pdf_passwords()
@@ -5987,6 +6044,14 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             limits.check_size(data)
         except limits.LimitError as e:
             results.append({**res, "status": "error", "message": errors.user_text(e)})
+            continue
+        if img := _sniff_image(data, f.content_type, name):  # fotoğraf: PDF ayrıştırıcıya gitmez
+            if not docs:
+                results.append({**res, "status": "error", "message": UPLOAD_IMAGE_MSG})
+            elif img not in BILL_TYPES:
+                results.append({**res, "status": "error", "message": UPLOAD_IMAGE_TYPE_MSG})
+            else:  # okuma hakkı belge okuma yolunda (tek kontrol, tek sayım)
+                results.append(_upload_document(res, data, img))
             continue
         try:  # hazır sürüm: her yeni belge 1 okuma hakkı; doluysa bu dosya okunmaz
             doc_reads.check(data)
@@ -6016,6 +6081,12 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             guess = _statement_kind(data, tried)
         except limits.LimitError as e:  # çok sayfalı / çok uzun süren PDF: bu dosya okunmaz, diğerleri sürer
             results.append({**res, "status": "error", "message": errors.user_text(e)})
+            continue
+        text = next((t for t in (_try_text(data, pw) for pw in [None, *tried]) if t), None) if guess else None
+        if not forced and guess != "dekont" and mailbox.looks_like_bill(text):
+            # fatura (GSM, elektrik, e-Arşiv …): kart ekstresi diye yapay zekâya gönderilmez
+            results.append(_upload_document(res, data, "application/pdf") if docs
+                           else {**res, "status": "error", "message": UPLOAD_BILL_MSG})
             continue
         kind = forced or guess
         if not forced and guess == "account" and not getattr(guess, "sure", True):
@@ -6050,6 +6121,14 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                 stmt = parse_statement(data, passwords=tried)
         except PasswordRequired as e:
             results.append({**res, "status": "password_required", "message": errors.user_text(e) if password else "PDF şifreli"})
+            continue
+        except NotAStatement as e:
+            # yapay zekâ kart ekstresi bulamadı (hak düşmedi): fatura/fiş işareti varsa belge olarak oku, yoksa neden
+            if forced != "card" and mailbox.mentions_bill(text):
+                results.append(_upload_document(res, data, "application/pdf") if docs
+                               else {**res, "status": "error", "message": UPLOAD_BILL_MSG})
+            else:
+                results.append({**res, "status": "error", "message": errors.user_text(e)})
             continue
         except Exception as e:  # noqa: BLE001 - kullanıcıya göster
             results.append({**res, "status": "error", "message": errors.user_text(e)})

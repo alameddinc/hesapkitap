@@ -1,5 +1,6 @@
 """Banka tespiti + parser registry. Yeni banka = yeni modül + DETECTORS'a bir satır."""
 import io
+import logging
 import threading
 
 import pdfplumber
@@ -11,6 +12,12 @@ DETECTORS = [
     (vakifbank.is_vakifbank, vakifbank.parse_text),
     (kuveytturk.is_kuveytturk, kuveytturk.parse_text),
 ]
+
+
+_log = logging.getLogger("hesapkitap.parsers")
+
+# PDF açılamadı (bozuk ya da PDF değil): kütüphanenin ayrıntısı ("No /Root object! - Is this really a PDF?") günlüğe
+PDF_UNREADABLE = "PDF açılamadı: dosya bozuk ya da PDF değil. Bankadan indirdiğin PDF'i yeniden seç."
 
 
 class PasswordRequired(ValueError):
@@ -175,9 +182,11 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
 
         if isinstance(e, LimitError):
             raise
-        raise ValueError(f"PDF açılamadı: {e}") from e
+        _log.info("PDF açılamadı: %s", str(e)[:300])  # kütüphanenin İngilizce metni kullanıcıya gitmez
+        raise ValueError(PDF_UNREADABLE) from e
     except Exception as e:  # noqa: BLE001 - bozuk PDF
-        raise ValueError(f"PDF açılamadı: {e}") from e
+        _log.info("PDF açılamadı: %s", str(e)[:300])
+        raise ValueError(PDF_UNREADABLE) from e
     if st := parse_text(text):
         return st
     from app import receipt
@@ -203,7 +212,9 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
             # şifreli PDF'i model okuyamaz: çözülmüş metni gönder
             st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")
         except receipt.ReceiptError as e:
-            raise ValueError(f"Banka tanınamadı ve yapay zekâ ile okunamadı: {e}") from e
+            from app import errors
+
+            raise ValueError(f"Banka tanınamadı ve yapay zekâ ile okunamadı: {errors.user_text(e, 502)}") from e
         st.ai_parsed, st.source = True, "yapay_zeka"
         from app import card_reader
 

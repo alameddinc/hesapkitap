@@ -41,6 +41,11 @@ Kurallar:
 - Türk sayı formatı: 1.234,56 = 1234.56. Hiçbir işlemi atlama."""
 
 
+class NotAStatement(ValueError):
+    """Yapay zekâ belgede kart ekstresi bulamadı (hesap kesim tarihi yok): fatura, fiş ya da alakasız PDF olabilir.
+    Yükleme ucu (yetenek upload_docs) metninde fatura işareti varsa belgeyi fiş/fatura olarak okumayı dener."""
+
+
 def _d(v) -> date | None:
     try:
         return date.fromisoformat(v) if v else None
@@ -60,7 +65,7 @@ def parse_pdf_with_ai(data: bytes, mime: str = "application/pdf") -> Statement:
     main = _mask(raw.get("card_no"), "AI***0000")
     period_end = _d(raw.get("period_end"))
     if not period_end:
-        raise ValueError("Bu PDF'te kredi kartı ekstresi bulunamadı (hesap kesim tarihi yok). Banka hesap dökümüyse "
+        raise NotAStatement("Bu PDF'te kredi kartı ekstresi bulunamadı (hesap kesim tarihi yok). Banka hesap dökümüyse "
                          "Ekstreler → Hesap hareketleri bölümünden yükle; olmazsa bankanın adını bana bildir.")
     num = receipt._num
     st = Statement(

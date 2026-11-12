@@ -35,7 +35,8 @@ _TR = re.compile(r"[çğıöşüÇĞİÖŞÜ₺]|\b(yok|değil|degil|için|olmal
                  r"tutar|hesap|ekstre|dosya|belge|kart|borç|alacak|kişi|gün|ay|yıl|en fazla|en az|tekrar|gerekli)\b", re.I)
 _TECH = re.compile(r"Traceback|Errno|NoneType|object has no|invalid literal|could not|Expecting|unexpected|"
                    r"line \d+|column \d+|not supported|is not|must be|argument|KeyError|TypeError|ValueError|"
-                   r"https?://|\bat 0x|sqlite|zipfile|openpyxl|xlrd|pdfminer|httpx", re.I)
+                   r"https?://|\bat 0x|sqlite|zipfile|openpyxl|xlrd|pdfminer|httpx|pdfplumber|pypdf|PdfReadError|"
+                   r"PSSyntax|PDFSyntax|really a PDF|/Root\b|\bEOF\b|startxref|xref", re.I)
 
 
 def is_user_text(msg: str) -> bool:

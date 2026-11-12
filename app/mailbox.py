@@ -247,6 +247,49 @@ def classify(text: str) -> tuple[str, bool]:
     return ("account" if _looks_like_account_statement_inner(text) else "card"), False
 
 
+# Fatura / e-Arşiv belgesi işaretleri (fatura kesen kurumun belgesi; kart ekstresinde ve hesap dökümünde başlıkta olmaz)
+_BILL_RE = (r"fatura no\b|fatura numaras[ıi]|fatura tarihi|fatura d[öo]nemi|e-?ar[şs]iv fatura|\be-?fatura\b|\bettn\b|"
+            r"abone (?:no|numaras[ıi])|tesisat (?:no|numaras[ıi])|s[öo]zle[şs]me hesap (?:no|numaras[ıi])|"
+            r"[öo]denecek (?:toplam )?tutar|fatura tutar[ıi]")
+# kart ekstresinin kesin işaretleri (faturada geçmez): biri bile varsa belge fatura sayılmaz
+_CARD_ONLY_RE = (r"hesap kesim|asgari [öo]deme|kredi kart[ıi] (?:hesap )?(?:ekstre|[öo]zeti)|kart limiti|"
+                 r"kullan[ıi]labilir limit|ekstre borcu")
+_ACCT_HEAD_RE = r"vadesiz|hesap hareket|hesap d[öo]k[üu]m|i[şs]lem d[öo]k[üu]m"
+
+
+def _low(text: str) -> str:
+    return text.replace("İ", "i").replace("I", "ı").lower()
+
+
+def looks_like_bill(text: str | None) -> bool:
+    """PDF metni fatura mı (kart ekstresi / hesap dökümü / dekont değil)? Temkinli: belgenin başında en az iki ayrı
+    fatura işareti (fatura no, fatura tarihi, ETTN, abone no, ödenecek tutar …) ve hiçbir yerinde kart ekstresinin kesin
+    işareti (hesap kesim, asgari ödeme, kullanılabilir limit …) yok, başlıkta hesap dökümü işareti yok. Yükleme ucu
+    (POST /api/statements/upload) faturayı yapay zekâya kart ekstresi diye göndermeden ayırır."""
+    if not text:
+        return False
+    from app.dekont import is_dekont
+
+    if is_dekont(text):
+        return False
+    t = _low(text)
+    head = t[:3000]
+    if re.search(_CARD_ONLY_RE, t) or re.search(_ACCT_HEAD_RE, head):
+        return False
+    return len({m.group(0) for m in re.finditer(_BILL_RE, head)}) >= 2
+
+
+def mentions_bill(text: str | None) -> bool:
+    """Daha gevşek: metinde fatura / fiş işareti var mı (kart ekstresi okunamadıktan sonra belge okumaya geçmek için;
+    alakasız PDF yapay zekâya ikinci kez gitmesin). Kart ekstresinin kesin işareti varsa False."""
+    if not text:
+        return False
+    t = _low(text)
+    if re.search(_CARD_ONLY_RE, t):
+        return False
+    return bool(re.search(_BILL_RE, t) or re.search(r"\bfatura\b|\bfaturas[ıi]\b|\bfi[şs]\b|e-?ar[şs]iv", t[:3000]))
+
+
 def handle_pdf(name: str, data: bytes) -> str:
     """PDF'i tanı ve içe aktar; kısa sonuç metni döner. Hazır sürümde yeni belge 1 okuma hakkı (app/doc_reads.py)."""
     from app import bank_import, bank_pdf, doc_reads

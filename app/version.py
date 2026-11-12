@@ -426,6 +426,12 @@ CAPABILITIES = (
                               # {card_no, early_close}. GET /api/interest early_close [kart + aynı alanlar] ve tips
                               # "erken_kapat"; /api/installments items[] early_close, card_no, count (kapama satırı);
                               # cards/summary cycle.items[] early_close. Ekstreden tanınan kapama push "faiz" (bir kez)
+    "upload_docs",            # POST /api/statements/upload docs=true (yeni istemci): ekstre olmayan fiş/fatura (fotoğraf,
+                              # fatura PDF'i — app/mailbox.looks_like_bill, ya da yapay zekâ kart ekstresi bulamadı ve
+                              # metinde fatura işareti var) belge okuma yolunda okunur (POST /api/documents/parse ile
+                              # aynı; okuma hakkı orada, tek sayım) → {status "document", doc_type bill|receipt, doc,
+                              # message}; okunamadıysa status "error". docs yoksa (eski istemci) aynı belgeler Türkçe
+                              # nedenle "error"; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez
 )
 
 
