@@ -140,7 +140,7 @@ def test_daily_cap_lower_than_plan_applies(hosted, gemini):
     assert r.status_code == 502 and r.json()["restricted"] is True and "sınırlandı; destek için bize yaz" in r.json()["detail"]
     assert len(gemini) == 2  # üçüncü okunmadı
     assert hosted.get(f"/api/admin/ai-restrictions/{u['id']}").json()["today_reads"] == 2
-    # paket hakkı (ücretsiz 30 fiş) üst sınırdan düşükse o bağlar: sınır 1000 olsa da hak dolunca hak mesajı
+    # paket hakkı (ücretsiz ayda 5) üst sınırdan düşükse o bağlar: sınır 1000 olsa da hak dolunca hak mesajı
     test_doc_reads._set_reads(u["id"], fis=30)
     hosted.put(f"/api/admin/ai-restrictions/{u['id']}", json={"mode": "cap", "daily_cap": 1000})
     r = c.post("/api/receipts/parse", files={"file": ("f.jpg", b"fis-4", "image/jpeg")})

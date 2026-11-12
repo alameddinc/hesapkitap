@@ -42,14 +42,14 @@ def test_limits_by_plan_and_meta_reads(hosted):
 
     c, u = _user(hosted)
     p = c.get("/api/meta").json()["plan"]
-    assert p["reads"]["belge"] == {"used": 0, "limit": 3, "left": 3} and p["reads"]["fis"]["limit"] == 3
+    assert p["reads"]["belge"] == {"used": 0, "limit": 5, "left": 5} and p["reads"]["fis"]["limit"] == 5
     # geriye uyum: eski {belge, fis} biçimi, ikisi de günlük hak
-    assert p["reads_by_plan"] == {"free": {"belge": 3, "fis": 3}, "premium": {"belge": 30, "fis": 30},
-                                  "aile": {"belge": 30, "fis": 30}}
+    assert p["reads_by_plan"] == {"free": {"belge": 5, "fis": 5}, "premium": {"belge": 10, "fis": 10},
+                                  "aile": {"belge": 10, "fis": 10}}
     assert [x["id"] for x in p["packs"]] == ["okuma_100", "okuma_300"] and p["family_seats"] == 4
     assert p["limits_by_plan"]["free"] == {"history_months": 1, "plan_months": 1, "budgets": 2}
     assert p["limits_by_plan"]["premium"] == {"history_months": None, "plan_months": None, "budgets": None}
-    for plan, (b, f) in (("premium", (30, 30)), ("aile", (30, 30))):
+    for plan, (b, f) in (("premium", (10, 10)), ("aile", (10, 10))):
         system.update_user(u["id"], plan=plan, plan_until=None)
         assert (plans.read_limit(system.user(u["id"]), "belge"), plans.read_limit(system.user(u["id"]), "fis")) == (b, f)
 
@@ -62,8 +62,8 @@ def test_trial_has_normal_limits_and_is_reported(hosted):
                 "product_id": "premium_monthly", "period_type": "TRIAL", "expiration_at_ms": exp}).status_code == 200
     p = c.get("/api/meta").json()["plan"]
     assert p["plan"] == "premium" and p["trial"] is True and p["trial_days_left"] in (6, 7, 8)  # gece yarısına yakın yerel ve UTC gün farkı
-    assert p["reads"]["limit"] == 30 and p["reads"]["monthly_cap"] is None
-    _set_reads(u["id"], day=30)
+    assert p["reads"]["limit"] == 10 and p["reads"]["monthly_cap"] == 300
+    _set_reads(u["id"], day=10)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
     assert r["quota_full"] and r["trial"] is True and r["trial_days_left"] in (6, 7, 8) and r["upgrade"] is False
     # deneme bitti, ücretli dönem (RENEWAL, period_type NORMAL): deneme bilgisi düşer
@@ -79,7 +79,7 @@ def test_upgrade_yearly_default_off_and_admin_switch(hosted):
     _rc({"type": "INITIAL_PURCHASE", "app_user_id": str(u["id"]), "entitlement_ids": ["premium"],
          "product_id": "premium_monthly:monthly", "period_type": "NORMAL", "expiration_at_ms": 4102444800000})
     assert system.user(u["id"])["plan_product"] == "premium_monthly"
-    _set_reads(u["id"], day=30)
+    _set_reads(u["id"], day=10)
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["upgrade_yearly"] is False  # varsayılan kapalı
     assert hosted.put("/api/admin/plan-table", json={"upgrade_yearly": True}).json()["upgrade_yearly"] is True
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["upgrade_yearly"] is True
@@ -116,7 +116,7 @@ def test_pack_purchase_is_idempotent_and_leaves_subscription(hosted):
 def test_pack_used_after_daily_for_every_kind(hosted, gemini):
     c, u = _user(hosted)
     _pack(u["id"])
-    _set_reads(u["id"], day=3)
+    _set_reads(u["id"], day=5)
     from app import system
 
     with system.connect() as cn:  # bakiyeyi 2'ye indir
@@ -125,7 +125,7 @@ def test_pack_used_after_daily_for_every_kind(hosted, gemini):
     assert r["status"] == "saved" and r["charged"] == {"daily": 0, "extra": 1}  # ekstre: ekten
     assert c.post("/api/receipts/parse", files={"file": ("f.jpg", b"fis-x", "image/jpeg")}).status_code == 200  # fiş: ekten
     ai = _ai(c)
-    assert ai["extra"] == 0 and ai["reads"]["used"] == 3  # günlük sayaç sınırda kaldı
+    assert ai["extra"] == 0 and ai["reads"]["used"] == 5  # sayaç sınırda kaldı
     r = c.post("/api/statements/upload", files=_stmt("vakifbank_b.txt")).json()[0]
     assert r["quota_full"] is True and r["extra_left"] == 0
 
@@ -133,10 +133,10 @@ def test_pack_used_after_daily_for_every_kind(hosted, gemini):
 def test_daily_first_then_pack(hosted):
     c, u = _user(hosted)
     _pack(u["id"])
-    _set_reads(u["id"], day=2)
+    _set_reads(u["id"], day=4)
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["status"] == "saved"
     ai = _ai(c)
-    assert ai["reads"]["used"] == 3 and ai["extra"] == 100  # günlük hak önce
+    assert ai["reads"]["used"] == 5 and ai["extra"] == 100  # paketin hakkı önce
     assert c.post("/api/statements/upload", files=_stmt("vakifbank_b.txt")).json()[0]["status"] == "saved"
     assert _ai(c)["extra"] == 99
 
@@ -150,12 +150,12 @@ def test_pack_survives_premium_and_day_change(hosted, monkeypatch):
     _pack(u["id"], "okuma_300", "tx-9")
     _rc({"type": "INITIAL_PURCHASE", "app_user_id": str(u["id"]), "entitlement_ids": ["premium"],
          "product_id": "premium_yearly", "expiration_at_ms": 4102444800000})
-    assert _ai(c)["extra"] == 300 and _ai(c)["reads"]["limit"] == 30  # Premium başlayınca ek hak kalır
-    _set_reads(u["id"], day=30)
+    assert _ai(c)["extra"] == 300 and _ai(c)["reads"]["limit"] == 10  # Premium başlayınca ek hak kalır
+    _set_reads(u["id"], day=10)
     # gelecek gün: günlük sayaç sıfır, ek hak aynı
     monkeypatch.setattr(doc_reads, "_now", lambda: datetime(2099, 1, 1, 9, tzinfo=doc_reads.TZ))
     st = doc_reads.status(system.user(u["id"]))
-    assert st["used"] == 0 and st["left"] == 30 and doc_reads.credits(u["id"]) == 300
+    assert st["used"] == 0 and st["left"] == 10 and doc_reads.credits(u["id"]) == 300
 
 
 def test_pack_refund(hosted):

@@ -1,4 +1,4 @@
-"""Okuma hakkı (hazır sürüm): tek GÜNLÜK sayaç; okunan her belge 1 (PDF her 10 sayfa 1); yöntem ve yapay zekâ çağrısı
+"""Okuma hakkı (hazır sürüm): tek sayaç (ücretsiz ayda 5, Premium/Aile günde 10 ve ayda en çok 300); okunan her belge 1 (PDF her 10 sayfa 1); yöntem ve yapay zekâ çağrısı
 sayısı fark etmez; tekrar, "zaten vardı" ve başarısız okuma düşmez; hak doluyken hiçbir belge okunmaz. Kendi
 sunucusunda bu sayım yoktur."""
 import io
@@ -130,23 +130,30 @@ def test_statement_ai_fallback_counts_one_despite_many_ai_calls(hosted, gemini, 
     assert len(gemini) == 2 and _used(u["id"]) == 1  # çift sayım yok
 
 
-def test_free_4th_read_refused_before_reading(hosted, gemini):
+def test_free_6th_read_refused_before_reading(hosted, gemini):
+    from app import doc_reads
+
     c, u = _user(hosted)
-    # ücretsiz: günde 3; türü ne olursa olsun aynı sayaç (ekstre + fiş + fiş)
+    # ücretsiz: ayda 5; türü ne olursa olsun aynı sayaç (ekstre + 4 fiş)
     assert c.post("/api/statements/upload", files=_stmt()).json()[0]["status"] == "saved"
     r = c.post("/api/receipts/parse", files={"file": ("fis.jpg", b"fis-1", "image/jpeg")})
     assert r.status_code == 200 and r.json()["charged"] == {"daily": 1, "extra": 0}
-    assert c.post("/api/receipts/parse", files={"file": ("fis.jpg", b"fis-2", "image/jpeg")}).status_code == 200
+    for i in (2, 3, 4):
+        assert c.post("/api/receipts/parse", files={"file": ("fis.jpg", f"fis-{i}".encode(), "image/jpeg")}).status_code == 200
     st = _reads(c)["reads"]
     assert (st["period"], st["used"], st["limit"], st["left"], st["monthly_cap"], st["monthly_used"]) == \
-        ("day", 3, 3, 0, 40, 3)
+        ("day", 5, 5, 0, 5, 5)
+    assert st["day_limited"] is False and st["limited_by"] == "month"  # günlük ayrı sınır yok
+    when = f"{doc_reads._on(doc_reads._next_month())} yenilenir."
     r = c.post("/api/statements/upload", files=_stmt("vakifbank_b.txt")).json()[0]
-    assert r["status"] == "error" and r["manual"] is True and r["limit"] == 3 and r["upgrade"] is True
-    assert r["message"].startswith("Bugünkü okuma hakkın doldu (3/3). Yarın yenilenir.")
-    assert "Ek okuma paketi alabilir ya da Premium'a geçebilirsin (günde 30 okuma)" in r["message"]
+    assert r["status"] == "error" and r["manual"] is True and r["limit"] == 5 and r["upgrade"] is True
+    assert r["message"] == (f"Bu ayın 5 okuması doldu; {when} Premium ile günde 10 okuma yapabilir ya da ek okuma "
+                            "paketi alabilirsin. Bu arada harcamanı elle ekleyebilirsin.")
+    assert r["texts"] == {"title": "Bu ayın 5 okuması doldu", "when": when,
+                          "offer": "Premium ile günde 10 okuma yapabilir ya da ek okuma paketi alabilirsin."}
     assert (r["reason"], r["kind"], r["trial"], r["upgrade_yearly"]) == ("quota", "belge", False, False)
-    assert (r["daily_limit"], r["daily_used"], r["needed"], r["limited_by"]) == (3, 3, 1, "day")
-    assert r["resets_at"].endswith("+03:00") and r["resets_at"][11:19] == "00:00:00"
+    assert (r["daily_limit"], r["daily_used"], r["needed"], r["limited_by"]) == (5, 5, 1, "month")
+    assert r["resets_at"].endswith("+03:00") and r["resets_at"][8:19] == "01T00:00:00"  # ay başı
     assert [p["id"] for p in r["packs"]] == ["okuma_100", "okuma_300"]
     assert len(c.get("/api/statements").json()) == 1  # okunmadı
     gemini.clear()
@@ -154,7 +161,7 @@ def test_free_4th_read_refused_before_reading(hosted, gemini):
     r = c.post("/api/receipts/parse", files={"file": ("fis.jpg", _jpeg(), "image/jpeg")})
     body = r.json()
     assert r.status_code == 502 and body["manual"] is True and body["quota_full"] is True and gemini == []
-    assert body["kind"] == "fis" and body["limit"] == 3 and "Bugünkü okuma hakkın doldu (3/3)" in body["detail"]
+    assert body["kind"] == "fis" and body["limit"] == 5 and "Bu ayın 5 okuması doldu" in body["detail"]
     assert body["receipt_file"] and body["receipt_file"].endswith(".jpg")
     e = c.post("/api/entries", json={"entry_date": "2026-10-20", "description": "Migros", "amount": 125.5,
                                      "kind": "gider", "category": "Market & Gıda", "payment": "nakit",
@@ -165,12 +172,12 @@ def test_free_4th_read_refused_before_reading(hosted, gemini):
     p = c.post("/api/bank-import/preview", files={"file": ("d.csv", b"Tarih;Tutar\n01.10.2026;-10", "text/csv")})
     assert p.status_code == 422 and p.json()["manual"] is True and p.json()["kind"] == "belge"
     b = c.post("/api/bills/parse", files={"file": ("f.pdf", b"%PDF-1", "application/pdf")}).json()
-    assert b["manual"] is True and "okuma hakkın doldu" in b["error"] and b["file_name"]
-    assert _used(u["id"]) == 3 and gemini == []
+    assert b["manual"] is True and "okuması doldu" in b["error"] and b["file_name"]
+    assert _used(u["id"]) == 5 and gemini == []
     ai = _reads(c)
-    assert (ai["used"], ai["quota"], ai["unit"]) == (3, 3, "docs")
+    assert (ai["used"], ai["quota"], ai["unit"]) == (5, 5, "docs")
     # geriye uyum: eski iki sayaç ikisi de aynı günlük sayacı gösterir
-    assert ai["belge"] == {"used": 3, "limit": 3, "left": 0} and ai["fis"] == {"used": 3, "limit": 3, "left": 0}
+    assert ai["belge"] == {"used": 5, "limit": 5, "left": 0} and ai["fis"] == {"used": 5, "limit": 5, "left": 0}
     assert ai["extra"] == 0 and ai["reads"]["extra_left"] == 0
 
 
@@ -179,10 +186,13 @@ def test_premium_refusal_has_no_upgrade_hint(hosted):
 
     c, u = _user(hosted)
     system.update_user(u["id"], plan="premium", plan_until=None)
-    _set_reads(u["id"], day=30)
+    _set_reads(u["id"], day=10)
     r = c.post("/api/statements/upload", files=_stmt()).json()[0]
-    assert r["limit"] == 30 and r["upgrade"] is False and "Premium'a" not in r["message"]
-    assert r["message"].startswith("Bugünkü okuma hakkın doldu (30/30). Yarın yenilenir. Ek okuma paketiyle")
+    assert r["limit"] == 10 and r["upgrade"] is False and "Premium" not in r["message"]
+    assert r["message"] == ("Bugünün 10 okuması doldu, yarın yenilenir. Ek okuma paketiyle hemen devam edebilirsin. "
+                            "Bu arada harcamanı elle ekleyebilirsin.")
+    assert r["texts"]["title"] == "Bugünün 10 okuması doldu" and r["texts"]["when"] == "Yarın yenilenir."
+    assert r["day_limited"] is True and r["limited_by"] == "day" and r["monthly_cap"] == 300
 
 
 def test_personal_quota_comes_first_and_admin_unlimited(hosted):
@@ -200,7 +210,7 @@ def test_personal_quota_comes_first_and_admin_unlimited(hosted):
 
 
 def test_family_counters_are_per_person_and_members_own_book(tmpdb, monkeypatch):
-    """Aile: kişi başı günde 30; ortak defterde her üyenin kendi sayacı. Sahibin hakkı dolu olsa da üye okur; üyenin
+    """Aile: kişi başı günde 10 (ayda en çok 300); ortak defterde her üyenin kendi sayacı. Sahibin hakkı dolu olsa da üye okur; üyenin
     hakkı dolunca ortak defterde de üyenin kendi defterinde de reddedilir."""
     from app import auth, db, doc_reads, system
 
@@ -211,18 +221,18 @@ def test_family_counters_are_per_person_and_members_own_book(tmpdb, monkeypatch)
     with system.connect() as c:  # davetle katılmış üye
         c.execute("UPDATE users SET member_of = ? WHERE id = ?", (o["id"], m["id"]))
     o, m = system.user(o["id"]), system.user(m["id"])
-    _set_reads(o["id"], day=30)
-    _set_reads(m["id"], day=29)
+    _set_reads(o["id"], day=10)
+    _set_reads(m["id"], day=9)
     with db.use_space(system.user_db_path(m), m):
-        doc_reads.check(b"belge-30")
-        assert doc_reads.charge(b"belge-30") and not doc_reads.charge(b"belge-30")  # aynı içerik bir kez
-    with db.use_space(system.user_db_path(o), o), pytest.raises(doc_reads.QuotaError, match=r"Bugünkü okuma hakkın doldu \(30/30\)"):
+        doc_reads.check(b"belge-10")
+        assert doc_reads.charge(b"belge-10") and not doc_reads.charge(b"belge-10")  # aynı içerik bir kez
+    with db.use_space(system.user_db_path(o), o), pytest.raises(doc_reads.QuotaError, match=r"Bugünün 10 okuması doldu"):
         doc_reads.check(b"x")
     for ctx, path in ((m, system.user_db_path(m)), ({**m, "own_book": True}, system.own_db_path(m))):
-        with db.use_space(path, ctx), pytest.raises(doc_reads.QuotaError, match="Bugünkü okuma hakkın doldu"):
-            doc_reads.check(b"belge-31", doc_reads.FIS)
-    assert doc_reads.status(m)["used"] == 30 and doc_reads.status(o)["left"] == 0
-    assert doc_reads.status(m)["monthly_cap"] is None  # aile/premium: aylık tavan yok
+        with db.use_space(path, ctx), pytest.raises(doc_reads.QuotaError, match="Bugünün 10 okuması doldu"):
+            doc_reads.check(b"belge-11", doc_reads.FIS)
+    assert doc_reads.status(m)["used"] == 10 and doc_reads.status(o)["left"] == 0
+    assert doc_reads.status(m)["monthly_cap"] == 300  # aile: kişi başı Premium ile aynı
 
 
 def test_mail_bill_counts_once_and_full_quota_skips(tmpdb, monkeypatch):
@@ -241,7 +251,7 @@ def test_mail_bill_counts_once_and_full_quota_skips(tmpdb, monkeypatch):
     assert _used(u["id"]) == 1  # mail ile fatura: 1
     assert inbound.handle(raw, to, verify=sig)["status"] == "skip"
     assert _used(u["id"]) == 1  # aynı Message-ID: 0
-    _set_reads(u["id"], day=30)
+    _set_reads(u["id"], day=10)
     r = inbound.handle(_raw("efatura@enerjisa.com.tr", body="Faturanız 300 TL", mid="<f2@x>"), to, verify=sig)
     assert (r["status"], r["detail"]) == ("skip", "Belge okuma hakkı doldu")  # günlükte: skip · belge okuma hakkı doldu
     assert _used(u["id"]) == 1

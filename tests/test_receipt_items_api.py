@@ -85,7 +85,7 @@ def test_reread_charges_two_and_is_limited(hosted, reread_ai):  # noqa: F811
     from app import system
 
     c, u = _user(hosted)
-    system.update_user(u["id"], plan="premium", plan_until=None)  # günde 30: üç yeniden okumaya yeter
+    system.update_user(u["id"], plan="premium", plan_until=None)  # günde 10: 1 + üç yeniden okuma (3 × 2) = 7
     r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
     assert _used(u["id"]) == 1 and r["receipt_file"] and "check" in r
     # ilk okuma fişi tutmadı: aynı istekte güçlü modelle bir kez daha okundu (otomatik: hak düşmez)
@@ -114,13 +114,16 @@ def test_reread_refused_when_two_reads_not_left(hosted, reread_ai):  # noqa: F81
     c, u = _user(hosted)
     r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
     n = len(reread_ai)
-    _set_reads(u["id"], day=2)  # ücretsiz günde 3: 1 kaldı
+    _set_reads(u["id"], day=4)  # ücretsiz ayda 5: 1 kaldı
     out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 285.0})
     body = out.json()
     assert out.status_code == 402 and body["quota_full"] is True and body["needed"] == 2 and body["reread"] is True
-    assert body["detail"].startswith("Yeniden okuma 2 hak ister, bugün 1 hakkın kaldı. Yarın yenilenir.")
+    from app import doc_reads
+
+    when = f"{doc_reads._on(doc_reads._next_month())} yenilenir."
+    assert body["detail"].startswith(f"Yeniden okuma 2 hak ister, bu ay 1 hakkın kaldı. {when}")
     assert body["receipt_file"] == r["receipt_file"] and len(reread_ai) == n  # modele gidilmedi
-    assert c.get("/api/me/ai").json()["reads"]["used"] == 2
+    assert c.get("/api/me/ai").json()["reads"]["used"] == 4
 
 
 def _ai(monkeypatch, first, second=None, fail=False):

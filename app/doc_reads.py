@@ -1,9 +1,14 @@
 """Okuma hakkı (yalnız hazır sürüm, plans.hosted()).
 
-TEK GÜNLÜK sayaç (plans.DAILY_READS), kişi başı (ortak defterde her üyenin kendi sayacı): fiş, fatura, kart ekstresi,
-hesap dökümü, dekont, deftere özel posta adresine gelen belge/bildirim, yapay zekâ kategori önerisi — türü ne olursa
-olsun, yerel ayrıştırıcıyla ya da yapay zekâyla okunsun aynı günlük haktan düşer. Gün sınırı Türkiye saatiyle gece
-yarısı (_day). Ücretsizde ayrıca aylık tavan (plans.MONTHLY_CAP: günde 3 VE ayda en çok 40).
+TEK sayaç, kişi başı (ortak defterde her üyenin kendi sayacı): fiş, fatura, kart ekstresi, hesap dökümü, dekont,
+deftere özel posta adresine gelen belge/bildirim, yapay zekâ kategori önerisi — türü ne olursa olsun, HER okuma düşer:
+yapay zekâ, fiş/fatura şablonu, banka şablonu ya da yerel ayrıştırıcı fark etmez (şablon yalnız maliyeti düşürür).
+Sınırlar paketin (plans.DAILY_READS günlük + plans.MONTHLY_CAP aylık; sayılar yalnız orada): ücretsiz ayda 5 (günlük
+ayrı sınır yok: günlük sayı aylıkla aynı), Premium ve Aile kişi başı günde 10 ve ayda en çok 300. Gün sınırı Türkiye
+saatiyle gece yarısı (_day), ay takvim ayı (_month). Aylık sayım read_daily'nin ay toplamıdır: kural değiştiği gün o ay
+zaten kullanılmış haklar da sayılır (ücretsizde bu ay 5'i geçmiş kullanıcı ay sonuna kadar yeni okuma yapamaz; ek paket
+hariç). Kalan = min(günlük kalan, aylık kalan, aile tavanı); limited_by hangisinin bağladığını söyler (eşitlikte
+"month": ay başına kadar yenilenmez).
 
 - Ağırlık (weight): PDF 10 sayfaya kadar 1 hak, uzunsa her 10 sayfa 1 hak (ceil(sayfa / 10)); sayfası bulunamayan
   (şifreli) PDF, fotoğraf, fiş (çok fotoğraflı da), Excel/CSV, mail metni, kategori önerisi 1 hak.
@@ -19,7 +24,8 @@ yarısı (_day). Ücretsizde ayrıca aylık tavan (plans.MONTHLY_CAP: günde 3 V
   charge çağrılmaz. charge idempotenttir: aynı içerik (key = dosya baytları ya da "mail:<Message-ID>") aynı defterde
   ikinci kez sayılmaz (system.doc_reads kaydı); dış uç ve iç işleyici (mailbox.handle_pdf) aynı belgeyi sayabilir.
 - Ek okuma paketi (plans.PACKS, mağazada tüketilebilir ürün → RevenueCat NON_RENEWING_PURCHASE): read_credits bakiyesi.
-  Önce günlük hak, o bitince ek paket; paketin günlük sınırı ve süresi yok (bitene kadar), paket değişince de kalır.
+  Önce paketin hakkı, günlük ya da aylık sınır dolunca ek paket; ek paketin günlük/aylık sınırı ve süresi yok (bitene
+  kadar), paket değişince de kalır.
   Çok haklı işlemde (ör. 3 hak, günlükte 1 kaldı) günlükten 1 + paketten 2 aynı işlemde (transaction) düşer; düşülen
   {daily, extra} döner (istemci "ek paketten 2 okuma kullanıldı" der).
 - Hak dolunca hiçbir şey kilitlenmez: yalnız okuma durur, kayıt elle eklenir.
@@ -31,9 +37,12 @@ yarısı (_day). Ücretsizde ayrıca aylık tavan (plans.MONTHLY_CAP: günde 3 V
   (charge_unreadable; tekrar muafiyeti yok, system.read_unreadable).
 - Aile tavanı: ortak defterin (sahip + üyeler; üyenin "Benim" defterindeki okumalar da, Premium'u aileden geliyorsa:
   koltuk ya da ek süre; kendi aboneliği olan üyenin Benim defteri hariç) günlük haktan düşen toplamı
-  family_limit'i (DAILY_READS[aile] × FAMILY_SEATS + kendi Premium/Aile aboneliği olan her üye için o paketin günlük
-  hakkı) aşamaz: davetle açılan üyeyi silip yenisini çağırmak yeni hak getirmez (system.read_book_daily, defter başı;
+  family_limit'i (DAILY_READS[aile] × FAMILY_SEATS = 10 × 4 = 40 + kendi Premium/Aile aboneliği olan her üye için o
+  paketin günlük hakkı; önceki kuralda 30 × 4 = 120) aşamaz: davetle açılan üyeyi silip yenisini çağırmak yeni hak getirmez (system.read_book_daily, defter başı;
   üye silinince kalır). Ek paket bu tavana girmez (satın alınmış hak). status: family_limit / family_left.
+- Metinler (texts): hak dolu başlığı, ne zaman yenilendiği ve öneri ("Premium ile günde 10 okuma…" / "Ek okuma
+  paketiyle…") status ve ret gövdesinde "texts" olarak gider; istemci sayı ve cümle üretmez (eski istemci kendi metnini
+  kurar).
 - Sayaçlar: system.read_daily (günlük haktan düşen; aylık tavan bunların ay toplamı), system.ai_usage (bu ay düşen
   toplam hak, ek paket dahil; yönetici listesi, eski istemci), system.read_usage (tür başı okunan belge; artık yalnız
   istatistik, hak hesabına girmez; eski aylık sayaçtan göç _split geçmiş aylar için kalır).
@@ -295,7 +304,7 @@ def _state(c, u: dict) -> dict:
     month_used, by = None, "day"
     if cap is not None:
         month_used = _month_used(c, u["id"], _month())
-        if cap - month_used < limit - day_used:
+        if cap - month_used <= limit - day_used:  # eşitlikte ay: yarın yenilenmez (ücretsizde hep ay)
             by = "month"
         left = min(left, max(0, cap - month_used))
     fam = _family(c, u)
@@ -329,7 +338,8 @@ def _resets(st: dict) -> str:
 
 
 def status(u: dict | None) -> dict | None:
-    """Arayüz için tek günlük sayaç: {period: "day", limit, used, left, resets_at, monthly_cap, monthly_used,
+    """Arayüz için tek sayaç: {period: "day", limit, used, left, resets_at, day_limited (False: günlük sınır yok,
+    istemci yalnız "Bu ay" gösterir), texts {title, when, offer} (hak dolunca), monthly_cap, monthly_used,
     monthly_resets_at, limited_by, extra_left, reread_cost, pages_per_read, family_limit?, family_used?, family_left?
     (yalnız ortak defterde; left bunları zaten içerir)} + geriye uyum: belge ve fiş (eski iki
     aylık sayaç) ikisi de aynı günlük sayacı yansıtır ({used, limit, left}), extra = ek paket. Kendi sunucusu /
@@ -342,6 +352,7 @@ def status(u: dict | None) -> dict | None:
         st = _state(c, u)
     old = {"used": st["used"], "limit": st["limit"], "left": st["left"]}
     return {"period": "day", "limit": st["limit"], "used": st["used"], "left": st["left"], "resets_at": _resets(st),
+            "day_limited": _day_limited(st), "texts": texts(u, st),
             "monthly_cap": st["cap"], "monthly_used": st["month_used"],
             "monthly_resets_at": _next_month().isoformat() if st["cap"] is not None else None,
             "limited_by": _by(st), "extra_left": st["extra"], "reread_cost": REREAD_COST,
@@ -360,32 +371,57 @@ def _upgrade(u: dict) -> bool:
     return plans.plan_of(u) == plans.FREE
 
 
+def _day_limited(st: dict) -> bool:
+    """Günlük sınır bağlıyor mu: aylık tavan yoksa ya da günlük hak tavandan küçükse (ücretsiz: hayır)."""
+    return st["cap"] is None or st["limit"] < st["cap"]
+
+
+def offer(u: dict) -> str:
+    """Hak dolunca öneri: ücretsize Premium (günde N okuma) ve ek paket, Premium/Aile'ye ek paket."""
+    from app import plans
+
+    if _upgrade(u):
+        return f"{plans.upgrade_text()} yapabilir ya da ek okuma paketi alabilirsin."
+    return "Ek okuma paketiyle hemen devam edebilirsin."
+
+
+def texts(u: dict, st: dict) -> dict:
+    """Hak dolu metinleri {title, when, offer} (istemci aynen gösterir): "Bu ayın 5 okuması doldu" / "1 Aralık'ta
+    yenilenir." · "Bugünün 10 okuması doldu" / "Yarın yenilenir." · aile tavanı. Hak varken de döner (ön kontrol)."""
+    by = st["by"]
+    if by == "family" and st["left"] <= 0:
+        title = f"Ailenin bugünkü toplam okuma hakkı ({st['family']['limit']}) doldu"
+    elif by == "month":
+        title = f"Bu ayın {st['cap']} okuması doldu"
+    else:
+        title = f"Bugünün {st['limit']} okuması doldu"
+    when = f"{_on(_next_month())} yenilenir." if by == "month" else "Yarın yenilenir."
+    return {"title": title, "when": when, "offer": offer(u)}
+
+
 def message(u: dict, st: dict | None = None, needed: int = 1, reread: bool = False, n_pages: int | None = None) -> str:
     """Hak dolu metni. st: _state (verilmezse okunur)."""
-    from app import plans, system
+    from app import system
 
     if st is None or isinstance(st, int):  # eski imza: message(u, quota, kind)
         with system.connect() as c:
             st = _state(c, u)
     left_, by = st["left"], st["by"]
-    when = "Yarın yenilenir." if by in ("day", "family") else f"{_on(_next_month())} yenilenir."
+    t = texts(u, st)
+    when = t["when"]
+    period = "bu ay" if by == "month" else "bugün"
     if by == "family" and left_ <= 0:
-        msg = f"Ailenin bugünkü toplam okuma hakkı ({st['family']['limit']}) doldu; yarın yenilenir."
+        msg = f"{t['title']}; yarın yenilenir."
     elif reread:
-        msg = f"Yeniden okuma {needed} hak ister, {'bu ay' if by == 'month' else 'bugün'} {left_} hakkın kaldı. {when}"
+        msg = f"Yeniden okuma {needed} hak ister, {period} {left_} hakkın kaldı. {when}"
     elif left_ > 0:  # hak var ama bu belgeye yetmiyor (uzun PDF)
         what = f"Bu belge ({n_pages} sayfa)" if n_pages else "Bu belge"
-        msg = f"{what} {needed} okuma hakkı ister, {'bu ay' if by == 'month' else 'bugün'} {left_} hakkın kaldı. {when}"
+        msg = f"{what} {needed} okuma hakkı ister, {period} {left_} hakkın kaldı. {when}"
     elif by == "month":
-        msg = f"Bu ayki {st['cap']} okuma hakkın doldu; {_on(_next_month())} yenilenir."
+        msg = f"{t['title']}; {when}"
     else:
-        msg = f"Bugünkü okuma hakkın doldu ({st['used']}/{st['limit']}). Yarın yenilenir."
-    if _upgrade(u):
-        msg += (f" Ek okuma paketi alabilir ya da Premium'a geçebilirsin (günde {plans.DAILY_READS[plans.PREMIUM]} "
-                "okuma). Bu arada harcamanı elle ekleyebilirsin.")
-    else:
-        msg += " Ek okuma paketiyle hemen devam edebilir ya da harcamanı elle ekleyebilirsin."
-    return msg
+        msg = f"{t['title']}, yarın yenilenir."
+    return f"{msg} {t['offer']} Bu arada harcamanı elle ekleyebilirsin."
 
 
 def _refusal(u: dict, st: dict, needed: int, kind: str, reread: bool = False, n_pages: int | None = None) -> QuotaError:
@@ -396,6 +432,7 @@ def _refusal(u: dict, st: dict, needed: int, kind: str, reread: bool = False, n_
              "period": "day", "daily_limit": st["limit"], "daily_used": st["used"], "left": st["left"],
              "resets_at": _resets(st), "needed": needed, "limited_by": _by(st), "monthly_cap": st["cap"],
              "monthly_used": st["month_used"], "reread": reread, **({"pages": n_pages} if n_pages else {}),
+             "day_limited": _day_limited(st), "texts": texts(u, st),
              **_family_fields(st), **({"family_full": True} if st["by"] == "family" and st["left"] <= 0 else {})}
     limit = st["cap"] if st["by"] == "month" and st["left"] <= 0 else \
         st["family"]["limit"] if st["by"] == "family" and st["left"] <= 0 else st["limit"]
