@@ -1,0 +1,22 @@
+{
+  "amount_at": {
+    "2": 0
+  },
+  "amount_idx": -1,
+  "bank": "Albaraka",
+  "cards": "section",
+  "credit": "plus",
+  "date": {
+    "order": "dmy",
+    "sep": "ay"
+  },
+  "keywords": [
+    "hesap kesim tarihi",
+    "son ödeme tarihi",
+    "ekstre",
+    "kredi kartı"
+  ],
+  "kind": "card",
+  "num": "tr",
+  "v": 1
+}

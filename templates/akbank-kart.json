@@ -1,0 +1,41 @@
+[
+  {
+    "amount_idx": -1,
+    "bank": "Akbank",
+    "credit": "paren",
+    "date": {
+      "order": "dmy",
+      "sep": "/"
+    },
+    "keywords": [
+      "hesap kesim tarihi",
+      "son ödeme tarihi",
+      "dönem borcu",
+      "kart limiti"
+    ],
+    "kind": "card",
+    "num": "us",
+    "v": 1
+  },
+  {
+    "amount_at": {
+      "2": 0
+    },
+    "amount_idx": -1,
+    "bank": "Akbank",
+    "credit": "words",
+    "date": {
+      "order": "dmy",
+      "sep": "/"
+    },
+    "keywords": [
+      "hesap kesim tarihi",
+      "son ödeme tarihi",
+      "dönem borcu",
+      "kart limiti"
+    ],
+    "kind": "card",
+    "num": "us",
+    "v": 1
+  }
+]

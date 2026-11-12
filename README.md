@@ -142,6 +142,8 @@ Ayrıntılar için başlığa dokun.
 - **Kart ekstreleri** — İşlemler, taksitler (kaçıncı taksit, kalan), dövizli harcamalar, faiz/BSMV/KKDF, vade farkı ayrıştırılır.
   Her ekstre **mutabakat kontrolünden** geçer: okunan işlemlerin toplamı ekstre özetiyle kuruşu kuruşuna tutmalı.
   - Hazır okuyucu: **VakıfBank**, **Kuveyt Türk**
+  - Topluluk şablonu (yapay zekâsız; [`templates/`](templates)): **Akbank**, **Albaraka**, **Garanti BBVA**, **Halkbank**,
+    **İş Bankası** kart ekstreleri · **Halkbank**, **VakıfBank** hesap dökümü
   - Diğer bankalar: **genel okuyucu**, yapay zekâsız. Etiketlerden ("Hesap Kesim Tarihi", "Dönem Borcu"…) ve tarihli
     satırlardan okur; sonuç **ekstre denklemiyle** (önceki borç − ödemeler + harcamalar = dönem borcu) doğrulanırsa o bankanın
     kuralı öğrenilir ve toplulukla paylaşılır. Tutmazsa Gemini anahtarı varsa **yapay zekâyla okunur**.

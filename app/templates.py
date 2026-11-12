@@ -393,7 +393,7 @@ import os  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-HUB = os.environ.get("HESAPKITAP_HUB", "https://ekstre.alameddinc.com")
+HUB = os.environ.get("HESAPKITAP_HUB", "https://hesapkitapapi.alameddinc.com")  # hazır sürüm sunucusu (eski ekstre.* kapandı)
 REPO_TEMPLATES = os.environ.get("HESAPKITAP_TEMPLATES_URL",
                                 "https://api.github.com/repos/alameddinc/hesapkitap/contents/templates")
 

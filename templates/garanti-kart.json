@@ -1,0 +1,25 @@
+{
+  "amount_at": {
+    "3": 0,
+    "4": 0
+  },
+  "amount_idx": -1,
+  "bank": "Garanti",
+  "cards": "section",
+  "credit": "trailplus",
+  "date": {
+    "order": "dmy",
+    "sep": "ay"
+  },
+  "fx": true,
+  "keywords": [
+    "hesap kesim tarihi",
+    "son ödeme tarihi",
+    "dönem borcu",
+    "kart limiti"
+  ],
+  "kind": "card",
+  "minus_pts": true,
+  "num": "tr",
+  "v": 1
+}

@@ -1,0 +1,24 @@
+{
+  "amount_at": {
+    "2": 0
+  },
+  "amount_idx": -1,
+  "bank": "İş Bankası",
+  "credit": "minus",
+  "date": {
+    "order": "dmy",
+    "sep": "/"
+  },
+  "keywords": [
+    "hesap kesim tarihi",
+    "son ödeme tarihi",
+    "dönem borcu",
+    "asgari ödeme"
+  ],
+  "kind": "card",
+  "num": "tr",
+  "skip": [
+    "min"
+  ],
+  "v": 1
+}

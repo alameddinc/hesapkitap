@@ -1,0 +1,29 @@
+{
+  "amount_idx": 0,
+  "bank": "Halkbank",
+  "cards": "section",
+  "credit": "plus",
+  "date": {
+    "order": "dmy",
+    "sep": "/"
+  },
+  "keywords": [
+    "hesap kesim tarihi",
+    "son ödeme tarihi",
+    "asgari ödeme",
+    "ekstre"
+  ],
+  "kind": "card",
+  "labels": {
+    "total": [
+      {
+        "label": "hesap bakiyesi",
+        "nth": 0,
+        "off": 0
+      }
+    ]
+  },
+  "num": "us",
+  "v": 1,
+  "wrap": true
+}
