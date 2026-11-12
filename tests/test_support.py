@@ -304,3 +304,57 @@ def test_anonymize_amounts_flag_keeps_default():
     masked = card_reader.anonymize(t, amounts=True)
     assert "12.345,67" not in masked and "Borcu 99.999,99" in masked and " 9,999.99" in masked and "01.11.2026" in masked
     assert card_reader.anonymize("Toplam -1.234,56", amounts=True).endswith(" -9.999,99")
+
+
+def _member_retry(owner, monkeypatch, role):
+    from app.api import main
+    from app.parsers import parse_statement as real_parse
+
+    from tests.test_book import _member
+
+    m = _member(owner, "esim", role=role)
+    r = m.post("/api/support/report", data={"report": json.dumps({"code": "ekstre_bulunamadi"}), "send_doc": "true"},
+               files={"file": ("e.pdf", text_pdf(STMT_LINES), "application/pdf")})
+    assert r.status_code == 200, r.text
+    monkeypatch.setattr(main, "parse_statement", lambda data, passwords=None: real_parse(fixture_bytes("vakifbank_a.txt")))
+    pid = m.get("/api/support/pending").json()["items"][0]["id"]
+    out = m.post(f"/api/support/pending/{pid}/retry")
+    assert out.status_code == 200 and out.json()["status"] == "saved", out.text
+    return m, out.json()
+
+
+def test_retry_saves_into_book_where_uploaded(owner, ai, monkeypatch):  # noqa: F811
+    """Tam yetkili üye ortak defterde bildirdi: tekrar deneme ortak deftere kaydeder (dosya üyenin alanında bekledi)."""
+    m, out = _member_retry(owner, monkeypatch, "full")
+    assert "moved" not in out
+    assert len(owner.get("/api/statements").json()) == 1  # sahibin (ortak) defterinde
+    assert m.get("/api/statements", headers={"X-HK-Book": "kendi"}).json() == []
+    sysmsg = m.get("/api/support").json()["messages"][-1]
+    assert sysmsg["author"] == "system" and sysmsg["body"] == "Bekleyen ekstre yeniden okundu ve kaydedildi."
+
+
+def test_retry_falls_back_to_own_book_without_upload_right(owner, ai, monkeypatch):  # noqa: F811
+    """Ortak defterde yükleme yetkisi yok (sadece görür): "Benim" defterine kaydedilir, yazışmaya nedeni yazılır."""
+    m, out = _member_retry(owner, monkeypatch, "viewer")
+    assert out["moved"].startswith("Ortak defterde ekstre yükleme yetkin yok")
+    assert owner.get("/api/statements").json() == []
+    assert len(m.get("/api/statements", headers={"X-HK-Book": "kendi"}).json()) == 1
+    body = m.get("/api/support").json()["messages"][-1]["body"]
+    assert "Benim defterine kaydedildi" in body
+
+
+def test_retry_falls_back_when_member_left_book(owner, ai, monkeypatch):  # noqa: F811
+    from app import support, system
+
+    from tests.test_book import _member
+
+    m = _member(owner, "esim", role="full")
+    m.post("/api/support/report", data={"report": "{}", "send_doc": "true"},
+           files={"file": ("e.pdf", text_pdf(STMT_LINES), "application/pdf")})
+    uid = system.user_by_name("esim")["id"]
+    owner_id = system.user_by_name("admin")["id"]
+    with support.own_space(uid):
+        assert support.pending_get(support.pending_list()[0]["id"])["book_owner"] == owner_id
+    system.set_membership(uid, None)  # üye ortak defterden ayrıldı
+    with support.target_space(uid, owner_id) as why:
+        assert why and "artık açık değil" in why

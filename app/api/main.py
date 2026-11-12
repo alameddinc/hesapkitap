@@ -1754,12 +1754,14 @@ def support_report(request: Request, report: str = Form("{}"), bank_name: str | 
         if not data or _sniff_image(data, file.content_type, (file.filename or "").lower()):
             raise HTTPException(422, "Yalnız ekstre dosyası (PDF, Excel, CSV) gönderilebilir")
         doc = (data, (file.filename or "ekstre.pdf")[:200])
+    book_owner = support.upload_book()  # yüklendiği defter: "Tekrar dene" oraya kaydeder
     try:
+        passwords = db.pdf_passwords()  # açık defterin hatırlanan şifreleri (yükleme de bunlarla denedi)
         with support.own_space(uid):
-            passwords = db.pdf_passwords()
+            passwords += [p for p in db.pdf_passwords() if p not in passwords]
             if doc:
                 support.pending_room(*doc)
-        out = support.create_report(uid, key, rep, bank_name, note, doc, passwords)
+        out = support.create_report(uid, key, rep, bank_name, note, doc, passwords, book_owner)
     except support.SupportError as e:
         raise _support_error(e) from e
     try:
@@ -1809,6 +1811,7 @@ def support_pending_retry(pid: int, body: RetryIn | None = None):
 
     uid = _support_uid()
     body = body or RetryIn()
+    # dosya kişinin kendi alanında; kayıt yüklendiği deftere (yetkisi/defter yoksa "Benim" defterine)
     with support.own_space(uid):
         row = support.pending_get(pid)
         if not row:
@@ -1817,17 +1820,20 @@ def support_pending_retry(pid: int, body: RetryIn | None = None):
         if data is None:
             support.pending_delete(pid)
             raise HTTPException(404, "Bekleyen dosya bulunamadı; süresi dolmuş ya da silinmiş olabilir")
-        uf = UploadFile(file=io.BytesIO(data), filename=row["filename"], size=len(data))
+    uf = UploadFile(file=io.BytesIO(data), filename=row["filename"], size=len(data))
+    with support.target_space(uid, row.get("book_owner")) as moved:
         with undo.batch(f"Ekstre (tekrar): {row['filename'][:110]}") as b:
             results = _upload_statements([uf], body.password, body.remember)
             b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
                                                     "message")} for r in results]
-        r = {**results[0], **{k: v for k, v in results[-1].items() if k in ("cycle_day", "storage_warning")}}
-        ok = r.get("status") in ("saved", "duplicate")
-        if ok:
-            support.pending_delete(pid)
+    r = {**results[0], **{k: v for k, v in results[-1].items() if k in ("cycle_day", "storage_warning")}}
+    ok = r.get("status") in ("saved", "duplicate")
     if ok:
-        support.record_retry(uid, row["feedback_id"], True)
+        with support.own_space(uid):
+            support.pending_delete(pid)
+        support.record_retry(uid, row["feedback_id"], True, moved)
+        if moved:
+            r["moved"] = moved
     elif r.get("status") in ("account_statement", "ask"):
         r = {**r, "status": "error", "message": RETRY_ACCOUNT_MSG}
     r.pop("report", None)

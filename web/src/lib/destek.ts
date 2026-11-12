@@ -39,7 +39,8 @@ export interface SupportThread {
   messages: SupportMessage[];
   user?: { id: number; username: string | null; plan?: string } | null;
 }
-export type RetryResult = ReportedUpload & { pending_id: number; done: boolean };
+/** moved: kayıt yüklendiği ortak defter yerine "Benim" defterine gitti; nedeni */
+export type RetryResult = ReportedUpload & { pending_id: number; done: boolean; moved?: string };
 
 export const destekApi = {
   thread: () => call<SupportThread>("GET", "/api/support"),

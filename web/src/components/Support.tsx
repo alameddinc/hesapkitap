@@ -149,7 +149,7 @@ function RetryBox({ a }: { a: NonNullable<SupportMessage["action"]> }) {
     onSuccess: (r) => {
       if (r.done) {
         setMsg(null); setNeedPw(false);
-        ui.toast("Ekstre okundu ve kaydedildi");
+        ui.toast(r.moved ? `Ekstre okundu. ${r.moved}` : "Ekstre okundu ve kaydedildi");
         void qc.invalidateQueries();
         return;
       }

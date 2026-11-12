@@ -51,7 +51,8 @@ PENDING_SQL = """CREATE TABLE IF NOT EXISTS pending_uploads (  -- okunamayan, ku
     filename TEXT NOT NULL,              -- kullanıcının dosya adı (yalnız kendisine görünür)
     name TEXT NOT NULL,                  -- depodaki ad: pending/<sha256>.<uzantı>
     size INTEGER NOT NULL,
-    feedback_id INTEGER                  -- bağlı ekstre bildirimi (system.db feedback.id)
+    feedback_id INTEGER,                 -- bağlı ekstre bildirimi (system.db feedback.id)
+    book_owner INTEGER                   -- yüklendiği ortak defterin sahibi; NULL: kişinin kendi defteri
 )"""
 
 
@@ -165,6 +166,11 @@ def own_space(uid: int):
 
 def _pending_conn(c) -> None:
     c.execute(PENDING_SQL)
+    if "book_owner" not in {r[1] for r in c.execute("PRAGMA table_info(pending_uploads)")}:
+        try:
+            c.execute("ALTER TABLE pending_uploads ADD COLUMN book_owner INTEGER")
+        except Exception:  # noqa: BLE001 - eşzamanlı göç
+            pass
 
 
 def pending_room(data: bytes, filename: str) -> None:
@@ -180,7 +186,39 @@ def pending_room(data: bytes, filename: str) -> None:
             raise SupportError(f"En çok {MAX_PENDING} bekleyen dosya saklanabilir; önce birini sil ya da tekrar dene.", 409)
 
 
-def save_pending(data: bytes, filename: str, fid: int) -> dict:
+def upload_book() -> int | None:
+    """İstekte açık defter: ortak defter üyesi ortak defterdeyse sahibin id'si, değilse None (kendi defteri)."""
+    u = db.current_user() or {}
+    return u["member_of"] if u.get("member_of") and not u.get("own_book") else None
+
+
+@contextmanager
+def target_space(uid: int, book_owner: int | None):
+    """Tekrar denemenin kaydedileceği defter: yüklendiği defter. Kişi o ortak defterin üyesi değilse, defter yoksa ya da
+    orada ekstre yükleme yetkisi yoksa kendi ("Benim") defteri. Verilen: (fallback_nedeni | None)."""
+    from app import book
+
+    u = system.user(uid)
+    if not u:
+        raise SupportError("Hesap bulunamadı", 404)
+    why = None
+    if book_owner:
+        owner = system.user(book_owner)
+        if u.get("member_of") != book_owner or not owner or owner.get("member_of") or owner.get("deleted_at"):
+            why = "Ekstrenin yüklendiği ortak defter artık açık değil; Benim defterine kaydedildi."
+        else:
+            with db.use_space(system.user_db_path(u), u):
+                if book.denied("POST", "/api/statements/upload"):
+                    why = "Ortak defterde ekstre yükleme yetkin yok; Benim defterine kaydedildi."
+            if not why:
+                with db.use_space(system.user_db_path(u), u):
+                    yield None
+                return
+    with own_space(uid):
+        yield why
+
+
+def save_pending(data: bytes, filename: str, fid: int, book_owner: int | None = None) -> dict:
     """Açık defterde (çağıran own_space içinde) bekleyen dosya. Aynı içerik zaten bekliyorsa onun süresi yenilenir."""
     import hashlib
 
@@ -197,12 +235,12 @@ def save_pending(data: bytes, filename: str, fid: int) -> dict:
     storage.book_put("pending", name, data)
     with db.connect() as c:
         if old:
-            c.execute("UPDATE pending_uploads SET expires_at = ?, feedback_id = ?, filename = ? WHERE id = ?",
-                      (exp, fid, filename[:200], old["id"]))
+            c.execute("UPDATE pending_uploads SET expires_at = ?, feedback_id = ?, filename = ?, book_owner = ? WHERE id = ?",
+                      (exp, fid, filename[:200], book_owner, old["id"]))
             pid = old["id"]
         else:
-            pid = c.execute("INSERT INTO pending_uploads (created_at, expires_at, filename, name, size, feedback_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?)", (_now(), exp, filename[:200], name, len(data), fid)).lastrowid
+            pid = c.execute("INSERT INTO pending_uploads (created_at, expires_at, filename, name, size, feedback_id, book_owner) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)", (_now(), exp, filename[:200], name, len(data), fid, book_owner)).lastrowid
     return {"id": pid, "filename": filename[:200], "expires_at": exp}
 
 
@@ -392,20 +430,21 @@ def screenshot(uid: int, fid: int, n: int):
     return feedback.screenshot(fid, n)
 
 
-def record_retry(uid: int, ref: int | None, ok: bool) -> None:
-    """Bekleyen dosya yeniden okundu: yazışmaya sistem satırı (kişisel veri yok; dosya adı yazılmaz)."""
+def record_retry(uid: int, ref: int | None, ok: bool, note: str | None = None) -> None:
+    """Bekleyen dosya yeniden okundu: yazışmaya sistem satırı (kişisel veri yok; dosya adı yazılmaz). note: kayıt
+    yüklendiği defter yerine "Benim" defterine gittiyse nedeni."""
     if not ok:
         return
     with system.connect() as c:
         _thread_row(c, uid)
-        _add(c, uid, "system", "sistem", "Bekleyen ekstre yeniden okundu ve kaydedildi.",
+        _add(c, uid, "system", "sistem", "Bekleyen ekstre yeniden okundu ve kaydedildi." + (f" {note}" if note else ""),
              action={"type": "retried", "ref": ref} if ref else None)
 
 
 # ---------------------------------------------------------------- ekstre bildirimi
 
 def create_report(uid: int, key: str, report: dict, bank_name: str | None, note: str | None,
-                  doc: tuple[bytes, str] | None, passwords: list[str]) -> dict:
+                  doc: tuple[bytes, str] | None, passwords: list[str], book_owner: int | None = None) -> dict:
     """Okunamayan ekstre bildirimi. doc: (baytlar, dosya adı) yalnız kullanıcı "Belgeyi bize gönder" dediyse."""
     bank = _clean_user_text(bank_name, MAX_BANK)
     text = _clean_user_text(note, MAX_NOTE)
@@ -428,7 +467,7 @@ def create_report(uid: int, key: str, report: dict, bank_name: str | None, note:
     if doc:
         try:
             with own_space(uid):
-                pending = save_pending(doc[0], doc[1] or "ekstre.pdf", fid)
+                pending = save_pending(doc[0], doc[1] or "ekstre.pdf", fid, book_owner)
         except SupportError:
             raise
         except Exception:  # noqa: BLE001 - bildirim gitti; dosya saklanamadı
