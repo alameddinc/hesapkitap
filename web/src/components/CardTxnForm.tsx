@@ -103,7 +103,7 @@ export default function CardTxnForm({ row, onClose, onSaved }: { row: Row; onClo
         <div className="rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-800">
           <div className="flex justify-between gap-2">
             <span className="font-medium">{row.description}</span>
-            <span className="font-semibold tabular-nums">{tl(row.original_amount ?? row.amount)}</span>
+            <span className="shrink-0 whitespace-nowrap font-semibold tabular-nums">{tl(row.original_amount ?? row.amount)}</span>
           </div>
           <div className="mt-1 text-xs text-stone-500">
             {dateTR(row.date)} · {row.card}

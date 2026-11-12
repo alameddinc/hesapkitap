@@ -177,9 +177,10 @@ export function useUiPrefs() {
 export function useOpenRow() {
   const qc = useQueryClient();
   const meta = useMeta().data;
-  return async (uid: string, date: string, open: (row: Row) => void) => {
+  return async (uid: string, date: string, open: (row: Row) => void, rowMonth?: string) => {
     const month = periodOf(date, meta?.cycle_start_day ?? 1);
-    for (const m of [...new Set([month, date.slice(0, 7), addMonths(month, 1)])]) {
+    // rowMonth: satırın dönemi biliniyorsa (ör. abonelik ayrıntısı) önce o
+    for (const m of [...new Set([...(rowMonth ? [rowMonth] : []), month, date.slice(0, 7), addMonths(month, 1)])]) {
       const rows = await qc.fetchQuery({ queryKey: ["txns", m], queryFn: () => api.transactions(m), staleTime: 10_000 });
       const row = rows.find((r) => r.uid === uid);
       if (row) { open(row); return true; }
