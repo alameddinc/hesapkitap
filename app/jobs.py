@@ -299,6 +299,14 @@ def run_global(now: datetime) -> list[str] | None:
             product_groups.consistency(c)
     except Exception:  # noqa: BLE001 - gece bakımını engellemesin
         log.exception("ürün grubu sınıflandırma başarısız")
+    try:  # ödeme aracısı adayları: bütün defterlerde "ÖN EK / SAĞ" kalıbı (yalnız ön ek ve sayılar; app/gateways.py);
+        # ardından liste değiştiyse kaçan defterlerde işyeri adına bağlı ayarlar taşınır (sync_all)
+        from app import gateways
+
+        if got := gateways.nightly(now):
+            log.info("ödeme aracısı taraması: %s", got)
+    except Exception:  # noqa: BLE001 - gece bakımını engellemesin
+        log.exception("ödeme aracısı taraması başarısız")
     return system.purge_archived(now=now.timestamp())
 
 

@@ -1427,6 +1427,76 @@ def admin_card_templates(days: int = Query(30, ge=1, le=365)):
     return templates.card_overview(days)
 
 
+class GatewayIn(BaseModel):
+    prefix: str = Field(min_length=1, max_length=40)
+
+
+@app.get("/api/admin/payment-gateways")
+def admin_payment_gateways():
+    """Ödeme aracıları (sunucu geneli): gece taramasının adayları (ön ek, farklı işyeri / defter sayısı, ilk görülme,
+    en çok 5 örnek işyeri, onaylanırsa ayrılacak satır), onaylılar, reddedilenler ve sabit liste. Kişisel veri yok
+    (app/gateways.py)."""
+    from app import gateways
+
+    _require_admin()
+    return gateways.overview()
+
+
+@app.get("/api/admin/payment-gateways/preview")
+def admin_payment_gateways_preview(prefix: str = Query(min_length=1, max_length=40)):
+    """Elle eklenecek ön ek: bütün defterlerde kaç satır ayrılır, kaç farklı işyeri (anlık tarama)."""
+    from app import gateways
+
+    _require_admin()
+    try:
+        return gateways.preview(prefix)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+def _gateway_action(fn, prefix: str) -> dict:
+    from app import gateways
+
+    _require_admin()
+    try:
+        fn(prefix)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return gateways.overview()
+
+
+@app.post("/api/admin/payment-gateways/approve")
+def admin_payment_gateways_approve(body: GatewayIn):
+    """Adayı onayla: deploy beklemeden bütün sunucuda aracı sayılır; defterlerde ada bağlı ayarlar arka planda taşınır."""
+    from app import gateways
+
+    return _gateway_action(gateways.approve, body.prefix)
+
+
+@app.post("/api/admin/payment-gateways/reject")
+def admin_payment_gateways_reject(body: GatewayIn):
+    """Adayı reddet ya da onaylıyı kaldır: bir daha aday olmaz, benzer yazımla da eşleşmez."""
+    from app import gateways
+
+    return _gateway_action(gateways.reject, body.prefix)
+
+
+@app.post("/api/admin/payment-gateways")
+def admin_payment_gateways_add(body: GatewayIn):
+    """Elle ekle (onaylı olarak)."""
+    from app import gateways
+
+    return _gateway_action(gateways.add, body.prefix)
+
+
+@app.post("/api/admin/payment-gateways/forget")
+def admin_payment_gateways_forget(body: GatewayIn):
+    """Reddedileni geri al: kayıt silinir, yeniden aday olabilir."""
+    from app import gateways
+
+    return _gateway_action(gateways.forget, body.prefix)
+
+
 @app.get("/api/admin/ai-costs/users")
 def admin_ai_cost_users(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
     """Kullanıcı başı aylık yapay zekâ maliyeti (en pahalı üstte): çağrı, okuma, tahmini ₺, paket, eşik, kısıtlama."""

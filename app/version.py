@@ -467,6 +467,10 @@ CAPABILITIES = (
                               # aynı; okuma hakkı orada, tek sayım) → {status "document", doc_type bill|receipt, doc,
                               # message}; okunamadıysa status "error". docs yoksa (eski istemci) aynı belgeler Türkçe
                               # nedenle "error"; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez
+    "payment_gateways",       # yönetici: GET /api/admin/payment-gateways (adaylar, onaylı, reddedilen, sabit liste),
+                              # /preview?prefix=, POST approve | reject | forget {prefix}, POST (elle ekle). Gece
+                              # taramasında yeni aday: "sistem" push'u (haftada en çok bir), route
+                              # #/diger/ayarlar/odeme-araclari
 )
 
 
