@@ -59,7 +59,8 @@ MERCHANT_ALIASES = {
 # (suggest_pattern) hepsi strip_gateway'den geçer. Yeni aracı eklemek için buraya normalize() biçiminde yaz
 # (büyük harf, Türkçe karaktersiz). Ham açıklama (veritabanındaki description) hiç değişmez.
 PAYMENT_GATEWAYS = (
-    "MOKAUNITED", "MOKA UNITED", "MOKA", "IYZICO", "IYZ", "IYZI", "TKPAY", "ODEAL", "PAYTR", "SIPAY", "PARAM",
+    "MOKAUNITED", "MOKA UNITED", "MOKA", "IYZICO", "IZICO", "IYZCO", "IYZ", "IYZI",  # IZICO: bazı bankaların yazılışı (12.11)
+    "TKPAY", "ODEAL", "PAYTR", "SIPAY", "PARAM",
     "PARAMPOS", "PARAM POS", "CRAFTGATE", "PAPARA", "HEPSIPAY", "ESNEKPOS", "PAYCELL", "HALKODE OD", "NKOLAY",
     "PAYCO", "ELEKSE", "TOSLA", "PAYU", "LIDIO", "PAYNET", "IPARA", "PARATIKA", "BIRLESIK ODEME", "PAYGURU",
 )
