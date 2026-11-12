@@ -2,17 +2,18 @@
 // bir daha kendiliğinden gelmesin. Kaldırılan yeni bileşen düzende "-ad" (işaret) olarak saklanır; istemciler bilmediği
 // adı zaten atar (WIDGETS süzgeci), sunucu listeyi olduğu gibi saklar.
 //
-// Sade Özet: düzen "sade" (Tek bakış: Harcanabilir + 3 satır) ile başlıyorsa sade; "ayrinti" bir ayraçtır, ardındakiler
-// kapalı "Ayrıntılar" bölümünde. Kendi düzenini kaydetmiş kullanıcının düzeni zorla sadeye dönmez: bir kez öneri
-// (sadeOnerisi) — Uygula: sadeyeGecir; Kalsın: düzende "-sade" işareti. Mobil lib/endpoints/islem.ts ile aynı kural.
+// Özet görünümü (kullanıcıya görünen adlar Minimal / Ayrıntılı; Sade görünüm ayrı bir özellik, ui.simple): düzen "sade"
+// (Tek bakış: Harcanabilir + 3 satır) ile başlıyorsa Minimal; "ayrinti" bir ayraçtır, ardındakiler kapalı "Ayrıntılar"
+// bölümünde. Kaydı yoksa Minimal (varsayılan). Görünüm değişince öbürünün sırası düzende "=ad" öğeleriyle saklanır
+// (gorunumDegistir); eski "-sade" işareti (kaldırılan öneri kartı) yok sayılır. Mobil lib/endpoints/islem.ts ile aynı kural.
 
 /** Sonradan eklenen bileşenler → kayıtlı düzende hangisinin ardına girer. "sade" / "ayrinti" burada yok: eski düzene
  *  kendiliğinden girmez. */
 export const YENI_BILESEN: Record<string, string> = { "donem-sonu": "kartlar", "faiz-ucret": "kartlar", sadaka: "uyarilar" };
 
 const isaret = (id: string) => `-${id}`;
-/** "Yeni sade Özet'i dene"de Kalsın: öneri bir daha çıkmaz. */
-export const SADE_RED = "-sade";
+const SAKLI = "=";
+export type Gorunum = "minimal" | "ayrintili";
 export const sadeMi = (layout: readonly string[]) => layout[0] === "sade";
 
 /** Kayıtlı düzen + yeni bileşenler (kaldırılmadıysa, ardına girdiği bileşenin hemen arkasına; o yoksa başa — sade
@@ -35,17 +36,21 @@ export function ozetDuzeni(saved: string[] | null | undefined, known: (id: strin
   return out;
 }
 
-/** Kendi (sade olmayan) düzenini kaydetmiş ve öneriyi yanıtlamamış: Özet'te bir kez "Yeni sade Özet'i dene". */
-export const sadeOnerisi = (saved: string[] | null | undefined, known: (id: string) => boolean) =>
-  !!saved && saved.some(known) && !saved.includes("sade") && !saved.includes(SADE_RED);
+/** Kayıttaki öbür görünümün saklı düzeni ("=ad" öğeleri, işaretleriyle; yoksa boş). */
+export const sakliDuzen = (saved: string[] | null | undefined): string[] =>
+  (saved ?? []).filter((id) => id.startsWith(SAKLI)).map((id) => id.slice(SAKLI.length));
 
-/** Öneride Uygula: kullanıcının sırası ve kaldırdıkları Ayrıntılar'ın içinde korunur; faiz kartı Tek bakış'ın 3. satırı
- *  olduğu için düşer. ust: Ayrıntılar'ın üstünde kalacak bileşenler (Başlarken, Telefondan gelenler). */
-export function sadeyeGecir(layout: string[], ust: readonly string[] = []): string[] {
-  const rest = layout.filter((id) => id !== "sade" && id !== "ayrinti" && id !== "faiz-ucret");
-  return ["sade", ...rest.filter((id) => ust.includes(id)), "ayrinti", ...rest.filter((id) => !ust.includes(id))];
+/** Görünümü değiştir: hedefin saklı sırası (yoksa o görünümün varsayılanı) gelir; şimdiki sıra (işaretleriyle) saklanır. */
+export function gorunumDegistir(layout: string[], sakli: string[], hedef: Gorunum, known: (id: string) => boolean,
+  varsayilan: { minimal: string[]; ayrintili: string[] }): { layout: string[]; sakli: string[] } {
+  const minimal = hedef === "minimal";
+  if (minimal === sadeMi(layout)) return { layout, sakli };
+  const geri = sakli.length ? ozetDuzeni(sakli, known, varsayilan[hedef]) : [];
+  const uygun = geri.length > 0 && sadeMi(geri) === minimal;
+  return { layout: uygun ? geri : varsayilan[hedef].filter(known), sakli: kayitDuzeni(layout) };
 }
 
-/** Kaydedilecek düzen: görünen sıra + düzende olmayan yeni bileşenlerin işareti (kaldırıldı). red: sade öneriye Kalsın. */
-export const kayitDuzeni = (layout: string[], red = false) =>
-  [...layout, ...Object.keys(YENI_BILESEN).filter((id) => !layout.includes(id)).map(isaret), ...(red && !sadeMi(layout) ? [SADE_RED] : [])];
+/** Kaydedilecek düzen: görünen sıra + düzende olmayan yeni bileşenlerin işareti (kaldırıldı) + öbür görünümün saklı
+ *  sırası ("=ad"). */
+export const kayitDuzeni = (layout: string[], sakli: string[] = []) =>
+  [...layout, ...Object.keys(YENI_BILESEN).filter((id) => !layout.includes(id)).map(isaret), ...sakli.map((id) => SAKLI + id)];

@@ -1,7 +1,9 @@
 // Ölçüm (sunucu app/funnel.py, yetenek "funnel_events"): POST /api/events {name}. Sunucu yalnız günlük toplam tutar;
 // kişi, IP, cihaz kimliği gönderilmez. Eski sunucuda (yetenek yok) hiç gönderilmez; hata sessizce yutulur.
 
-export type OlcumOlayi = "paywall_view" | "plans_open" | "purchase_start" | "purchase_success" | "purchase_cancel" | "signup_demo";
+export type OlcumOlayi = "paywall_view" | "plans_open" | "purchase_start" | "purchase_success" | "purchase_cancel" | "signup_demo"
+  // Özet görünümü (sunucu yeteneği ozet_gorunum; lib/gorunum.ts)
+  | `ozet_gorunum_${"minimal" | "ayrintili" | "sade"}` | `ozet_degisti_${string}`;
 
 const DEMO_KEY = "hk-demo-signup"; // kayıt demodan gelen bağlantıyla yapıldı; oturum açılınca bir kez bildirilir
 

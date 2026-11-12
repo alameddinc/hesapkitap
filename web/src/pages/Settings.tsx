@@ -14,6 +14,9 @@ import { useState } from "react";
 import { useSave } from "../components/hooks";
 import { cx, dateTR, maskText } from "../format";
 import { useUI } from "../ui";
+import { gorunumDegistir, kayitDuzeni, ozetDuzeni, sakliDuzen } from "../lib/ozetDuzen";
+import { GORUNUM_ACIKLAMA, GORUNUM_ADI, GORUNUMLER, gorunumDegisti, simdikiGorunum, type OzetGorunum } from "../lib/gorunum";
+import { AYRINTILI_LAYOUT, DEFAULT_LAYOUT, WIDGETS } from "./Dashboard";
 import DataPrivacy from "../components/DataPrivacy";
 import ShareSetup from "../components/ShareSetup";
 import BankTemplates from "../components/BankTemplates";
@@ -260,18 +263,39 @@ export default function Settings() {
   return <OwnerSettings ownBook={!!b?.member} seat={b?.seat} />;
 }
 
-/** Kişisel görünüm: sade mod (büyük yazı), Özet düzenini sıfırla. */
+/** Kişisel görünüm: Özet görünümü Minimal (varsayılan) / Ayrıntılı / Sade (büyük yazı); Özet düzenini sıfırla. Seçim
+ *  sunucuda, cihazlar arasında aynı; Minimal ↔ Ayrıntılı geçişte her görünümün sırası saklanır (lib/ozetDuzen). */
 function ViewPrefs() {
-  const { ui, save } = useUiPrefs();
+  const ui = useUI();
+  const meta = useMeta().data;
+  const { ui: prefs, save } = useUiPrefs();
+  const known = (id: string) => !!WIDGETS[id];
+  const layout = ozetDuzeni(prefs.layout, known, DEFAULT_LAYOUT);
+  const simdi = simdikiGorunum(prefs.simple, layout);
+  const sec = (hedef: OzetGorunum) => {
+    if (hedef === simdi) return;
+    if (hedef === "sade") save.mutate({ simple: true });
+    else {
+      const n = gorunumDegistir(layout, sakliDuzen(prefs.layout), hedef, known, { minimal: DEFAULT_LAYOUT, ayrintili: AYRINTILI_LAYOUT });
+      save.mutate({ simple: false, layout: kayitDuzeni(n.layout, n.sakli) });
+    }
+    gorunumDegisti(simdi, hedef, meta?.capabilities);
+    ui.go("ozet");
+  };
   return (
     <section className="card space-y-2 p-4">
       <h2 className="font-semibold">Görünüm</h2>
-      <label className="flex cursor-pointer items-start gap-2 text-sm">
-        <input type="checkbox" className="mt-1" checked={ui.simple} onChange={(e) => save.mutate({ simple: e.target.checked })} />
-        <span><b>Sade görünüm</b> — büyük yazı; Özet'te sadece "bu ay ne kadar harcadım", gelen, kalan ve yaklaşan ödemeler.
-          <span className="block text-xs text-stone-500">Bu ayar sana özel; aynı defteri kullanan diğer kişiyi etkilemez.</span></span>
-      </label>
-      {ui.layout && (
+      <div role="radiogroup" aria-label="Görünüm" className="space-y-1" data-testid="gorunum-secim">
+        {GORUNUMLER.map((g) => (
+          <label key={g} className="flex cursor-pointer items-start gap-2 rounded-lg p-1.5 text-sm hover:bg-stone-50 dark:hover:bg-stone-800/50">
+            <input type="radio" name="ozet-gorunum" className="mt-1" checked={simdi === g} onChange={() => sec(g)} />
+            <span><b>{GORUNUM_ADI[g]}</b>{g === "minimal" ? " (varsayılan)" : ""}
+              <span className="block text-xs text-stone-500">{GORUNUM_ACIKLAMA[g]}</span></span>
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-stone-500">Bu ayar sana özel; aynı defteri kullanan diğer kişiyi etkilemez.</p>
+      {prefs.layout && (
         <button className="btn-ghost px-2 py-1 text-xs" onClick={() => save.mutate({ reset_layout: true })}>Özet düzenini varsayılana döndür</button>
       )}
     </section>

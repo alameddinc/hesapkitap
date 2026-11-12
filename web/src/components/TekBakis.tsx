@@ -5,7 +5,7 @@
 // Mobil components/ozet/TekBakis.tsx ile aynı metinler.
 import { useQuery } from "@tanstack/react-query";
 import { AlertOctagon, BadgePercent, CalendarClock, CheckCircle2, ChevronDown, ChevronRight, Receipt } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { api, type Insight, type Summary } from "../api";
 import { call } from "../lib/apiError";
 import { areAmountsHidden, cx, dayMonthTR, maskText, tl } from "../format";
@@ -146,21 +146,5 @@ export function AyrintiBaslik({ open, onToggle, names }: { open: boolean; onTogg
       </span>
       <ChevronDown size={18} className={cx("shrink-0 text-stone-400 transition-transform", open && "rotate-180")} />
     </button>
-  );
-}
-
-/** Kendi düzenini kaydetmiş kullanıcıya bir kez: "Yeni sade Özet'i dene" (Uygula / Kalsın). */
-export function SadeOneri({ onApply, onKeep, busy }: { onApply: () => void; onKeep: () => void; busy?: boolean }) {
-  const [gone, setGone] = useState(false);
-  if (gone) return null;
-  return (
-    <section data-testid="sade-oneri" className="card space-y-2 border-blue-200 p-4 dark:border-blue-900">
-      <div className="font-semibold">Yeni sade Özet'i dene</div>
-      <p className="text-sm text-stone-600 dark:text-stone-400">Üstte harcanabilir paran ve en önemli 3 satır; gerisi kapalı Ayrıntılar'da. Senin sıran Ayrıntılar'ın içinde korunur.</p>
-      <div className="flex flex-wrap gap-2">
-        <button className="btn-primary" disabled={busy} onClick={() => { setGone(true); onApply(); }}>Uygula</button>
-        <button className="btn-ghost border border-stone-300 dark:border-stone-700" disabled={busy} onClick={() => { setGone(true); onKeep(); }}>Kalsın</button>
-      </div>
-    </section>
   );
 }

@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { kayitDuzeni, ozetDuzeni, SADE_RED, sadeOnerisi, sadeyeGecir } from "./ozetDuzen.ts";
+import { gorunumDegistir, kayitDuzeni, ozetDuzeni, sadeMi, sakliDuzen } from "./ozetDuzen.ts";
+import { simdikiGorunum } from "./gorunum.ts";
 
 const KNOWN = new Set(["kartlar", "donem-sonu", "uyarilar", "butceler"]);
 const known = (id: string) => KNOWN.has(id);
@@ -58,19 +59,33 @@ test("sade: kayıt yoksa sade varsayılan; Tek bakış hep en üstte, ayraç hep
   assert.deepEqual(ozetDuzeni(["sade", "ayrinti", "kartlar", "faiz-ucret", "-donem-sonu"], k2, SADE), ["sade", "ayrinti", "kartlar", "faiz-ucret"]);
 });
 
-test("eski kayıtlı düzen zorla değişmez; öneri bir kez (Uygula / Kalsın)", () => {
-  const eski = ["uyarilar", "kartlar", "butceler"];
+test("varsayılan Minimal; kayıtlı (klasik) düzen Ayrıntılı kalır; eski '-sade' işareti zarar vermez", () => {
+  assert.equal(sadeMi(ozetDuzeni(null, k2, SADE)), true);
+  const eski = ["uyarilar", "kartlar", "butceler", "-sade"];
   assert.deepEqual(ozetDuzeni(eski, k2, SADE), ["uyarilar", "kartlar", "faiz-ucret", "donem-sonu", "butceler"]);
-  assert.equal(sadeOnerisi(eski, k2), true);
-  assert.equal(sadeOnerisi(null, k2), false); // kaydı yok: zaten sade varsayılan
-  assert.equal(sadeOnerisi(["sade", "ayrinti", "kartlar"], k2), false);
-  // Uygula: sıra ve kaldırılanlar korunur, faiz kartı düşer, Başlarken üstte
-  const yeni = sadeyeGecir(["baslarken", "uyarilar", "kartlar", "faiz-ucret", "butceler"], ["baslarken"]);
-  assert.deepEqual(yeni, ["sade", "baslarken", "ayrinti", "uyarilar", "kartlar", "butceler"]);
-  assert.deepEqual(kayitDuzeni(yeni), [...yeni, "-donem-sonu", "-faiz-ucret", "-sadaka"]);
-  // Kalsın: işaret saklanır, öneri bir daha çıkmaz; düzen aynı
-  const kalsin = kayitDuzeni(["uyarilar", "kartlar", "donem-sonu", "faiz-ucret", "sadaka"], true);
-  assert.deepEqual(kalsin, ["uyarilar", "kartlar", "donem-sonu", "faiz-ucret", "sadaka", SADE_RED]);
-  assert.equal(sadeOnerisi(kalsin, k2), false);
-  assert.deepEqual(ozetDuzeni(kalsin, k2, SADE), ["uyarilar", "kartlar", "donem-sonu", "faiz-ucret"]); // sadaka k2’de bilinmiyor
+  assert.equal(simdikiGorunum(false, ozetDuzeni(eski, k2, SADE)), "ayrintili");
+  assert.equal(simdikiGorunum(false, ozetDuzeni(null, k2, SADE)), "minimal");
+  assert.equal(simdikiGorunum(true, ozetDuzeni(null, k2, SADE)), "sade");
+});
+
+test("görünüm Minimal ↔ Ayrıntılı gidiş-dönüş: her görünümün sırası (işaretleriyle) saklanır", () => {
+  const AYR = ["kartlar", "faiz-ucret", "donem-sonu", "uyarilar"];
+  const v = { minimal: SADE, ayrintili: AYR };
+  const benim = ozetDuzeni(["uyarilar", "kartlar", "butceler", "-donem-sonu"], k2, SADE); // kendi Ayrıntılı sırası
+  assert.deepEqual(benim, ["uyarilar", "kartlar", "faiz-ucret", "butceler"]);
+  // → Minimal: saklı sıra yok, Minimal varsayılanı; Ayrıntılı sırası "=ad" olarak saklanır
+  const m = gorunumDegistir(benim, [], "minimal", k2, v);
+  assert.deepEqual(m.layout, SADE);
+  const kayit = kayitDuzeni(m.layout, m.sakli);
+  assert.deepEqual(sakliDuzen(kayit), ["uyarilar", "kartlar", "faiz-ucret", "butceler", "-donem-sonu", "-sadaka"]);
+  assert.deepEqual(ozetDuzeni(kayit, k2, SADE), ozetDuzeni(SADE, k2, SADE)); // "=ad" görünen düzene karışmaz
+  // Minimal'de sırayı değiştir, → Ayrıntılı: kendi sırası geri gelir, Minimal sırası saklanır
+  const mDegisti = ["sade", "kartlar", "ayrinti", "baslarken", "donem-sonu", "uyarilar"];
+  const a = gorunumDegistir(mDegisti, sakliDuzen(kayit), "ayrintili", k2, v);
+  assert.deepEqual(a.layout, benim);
+  // → Minimal yine: değiştirilmiş Minimal sırası
+  const m2 = gorunumDegistir(a.layout, a.sakli, "minimal", k2, v);
+  assert.deepEqual(m2.layout, mDegisti);
+  // aynı görünüme geçiş bir şey değiştirmez
+  assert.deepEqual(gorunumDegistir(m2.layout, m2.sakli, "minimal", k2, v), m2);
 });

@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { gorunumAcildi } from "../lib/gorunum";
 import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "./TerimBilgi";
 import { CheckCircle2, Camera, ChevronRight, List, Minimize2 } from "lucide-react";
@@ -20,6 +22,7 @@ export default function SimpleDashboard() {
   const prevMonth = addMonths(ui.month, -1);
   const prev = useQuery({ queryKey: ["summary", prevMonth], queryFn: () => api.summary(prevMonth) });
   const payables = useQuery({ queryKey: ["payables"], queryFn: api.payables });
+  useEffect(() => { if (meta) gorunumAcildi("sade", meta.capabilities); }, [meta]); // ölçüm: yalnız toplam
   const t = summary.data?.totals;
   const due = (payables.data ?? []).filter((p) => p.status !== "odendi").slice(0, 4);
   return (

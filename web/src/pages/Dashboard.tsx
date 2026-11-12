@@ -3,7 +3,7 @@ import { rowTotals } from "../lib/counts";
 import { TERIM, faizGeliriNotu } from "../lib/terimler";
 import TerimBilgi from "../components/TerimBilgi";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Receipt, Settings2, Type, X } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, type Insight, type Row, type VsPrev } from "../api";
 import BarList from "../components/BarList";
 import { BudgetForm, BudgetList } from "../components/Budgets";
@@ -33,8 +33,10 @@ import { DonemSonuKarti } from "../components/Beklenen";
 import DebtPlanCard from "../components/DebtPlanCard";
 import SadakaOzetKarti from "../components/SadakaOzet";
 import FaizOzetKarti from "../components/FaizOzet";
-import { kayitDuzeni, ozetDuzeni, SADE_RED, sadeMi, sadeOnerisi, sadeyeGecir } from "../lib/ozetDuzen";
-import TekBakis, { AyrintiBaslik, ayrintiAcikMi, ayrintiKaydet, SadeOneri } from "../components/TekBakis";
+import { gorunumDegistir, kayitDuzeni, ozetDuzeni, sadeMi, sakliDuzen, type Gorunum } from "../lib/ozetDuzen";
+import { GORUNUM_ACIKLAMA, GORUNUM_ADI, gorunumAcildi, gorunumDegisti } from "../lib/gorunum";
+import Segmented from "../components/Segmented";
+import TekBakis, { AyrintiBaslik, ayrintiAcikMi, ayrintiKaydet } from "../components/TekBakis";
 import { boundsOf, cx, signed, tl, tlCompact, periodLabel } from "../format";
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
@@ -124,13 +126,14 @@ export const WIDGETS: Record<string, { title: string; module?: string; cap?: str
   // ritim (Her Cuma / Ayda bir) seçiliyse son sadakadan beri geçen süre ve süreklilik; seçim yoksa görünmez
   sadaka: { title: "Sadaka", module: "zekat", cap: "sadaka_reminder" },
 };
-// Varsayılan sade: üstte Tek bakış (ve kurulum / telefondan gelenler: yalnız iş varken görünür), gerisi kapalı Ayrıntılar'da.
-// Faiz kartı yok: Tek bakış'ın 3. satırı aynı bilgi (Düzenle'den eklenebilir). Kendi düzenini kaydetmiş kullanıcının düzeni
-// değişmez; bir kez "Yeni sade Özet'i dene" önerisi (lib/ozetDuzen).
+// Varsayılan görünüm Minimal: üstte Tek bakış (ve kurulum / telefondan gelenler: yalnız iş varken görünür), gerisi kapalı
+// Ayrıntılar'da. Faiz kartı yok: Tek bakış'ın 3. satırı aynı bilgi (Düzenle'den eklenebilir). Kendi düzenini kaydetmiş
+// kullanıcı Ayrıntılı'da kalır (lib/ozetDuzen).
 export const DEFAULT_LAYOUT = ["sade", "baslarken", "gelenler", "ayrinti", "kartlar", "donem-sonu", "uyarilar", "odemeler", "net", "zekat", "sadaka",
   "kumbaralar", "borc-plani", "butceler", "kategoriler", "isyerleri", "istatistik-link"];
-/** Sadeye geçerken Ayrıntılar'ın üstünde kalanlar (yalnız iş varken görünür). */
-const SADE_UST = ["baslarken", "gelenler"];
+/** Ayrıntılı (klasik) görünümün ilk düzeni: Özeti düzenle → Görünüm: Ayrıntılı (öncesinde saklı sıra yoksa). */
+export const AYRINTILI_LAYOUT = ["kartlar", "faiz-ucret", "donem-sonu", "gelenler", "baslarken", "uyarilar", "net", "zekat", "sadaka", "butceler",
+  "kategoriler", "isyerleri", "istatistik-link", "odemeler"];
 
 export default function Dashboard() {
   const ui = useUI();
@@ -171,8 +174,20 @@ export default function Dashboard() {
   const [editing, setEditing] = useState(false);
   // sonradan eklenen bileşen (Dönem sonu) kayıtlı düzende de görünür; kaldırılınca işaretiyle saklanır (lib/ozetDuzen)
   const layout = ozetDuzeni(prefs.layout, (id) => !!WIDGETS[id], DEFAULT_LAYOUT);
-  const red = !!prefs.layout?.includes(SADE_RED); // sade öneriye "Kalsın" demiş: işaret korunur
-  const setLayout = (next: string[]) => savePrefs.mutate({ layout: kayitDuzeni(next, red) });
+  // ölçüm (yalnız toplam): Özet hangi görünümde açıldı; Sade'de SimpleDashboard gönderir
+  const acilanGorunum = meta && !prefs.simple ? (sadeMi(layout) ? "minimal" : "ayrintili") : null;
+  const caps = meta?.capabilities;
+  useEffect(() => { if (acilanGorunum) gorunumAcildi(acilanGorunum, caps); }, [acilanGorunum, caps]);
+  const sakli = sakliDuzen(prefs.layout); // öbür görünümün (Minimal ↔ Ayrıntılı) saklı sırası korunur
+  const setLayout = (next: string[]) => savePrefs.mutate({ layout: kayitDuzeni(next, sakli) });
+  // görünüm değiştir: öbürünün saklı sırası gelir, şimdiki saklanır; ölçüm yalnız toplam
+  const gorunumSec = (hedef: Gorunum) => {
+    const once: Gorunum = sadeMi(layout) ? "minimal" : "ayrintili";
+    if (hedef === once) return;
+    const n = gorunumDegistir(layout, sakli, hedef, (id) => !!WIDGETS[id], { minimal: DEFAULT_LAYOUT, ayrintili: AYRINTILI_LAYOUT });
+    savePrefs.mutate({ layout: kayitDuzeni(n.layout, n.sakli) });
+    gorunumDegisti(once, hedef, meta?.capabilities);
+  };
   const current = month === (meta?.current_month ?? month);
   // sade düzen (Tek bakış + kapalı Ayrıntılar) yalnız içinde bulunulan dönemde; geçmiş dönemde bileşenler açık sırayla,
   // gelir/gider kartları en üstte (Harcanabilir ve "Bu ay ödenecek" bugünün rakamı)
@@ -396,7 +411,6 @@ export default function Dashboard() {
     <AyrintiBaslik open={acik} onToggle={toggleAcik} names={alt.map(([id]) => WIDGETS[id]!.title)} />
     {acik && <><MonthDigest /><BillsLine month={month} />{alt.map(([, n]) => n)}</>}
   </>);
-  const oneri = !editing && current && sadeOnerisi(prefs.layout, (id) => !!WIDGETS[id]);
 
   if (prefs.simple) return <SimpleDashboard />;
   return (
@@ -419,11 +433,6 @@ export default function Dashboard() {
 
       {!sade && <BillsLine month={month} />}
 
-      {oneri && s && (
-        <SadeOneri busy={savePrefs.isPending}
-          onApply={() => { savePrefs.mutate({ layout: kayitDuzeni(sadeyeGecir(layout, SADE_UST)) }); ui.toast("Sade Özet açıldı; Düzenle'den değiştirebilirsin"); }}
-          onKeep={() => { savePrefs.mutate({ layout: kayitDuzeni(layout, true) }); ui.toast("Özet'in olduğu gibi kaldı"); }} />
-      )}
 
       <SorguDurumu q={summary} etiket="Özet yükleniyor">
         <div className="space-y-3"><KartIskelet satir={2} /><div className="grid grid-cols-2 gap-3"><KartIskelet satir={0} /><KartIskelet satir={0} /></div><SatirIskelet n={3} /></div>
@@ -431,6 +440,15 @@ export default function Dashboard() {
 
       {s && (
         <>
+          {/* Özeti düzenle'nin en üstünde: görünüm (Minimal / Ayrıntılı); Sade (büyük yazı) Ayarlar → Görünüm'de */}
+          {editing && (
+            <section className="card space-y-1.5 p-3" data-testid="ozet-gorunum">
+              <div className="text-xs font-medium tracking-wide text-stone-500 uppercase">Görünüm</div>
+              <div className="w-full sm:w-72"><Segmented label="Görünüm" value={sadeMi(layout) ? "minimal" : "ayrintili"} onChange={(v) => gorunumSec(v as Gorunum)}
+                options={[{ value: "minimal", label: GORUNUM_ADI.minimal }, { value: "ayrintili", label: GORUNUM_ADI.ayrintili }]} /></div>
+              <p className="text-xs text-stone-500">{GORUNUM_ACIKLAMA[sadeMi(layout) ? "minimal" : "ayrintili"]}</p>
+            </section>
+          )}
           {sade && !editing && sadeIcerik}
           {(!sade || editing) && gorunen.map(item)}
           {!layout.includes("uyarilar") && detailBlock}

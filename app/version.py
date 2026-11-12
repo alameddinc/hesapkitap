@@ -313,6 +313,10 @@ CAPABILITIES = (
                               # ve ücret ₺X" kartı; total = totals.fees = Faiz sayfasının o ayı (finance.interest_paid);
                               # last_period {month, name, label, total, interest, tax, fee, count, statements, state} |
                               # null: ekstre_yok iken son ekstreli dönem ("Ekim döneminde …")
+    "ozet_gorunum",           # Özet görünümü: Minimal (düzen "sade" ile başlar; kaydı yoksa varsayılan) / Ayrıntılı (klasik) /
+                              # Sade (ui.simple); düzende "=ad": öbür görünümün saklı sırası (80 öğeye kadar). POST /api/events
+                              # ozet_gorunum_{minimal|ayrintili|sade}, ozet_degisti_{nereden}_{nereye} (yalnız toplam);
+                              # admin funnel "gorunum" kartı
     "net_display",            # GET /api/net-worth net_display (ve totals.net_display): ekranda gösterilen Net durum =
                               # net − kesilecek kart ekstresi (tahmini; card_estimated) = net_after_estimates. "net" eski
                               # anlamında (kesilecek ekstre düşülmez) kalır; eski istemci onu gösterir

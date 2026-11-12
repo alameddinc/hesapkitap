@@ -369,3 +369,39 @@ def test_prune(hosted):
 
 def test_capability_advertised(hosted):
     assert "funnel_events" in hosted.get("/api/meta").json()["capabilities"]
+
+
+# ---------------------------------------------------------------- Özet görünümü (Minimal / Ayrıntılı / Sade)
+
+def test_gorunum_events_whitelisted_aggregate_and_admin_card(hosted):
+    """Görünüm olayları beyaz listede, yalnız toplam; admin Ölçüm "Görünüm" kartı: görünüm başına kişi-gün ve elle
+    değiştirme (nereden → nereye). Kişi kimliği yok."""
+    from app import system
+
+    c, _ = _user(hosted, headers=IOS)
+    for name in ("ozet_gorunum_minimal", "ozet_gorunum_minimal", "ozet_degisti_minimal_ayrintili", "ozet_gorunum_ayrintili"):
+        assert c.post("/api/events", json={"name": name}).json()["counted"] is True
+    assert c.post("/api/events", json={"name": "ozet_degisti_minimal_minimal"}).status_code == 422  # aynı görünüm yok
+    assert c.post("/api/events", json={"name": "ozet_gorunum_klasik"}).status_code == 422
+    with system.connect() as cx:
+        cols = {r[1] for r in cx.execute("PRAGMA table_info(funnel_events)")}
+        rows = {r["event"]: (r["n"], r["users"]) for r in cx.execute("SELECT * FROM funnel_events")}
+    assert "user_id" not in cols
+    assert rows["ozet_gorunum_minimal"] == (2, 1) and rows["ozet_degisti_minimal_ayrintili"] == (1, 1)
+    today = funnel.today()
+    with system.connect() as cx:  # dün web'de iki kişi Ayrıntılı, biri Sade'ye geçti; 10 gün önce sayılmaz
+        y = (today - timedelta(days=1)).isoformat()
+        cx.execute("INSERT INTO funnel_events VALUES (?, 'ozet_gorunum_ayrintili', 'web', 'free', 2, 2)", (y,))
+        cx.execute("INSERT INTO funnel_events VALUES (?, 'ozet_degisti_ayrintili_sade', 'web', 'free', 1, 1)", (y,))
+        cx.execute("INSERT INTO funnel_events VALUES (?, 'ozet_gorunum_sade', 'web', 'free', 5, 5)",
+                   ((today - timedelta(days=10)).isoformat(),))
+    g = hosted.get("/api/admin/funnel").json()["gorunum"]
+    assert g["days"] == 7
+    assert g["views"]["minimal"] == {"user_days": 1, "daily_avg": 0.1}
+    assert g["views"]["ayrintili"]["user_days"] == 3 and g["views"]["sade"]["user_days"] == 0
+    assert g["changes"]["minimal>ayrintili"] == 1 and g["changes"]["ayrintili>sade"] == 1 and g["changes_total"] == 2
+    w = hosted.get("/api/admin/funnel", params={"platform": "web"}).json()["gorunum"]
+    assert w["views"]["minimal"]["user_days"] == 0 and w["views"]["ayrintili"]["user_days"] == 2
+    # paket ekranı hunisi görünüm olaylarını saymaz
+    assert set(hosted.get("/api/admin/funnel").json()["total"]["paywall"]) == {"paywall_view", "plans_open", "purchase_start",
+                                                                               "purchase_success", "purchase_cancel"}

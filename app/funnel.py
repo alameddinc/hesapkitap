@@ -36,7 +36,12 @@ EVENT_DAILY_CAP = 20       # kişi/gün/olay başı en çok sayılan olay
 EVENT_HOURLY = 60          # kişi başı saatte en çok olay isteği (üstü 429)
 STARTED_KEY = "funnel_started"  # sys_settings: ölçümün başladığı gün (öncesinin kohortu eksik sayılır)
 
-EVENTS = ("paywall_view", "plans_open", "purchase_start", "purchase_success", "purchase_cancel", "signup_demo")
+# Özet görünümü (Minimal / Ayrıntılı / Sade): hangi görünümde açıldı ve elle değiştirme (nereden → nereye). Yalnız toplam.
+GORUNUMLER = ("minimal", "ayrintili", "sade")
+GORUNUM_OLAY = tuple(f"ozet_gorunum_{g}" for g in GORUNUMLER)
+GORUNUM_DEGISTI = tuple(f"ozet_degisti_{a}_{b}" for a in GORUNUMLER for b in GORUNUMLER if a != b)
+FUNNEL_EVENTS = ("paywall_view", "plans_open", "purchase_start", "purchase_success", "purchase_cancel", "signup_demo")
+EVENTS = FUNNEL_EVENTS + GORUNUM_OLAY + GORUNUM_DEGISTI
 PLATFORMS = ("web", "ios", "android")
 STORE_PLATFORM = {"app_store": "ios", "play_store": "android"}
 
@@ -359,6 +364,8 @@ def report(weeks: int = 12, platform: str | None = None, now: date | None = None
                 reads[uid].add(d)
         ev_rows = c.execute("SELECT day, event, platform, plan_state, n, users FROM funnel_events WHERE day >= ?",
                             (first.isoformat(),)).fetchall()
+        ev_gorunum = c.execute("SELECT day, event, platform, plan_state, n, users FROM funnel_events WHERE day >= ? AND "
+                               "event LIKE 'ozet_%'", ((t - timedelta(days=GORUNUM_GUN - 1)).isoformat(),)).fetchall()
         ev_all = c.execute("SELECT event, platform, SUM(n), SUM(users) FROM funnel_events GROUP BY event, platform").fetchall()
         st_rows = c.execute("SELECT day, kind, plan, period, store, n FROM store_events").fetchall()
         subs_rows = [dict(r) for r in c.execute(
@@ -444,16 +451,16 @@ def report(weeks: int = 12, platform: str | None = None, now: date | None = None
                 demo_weeks[i]["visitors"] += int(v.get("ziyaretçi") or 0)
 
     # ---- paket ekranı hunisi
-    pw = [{e: {"users": 0, "n": 0} for e in EVENTS if e != "signup_demo"} for _ in starts]
+    pw = [{e: {"users": 0, "n": 0} for e in FUNNEL_EVENTS if e != "signup_demo"} for _ in starts]
     pw_by_state: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for day, ev, p, ps, n, us in ev_rows:
-        if ev == "signup_demo" or (plat and p != plat):
+        if ev == "signup_demo" or ev not in FUNNEL_EVENTS or (plat and p != plat):
             continue
         if (i := widx(date.fromisoformat(day))) is not None:
             pw[i][ev]["users"] += us
             pw[i][ev]["n"] += n
             pw_by_state[ps][ev] += us
-    pw_tot = {e: {"users": 0, "n": 0} for e in EVENTS if e != "signup_demo"}
+    pw_tot = {e: {"users": 0, "n": 0} for e in FUNNEL_EVENTS if e != "signup_demo"}
     for ev, p, n, us in ev_all:
         if ev in pw_tot and (not plat or p == plat):
             pw_tot[ev]["users"] += us or 0
@@ -503,6 +510,8 @@ def report(weeks: int = 12, platform: str | None = None, now: date | None = None
     mrr = sum(n * (pr[k] if k.endswith("_monthly") else pr[k] / 12) for k, n in active.items())
     net = mrr / (1 + VAT) * (1 - STORE_CUT)
 
+    gorunum = _gorunum(ev_gorunum, plat, t)
+
     week_list = []
     for i, s in enumerate(starts):
         week_list.append({"start": s.isoformat(), "end": min(s + timedelta(days=6), t).isoformat(),
@@ -519,12 +528,35 @@ def report(weeks: int = 12, platform: str | None = None, now: date | None = None
                   "store_split": {k: dict(v) for k, v in split.items()},
                   "paywall_by_state": {k: dict(v) for k, v in pw_by_state.items()}},
         "demo_available": demo_weeks is not None,
+        "gorunum": gorunum,
         "store_sandbox": sandbox,
         "subs": {"active": active, "unknown_product": unknown, "trials": trials, "ending": ending,
                  "paying": sum(active.values()) + unknown, "mrr_gross": round(mrr, 2), "mrr_net": round(net, 2),
                  "prices": pr, "vat": VAT, "store_cut": STORE_CUT},
         "definitions": DEFINITIONS,
     }
+
+
+GORUNUM_GUN = 7  # "Görünüm" kartı: son kaç gün
+
+
+def _gorunum(ev_rows, plat: str | None, t: date) -> dict:
+    """Admin Ölçüm "Görünüm" kartı: son GORUNUM_GUN günde Özet'i hangi görünümde açan kişi-gün (günde tekil; kişi
+    kimliği yok) ve günlük ortalama; elle değiştirme sayıları (nereden → nereye). Yalnız funnel_events toplamları."""
+    lo = (t - timedelta(days=GORUNUM_GUN - 1)).isoformat()
+    acan = {g: 0 for g in GORUNUMLER}
+    degisti = {f"{a}>{b}": 0 for a in GORUNUMLER for b in GORUNUMLER if a != b}
+    for day, ev, p, _ps, n, us in ev_rows:
+        if day < lo or (plat and p != plat):
+            continue
+        if ev in GORUNUM_OLAY:
+            acan[ev.removeprefix("ozet_gorunum_")] += us
+        elif ev in GORUNUM_DEGISTI:
+            a, b = ev.removeprefix("ozet_degisti_").split("_")
+            degisti[f"{a}>{b}"] += n
+    return {"days": GORUNUM_GUN, "from": lo,
+            "views": {g: {"user_days": v, "daily_avg": round(v / GORUNUM_GUN, 1)} for g, v in acan.items()},
+            "changes": degisti, "changes_total": sum(degisti.values())}
 
 
 DEFINITIONS = {
@@ -540,6 +572,9 @@ DEFINITIONS = {
               "(yenileme kapatıldı), iade (mağaza müşteri hizmeti), bitiş. Test (sandbox) olayları ayrı.",
     "mrr": "Şu an süren ücretli (deneme dışı) mağaza abonelikleri × mağaza fiyatı (yıllık / 12). Brüt KDV dahil; net: "
            "KDV %20 ve mağaza payı %15 düşülmüş tahmin. Ortak defter üyeleri sayılmaz (sahibin aboneliği).",
+    "görünüm": "Özet görünümü: Minimal (tek rakam + 3 satır), Ayrıntılı (bütün bölümler açık), Sade (büyük yazı). Son 7 "
+                "günde Özet'i o görünümde açan kişi-gün (günde tekil; kimlik yok) ve elle değiştirme sayısı (nereden → "
+                "nereye).",
     "paket ekranı": "Kilitli sayfa görüntüleme → paket ekranı → satın alma başlatma → başarılı / vazgeçti. 'Kişi': o gün "
                     "olayı yapan kişi (gün içinde tekil), haftalık toplamı kişi-gündür.",
 }

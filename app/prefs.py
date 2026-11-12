@@ -152,6 +152,9 @@ def ui() -> dict:
         return base
 
 
+LAYOUT_MAX = 80  # Özet düzeninde en çok öğe (iki görünümün sırası birlikte saklanır)
+
+
 def set_ui(data: dict) -> dict:
     cur = ui()
     if "simple" in data:
@@ -159,7 +162,8 @@ def set_ui(data: dict) -> dict:
     for k in ("layout", "layout_mobile"):
         if k in data:
             lay = data[k]
-            cur[k] = [str(x)[:40] for x in lay][:40] if isinstance(lay, list) else None
+            # Özet düzeni: görünen sıra + "-ad" işaretleri + diğer görünümün (Klasik/Sade) saklı sırası "=ad": 80 öğeye kadar
+            cur[k] = [str(x)[:40] for x in lay][:LAYOUT_MAX] if isinstance(lay, list) else None
     if "stop_cost" in data:  # alışveriş listesi "Nereye gideyim?": ekstra durak için en az tasarruf (₺); None varsayılan
         v = data["stop_cost"]
         if v is None:

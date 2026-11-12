@@ -15,6 +15,8 @@ interface Cohort {
   act_n: number; act_doc: number; act_rec: number; act_any: number; act_any_pct: number | null; act_doc_pct: number | null; act_rec_pct: number | null;
   w2_n: number; w2: number; w2_pct: number | null; w4_n: number; w4: number; w4_pct: number | null;
 }
+interface Gorunum { days: number; views: Record<"minimal" | "ayrintili" | "sade", { user_days: number; daily_avg: number }>;
+  changes: Record<string, number>; changes_total: number }
 type Paywall = Record<"paywall_view" | "plans_open" | "purchase_start" | "purchase_success" | "purchase_cancel", { users: number; n: number }>;
 type Store = Record<string, number>;
 interface Week { start: string; end: string; partial: boolean; cohort: Cohort; signup_demo: number; demo: { sessions: number; visitors: number } | null; paywall: Paywall; store: Store }
@@ -25,6 +27,8 @@ export interface Funnel {
   window: { signups: number; web: number; ios: number; android: number; other: number; signup_demo: number; demo_sessions: number | null };
   total: { cohort: Cohort; signup_demo: number; paywall: Paywall; store: Store; store_split: Record<string, Record<string, number>>;
     paywall_by_state: Record<string, Record<string, number>> };
+  /** Özet görünümü kartı (sunucu yeteneği ozet_gorunum; eski sunucuda yok) */
+  gorunum?: Gorunum;
   subs: { active: Record<string, number>; unknown_product: number; trials: Record<string, number>; ending: number; paying: number;
     mrr_gross: number; mrr_net: number; prices: Record<string, number> };
   definitions: Record<string, string>;
@@ -211,6 +215,8 @@ export function OlcumView({ d }: { d: Funnel }) {
           total={["Toplam", ...STEPS.map(([k]) => n(pw[k].users))]} />
       </Section>
 
+      {d.gorunum && <GorunumKarti g={d.gorunum} />}
+
       <details className="card p-4 text-sm">
         <summary className="flex cursor-pointer items-center gap-2 font-medium"><Info size={16} aria-hidden /> Tanımlar ve gizlilik</summary>
         <dl className="mt-2 space-y-2">
@@ -222,6 +228,25 @@ export function OlcumView({ d }: { d: Funnel }) {
       </details>
       <p className="text-xs text-stone-500">* Bu hafta henüz bitmedi. Bugün: {d.today.split("-").reverse().join(".")}.</p>
     </div>
+  );
+}
+
+const GOR_AD: Record<string, string> = { minimal: "Minimal", ayrintili: "Ayrıntılı", sade: "Sade" };
+/** "Görünüm" kartı: Özet'i hangi görünümde açan kişi-gün (günde tekil; kimlik yok) ve elle değiştirme (nereden → nereye). */
+function GorunumKarti({ g }: { g: Gorunum }) {
+  const degisim = Object.entries(g.changes).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  return (
+    <Section title={`Görünüm (son ${g.days} gün)`} note="Özet'i o görünümde açan kişi-gün (aynı kişi günde bir kez) ve elle değiştirme sayısı. Yalnız toplam.">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="olcum-gorunum">
+        {(["minimal", "ayrintili", "sade"] as const).map((k) => (
+          <Tile key={k} label={GOR_AD[k]} value={n(g.views[k].user_days)} note={`günde ort. ${g.views[k].daily_avg.toLocaleString("tr-TR")}`} />
+        ))}
+        <Tile label="Elle değiştirme" value={n(g.changes_total)} />
+      </div>
+      <p className="text-sm text-stone-600 dark:text-stone-300">{degisim.length
+        ? degisim.map(([k, v]) => { const [a, b] = k.split(">"); return `${GOR_AD[a]} → ${GOR_AD[b]}: ${n(v)}`; }).join(" · ")
+        : "Henüz elle değiştiren yok."}</p>
+    </Section>
   );
 }
 
