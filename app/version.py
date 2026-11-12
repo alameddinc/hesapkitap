@@ -390,7 +390,8 @@ CAPABILITIES = (
                               # POST /api/jars/{id}/moves {person_id?, outside?} (kim attı; para hesaplarda değil: harcanabilirden
                               # düşmez); PATCH /api/jar-moves/{id} TL hareketinde {amount?, move_date?, note?, person_id?,
                               # outside?}; GET /api/jars [].shares {month, target, basis aylik|hedef|tamam|null, total, paid,
-                              # remind_day, people [{id, user_id, name, app, me, manual, share, paid, left, over, state
+                              # remind_day, needed (paylar toplamı hedefin gerektirdiğinden azsa ayda
+                              # gereken; yoksa null), people [{id, user_id, name, app, me, manual, share, paid, left, over, state
                               # tamam|eksik|bekliyor|paysiz, total, months_full, months_counted}], removed, behind, all_done}
                               # | null, [].outside, moves[].person_id/outside; push türü "kumbara_pay"
     "debt_plan_plus",         # borç planının gelişmiş kısmı Premium (plans "borc_plani_plus"; plan, sıra ve tutarlar ücretsiz):

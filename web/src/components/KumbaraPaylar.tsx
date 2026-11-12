@@ -6,7 +6,7 @@ import { useState } from "react";
 import { call } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { cx, dateTR, parseAmount, tl } from "../format";
-import { gecmisMetni, kisiAdi, kisiMetni, ozetMetni, temelMetni, type PayDurumu, type PayKisi } from "../lib/kumbaraPay";
+import { gecmisMetni, kisiAdi, kisiMetni, ozetMetni, temelMetni, toplamiYapEtiketi, yetmeyenNot, type PayDurumu, type PayKisi } from "../lib/kumbaraPay";
 import { useUI } from "../ui";
 import { isLimited, isViewer, useBook, usePeople, useSave } from "./hooks";
 import Modal from "./Modal";
@@ -50,6 +50,7 @@ export function PayKarti({ j, onOpen }: { j: PayJar; onOpen: () => void }) {
         <button className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-300" onClick={onOpen}>
           <Users size={12} className="mr-0.5 inline" aria-hidden="true" />Katılımcılar ({s.people.length})</button>
       </div>
+      {yetmeyenNot(s, tl0) && <p className="text-xs text-stone-600 dark:text-stone-400" data-testid="kumbara-pay-yetmeyen">{yetmeyenNot(s, tl0)}</p>}
       <ul className="mt-1 divide-y divide-stone-200 dark:divide-stone-800">
         {s.people.map((p) => <KisiSatiri key={p.id} p={p} />)}
       </ul>
@@ -95,6 +96,9 @@ export function KatilimciPenceresi({ j, onClose }: { j: PayJar; onClose: () => v
   const save = useSave(() => json("PATCH", `/api/jars/${j.id}`, { share_monthly: parseAmount(total) > 0 ? parseAmount(total) : null, remind_day: Number(day) }),
     () => { ui.toast("Kaydedildi"); onClose(); });
   const editable = manage && !lock;
+  // "Toplamı ₺X yap": ayda toplamı hedefin gerektirdiğine çeker; elle paylar korunur, kalan eşit bölünür
+  const yap = useSave(() => json("PATCH", `/api/jars/${j.id}`, { share_monthly: s?.needed }),
+    () => { ui.toast("Toplam güncellendi"); setTotal(String(s?.needed ?? "").replace(".", ",")); });
   return (
     <Modal title={`${j.name} · katılımcılar`} onClose={onClose} footer={editable ? (
       <button className="btn-primary w-full justify-center" disabled={save.isPending}
@@ -131,6 +135,13 @@ export function KatilimciPenceresi({ j, onClose }: { j: PayJar; onClose: () => v
                 {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>Her ayın {d}. günü</option>)}
               </select>
             </label>
+          </div>
+        )}
+        {s && yetmeyenNot(s, tl0) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 p-2 text-xs text-stone-700 dark:bg-stone-900 dark:text-stone-300" data-testid="katilimci-yetmeyen">
+            <span className="min-w-0 flex-1 basis-48">{yetmeyenNot(s, tl0)}</span>
+            {editable && <button className="btn-ghost border border-stone-300 px-2 py-0.5 dark:border-stone-700" disabled={yap.isPending}
+              onClick={() => yap.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{toplamiYapEtiketi(s, tl0)}</button>}
           </div>
         )}
         <p className="text-xs text-stone-500">Payını o ay tamamlamamış uygulama kullanıcısına seçtiğin gün telefonuna bir kez hatırlatma gider

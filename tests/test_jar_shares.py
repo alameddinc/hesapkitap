@@ -300,3 +300,26 @@ def db_space(u):
     from app import db, system
 
     return db.use_space(system.user_db_path(u), u)
+
+
+def test_needed_note_when_total_below_goal_pace(client, tmpdb):
+    """Ayda toplam hedefin gerektirdiğinden azsa needed (hedef kutusundaki "ayda ₺… ayır" ile aynı rakam)."""
+    jid = _jar(client, goal=120000, deadline=f"{date.today().year + 1}-12-31")
+    client.patch(f"/api/jars/{jid}", json={"share_monthly": 1000})
+    client.post(f"/api/jars/{jid}/people", json={"name": "Ayşe", "share": 400})
+    client.post(f"/api/jars/{jid}/people", json={"name": "Mehmet"})
+    j = _status(client, jid)
+    need = j["goal_status"]["needed_monthly"]
+    assert need > 1000 and j["shares"]["needed"] == need and j["shares"]["total"] == 1000
+    # "Toplamı yap": elle pay korunur, kalan eşit
+    client.patch(f"/api/jars/{jid}", json={"share_monthly": need})
+    sh = _status(client, jid)["shares"]
+    assert sh["needed"] is None and sh["total"] == need
+    assert [p["share"] for p in sh["people"]] == [400, need - 400]
+    # hedeften hesaplanan toplamda ya da son tarihsiz kumbarada not yok
+    client.patch(f"/api/jars/{jid}", json={"share_monthly": None})
+    assert _status(client, jid)["shares"]["needed"] is None
+    k = _jar(client, name="Tarihsiz", deadline=None)
+    client.patch(f"/api/jars/{k}", json={"share_monthly": 100})
+    client.post(f"/api/jars/{k}/people", json={"name": "Ayşe"})
+    assert _status(client, k)["shares"]["needed"] is None

@@ -12,6 +12,8 @@ export interface PayDurumu {
   month: string; target: number | null; basis: "aylik" | "hedef" | "tamam" | null; total: number; paid: number;
   remind_day: number; people: PayKisi[]; removed: { id: number; name: string; total: number; months_full: number; months_counted: number }[];
   behind: number[]; all_done: boolean; history_months: number;
+  /** paylar toplamı hedefin gerektirdiğinden azsa ayda gereken (hedef kutusundaki rakam); yoksa null / eski sunucuda yok */
+  needed?: number | null;
 }
 
 const AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
@@ -68,3 +70,10 @@ export function temelMetni(s: PayDurumu, para: (n: number) => string): string {
 /** Geçmiş aylar: "4/5 ay tam" (payı olan ay yoksa null). */
 export const gecmisMetni = (p: { months_full: number; months_counted: number }) =>
   p.months_counted > 0 ? `${p.months_full}/${p.months_counted} ay tam` : null;
+
+/** Paylar toplamı hedefe yetmiyorsa nötr not (yoksa null): "Hedefe yetişmek için ayda ₺7.000 gerekiyor; paylar toplamı ₺6.000." */
+export const yetmeyenNot = (s: PayDurumu, para: (n: number) => string) =>
+  s.needed ? `Hedefe yetişmek için ayda ${para(s.needed)} gerekiyor; paylar toplamı ${para(s.total)}.` : null;
+
+/** Tek dokunuş: ayda toplamı hedefin gerektirdiğine çek (elle paylar korunur, kalan eşit bölünür). */
+export const toplamiYapEtiketi = (s: PayDurumu, para: (n: number) => string) => (s.needed ? `Toplamı ${para(s.needed)} yap` : null);

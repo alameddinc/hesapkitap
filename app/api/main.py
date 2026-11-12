@@ -4080,6 +4080,12 @@ def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans:
         out["goal_status"] = None
         for k in ("need_per_month", "eta", "on_track"):
             out.pop(k, None)
+    # katılımcılı kumbara: paylar toplamı hedefin gerektirdiğinden azsa (hedef + son tarih) "ayda ₺X gerekiyor" notu ve
+    # "Toplamı ₺X yap" eylemi (PATCH share_monthly; elle paylar korunur). Rakam hedef kutusundakiyle aynı (goal_status)
+    if out["shares"] is not None:
+        need = (out["goal_status"] or {}).get("needed_monthly") if j.get("deadline") else None
+        sh = out["shares"]
+        sh["needed"] = need if need and sh["basis"] != "hedef" and money.lt(sh["total"], need) else None
     return out
 
 
