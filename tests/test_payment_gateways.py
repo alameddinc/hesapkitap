@@ -234,7 +234,7 @@ def test_admin_api(client, tmpdb):
     assert r.status_code == 200 and r.json()["candidates"][0]["prefix"] == "YENIARACI"
     assert "IYZICO" in r.json()["builtin"] and r.json()["thresholds"]["single_book"] == 5
     p = client.get("/api/admin/payment-gateways/preview", params={"prefix": "ornekzincir"}).json()
-    assert p == {"prefix": "ORNEKZINCIR", "known": False, "rows": 4, "merchants": 1, "samples": ["ORNEK"]}
+    assert p == {"prefix": "ORNEKZINCIR", "known": False, "rows": 4, "merchants": 1, "samples": ["ORNEK"], "hidden": 0}
     assert client.get("/api/admin/payment-gateways/preview", params={"prefix": "IYZICO"}).json()["known"] is True
     assert client.get("/api/admin/payment-gateways/preview", params={"prefix": "//"}).status_code == 422
     r = client.post("/api/admin/payment-gateways/approve", json={"prefix": "YENIARACI"})
@@ -315,3 +315,47 @@ def test_sync_on_first_run_uses_legacy_list(tmpdb):
     assert sig == current_gateways().sig and len(sig) == 16  # defterde yalnız özet; adlar system.db'de
     assert gateways.recall_set(sig)["fuzzy"] is True
     assert db.sync_gateway_keys() is None
+
+
+# ---------------------------------------------------------------- hazır sürüm: tek kişide görülen ad örnek olmaz
+
+def test_hosted_samples_only_from_two_books(tmpdb, monkeypatch):
+    """Hazır sürümde yönetici başkasının defterini görmez: örnek işyeri adı yalnız ≥2 defterde görülenlerden; tek
+    defterde görülenin adı yazılmaz, sayısı (hidden) kalır. Önizlemede de aynı."""
+    from app import gateways
+
+    monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
+    m = _month()
+    _card(tmpdb, _candidate_rows(m))
+    _second_book([(f"{m}-03", "YENIARACI/ORNEK KITAP", 45, "Kategorisiz"),
+                  (f"{m}-04", "YENIARACI/ORNEK MOBILYA", 300, "Kategorisiz")])
+    gateways.scan(date(2026, 11, 12))
+    [c] = gateways.overview()["candidates"]
+    assert c["samples"] == ["ORNEK KITAP"] and c["hidden"] == 3 and c["merchants"] == 4 and c["rows"] == 5
+    p = gateways.preview("YENIARACI")
+    assert p["samples"] == ["ORNEK KITAP"] and p["hidden"] == 3 and p["merchants"] == 4 and p["rows"] == 5
+
+
+def test_hosted_single_book_candidate_has_no_names(tmpdb, monkeypatch):
+    from app import gateways
+
+    monkeypatch.setenv("HESAPKITAP_HOSTED", "1")
+    m = _month()
+    _card(tmpdb, [(f"{m}-0{i}", f"TEKDEFTER/ORNEK ISYERI {w}", 10, "Kategorisiz") for i, w in enumerate("ABCDE", 1)])
+    gateways.scan(date(2026, 11, 12))
+    [c] = gateways.overview()["candidates"]
+    assert c["samples"] == [] and c["hidden"] == 5 and c["merchants"] == 5 and c["books"] == 1
+    p = gateways.preview("tekdefter")
+    assert p["samples"] == [] and p["hidden"] == 5 and p["rows"] == 5
+
+
+def test_self_hosted_shows_single_book_samples(tmpdb, monkeypatch):
+    """Kendi sunucusunu kuranda (hosted değil) eski davranış: tek defterde görülen ad da örnek."""
+    from app import gateways
+
+    monkeypatch.delenv("HESAPKITAP_HOSTED", raising=False)
+    m = _month()
+    _card(tmpdb, [(f"{m}-0{i}", f"TEKDEFTER/ORNEK ISYERI {w}", 10, "Kategorisiz") for i, w in enumerate("ABCDE", 1)])
+    gateways.scan(date(2026, 11, 12))
+    [c] = gateways.overview()["candidates"]
+    assert len(c["samples"]) == 5 and c["hidden"] == 0

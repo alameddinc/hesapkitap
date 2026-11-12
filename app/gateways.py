@@ -19,7 +19,8 @@ kalıbı sayılır (önce bilinen aracılar atılır, sonra kalan baş). Aday ö
   aday çıkarır; listeye girmesi için yönetici onayı gerekir.
 
 Kişisel veri saklanmaz: ön ek, sayılar (işyeri / defter / satır), ilk-son görülme günü ve önizleme için en çok
-SAMPLES (5) sağ taraf işyeri adı (önce birden çok defterde görülenler). Tutar, tarih, kişi, defter kimliği yok; hesap
+SAMPLES (5) sağ taraf işyeri adı (önce birden çok defterde görülenler). Hazır sürümde (HESAPKITAP_HOSTED=1) yalnız
+en az iki farklı defterde görülen işyeri adı örnek olur; tek kişide görülenin adı yazılmaz, sayısı (hidden) kalır. Tutar, tarih, kişi, defter kimliği yok; hesap
 hareketlerinde karşı tarafı (kişi) olan satırlar hiç okunmaz.
 
 Reddedilen ön ek bir daha aday olmaz ve benzer yazım toleransının da dışında kalır (textnorm.GatewaySet blocked).
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS payment_gateways (
     top_book INTEGER NOT NULL DEFAULT 0,  -- tek defterdeki en çok farklı işyeri
     rows INTEGER NOT NULL DEFAULT 0,      -- onaylanırsa ayrılacak satır (kart + hesap hareketi; benzer yazım dahil)
     samples TEXT,                         -- JSON: en çok 5 sağ taraf işyeri adı (önizleme)
+    hidden INTEGER NOT NULL DEFAULT 0,    -- hazır sürüm: yalnız tek defterde görüldüğü için örneğe girmeyen işyeri sayısı
     first_seen TEXT,                      -- YYYY-MM-DD
     last_seen TEXT,
     decided_at TEXT,                      -- onay / ret zamanı
@@ -233,10 +235,24 @@ def _neighbors(p: str, prefixes) -> set[str]:
     return {p} | (near & set(prefixes))
 
 
-def _samples(merchants: dict[str, set]) -> list[str]:
-    """Önizleme: önce en çok defterde görülen, kısa ve rakam dizisi içermeyen en çok SAMPLES işyeri adı."""
-    ok = [k for k in merchants if len(k) <= 40 and not re.search(r"\d{4}", k)]
-    return sorted(ok, key=lambda k: (-len(merchants[k]), k))[:SAMPLES]
+def _private() -> bool:
+    """Hazır sürüm (HESAPKITAP_HOSTED=1): yönetici başkalarının defterini görmez; yalnız birden çok defterde görülen
+    işyeri adı örnek olabilir. Kendi sunucusunu kuranda yönetici defterlerin sahibi/ailesi: bütün adlar."""
+    from app import plans
+
+    return plans.hosted()
+
+
+def _samples(merchants: dict[str, set]) -> tuple[list[str], int]:
+    """Önizleme: (örnekler, gizlenen işyeri sayısı). Önce en çok defterde görülen, kısa ve rakam dizisi içermeyen en çok
+    SAMPLES işyeri adı. Hazır sürümde yalnız tek defterde (tek kişide) görülen işyeri örneğe girmez, sayısı döner."""
+    names = list(merchants)
+    hidden = 0
+    if _private():
+        hidden = sum(1 for k in names if len(merchants[k]) < 2)
+        names = [k for k in names if len(merchants[k]) >= 2]
+    ok = [k for k in names if len(k) <= 40 and not re.search(r"\d{4}", k)]
+    return sorted(ok, key=lambda k: (-len(merchants[k]), k))[:SAMPLES], hidden
 
 
 def aggregate(per_book: list[dict[str, dict]]) -> dict[str, dict]:
@@ -278,16 +294,17 @@ def scan(today: date | None = None) -> dict:
             if not is_candidate(a) or known.get(p) in ("onaylandi", "reddedildi"):
                 continue
             found += 1
+            samples, hidden = _samples(a["merchants"])
             vals = (len(a["merchants"]), a["books"], a["top_book"],
                     sum(rows_by[q] for q in _neighbors(p, rows_by)),
-                    json.dumps(_samples(a["merchants"]), ensure_ascii=False), today.isoformat())
+                    json.dumps(samples, ensure_ascii=False), hidden, today.isoformat())
             if p in known:
                 c.execute("UPDATE payment_gateways SET merchants = ?, books = ?, top_book = ?, rows = ?, samples = ?, "
-                          "last_seen = ? WHERE prefix = ?", (*vals, p))
+                          "hidden = ?, last_seen = ? WHERE prefix = ?", (*vals, p))
             else:
                 new += 1
                 c.execute("INSERT INTO payment_gateways (prefix, status, source, merchants, books, top_book, rows, "
-                          "samples, first_seen, last_seen) VALUES (?, 'bekliyor', 'veri', ?, ?, ?, ?, ?, ?, ?)",
+                          "samples, hidden, first_seen, last_seen) VALUES (?, 'bekliyor', 'veri', ?, ?, ?, ?, ?, ?, ?, ?)",
                           (p, *vals, today.isoformat()))
     system.put("gateways:last_scan", today.isoformat())
     pushed = notify(today)
@@ -373,7 +390,7 @@ def preview(prefix: str) -> dict:
         raise ValueError("Geçersiz ön ek: harf ve rakam, en çok 3 kelime, 24 karakter")
     gs = current_gateways()
     if gs.match(p):
-        return {"prefix": p, "known": True, "rows": 0, "merchants": 0, "samples": []}
+        return {"prefix": p, "known": True, "rows": 0, "merchants": 0, "samples": [], "hidden": 0}
     trial = GatewaySet(gs.names | {p}, gs.blocked - {p})
 
     def one():
@@ -399,7 +416,8 @@ def preview(prefix: str) -> dict:
         total += rows
         for k in rights:
             merchants.setdefault(k, set()).add(i)
-    return {"prefix": p, "known": False, "rows": total, "merchants": len(merchants), "samples": _samples(merchants)}
+    samples, hidden = _samples(merchants)
+    return {"prefix": p, "known": False, "rows": total, "merchants": len(merchants), "samples": samples, "hidden": hidden}
 
 
 def _set_status(prefix: str, status: str, source: str | None = None) -> dict:

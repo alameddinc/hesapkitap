@@ -3,6 +3,7 @@ import { Check, Eye, Plus, Route, Undo2, X } from "lucide-react";
 import { useState } from "react";
 import { call } from "../lib/apiError";
 import { ask } from "../lib/ask";
+import { ornekMetni } from "../lib/odemeAraci";
 import { useUI } from "../ui";
 import { useSave } from "./hooks";
 import SorguDurumu, { KartIskelet } from "./SorguDurumu";
@@ -12,13 +13,16 @@ import SorguDurumu, { KartIskelet } from "./SorguDurumu";
 export interface Gateway {
   prefix: string; status: "bekliyor" | "onaylandi" | "reddedildi"; source: "veri" | "elle";
   merchants: number; books: number; top_book: number; rows: number; samples: string[];
+  /** hazır sürüm: yalnız tek defterde görüldüğü için adı gösterilmeyen işyeri sayısı */
+  hidden?: number;
   first_seen: string | null; last_seen: string | null; decided_at: string | null;
 }
 export interface GatewayOverview {
   candidates: Gateway[]; approved: Gateway[]; rejected: Gateway[]; builtin: string[]; last_scan: string | null;
   thresholds: { merchants: number; books: number; single_book: number };
 }
-interface Preview { prefix: string; known: boolean; rows: number; merchants: number; samples: string[] }
+interface Preview { prefix: string; known: boolean; rows: number; merchants: number; samples: string[]; hidden?: number }
+
 
 const KEY = ["admin-payment-gateways"];
 const sayi = (n: number) => n.toLocaleString("tr-TR");
@@ -55,8 +59,8 @@ export default function PaymentGateways() {
                   <span className="font-mono text-sm font-semibold break-all">{c.prefix}</span>
                   <span className="text-xs text-stone-500 tabular-nums">{sayi(c.merchants)} işyeri · {sayi(c.books)} defter · ilk {gun(c.first_seen)}</span>
                 </div>
-                {c.samples.length > 0 && (
-                  <p className="text-xs break-words text-stone-600 dark:text-stone-400">Örnek: {c.samples.join(" · ")}</p>
+                {ornekMetni(c.samples, c.hidden) && (
+                  <p className="text-xs break-words text-stone-600 dark:text-stone-400" data-testid="aday-ornek">{ornekMetni(c.samples, c.hidden)}</p>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-900 tabular-nums dark:bg-amber-950 dark:text-amber-200">
@@ -148,7 +152,7 @@ function ManualAdd({ onAdded }: { onAdded: (r: GatewayOverview, prefix: string) 
         <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="elle-onizleme">
           <span className="min-w-0 flex-1 break-words">
             <b className="font-mono">{pv.prefix}</b>: {sayi(pv.rows)} satır ayrılır, {sayi(pv.merchants)} farklı işyeri
-            {pv.samples.length > 0 && <span className="text-stone-500"> ({pv.samples.join(" · ")})</span>}
+            {ornekMetni(pv.samples, pv.hidden) && <span className="text-stone-500"> ({ornekMetni(pv.samples, pv.hidden)})</span>}
             {pv.rows > 0 && pv.merchants === 0 && <span className="block text-xs text-amber-800 dark:text-amber-300">Sağ tarafların hepsi şehir/ilçe: bu bir zincir + şube olabilir, aracı değil.</span>}
             {pv.rows === 0 && <span className="block text-xs text-stone-500">Defterlerde bu önekle satır yok; eklenirse yalnız yeni satırlarda etkili.</span>}
           </span>
