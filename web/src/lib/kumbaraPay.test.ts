@@ -51,3 +51,38 @@ test("paylar toplamı hedefe yetmiyor: nötr not ve eylem", () => {
   assert.equal(yetmeyenNot({ ...s, needed: null }, tl), null);
   assert.equal(yetmeyenNot({ ...s, needed: undefined }, tl), null); // eski sunucu
 });
+
+test("v2: tamamlanacak, devir, dağılım, muaf, hatırlatma mesajı", async () => {
+  const { tamamlanacakMetni, devirMetni, dagilimMetni, hatirlatMesaji, aydan } = await import("./kumbaraPay.ts");
+  assert.equal(tamamlanacakMetni({ due: [{ month: "2026-10", amount: 500 }], due_total: 500 }, tl, "2026-11"), "Tamamlanacak: ₺500 (Ekim)");
+  assert.equal(tamamlanacakMetni({ due: [{ month: "2025-12", amount: 800 }, { month: "2026-10", amount: 500 }], due_total: 1300 }, tl, "2026-11"),
+    "Tamamlanacak: ₺1.300 (Aralık 2025 ₺800, Ekim ₺500)");
+  assert.equal(tamamlanacakMetni({ due: [], due_total: 0 }, tl, "2026-11"), null);
+  assert.equal(devirMetni({ carried_in: 500 }, tl), "Geçen aydan ₺500 fazla geldi");
+  assert.equal(dagilimMetni({ person_id: 1, past: [{ month: "2026-10", amount: 500 }], month: "2026-11", month_amount: 200, extra: 0 }, tl, "2026-11"),
+    "₺500 Ekim eksiğine, ₺200 Kasım payına sayıldı.");
+  assert.equal(dagilimMetni({ person_id: 1, past: [{ month: "2026-09", amount: 400 }, { month: "2026-10", amount: 1000 }], month: "2026-11", month_amount: 0, extra: 0 }, tl, "2026-11"),
+    "₺400 Eylül ve ₺1.000 Ekim eksiğine sayıldı.");
+  assert.equal(dagilimMetni({ person_id: 1, past: [], month: "2026-11", month_amount: 700, extra: 0 }, tl, "2026-11"), null);
+  assert.deepEqual(kisiMetni(kisi({ state: "muaf", share: 0, left: null }), tl), { rozet: "Bu ay yok", ton: "notr", cumle: "Bu ay için pay yok olarak işaretli" });
+  const s: PayDurumu = { month: "2026-11", target: 15000, basis: "aylik", total: 15000, paid: 2000, remind_day: 25, people: [], removed: [], behind: [], all_done: false, history_months: 0 };
+  assert.equal(hatirlatMesaji("Annemin birikimi", s, kisi({ share: 5000, paid: 2000, paid_for_month: 2000, state: "eksik" }), tl),
+    "Annemin birikimi: Kasım payın ₺5.000, şu ana kadar ₺2.000 geldi.");
+  assert.equal(hatirlatMesaji("Annemin birikimi", s, kisi({ share: 5000, paid: 0, paid_for_month: 0, due: [{ month: "2026-10", amount: 500 }], due_total: 500 }), tl),
+    "Annemin birikimi: Kasım payın ₺5.000, şu ana kadar ₺0 geldi. Ekim'den ₺500 tamamlanacak.");
+  assert.equal(hatirlatMesaji("X", s, kisi({ state: "muaf" }), tl), null);
+  assert.equal(aydan("2026-09"), "Eylül'den");
+  for (const t of [hatirlatMesaji("A", s, kisi({ due: [{ month: "2026-10", amount: 5 }], due_total: 5 }), tl)!, tamamlanacakMetni({ due: [{ month: "2026-10", amount: 5 }], due_total: 5 }, tl, "2026-11")!]) {
+    assert.doesNotMatch(t, /borç|gecik|geride/i);
+  }
+  // altın: birim kumbaranın biriminde
+  const gr = (n: number) => `${n.toLocaleString("tr-TR")} gr`;
+  assert.equal(kisiMetni(kisi({ state: "eksik", left: 0.66 }), gr).cumle, "Bu ay Ayşe'nin payından 0,66 gr kaldı");
+});
+
+test("ay seçenekleri yıl geçişinde doğru", async () => {
+  const { aySecenekleri } = await import("./kumbaraPay.ts");
+  const a = aySecenekleri("2026-11", 1, 2);
+  assert.deepEqual(a.map((x) => x.v), ["2026-10", "2026-11", "2026-12", "2027-01"]);
+  assert.equal(a[3]!.t, "Ocak 2027");
+});

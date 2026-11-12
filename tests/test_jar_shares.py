@@ -118,9 +118,7 @@ def test_remove_person_keeps_history_and_readd_restores(client, tmpdb):
     assert sh["people"][0]["total"] == 700
 
 
-def test_unit_jar_and_closed_jar_reject_people(client, tmpdb):
-    gold = client.post("/api/jars", json={"name": "Düğün altını", "unit": "ALTIN_24"}).json()["id"]
-    assert client.post(f"/api/jars/{gold}/people", json={"name": "Ayşe"}).status_code == 422
+def test_closed_jar_rejects_people(client, tmpdb):
     jid = _jar(client)
     client.patch(f"/api/jars/{jid}", json={"closed": True})
     assert client.post(f"/api/jars/{jid}/people", json={"name": "Ayşe"}).status_code == 422
@@ -323,3 +321,166 @@ def test_needed_note_when_total_below_goal_pace(client, tmpdb):
     client.patch(f"/api/jars/{k}", json={"share_monthly": 100})
     client.post(f"/api/jars/{k}/people", json={"name": "Ayşe"})
     assert _status(client, k)["shares"]["needed"] is None
+
+
+# ---------------------------------------------------------------- v2: eksik devri, fazla, muaf, tarihli pay, altın
+
+def _ledger_jar(tmpdb, start="2026-08", **kw):
+    """start'tan beri iki kişi, ayda toplam 2.000 (kişi başı 1.000)."""
+    from app import db
+
+    jid = db.create_jar({"name": "Annemin birikimi", "share_monthly": 2000, **kw})
+    a = db.add_jar_person(jid, "Ayşe")
+    b = db.add_jar_person(jid, "Mehmet")
+    with db.connect() as c:
+        c.execute("UPDATE jar_people SET created_at = ? WHERE jar_id = ?", (f"{start}-01 09:00:00", jid))
+    return jid, a, b
+
+
+def _st(tmpdb, jid, today=NOV):
+    from app import db
+
+    return jar_shares.status(next(j for j in db.list_jars(today) if j["id"] == jid), today)
+
+
+def test_shortfall_carries_and_new_payment_closes_oldest_first(tmpdb):
+    from app import db
+
+    jid, a, b = _ledger_jar(tmpdb)
+    db.add_jar_move(jid, 1000, "2026-08-05", None, a)
+    db.add_jar_move(jid, 600, "2026-08-06", None, b)          # Ağustos: 400 eksik
+    db.add_jar_move(jid, 1000, "2026-09-05", None, a)
+    db.add_jar_move(jid, 1000, "2026-09-06", None, b)         # Eylül: önce Ağustos 400, Eylül'e 600 → 400 eksik
+    db.add_jar_move(jid, 1000, "2026-10-05", None, a)          # Ekim: Mehmet hiç → 1.000 eksik
+    st = _st(tmpdb, jid)
+    m = next(p for p in st["people"] if p["id"] == b)
+    assert m["due"] == [{"month": "2026-09", "amount": 400.0}, {"month": "2026-10", "amount": 1000.0}]
+    assert m["due_total"] == 1400 and m["state"] == "bekliyor" and m["left"] == 1000
+    assert (m["months_full"], m["months_counted"]) == (1, 3)  # Ağustos sonradan tamamlandı: tam sayılır
+    assert b in st["behind"] and next(p for p in st["people"] if p["id"] == a)["due"] == []
+    # Kasım'da 1.700: önce Eylül 400, sonra Ekim 1.000, kalan 300 Kasım'a
+    mid = db.add_jar_move(jid, 1700, "2026-11-04", None, b)
+    st = _st(tmpdb, jid)
+    m = next(p for p in st["people"] if p["id"] == b)
+    assert m["due"] == [] and m["paid"] == 1700 and m["to_past"] == 1400 and m["paid_for_month"] == 300 and m["left"] == 700
+    al = st["allocations"][mid]
+    assert al["past"] == [{"month": "2026-09", "amount": 400.0}, {"month": "2026-10", "amount": 1000.0}] and al["month_amount"] == 300
+    assert m["state"] == "eksik" and (m["months_full"], m["months_counted"]) == (3, 3)
+
+
+def test_overpayment_stays_unless_carry_over(tmpdb):
+    from app import db
+
+    jid, a, b = _ledger_jar(tmpdb, start="2026-10")
+    db.add_jar_move(jid, 1500, "2026-10-05", None, a)
+    st = _st(tmpdb, jid)
+    ay = next(p for p in st["people"] if p["id"] == a)
+    assert ay["carried_in"] == 0 and ay["left"] == 1000 and ay["state"] == "bekliyor"  # fazla devretmez (varsayılan)
+    db.update_jar(jid, {"carry_over": 1})
+    ay = next(p for p in _st(tmpdb, jid)["people"] if p["id"] == a)
+    assert ay["carried_in"] == 500 and ay["left"] == 500 and ay["state"] == "eksik"
+    assert _st(tmpdb, jid)["carry_over"] is True
+
+
+def test_exempt_month_zero_share_counts_full_and_undo(client, tmpdb):
+    from app import db
+
+    jid, a, b = _ledger_jar(tmpdb, start="2026-10")
+    db.add_jar_move(jid, 1000, "2026-10-05", None, a)
+    assert client.put(f"/api/jars/{jid}/people/{b}/exempt/2026-10").status_code == 200
+    m = next(p for p in _st(tmpdb, jid)["people"] if p["id"] == b)
+    assert m["due"] == [] and "2026-10" in m["exempt_months"]
+    assert client.put(f"/api/jars/{jid}/people/{b}/exempt/2026-11").status_code == 200
+    st = _st(tmpdb, jid)
+    m = next(p for p in st["people"] if p["id"] == b)
+    assert m["state"] == "muaf" and m["exempt"] and m["share"] == 0 and m["left"] is None
+    assert st["total"] == 1000  # başkasının payı artmaz
+    assert b not in st["behind"]
+    assert client.delete(f"/api/jars/{jid}/people/{b}/exempt/2026-10").status_code == 200  # geri al
+    m = next(p for p in _st(tmpdb, jid)["people"] if p["id"] == b)
+    assert m["due"] == [{"month": "2026-10", "amount": 1000.0}]
+    assert client.put(f"/api/jars/{jid}/people/{b}/exempt/2026-13").status_code == 422
+
+
+def test_dated_share_change_keeps_past_months(client, tmpdb):
+    from app import db
+
+    jid, a, b = _ledger_jar(tmpdb)
+    for ym in ("2026-08", "2026-09", "2026-10"):
+        db.add_jar_move(jid, 1000, f"{ym}-05", None, a)
+    # Ayşe'nin payı Ekim'den itibaren 1.500 (Ağustos–Eylül 1.000 kalır)
+    assert client.patch(f"/api/jars/{jid}/people/{a}", json={"share": 1500, "from_month": "2026-10"}).status_code == 200
+    ay = next(p for p in _st(tmpdb, jid)["people"] if p["id"] == a)
+    assert ay["due"] == [{"month": "2026-10", "amount": 500.0}] and ay["share"] == 1500 and ay["manual"]
+    # toplam da tarihli: Kasım'dan itibaren 3.000 → Mehmet 1.500
+    assert client.patch(f"/api/jars/{jid}", json={"share_monthly": 3000, "share_from": "2026-11"}).status_code == 200
+    st = _st(tmpdb, jid)
+    assert st["total"] == 3000 and next(p for p in st["people"] if p["id"] == b)["share"] == 1500
+    mh = next(p for p in st["people"] if p["id"] == b)
+    assert [d["amount"] for d in mh["due"]] == [1000.0, 1000.0, 500.0]  # eski aylar o ayki payla (Ekim: 2.000 − 1.500)
+    # "tüm aylar": geçmiş de yeni payla
+    client.patch(f"/api/jars/{jid}/people/{a}", json={"share": 1500, "from_month": "all"})
+    ay = next(p for p in _st(tmpdb, jid)["people"] if p["id"] == a)
+    assert sum(d["amount"] for d in ay["due"]) == 1500
+    assert client.patch(f"/api/jars/{jid}/people/{a}", json={"share": 10, "from_month": "2026-13"}).status_code == 422
+
+
+def test_gold_jar_shares_in_grams_and_adet(client, tmpdb):
+    from app import db
+
+    g = db.create_jar({"name": "Düğün altını", "unit": "ALTIN_24", "share_monthly": 5})
+    ids = [db.add_jar_person(g, n) for n in ("Sen", "Ayşe", "Mehmet")]
+    st = _st(tmpdb, g)
+    assert st["unit"] == "ALTIN_24" and st["scale"] == 100
+    assert [p["share"] for p in st["people"]] == [1.68, 1.66, 1.66]  # 0,01 gr kalanı tek kişiye
+    db.add_jar_move(g, 1.0, f"{NOV:%Y-%m}-03", None, ids[1])          # Ayşe getirdi (gider kaydı yok)
+    ay = next(p for p in _st(tmpdb, g)["people"] if p["id"] == ids[1])
+    assert ay["paid"] == 1.0 and ay["left"] == 0.66
+    assert client.patch(f"/api/jars/{g}/people/{ids[0]}", json={"share": 2.004}).status_code == 200
+    assert next(p for p in _st(tmpdb, g)["people"] if p["id"] == ids[0])["share"] == 2.0
+    c = db.create_jar({"name": "Çeyrek birikimi", "unit": "CEYREK", "share_monthly": 5})
+    for n in ("Ayşe", "Mehmet", "Zeynep"):
+        db.add_jar_person(c, n)
+    assert [p["share"] for p in _st(tmpdb, c)["people"]] == [3.0, 1.0, 1.0]  # adet: kalan tek kişiye
+    pid = _st(tmpdb, c)["people"][0]["id"]
+    assert client.patch(f"/api/jars/{c}/people/{pid}", json={"share": 1.5}).status_code == 422
+    # hedeften: gram 0,01'e yukarı
+    h = db.create_jar({"name": "Bilezik", "unit": "ALTIN_22", "goal": 10, "deadline": "2027-02-28"})
+    db.add_jar_person(h, "Ayşe")
+    assert jar_shares.month_target(next(j for j in db.list_jars(NOV) if j["id"] == h), "2026-11") == (2.5, "hedef")
+
+
+def test_gold_buy_with_person(client, tmpdb, monkeypatch):
+    from app import db, zakat
+
+    monkeypatch.setattr(zakat, "prices", lambda: {"prices": {"GRA": 4000.0}})
+    g = db.create_jar({"name": "Düğün altını", "unit": "ALTIN_24", "share_monthly": 2})
+    me = db.add_jar_person(g, "Ben")
+    r = client.post(f"/api/jars/{g}/buy", json={"quantity": 1, "cost": 4000, "payment": "nakit", "person_id": me})
+    assert r.status_code == 200
+    j = next(x for x in client.get("/api/jars").json() if x["id"] == g)
+    assert j["shares"]["people"][0]["paid"] == 1 and j["moves"][0]["person_id"] == me
+
+
+def test_push_mentions_amount_to_complete(owner):
+    from app import db, push, system
+
+    adm = system.user_by_name("admin")
+    jid = owner.post("/api/jars", json={"name": "Ortak hedef"}).json()["id"]
+    owner.patch(f"/api/jars/{jid}", json={"share_monthly": 2000, "share_from": "all"})
+    pa = owner.post(f"/api/jars/{jid}/people", json={"user_id": adm["id"]}).json()["id"]
+    owner.post(f"/api/jars/{jid}/people", json={"name": "Mehmet"})
+    with db.use_space(push._space_of(adm), adm):
+        with db.connect() as c:
+            c.execute("UPDATE jar_people SET created_at = '2026-10-01 09:00:00' WHERE jar_id = ?", (jid,))
+        db.add_jar_move(jid, 500, "2026-10-04", None, pa)
+        db.add_jar_move(jid, 1000, "2026-11-04", None, pa)  # Ekim 500 tamamlanır, Kasım'a 500
+        got = push._kumbara_pay(adm, date(2026, 11, 27))
+    assert len(got) == 1
+    assert got[0]["body"] == "Bu ay payından ₺500 kaldı; ₺500 eklendi. Attıysan kumbaraya işle."
+    with db.use_space(push._space_of(adm), adm):
+        with db.connect() as c:
+            c.execute("DELETE FROM jar_moves WHERE amount = 1000")  # Kasım'da henüz ekleme yok
+        got = push._kumbara_pay(adm, date(2026, 11, 27))
+    assert got[0]["body"] == "Bu ay payın ₺1.000. Ekim'den ₺500 tamamlanacak. Attıysan kumbaraya işle."
+    assert not any(w in got[0]["body"].lower() for w in ("borç", "gecik", "geride"))

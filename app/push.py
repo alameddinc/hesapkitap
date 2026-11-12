@@ -962,12 +962,18 @@ def _kumbara(today: date) -> list[dict]:
     return out
 
 
+# ay adının çıkma hâli (bildirim: "Ekim'den ₺500 tamamlanacak")
+AY_DAN = ["Ocak'tan", "Şubat'tan", "Mart'tan", "Nisan'dan", "Mayıs'tan", "Haziran'dan", "Temmuz'dan", "Ağustos'tan",
+          "Eylül'den", "Ekim'den", "Kasım'dan", "Aralık'tan"]
+
+
 def _kumbara_pay(u: dict, today: date) -> list[dict]:
-    """Katılımcılı TL kumbarası (kumbara_shares): kişinin KENDİ bu ayki payı tamamlanmadıysa, kumbaranın hatırlatma
-    gününde ya da sonrasında ayda bir kez (kimlik ay'a bağlı). Başkasının payı için bildirim yok (yalnız ekranda);
-    uygulamayı kullanmayan katılımcı zaten burada yok. Hedefe ulaşan / kapalı kumbara, Hesaplar sayfası kapalı üye ve
-    görünmeyen hesaptaki kumbara yok. Dil suçlayıcı değil: ne kadar kaldığı ve "attıysan işle"."""
-    from app import book, jar_shares, money
+    """Katılımcılı kumbara (kumbara_shares; TL, altın, döviz): kişinin KENDİ bu ayki payı ya da önceki aylardan
+    tamamlanacak kısmı varsa, kumbaranın hatırlatma gününde ya da sonrasında ayda bir kez (kimlik ay'a bağlı). "Bu ay
+    yok" işaretliyse ve tamamlanacak yoksa yok. Başkasının payı için bildirim yok (yalnız ekranda); uygulamayı
+    kullanmayan katılımcı zaten burada yok. Hedefe ulaşan / kapalı kumbara, Hesaplar sayfası kapalı üye ve görünmeyen
+    hesaptaki kumbara yok. Dil nötr: ne kadar kaldığı, ne kadar tamamlanacağı ve "attıysan işle"."""
+    from app import book, jar_shares
 
     uid = u.get("id")
     if uid is None or _hesaplar_hidden():
@@ -976,23 +982,30 @@ def _kumbara_pay(u: dict, today: date) -> list[dict]:
     owner = u.get("member_of") or uid
     out = []
     for j in db.list_jars(today, include_closed=False):
-        if (j.get("unit") or "TRY") != "TRY" or not j.get("people"):
+        if not j.get("people"):
             continue
         if j.get("account_id") and not book.can_see_account(j["account_id"]):
             continue
-        if j.get("goal") and money.le(j["goal"] - j["balance"], 0):
+        unit = j.get("unit") or "TRY"
+        if j.get("goal") and j["goal"] - j["balance"] <= 1e-9:
             continue
         st = jar_shares.status(j, today, names, uid, owner)
         if not st or today.day < st["remind_day"]:
             continue
         me = next((p for p in st["people"] if p["me"]), None)
-        if not me or me["state"] not in ("eksik", "bekliyor"):
+        if not me or not ((me["left"] or 0) > 0 or me["due_total"] > 0):
             continue
-        if me["state"] == "bekliyor":
-            body = f"Bu ay payın {money.tl(me['share'], trim=True)}. Attıysan kumbaraya işle; kimin ne kadar attığı kumbarada."
-        else:
-            body = (f"Bu ay payından {money.tl(me['left'], trim=True)} kaldı; {money.tl(me['paid'], trim=True)} eklendi. "
-                    "Attıysan kumbaraya işle.")
+        parts = []
+        if (me["left"] or 0) > 0:
+            parts.append(f"Bu ay payın {_amount(me['share'], unit)}." if me["state"] == "bekliyor" else
+                         f"Bu ay payından {_amount(me['left'], unit)} kaldı; {_amount(me['paid_for_month'], unit)} eklendi.")
+        if me["due_total"] > 0:
+            if len(me["due"]) == 1:
+                ay = AY_DAN[int(me["due"][0]["month"][5:7]) - 1]
+                parts.append(f"{ay} {_amount(me['due_total'], unit)} tamamlanacak.")
+            else:
+                parts.append(f"Önceki aylardan {_amount(me['due_total'], unit)} tamamlanacak.")
+        body = " ".join(parts) + " Attıysan kumbaraya işle."
         out.append(item("kumbara_pay", f"kumbara_pay:{j['id']}:{st['month']}", f"{j['name']}: bu ayki payın", body,
                         f"{R_KUMBARA}/{j['id']}"))
     return out

@@ -1,12 +1,13 @@
 // Kumbara katılımcıları ve aylık pay (yetenek kumbara_shares; sunucu app/jar_shares.py). Mobil:
 // hesapkitap-mobile src/components/para/KumbaraPaylar.tsx (aynı sözler, src/lib/kumbaraPay.ts).
 // Kişi: defterdeki kullanıcı ya da uygulamayı kullanmayan biri (yalnız ad). Her satır dokununca düzenlenir.
-import { Lock, Plus, Trash2, Users } from "lucide-react";
+import { Lock, Plus, Send, Trash2, Users } from "lucide-react";
 import { useState } from "react";
 import { call } from "../lib/apiError";
 import { ask } from "../lib/ask";
 import { cx, dateTR, parseAmount, tl } from "../format";
-import { gecmisMetni, kisiAdi, kisiMetni, ozetMetni, temelMetni, toplamiYapEtiketi, yetmeyenNot, type PayDurumu, type PayKisi } from "../lib/kumbaraPay";
+import { ayAdi, aySecenekleri, dagilimMetni, devirMetni, gecmisMetni, hatirlatMesaji, kisiAdi, kisiMetni, ozetMetni, tamamlanacakMetni, temelMetni,
+  toplamiYapEtiketi, yetmeyenNot, type PayDurumu, type PayKisi } from "../lib/kumbaraPay";
 import { useUI } from "../ui";
 import { isLimited, isViewer, useBook, usePeople, useSave } from "./hooks";
 import Modal from "./Modal";
@@ -17,12 +18,35 @@ export interface PayMove {
   person_id?: number | null; outside?: number; created_by?: number | null; debt_payment_id?: number | null;
 }
 export interface PayJar {
+  unit_symbol?: string; unit_price?: number | null; carry_over?: number;
   id: number; name: string; unit: string; balance: number; closed_at: string | null; goal: number | null; deadline: string | null;
   moves: PayMove[]; shares?: PayDurumu | null; outside?: number; share_monthly?: number | null; remind_day?: number | null;
 }
 
 const json = <T,>(method: string, url: string, body?: unknown) => call<T>(method, url, body);
 const tl0 = (n: number) => tl(n).replace(/,00$/, "");
+const MIKTAR = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 });
+const SYM: Record<string, string> = { ALTIN_24: "gr", ALTIN_22: "gr", GUMUS: "gr", USD: "$", EUR: "€", GBP: "£" };
+/** Kumbaranın biriminde biçim: ₺, "1,5 gr", "3 adet", "$100". */
+export function fmtOf(j: Pick<PayJar, "unit" | "unit_symbol">): (n: number) => string {
+  if ((j.unit ?? "TRY") === "TRY") return tl0;
+  const s = j.unit_symbol ?? SYM[j.unit] ?? "adet";
+  return s === "gr" || s === "adet" ? (n) => `${MIKTAR.format(n)} ${s}` : (n) => `${s}${MIKTAR.format(n)}`;
+}
+const buAy = () => new Date().toISOString().slice(0, 7);
+const sonrakiAy = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 7); };
+/** Pay değişikliği ne zamandan geçerli (sunucu from_month / share_from). */
+const NE_ZAMAN: [string, string][] = [["bu", "Bu aydan itibaren"], ["sonraki", "Gelecek aydan itibaren"], ["all", "Tüm aylar (geçmiş de)"]];
+const fromMonth = (k: string) => (k === "all" ? "all" : k === "sonraki" ? sonrakiAy() : buAy());
+
+/** Uygulamayı kullanmayana hatırlatma: paylaşım menüsü, yoksa WhatsApp bağlantısı (mesajı kullanıcı gönderir). */
+export async function hatirlatPaylas(text: string): Promise<void> {
+  const nav = navigator as Navigator & { share?: (d: { text: string }) => Promise<void> };
+  if (nav.share) {
+    try { await nav.share({ text }); return; } catch (e) { if ((e as Error)?.name === "AbortError") return; }
+  }
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+}
 const TON = {
   iyi: "bg-green-100 text-green-800 dark:bg-green-900/60 dark:text-green-200",
   uyari: "bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200",
@@ -30,7 +54,7 @@ const TON = {
 } as const;
 
 /** Bu sunucu katılımcıyı biliyor mu (yeni sunucu: alan var, değeri null olabilir). */
-export const hasShares = (j: PayJar) => "shares" in j && (j.unit ?? "TRY") === "TRY";
+export const hasShares = (j: PayJar) => "shares" in j && ((j.unit ?? "TRY") === "TRY" || !!j.shares || "carry_over" in j);
 
 /** Katılımcı ekleme/düzenleme sahibin ya da tam yetkilinin işi. */
 export function useCanManage() {
@@ -42,17 +66,18 @@ export function useCanManage() {
 export function PayKarti({ j, onOpen }: { j: PayJar; onOpen: () => void }) {
   const s = j.shares;
   if (!s) return null;
+  const f = fmtOf(j);
   const done = s.people.filter((p) => p.share).length;
   return (
     <div data-testid="kumbara-paylar" className="mt-1.5 rounded-lg bg-stone-50 px-2.5 py-2 dark:bg-stone-900">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-        <p className="text-sm font-semibold tabular-nums" data-testid="kumbara-pay-ozet">{ozetMetni(s, tl0)}</p>
+        <p className="text-sm font-semibold tabular-nums" data-testid="kumbara-pay-ozet">{ozetMetni(s, f)}{(j.unit ?? "TRY") !== "TRY" && j.unit_price && s.total ? <span className="font-normal text-stone-500"> (≈ {tl0(Math.round(s.total * j.unit_price))})</span> : null}</p>
         <button className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-300" onClick={onOpen}>
           <Users size={12} className="mr-0.5 inline" aria-hidden="true" />Katılımcılar ({s.people.length})</button>
       </div>
-      {yetmeyenNot(s, tl0) && <p className="text-xs text-stone-600 dark:text-stone-400" data-testid="kumbara-pay-yetmeyen">{yetmeyenNot(s, tl0)}</p>}
+      {yetmeyenNot(s, f) && <p className="text-xs text-stone-600 dark:text-stone-400" data-testid="kumbara-pay-yetmeyen">{yetmeyenNot(s, f)}</p>}
       <ul className="mt-1 divide-y divide-stone-200 dark:divide-stone-800">
-        {s.people.map((p) => <KisiSatiri key={p.id} p={p} />)}
+        {s.people.map((p) => <KisiSatiri key={p.id} p={p} j={j} f={f} />)}
       </ul>
       {done > 0 && s.people.some((p) => p.months_counted > 0) && (
         <p className="mt-1 text-xs text-stone-500" data-testid="kumbara-pay-gecmis">
@@ -64,8 +89,12 @@ export function PayKarti({ j, onOpen }: { j: PayJar; onOpen: () => void }) {
   );
 }
 
-function KisiSatiri({ p }: { p: PayKisi }) {
-  const t = kisiMetni(p, tl0);
+function KisiSatiri({ p, j, f }: { p: PayKisi; j: PayJar; f: (n: number) => string }) {
+  const t = kisiMetni(p, f);
+  const s = j.shares!;
+  const tam = tamamlanacakMetni(p, f, s.month);
+  const devir = devirMetni(p, f);
+  const msg = !p.app ? hatirlatMesaji(j.name, s, p, f) : null;
   return (
     <li className="py-1 text-sm" data-testid="kumbara-pay-kisi">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2">
@@ -74,11 +103,18 @@ function KisiSatiri({ p }: { p: PayKisi }) {
           {t.rozet && <span className={cx("ml-1.5 rounded-md px-1.5 py-0.5 text-xs font-bold", TON[t.ton])}>{t.rozet}</span>}
         </span>
         <span className="text-xs tabular-nums text-stone-600 dark:text-stone-400">
-          {p.share != null ? <>pay {tl0(p.share)}{p.manual ? " (elle)" : ""} · atılan {tl0(p.paid)}{p.left ? <> · kalan {tl0(p.left)}</> : null}</>
-            : <>atılan {tl0(p.paid)}</>}
+          {p.state === "muaf" ? <>bu ay pay yok{p.paid ? <> · atılan {f(p.paid)}</> : null}</>
+            : p.share != null ? <>pay {f(p.share)}{p.manual ? " (elle)" : ""} · bu aya {f((p.paid_for_month ?? p.paid) + (p.carried_in ?? 0))}{p.left ? <> · kalan {f(p.left)}</> : null}</>
+            : <>atılan {f(p.paid)}</>}
         </span>
       </div>
       {(t.ton === "uyari" || (p.over ?? 0) > 0) && <p className="text-xs text-stone-600 dark:text-stone-400">{t.cumle}</p>}
+      {devir && <p className="text-xs text-stone-600 dark:text-stone-400" data-testid="kumbara-pay-devir">{devir}</p>}
+      {tam && <p className="text-xs text-stone-700 dark:text-stone-300" data-testid="kumbara-pay-tamamlanacak">{tam}</p>}
+      {msg && (t.ton === "uyari" || tam) && (
+        <button className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline dark:text-blue-300"
+          onClick={() => void hatirlatPaylas(msg)} aria-label={`${p.name}'e hatırlat: mesajı paylaş`}><Send size={12} aria-hidden="true" />Hatırlat</button>
+      )}
     </li>
   );
 }
@@ -93,11 +129,17 @@ export function KatilimciPenceresi({ j, onClose }: { j: PayJar; onClose: () => v
   const [edit, setEdit] = useState<PayKisi | "yeni" | null>(null);
   const [total, setTotal] = useState(j.share_monthly ? String(j.share_monthly).replace(".", ",") : "");
   const [day, setDay] = useState(String(j.remind_day ?? s?.remind_day ?? 25));
-  const save = useSave(() => json("PATCH", `/api/jars/${j.id}`, { share_monthly: parseAmount(total) > 0 ? parseAmount(total) : null, remind_day: Number(day) }),
-    () => { ui.toast("Kaydedildi"); onClose(); });
+  const [neZaman, setNeZaman] = useState("bu");
+  const [carry, setCarry] = useState(!!(s?.carry_over ?? j.carry_over));
+  const f = fmtOf(j);
+  const totalChanged = (parseAmount(total) > 0 ? parseAmount(total) : null) !== (j.share_monthly ?? null);
+  const save = useSave(() => json("PATCH", `/api/jars/${j.id}`, {
+    ...(totalChanged ? { share_monthly: parseAmount(total) > 0 ? parseAmount(total) : null, share_from: fromMonth(neZaman) } : {}),
+    remind_day: Number(day), carry_over: carry,
+  }), () => { ui.toast("Kaydedildi"); onClose(); });
   const editable = manage && !lock;
   // "Toplamı ₺X yap": ayda toplamı hedefin gerektirdiğine çeker; elle paylar korunur, kalan eşit bölünür
-  const yap = useSave(() => json("PATCH", `/api/jars/${j.id}`, { share_monthly: s?.needed }),
+  const yap = useSave(() => json("PATCH", `/api/jars/${j.id}`, { share_monthly: s?.needed, share_from: buAy() }),
     () => { ui.toast("Toplam güncellendi"); setTotal(String(s?.needed ?? "").replace(".", ",")); });
   return (
     <Modal title={`${j.name} · katılımcılar`} onClose={onClose} footer={editable ? (
@@ -115,7 +157,7 @@ export function KatilimciPenceresi({ j, onClose }: { j: PayJar; onClose: () => v
               <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm disabled:cursor-default" disabled={!editable}
                 onClick={() => setEdit(p)} aria-label={`${kisiAdi(p)}: düzenle`}>
                 <span className="min-w-0 [overflow-wrap:anywhere]">{kisiAdi(p)}{!p.app && <span className="text-xs text-stone-500"> · uygulamada değil</span>}</span>
-                <span className="shrink-0 text-xs tabular-nums text-stone-600 dark:text-stone-400">{p.share != null ? `${tl0(p.share)}/ay${p.manual ? " (elle)" : " (eşit)"}` : "pay yok"}</span>
+                <span className="shrink-0 text-xs tabular-nums text-stone-600 dark:text-stone-400">{p.state === "muaf" ? "bu ay yok" : p.share != null ? `${f(p.share)}/ay${p.manual ? " (elle)" : " (eşit)"}` : "pay yok"}</span>
               </button>
             </li>
           ))}
@@ -123,13 +165,20 @@ export function KatilimciPenceresi({ j, onClose }: { j: PayJar; onClose: () => v
         </ul>
         {editable && <button className="btn-ghost border border-stone-300 px-2 py-1 text-sm dark:border-stone-700" onClick={() => setEdit("yeni")}>
           <Plus size={14} /> Katılımcı ekle</button>}
-        {s && <p className="text-xs text-stone-500">{temelMetni(s, tl0)}</p>}
+        {s && <p className="text-xs text-stone-500">{temelMetni(s, f)}</p>}
         {editable && (
           <div className="grid grid-cols-2 gap-2">
             <label className="text-xs">Ayda toplam (ops.)
-              <input className="input mt-1 text-right" inputMode="decimal" placeholder={s?.basis === "hedef" && s.target ? tl0(s.target) : "Hedeften"}
+              <input className="input mt-1 text-right" inputMode="decimal" placeholder={s?.basis === "hedef" && s.target ? f(s.target) : "Hedeften"}
                 value={total} onChange={(e) => setTotal(e.target.value)} />
             </label>
+            {totalChanged && (
+              <label className="col-span-2 text-xs">Değişiklik ne zamandan?
+                <select className="input mt-1" value={neZaman} onChange={(e) => setNeZaman(e.target.value)}>
+                  {NE_ZAMAN.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </label>
+            )}
             <label className="text-xs">Hatırlatma günü
               <select className="input mt-1" value={day} onChange={(e) => setDay(e.target.value)}>
                 {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>Her ayın {d}. günü</option>)}
@@ -137,11 +186,17 @@ export function KatilimciPenceresi({ j, onClose }: { j: PayJar; onClose: () => v
             </label>
           </div>
         )}
-        {s && yetmeyenNot(s, tl0) && (
+        {editable && (
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={carry} onChange={(e) => setCarry(e.target.checked)} />
+            <span>Fazla atılan sonraki aylara sayılsın<span className="block text-xs text-stone-500">Kapalıyken fazlası o ayda kalır. Eksik her durumda devreder ve sonraki eklemeler önce onu tamamlar.</span></span>
+          </label>
+        )}
+        {s && yetmeyenNot(s, f) && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-stone-50 p-2 text-xs text-stone-700 dark:bg-stone-900 dark:text-stone-300" data-testid="katilimci-yetmeyen">
-            <span className="min-w-0 flex-1 basis-48">{yetmeyenNot(s, tl0)}</span>
+            <span className="min-w-0 flex-1 basis-48">{yetmeyenNot(s, f)}</span>
             {editable && <button className="btn-ghost border border-stone-300 px-2 py-0.5 dark:border-stone-700" disabled={yap.isPending}
-              onClick={() => yap.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{toplamiYapEtiketi(s, tl0)}</button>}
+              onClick={() => yap.mutate(undefined, { onError: (e) => ui.error(e.message) })}>{toplamiYapEtiketi(s, f)}</button>}
           </div>
         )}
         <p className="text-xs text-stone-500">Payını o ay tamamlamamış uygulama kullanıcısına seçtiğin gün telefonuna bir kez hatırlatma gider
@@ -161,9 +216,12 @@ function KisiFormu({ j, p, people, meId, taken, onClose }: { j: PayJar; p: PayKi
   const [name, setName] = useState(p && !p.app ? p.name : "");
   const [manual, setManual] = useState(!!p?.manual);
   const [share, setShare] = useState(p?.manual && p.share ? String(p.share).replace(".", ",") : "");
+  const [neZaman, setNeZaman] = useState("bu");
   const shareVal = manual && parseAmount(share) > 0 ? parseAmount(share) : null;
+  const shareChanged = !p || shareVal !== (p.manual ? p.share : null);
   const save = useSave(() => p
-    ? json("PATCH", `/api/jars/${j.id}/people/${p.id}`, { ...(p.app ? {} : { name: name.trim() }), share: shareVal })
+    ? json("PATCH", `/api/jars/${j.id}/people/${p.id}`, { ...(p.app ? {} : { name: name.trim() }),
+      ...(shareChanged ? { share: shareVal, from_month: fromMonth(neZaman) } : {}) })
     : json("POST", `/api/jars/${j.id}/people`, who.startsWith("u") ? { user_id: Number(who.slice(1)), share: shareVal } : { name: name.trim(), share: shareVal }),
   () => { ui.toast("Kaydedildi"); onClose(); });
   const del = useSave(() => json<{ result: string }>("DELETE", `/api/jars/${j.id}/people/${p!.id}`),
@@ -199,29 +257,39 @@ function KisiFormu({ j, p, people, meId, taken, onClose }: { j: PayJar; p: PayKi
           <legend className="label">Aylık pay</legend>
           <label className="flex items-center gap-2"><input type="radio" checked={!manual} onChange={() => setManual(false)} /> Eşit böl</label>
           <label className="flex items-center gap-2"><input type="radio" checked={manual} onChange={() => setManual(true)} /> Elle tutar</label>
-          {manual && <input className="input text-right" inputMode="decimal" aria-label="Aylık pay" placeholder="Ayda ₺" value={share} onChange={(e) => setShare(e.target.value)} />}
+          {manual && <input className="input text-right" inputMode="decimal" aria-label="Aylık pay" placeholder={(j.unit ?? "TRY") === "TRY" ? "Ayda ₺" : `Ayda (${j.unit_symbol ?? SYM[j.unit] ?? "adet"})`} value={share} onChange={(e) => setShare(e.target.value)} />}
         </fieldset>
-        <p className="text-xs text-stone-500">Eşit bölüşte ayın toplamından elle verilen paylar düşülür, kalan eşit bölünür; bölünemeyen kuruş ilk kişiye eklenir.</p>
+        {p && shareChanged && (
+          <div>
+            <label className="label" htmlFor="kp-from">Değişiklik ne zamandan?</label>
+            <select id="kp-from" className="input" value={neZaman} onChange={(e) => setNeZaman(e.target.value)}>
+              {NE_ZAMAN.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <p className="mt-1 text-xs text-stone-500">Önceki aylar o ayki payla hesaplanır; "Tüm aylar" seçilirse geçmiş de yeni payla.</p>
+          </div>
+        )}
+        <p className="text-xs text-stone-500">Eşit bölüşte ayın toplamından elle verilen paylar düşülür, kalan eşit bölünür; bölünemeyen kalan ilk kişiye eklenir.</p>
+        {p && <Muaf j={j} p={p} />}
       </div>
     </Modal>
   );
 }
 
 /** Para eklerken "kim attı" + "para nerede" (katılımcılı kumbara). */
-export function KimAtti({ j, person, setPerson, outside, setOutside }: { j: PayJar; person: number | null; setPerson: (n: number | null) => void;
-  outside: boolean; setOutside: (b: boolean) => void }) {
+export function KimAtti({ j, person, setPerson, outside, setOutside, label = "Kim attı?" }: { j: PayJar; person: number | null; setPerson: (n: number | null) => void;
+  outside: boolean; setOutside: (b: boolean) => void; label?: string }) {
   const s = j.shares;
   if (!s?.people.length) return null;
   const sel = s.people.find((p) => p.id === person);
   return (
     <div className="space-y-2">
       <div>
-        <label className="label" htmlFor="km-who">Kim attı?</label>
+        <label className="label" htmlFor="km-who">{label}</label>
         <select id="km-who" className="input" value={person ?? ""} onChange={(e) => setPerson(e.target.value ? Number(e.target.value) : null)}>
-          {s.people.map((p) => <option key={p.id} value={p.id}>{kisiAdi(p)}{p.left ? ` · ${tl0(p.left)} kaldı` : ""}</option>)}
+          {s.people.map((p) => <option key={p.id} value={p.id}>{kisiAdi(p)}{p.left ? ` · ${fmtOf(j)(p.left)} kaldı` : ""}</option>)}
         </select>
       </div>
-      {sel && !sel.me && (
+      {sel && !sel.me && (j.unit ?? "TRY") === "TRY" && (
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={outside} onChange={(e) => setOutside(e.target.checked)} />
           <span>Para hesaplarımda değil <span className="block text-xs text-stone-500">Elden aldın ya da {sel.name} kendisinde tutuyor: harcanabilir tutarından düşmez.</span></span>
@@ -266,4 +334,40 @@ export function hareketKisi(j: PayJar, m: PayMove): string | null {
   const p = j.shares.people.find((x) => x.id === m.person_id) ?? j.shares.removed.find((x) => x.id === m.person_id);
   if (!p) return null;
   return ("me" in p ? kisiAdi(p as PayKisi) : p.name) + (m.outside ? " · elden" : "");
+}
+
+/** "Bu ay yok": kişinin bir ayı muaf (o ayki payı 0, geçmişte tam sayılır); geri alınabilir. */
+function Muaf({ j, p }: { j: PayJar; p: PayKisi }) {
+  const ui = useUI();
+  const [ay, setAy] = useState(buAy());
+  const months = p.exempt_months ?? [];
+  const put = useSave((m: string) => json("PUT", `/api/jars/${j.id}/people/${p.id}/exempt/${m}`), () => ui.toast("Bu ay yok olarak işaretlendi"));
+  const del = useSave((m: string) => json("DELETE", `/api/jars/${j.id}/people/${p.id}/exempt/${m}`), () => ui.toast("Geri alındı"));
+  return (
+    <fieldset className="space-y-2 rounded-lg border border-stone-200 p-2 dark:border-stone-800" data-testid="kumbara-muaf">
+      <legend className="label px-1">Bu ay yok</legend>
+      <p className="text-xs text-stone-500">Seçtiğin ay için pay alınmaz; o ay tamamlanacak oluşmaz ve geçmişte tam sayılır.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="input w-auto" aria-label="Ay" value={ay} onChange={(e) => setAy(e.target.value)}>
+          {aySecenekleri(buAy()).map((o) => <option key={o.v} value={o.v}>{o.t}</option>)}
+        </select>
+        <button className="btn-ghost border border-stone-300 px-2 py-1 text-sm dark:border-stone-700" disabled={!ay || months.includes(ay) || put.isPending}
+          onClick={() => put.mutate(ay, { onError: (e) => ui.error(e.message) })}>İşaretle</button>
+      </div>
+      {months.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5">
+          {months.map((m) => (
+            <li key={m}><button className="rounded-full bg-stone-100 px-2 py-0.5 text-xs dark:bg-stone-800" aria-label={`${ayAdi(m)} ${m.slice(0, 4)}: geri al`}
+              onClick={() => del.mutate(m, { onError: (e) => ui.error(e.message) })}>{ayAdi(m)} {m.slice(0, 4)} ✕</button></li>
+          ))}
+        </ul>
+      )}
+    </fieldset>
+  );
+}
+
+/** Hareketin nereye sayıldığı (önceki aya sayılan varsa): "₺500 Ekim eksiğine, ₺200 Kasım payına sayıldı." */
+export function hareketDagilim(j: PayJar, m: PayMove): string | null {
+  const s = j.shares;
+  return s ? dagilimMetni(s.allocations?.[String(m.id)], fmtOf(j), s.month) : null;
 }

@@ -14,7 +14,7 @@ import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import { hedefMetni, type GoalStatus, type Ton } from "../lib/kumbaraHedef";
 import type { JarDebt } from "../lib/borcKumbara";
 import { JarPlanLine } from "./DebtJar";
-import { defaultPerson, hareketKisi, HareketDuzelt, hasShares, KatilimciPenceresi, KimAtti, PayKarti, useCanManage, type PayJar } from "./KumbaraPaylar";
+import { defaultPerson, hareketDagilim, hareketKisi, HareketDuzelt, hasShares, KatilimciPenceresi, KimAtti, PayKarti, useCanManage, type PayJar } from "./KumbaraPaylar";
 import type { PayDurumu } from "../lib/kumbaraPay";
 
 interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null;
@@ -214,15 +214,29 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
       void quota.refresh();
     }
   };
-  const save = useSave(() => json("POST", `/api/jars/${jar.id}/buy`, {
-    quantity: parseAmount(amount), cost: parseAmount(cost) || Math.round(est * 100) / 100, buy_date: day, payment,
-    account_id: payment === "kredi_karti" ? null : account,
-  }), () => { ui.toast(`${qty(parseAmount(amount), s)} eklendi`); onClose(); });
+  // katılımcılı altın/döviz kumbarası: kim için; sen aldıysan alım (varlık + gider), başkası getirdiyse yalnız miktar
+  const [person, setPerson] = useState<number | null>(() => defaultPerson(jar as PayJar));
+  const other = !!jar.shares?.people.length && !jar.shares.people.find((p) => p.id === person)?.me;
+  const save = useSave(() => other
+    ? json("POST", `/api/jars/${jar.id}/moves`, { amount: parseAmount(amount), direction: "yatir", move_date: day, person_id: person })
+    : json("POST", `/api/jars/${jar.id}/buy`, {
+      quantity: parseAmount(amount), cost: parseAmount(cost) || Math.round(est * 100) / 100, buy_date: day, payment,
+      account_id: payment === "kredi_karti" ? null : account, ...(jar.shares?.people.length ? { person_id: person } : {}),
+    }), () => { ui.toast(`${qty(parseAmount(amount), s)} eklendi`); onClose(); });
   return (
-    <Modal title={`${jar.name} · aldım`} onClose={onClose} footer={
-      <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || !(parseAmount(cost) > 0 || est > 0) || needAccount || save.isPending}
+    <Modal title={`${jar.name} · ${other ? "ekle" : "aldım"}`} onClose={onClose} footer={
+      <button className="btn-primary w-full justify-center" disabled={!(parseAmount(amount) > 0) || (!other && (!(parseAmount(cost) > 0 || est > 0) || needAccount)) || save.isPending}
         onClick={() => save.mutate(undefined, { onError: (e) => ui.error(e.message) })}>Kaydet</button>}>
       <div className="space-y-3">
+        <KimAtti j={jar as PayJar} person={person} setPerson={setPerson} outside={false} setOutside={() => undefined} label="Kim için?" />
+        {other && <>
+          <label className="text-xs">Ne kadar ({s})
+            <input className="input mt-1 text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </label>
+          <input type="date" className="input" value={day} onChange={(e) => setDay(e.target.value)} aria-label="Tarih" />
+          <p className="text-xs text-stone-500">Kumbaraya miktar olarak eklenir; senin adına gider ya da varlık yazılmaz.{est > 0 ? ` Bugünkü karşılığı ≈ ${tl(Math.round(est)).replace(/,00$/, "")} (bilgi).` : ""}</p>
+        </>}
+        {!other && <>
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs">Ne kadar ({s})
             <input className="input mt-1 text-right" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
@@ -243,6 +257,7 @@ function BuyForm({ jar, onClose }: { jar: Jar; onClose: () => void }) {
         </select>
         {payment !== "kredi_karti" && <AccountSelect id="b-acc" label="Hangi hesaptan?" value={account} onChange={setAccount} />}
         {needAccount && <p className="text-xs text-amber-700 dark:text-amber-400">Hangi hesaptan ödediğini seç; yoksa para bankandan düşmez.</p>}
+        </>}
       </div>
     </Modal>
   );
@@ -401,13 +416,14 @@ export default function Jars() {
                 <ul className="divide-y divide-stone-200 dark:divide-stone-800">
                   {j.moves.map((m) => (
                     <li key={m.id} className="flex items-center justify-between gap-2 py-1">
-                      {!isUnit(j) && !m.debt_payment_id && !j.closed_at ? (
+                      {(!isUnit(j) || (m.cost == null && j.shares)) && !m.debt_payment_id && !j.closed_at ? (
                         <button className="min-w-0 text-left hover:underline" aria-label={`${dateTR(m.move_date)} hareketini düzelt`} onClick={() => setEdit({ jar: j, move: m })}>
                           {dateTR(m.move_date)} {hareketKisi(j as PayJar, m) && <span className="font-medium">· {hareketKisi(j as PayJar, m)}</span>} {m.note && <span className="text-stone-500">· {m.note}</span>}
+                          {hareketDagilim(j as PayJar, m) && <span className="block text-stone-500" data-testid="kumbara-dagilim">{hareketDagilim(j as PayJar, m)}</span>}
                         </button>
                       ) : <span>{dateTR(m.move_date)} {m.note && <span className="text-stone-500">· {m.note}</span>}</span>}
-                      <span className="flex items-center gap-2">
-                        <span className={cx("tabular-nums", m.amount < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className={cx("whitespace-nowrap tabular-nums", m.amount < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>
                           {m.amount > 0 ? "+" : "−"}{isUnit(j) ? qty(Math.abs(m.amount), j.unit_symbol ?? sym(j.unit)) : tl(Math.abs(m.amount))}
                           {m.cost != null && <span className="text-stone-500"> · {tl(m.cost)}</span>}
                         </span>
