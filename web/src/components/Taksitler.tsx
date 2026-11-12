@@ -7,6 +7,8 @@ import {
   TAKSIT_NOT, taksitBaslik, taksitDurum, taksitGoster, taksitKalan, taksitKalemAlt, taksitKisaAlt, taksitSayi,
 } from "../lib/taksit";
 import { useUI } from "../ui";
+import { useCardLimits } from "./CardLimit";
+import { EarlyCloseForm } from "./EarlyClose";
 import Modal from "./Modal";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 
@@ -45,6 +47,9 @@ function TaksitListe({ month, onClose }: { month: string; onClose: () => void })
   const q = useQuery({ queryKey: ["installments", month], queryFn: () => api.installments(month) });
   const d = q.data;
   const kalan = d ? taksitKalan(d, tl) : null;
+  const cards = useCardLimits(!!d?.items.some((i) => i.early_close));
+  const [kapama, setKapama] = useState<string | null>(null); // erken kapama satırı: kartın kapama formu
+  const ek = kapama ? cards.data?.get(kapama)?.early_close : null;
   return (
     <Modal title={d ? taksitBaslik(d) : "Taksitler"} onClose={onClose}>
       <SorguDurumu q={q} etiket="Taksitler yükleniyor"><SatirIskelet n={3} kart={false} /></SorguDurumu>
@@ -61,6 +66,7 @@ function TaksitListe({ month, onClose }: { month: string; onClose: () => void })
                 <li key={i.uid}>
                   <button className="flex w-full items-start gap-3 px-4 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-800/50"
                     onClick={() => {
+                      if (i.early_close && i.card_no && cards.data?.get(i.card_no)?.early_close) { setKapama(i.card_no); return; }
                       onClose();
                       if (i.row.source === "manual") ui.openEntry(i.row);
                       else ui.openCardTxn(i.row);
@@ -86,6 +92,7 @@ function TaksitListe({ month, onClose }: { month: string; onClose: () => void })
           <p className="text-xs text-stone-500">{TAKSIT_NOT}</p>
         </div>
       )}
+      {kapama && ek && <EarlyCloseForm cardNo={kapama} info={ek} onClose={() => setKapama(null)} />}
     </Modal>
   );
 }

@@ -32,6 +32,9 @@ export interface TaksitKalem {
   in_spend: boolean;
   /** vade farkı, BSMV, KKDF taksiti */
   fee: boolean;
+  /** taksit erken kapama satırı: kalan taksitler tek seferde (sunucu yeteneği card_early_close) */
+  early_close?: boolean;
+  card_no?: string;
   due_date: string | null;
   /** ortak defterde: kim harcadı */
   spender?: string;
@@ -79,7 +82,8 @@ export function taksitKalan(o: TaksitOzet, para: (n: number) => string): string 
  *  Kim harcadı adı yalnız ortak defterde gelir (sunucu iki ve daha çok kişide spender_name verir). */
 export function taksitKalemAlt(i: TaksitKalem): string {
   // bölünmeyen boşluk: dar ekranda "3/6." ile "taksit", "25" ile "Kas" ayrı satıra düşmesin
-  const sira = i.fee ? `vade farkı/vergi · ${i.no}/${i.of}` : i.no === i.of ? `son\u00a0taksit\u00a0(${i.no}/${i.of})` : `${i.no}/${i.of}.\u00a0taksit`;
+  const sira = i.early_close ? "kalan taksitler tek seferde" : i.fee ? `vade farkı/vergi · ${i.no}/${i.of}`
+    : i.no === i.of ? `son\u00a0taksit\u00a0(${i.no}/${i.of})` : `${i.no}/${i.of}.\u00a0taksit`;
   return [
     i.card,
     sira,

@@ -2271,6 +2271,54 @@ def put_card_limit(body: CardLimitIn):
                                  "available_as_of", "used", "used_pct")}
 
 
+class EarlyCloseIn(BaseModel):
+    card_no: str = Field(..., min_length=1, max_length=40)  # ekstrenin kart numarası (cards/summary card_no)
+    month: str = Field(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$")  # kalan taksitlerin tek seferde geleceği ekstre (early_close.months)
+    amount: Money | None = Field(None, ge=0, le=100_000_000)  # bankanın söylediği kapatma tutarı; boş/0: kalan taksitlerin toplamı
+
+
+def _early_close_card(card_no: str) -> dict:
+    card = next((c for c in finance.cards_summary(recent=0)["cards"] if c["card_no"] == card_no), None)
+    if card is None:
+        raise HTTPException(404, "Kart bulunamadı")
+    return card
+
+
+@app.put("/api/cards/early-close")
+def put_card_early_close(body: EarlyCloseIn):
+    """Taksitleri erken kapattım (yetenek card_early_close, app/early_close.py): kartın son ekstresindeki kalan taksitler
+    seçilen ekstrede tek seferde; vade farkı/vergi taksitleri düşer. Kayıt kartın şimdiki son ekstresine bağlıdır (yeni
+    ekstre gelince kendiliğinden devre dışı). Tekrar göndermek düzenler. Yanıt: kartın early_close alanı (cards/summary
+    ile aynı). Ortak defterde gizli kart bulunamaz; yazma: sahip ve tam yetkili (app/book.py)."""
+    from app import early_close
+
+    st = next((s for s in sorted(db.list_statements(), key=lambda s: s["period_end"], reverse=True)
+               if s["card_no"] == body.card_no), None)
+    if st is None:
+        raise HTTPException(404, "Kart bulunamadı")
+    raw = (finance.card_projection().get(body.card_no) or {}).get("early_close") or {}
+    info = early_close.card_info(raw, st["bank"]) if raw else None
+    if not info or not info["available"]:
+        raise HTTPException(422, "Bu kartta kalan taksit yok")
+    allowed = {m["month"] for m in info["months"]} | ({info["record"]["month"]} if info["record"] else set())
+    if body.month not in allowed:
+        raise HTTPException(422, "Bu ay için kapama girilemez; sonraki ekstrelerden birini seç")
+    early_close.save(body.card_no, st["period_end"], body.month, body.amount or None)
+    return {"card_no": body.card_no, "early_close": _early_close_card(body.card_no)["early_close"]}
+
+
+@app.delete("/api/cards/early-close")
+def delete_card_early_close(card_no: str = Query(..., min_length=1, max_length=40)):
+    """Erken kapama kaydını geri al: kalan taksitler yeniden son ekstreden aya yayılır."""
+    from app import early_close
+
+    if not any(s["card_no"] == card_no for s in db.list_statements()):
+        raise HTTPException(404, "Kart bulunamadı")
+    if not early_close.remove(card_no):
+        raise HTTPException(404, "Kayıt yok")
+    return {"card_no": card_no, "early_close": _early_close_card(card_no)["early_close"]}
+
+
 @app.get("/api/transactions")
 def transactions(month: str | None = None, include_deleted: bool = False, include_estimates: bool = False,
                  totals: bool = False, limit: int | None = Query(None, ge=1, le=5000),

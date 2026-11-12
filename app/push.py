@@ -1125,6 +1125,12 @@ def statement_items(today: date) -> list[dict]:
                 tg = i.get("target") or {}  # mağaza aboneliği: ayrıntısına
                 rt = store_subs.route(tg["id"]) if tg.get("screen") == "abonelik" and tg.get("id") else R_TASARRUF
                 out.append(item("abonelik", k, i["title"], i.get("detail") or "", rt))
+    if not book.hide_fees():  # ekstrede taksitler erken kapandı (app/early_close.py): kart ve son ekstre başına bir kez
+        for c in finance.early_close_cards():
+            d = c.get("detected")
+            if d:
+                out.append(item("faiz", f"erken_kapama:{c['card_no'][-4:]}:{c.get('period_end') or ''}",
+                                f"{c['card']}: taksitler erken kapandı", d["text"], R_FAIZ))
     recent = (today - timedelta(days=45)).isoformat()
     for s in finance.subscriptions():
         prev = s.get("prev_monthly")

@@ -43,4 +43,7 @@ test("kalem alt satırı", () => {
   assert.equal(duz(taksitKalemAlt({ ...k, no: 6, in_spend: false, due_date: null })), "VakıfBank …9012 · son taksit (6/6) · ekstre bekliyor");
   assert.equal(duz(taksitKalemAlt({ ...k, fee: true, card: null, due_date: null })), "vade farkı/vergi · 3/6");
   assert.equal(duz(taksitKalemAlt({ ...k, spender_name: "Ayşe", due_date: null })), "VakıfBank …9012 · 3/6. taksit · Ayşe");
+  // erken kapama: kalan taksitler tek satır ("son taksit (1/1)" gibi okunmaz)
+  assert.equal(duz(taksitKalemAlt({ ...k, early_close: true, no: 1, of: 1, in_spend: false, due_date: null })),
+    "VakıfBank …9012 · kalan taksitler tek seferde · ekstre bekliyor");
 });

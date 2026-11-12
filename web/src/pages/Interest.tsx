@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Check, ChevronRight, CreditCard, Info, Lock, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Check, CheckCircle2, ChevronRight, CreditCard, Info, Layers, Lock, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { ApiError, send } from "../lib/apiError";
 import { cx, dateTR, tl, periodLabel } from "../format";
-import { useBook, useCap, useOpenRow } from "../components/hooks";
+import { isLimited, useBook, useCap, useOpenRow } from "../components/hooks";
+import { EarlyCloseForm, type EarlyCloseInfo } from "../components/EarlyClose";
 import Segmented from "../components/Segmented";
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
@@ -28,6 +29,8 @@ interface InterestReport {
   items: InterestItem[];
   tips: { key: string; title: string; detail: string }[];
   income: { total: number; items: { uid: string; date: string; description: string; amount: number }[] };
+  /** kalan taksitlerinde vade farkı olan / erken kapatılmış kartlar (yetenek card_early_close; eski sunucuda yok) */
+  early_close?: (EarlyCloseInfo & { card_no: string; bank: string; last4: string; card: string })[];
 }
 
 const dayMonth = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("tr-TR", { day: "numeric", month: "long" });
@@ -43,6 +46,8 @@ export default function Interest() {
   const [months, setMonths] = useState<"12" | "0">("12");
   const [pick, setPick] = useState<string | null>(null); // grafikte seçilen ay: kalemler o aya süzülür
   const [card, setCard] = useState<string | null>(null);
+  const [kapama, setKapama] = useState<string | null>(null); // "Erken kapattım" formu açık kart
+  const canEdit = !isLimited(book); // sahip ya da tam yetkili üye
   const q = useQuery({ queryKey: ["interest", months], queryFn: () => send<InterestReport>(`/api/interest?months=${months}`), enabled: on });
   const r = q.data;
   const hidden = !!book?.hide_fees || !!r?.hidden;
@@ -78,6 +83,10 @@ export default function Interest() {
           {r && (card ? renderCard({ r, card }) : renderMain({ r }))}
         </>
       )}
+      {kapama && (() => {
+        const ec = r?.early_close?.find((c) => c.card_no === kapama);
+        return ec ? <EarlyCloseForm cardNo={kapama} info={ec} onClose={() => setKapama(null)} /> : null;
+      })()}
     </div>
   );
 
@@ -93,6 +102,7 @@ export default function Interest() {
               {r.months > 0 ? `Son ${r.months} ayın` : "Hiçbir"} ekstresinde faiz, vade farkı ya da kart ücreti görünmüyor. Borcun tamamını son ödeme gününe kadar ödemeye devam et.</span>
           </span>
         </section>
+        {renderEarly({ r })}
         {renderIncome({ r })}
       </>
     );
@@ -151,6 +161,8 @@ export default function Interest() {
             </ul>
           </section>
         )}
+
+        {renderEarly({ r })}
 
         {r.by_card.length > 0 && (
           <section className="space-y-1.5">
@@ -245,6 +257,42 @@ export default function Interest() {
             </ul>
           );
         })}
+      </section>
+    );
+  }
+
+  /** kalan taksitlerde vade farkı: kart başına "en çok ₺X ödemezsin" + "Erken kapattım"; kayıt / ekstreden tanıma */
+  function renderEarly({ r: rep }: { r: InterestReport }) {
+    const list = rep.early_close ?? [];
+    if (!list.length) return null;
+    return (
+      <section className="space-y-1.5" data-testid="faiz-erken-kapama">
+        <H2>Taksit erken kapama</H2>
+        <ul className="card divide-y divide-stone-100 dark:divide-stone-800">
+          {list.map((c) => {
+            const done = c.record ?? c.detected;
+            return (
+              <li key={c.card_no} className="flex items-start gap-3 p-3" data-testid="faiz-erken-kart">
+                <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-lg",
+                  done ? "bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-400" : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+                  {done ? <CheckCircle2 size={17} aria-hidden /> : <Layers size={17} aria-hidden />}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium break-words">{c.card}</span>
+                  {c.detected && <span className="block text-sm text-green-800 dark:text-green-300">{c.detected.text}</span>}
+                  {c.record && <>
+                    {c.record.saved_text && <span className="block text-sm font-medium text-green-800 dark:text-green-300">{c.record.saved_text}</span>}
+                    <span className="block text-sm text-stone-600 dark:text-stone-400">{c.record.text}</span>
+                  </>}
+                  {!done && c.hint && <span className="block text-sm text-stone-600 dark:text-stone-400">{c.hint}</span>}
+                </span>
+                {canEdit && (c.record || c.available) && (
+                  <button className={cx("shrink-0 text-sm", c.record ? "btn-ghost px-2 py-1" : "btn-primary px-3 py-1.5")} onClick={() => setKapama(c.card_no)}>
+                    {c.record ? "Düzenle" : "Erken kapattım"}</button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </section>
     );
   }

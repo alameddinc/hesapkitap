@@ -299,6 +299,12 @@ def _cards(today: date) -> tuple[list[dict], list[dict]]:
             future = {"total": total, "last_month": last, "last_label": month_label(last),
                       "text": f"İleride {_tl(total)} taksit daha var; her ay ekstrene eklenir, son taksit "
                               f"{month_label(last)}. Aylık tutarın bunların dışında."}
+            if any(i.get("early_close") for i in inst):  # taksitler erken kapatıldı (app/early_close.py): tek seferde
+                future["early_close"] = True
+                future["text"] = (f"Taksitleri erken kapattın: kalan {_tl(total)} {month_label(last)} ekstrene tek seferde "
+                                  "eklenir. Aylık tutarın bunun dışında." if len(inst) == 1 else
+                                  f"İleride {_tl(total)} taksit daha var; kalanı erken kapattın, son ödeme "
+                                  f"{month_label(last)} ekstrende tek seferde. Aylık tutarın bunların dışında.")
         rate = rates.get(card_no)
         open_.append({
             "key": f"kart:{p['id']}", "kind": "card", "id": p["id"], "title": _card_title(st, p), "card_no": card_no,

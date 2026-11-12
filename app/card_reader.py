@@ -1241,6 +1241,57 @@ def is_safe(spec: dict) -> bool:
         return False
 
 
+# ---------------------------------------------------------------- taksit erken kapama (savunma)
+
+# Bankayı arayıp taksitleri erken kapattıran kullanıcının sonraki ekstresinde kalan taksitler tek seferde gelir: ya bir
+# kapama satırı ("ERKEN KAPAMA", "TAKSİT KAPAMA", "KALAN TAKSİT TUTARI") ya da kalan taksitler aynı ekstrede tek tek
+# ("4/6", "5/6", "6/6"). İkisi de tek çekimdir: kalan taksit (installment_left_amount) yazılırsa Planlama ve Özet aynı
+# tutarı sonraki aylara yeniden yayar. "Kalan taksit: 3" gibi sayı bildiren satır kapama değildir (yalnız tutar/çoğul).
+_CLOSE_LINE = re.compile(r"erken\s*(?:kapa(?:ma|tma)|odeme)|taksit\w*\s*(?:islem\w*\s*)?kapa(?:ma|tma)|toplu\s*kapa(?:ma|tma)"
+                         r"|kalan\s*taksit(?:ler|\s*tutar)")
+_INST_MARK = re.compile(r"(?<![\d/.])\d{1,2}\s*/\s*\d{1,2}(?![\d/])|\d{1,2}\.\s*(?:taksit|iade)|son\s*taksit"
+                        r"|\d{1,2}\s*[x×]\s*[\d.,]+|taksit\w*")
+
+
+def is_close_line(desc: str) -> bool:
+    """Açıklama taksit erken kapama satırı mı ("ERKEN KAPAMA", "TAKSİT KAPAMA", "KALAN TAKSİTLER", "KALAN TAKSİT TUTARI")."""
+    return bool(_CLOSE_LINE.search(_fold(desc or "")))
+
+
+def installment_base(desc: str) -> str:
+    """Taksit işaretleri ve sayılar atılmış açıklama ("ÖRNEK MOBİLYA 3/6 TAKSİT" → "ornekmobilya"): aynı alışverişin
+    farklı ekstrelerdeki ya da aynı ekstrede tek tek listelenen taksitleri aynı anahtarı taşır."""
+    s = _INST_MARK.sub(" ", _fold(desc or ""))
+    return "".join(re.sub(r"[\d.,/:*-]+", " ", s).split())[:24]
+
+
+def close_installments(st: Statement) -> int:
+    """Ekstrede erken kapanan taksitler sonraki aylara yayılmasın (yerinde düzeltir; düzeltilen satır sayısı).
+    - açıklamasında kapama ifadesi geçen satır tek çekimdir: taksit bilgisi silinir;
+    - aynı alışverişin (aynı gün, aynı açıklama, aynı taksit sayısı) son taksite kadar ardışık birden çok taksiti aynı
+      ekstredeyse hepsi bu ekstrede ödenir: kalan taksit tutarı silinir (sıra bilgisi "4/6" görünmeye devam eder)."""
+    n = 0
+    for t in st.transactions:
+        if t.txn_type != PAYMENT and is_close_line(t.description) and (
+                t.installment_no is not None or t.installments_left is not None or t.installment_left_amount is not None):
+            t.installment_no = t.installments_left = t.installment_left_amount = None
+            n += 1
+    runs: dict[tuple, list[Transaction]] = {}
+    for t in st.transactions:
+        if t.txn_type in (PURCHASE, REFUND) and t.installment_no is not None and t.installments_left is not None:
+            runs.setdefault((t.txn_date, installment_base(t.description), t.installment_no + t.installments_left,
+                             t.txn_type), []).append(t)
+    for (_d, base, total, _k), ts in runs.items():
+        nos = sorted(t.installment_no for t in ts)
+        if not base or len(ts) < 2 or nos[-1] != total or nos != list(range(nos[0], total + 1)):
+            continue
+        for t in ts:
+            if t.installment_left_amount is not None:
+                t.installment_left_amount = None
+                n += 1
+    return n
+
+
 def read(text: str) -> Statement | None:
     """Kayıtlı kart şablonlarından biri belgeyi doğrulanabilir okuyorsa onu; yoksa yeni kural öğrenmeyi dene.
     Eşleşen şablonların hiçbiri tutmadıysa hepsinin hata sayısı artar (art arda iki → devre dışı)."""

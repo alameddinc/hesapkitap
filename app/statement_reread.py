@@ -156,6 +156,7 @@ def plan_for(st: dict, txns: list[dict], read) -> dict | None:
     if money.ne(read.total_debt, st["total_debt"]) or read.period_end != _date(st["period_end"]) \
             or read.due_date != _date(st.get("due_date")):
         return None
+    card_reader.close_installments(read)  # kaydedilen okumayla aynı kural (db.save_statement)
     tmpl = [_tx(t) for t in read.transactions]
     common = sum((_abs_keys(txns) & _abs_keys(tmpl)).values())
     if common < 0.8 * max(len(txns), len(tmpl), 1):
