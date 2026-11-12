@@ -1266,7 +1266,7 @@ def _safe(fn, *a):
 
 # ---------------------------------------------------------------- yeniden gruplama (kurallar değişince, bir kez)
 
-GROUPS_VERSION = 5  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği ayrı grup (refine)
+GROUPS_VERSION = 6  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği ayrı grup (refine)
 #                    3: geniş sözlük (product_taxonomy), marka listesi, alt kategori; kural yapay zekâ sonucunun önünde
 #                    4: marka → ürün düzeltmesi (BRAND_PRODUCTS: Cola Turka → Kola, Fanta → Portakallı Gazoz …);
 #                       katalog eşleşmesi gecelik tutarlılık işinde (consistency)
@@ -1274,6 +1274,8 @@ GROUPS_VERSION = 5  # 2: aromalı / laktozsuz / keçi süt ve protein içeceği 
 #                       dökme / poşet / bitki / soğuk; deterjan toz / sıvı / kapsül, bulaşık makinesi; resmî satırlarda
 #                       raf etiketi (catalog_products); hacimle satılan içecekte ağırlıklı boy kural dışı; gıda dışı ad
 #                       gıda kelimesinden önce (duş jeli "vanilya sütü")
+#                    6: Sürpriz Yumurta ayrı genel ürün (KINDER JOY / SURPRISE → BRAND_PRODUCTS; KINDER, TAYYO marka):
+#                       yapay zekâ "Çikolata" demişti, piyasa notu ₺11'lik düz çikolatayla karşılaştırıyordu (12.11.2026)
 
 
 def regroup(c) -> dict:

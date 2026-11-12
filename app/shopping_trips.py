@@ -140,7 +140,8 @@ def attach_planned(items: list[dict]) -> dict | None:
 
 def _market_units(pairs: list[tuple[str, str]]) -> dict[tuple[str, str], float]:
     """(grup, gün) → piyasa ortancası (birim teklif): o günün (±3 gün) piyasa bandı, yoksa bugünkü zincir
-    tekliflerinin ortancası (en az 2 zincir)."""
+    tekliflerinin ortancası (en az 2 zincir). Bant dağınıksa (market_ref.comparable: grup heterojen) o kalemin piyasa
+    fiyatı yoktur (tekliflerin ortancası da aynı heterojen gruptan gelir)."""
     from app import market_ref, price_sources
 
     pairs = [(k, d) for k, d in pairs if k and d]
@@ -152,15 +153,19 @@ def _market_units(pairs: list[tuple[str, str]]) -> dict[tuple[str, str], float]:
         ser = market_ref.series(sorted({k for k, _ in pairs}), since)
     except Exception:  # noqa: BLE001 - piyasa bandı yoksa yedek
         ser = {}
+    wide: set[tuple[str, str]] = set()
     for k, d in pairs:
         ref = market_ref.nearest(ser.get(k, {}), d)
         if ref and ref.get("median"):
-            out[(k, d)] = float(ref["median"])
-    rest = sorted({k for k, d in pairs if (k, d) not in out})
+            if market_ref.comparable(ref):
+                out[(k, d)] = float(ref["median"])
+            else:
+                wide.add((k, d))
+    rest = sorted({k for k, d in pairs if (k, d) not in out and (k, d) not in wide})
     if rest:
         offers = price_sources.best_offers(rest, limit=50)
         for k, d in pairs:
-            if (k, d) in out:
+            if (k, d) in out or (k, d) in wide:
                 continue
             prices = [o["price"] for o in offers.get(k, [])]
             if len(prices) >= 2:

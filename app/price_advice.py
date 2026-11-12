@@ -5,11 +5,14 @@ attach(products): /api/prices products[]'ına
   Siparişi değil ve en az bir alım bilinen bir market zincirinde (receipt_templates.CHAINS "Market & Gıda"). Kafede,
   lokantada, mahalle dükkânında alınan ürüne market fiyatı gösterilmez; kendi mağazalarını karşılaştırır.
 - market_ref: {median, min, cheapest_chain, day, source} | null — grubun en yeni piyasa referansı (app/market_ref.py
-  series; son REF_DAYS gün): grafikte tek kesik çizgi "Piyasa ortancası".
+  series; son REF_DAYS gün): grafikte tek kesik çizgi "Piyasa ortancası". Karşılaştırma güvenilmezse (bant dağınık ya
+  da marka rafında son ödediğin bandın çok üstünde: market_ref.comparable) null.
 - advice: tek öneri ya da null:
   cheaper_at {chain, price, paid, diff, qty, saving, unit_price_per?, per_unit?, source, n?, date?}: son ödediğin
     birim fiyattan en az MIN_DIFF ₺ ve MIN_PCT ucuz bir zincir (kendi fişin değil: topluluk / Market Fiyatı);
-    qty = tipik alım adedin (ortanca), saving = diff × qty;
+    qty = tipik alım adedin (ortanca), saving = diff × qty. Grubun piyasa bandı güvenilmezse verilmez (comparable);
+    bant yoksa marka rafında (market_ref.brand_priced) teklif ödediğinin 1 / BRAND_PAID_MAX'ından ucuzsa da verilmez
+    (başka ürün tipi: oyuncaklı yumurta ile düz çikolata);
   good_price {paid, median, pct}: ödediğin piyasa ortancasından yüksek değil;
   store_compare {stores [{store, price, date}] ucuzdan, cheapest, diff}: market dışı üründe en az iki mağazan varsa.
 suggest(q): kendi fişlerindeki ürün adları + genel grup adları; did_you_mean (neredeyse aynı yazılış).
@@ -75,14 +78,20 @@ def attach(products: list[dict], today: date | None = None) -> None:
     ser = market_ref.series(keys, since) if keys else {}
     for p in want:
         k = p["group"]["key"]
+        paid = p["last_price"]
+        trusted = None  # piyasa bandı yok
         if (by := ser.get(k)):
             d = max(by)
             r = by[d]
-            p["market_ref"] = {"median": r["median"], "min": r["min"], "cheapest_chain": r["cheapest_chain"], "day": d,
-                               "source": r["source"]}
-        paid = p["last_price"]
+            trusted = market_ref.comparable(r, p["group"], paid)
+            if trusted:
+                p["market_ref"] = {"median": r["median"], "min": r["min"], "cheapest_chain": r["cheapest_chain"],
+                                   "day": d, "source": r["source"]}
         cand = [o for o in offers.get(k, []) if o["source"] != "own"]
         best = min(cand, key=lambda o: (o["price"], o["chain"])) if cand else None
+        if best and (trusted is False or (trusted is None and market_ref.brand_priced(p["group"])
+                                          and paid > best["price"] * market_ref.BRAND_PAID_MAX)):
+            best = None  # heterojen grup: "X'te daha ucuz" başka bir ürünü gösterir
         if best and paid - best["price"] >= MIN_DIFF and (paid - best["price"]) / paid * 100 >= MIN_PCT:
             q = _qty(p)
             diff = money.money(paid - best["price"])

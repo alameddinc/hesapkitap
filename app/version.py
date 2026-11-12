@@ -138,7 +138,8 @@ CAPABILITIES = (
     "market_notes",           # fiş okuma / kayıtlı fiş check.market_notes [{index, name, group, label, paid_unit, market_median,
                               # market_min, cheapest_chain, pct, day, source resmi|community, region il|"ulusal"|null}]:
                               # birim fiyat piyasa ortancasından ≥%10 ve ≥₺2 yüksek (fiş günü ±3), en çok 5, pahalı önce;
-                              # okuma hatası olabilecek kalem (digit_fix, suspect, kayma, adet × birim) atlanır
+                              # okuma hatası olabilecek kalem (digit_fix, suspect, kayma, adet × birim) atlanır; bant
+                              # dağınık / marka rafında güvenilmez karşılaştırma (market_ref.comparable) not almaz
     "price_advice",           # /api/prices products[] (üst düzey): market (bool: piyasa karşılaştırması anlamlı mı; kafe /
                               # lokanta / zincir dışı false), market_ref {median, min, cheapest_chain, day, source} | null,
                               # advice null | {kind cheaper_at, chain, price, paid, diff, qty, saving, unit_price_per?,

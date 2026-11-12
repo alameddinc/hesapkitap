@@ -12,6 +12,11 @@ provinces.fallback_chain (yakın büyük şehir, İstanbul); o grupta verisi ola
 
 vs_market (kendi alımı): alım gününün ya da en yakın NEAR_DAYS gün içindeki referansın ortancasına göre yüzde;
 pct ≤ -THRESHOLD "ucuz", ≥ +THRESHOLD "pahali", arası "normal". Ağ çağrısı yok.
+
+Güvenilirlik (comparable): grup markadan bağımsızdır; o gün zincirlerin en ucuzları birbirinden çok açılıyorsa (bant
+dağınık: SPREAD_MAX) ya da ürün fiyatını markanın belirlediği bir raftaysa (BRAND_PRICED_*: çikolata, bisküvi,
+şekerleme …; daha sıkı bant, daha yüksek eşik, ödenen / en ucuz tavanı) karşılaştırma yapılmaz: fiş notu, vs_market,
+fiyat önerisi (app/price_advice.py) ve alışveriş tasarrufu (app/shopping_trips.py) aynı kuralı kullanır.
 """
 from datetime import date, timedelta
 from statistics import median
@@ -20,6 +25,58 @@ DAILY_KEEP_DAYS = 400
 NEAR_DAYS = 3
 THRESHOLD = 5.0
 MAX_DAYS = 400
+
+
+# Karşılaştırmanın güvenilirliği. 12.11.2026 cihaz testi: "KINDER JOY 20 GR ₺42,75" düz 20 g çikolatanın bandıyla
+# (en ucuz ₺11, ortanca ₺26,90) karşılaştırılıp "+%59 pahalı · en ucuz: A101 ₺11" dendi; oyuncaklı yumurta her yerde
+# ~₺40. Bant zincir başına gruptaki EN UCUZ ürünün fiyatıdır: aynı tür ürünün en ucuzu ulusal zincirler arasında
+# birbirine yakındır (indirim marketi ile süpermarketin özel markası arası tipik olarak ≤ 1,5×; testlerdeki süt / ekmek /
+# peynir bantları 1,4–1,6×). Zincirlerin en ucuzları SPREAD_MAX katından fazla açılıyorsa zincirler o boyda başka başka
+# ürün satıyor demektir (grup heterojen; yönetici panelindeki ürün içi yanlış eşleme ölçüsü
+# product_groups.SPREAD_FACTOR 3× — zincir en ucuzlarında daha sıkı): o gün karşılaştırma yapılmaz. Hatalı örnekte
+# ortanca / en ucuz zaten 2,45×.
+SPREAD_MAX = 2.0
+# Fiyatını markanın / ürün tipinin belirlediği raflar (ana kategori ya da alt kategori; app/product_taxonomy.py
+# adları): markadan bağımsız grupta markalı ürün özel markayla aynı bantta durur, piyasa verisinde marka eşleşmesi
+# yoktur. Bu raflarda bant daha sıkı olmalı (BRAND_SPREAD_MAX), not eşiği yüksek (BRAND_NOTE_PCT; vs_market'te
+# "pahalı" eşiği de bu) ve ödenen fiyat bandın en ucuzunun BRAND_PAID_MAX katını geçiyorsa (başka ürün tipi:
+# oyuncaklı yumurta, premium seri) karşılaştırma yapılmaz. Temel gıda (süt, yumurta, ekmek, un, şeker, yağ, bakliyat,
+# et, sebze …) burada değildir: davranışı değişmez (yalnız SPREAD_MAX).
+BRAND_PRICED_CATEGORIES = {"Atıştırmalık", "Dondurma ve Tatlı", "Kişisel Bakım", "Temizlik", "Alkollü İçecek",
+                           "Bebek", "Evcil Hayvan"}
+BRAND_PRICED_SUBCATEGORIES = {"Gazlı İçecek", "Diğer İçecekler", "Kahve", "Kahvaltılık Gevrek Bar ve Granola",
+                              "Sürülebilir Ürünler ve Kahvaltılık Soslar"}
+BRAND_SPREAD_MAX = 1.5
+BRAND_NOTE_PCT = 30.0
+BRAND_PAID_MAX = 3.0
+
+
+def brand_priced(group: dict | None) -> bool:
+    """Grubun ({category, subcategory}) fiyatını marka belirliyor mu (BRAND_PRICED_*)."""
+    g = group or {}
+    return g.get("category") in BRAND_PRICED_CATEGORIES or g.get("subcategory") in BRAND_PRICED_SUBCATEGORIES
+
+
+def spread(ref: dict | None) -> float | None:
+    """Bandın dağınıklığı: zincir en ucuzlarının en yükseği / en düşüğü (bilinmiyorsa None)."""
+    lo, hi = (ref or {}).get("min"), (ref or {}).get("max")
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)) or lo <= 0:
+        return None
+    return hi / lo
+
+
+def comparable(ref: dict | None, group: dict | None = None, paid: float | None = None) -> bool:
+    """Ödenen fiyat bu referansla karşılaştırılabilir mi: bant SPREAD_MAX'ten (marka rafında BRAND_SPREAD_MAX) sıkı;
+    marka rafında ödenen (verilmişse) bandın en ucuzunun BRAND_PAID_MAX katını geçmiyor. Referans yoksa False."""
+    if not ref or not ref.get("median"):
+        return False
+    sp = spread(ref)
+    brand = brand_priced(group)
+    if sp is None:
+        return not brand  # en ucuz / en yüksek bilinmiyor: marka rafında güvenme
+    if sp > (BRAND_SPREAD_MAX if brand else SPREAD_MAX):
+        return False
+    return not (brand and paid is not None and paid > ref["min"] * BRAND_PAID_MAX)
 
 
 def _band(per_chain: dict[str, float]) -> dict:
@@ -125,12 +182,14 @@ def market(group_key: str, days: int = 90) -> dict:
             "attribution": price_import.attribution() if any(r["source"] == "resmi" for r in rows) else None}
 
 
-def compare(price: float | None, ref: dict | None) -> dict | None:
-    """{median, min, max, pct, verdict, cheapest_chain, day, source} ya da None."""
-    if price is None or not ref or not ref.get("median"):
+def compare(price: float | None, ref: dict | None, group: dict | None = None) -> dict | None:
+    """{median, min, max, pct, verdict, cheapest_chain, day, source} ya da None (referans yok ya da karşılaştırma
+    güvenilmez: comparable). group verilirse marka rafında "pahalı" eşiği BRAND_NOTE_PCT."""
+    if price is None or not comparable(ref, group, price):
         return None
     pct = round((price - ref["median"]) / ref["median"] * 100, 1)
-    verdict = "ucuz" if pct <= -THRESHOLD else "pahali" if pct >= THRESHOLD else "normal"
+    high = BRAND_NOTE_PCT if brand_priced(group) else THRESHOLD
+    verdict = "ucuz" if pct <= -THRESHOLD else "pahali" if pct >= high else "normal"
     return {"median": ref["median"], "min": ref["min"], "max": ref["max"], "pct": pct, "verdict": verdict,
             "cheapest_chain": ref["cheapest_chain"], "day": ref["day"], "source": ref["source"]}
 
@@ -164,12 +223,13 @@ def attach(products: list[dict]) -> None:
             continue
         for h in p["history"]:
             if h.get("price") is not None and (h.get("date") or "") >= cut:
-                v = compare(h["price"], nearest(by, h["date"]))
+                v = compare(h["price"], nearest(by, h["date"]), p["group"])
                 if v:
                     h["vs_market"] = v
 
 
-# fiş notu (check.market_notes): birim fiyat piyasa ortancasından en az NOTE_PCT yüksek VE en az NOTE_MIN_DIFF ₺ fazla
+# fiş notu (check.market_notes): birim fiyat piyasa ortancasından en az NOTE_PCT (marka rafında BRAND_NOTE_PCT) yüksek
+# VE en az NOTE_MIN_DIFF ₺ fazla; karşılaştırma güvenilir (comparable) değilse not yok ("en ucuz: X" de yok)
 NOTE_PCT = 10.0
 NOTE_MIN_DIFF = 2.0
 NOTE_MAX = 5
@@ -208,7 +268,8 @@ def receipt_notes(items: list[dict], chk: dict | None, merchant: str | None, day
                   legal_name: str | None = None) -> list[dict]:
     """check.market_notes: fişte piyasadan pahalı kalemler, en pahalı önce, en çok NOTE_MAX —
     [{index, name, group, label, paid_unit, market_median, market_min, cheapest_chain, pct, day, source resmi|community,
-    region (il | "ulusal" | null)}]. Piyasa: alım günü ±NEAR_DAYS içindeki referans (series; kişinin Bölgem'i →
+    region (il | "ulusal" | null)}]. Bant dağınıksa ya da marka rafında ödenen bandın çok üstündeyse (comparable) not
+    yok. Piyasa: alım günü ±NEAR_DAYS içindeki referans (series; kişinin Bölgem'i →
     yakın büyük şehir → İstanbul). Fişin zinciri ulusal fiyatlı (price_sources.national_chains(): BİM, A101, ŞOK, Migros; demoda kurgu zincirler)
     ise region "ulusal" (o zincirin fiyatı ilden bağımsız). Okuma hatası olabilecek kalemler atlanır (_skipped).
     Fiyat takibi paketi / sayfası kapalıysa []. Yapay zekâ ve ağ çağrısı yok."""
@@ -240,10 +301,11 @@ def receipt_notes(items: list[dict], chk: dict | None, merchant: str | None, day
     out = []
     for i, it, g, paid in want:
         ref = nearest(ser.get(g["key"]) or {}, d0.isoformat())
-        if not ref or not ref.get("median"):
+        if not comparable(ref, g, paid):
             continue
         med = ref["median"]
-        if paid - med < NOTE_MIN_DIFF or (pct := round((paid - med) / med * 100, 1)) < NOTE_PCT:
+        need = BRAND_NOTE_PCT if brand_priced(g) else NOTE_PCT
+        if paid - med < NOTE_MIN_DIFF or (pct := round((paid - med) / med * 100, 1)) < need:
             continue
         region = ("ulusal" if national else used.get(g["key"]) or None) if ref["source"] == "resmi" else None
         out.append({"index": i, "name": it.get("name") or g["label"], "group": g["key"], "label": g["label"],

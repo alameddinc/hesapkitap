@@ -217,6 +217,10 @@ TAXONOMY: dict[str, dict[str, list[str]]] = {
         ],
         "Çikolata": [
             "?Çikolata=CIKOLATASI",
+            # oyuncaklı çikolata yumurtası: fiyatını markası / oyuncağı belirler, düz çikolatayla aynı grup değil
+            # ("KINDER JOY 20 GR" ~₺40, sade 20 g çikolata ~₺11; 12.11.2026 cihaz testi yanlış "pahalı" notu)
+            "Sürpriz Yumurta=SURPRIZ YUMURTASI,SURPRIZ YUM,SURPRIZLI YUMURTA,SURPRIZLI CIKOLATA,"
+            "OYUNCAKLI YUMURTA,OYUNCAKLI CIKOLATA,CIKOLATA YUMURTA,CIKOLATALI YUMURTA",
         ],
         "Cips ve Çerez": [
             "Cips=CIPSI,PATATES CIPSI", "Kuruyemiş", "?Fındık", "?Ceviz=CEVIZ ICI", "?Badem",
@@ -398,4 +402,5 @@ BRAND_PRODUCTS: dict[str, str] = {
     "RED BULL": "Enerji İçeceği", "REDBULL": "Enerji İçeceği", "MONSTER": "Enerji İçeceği", "BURN": "Enerji İçeceği",
     "NUTELLA": "Fındık Kreması", "SARELLE": "Fındık Kreması",
     "CAPPY": "Meyve Suyu", "MEYSU": "Meyve Suyu",
+    "KINDER JOY": "Sürpriz Yumurta", "KINDER SURPRIZ": "Sürpriz Yumurta", "KINDER SURPRISE": "Sürpriz Yumurta",
 }
