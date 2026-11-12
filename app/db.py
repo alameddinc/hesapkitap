@@ -240,6 +240,39 @@ CREATE TABLE IF NOT EXISTS jar_moves (
     note TEXT,
     auto INTEGER NOT NULL DEFAULT 0
 );
+-- Kumbara katılımcıları (yetenek kumbara_shares): bir kumbaraya birden çok kişi düzenli para atar (ör. kardeşler annesi
+-- için). Kişi defterdeki bir kullanıcı (user_id; ad o anki adın kopyası) ya da uygulamayı kullanmayan biri (yalnız ad).
+-- Aylık pay: share elle verilmişse o, yoksa kalan aylık tutar eşit bölünür (app/jar_shares.py). Çıkarılan kişinin
+-- geçmişi kalır (removed_at); katkıları jar_moves.person_id ile bağlıdır.
+CREATE TABLE IF NOT EXISTS jar_people (
+    id INTEGER PRIMARY KEY,
+    jar_id INTEGER NOT NULL REFERENCES jars(id) ON DELETE CASCADE,
+    user_id INTEGER,
+    name TEXT NOT NULL,
+    share REAL CHECK (share IS NULL OR share > 0),
+    sort INTEGER NOT NULL DEFAULT 0,
+    removed_at DATE,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- Tarihli pay (kumbara_shares_v2): kişinin elle payı (person_id) ya da kumbaranın ayda toplamı (person_id NULL)
+-- "from_month'tan itibaren"; geçmiş aylar o ayki payla hesaplanır. from_month '0000-00': ilk değişiklikten önceki değer.
+-- share NULL: kişide eşit böl, toplamda hedeften.
+CREATE TABLE IF NOT EXISTS jar_share_changes (
+    id INTEGER PRIMARY KEY,
+    jar_id INTEGER NOT NULL REFERENCES jars(id) ON DELETE CASCADE,
+    person_id INTEGER REFERENCES jar_people(id) ON DELETE CASCADE,
+    from_month TEXT NOT NULL,
+    share REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- "Bu ay yok" (muaf): kişinin o ayki payı 0; geçmişte tam sayılır, eksiği devretmez
+CREATE TABLE IF NOT EXISTS jar_exempt (
+    id INTEGER PRIMARY KEY,
+    jar_id INTEGER NOT NULL REFERENCES jars(id) ON DELETE CASCADE,
+    person_id INTEGER NOT NULL REFERENCES jar_people(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    UNIQUE (person_id, month)
+);
 -- Kalem kuralları: fişteki satırda bu kelimelerden biri geçerse o satır bu kategoriye ayrılır
 CREATE TABLE IF NOT EXISTS item_rules (
     id INTEGER PRIMARY KEY,
@@ -542,6 +575,11 @@ MIGRATIONS = [
     ("jars", "debt_title", "TEXT"),                            # bağlı borcun adı (borç silinse de etiket kalır)
     ("jars", "closed_payment_id", "INTEGER"),                  # "Kumbaradan öde" bu ödemeyle kapattı (geri alınca açılır)
     ("jar_moves", "debt_payment_id", "INTEGER"),               # kumbaradan borç ödemesi (geri alınınca hareket de silinir)
+    ("jar_moves", "person_id", "INTEGER"),                     # kumbara katılımcısı: kim attı (jar_people; boş: ekleyen/sahip)
+    ("jar_moves", "outside", "INTEGER NOT NULL DEFAULT 0"),    # para hesaplarda değil (elden / kişide): harcanabilirden düşmez
+    ("jars", "remind_day", "INTEGER"),                         # katılımcıya pay hatırlatması günü (1–28; boş: 25)
+    ("jars", "share_monthly", "REAL"),
+    ("jars", "carry_over", "INTEGER NOT NULL DEFAULT 0"),      # fazla atılan sonraki ayların payına sayılsın                         # katılımcılı kumbarada ayda toplam pay (boş: hedeften)
     ("jar_moves", "entry_id", "INTEGER"),                      # birimli kumbara: ödemenin gider kaydı  # hareketlerden önerildiyse: karşı taraf/işyeri anahtarı (yeni hareketler buna bağlanır)  # kredi kartıyla ödendiyse kartın son 4 hanesi (fişten ya da elle)
     ("statements", "next_period_end", "DATE"),
     ("statements", "next_due_date", "DATE"),
@@ -4935,6 +4973,14 @@ def list_jars(today: date | None = None, include_closed: bool = True) -> list[di
             for m in j["moves"]:
                 contrib[m.get("created_by")] = round(contrib.get(m.get("created_by"), 0) + m["amount"], 2)
             j["contributions"] = [{"user_id": k, "amount": v} for k, v in contrib.items()]
+            # hesaplarda duran kısım (harcanabilirden düşülen): elden / kişide duran katkılar (outside) hariç
+            inside = sum(m["amount"] for m in j["moves"] if not m.get("outside"))
+            j["in_accounts"] = round(min(max(0.0, inside), max(0.0, j["balance"])), 2)
+            j["people"] = rows(c.execute("SELECT * FROM jar_people WHERE jar_id = ? ORDER BY sort, id", (j["id"],)))
+            if j["people"]:
+                j["share_changes"] = rows(c.execute("SELECT person_id, from_month, share FROM jar_share_changes WHERE jar_id = ?",
+                                                    (j["id"],)))
+                j["exempt"] = rows(c.execute("SELECT person_id, month FROM jar_exempt WHERE jar_id = ?", (j["id"],)))
     return [j for j in js if include_closed or not j["closed_at"]]
 
 
@@ -4945,13 +4991,16 @@ def jar_reserved(today: date | None = None) -> dict:
     for j in list_jars(today, include_closed=False):
         if (j.get("unit") or "TRY") != "TRY":  # altın/döviz kumbarası para ayırmaz: alınan varlık net durumda görünür
             continue
-        by_acc[j["account_id"]] = round(by_acc.get(j["account_id"], 0) + j["balance"], 2)
+        # elden alınan / kişinin kendisinde duran katkı (jar_moves.outside) hesaplarda değil: harcanabilirden düşülmez
+        held = j.get("in_accounts", j["balance"])
+        by_acc[j["account_id"]] = round(by_acc.get(j["account_id"], 0) + held, 2)
         if j.get("debt_id"):  # borca bağlı kumbara (debt_jar): harcanabilirde borcun kalanıyla iki kez düşülmesin
-            by_debt[j["debt_id"]] = round(by_debt.get(j["debt_id"], 0) + j["balance"], 2)
+            by_debt[j["debt_id"]] = round(by_debt.get(j["debt_id"], 0) + held, 2)
     return {"total": round(sum(by_acc.values()), 2), "by_account": by_acc, "by_debt": by_debt}
 
 
-JAR_FIELDS = ("name", "goal", "deadline", "account_id", "monthly", "auto_day", "note", "closed_at", "unit")
+JAR_FIELDS = ("name", "goal", "deadline", "account_id", "monthly", "auto_day", "note", "closed_at", "unit", "remind_day", "share_monthly",
+              "carry_over")
 
 
 def create_jar(data: dict, initial: float = 0, today: date | None = None) -> int:
@@ -4984,10 +5033,13 @@ def delete_jar(jid: int) -> bool:
         return c.execute("DELETE FROM jars WHERE id = ?", (jid,)).rowcount > 0
 
 
-def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = None) -> int:
-    """amount > 0 yatır, < 0 çek. Kumbarada olandan fazlası çekilemez."""
+def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = None, person_id: int | None = None,
+                 outside: bool = False) -> int:
+    """amount > 0 yatır, < 0 çek. Kumbarada olandan fazlası çekilemez.
+    person_id: katılımcılı kumbarada kim attı (yalnız yatırmada; boşsa ekleyen / sahip sayılır, app/jar_shares.py).
+    outside: para hesaplarda değil (elden alındı / kişinin kendisinde): harcanabilirden düşülmez."""
     with connect() as c:
-        j = c.execute("SELECT closed_at FROM jars WHERE id = ?", (jid,)).fetchone()
+        j = c.execute("SELECT closed_at, unit FROM jars WHERE id = ?", (jid,)).fetchone()
         if not j:
             raise LookupError("Kumbara yok")
         if j["closed_at"]:
@@ -4995,9 +5047,191 @@ def add_jar_move(jid: int, amount: float, move_date: str, note: str | None = Non
         bal = c.execute("SELECT COALESCE(SUM(amount), 0) FROM jar_moves WHERE jar_id = ?", (jid,)).fetchone()[0]
         if amount < 0 and money.lt(bal + amount, 0):
             raise ValueError(f"Kumbarada {bal:.2f} var; daha fazlası çekilemez")
+        if amount < 0:
+            person_id = None
+        if person_id is not None:
+            _jar_person_check(c, jid, person_id)
         u = current_user()
-        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, created_by) VALUES (?, ?, ?, ?, ?)",
-                         (jid, move_date, amount, (note or "").strip() or None, u.get("id") if u else None)).lastrowid
+        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, created_by, person_id, outside) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (jid, move_date, amount, (note or "").strip() or None, u.get("id") if u else None, person_id,
+                          1 if outside and amount > 0 else 0)).lastrowid
+
+
+def _jar_person_check(c, jid: int, person_id: int) -> None:
+    p = c.execute("SELECT removed_at FROM jar_people WHERE id = ? AND jar_id = ?", (person_id, jid)).fetchone()
+    if not p or p["removed_at"]:
+        raise ValueError("Bu kişi bu kumbarada değil")
+
+
+def get_jar_move(mid: int) -> dict | None:
+    with connect() as c:
+        r = c.execute("SELECT * FROM jar_moves WHERE id = ?", (mid,)).fetchone()
+    return dict(r) if r else None
+
+
+def update_jar_move(mid: int, data: dict) -> bool:
+    """TL kumbarası hareketini düzelt (dokun → düzenle): tutar, tarih, not, kim attı, para nerede. Yön değişmez
+    (yatırma yatırma kalır); çekim kumbaradakinden fazla olamaz. Alım ve borç ödemesi hareketi buradan değişmez."""
+    with connect() as c:
+        m = c.execute("SELECT * FROM jar_moves WHERE id = ?", (mid,)).fetchone()
+        if not m:
+            return False
+        if m["cost"] is not None or m["debt_payment_id"] or m["asset_id"]:
+            raise ValueError("Bu hareket buradan düzeltilemez")
+        sets: dict = {}
+        if data.get("amount") is not None:
+            amt = abs(float(data["amount"])) * (1 if m["amount"] > 0 else -1)
+            bal = c.execute("SELECT COALESCE(SUM(amount), 0) FROM jar_moves WHERE jar_id = ? AND id <> ?",
+                            (m["jar_id"], mid)).fetchone()[0]
+            if amt < 0 and money.lt(bal + amt, 0):
+                raise ValueError(f"Kumbarada {bal:.2f} var; daha fazlası çekilemez")
+            sets["amount"] = amt
+        if data.get("move_date"):
+            sets["move_date"] = data["move_date"]
+        if "note" in data:
+            sets["note"] = (data["note"] or "").strip() or None
+        if "person_id" in data and m["amount"] > 0:
+            if data["person_id"] is not None:
+                _jar_person_check(c, m["jar_id"], data["person_id"])
+            sets["person_id"] = data["person_id"]
+        if "outside" in data and data["outside"] is not None and m["amount"] > 0:
+            sets["outside"] = 1 if data["outside"] else 0
+        if sets:
+            c.execute(f"UPDATE jar_moves SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), mid))
+    return True
+
+
+# ---------------------------------------------------------------- kumbara katılımcıları (yetenek kumbara_shares)
+
+JAR_PEOPLE_MAX = 12
+
+
+def jar_people(jid: int) -> list[dict]:
+    with connect() as c:
+        return rows(c.execute("SELECT * FROM jar_people WHERE jar_id = ? ORDER BY sort, id", (jid,)))
+
+
+def add_jar_person(jid: int, name: str, user_id: int | None = None, share: float | None = None) -> int:
+    """Katılımcı ekle: defterdeki kullanıcı (user_id) ya da uygulamayı kullanmayan biri (yalnız ad). Açık kumbarada
+    (TL, altın, döviz: pay kumbaranın biriminde). Aynı kişi iki kez olmaz; çıkarılmış kişi yeniden eklenirse eski satırı (geçmişiyle) geri gelir."""
+    name = (name or "").strip()
+    with connect() as c:
+        j = c.execute("SELECT closed_at, unit FROM jars WHERE id = ?", (jid,)).fetchone()
+        if not j:
+            raise LookupError("Kumbara yok")
+        if j["closed_at"]:
+            raise ValueError("Kumbara kapalı; önce yeniden aç")
+        ppl = rows(c.execute("SELECT * FROM jar_people WHERE jar_id = ?", (jid,)))
+        same = next((p for p in ppl if (user_id is not None and p["user_id"] == user_id)
+                     or (user_id is None and p["user_id"] is None and p["name"].casefold() == name.casefold())), None)
+        if same and not same["removed_at"]:
+            raise JarPersonExists("Bu kişi zaten kumbarada")
+        if sum(1 for p in ppl if not p["removed_at"]) >= JAR_PEOPLE_MAX:
+            raise ValueError(f"Bir kumbarada en çok {JAR_PEOPLE_MAX} kişi olur")
+        sort = max((p["sort"] for p in ppl), default=-1) + 1
+        if same:  # geri gelen: geçmişi ve katkıları aynı satırda
+            c.execute("UPDATE jar_people SET removed_at = NULL, share = ?, name = ?, sort = ? WHERE id = ?",
+                      (share, name or same["name"], sort, same["id"]))
+            return same["id"]
+        return c.execute("INSERT INTO jar_people (jar_id, user_id, name, share, sort) VALUES (?, ?, ?, ?, ?)",
+                         (jid, user_id, name, share, sort)).lastrowid
+
+
+class JarPersonExists(ValueError):
+    pass
+
+
+def _cur_month() -> str:
+    return date.today().strftime("%Y-%m")
+
+
+def _set_share_change(c, jid: int, pid: int | None, share, from_month: str | None) -> None:
+    """Tarihli pay: from_month'tan itibaren share (kişi: elle pay / None eşit; pid None: ayda toplam / None hedeften).
+    from_month 'all' ya da None değil ise o aydan; 'all': tüm aylar (geçmiş silinir). Önceki değer, ilk değişiklikte
+    '0000-00' satırı olarak saklanır; from_month ve sonrası yeni değerle değişir. Taban sütun (jar_people.share /
+    jars.share_monthly) bu ayın değerini tutar (eski istemci ve özetler için)."""
+    from app.jar_shares import ALL, effective
+
+    cur = _cur_month()
+    fm = from_month or cur
+    where, args = ("person_id = ?", (jid, pid)) if pid is not None else ("person_id IS NULL", (jid,))
+    base = (c.execute("SELECT share FROM jar_people WHERE id = ?", (pid,)).fetchone()[0] if pid is not None
+            else c.execute("SELECT share_monthly FROM jars WHERE id = ?", (jid,)).fetchone()[0])
+    if fm == "all":
+        c.execute(f"DELETE FROM jar_share_changes WHERE jar_id = ? AND {where}", args)
+        now = share
+    else:
+        if not c.execute(f"SELECT 1 FROM jar_share_changes WHERE jar_id = ? AND {where}", args).fetchone():
+            c.execute("INSERT INTO jar_share_changes (jar_id, person_id, from_month, share) VALUES (?, ?, ?, ?)",
+                      (jid, pid, ALL, base))
+        c.execute(f"DELETE FROM jar_share_changes WHERE jar_id = ? AND {where} AND from_month >= ?", (*args, fm))
+        c.execute("INSERT INTO jar_share_changes (jar_id, person_id, from_month, share) VALUES (?, ?, ?, ?)",
+                  (jid, pid, fm, share))
+        rows_ = rows(c.execute(f"SELECT from_month, share FROM jar_share_changes WHERE jar_id = ? AND {where}", args))
+        now = effective(rows_, base, cur)
+    if pid is not None:
+        c.execute("UPDATE jar_people SET share = ? WHERE id = ?", (now, pid))
+    else:
+        c.execute("UPDATE jars SET share_monthly = ? WHERE id = ?", (now, jid))
+
+
+def set_jar_total(jid: int, share: float | None, from_month: str | None = None) -> bool:
+    """Ayda toplam pay (tarihli)."""
+    with connect() as c:
+        if not c.execute("SELECT 1 FROM jars WHERE id = ?", (jid,)).fetchone():
+            return False
+        _set_share_change(c, jid, None, share, from_month)
+    return True
+
+
+def set_jar_exempt(jid: int, pid: int, month: str, on: bool) -> bool:
+    """"Bu ay yok": kişinin o ayki payı 0 (geri alınabilir)."""
+    with connect() as c:
+        if not c.execute("SELECT 1 FROM jar_people WHERE id = ? AND jar_id = ?", (pid, jid)).fetchone():
+            return False
+        if on:
+            c.execute("INSERT OR IGNORE INTO jar_exempt (jar_id, person_id, month) VALUES (?, ?, ?)", (jid, pid, month))
+        else:
+            c.execute("DELETE FROM jar_exempt WHERE person_id = ? AND month = ?", (pid, month))
+    return True
+
+
+def update_jar_person(jid: int, pid: int, data: dict) -> bool:
+    """Ad (yalnız uygulamayı kullanmayanda), elle pay (None: eşit böl; from_month'tan itibaren) ve sıra."""
+    with connect() as c:
+        p = c.execute("SELECT * FROM jar_people WHERE id = ? AND jar_id = ?", (pid, jid)).fetchone()
+        if not p:
+            return False
+        sets: dict = {}
+        if data.get("name") and p["user_id"] is None:
+            name = data["name"].strip()
+            if c.execute("SELECT 1 FROM jar_people WHERE jar_id = ? AND id <> ? AND user_id IS NULL AND removed_at IS NULL "
+                         "AND lower(name) = lower(?)", (jid, pid, name)).fetchone():
+                raise JarPersonExists("Bu adla biri zaten kumbarada")
+            sets["name"] = name
+        if "share" in data:
+            _set_share_change(c, jid, pid, data["share"], data.get("from_month"))
+        if data.get("sort") is not None:
+            sets["sort"] = data["sort"]
+        if sets:
+            c.execute(f"UPDATE jar_people SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), pid))
+    return True
+
+
+def remove_jar_person(jid: int, pid: int, today: date | None = None) -> str | None:
+    """Katılımcıyı çıkar. Katkısı varsa geçmişi kalır (removed_at; bu aydan sonra pay almaz), yoksa satır silinir.
+    Dönüş: 'removed' | 'deleted' | None (yok)."""
+    today = today or date.today()
+    with connect() as c:
+        p = c.execute("SELECT 1 FROM jar_people WHERE id = ? AND jar_id = ?", (pid, jid)).fetchone()
+        if not p:
+            return None
+        if c.execute("SELECT 1 FROM jar_moves WHERE person_id = ? LIMIT 1", (pid,)).fetchone():
+            c.execute("UPDATE jar_people SET removed_at = ? WHERE id = ?", (today.isoformat(), pid))
+            return "removed"
+        c.execute("DELETE FROM jar_people WHERE id = ?", (pid,))
+        return "deleted"
 
 
 def delete_jar_move(mid: int) -> bool:
@@ -5050,7 +5284,7 @@ def update_jar_purchase(mid: int, quantity: float | None = None, cost: float | N
 
 
 def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: int | None, payment: str,
-                 note: str | None = None) -> int:
+                 note: str | None = None, person_id: int | None = None) -> int:
     """Altın/döviz kumbarası: alım = senin adına varlık (alış tarihi + bedeli) + ödemenin gider kaydı + kumbara hareketi.
     Gider kaydı, banka dökümü gelince aynı ödemeyle eşleşir (iki kez sayılmaz)."""
     from app import zakat
@@ -5067,6 +5301,9 @@ def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: in
         account_id = j["account_id"]
         if not account_id and any(a["as_of"] for a in list_accounts()):  # yoksa para hiçbir bankadan düşmez
             raise ValueError("Hangi hesaptan ödediğini seç")
+    if person_id is not None:
+        with connect() as c:
+            _jar_person_check(c, jid, person_id)
     me = next((p for p in zakat.people() if p["is_self"]), None) or {"id": zakat.add_person("Ben")}
     label = zakat.KINDS[j["unit"]][0]
     aid = zakat.add_asset(me["id"], j["unit"], quantity, False, f"Kumbara: {j['name']}", on, cost)
@@ -5076,9 +5313,9 @@ def buy_into_jar(jid: int, quantity: float, cost: float, on: str, account_id: in
                         "note": "Kumbara alımı (varlık olarak da eklendi)"})
     with connect() as c:
         u = current_user()
-        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, cost, asset_id, entry_id, created_by) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (jid, on, quantity, (note or "").strip() or None, cost, aid, eid,
-                                                             u.get("id") if u else None)).lastrowid
+        return c.execute("INSERT INTO jar_moves (jar_id, move_date, amount, note, cost, asset_id, entry_id, created_by, person_id) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (jid, on, quantity, (note or "").strip() or None, cost, aid, eid,
+                                                                u.get("id") if u else None, person_id)).lastrowid
 
 
 def delete_target(tid: int) -> bool:

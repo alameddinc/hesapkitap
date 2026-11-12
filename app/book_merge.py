@@ -190,8 +190,15 @@ TABLES = [
     T("jars", keys=(("name",),), fks={"account_id": "accounts", "debt_id": "debts", "closed_payment_id": "debt_payments"}, when="created_at", label=("created_at", "goal", "name", "kumbara")),
     T("zakat_assets", keys=(_opt("person_id", "kind", "quantity", "acquired"),), fks={"person_id": "zakat_people"},
       required=("person_id",), when="created_at", label=("acquired", "quantity", "kind", "zekât varlığı")),
+    T("jar_people", keys=(lambda r, s: (r["jar_id"], r["user_id"], _norm(r["name"]) if r.get("user_id") is None else ""),),
+      fks={"jar_id": "jars"}, required=("jar_id",), when="created_at", child=True),
+    T("jar_share_changes", keys=(("jar_id", "person_id", "from_month"),), fks={"jar_id": "jars", "person_id": "jar_people"},
+      required=("jar_id",), when="created_at", child=True),
+    T("jar_exempt", keys=(("person_id", "month"),), fks={"jar_id": "jars", "person_id": "jar_people"},
+      required=("jar_id", "person_id"), child=True),
     T("jar_moves", keys=(lambda r, s: (r["jar_id"], r["move_date"], _amt(r["amount"])),),
-      fks={"jar_id": "jars", "asset_id": "zakat_assets", "entry_id": "entries", "debt_payment_id": "debt_payments"},
+      fks={"jar_id": "jars", "asset_id": "zakat_assets", "entry_id": "entries", "debt_payment_id": "debt_payments",
+           "person_id": "jar_people"},
       required=("jar_id",), when="move_date",
       label=("move_date", "amount", "note", "kumbara hareketi")),
     T("zakat_payments", keys=(("person_id", "year_start", "pay_date", "amount"),),
@@ -710,6 +717,11 @@ class Merge:
                 if cases:
                     n += self.m.execute(f'UPDATE "{table}" SET created_by = CASE created_by {cases} END WHERE created_by IN '
                                         f'({",".join(str(int(a)) for a in self.user_map)})').rowcount
+        # kumbara katılımcısı defterdeki bir kullanıcıysa (jar_people.user_id) o da eşlenir
+        if "jar_people" in _tables(self.m) and self.user_map:
+            cases = " ".join(f"WHEN {int(a)} THEN {int(b)}" for a, b in self.user_map.items())
+            n += self.m.execute(f'UPDATE jar_people SET user_id = CASE user_id {cases} END WHERE user_id IN '
+                                f'({",".join(str(int(a)) for a in self.user_map)})').rowcount
         self.created_by_mapped = n
 
     def close(self) -> None:

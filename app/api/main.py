@@ -3932,6 +3932,7 @@ class JarBuy(BaseModel):
     payment: Literal["havale", "nakit", "kredi_karti"] = "havale"
     account_id: int | None = None
     note: str | None = None
+    person_id: int | None = None  # kumbara_shares_v2: kim için (katılımcılı altın/döviz kumbarası)
 
 
 class JarIn(BaseModel):
@@ -3955,6 +3956,10 @@ class JarPatch(BaseModel):
     auto_day: int | None = Field(None, ge=1, le=28)
     note: str | None = None
     closed: bool | None = None
+    remind_day: int | None = Field(None, ge=1, le=28)  # kumbara_shares: payı gelmeyene hatırlatma günü (boş: 25)
+    share_monthly: float | None = Field(None, gt=0)     # kumbara_shares: ayda toplam pay, kumbaranın biriminde (null: hedeften)
+    share_from: str | None = Field(None, pattern=r"^(\d{4}-(0[1-9]|1[0-2])|all)$")  # v2: bu aydan itibaren (varsayılan bu ay)
+    carry_over: bool | None = None                      # v2: fazla atılan sonraki ayların payına sayılsın
     unlink_debt: bool | None = None  # "Başka hedefe çevir": borçla bağı kaldır (yetenek debt_jar)
 
 
@@ -3963,6 +3968,36 @@ class JarMoveIn(BaseModel):
     direction: Literal["yatir", "cek"] = "yatir"
     move_date: date | None = None
     note: str | None = None
+    person_id: int | None = None  # kumbara_shares: kim attı (boş: ekleyen / sahip)
+    outside: bool = False         # kumbara_shares: para hesaplarda değil (elden / kişide): harcanabilirden düşmez
+
+
+class JarPersonIn(BaseModel):
+    """Kumbara katılımcısı: defterdeki kullanıcı (user_id) ya da uygulamayı kullanmayan biri (name)."""
+    user_id: int | None = None
+    name: str | None = Field(None, min_length=1, max_length=40)
+    share: float | None = Field(None, gt=0)  # elle aylık pay, kumbaranın biriminde (₺, gram, adet, $); boş: eşit böl
+
+
+class JarPersonPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=40)
+    share: float | None = Field(None, gt=0)  # null gönderilirse eşit bölüşe döner
+    # v2: pay değişikliği bu aydan itibaren (varsayılan bu ay); "all": tüm aylar (geçmiş de bu payla)
+    from_month: str | None = Field(None, pattern=r"^(\d{4}-(0[1-9]|1[0-2])|all)$")
+    sort: int | None = Field(None, ge=0, le=1000)
+
+
+def _share_value(jid: int, v: float | None) -> float | None:
+    """Pay kumbaranın birim hassasiyetinde: TL kuruş, gram/döviz 0,01, adet tam sayı (adette küsurat 422)."""
+    from app import jar_shares
+
+    if v is None:
+        return None
+    j = next((x for x in db.list_jars() if x["id"] == jid), None)
+    sc = jar_shares.scale_of((j or {}).get("unit"))
+    if sc == 1 and abs(v - round(v)) > 1e-9:
+        raise HTTPException(422, "Adetle biriken kumbarada pay tam sayı olur")
+    return round(v * sc) / sc
 
 
 def _jar_debt(j: dict, debts: dict[int, dict] | None) -> dict | None:
@@ -3992,12 +4027,30 @@ def _jar_debt(j: dict, debts: dict[int, dict] | None) -> dict | None:
     return out
 
 
-def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans: dict[int, dict] | None = None) -> dict:
+def _jar_ctx() -> dict:
+    """Katılımcı adları ve kimlikler (kumbara_shares): defterdeki kişiler, giriş yapan, defter sahibi."""
+    from app import book
+
+    u = db.current_user()
+    ppl = book.people() if u else []
+    return {"names": {p["id"]: p["name"] for p in ppl}, "me": u.get("id") if u else None,
+            "owner": (u.get("member_of") or u.get("id")) if u else None}
+
+
+def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans: dict[int, dict] | None = None,
+              ctx: dict | None = None) -> dict:
     """Hedef ilerlemesi, son tarihe göre ayda gereken ve bu hızla ne zaman ulaşılacağı.
     Hız: otomatik aylık ayırma varsa o; yoksa son 3 ayda ayrılan (başlangıç ayırması hariç) aylık ortalaması."""
     from datetime import timedelta
 
+    from app import jar_shares
+
     out = {**j}
+    ctx = ctx if ctx is not None else _jar_ctx()
+    # katılımcılar ve bu ayki paylar (yetenek kumbara_shares; katılımcı yoksa null). people ham satırlar istemciye gitmez
+    out.pop("people", None)
+    out["shares"] = jar_shares.status(j, today, ctx["names"], ctx["me"], ctx["owner"])
+    out["outside"] = round(max(0.0, j["balance"] - j.get("in_accounts", j["balance"])), 2)
     out["debt"] = _jar_debt(j, debts)
     unit = j.get("unit") or "TRY"
     if unit != "TRY":  # altın/döviz: miktar, bugünkü değer, ödenen, kâr/zarar, bu ayki alım
@@ -4045,6 +4098,12 @@ def _jar_view(j: dict, today: date, debts: dict[int, dict] | None = None, plans:
         out["goal_status"] = None
         for k in ("need_per_month", "eta", "on_track"):
             out.pop(k, None)
+    # katılımcılı kumbara: paylar toplamı hedefin gerektirdiğinden azsa (hedef + son tarih) "ayda ₺X gerekiyor" notu ve
+    # "Toplamı ₺X yap" eylemi (PATCH share_monthly; elle paylar korunur). Rakam hedef kutusundakiyle aynı (goal_status)
+    if out["shares"] is not None:
+        need = (out["goal_status"] or {}).get("needed_monthly") if j.get("deadline") else None
+        sh = out["shares"]
+        sh["needed"] = need if need and sh["basis"] != "hedef" and sh["total"] + 1e-9 < need else None
     return out
 
 
@@ -4065,7 +4124,8 @@ def list_jars():
     today = date.today()
     jars = db.list_jars(today)
     debts = _jar_debts(jars)
-    return [_jar_view(j, today, debts, _jar_plans(jars, debts)) for j in jars]
+    plans_, ctx = _jar_plans(jars, debts), _jar_ctx()
+    return [_jar_view(j, today, debts, plans_, ctx) for j in jars]
 
 
 def _jar_plans(jars: list[dict], debts: dict[int, dict] | None) -> dict[int, dict]:
@@ -4105,6 +4165,14 @@ def patch_jar(jid: int, body: JarPatch):
         data["closed_at"] = date.today().isoformat() if data.pop("closed") else None
         if reopen and db.reopen_conflict(jid):
             raise HTTPException(409, "Bu borcun açık bir kumbarası daha var; bunu açmadan önce ötekini kapat")
+    share_from = data.pop("share_from", None)
+    if "share_monthly" in data:  # ayda toplam: tarihli (bu aydan itibaren)
+        if not db.set_jar_total(jid, _share_value(jid, data.pop("share_monthly")), share_from):
+            raise HTTPException(404, "Kumbara yok")
+        if not data:
+            return {"ok": True}
+    if "carry_over" in data:
+        data["carry_over"] = 1 if data["carry_over"] else 0
     if not db.update_jar(jid, data):
         raise HTTPException(404, "Kumbara yok")
     return {"ok": True}
@@ -4117,15 +4185,107 @@ def delete_jar(jid: int):
     return {"ok": True}
 
 
+def _member_jar_person_guard(jid: int, person_id: int | None) -> None:
+    """"Görür ve ekler" üyesi kendi katkısını ya da uygulamayı kullanmayan birinin katkısını ekler; başka bir üyenin
+    (ya da sahibin) adına ekleyemez (o kişi kendisi ya da defter sahibi / tam yetkili ekler)."""
+    from app import book
+
+    m = book.member()
+    if not m or person_id is None or book.role(m) == "full":
+        return
+    p = next((x for x in db.jar_people(jid) if x["id"] == person_id), None)
+    if p and p["user_id"] is not None and p["user_id"] != m["id"]:
+        raise HTTPException(403, "Başka bir üyenin katkısını kendisi ya da defter sahibi ekler")
+
+
 @app.post("/api/jars/{jid}/moves")
 def add_jar_move(jid: int, body: JarMoveIn):
     amt = body.amount if body.direction == "yatir" else -body.amount
+    _member_jar_person_guard(jid, body.person_id if amt > 0 else None)
     try:
-        return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note)}
+        return {"id": db.add_jar_move(jid, amt, (body.move_date or date.today()).isoformat(), body.note,
+                                      body.person_id, body.outside)}
     except LookupError as e:
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
+
+
+# ---------------------------------------------------------------- kumbara katılımcıları (yetenek kumbara_shares)
+
+def _jar_or_404(jid: int) -> dict:
+    j = next((x for x in db.list_jars() if x["id"] == jid), None)
+    if not j:
+        raise HTTPException(404, "Kumbara yok")
+    return j
+
+
+@app.post("/api/jars/{jid}/people")
+def add_jar_person(jid: int, body: JarPersonIn):
+    """Katılımcı ekle (Premium "kumbara"; ortak defterde sahip / tam yetkili). user_id: defterdeki kişi (sahip ya da
+    üye; değilse 400); yoksa name (uygulamayı kullanmayan). 409: zaten kumbarada; 422: TL kumbarası değil / kapalı."""
+    from app import book
+
+    _jar_or_404(jid)
+    if body.user_id is not None:
+        p = next((x for x in book.people() if x["id"] == body.user_id), None)
+        if not p:
+            raise HTTPException(400, "Bu kişi defterde değil")
+        name = p["name"]
+    elif body.name and body.name.strip():
+        name = body.name.strip()
+    else:
+        raise HTTPException(422, "Ad yaz ya da defterden birini seç")
+    try:
+        pid = db.add_jar_person(jid, name, body.user_id, _share_value(jid, body.share))
+    except db.JarPersonExists as e:
+        raise HTTPException(409, str(e)) from None
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    return {"id": pid}
+
+
+@app.patch("/api/jars/{jid}/people/{pid}")
+def patch_jar_person(jid: int, pid: int, body: JarPersonPatch):
+    """Ad (uygulamayı kullanmayanda), elle aylık pay (null: eşit böl; from_month'tan itibaren, varsayılan bu ay), sıra."""
+    data = body.model_dump(exclude_unset=True)
+    if "share" in data:
+        data["share"] = _share_value(jid, data["share"])
+    try:
+        ok = db.update_jar_person(jid, pid, data)
+    except db.JarPersonExists as e:
+        raise HTTPException(409, str(e)) from None
+    if not ok:
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True}
+
+
+@app.put("/api/jars/{jid}/people/{pid}/exempt/{month}")
+def put_jar_exempt(jid: int, pid: int, month: str):
+    """"Bu ay yok" (kumbara_shares_v2): kişinin o ayki payı 0; geçmişte tam sayılır, eksiği devretmez. Geri al: DELETE."""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(422, "Ay YYYY-AA biçiminde")
+    if not db.set_jar_exempt(jid, pid, month, True):
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True}
+
+
+@app.delete("/api/jars/{jid}/people/{pid}/exempt/{month}")
+def delete_jar_exempt(jid: int, pid: int, month: str):
+    if not db.set_jar_exempt(jid, pid, month, False):
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True}
+
+
+@app.delete("/api/jars/{jid}/people/{pid}")
+def delete_jar_person(jid: int, pid: int):
+    """Katılımcıyı çıkar: katkısı varsa geçmişi kalır (removed), yoksa silinir (deleted)."""
+    r = db.remove_jar_person(jid, pid)
+    if not r:
+        raise HTTPException(404, "Katılımcı yok")
+    return {"ok": True, "result": r}
 
 
 class DebtJarIn(BaseModel):
@@ -4211,9 +4371,10 @@ def pay_debt_from_jar(jid: int, body: DebtFromJarIn):
 def buy_into_jar(jid: int, body: JarBuy):
     """Altın/döviz kumbarası: aldım → varlık + gider kaydı + kumbara hareketi."""
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
+    _member_jar_person_guard(jid, body.person_id)
     try:
         return {"id": db.buy_into_jar(jid, body.quantity, body.cost, (body.buy_date or date.today()).isoformat(),
-                                      body.account_id, body.payment, body.note)}
+                                      body.account_id, body.payment, body.note, body.person_id)}
     except LookupError as e:
         raise HTTPException(404, errors.user_text(e, 404)) from e
     except ValueError as e:
@@ -4224,13 +4385,39 @@ class JarMovePatch(BaseModel):
     quantity: float | None = Field(None, gt=0)
     cost: Money | None = Field(None, gt=0)
     move_date: date | None = None
+    # TL kumbarası hareketi (kumbara_shares): tutar, not, kim attı, para nerede
+    amount: Money | None = Field(None, gt=0)
+    note: str | None = Field(None, max_length=120)
+    person_id: int | None = None
+    outside: bool | None = None
 
 
 @app.patch("/api/jar-moves/{mid}")
 def patch_jar_purchase(mid: int, body: JarMovePatch):
-    """Altın/döviz kumbarası alımını düzelt (kuyumcuda ödenen farklıysa)."""
-    if not db.update_jar_purchase(mid, body.quantity, body.cost, body.move_date.isoformat() if body.move_date else None):
-        raise HTTPException(404, "Alım bulunamadı")
+    """Altın/döviz kumbarası alımını düzelt (kuyumcuda ödenen farklıysa). TL kumbarası hareketinde (kumbara_shares)
+    tutar, tarih, not, kim attı ve para nerede düzelir; "Görür ve ekler" üyesi yalnız kendi eklediğini düzeltir."""
+    from app import book
+
+    m = db.get_jar_move(mid)
+    if not m:
+        raise HTTPException(404, "Hareket yok")
+    mem = book.member()
+    if mem and book.role(mem) != "full":
+        if m["created_by"] != mem["id"] or m["cost"] is not None:
+            raise HTTPException(403, "Bu hareketi ekleyen ya da defter sahibi düzeltir")
+        if "person_id" in body.model_fields_set:
+            _member_jar_person_guard(m["jar_id"], body.person_id)
+    if m["cost"] is not None:
+        if not db.update_jar_purchase(mid, body.quantity, body.cost, body.move_date.isoformat() if body.move_date else None):
+            raise HTTPException(404, "Alım bulunamadı")
+        return {"ok": True}
+    data = body.model_dump(include={"amount", "note", "person_id", "outside"}, exclude_unset=True)
+    if body.move_date:
+        data["move_date"] = body.move_date.isoformat()
+    try:
+        db.update_jar_move(mid, data)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"ok": True}
 
 

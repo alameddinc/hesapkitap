@@ -397,7 +397,12 @@ def require(u: dict | None, feature: str) -> None:
 
 # önekle yakalanamayan (yolun ortasında değişken olan) kilitli uçlar: (yöntem, tam yol deseni, özellik)
 GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_rapor"),  # kartı kişiye bağla
-            ("POST", re.compile(r"/api/debts/\d+/jar"), "kumbara")]  # borç planı birikimi için yeni kumbara
+            ("POST", re.compile(r"/api/debts/\d+/jar"), "kumbara"),  # borç planı birikimi için yeni kumbara
+            # kumbara katılımcısı ekle / payını değiştir (kumbara_shares): kumbara kurmak gibi Premium. Para eklemek,
+            # kim attı seçmek, durumu görmek ve katılımcı çıkarmak her pakette açık (var olan kumbara kullanılır)
+            ("POST", re.compile(r"/api/jars/\d+/people"), "kumbara"),
+            ("PATCH", re.compile(r"/api/jars/\d+/people/\d+"), "kumbara"),
+            ("PUT", re.compile(r"/api/jars/\d+/people/\d+/exempt/[\d-]+"), "kumbara")]  # "Bu ay yok" işaretle (geri alma serbest)
 
 
 def gate_for(path: str, method: str = "GET") -> str | None:

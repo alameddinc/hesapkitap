@@ -382,6 +382,26 @@ CAPABILITIES = (
                               # (Geri al: DELETE /api/debt-payments/{payment_id}: kumbara hareketi de geri gelir).
                               # GET /api/jars [].debt {id, title, state acik|kapandi|silindi, label, remaining?, suggestion?}
                               # | null; PATCH /api/jars/{id} {unlink_debt: true} ("başka hedefe çevir")
+    "kumbara_shares",         # kumbara katılımcıları ve aylık pay (yalnız TL kumbarası): POST /api/jars/{id}/people
+                              # {user_id | name, share?} (402 kumbara, 409 zaten var, 400 defterde değil), PATCH
+                              # /api/jars/{id}/people/{pid} {name?, share? (null: eşit böl), sort?} (402 kumbara), DELETE
+                              # (katkısı varsa geçmiş kalır: result removed|deleted); PATCH /api/jars/{id} {remind_day 1–28, share_monthly (ayda toplam;
+                              # null: hedef ve son tarihten)};
+                              # POST /api/jars/{id}/moves {person_id?, outside?} (kim attı; para hesaplarda değil: harcanabilirden
+                              # düşmez); PATCH /api/jar-moves/{id} TL hareketinde {amount?, move_date?, note?, person_id?,
+                              # outside?}; GET /api/jars [].shares {month, target, basis aylik|hedef|tamam|null, total, paid,
+                              # remind_day, needed (paylar toplamı hedefin gerektirdiğinden azsa ayda
+                              # gereken; yoksa null), people [{id, user_id, name, app, me, manual, share, paid, left, over, state
+                              # tamam|eksik|bekliyor|paysiz, total, months_full, months_counted}], removed, behind, all_done}
+                              # | null, [].outside, moves[].person_id/outside; push türü "kumbara_pay"
+    "kumbara_shares_v2",      # kumbara payları v2: altın/döviz kumbarasında da (pay kumbaranın biriminde; shares.unit, scale:
+                              # TL/gram/döviz 100, adet 1; POST /api/jars/{id}/buy person_id); tarihli pay: PATCH
+                              # /api/jars/{id}/people/{pid} {share, from_month YYYY-MM|all} ve PATCH /api/jars/{id}
+                              # {share_monthly, share_from}; eksik devri: people[].due [{month, amount}], due_total; yeni katkı
+                              # önce en eski tamamlanacak aya (shares.allocations {hareket id: {person_id, past, month,
+                              # month_amount, extra}}); PATCH /api/jars/{id} {carry_over}: fazla sonraki aylara (people[].
+                              # carried_in, credit); "Bu ay yok": PUT/DELETE /api/jars/{id}/people/{pid}/exempt/{YYYY-MM}
+                              # (state muaf, exempt, exempt_months; PUT Premium "kumbara"); people[].paid_for_month, to_past; shares.paid_month
     "debt_plan_plus",         # borç planının gelişmiş kısmı Premium (plans "borc_plani_plus"; plan, sıra ve tutarlar ücretsiz):
                               # GET /api/debt-plan plus {available, had_plan, lock {commit, payoff} | null}; ücretsizde
                               # commitment/commit_offer null, commit_history [], debts[].payoff {state "locked", title,
