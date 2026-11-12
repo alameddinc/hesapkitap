@@ -34,10 +34,13 @@ sürümde zekât rızası yoksa) hiçbiri yoktur.
 Metin: nazik, suçlamasız; tutar önerilmez. "Hayırlı Cumalar" selamı sahibin isteği; başka dini ifade yok.
 """
 import json
+import logging
 from collections import defaultdict
 from datetime import date, timedelta
 
 from app import db
+
+log = logging.getLogger("ekstre.sadaka")
 
 RHYTHMS = {"haftalik": "Her Cuma", "aylik": "Ayda bir", "kapali": "Hatırlatma"}
 DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
@@ -491,16 +494,27 @@ def ratio(months: int = 12, today: date | None = None) -> dict:
             zakat._init(c)
             for d, a in c.execute("SELECT pay_date, amount FROM zakat_payments WHERE pay_date <= ?", (today.isoformat(),)):
                 zak[db.period_of(d)] += a
+    # içinde bulunulan dönem: gelmemiş beklenen gelir (maaş gibi sabit gelir; Özet "Beklenen" ve Planlama ile aynı kaynak,
+    # finance.expected → parts.pending_income) tabana eklenir; yoksa ay başında yatan küçük gelir oranı %100 gösterir
+    # (12.11 cihaz testi). Üyede defterin beklenen geliri kişinin değil: eklenmez.
+    pending = 0.0
+    if not member:
+        try:
+            exp = finance.expected(cur, today)
+            pending = max(0.0, float(((exp or {}).get("parts") or {}).get("pending_income") or 0.0))
+        except Exception:  # noqa: BLE001 - beklenen hesaplanamazsa gerçekleşenle devam
+            log.warning("sadaka oranı: beklenen gelir hesaplanamadı", exc_info=True)
     rows = []
     for m in keys:
-        income = round(inc.get(m, 0.0), 2)
+        income = round(inc.get(m, 0.0) + (pending if m == cur else 0.0), 2)
         enough = ratio_ok and income >= MIN_INCOME
         s = round(sad.get(m, 0.0), 2)
         y, mo = int(m[:4]), int(m[5:7])
         rows.append({"month": m, "label": f"{AY[mo - 1]} {y}", "short": AY[mo - 1][:3], "sadaka": s,
                      "income": income if ratio_ok else None, "ratio": round(s / income * 100, 2) if enough else None,
                      "note": None if enough or not ratio_ok else "gelir kaydı yok",
-                     "zakat": round(zak.get(m, 0.0), 2) if zak is not None else None, "partial": m == cur})
+                     "zakat": round(zak.get(m, 0.0), 2) if zak is not None else None, "partial": m == cur,
+                     "expected_income": round(pending, 2) if m == cur and pending > 0 else None})
     done = [r for r in rows if not r["partial"]]
     new, old = done[-WINDOW:], done[-2 * WINDOW:-WINDOW]
     sentence = None
