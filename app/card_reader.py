@@ -1362,9 +1362,16 @@ def diagnose(text: str) -> dict:
     return out
 
 
-def anonymize(text: str) -> str:
+def _mask_amount(m: re.Match) -> str:
+    """Tutarın biçimi kalır (işaret, binlik ve kuruş ayracı, hane sayısı), rakamları 9 olur: "-1.234,56" → "-9.999,99"."""
+    lead = m.group(0)[: m.start(2) - m.start(0)]  # işaret ve aradaki boşluk aynen ("Borcu 12,00" bitişmesin)
+    return lead + re.sub(r"\d", "9", m.group(2))
+
+
+def anonymize(text: str, amounts: bool = False) -> str:
     """Yapıyı koruyarak kişisel veriyi maskele: etiket sözlüğü ve tarih/tutar düzeni kalır; isimler, açıklamalar,
-    kart/hesap/TC numaraları değişir. Tutarlar korunur (denklem test edilebilsin); istersen elle değiştir."""
+    kart/hesap/TC numaraları değişir. Tutarlar varsayılan olarak korunur (denklem test edilebilsin); amounts=True
+    (uygulama içi "Bildir", app/support.py): tutarların rakamları da 9 olur, yalnız biçimi kalır."""
     stems = set()
     words = [*LABELS.values(), *KEYWORDS, _PREV_LINE.pattern, _PAY_WORDS.pattern, _FEE_WORDS.pattern,
              *(p for p, _ in BANK_HINTS), "taksit taksidi iade toplam tutar tarih işlem açıklama tl usd eur son kalan kredi "
@@ -1385,6 +1392,11 @@ def anonymize(text: str) -> str:
         ln = re.sub(r"TR\s?\d{2}(?:\s?\d{4}){5}\s?\d{0,2}", "TR00 0000 0000 0000 0000 0000 00", ln)
         ln = re.sub(r"\S+@\S+", "eposta@ornek.com", ln)
         ln = re.sub(r"(?<![\d.,])\d{6,}(?![\d.,])", lambda m: "9" * len(m.group(0)), ln)  # TCKN, müşteri/hesap/tel no
+        if amounts:
+            for rx in _MONEY.values():
+                ln = rx.sub(_mask_amount, ln)
+            # kuruşsuz binlikli tutar ("50.000 TL" limit): tarih (12.10.2026) bu kalıba uymaz
+            ln = re.sub(r"(?<![\d.,])\d{1,3}(?:\.\d{3})+(?![\d.,])", lambda m: re.sub(r"\d", "9", m.group(0)), ln)
         ln = re.sub(r"[A-Za-zÇĞİÖŞÜçğıöşü]{2,}", word, ln)
         out.append(ln)
     return "\n".join(out)

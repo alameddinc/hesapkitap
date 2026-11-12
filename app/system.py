@@ -231,6 +231,16 @@ CREATE TABLE IF NOT EXISTS feedback (       -- uygulama içi "Sorun bildir" (app
     shots TEXT NOT NULL DEFAULT '[]',    -- JSON: depodaki ekran görüntüsü adları (main/feedback/<ad>)
     client_key TEXT,                     -- bağlantının tuzlu kısa özeti (yalnız saatlik sınır; adres saklanmaz)
     demo INTEGER NOT NULL DEFAULT 0
+    -- destek yazışması (app/support.py; sütunlar _migrate'te eklenir): author user|admin|system, admin_id, kind
+    -- (NULL mesaj | ekstre | yanit | sistem), report (JSON, kişisel veri yok), structure (JSON: maskeli yapı + teşhis;
+    -- yalnız yönetici), action (JSON {type: retry, ref: <ekstre bildirimi id>})
+);
+CREATE TABLE IF NOT EXISTS support_threads (  -- kişi başı tek destek yazışmasının durumu (app/support.py)
+    user_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'acik', -- acik | cozuldu
+    updated_at TEXT NOT NULL,            -- son mesaj (UTC)
+    user_seen INTEGER NOT NULL DEFAULT 0,  -- kullanıcının okuduğu son mesaj id'si (yönetici/sistem satırları için)
+    admin_seen INTEGER NOT NULL DEFAULT 0  -- yöneticinin okuduğu son mesaj id'si ("Görüldü")
 );
 CREATE TABLE IF NOT EXISTS product_groups (  -- ürün adı → markadan bağımsız grup (app/product_groups.py); sonsuza dek
     name_norm TEXT PRIMARY KEY,          -- name_norm(ad): 'SUTAS GUNLUK SUT 1 L'
@@ -402,6 +412,11 @@ def connect():
 
 
 def _migrate(c) -> None:
+    have = {r[1] for r in c.execute("PRAGMA table_info(feedback)")}  # destek yazışması (app/support.py)
+    for col, ddl in (("author", "TEXT NOT NULL DEFAULT 'user'"), ("admin_id", "INTEGER"), ("kind", "TEXT"),
+                     ("report", "TEXT"), ("structure", "TEXT"), ("action", "TEXT")):
+        if col not in have:
+            _alter(c, f"ALTER TABLE feedback ADD COLUMN {col} {ddl}")
     # ortak defter: üye kendi kullanıcısıyla girer ama sahibin defterini açar
     for table in ("users", "invites"):
         if "member_of" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
@@ -628,6 +643,7 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM doc_reads WHERE book_id = ?", (uid,))
             for t in ("doc_cache", "read_book_daily"):  # defterin okuma önbelleği ve aile günlük toplamı
                 c.execute(f"DELETE FROM {t} WHERE book_id = ?", (uid,))
+            c.execute("DELETE FROM support_threads WHERE user_id = ?", (uid,))  # destek yazışmasının durumu
             c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,))  # silinen hesabın anahtarı çalışmasın
             c.execute("DELETE FROM invites WHERE member_of = ? AND used_at IS NULL", (uid,))  # bekleyen ortak defter daveti
             c.execute("DELETE FROM tg_pairs WHERE user_id = ?", (uid,))

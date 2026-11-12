@@ -51,7 +51,7 @@ CORE_READS = ("/api/summary", "/api/transactions", "/api/plan", "/api/statements
               "/api/digest", "/api/debts", "/api/transfers", "/api/budgets", "/api/zakat", "/api/cards",
               "/api/compare", "/api/year-summary", "/api/entries", "/api/inbox", "/api/savings", "/api/jars",
               "/api/installments", "/api/interest", "/api/holdings", "/api/donations", "/api/recurring")
-PASSIVE = ("/api/auth/", "/api/events", "/api/push/", "/api/feedback", "/api/me/", "/api/onboarding",
+PASSIVE = ("/api/auth/", "/api/events", "/api/push/", "/api/feedback", "/api/support", "/api/me/", "/api/onboarding",
            "/api/insights/", "/api/digest/dismiss", "/api/admin/")
 # "kayıt" (aktivasyon ≥5): tek kayıt oluşturan POST uçları. Toplu içe aktarma (ekstre, banka dökümü) belge sayılır.
 RECORD_POSTS = frozenset({"/api/entries", "/api/debts", "/api/bills", "/api/dekont/save", "/api/recurring",

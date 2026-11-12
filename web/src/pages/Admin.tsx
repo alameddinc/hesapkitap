@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AiCosts as Costs } from "../api";
-import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
+import { useFeedbackCounts } from "../components/AdminFeedback";
+import AdminSupport, { useSupportCounts } from "../components/AdminSupport";
 import AiCosts from "../components/AiCosts";
 import Announce from "../components/Announce";
 import AppUpdate from "../components/AppUpdate";
@@ -26,7 +27,7 @@ const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "genel", label: "Genel", icon: LayoutDashboard, hint: "Özet ve sürüm" },
   { key: "olcum", label: "Ölçüm", icon: Activity, hint: "Demo → hesap → aktivasyon → tutunma → abonelik" },
   { key: "kullanicilar", label: "Kullanıcılar", icon: UsersIcon, hint: "Hesaplar, davetler, paketler, silinenler" },
-  { key: "geri-bildirim", label: "Geri bildirim", icon: MessageSquareWarning, hint: "Sorun bildir mesajları" },
+  { key: "geri-bildirim", label: "Destek", icon: MessageSquareWarning, hint: "Kullanıcı yazışmaları, ekstre bildirimleri" },
   { key: "duyuru", label: "Duyuru gönder", icon: Megaphone, hint: "Telefonlara bildirim: yeni sürüm, duyuru" },
   { key: "yapay-zeka", label: "Yapay zekâ maliyeti", icon: Coins, hint: "Aylık maliyet, kullanıcı başı, sınırla" },
   { key: "paket-tablosu", label: "Paket tablosu", icon: TableProperties, hint: "Hangi sayfa hangi pakette" },
@@ -51,6 +52,7 @@ export default function Admin() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   const fb = useFeedbackCounts();
+  const sup = useSupportCounts(); // destek yazışması varsa rozet okunmamış yazışma sayısı
   if (auth.isLoading) return <></>;
   if (!admin) {
     return (
@@ -61,7 +63,7 @@ export default function Admin() {
     );
   }
   const cur = SUBS.find((x) => x.key === sub)!;
-  const badge = (k: Sub) => (k === "geri-bildirim" && fb.data?.yeni ? fb.data.yeni : null);
+  const badge = (k: Sub) => (k !== "geri-bildirim" ? null : (sup ? sup.okunmamis : fb.data?.yeni) || null);
   return (
     <div className="space-y-4">
       <h1 className="flex items-center gap-2 text-xl font-semibold"><ShieldCheck size={22} aria-hidden /> Yönetici paneli</h1>
@@ -88,7 +90,7 @@ export default function Admin() {
           {sub === "genel" && <Overview />}
           {sub === "olcum" && <Olcum />}
           {sub === "kullanicilar" && <Users />}
-          {sub === "geri-bildirim" && <AdminFeedback />}
+          {sub === "geri-bildirim" && <AdminSupport />}
           {sub === "duyuru" && <Announce />}
           {sub === "yapay-zeka" && <AiCosts />}
           {sub === "paket-tablosu" && <PlanTable />}

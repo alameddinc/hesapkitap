@@ -1,12 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { send } from "../lib/apiError";
 import { useState } from "react";
-import { ArrowLeftRight, BadgeCheck, BadgePercent, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
+import { ArrowLeftRight, BadgeCheck, LifeBuoy, BadgePercent, BarChart3, ChevronRight, HandCoins, Moon, Landmark, MessageSquareWarning, ShieldCheck, Tag as TagIcon, FileText, LogOut, Coins, Settings2, Sheet, ShoppingCart, Tags, Zap } from "lucide-react";
 import { useUI } from "../ui";
 import InstallApp from "../components/InstallApp";
-import { inSharedBook, routeVisible, useBook, useIsAdmin, useMeta } from "../components/hooks";
+import { inSharedBook, routeVisible, useBook, useDemo, useIsAdmin, useMeta } from "../components/hooks";
 import ZakatConsent from "../components/ZakatConsent";
 import FeedbackDialog from "../components/Feedback";
+import { useSupportUnread } from "../components/Support";
+import { destekAc } from "../lib/destek";
 import { LockBadge, ROUTE_FEATURE, useLock } from "../components/Plan";
 import type { Route } from "../ui";
 
@@ -30,7 +32,7 @@ function ZakatItem() {
   );
 }
 
-function Item({ icon, label, onClick, route }: { icon: React.ReactNode; label: string; onClick: () => void; route?: Route }) {
+function Item({ icon, label, onClick, route, badge }: { icon: React.ReactNode; label: string; onClick: () => void; route?: Route; badge?: number }) {
   const book = useBook(); // ortak defter üyesine kapalı sayfalar ve kapatılan özellikler listelenmez
   const meta = useMeta();
   const lock = useLock(route ? ROUTE_FEATURE[route] : undefined); // paketinde kapalı sayfa: listede kalır, kilit rozetiyle
@@ -39,7 +41,9 @@ function Item({ icon, label, onClick, route }: { icon: React.ReactNode; label: s
     <li>
       <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={onClick}>
         {icon}<span className="min-w-0 flex-1">{label}</span>
-        {lock && <LockBadge need={lock.need} />}<ChevronRight size={16} className="text-stone-400" />
+        {lock && <LockBadge need={lock.need} />}
+        {!!badge && <span className="rounded-full bg-blue-600 px-1.5 text-[11px] font-semibold text-white tabular-nums" aria-label={`${badge} okunmamış`}>{badge}</span>}
+        <ChevronRight size={16} className="text-stone-400" />
       </button>
     </li>
   );
@@ -53,6 +57,9 @@ export default function More() {
   const meta = useMeta();
   const book = useBook();
   const [feedback, setFeedback] = useState(false);
+  const unread = useSupportUnread();
+  const demo = useDemo().data;
+  const destek = !!meta.data?.capabilities?.includes("support_chat") && !demo;
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Diğer</h1>
@@ -81,6 +88,7 @@ export default function More() {
         <Item icon={<Tags size={18} />} label="Kategori kuralları" onClick={() => ui.go("kurallar")} route="kurallar" />
         <Item icon={<Settings2 size={18} />} label="Ayarlar: Telegram, yedekler" onClick={() => ui.go("ayarlar")} route="ayarlar" />
         {admin && <Item icon={<ShieldCheck size={18} />} label="Yönetici paneli: kullanıcılar, maliyet, geri bildirim" onClick={() => ui.go("yonetici")} />}
+        {destek && <Item icon={<LifeBuoy size={18} />} label="Destek: bize yaz, yanıtlarımız" onClick={destekAc} badge={unread} />}
         <Item icon={<MessageSquareWarning size={18} />} label="Sorun bildir: ekran görüntüsüyle bize yaz" onClick={() => setFeedback(true)} />
         {status.data?.required && (
           <Item icon={<LogOut size={18} />} label="Çıkış yap" onClick={async () => {

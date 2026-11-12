@@ -91,6 +91,18 @@ CAPABILITIES = (
     "feedback",               # uygulama içi "Sorun bildir": POST /api/feedback multipart message (1–2000), screenshots
                               # (0–3 jpeg/png/webp, ≤ 5 MB), context (JSON ≤ 4 KB) → {ok, id}; oturumsuz/demo/üye açık,
                               # saatte 10 (429)
+    "support_chat",           # destek yazışması (app/support.py): GET /api/support {thread {status, unread}, messages[]
+                              # author user|admin|system, seen, report, pending, action {type retry, ref, pending, done}},
+                              # GET /api/support/unread, POST /api/support/seen, GET .../messages/{id}/screenshot/{n};
+                              # mesaj POST /api/feedback ile; yönetici GET /api/admin/support (gelen kutusu),
+                              # GET|PATCH /api/admin/support/{uid} (0: oturumsuz/demo), POST .../{uid}/seen|reply
+                              # {message, retry_ref, resolve}, GET .../messages/{id}/structure; push türü "destek"
+    "feedback_reply",         # yöneticinin yanıtı kullanıcıya ulaşır (support_chat ile aynı sürüm; eş ad)
+    "upload_report",          # yükleme hata satırında report {code, file_type, pages, bank_guess, has_text};
+                              # POST /api/support/report multipart report (JSON), bank_name, note, send_doc, file →
+                              # {ok, id, pending}; yöneticiye yalnız maskeli yapı + teşhis (dosya değil)
+    "upload_retry",           # GET /api/support/pending, DELETE /api/support/pending/{id}, POST .../{id}/retry {password,
+                              # remember} → yükleme sonucu satırı + {pending_id, done}; 30 gün, kendi defterinde
     "save_book_choice",       # fiş/fatura onayında defter ve harcayan: POST /api/entries ve /api/bills spender u<id>|ortak
                               # (ortak defterde; değilse yok sayılır, defterde olmayan kişi 400); X-HK-Book: kendi|ortak
                               # başlığı hk_book çerezinden önce gelir; okumadaki receipt_file/file_name üyenin öbür
