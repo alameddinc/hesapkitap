@@ -441,3 +441,81 @@ def test_api_pdf_bill_server_qr_with_text_layer(hosted, gemini, monkeypatch):  #
     d = r.json()
     assert d["type"] == "bill" and d["rule"] == "qr_bill" and d["amount"] == 642.4 and d["qr"]["server"] is True
     assert gemini["calls"] == 0
+
+
+# ---------------------------------------------------------------- alışveriş e-Arşivi: karekod tek başına "fatura" değil
+
+def restaurant_text(total: float = 108.0) -> str:
+    return "\n".join(["ÖRNEK KAFE RESTORAN LTD. ŞTİ.", "DENEME MAH. ÇARŞI CAD. NO:7", "e-Arşiv Fatura",
+                      "Fatura No: ABC2026000000042", f"Fatura Tarihi: {_day(3).strftime('%d.%m.%Y')}",
+                      "MERCİMEK ÇORBASI   48,00", "AYRAN   20,00", "KÜNEFE   40,00",
+                      f"Ödenecek Tutar: {_money(total)} TL", "KREDİ KARTI", "**** **** **** 4321"])
+
+
+def market_earsiv_text(total: float = 254.9) -> str:
+    return "\n".join(["ÖRNEK GIDA MARKET A.Ş.", "e-Arşiv Fatura", f"Tarih: {_day(2).strftime('%d.%m.%Y')}",
+                      "ZEYTİNYAĞI 1 L   189,90", "EKMEK   15,00", "SÜT 1 L   50,00",
+                      f"Vergiler Dahil Toplam Tutar: {_money(total)} TL", "GSM: 0555 000 00 00"])
+
+
+AI_SAYS_BILL = {"doc_type": "fatura", "merchant": "Örnek Kafe Restoran", "legal_name": "ÖRNEK KAFE RESTORAN LTD. ŞTİ.",
+                "total": 108.0, "due_date": None, "bill_type": "diger", "confidence": "orta"}
+
+
+def test_shopping_earsiv_classification(tmpdb):
+    q = karekod.parse(gib(total=108.0))
+    assert karekod.shopping(q, restaurant_text()) and not karekod.is_bill(q, restaurant_text())
+    assert karekod.shopping(karekod.parse(gib(total=254.9)), market_earsiv_text())  # GSM etiketi kurum işareti değil
+    assert not karekod.shopping(q, bill_text()) and karekod.is_bill(q, bill_text())  # son ödeme
+    utility_no_due = bill_text().replace("Son Ödeme", "Okuma").replace("Tüketim: 210 kWh", "Abone No: 0000000")
+    assert karekod.is_bill(q, utility_no_due) and not karekod.shopping(q, utility_no_due)  # kurum işareti
+    assert not karekod.shopping(q, restaurant_text() + "\nÖdendi, dekont")  # dekont: mevcut davranış
+    assert not karekod.shopping(q, restaurant_text(), due=_day(-10).isoformat())  # son ödeme fatura tarihinden sonra
+    assert karekod.shopping(q, restaurant_text(), due=_day(3).isoformat())  # aynı gün: tarih tekrarı
+    assert not karekod.shopping(karekod.parse(gib(parabirimi="USD")), restaurant_text())
+
+
+def test_api_restaurant_earsiv_ai_says_bill_becomes_receipt(hosted, gemini):  # noqa: F811
+    """Cihaz testi hatası: restoranın e-Arşivi (son ödeme yok) yapay zekâ "fatura" dese de harcama (fiş) olur."""
+    from app import bill_templates, db
+
+    c, u = _user(hosted)
+    gemini["replies"].append(dict(AI_SAYS_BILL))
+    r = _parse(c, restaurant_text(), [gib(total=108.0)])
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["type"] == "receipt" and d["total"] == 108.0 and d["date"] == _day(3).isoformat()
+    assert d["merchant"] == "Örnek Kafe Restoran" and d["tax_no"] == VKN_BILL and "type" in d["qr_fixed"]
+    assert d["receipt_file"] and "file_name" not in d and d["card_last4"] == "4321"
+    assert [i["amount"] for i in d["items"]] == [48.0, 20.0, 40.0]  # metinden, toplam karekodla tutuyor
+    assert d["vat_lines"] == [{"rate": 20, "amount": round(108.0 / 6, 2)}]
+    assert gemini["calls"] == 1 and d.get("charged") and _used(u["id"]) == 1
+    with db.connect() as cx:  # yanlış fatura şablonu öğrenilmedi
+        bill_templates._init(cx)
+        assert cx.execute("SELECT COUNT(*) FROM bill_templates WHERE source = 'learned'").fetchone()[0] == 0
+
+
+def test_api_market_earsiv_without_phone_text_becomes_receipt(hosted, gemini):  # noqa: F811
+    """Market e-Arşivi, karekod var, telefon metni yok: yapay zekâ "fatura" der → fiş (kalemsiz, tutar karekoddan)."""
+    c, _ = _user(hosted)
+    gemini["replies"].append({**AI_SAYS_BILL, "merchant": "Örnek Gıda Market", "total": 245.9})
+    d = _parse(c, None, [gib(total=254.9, day=_day(2))]).json()
+    assert d["type"] == "receipt" and d["total"] == 254.9 and d["merchant"] == "Örnek Gıda Market"
+    assert d["date"] == _day(2).isoformat() and d["items"] == []
+
+
+def test_api_electricity_earsiv_with_due_stays_bill(hosted, gemini):  # noqa: F811
+    c, _ = _user(hosted)
+    gemini["replies"].append({"doc_type": "fatura", "merchant": "Örnek Enerji", "total": 642.4,
+                              "due_date": _day(-12).isoformat(), "confidence": "orta"})
+    text = bill_text().replace(f"Son Ödeme Tarihi: {_day(-12).strftime('%d.%m.%Y')}", "Son Ödeme Tarihi: ??")
+    d = _parse(c, text, [gib()]).json()
+    assert d["type"] == "bill" and d["amount"] == 642.4 and d["due_date"] == _day(-12).isoformat()
+
+
+def test_paid_bill_dekont_unchanged(hosted, gemini):  # noqa: F811
+    """Ödenmiş fatura dekontu (paid): fatura olarak kalır (mevcut davranış)."""
+    c, _ = _user(hosted)
+    gemini["replies"].append({**AI_SAYS_BILL, "paid": True, "paid_at": _day(3).isoformat(), "pay_method": "kredi_karti"})
+    d = _parse(c, restaurant_text() + "\nTahsil edildi, dekont", [gib(total=108.0)]).json()
+    assert d["type"] == "bill" and d["paid"] is True

@@ -740,20 +740,24 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
     if (rule_text or code) and (hit := rule_read(rule_text, qr, categories)):
         return hit  # karekod (fatura / akaryakıt) ya da POS slibi: yapay zekâsız (app/karekod.py)
     qr_vkn = code.get("vkn") if code and not karekod.is_bill(code, rule_text) else None
+    shop = karekod.shopping(code, rule_text)  # alışveriş e-Arşivi: fatura şablonu öğrenilmez, sonuç fiş olur
+
+    def hints(doc: dict) -> dict:
+        return karekod.apply_hints(doc, code, rule_text, categories)
+
     if text and (hit := receipt_templates.read(text, categories, vkn=qr_vkn)):
-        return karekod.apply_hints(hit, code)  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
+        return hints(hit)  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
     if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
         return bill_templates.as_doc(hit)  # kurumun fatura şablonu: yapay zekâsız (app/bill_templates.py)
     if not enabled():
-        return karekod.apply_hints(
-            _local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more, text), code)
+        return hints(_local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more, text))
     try:
-        return karekod.apply_hints(
-            _parse_document_ai(data, mime, categories, split_categories, more, ocr_text=text, qr_vkn=qr_vkn), code)
+        return hints(_parse_document_ai(data, mime, categories, split_categories, more, ocr_text=text, qr_vkn=qr_vkn,
+                                        learn_bill=not shop))
     except ReceiptError as e:
         if not (text or ocr.available() or mime == "application/pdf"):
             raise
-        return karekod.apply_hints(_local(data, mime, categories, str(e), more, text), code)
+        return hints(_local(data, mime, categories, str(e), more, text))
 
 
 def _local(data: bytes, mime: str, categories: list[str], reason: str, more: list[tuple[bytes, str]] | None = None,
@@ -771,11 +775,13 @@ def _local(data: bytes, mime: str, categories: list[str], reason: str, more: lis
 
 def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
                        more: list[tuple[bytes, str]] | None = None, kind: str = "otomatik",
-                       ocr_text: str | None = None, qr_vkn: str | None = None) -> dict:
+                       ocr_text: str | None = None, qr_vkn: str | None = None, learn_bill: bool = True) -> dict:
     """Tek Gemini çağrısı. split_categories: kalem kurallarının kategorileri; model her fiş satırını bunlardan
     birine etiketler (kelime kuralının yakalayamadığı kısaltmalar için). kind: maliyet türü (metin yolunun fotoğraf
     yedeği "otomatik_foto"). ocr_text: telefon metni (yapay zekâya gitmez): faturada şablon bundan öğrenilir, fişte
-    KDV/VKN boşsa bundan doldurulur. qr_vkn: karekodun satıcı VKN'si (fiş şablonu imzası; metindeki VKN'den önce)."""
+    KDV/VKN boşsa bundan doldurulur. qr_vkn: karekodun satıcı VKN'si (fiş şablonu imzası; metindeki VKN'den önce).
+    learn_bill False: belge karekodlu alışveriş e-Arşivi (app/karekod.py shopping) — model "fatura" dese de fatura
+    şablonu öğrenilmez (yanlış öğrenilen şablon sonraki fişi fatura yapmasın)."""
     from app import bill_templates
 
     images_only = all((m or "").startswith("image/") for m in [mime, *(m for _, m in (more or []))])
@@ -785,7 +791,7 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
     doc = _doc_of(raw, categories)
     # şablon metni: PDF metin katmanı; fotoğrafta (metin katmanı yok) telefon metni — metin yolu da ondan öğreniyordu
     own = bill_templates.text_of(data, mime)
-    if doc["type"] == "bill" and (learn_from := (own if not more else None) or ocr_text):
+    if doc["type"] == "bill" and learn_bill and (learn_from := (own if not more else None) or ocr_text):
         bill_templates.learn(learn_from, raw)
     if doc["type"] == "receipt" and (own or ocr_text):  # e-arşiv PDF'i / telefon metni: KDV/VKN kural yedeği
         vat.fill(doc, own or ocr_text)

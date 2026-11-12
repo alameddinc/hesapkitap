@@ -356,14 +356,101 @@ def _provider(text: str, lines_orig: list[str], vkn: str | None) -> tuple[str | 
     return (name[:60] if name else None), None
 
 
+# abonelik / kamu hizmeti faturasının açık işaretleri (katlanmış metin). Kategori kelimesi tek başına (elektrik,
+# doğalgaz, internet, gsm) sayılmaz: market/restoran e-Arşivinde ürün adı ya da telefon etiketi olabilir.
+_UTILITY = re.compile(r"(?<![a-z])(abone|aboneli[gk]|abone\s*no|tesisat|sozlesme\s*hesap|tuketim|kwh|endeks|sayac|m3|"
+                      r"okuma\s*tarihi|ilk\s*okuma|son\s*okuma)(?![a-z])")
+
+
+def utility(text: str | None) -> bool:
+    """Metin bir abonelik / kamu hizmeti faturası mı: fatura şablonunun (öğrenilen ya da yerleşik kurum) imzası tutuyor
+    ya da abone / tesisat / sözleşme hesap / tüketim (kWh, m3, endeks, sayaç) gibi açık işaret var."""
+    if not text:
+        return False
+    _, lines = _text_lines(text)
+    if any(_UTILITY.search(ln) for ln in lines):
+        return True
+    from app import bill_templates, db
+
+    try:
+        with db.connect() as c:
+            bill_templates._init(c)
+            return any(bill_templates.matches(text, t["spec"]["sig"], t["exclude"]) for t in bill_templates._templates(c))
+    except Exception:  # noqa: BLE001
+        log.warning("fatura şablonu imzası denetlenemedi", exc_info=True)
+        return False
+
+
+def bill_like(qr: dict | None, text: str | None, due: str | None = None) -> bool:
+    """Ödenecek fatura belirtisi: metinde "son ödeme" geçiyor, ya da kurum (abonelik / kamu hizmeti) faturası, ya da
+    okunan son ödeme tarihi karekodun fatura tarihinden SONRA (aynı gün: alışveriş belgesinde tarih tekrarı)."""
+    if text:
+        _, lines = _text_lines(text)
+        if any(_DUE.search(ln) for ln in lines):
+            return True
+    if utility(text):
+        return True
+    return bool(due and qr and qr.get("date") and due > qr["date"])
+
+
 def is_bill(qr: dict | None, text: str | None) -> bool:
-    """GİB karekodlu belge kurum faturası mı: metinde "son ödeme" geçiyor ve ödeme dekontu değil."""
+    """GİB karekodlu belge ödenecek kurum faturası mı: bill_like (son ödeme / kurum işareti) ve ödeme dekontu değil.
+    Değilse alışveriş e-Arşivi / e-Faturası: harcama (fiş) olarak işlenir (shopping)."""
     from app import bill_templates
 
     if not qr or qr.get("kind") != "gib" or not text:
         return False
-    _, lines = _text_lines(text)
-    return any(_DUE.search(ln) for ln in lines) and not bill_templates.is_paid_doc(text)
+    return bill_like(qr, text) and not bill_templates.is_paid_doc(text)
+
+
+def shopping(qr: dict | None, text: str | None, due: str | None = None) -> bool:
+    """GİB karekodlu ALIŞVERİŞ belgesi (restoran, market e-Arşivi): karekod TL, son ödeme / kurum işareti yok, ödeme
+    dekontu değil. Karekod tek başına "ödenecek fatura" kararı vermez; yapay zekâ "fatura" dese de fiş olur."""
+    from app import bill_templates
+
+    if not qr or qr.get("kind") != "gib" or (qr.get("currency") or "").lower() not in CURRENCY_TL:
+        return False
+    if text and bill_templates.is_paid_doc(text):
+        return False  # dekont / makbuz: mevcut davranış
+    return not bill_like(qr, text, due)
+
+
+def as_receipt(doc: dict, qr: dict, text: str | None, categories: list[str] | None = None) -> dict:
+    """Yapay zekânın (ya da yerel okumanın) "fatura" dediği alışveriş e-Arşivi → fiş (harcama): tutar karekodun
+    odenecek'i (yoksa vergidahil), tarih karekoddan, VKN ve KDV dökümü karekoddan, işyeri okumanın kurum adından (yoksa
+    metnin başlığından). Kalemler metinden kural ile; toplamı karekodla ±TOL tutmuyorsa kalemsiz."""
+    from app import ocr, receipt_templates as rt, vat
+
+    cats = categories or []
+    items, pay, last4, inst, merchant, legal = [], "bilinmiyor", None, 1, None, None
+    if text:
+        orig, lines = _text_lines(text)
+        merchant, legal = rt._merchant(orig, lines)
+        pay, _, inst, last4 = rt._payment(" ".join(lines))
+        try:
+            loc = ocr.parse_text(text, cats or ["Diğer"]).get("items") or []
+        except ValueError:
+            loc = []
+        if loc and all(isinstance(i.get("amount"), (int, float)) for i in loc) \
+                and abs(round(sum(i["amount"] for i in loc), 2) - qr["total"]) <= TOL:
+            items = loc
+    name = (doc.get("provider") or "").strip()
+    out = {"type": "receipt", "merchant": (name if name and name != "Fatura" else merchant) or "Fiş",
+           "date": qr["date"] if _date_ok(qr.get("date")) else None, "total": qr["total"], "payment": pay,
+           "payment_card": None, "installments": inst, "card_last4": last4,
+           "category": "Diğer" if "Diğer" in cats or not cats else cats[0], "items": items[:40],
+           "legal_name": doc.get("legal_name") or legal, "address": None, "branch": None,
+           "vat_total": qr.get("vat_total"), "vat_lines": qr.get("vat_lines") or [], "tax_no": qr.get("vkn"),
+           "tax_office": None, "confidence": "orta", "source": doc.get("source") or "yapay_zeka"}
+    for k in ("engine", "note", "model"):
+        if doc.get(k):
+            out[k] = doc[k]
+    if text:
+        vat.fill(out, text)
+        if qr.get("vkn"):
+            out["tax_no"] = qr["vkn"]
+    out["qr_fixed"] = ["type"]
+    return out
 
 
 def bill_doc(qr: dict, text: str | None) -> dict | None:
@@ -384,12 +471,17 @@ def bill_doc(qr: dict, text: str | None) -> dict | None:
             "payment": None, "confidence": "yüksek", "source": "karekod", "rule": "qr_bill", "qr": {"kind": "gib"}}
 
 
-def apply_hints(doc: dict, qr: dict | None) -> dict:
+def apply_hints(doc: dict, qr: dict | None, text: str | None = None, categories: list[str] | None = None) -> dict:
     """Yapay zekâ (ya da yerel) okumasından sonra GİB karekodu: tutar karekodla tutmuyorsa karekodunki (e-belgenin
-    resmi tutarı), boş tarih / VKN / KDV dökümü karekoddan. Pompa karekodu: boş tarih / VKN. doc['qr_fixed'] alanları."""
+    resmi tutarı), boş tarih / VKN / KDV dökümü karekoddan. Pompa karekodu: boş tarih / VKN. doc['qr_fixed'] alanları.
+    Okuma "fatura" dedi ama belge alışveriş e-Arşivi (shopping: son ödeme / kurum işareti yok, ödenmiş fatura değil)
+    → fiş (as_receipt): Ödemeler'e değil harcama olarak İşlemler'e girer."""
     if not doc or not qr or qr.get("kind") not in ("gib", "pompa"):
         return doc
-    fixed = []
+    if doc.get("type") == "bill" and qr["kind"] == "gib" and not doc.get("paid") \
+            and shopping(qr, text, doc.get("due_date")):
+        doc = as_receipt(doc, qr, text, categories)
+    fixed = list(doc.pop("qr_fixed", []))
     tl = (qr.get("currency") or "").lower() in CURRENCY_TL
     if doc.get("type") == "bill":
         if qr["kind"] == "gib" and tl and (doc.get("amount") is None or not money.eq(doc["amount"], qr["total"])):
