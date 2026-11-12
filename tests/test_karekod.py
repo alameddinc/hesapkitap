@@ -547,3 +547,15 @@ def test_dine_in_consumption_is_not_utility(tmpdb):
     assert not karekod.utility(dine_in) and karekod.shopping(q, dine_in) and not karekod.is_bill(q, dine_in)
     for t in ("Tüketim: 210 kWh", "TÜKETİM MİKTARI 45", "Tüketim Dönemi 10.2026", "AKTİF TÜKETİM 210"):
         assert karekod.utility("ÖRNEK ENERJİ\n" + t), t
+
+
+def test_pos_sale_link_qr_makes_receipt(tmpdb):
+    """POS'un satış sorgulama bağlantısı (karekod) alışveriş belgesidir: okuma "fatura" dese de fiş (metin olmasa da)."""
+    q = karekod.parse("https://pos.example.com.tr/InquiryOperations/SaleInquiryView/Index?q=abc123")
+    assert q["kind"] == "link" and q.get("sale")
+    assert not karekod.parse("https://e-fatura.example.com/goruntule?id=1").get("sale")
+    doc = {"type": "bill", "provider": "Örnek Kafe", "amount": 108.0, "due_date": None, "paid": False,
+           "category": "Faturalar", "issue_date": _day(3).isoformat()}
+    r = karekod.apply_hints(dict(doc), q, None, ["Kafe & Restoran"])
+    assert r["type"] == "receipt" and r["total"] == 108.0 and r["date"] == _day(3).isoformat()
+    assert karekod.apply_hints(dict(doc, due_date=_day(-20).isoformat()), q, None, [])["type"] == "bill"

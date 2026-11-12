@@ -195,7 +195,9 @@ def parse(payload: str | None) -> dict | None:
     s = payload.strip()[:MAX_LEN]
     if re.match(r"^https?://", s, re.I):
         host = re.sub(r"^https?://", "", s, flags=re.I).split("/")[0].split("?")[0].lower()[:80]
-        return {"kind": "link", "host": host}  # tanınır, erişilmez
+        # POS / ödeme kuruluşunun satış sorgulama bağlantısı (ör. pavopay …/SaleInquiry…): belge alışveriş fişidir
+        sale = bool(re.search(r"sale|satis|slip", s.split("?")[0], re.I))
+        return {"kind": "link", "host": host, **({"sale": True} if sale else {})}  # tanınır, erişilmez
     if "{" in s:
         raw = _json_pairs(s)
         return _gib(raw) if raw else None
@@ -477,21 +479,24 @@ def bill_doc(qr: dict, text: str | None) -> dict | None:
 _BILL_KEEP = {"Elektrik", "Doğalgaz", "Su", "İnternet & TV", "Telefon", "Kira & Aidat"}
 
 
-def bill_without_due(doc: dict, text: str | None, categories: list[str] | None = None) -> dict:
+def bill_without_due(doc: dict, text: str | None, categories: list[str] | None = None, sale: bool = False) -> dict:
     """Karekod okunamadı (ya da GİB değil) ve okuma "fatura" dedi: son ödeme tarihi yok, kurum işareti yok, kategori
     abonelik değil ve ödeme dekontu değilse alışveriş belgesidir (restoran / market e-Arşivi; 12.11 cihaz testi: karekodu
-    okunamayan restoran fişi Ödemeler'e düşüyordu) → fiş. Telefon metni yoksa karar verilmez (eski davranış)."""
+    okunamayan restoran fişi Ödemeler'e düşüyordu) → fiş. Telefon metni yoksa karar verilmez (eski davranış). sale: karekod
+    POS satış sorgulama bağlantısı (parse "sale"): metin olmasa da, kurum işareti olsa da fiş."""
     from app import bill_templates
 
-    if doc.get("type") != "bill" or doc.get("paid") or doc.get("due_date") or not text:
+    if doc.get("type") != "bill" or doc.get("paid") or doc.get("due_date") or not (text or sale):
         return doc
-    if (doc.get("category") or "") in _BILL_KEEP or bill_like(None, text) or bill_templates.is_paid_doc(text):
+    if not sale and ((doc.get("category") or "") in _BILL_KEEP or bill_like(None, text)):
+        return doc
+    if text and bill_templates.is_paid_doc(text):
         return doc
     amount = doc.get("amount")
     if not isinstance(amount, (int, float)) or amount <= 0:
         return doc
     date = doc.get("issue_date") or doc.get("date")
-    if not _date_ok(date):
+    if not _date_ok(date) and text:
         from app import ocr
 
         try:
@@ -513,7 +518,7 @@ def apply_hints(doc: dict, qr: dict | None, text: str | None = None, categories:
     if not doc:
         return doc
     if not qr or qr.get("kind") not in ("gib", "pompa"):
-        return bill_without_due(doc, text, categories)
+        return bill_without_due(doc, text, categories, sale=bool(qr and qr.get("sale")))
     if doc.get("type") == "bill" and qr["kind"] == "gib" and not doc.get("paid") \
             and shopping(qr, text, doc.get("due_date")):
         doc = as_receipt(doc, qr, text, categories)
