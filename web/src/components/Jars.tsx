@@ -14,8 +14,11 @@ import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
 import { hedefMetni, type GoalStatus, type Ton } from "../lib/kumbaraHedef";
 import type { JarDebt } from "../lib/borcKumbara";
 import { JarPlanLine } from "./DebtJar";
+import { defaultPerson, hareketKisi, HareketDuzelt, hasShares, KatilimciPenceresi, KimAtti, PayKarti, useCanManage, type PayJar } from "./KumbaraPaylar";
+import type { PayDurumu } from "../lib/kumbaraPay";
 
-interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null }
+interface Move { id: number; move_date: string; amount: number; note: string | null; auto: number; cost: number | null;
+  person_id?: number | null; outside?: number; created_by?: number | null; debt_payment_id?: number | null }
 interface Jar {
   unit: string; unit_label?: string; unit_symbol?: string; value?: number | null; unit_price?: number | null; cost?: number;
   gain?: number | null; buy_due?: boolean; bought_this_month?: number;
@@ -26,6 +29,7 @@ interface Jar {
   goal_status?: GoalStatus | null; // sunucu app/jar_goal.py: rozet + "ayda ₺… ayır" (eski sunucuda yok)
   contributions?: { user_id: number | null; amount: number }[]; // ortak kumbara: kim ne kadar ayırdı
   debt?: JarDebt | null; // borca bağlı kumbara (yetenek debt_jar; eski sunucuda yok)
+  shares?: PayDurumu | null; outside?: number; share_monthly?: number | null; remind_day?: number | null; // kumbara_shares
 }
 
 // TL dışı kumbara: her ay altın/döviz alımı (varlık olarak eklenir)
@@ -145,7 +149,11 @@ function MoveForm({ jar, dir, onClose }: { jar: Jar; dir: "yatir" | "cek"; onClo
   const ui = useUI();
   const [amount, setAmount] = useState(dir === "yatir" && jar.need_per_month ? String(jar.need_per_month) : "");
   const [note, setNote] = useState("");
-  const save = useSave(() => json("POST", `/api/jars/${jar.id}/moves`, { amount: parseAmount(amount), direction: dir, note }),
+  // katılımcılı kumbara: kim attı (varsayılan sen), para hesaplarda değilse harcanabilirden düşmez
+  const [person, setPerson] = useState<number | null>(() => defaultPerson(jar as PayJar));
+  const [outside, setOutside] = useState(false);
+  const who = dir === "yatir" && jar.shares?.people.length ? { person_id: person, outside } : {};
+  const save = useSave(() => json("POST", `/api/jars/${jar.id}/moves`, { amount: parseAmount(amount), direction: dir, note, ...who }),
     () => { ui.toast(dir === "yatir" ? "Kumbaraya eklendi" : "Kumbaradan çekildi"); onClose(); });
   return (
     <Modal title={`${jar.name} · ${dir === "yatir" ? "para ayır" : "para çek"}`} onClose={onClose} footer={
@@ -154,6 +162,7 @@ function MoveForm({ jar, dir, onClose }: { jar: Jar; dir: "yatir" | "cek"; onClo
       <div className="space-y-3">
         <input className="input text-right text-lg" inputMode="decimal" autoFocus placeholder="Tutar" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <input className="input" placeholder="Not (ops.)" value={note} onChange={(e) => setNote(e.target.value)} />
+        {dir === "yatir" && <KimAtti j={jar as PayJar} person={person} setPerson={(n) => { setPerson(n); setOutside(false); }} outside={outside} setOutside={setOutside} />}
         <p className="text-xs text-stone-500">Kumbarada şu an {tl(jar.balance)} var.</p>
       </div>
     </Modal>
@@ -286,6 +295,9 @@ export default function Jars() {
   const [move, setMove] = useState<{ jar: Jar; dir: "yatir" | "cek" } | null>(null);
   const [buy, setBuy] = useState<Jar | null>(null);
   const [fix, setFix] = useState<{ jar: Jar; move: Move } | null>(null);
+  const [edit, setEdit] = useState<{ jar: Jar; move: Move } | null>(null); // TL hareketi: dokun → düzenle
+  const [ppl, setPpl] = useState<Jar | null>(null); // katılımcılar penceresi
+  const canManage = useCanManage();
   const [open, setOpen] = useState<number | null>(null);
   const [showClosed, setShowClosed] = useState(false);
   const patch = useSave((a: { id: number; body: object }) => json("PATCH", `/api/jars/${a.id}`, a.body));
@@ -348,13 +360,15 @@ export default function Jars() {
                   onClick={() => unlink.mutate(j, { onError: (e) => ui.error(e.message) })}>{j.debt.suggestion.convert}</button>
               </div>
             )}
-            {shares(j) && <p className="text-xs text-stone-500">{shares(j)}</p>}
+            {!j.shares && shares(j) && <p className="text-xs text-stone-500">{shares(j)}</p>}
             {j.goal != null && (
               <div className="mt-1 h-2 overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800">
                 <div className={cx("h-full rounded-full", TON[tonOf(j.goal_status) ?? "iyi"].cubuk)} style={{ width: `${j.pct ?? 0}%` }} />
               </div>
             )}
             {j.debt?.plan && !j.closed_at ? <div className="mt-1.5"><JarPlanLine p={j.debt.plan} /></div> : <HedefDurumu j={j} />}
+            {!j.closed_at && <PayKarti j={j as PayJar} onOpen={() => setPpl(j)} />}
+            {!!j.outside && <p className="mt-0.5 text-xs text-stone-500 tabular-nums">{tl(j.outside)} hesaplarının dışında (elden / kişide); harcanabilirden düşülmez.</p>}
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
               <span>
                 {j.closed_at ? `kapandı ${dateTR(j.closed_at)}`
@@ -387,7 +401,11 @@ export default function Jars() {
                 <ul className="divide-y divide-stone-200 dark:divide-stone-800">
                   {j.moves.map((m) => (
                     <li key={m.id} className="flex items-center justify-between gap-2 py-1">
-                      <span>{dateTR(m.move_date)} {m.note && <span className="text-stone-500">· {m.note}</span>}</span>
+                      {!isUnit(j) && !m.debt_payment_id && !j.closed_at ? (
+                        <button className="min-w-0 text-left hover:underline" aria-label={`${dateTR(m.move_date)} hareketini düzelt`} onClick={() => setEdit({ jar: j, move: m })}>
+                          {dateTR(m.move_date)} {hareketKisi(j as PayJar, m) && <span className="font-medium">· {hareketKisi(j as PayJar, m)}</span>} {m.note && <span className="text-stone-500">· {m.note}</span>}
+                        </button>
+                      ) : <span>{dateTR(m.move_date)} {m.note && <span className="text-stone-500">· {m.note}</span>}</span>}
                       <span className="flex items-center gap-2">
                         <span className={cx("tabular-nums", m.amount < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>
                           {m.amount > 0 ? "+" : "−"}{isUnit(j) ? qty(Math.abs(m.amount), j.unit_symbol ?? sym(j.unit)) : tl(Math.abs(m.amount))}
@@ -406,6 +424,8 @@ export default function Jars() {
                 </ul>
                 <div className="flex flex-wrap gap-2">
                   {!j.closed_at && <button className="btn-ghost px-2 py-1" onClick={() => setForm({ jar: j })}>Düzenle</button>}
+                  {!j.closed_at && hasShares(j as PayJar) && (j.shares || canManage) && (
+                    <button className="btn-ghost px-2 py-1" onClick={() => setPpl(j)}>{j.shares ? "Katılımcılar" : "Birden çok kişi atıyor: katılımcı ekle"}</button>)}
                   <button className="btn-ghost px-2 py-1" onClick={() => patch.mutate({ id: j.id, body: { closed: !j.closed_at } })}>
                     {j.closed_at ? "Yeniden aç" : "Kapat (hedefe ulaştım / vazgeçtim)"}
                   </button>
@@ -425,6 +445,8 @@ export default function Jars() {
       {move && <MoveForm jar={move.jar} dir={move.dir} onClose={() => setMove(null)} />}
       {buy && <BuyForm jar={buy} onClose={() => setBuy(null)} />}
       {fix && <EditPurchase jar={fix.jar} move={fix.move} onClose={() => setFix(null)} />}
+      {edit && <HareketDuzelt j={edit.jar as PayJar} m={edit.move} onClose={() => setEdit(null)} />}
+      {ppl && <KatilimciPenceresi j={(q.data?.find((x) => x.id === ppl.id) ?? ppl) as PayJar} onClose={() => setPpl(null)} />}
     </section>
   );
 }

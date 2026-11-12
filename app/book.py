@@ -50,6 +50,7 @@ MEMBER_WRITES = [
     ("PUT", r"/api/entries/\d+/receipt-items"), ("POST", r"/api/entries/\d+/receipt-reread"), ("POST", r"/api/receipts/reread"),
     ("POST", r"/api/share"), ("POST", r"/api/inbox/\d+/\w+"), ("POST", r"/api/digest/dismiss"),
     ("POST", r"/api/jars/\d+/moves"), ("POST", r"/api/jars/\d+/buy"),  # ortak kumbara: aile birlikte biriktirir
+    ("PATCH", r"/api/jar-moves/\d+"),  # kumbara hareketini düzelt: yalnız kendi eklediği TL hareketi (uçta denetlenir)
     ("PUT", r"/api/spender"), ("PUT", r"/api/cards/[^/]+/spender"),  # kim harcadı: kayıtta ve kartta (görebildiği)
     ("POST", r"/api/shopping-list"), ("PATCH", r"/api/shopping-list/\d+"),  # ortak alışveriş listesi
     ("DELETE", r"/api/shopping-list/\d+"), ("DELETE", r"/api/shopping-list"),

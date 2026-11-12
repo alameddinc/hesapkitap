@@ -100,6 +100,9 @@ TYPES = {
     "borc": ("Borç ödeme günü", True),
     "duyuru": ("Duyurular ve yeni sürümler", True),  # yöneticinin duyurusu (app/announce.py)
     "kumbara": ("Kumbara hedef tarihi", True),  # hedef tarihine 7 gün kala, hedefin gerisindeyse (_kumbara)
+    # katılımcılı kumbarada kişinin KENDİ payı bu ay tamamlanmadıysa ayın hatırlatma gününde (varsayılan 25) bir kez
+    # (_kumbara_pay); başkasının payı için bildirim yok, uygulamayı kullanmayan katılımcıya hiç yok
+    "kumbara_pay": ("Kumbara payı", True),
     "kart_suresi": ("Yemek / hediye kartı son kullanma", True),  # son kullanmaya 30 ve 7 gün kala, bakiye varsa
     # "Hayırlı Cumalar": seçilen ritimde (Her Cuma / ayın ilk Cuması) o dönemde sadaka kaydı yoksa; seçim yapılmamışsa
     # ilk Cuma ve (kayıt olmazsa) sonraki ayın ilk Cuması, en çok 2 kez (app/sadaka_reminder.py)
@@ -114,7 +117,7 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "belge": "belge", "ortak": "ortak defter kaydı", "zekat": "zekât hatırlatması", "aile": "aile bildirimi",
          "geri_bildirim": "geri bildirim", "fiyat": "fiyat artışı", "sistem": "sistem uyarısı",
          "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
-         "kumbara": "kumbara hatırlatması", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
+         "kumbara": "kumbara hatırlatması", "kumbara_pay": "kumbara payı", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
          "garanti": "garanti hatırlatması"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -959,6 +962,42 @@ def _kumbara(today: date) -> list[dict]:
     return out
 
 
+def _kumbara_pay(u: dict, today: date) -> list[dict]:
+    """Katılımcılı TL kumbarası (kumbara_shares): kişinin KENDİ bu ayki payı tamamlanmadıysa, kumbaranın hatırlatma
+    gününde ya da sonrasında ayda bir kez (kimlik ay'a bağlı). Başkasının payı için bildirim yok (yalnız ekranda);
+    uygulamayı kullanmayan katılımcı zaten burada yok. Hedefe ulaşan / kapalı kumbara, Hesaplar sayfası kapalı üye ve
+    görünmeyen hesaptaki kumbara yok. Dil suçlayıcı değil: ne kadar kaldığı ve "attıysan işle"."""
+    from app import book, jar_shares, money
+
+    uid = u.get("id")
+    if uid is None or _hesaplar_hidden():
+        return []
+    names = {p["id"]: p["name"] for p in book.people()}
+    owner = u.get("member_of") or uid
+    out = []
+    for j in db.list_jars(today, include_closed=False):
+        if (j.get("unit") or "TRY") != "TRY" or not j.get("people"):
+            continue
+        if j.get("account_id") and not book.can_see_account(j["account_id"]):
+            continue
+        if j.get("goal") and money.le(j["goal"] - j["balance"], 0):
+            continue
+        st = jar_shares.status(j, today, names, uid, owner)
+        if not st or today.day < st["remind_day"]:
+            continue
+        me = next((p for p in st["people"] if p["me"]), None)
+        if not me or me["state"] not in ("eksik", "bekliyor"):
+            continue
+        if me["state"] == "bekliyor":
+            body = f"Bu ay payın {money.tl(me['share'], trim=True)}. Attıysan kumbaraya işle; kimin ne kadar attığı kumbarada."
+        else:
+            body = (f"Bu ay payından {money.tl(me['left'], trim=True)} kaldı; {money.tl(me['paid'], trim=True)} eklendi. "
+                    "Attıysan kumbaraya işle.")
+        out.append(item("kumbara_pay", f"kumbara_pay:{j['id']}:{st['month']}", f"{j['name']}: bu ayki payın", body,
+                        f"{R_KUMBARA}/{j['id']}"))
+    return out
+
+
 def _kart_suresi(today: date) -> list[dict]:
     """Ön ödemeli kart (yemek / hediye / giyim) son kullanma tarihine 30 ve 7 gün kala, kartta para varsa. Bakiye 0 ya
     da eksiyse yok (kaybedilecek para yok)."""
@@ -1035,7 +1074,8 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
                      ("butce", lambda: _butce(today)), ("gelir", lambda: _gelir(today)), ("ozet", lambda: _ozet(today)),
                      ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
                      ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today)),
-                     ("kumbara", lambda: _kumbara(today)), ("kart_suresi", lambda: _kart_suresi(today)),
+                     ("kumbara", lambda: _kumbara(today)), ("kumbara_pay", lambda: _kumbara_pay(u, today)),
+                     ("kart_suresi", lambda: _kart_suresi(today)),
                      ("sadaka", lambda: _sadaka(today)), ("garanti", lambda: _garanti(u, today)),
                      ("abonelik", lambda: _abonelik(u, today))):
         if kind != "odeme" and not on.get(kind):
