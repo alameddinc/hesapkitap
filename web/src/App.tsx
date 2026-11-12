@@ -89,7 +89,7 @@ const PAGES: Record<Route, () => React.ReactElement> = {
   yonetici: Admin, // yalnız yöneticiye (menüde ve Diğer'de); alt sayfa adreste: #/yonetici/<alt>
 };
 
-const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
+const NAV: { route: Route; label: string; icon: LucideIcon; hidden?: true }[] = [
   { route: "ozet", label: "Özet", icon: LayoutDashboard },
   { route: "islemler", label: "İşlemler", icon: List },
   { route: "istatistik", label: "İstatistik", icon: BarChart3 },
@@ -100,7 +100,7 @@ const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: "hesaplar", label: "Hesaplar", icon: Landmark },
   { route: "faturalar", label: "Faturalar", icon: Zap },
   { route: "borclar", label: "Borç / Alacak", icon: HandCoins },
-  { route: "borc-plani", label: "Borç planı", icon: ListChecks },
+  { route: "borc-plani", label: "Borç planı", icon: ListChecks, hidden: true }, // menüde değil: Borç / Alacak'tan açılır (12.11)
   { route: "zekat", label: "Zekât ve Sadaka", icon: Moon },
   { route: "fiyatlar", label: "Fiyatlar", icon: Tag },
   { route: "alisveris", label: "Alışveriş listesi", icon: ShoppingCart },
@@ -300,7 +300,7 @@ function Shell() {
           {book.data?.member && <div className="-mt-2 mb-3"><BookSwitch /></div>}
           {!viewer && <button className="btn-primary mb-3 justify-center py-2" onClick={ui.openAdd}><Plus size={16} /> Ekle</button>}
           <nav className="space-y-0.5">
-            {NAV.filter((n) => canSee(n.route)).map((n) => (
+            {NAV.filter((n) => !n.hidden && canSee(n.route)).map((n) => (
               <a key={n.route} href={`#/${n.route}`}
                 className={cx("flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                   route === n.route ? "bg-stone-100 font-medium dark:bg-stone-800" : "text-stone-600 hover:bg-stone-50 dark:text-stone-400 dark:hover:bg-stone-800/50")}>

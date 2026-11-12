@@ -27,7 +27,8 @@ export default function Borclar() {
       <div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-xl font-semibold">Borç / Alacak</h1>
-          {plan && <button className="btn-ghost px-2 py-1 text-sm" onClick={() => ui.go("borc-plani")}><ListChecks size={16} /> Borç planı <ChevronRight size={14} /></button>}
+          {/* Borç planı menüde değil, buradan açılır (12.11) */}
+          {plan && <button className="btn-primary px-3 py-1.5 text-sm" data-testid="borc-plani-gir" onClick={() => ui.go("borc-plani")}><ListChecks size={16} /> Borç planı: faiz ödemeden ay ay kapat <ChevronRight size={14} /></button>}
         </div>
         <p className="text-sm text-stone-500">
           Borç verip almak gelir ya da gider değildir: verdiğin gün elindeki para azalır, geri aldığın gün artar; aylık
