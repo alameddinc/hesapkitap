@@ -32,8 +32,8 @@ export const TERIM = {
   netDurum: {
     ad: "Net durum",
     kisa: "Sahip oldukların − borçların",
-    aciklama: "Banka ve nakit, altın/döviz, yemek kartları ve alacakların toplanır; kart borcu, kişilere borcun ve " +
-      "ödenmemiş zekât düşülür. Henüz kesilmemiş ekstreler düşülmez; onlar \"Tahmini ekstre sonrası\" satırında.",
+    aciklama: "Banka ve nakit, altın/döviz, yemek kartları ve alacakların toplanır; kart ekstresi, henüz kesilmemiş kart " +
+      "ekstresinin tahmini, kişilere borcun ve ödenmemiş zekât düşülür.",
   },
   artan: {
     ad: "Artan",

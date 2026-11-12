@@ -182,7 +182,8 @@ def test_payoff_edit_later_and_old_client_keeps_it(client):
             "plan_interest": "var"}
     r = client.put(f"/api/debts/{did}/schedule", json={**body, "payoff_amount": 80000, "plan_rate": 2.2})
     assert r.status_code == 200 and r.json()["debt"]["payoff_amount"] == 80000 and r.json()["debt"]["plan_rate"] == 2.2
-    assert r.json()["debt"]["payoff_date"] == TODAY.isoformat()
+    # girildiği gün: API katmanı gerçek bugünü yazar (yukarıdaki sabit gün yalnız db/debt_plan'da); test güne bağlı kalmasın
+    assert r.json()["debt"]["payoff_date"] == date.today().isoformat()
     # eski istemci (yeni alanları bilmez) planı düzenleyince girilen tutar silinmez
     assert client.put(f"/api/debts/{did}/schedule", json=body).json()["debt"]["payoff_amount"] == 80000
     assert client.patch(f"/api/debts/{did}", json={"note": "Konut dışı"}).status_code == 200

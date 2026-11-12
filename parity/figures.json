@@ -26,7 +26,7 @@
     "web_src": "web/src/pages/Transactions.tsx", "mobile_src": "src/screens/Islemler.tsx"},
   "net.harcanabilir": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "spendable",
     "web_src": "web/src/components/NetWorth.tsx", "mobile_src": "src/screens/Ozet.tsx"},
-  "net.durum": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "net",
+  "net.durum": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "net_display",
     "web_src": "web/src/components/NetWorth.tsx", "mobile_src": "src/screens/Ozet.tsx"},
   "net.ekstre_sonrasi": {"web": "/api/net-worth", "mobile": "/api/net-worth", "path": "net_after_estimates",
     "web_src": "web/src/components/NetWorth.tsx", "mobile_src": "src/components/para/NetDurum.tsx"},

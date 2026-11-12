@@ -5,6 +5,7 @@ import { ask } from "../lib/ask";
 import { call } from "../lib/apiError";
 import { AlertTriangle, ChevronDown, ChevronRight, CreditCard, GitMerge, Landmark, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
+import { NET_KESILECEK, netDurumu } from "../lib/netDurum";
 import type { CardCycle } from "../api";
 import { cx, dateTR, parseAmount, tl } from "../format";
 import { useUI } from "../ui";
@@ -22,12 +23,14 @@ interface NW {
   reserved: number; free: number; spendable: number; holdings: number; family_holdings: number; zakat_due: number;
   accounts: (Account & { reserved: number })[]; cash: number; cards: { title: string; amount: number; due_date: string; estimated: boolean }[];
   card_debt: number; card_estimated: number; receivable: number; payable: number; net: number; net_after_estimates: number;
+  /** ekranda gösterilen Net durum (yetenek net_display; = net_after_estimates): kesilecek kart ekstresi dahil */
+  net_display?: number;
   wallets: { id: number; name: string; balance: number }[]; in_wallets: number; unknown_banks: string[];
   credit_cards: { title: string; card_no: string; last_period_end: string; last_total: number; last_due: string | null; paid_at: string | null;
     unpaid: number; next_estimate: number | null; next_due: string | null; cycle: CardCycle | null }[];
   stale: string[];
   /** sunucu toplamları (istemci toplamaz); card_overdue: ödenmemiş eski ekstreler, kalanı son ekstrede (toplamda yok) */
-  totals?: { card_debt: number; card_estimated: number; card_overdue: number; cash: number; spendable: number; net: number };
+  totals?: { card_debt: number; card_estimated: number; card_overdue: number; cash: number; spendable: number; net: number; net_display?: number };
   card_overdue?: { title: string; amount: number; due_date: string; statement_id: number; rolled_into: number | null }[];
   /** sunucu a18ac2a: Harcanabilir'in parçaları ve açıklaması (Özet ve Hesaplar'da aynı metin) */
   spendable_parts?: { key: string; label: string; amount: number; sign: "+" | "−" }[];
@@ -83,7 +86,8 @@ function NetWorthAt({ month }: { month: string }) {
     <button className="card flex w-full items-center gap-3 p-4 text-left" onClick={() => ui.go("hesaplar")}>
       <Landmark size={18} className="shrink-0 text-stone-500" />
       <span className="min-w-0 flex-1">
-        <span className="block text-xs text-stone-500">Net durum · {d ? dateTR(d.as_of) : "…"} itibarıyla (dönem sonu, yaklaşık)</span>
+        {/* geçmiş gün: o güne kadar kesilmiş ekstreler düşülür (sunucu net_worth_at; kesilecek ekstre tahmini yok) */}
+        <span className="block text-xs text-stone-500">Net durum · {d ? dateTR(d.as_of) : "…"} itibarıyla (dönem sonu, yaklaşık; kesilmiş ekstreler dahil)</span>
         {d && <>
           <span className={cx("block text-lg font-semibold tabular-nums", d.net < 0 ? "text-red-600" : "text-green-700 dark:text-green-400")}>{tl(d.net)}</span>
           <span className="block text-xs text-stone-500">
@@ -118,7 +122,8 @@ function SpendableParts({ d }: { d: NW }) {
 
 /** İki rakam: harcanabilir (ödenecekler ve kumbara düşülmüş, altın/döviz hariç) ve net durum (her şey dahil).
  *  Açıklamalar (i) penceresinde (title değil: dokunmatikte görünmez); eksi harcanabilir neden eksi, alt satırda. */
-function Headline({ d }: { d: NW }) {
+function Headline({ d, yeni }: { d: NW; yeni: boolean }) {
+  const net = netDurumu({ ...tot(d), net_display: d.net_display }, yeni);
   const tone = (x: number) => (x < 0 ? "text-red-600" : "text-green-700 dark:text-green-400");
   const sp = tot(d).spendable;
   return (
@@ -131,8 +136,8 @@ function Headline({ d }: { d: NW }) {
       </span>
       <span>
         <span className="block text-xs text-stone-500">{TERIM.netDurum.ad}{d.holdings ? " (altın/döviz dahil)" : ""} <TerimBilgi id="netDurum" /></span>
-        <span className={cx("block text-lg font-semibold tabular-nums", tone(tot(d).net))}>{tl(tot(d).net)}</span>
-        <span className="block text-xs text-stone-500">{TERIM.netDurum.kisa}</span>
+        <span className={cx("block text-lg font-semibold tabular-nums", tone(net.value))} data-testid="net-durum">{tl(net.value)}</span>
+        <span className="block text-xs text-stone-500">{net.kesilecek ? NET_KESILECEK : TERIM.netDurum.kisa}</span>
       </span>
     </span>
   );
@@ -158,6 +163,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
     () => ui.toast("Bakiye güncellendi"));
   const del = useSave((id: number) => json("DELETE", `/api/accounts/${id}`), () => ui.toast("Silindi"));
   const d = q.data;
+  const yeni = !!meta.data?.capabilities?.includes("net_display"); // Net durum kesilecek kart ekstresi dahil
   if (compact && month && meta.data?.current_month && month < meta.data.current_month) return <NetWorthAt month={month} />;
   if (!d) return <SorguDurumu q={q} etiket="Hesaplar yükleniyor">{compact ? <KartIskelet satir={2} /> : <SatirIskelet n={4} />}</SorguDurumu>;
   const empty = !d.accounts.length && !d.holdings && !d.wallets.length && !d.credit_cards.length && !d.unknown_banks.length;
@@ -171,7 +177,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
           <span className="pointer-events-none relative flex-1 text-sm text-stone-500">Hesaplarını, nakdini ve yemek/hediye kartlarını ekle: gerçek durumunu görürsün.</span>
         ) : (
           <span className="pointer-events-none relative min-w-0 flex-1">
-            <Headline d={d} />
+            <Headline d={d} yeni={yeni} />
             {/* döküm telefonda gizli: karta dokununca Hesaplar'da tamamı */}
             <span className="hidden text-xs text-stone-500 sm:block">
               Bankada {tl(tot(d).cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{tot(d).card_debt ? ` · kart borcu −${tl(tot(d).card_debt)}` : ""}
@@ -196,7 +202,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
           onClick={() => setOpen(!open)} />
         <Landmark size={18} className="pointer-events-none relative shrink-0 text-stone-500" />
         <div className="pointer-events-none relative min-w-0 flex-1">
-          <Headline d={d} />
+          <Headline d={d} yeni={yeni} />
           <div className="text-xs text-stone-500">
             Bankada {tl(tot(d).cash)}{d.holdings ? ` · altın/döviz ${tl(d.holdings)}` : ""}{d.in_wallets ? ` · kartlarda ${tl(d.in_wallets)}` : ""}{tot(d).card_debt ? ` · kart borcu ${tl(tot(d).card_debt)}` : ""}
             {tot(d).card_estimated ? ` · kesilecek ekstreler tahmini ~${tl(tot(d).card_estimated)}` : ""}
@@ -291,8 +297,12 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             </div>
           )}
 
-          {(d.receivable > 0 || d.payable > 0 || d.zakat_due > 0) && (
+          {(d.receivable > 0 || d.payable > 0 || d.zakat_due > 0 || (yeni && tot(d).card_estimated > 0)) && (
             <ul className="space-y-1 text-sm">
+              {/* yeni sunucu: kesilecek ekstre Net durumun kalemi (ayrı "Tahmini ekstre sonrası" satırı yok; aynı rakam olurdu) */}
+              {yeni && tot(d).card_estimated > 0 && (
+                <li className="flex justify-between" data-testid="kesilecek-ekstre"><span>Kesilecek kart ekstresi <span className="text-stone-500">(tahmini)</span></span>
+                  <span className="tabular-nums text-red-600">−{tl(tot(d).card_estimated)}</span></li>)}
               {d.receivable > 0 && <li className="flex justify-between"><span>Alacakların</span><span className="tabular-nums text-green-700">+{tl(d.receivable)}</span></li>}
               {d.payable > 0 && <li className="flex justify-between"><span>Borçların</span><span className="tabular-nums text-red-600">−{tl(d.payable)}</span></li>}
               {d.zakat_due > 0 && (
@@ -304,7 +314,7 @@ export default function NetWorth({ compact = false, month }: { compact?: boolean
             </ul>
           )}
           <Wallets />
-          {tot(d).card_estimated > 0 && (
+          {!yeni && tot(d).card_estimated > 0 && (
             <p className="text-xs text-stone-500">{TERIM.tahminiEkstreSonrasi.ad} <TerimBilgi id="tahminiEkstreSonrasi" />: <b>{tl(d.net_after_estimates)}</b> (kesilmemiş ekstreler ~{tl(tot(d).card_estimated)} düşülünce)</p>
           )}
           <p className="text-xs text-stone-500">

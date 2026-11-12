@@ -313,6 +313,9 @@ CAPABILITIES = (
                               # ve ücret ₺X" kartı; total = totals.fees = Faiz sayfasının o ayı (finance.interest_paid);
                               # last_period {month, name, label, total, interest, tax, fee, count, statements, state} |
                               # null: ekstre_yok iken son ekstreli dönem ("Ekim döneminde …")
+    "net_display",            # GET /api/net-worth net_display (ve totals.net_display): ekranda gösterilen Net durum =
+                              # net − kesilecek kart ekstresi (tahmini; card_estimated) = net_after_estimates. "net" eski
+                              # anlamında (kesilecek ekstre düşülmez) kalır; eski istemci onu gösterir
     "summary_interest_latest",  # GET /api/summary interest_latest {total, interest, tax, fee, count, by_type, state
                               # var|yok, statement_count, statements [{id, bank, last4, period_end, total}], source
                               # ("Mavi Bank 7 Kas · Örnek Bank 5 Kas ekstreleri" | "3 ekstre")} | null (faiz gizli ya da
