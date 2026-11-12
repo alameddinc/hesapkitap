@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
+import { Activity, ChevronRight, Coins, FlaskConical, LayoutDashboard, Megaphone, MessageSquareWarning, Receipt, Route, ShieldCheck, Smartphone, TableProperties, Users as UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AiCosts as Costs } from "../api";
 import AdminFeedback, { useFeedbackCounts } from "../components/AdminFeedback";
@@ -9,6 +9,7 @@ import AppUpdate from "../components/AppUpdate";
 import CardTemplates from "../components/CardTemplates";
 import DemoStats from "../components/DemoStats";
 import Olcum from "../components/Olcum";
+import PaymentGateways, { type GatewayOverview } from "../components/PaymentGateways";
 import PlanTable from "../components/PlanTable";
 import ReceiptTemplates from "../components/ReceiptTemplates";
 import UpdateNotice from "../components/UpdateNotice";
@@ -20,7 +21,7 @@ import { cx } from "../format";
 // Yönetici paneli (#/yonetici/<alt sayfa>): eskiden Ayarlar'ın altındaki yönetici bölümleri burada, her biri kendi
 // sayfasında. Adres alt sayfayı tutar: yenileyince aynı sayfa açılır. Bölümlerin kendisi (bileşenler) değişmedi.
 
-type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "mobil" | "demo";
+type Sub = "genel" | "olcum" | "kullanicilar" | "geri-bildirim" | "duyuru" | "yapay-zeka" | "paket-tablosu" | "sablonlar" | "odeme-araclari" | "mobil" | "demo";
 
 const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "genel", label: "Genel", icon: LayoutDashboard, hint: "Özet ve sürüm" },
@@ -31,6 +32,7 @@ const SUBS: { key: Sub; label: string; icon: LucideIcon; hint: string }[] = [
   { key: "yapay-zeka", label: "Yapay zekâ maliyeti", icon: Coins, hint: "Aylık maliyet, kullanıcı başı, sınırla" },
   { key: "paket-tablosu", label: "Paket tablosu", icon: TableProperties, hint: "Hangi sayfa hangi pakette" },
   { key: "sablonlar", label: "Fiş şablonları", icon: Receipt, hint: "Yapay zekâsız okunan zincirler" },
+  { key: "odeme-araclari", label: "Ödeme aracıları", icon: Route, hint: "Ekstrede satıcıdan ayrılan ön ekler: adaylar, onay" },
   { key: "mobil", label: "Mobil sürüm", icon: Smartphone, hint: "Son / en düşük sürüm, mağaza" },
   { key: "demo", label: "Canlı demo", icon: FlaskConical, hint: "Demo kullanımı" },
 ];
@@ -51,6 +53,8 @@ export default function Admin() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   const fb = useFeedbackCounts();
+  const gw = useQuery({ queryKey: ["admin-payment-gateways"], retry: false, enabled: admin,
+    queryFn: () => call<GatewayOverview>("GET", "/api/admin/payment-gateways") });
   if (auth.isLoading) return <></>;
   if (!admin) {
     return (
@@ -61,7 +65,8 @@ export default function Admin() {
     );
   }
   const cur = SUBS.find((x) => x.key === sub)!;
-  const badge = (k: Sub) => (k === "geri-bildirim" && fb.data?.yeni ? fb.data.yeni : null);
+  const gwN = gw.data?.candidates.length ?? 0;
+  const badge = (k: Sub) => (k === "geri-bildirim" && fb.data?.yeni ? fb.data.yeni : k === "odeme-araclari" && gwN ? gwN : null);
   return (
     <div className="space-y-4">
       <h1 className="flex items-center gap-2 text-xl font-semibold"><ShieldCheck size={22} aria-hidden /> Yönetici paneli</h1>
@@ -93,6 +98,7 @@ export default function Admin() {
           {sub === "yapay-zeka" && <AiCosts />}
           {sub === "paket-tablosu" && <PlanTable />}
           {sub === "sablonlar" && <><ReceiptTemplates /><CardTemplates /></>}
+          {sub === "odeme-araclari" && <PaymentGateways />}
           {sub === "mobil" && <AppUpdate />}
           {sub === "demo" && <Demo />}
         </div>

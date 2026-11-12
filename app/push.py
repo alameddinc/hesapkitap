@@ -683,12 +683,12 @@ def ops_alert(status: str, region: str | None, text: str, today: date | None = N
     return system_alert(f"sistem:{(today or date.today()).isoformat()}:{status}:{region or '-'}", title, text)
 
 
-def system_alert(pid: str, title: str, text: str) -> int:
+def system_alert(pid: str, title: str, text: str, route: str = R_SISTEM) -> int:
     """Yöneticilerin telefonuna "sistem" türü push (sessiz saate uyar); aynı pid bir kez gider (claim). Dönen: kuyruğa
-    giren bildirim."""
+    giren bildirim. route: dokununca açılan ekran (varsayılan Sistem durumu)."""
     from app import feedback
 
-    return sum(len(notify(a["id"], [item("sistem", pid, title, text, R_SISTEM)])) for a in feedback.admins())
+    return sum(len(notify(a["id"], [item("sistem", pid, title, text, route)])) for a in feedback.admins())
 
 
 # ---------------------------------------------------------------- zamanlı türler (kullanıcının defterinde)

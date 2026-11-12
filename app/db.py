@@ -836,7 +836,10 @@ def init_db() -> None:
     _ensure_imported_bank_accounts()
     _once("salary_linked_v2", link_salary_entries)
     _once("cancel_pairs_v1", pair_cancelled_entries)
-    _once("gateway_keys_v1", migrate_gateway_keys)
+    try:  # ödeme aracısı listesi (sabit + yöneticinin onayladıkları) değiştiyse işyeri adına bağlı ayarlar yeni ada
+        sync_gateway_keys()
+    except sqlite3.OperationalError:  # çok eski şema
+        pass
 
 
 def _once(key: str, fn) -> None:
@@ -850,46 +853,123 @@ def _once(key: str, fn) -> None:
     set_setting(key, "1")
 
 
-def migrate_gateway_keys() -> dict:
-    """Ödeme aracısı önekleri (textnorm.PAYMENT_GATEWAYS) artık işyeri adından atılıyor: 'PAYCO/ORNEK BILISIM' eskiden
-    'PAYCO' adıyla, şimdi 'ORNEK BILISIM' adıyla görünür. İşyeri adı saklanmaz (açıklamadan hesaplanır), göç gerekmez;
-    yalnız işyeri ADINA bağlı iki kullanıcı ayarı yeni ada taşınır, rakam ve kategori değişmez:
+# 12.11.2026 öncesi sabit liste (gateway_keys_v1 göçü bununla yapıldı; benzer yazım yoktu)
+LEGACY_GATEWAYS_V1 = (
+    "MOKAUNITED", "MOKA UNITED", "MOKA", "IYZICO", "IYZ", "IYZI", "TKPAY", "ODEAL", "PAYTR", "SIPAY", "PARAM",
+    "PARAMPOS", "PARAM POS", "CRAFTGATE", "PAPARA", "HEPSIPAY", "ESNEKPOS", "PAYCELL", "HALKODE OD", "NKOLAY",
+    "PAYCO", "ELEKSE", "TOSLA", "PAYU", "LIDIO", "PAYNET", "IPARA", "PARATIKA", "BIRLESIK ODEME", "PAYGURU",
+)
+GATEWAY_KEYS_SETTING = "gateway_keys_set"
+
+
+def _gateway_descriptions(c) -> set[str]:
+    """İşyeri adı hesaplanan açıklamalar: kart işlemleri + hesap hareketlerinin bankadaki metni (yalnız '/' ya da '*'
+    içerenler; aracı öneki başka biçimde olmaz)."""
+    out = {r[0] for r in c.execute("SELECT DISTINCT description FROM transactions WHERE description LIKE '%/%' "
+                                   "OR description LIKE '%*%'") if r[0]}
+    for r in c.execute("SELECT description, note FROM entries WHERE import_hash IS NOT NULL"):
+        note = r[1] or ""
+        d = note.partition("\n")[0][len("Hesap hareketi · "):] if note.startswith("Hesap hareketi · ") else r[0]
+        if d and ("/" in d or "*" in d):
+            out.add(d)
+    return out
+
+
+def migrate_gateway_keys(old=None, new=None) -> dict:
+    """Ödeme aracısı önekleri işyeri adından atılıyor: 'PAYCO/ORNEK BILISIM' eskiden 'PAYCO' adıyla, şimdi 'ORNEK
+    BILISIM' adıyla görünür. İşyeri adı saklanmaz (açıklamadan hesaplanır); yalnız işyeri ADINA bağlı kullanıcı ayarları
+    yeni ada taşınır, rakam ve kategori değişmez. old / new: textnorm.GatewaySet (varsayılan: aracısız → geçerli liste).
     - abonelik durumu (subscription_state, anahtar = eski ad): yeni adlara kopyalanır (eski satır kalır; INSERT OR IGNORE),
-    - işyeri kısma hedefi (savings_goals kind='merchant'): eski ad tek bir yeni ada gidiyorsa adı güncellenir.
-    Tekrar çalışması bir şey değiştirmez. Rapor settings'te (gateway_keys_v1_report) ve günlükte."""
+    - işyeri kısma hedefi (savings_goals kind='merchant'): eski ad tek bir yeni ada gidiyorsa adı güncellenir,
+    - öğrenilmiş eşleşme kuralı (match_rules.pattern = işyeri adı): yeni adlara kopyalanır (eski kural kalır),
+    - sabit kalemin eşleşme anahtarı (recurring.match_key 'm:<ad>'): tek yeni ada gidiyorsa güncellenir.
+    Liste daralırsa (onay kaldırıldı) aynı kural ters yönde çalışır. Tekrar çalışması bir şey değiştirmez. Rapor
+    settings'te (gateway_keys_v1_report) ve günlükte; rules / recurring yalnız sıfır değilse rapora girer."""
     import json
     import logging
 
-    from app.textnorm import PAYMENT_GATEWAYS, gateway_of, merchant_name, normalize
+    from app.categorize import fold_key
+    from app.textnorm import GatewaySet, current_gateways, merchant_name_with
 
-    gws = set(PAYMENT_GATEWAYS)
+    old = old or GatewaySet((), fuzzy=False)
+    new = new or current_gateways()
     report = {"subscriptions": 0, "goals": 0, "ambiguous_goals": 0}
+    extra = {"rules": 0, "recurring": 0}
+
+    def rkey(name: str) -> str:
+        return "m:" + fold_key(" ".join(re.sub(r"[\d/.:*-]+", " ", name).split()[:3]))
+
     with connect() as c:
-        subs = {r["merchant"]: dict(r) for r in c.execute("SELECT * FROM subscription_state")
-                if r["merchant"] in gws}
-        goals = [dict(r) for r in c.execute("SELECT id, name FROM savings_goals WHERE kind = 'merchant'")
-                 if normalize(r["name"]) in gws]
-        if not subs and not goals:
+        subs = {r["merchant"]: dict(r) for r in c.execute("SELECT * FROM subscription_state")}
+        goals = [dict(r) for r in c.execute("SELECT id, name FROM savings_goals WHERE kind = 'merchant'")]
+        rules = [dict(r) for r in c.execute("SELECT * FROM match_rules")]
+        recs = [dict(r) for r in c.execute("SELECT id, match_key FROM recurring WHERE match_key LIKE 'm:%'")]
+        if not (subs or goals or rules or recs):
             return report
-        new_names: dict[str, set] = {}
-        for r in c.execute("SELECT DISTINCT description FROM transactions"):
-            g = gateway_of(normalize(r["description"] or ""))
-            if g:
-                new_names.setdefault(g[0], set()).add(merchant_name(r["description"]))
-        for old, st in subs.items():
-            for name in sorted(new_names.get(old, ())):
+        moved: dict[str, set] = {}
+        for d in _gateway_descriptions(c):
+            a, b = merchant_name_with(d, old), merchant_name_with(d, new)
+            if a != b:
+                moved.setdefault(a, set()).add(b)
+        if not moved:
+            return report
+        for name, st in subs.items():
+            for nm in sorted(moved.get(name, ())):
                 report["subscriptions"] += c.execute(
                     "INSERT OR IGNORE INTO subscription_state (merchant, status, changed_at, new_amount, note) "
-                    "VALUES (?, ?, ?, ?, ?)", (name, st["status"], st["changed_at"], st.get("new_amount"), st.get("note"))).rowcount
+                    "VALUES (?, ?, ?, ?, ?)", (nm, st["status"], st["changed_at"], st.get("new_amount"), st.get("note"))).rowcount
+        from app.textnorm import normalize
+
         for gl in goals:
-            names = new_names.get(normalize(gl["name"]), set())
+            names = moved.get(gl["name"]) or moved.get(normalize(gl["name"])) or set()
             if len(names) == 1:
                 c.execute("UPDATE savings_goals SET name = ? WHERE id = ?", (next(iter(names)), gl["id"]))
                 report["goals"] += 1
             elif names:
                 report["ambiguous_goals"] += 1
+        for r in rules:
+            for nm in sorted(moved.get(r["pattern"], ())):
+                extra["rules"] += c.execute(
+                    "INSERT OR IGNORE INTO match_rules (source, pattern, entry_key, bank_label, entry_label, category, "
+                    "hits, used, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (r["source"], nm, r["entry_key"], r["bank_label"], r["entry_label"], r["category"], r["hits"],
+                     r["used"], r["created_at"], r["updated_at"])).rowcount
+        rmoved: dict[str, set] = {}
+        for a, bs in moved.items():
+            rmoved.setdefault(rkey(a), set()).update(rkey(b) for b in bs)
+        for r in recs:
+            ks = rmoved.get(r["match_key"]) or set()
+            if len(ks) == 1 and r["match_key"] not in ks:
+                c.execute("UPDATE recurring SET match_key = ? WHERE id = ?", (next(iter(ks)), r["id"]))
+                extra["recurring"] += 1
+        report.update({k: v for k, v in extra.items() if v})
         c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('gateway_keys_v1_report', ?)", (json.dumps(report),))
     logging.getLogger(__name__).info("ödeme aracısı göçü: %s", report)
+    return report
+
+
+def sync_gateway_keys() -> dict | None:
+    """Geçerli aracı listesi bu defterin son taşındığı listeden farklıysa migrate_gateway_keys(eski, yeni) ve yeni
+    listenin özetini kaydet (defterde yalnız özet; adlar system.db'de: gateways.remember_set). Açılışta (init_db), liste
+    değişince (app/gateways.py sync_all) ve gece (gateways.nightly) çalışır; liste aynıysa tek ayar okuması. Dönen:
+    rapor ya da None (değişiklik yok)."""
+    from app import gateways
+    from app.textnorm import GatewaySet, current_gateways
+
+    new = current_gateways()
+    data, sig = new.data(), new.sig
+    raw = get_setting(GATEWAY_KEYS_SETTING)
+    if raw == sig:
+        return None
+    d = gateways.recall_set(raw) if raw else None
+    if d:
+        old = GatewaySet(d.get("names") or (), d.get("blocked") or (), fuzzy=bool(d.get("fuzzy", True)))
+    else:  # ilk kez (ya da başka sunucudan gelen defter): v1 göçü yapıldıysa o günkü liste, yapılmadıysa aracısız
+        old = GatewaySet(LEGACY_GATEWAYS_V1 if get_setting("gateway_keys_v1") else (), fuzzy=False)
+    gateways.remember_set(sig, data)
+    report = migrate_gateway_keys(old, new) if old.key != new.key else None
+    set_setting(GATEWAY_KEYS_SETTING, sig)
+    set_setting("gateway_keys_v1", "1")
     return report
 
 
