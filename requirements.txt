@@ -13,6 +13,9 @@ pdfplumber==0.11.10
 # fiş/fatura fotoğrafı: yön, küçültme, EXIF/konum silme (app/images.py) ve yerel OCR ön işleme. pdfplumber zaten
 # getiriyor; doğrudan kullanıldığı için sürümü sabit (pdfplumber bağımlılığını değiştirirse sessizce kırılmasın)
 pillow==13.0.0
+# fiş/fatura karekodu (QR) sunucu yedeği (app/karekod.py scan): telefon karekod göndermediyse (eski uygulama, web, PDF).
+# Bağımlılıksız, wheel ~1 MB (linux amd64/arm64 manylinux_2_28); yoksa yedek sessizce atlanır. OpenCV WeChat ~170 MB'tı
+zxing-cpp==3.1.1
 # banka hesap hareketleri (Excel) içe aktarma
 openpyxl==3.1.5
 xlrd==2.0.2

@@ -8095,20 +8095,28 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
     split = sorted({r["category"] for r in db.list_item_rules()})
-    from app import receipt_templates
+    qr_by_server = False
+    from app import karekod, receipt_templates
 
+    if not qr and (mime.startswith("image/") or mime == "application/pdf"):
+        # telefon karekod göndermedi (eski uygulama, web, PDF): sunucuda yedek okuma (süre sınırlı, sonuç belirlenimci:
+        # önbellek anahtarına girmez). Okunan karekod da kural okumasında aynı doğrulamadan geçer.
+        if qr := karekod.scan(data, mime, original if original_mime.startswith("image/") and not more else None) or None:
+            qr_by_server = True
     receipt_templates.reset_miss()
     try:
         if ocr_text and receipt.enabled() and receipt.text_first():
             doc = _read_by_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more, qr)
-        elif ocr_text or qr:  # fotoğraf okunur, metin/karekod yardımcı (fatura şablonu, karekod, KDV/VKN yedeği, yerel)
-            doc = _read_with_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more, qr)
+        elif ocr_text or (qr and not qr_by_server):  # fotoğraf okunur, metin/karekod yardımcı (fatura şablonu, karekod,
+            doc = _read_with_text(ocr_text, ocr_source or "diger", data, mime, cats, split, more, qr)  # KDV/VKN, yerel)
         else:
-            doc = receipt.parse_document(data, mime, cats, split, more=more)
+            doc = receipt.parse_document(data, mime, cats, split, more=more, **({"qr": qr} if qr else {}))
     except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı, yerel okuma da olmadı)
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
+    if qr_by_server and isinstance(doc.get("qr"), dict):
+        doc["qr"]["server"] = True  # karekod sunucuda okundu (ölçüm; telefonda okunmadı)
     if _unreadable(doc):  # okunamadı: günün ilk denemeleri ücretsiz (bkz. _mark_unreadable)
         _mark_unreadable(doc, UNREADABLE_MSG)
     elif charged := doc_reads.charge(key, doc_reads.kind_of_doc(doc.get("type")), need):

@@ -376,3 +376,68 @@ def test_rule_reads_counted_in_hit_rate(hosted, gemini):  # noqa: F811
     assert o["fatura"]["rate"] == 50
     h = hosted.get("/api/admin/receipt-templates").json()["hit_rate"]
     assert h["fatura"]["rules"] == {"qr_bill": 1} and h["fis"]["rules"]["qr_fuel"] == 1
+
+
+# ---------------------------------------------------------------- sunucu yedeği (zxing-cpp)
+
+def _qr_image(payload: str, fmt: str = "JPEG", rotate: int = 0) -> bytes:
+    """Uydurma fiş: beyaz kâğıt, üstte gri satırlar, altta karekod (zxing-cpp ile test sırasında üretilir)."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    zx = pytest.importorskip("zxingcpp")
+    q = zx.create_barcode(payload, zx.BarcodeFormat.QRCode).to_image(scale=6)
+    qr = Image.frombuffer("L", (q.shape[1], q.shape[0]), bytes(memoryview(q)), "raw", "L", 0, 1)
+    page = Image.new("RGB", (700, 1200), "white")
+    d = ImageDraw.Draw(page)
+    for i in range(12):
+        d.rectangle((60, 60 + i * 45, 60 + (i * 37) % 500 + 80, 80 + i * 45), fill=(90, 90, 90))
+    page.paste(qr.convert("RGB"), (int((700 - qr.width) / 2), 1200 - qr.height - 60))
+    if rotate:
+        page = page.rotate(rotate, expand=True, fillcolor="white")
+    buf = io.BytesIO()
+    page.save(buf, fmt)
+    return buf.getvalue()
+
+
+def test_server_scan_image_and_pdf():
+    img = _qr_image(pump_sp())
+    assert karekod.scan(img, "image/jpeg") == [pump_sp()]
+    assert karekod.scan(_qr_image(gib(), rotate=5), "image/jpeg") == [gib()]  # hafif eğik
+    assert karekod.scan(_qr_image(pump_at(), fmt="PDF"), "application/pdf") == [pump_at()]
+    assert karekod.scan(_photo("white"), "image/jpeg") == []  # karekodsuz
+    assert karekod.scan(b"bozuk", "image/jpeg") == [] and karekod.scan(b"%PDF-bozuk", "application/pdf") == []
+
+
+def test_server_scan_budget_and_missing_library(monkeypatch):
+    img = _qr_image(pump_sp())
+    assert karekod.scan(img, "image/jpeg", budget=0) == []  # süre sınırı
+    monkeypatch.setattr(karekod, "_zx", lambda: None)
+    assert karekod.scan(img, "image/jpeg") == []  # kütüphane yok: sessizce atlanır
+
+
+def test_api_old_client_server_reads_qr(hosted, gemini):  # noqa: F811
+    """Eski uygulama qr_text göndermez: sunucu fotoğraftaki pompa karekodunu okur, akaryakıt yapay zekâsız; hak düşer."""
+    c, u = _user(hosted)
+    r = c.post("/api/documents/parse", files=[("file", ("f.jpg", _qr_image(pump_at()), "image/jpeg"))],
+               data={"ocr_text": fuel_text(), "ocr_source": "vision"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["rule"] == "qr_fuel" and d["qr"] == {"kind": "pompa", "server": True}
+    assert gemini["calls"] == 0 and d.get("charged") and _used(u["id"]) == 1
+
+
+def test_api_pdf_bill_server_qr_with_text_layer(hosted, gemini, monkeypatch):  # noqa: F811
+    """Web'den yüklenen e-arşiv PDF'i: karekod sayfadan, son ödeme tarihi PDF metin katmanından; yapay zekâ yok."""
+    from app import bill_templates
+
+    c, _ = _user(hosted)
+    real = bill_templates.text_of
+    monkeypatch.setattr(bill_templates, "text_of",
+                        lambda data, mime: bill_text() if mime == "application/pdf" else real(data, mime))
+    r = c.post("/api/documents/parse", files=[("file", ("f.pdf", _qr_image(gib(), fmt="PDF"), "application/pdf"))])
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["type"] == "bill" and d["rule"] == "qr_bill" and d["amount"] == 642.4 and d["qr"]["server"] is True
+    assert gemini["calls"] == 0

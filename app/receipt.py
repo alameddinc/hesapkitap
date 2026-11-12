@@ -735,9 +735,11 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
     code = karekod.best(qr) if qr else None
     if text and (hit := bill_templates.read(text)):
         return bill_templates.as_doc(hit)  # telefon metni kurumun fatura şablonunu tutuyor: yapay zekâsız
-    if (text or code) and (hit := rule_read(text, qr, categories)):
+    # kural okumasının metni: telefon metni, yoksa (karekod sunucuda okunduysa) PDF metin katmanı
+    rule_text = text or (bill_templates.text_of(data, mime) if code and not more else None)
+    if (rule_text or code) and (hit := rule_read(rule_text, qr, categories)):
         return hit  # karekod (fatura / akaryakıt) ya da POS slibi: yapay zekâsız (app/karekod.py)
-    qr_vkn = code.get("vkn") if code and not karekod.is_bill(code, text) else None
+    qr_vkn = code.get("vkn") if code and not karekod.is_bill(code, rule_text) else None
     if text and (hit := receipt_templates.read(text, categories, vkn=qr_vkn)):
         return karekod.apply_hints(hit, code)  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
     if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):

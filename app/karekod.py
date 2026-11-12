@@ -5,6 +5,12 @@ scanning; hesapkitap-mobile MetinPlugin) ve içeriği metinle birlikte gönderir
 tekrarlanabilir alan; yetenek receipt_qr). Eski uygulama alanı göndermez: davranış aynen eskisi. Sunucuda görüntüden
 karekod çözülmez (opencv-contrib WeChat QR imajı ~170 MB büyütür; önce telefon).
 
+Sunucu yedeği (scan): telefon karekod göndermediyse (eski uygulama, web yüklemesi, PDF) fotoğrafta / PDF'in ilk
+sayfalarında zxing-cpp ile okunur (wheel ~1 MB, kurulu ~2 MB; linux amd64/arm64 manylinux_2_28), SCAN_BUDGET süre
+sınırıyla; kütüphane yoksa sessizce atlanır. Yerel ölçüm (12.11.2026, 12 karekodlu gerçek fiş, repo dışı): ön
+işlemeyle 1600 px'te 10/12, tam çözünürlükte 11/12 (OpenCV WeChat 10/9, cv2.QRCodeDetector 3/4); karekodsuz 29
+görüntüde yanlış okuma yok; süre ort. 17 ms, en çok 67 ms (1600 px).
+
 Tanınan içerikler (parse):
 - GİB e-Fatura / e-Arşiv karekodu (Karekod Standardı v1.1): JSON; anahtarlar küçük harf, bazı yazılımlarda boşluklu
   ya da büyük harfli ("hesaplanankdv (8)", "KDVMatrah(20)"); tutarlar "1234.56" ya da "1.234,56"; tarih YYYY-AA-GG.
@@ -454,3 +460,103 @@ def pos_slip(text: str | None, categories: list[str]) -> dict | None:
             "category": "Diğer" if "Diğer" in cats or not cats else cats[0], "items": [], "legal_name": legal,
             "address": None, "branch": None, "vat_total": None, "vat_lines": [], "tax_no": None, "tax_office": None,
             "confidence": "yüksek", "source": "pos", "rule": "pos_slip"}
+
+
+# ---------------------------------------------------------------- sunucu yedeği: görüntüden / PDF'ten karekod
+
+SCAN_BUDGET = 1.5  # sn: yedek okuma bütçesi (adımlar arasında denetlenir; tek çağrı ~5–70 ms)
+PDF_PAGES = 2      # PDF'te taranan ilk sayfalar
+PDF_DPI = 200
+_PDFIUM = __import__("threading").Lock()  # pdfium çizimi iş parçacığına güvenli değil
+
+
+def _zx():
+    try:
+        import zxingcpp
+    except ImportError:  # kütüphane yoksa (kendi sunucusu, eski imaj) yedek sessizce atlanır
+        return None
+    return zxingcpp
+
+
+def _variants(img):
+    """Ön işleme sırası (yerel ölçüm 12.11.2026, 12 karekodlu fiş: düz okuma 7/12, bu sırayla 1600 px'te 10/12, tam
+    çözünürlükte 11/12; karekodsuz 29 görüntüde yanlış okuma 0): gri → oto kontrast → başka eşikleme → ölçek →
+    küçük döndürme → alt bölge (karekod çoğu fişin altında) 2× büyütülmüş."""
+    from PIL import ImageOps
+
+    zx = _zx()
+    g = ImageOps.grayscale(img)
+    yield g, {}
+    yield ImageOps.autocontrast(g, cutoff=1), {}
+    for b in (zx.Binarizer.GlobalHistogram, zx.Binarizer.FixedThreshold):
+        yield g, {"binarizer": b}
+    w, h = g.size
+    for s in (0.5, 0.75, 1.5):
+        if max(w, h) * s <= 5000:
+            yield g.resize((max(1, int(w * s)), max(1, int(h * s)))), {}
+    for a in (-8, -4, 4, 8):
+        yield g.rotate(a, expand=True, fillcolor=255), {}
+    for y0 in (0.5, 0.66):
+        r = g.crop((0, int(h * y0), w, h))
+        if max(r.size) * 2 <= 5000:
+            yield r.resize((r.width * 2, r.height * 2)), {}
+
+
+def _scan_pil(img, deadline: float) -> list[str]:
+    import time
+
+    zx = _zx()
+    for im, kw in _variants(img):
+        if time.monotonic() > deadline:
+            break
+        try:
+            got = [b.text for b in zx.read_barcodes(im, formats=zx.BarcodeFormat.QRCode, **kw) if b.text]
+        except Exception:  # noqa: BLE001 - bozuk görüntü: sonraki seçenek
+            got = []
+        if got:
+            return clean(got)
+    return []
+
+
+def scan(data: bytes | None, mime: str, original: bytes | None = None, budget: float = SCAN_BUDGET) -> list[str]:
+    """Telefon karekod göndermediyse (eski uygulama, web yüklemesi, PDF) sunucuda oku: fotoğrafta önce hazırlanmış
+    (1600 px) görüntü, olmazsa özgün tam çözünürlük; PDF'te ilk PDF_PAGES sayfa PDF_DPI ile çizilir. Süre sınırı
+    budget; kütüphane (zxing-cpp) yoksa ya da hata olursa []. İçerik yalnız okumada kullanılır, saklanmaz."""
+    import io
+    import time
+
+    if not data or _zx() is None:
+        return []
+    deadline = time.monotonic() + budget
+    try:
+        from PIL import Image, ImageOps
+
+        if mime.startswith("image/"):
+            for raw in dict.fromkeys(x for x in (data, original) if x):  # önce küçük (hızlı), sonra özgün
+                if time.monotonic() > deadline:
+                    break
+                with Image.open(io.BytesIO(raw)) as im:
+                    from app import images
+
+                    if im.width * im.height > images.MAX_PIXELS:
+                        continue
+                    got = _scan_pil(ImageOps.exif_transpose(im).convert("RGB"), deadline)
+                if got:
+                    return got
+        elif mime == "application/pdf":
+            import pypdfium2 as pdfium
+
+            with _PDFIUM:
+                pdf = pdfium.PdfDocument(data)
+                try:
+                    pages = [pdf[i].render(scale=PDF_DPI / 72).to_pil() for i in range(min(len(pdf), PDF_PAGES))]
+                finally:
+                    pdf.close()
+            for page in pages:
+                if time.monotonic() > deadline:
+                    break
+                if got := _scan_pil(page.convert("RGB"), deadline):
+                    return got
+    except Exception:  # noqa: BLE001 - yedek: okumayı bozmaz (şifreli PDF, bozuk görüntü)
+        log.info("sunucuda karekod okunamadı", exc_info=True)
+    return []
