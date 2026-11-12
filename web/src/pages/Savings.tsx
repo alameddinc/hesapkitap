@@ -5,12 +5,13 @@ import { AlertOctagon, ArrowDownRight, Ban, Plus, RotateCcw, Target, Trash2 } fr
 import { useState } from "react";
 import CategoryPicker from "../components/CategoryPicker";
 import Jars from "../components/Jars";
-import { useMeta, useSave } from "../components/hooks";
+import { useCap, useMeta, useSave } from "../components/hooks";
 import Modal from "../components/Modal";
 import Segmented from "../components/Segmented";
 import { addMonths, cx, dateTR, parseAmount, tl, periodLabel, periodNameMonth, periodKeyOfName } from "../format";
 import { useUI } from "../ui";
 import SorguDurumu, { KartIskelet, SatirIskelet } from "../components/SorguDurumu";
+import AppSubs, { SubLogoBox, type AppsData, type SubLogo } from "../components/AppSubs";
 
 interface Sub {
   merchant: string;
@@ -25,6 +26,8 @@ interface Sub {
   new_amount: number | null;
   saving: number;
   overcharged: number;
+  store?: "apple" | "google" | null; // mağaza tahsilatı: "Uygulama mağazası" bölümünde ayrı ayrı (yetenek store_subscriptions)
+  logo?: SubLogo;
 }
 interface Goal {
   id: number;
@@ -145,6 +148,8 @@ export function DowngradeForm({ sub, onClose }: { sub: { merchant: string; month
 export default function Savings() {
   const ui = useUI();
   const q = useQuery({ queryKey: ["savings"], queryFn: () => send<SavingsData>("/api/savings") });
+  const storeCap = useCap("store_subscriptions");
+  const apps = useQuery({ queryKey: ["subscription-apps"], queryFn: () => send<AppsData>("/api/subscriptions/apps"), enabled: storeCap });
   const [adding, setAdding] = useState(false);
   const [downgrade, setDowngrade] = useState<Sub | null>(null);
   const setSub = useSave((b: { merchant: string; status: string }) => j("PUT", "/api/subscriptions", b),
@@ -152,6 +157,8 @@ export default function Savings() {
   const patchGoal = useSave((b: { id: number; active: boolean }) => j("PATCH", `/api/goals/${b.id}`, { active: b.active }));
   const delGoal = useSave((id: number) => j("DELETE", `/api/goals/${id}`), () => ui.toast("Hedef silindi"));
   const d = q.data;
+  // mağaza satırları ("APPLE", "GOOGLE YOUTUBE") yukarıda aday aday; burada yalnız diğer abonelikler
+  const subs = (d?.subscriptions ?? []).filter((s) => !(storeCap && apps.data && s.store));
 
   return (
     <div className="space-y-4">
@@ -171,15 +178,18 @@ export default function Savings() {
         </div>
       )}
 
+      {storeCap && <AppSubs q={apps} />}
+
       <section className="card overflow-hidden">
         <div className="border-b border-stone-100 px-4 py-2.5 dark:border-stone-800">
           <h2 className="font-semibold">Abonelikler</h2>
           <p className="text-xs text-stone-500">İptal ettiğini işaretle: planlamadan düşer; sonraki ekstrede yine çekilirse uyarı gelir.</p>
         </div>
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-          {d?.subscriptions.map((s) => (
+          {subs.map((s) => (
             <li key={s.merchant} className={cx("px-4 py-2.5", s.status === "iptal" && !s.charged_after_cancel && "opacity-60")}>
               <div className="flex items-start justify-between gap-3">
+                {s.logo && <SubLogoBox logo={s.logo} />}
                 <div className="min-w-0 flex-1">
                   <div className={cx("font-medium", s.status === "iptal" && "line-through")}>{title(s.merchant)}</div>
                   <div className="text-xs text-stone-500">
@@ -217,7 +227,7 @@ export default function Savings() {
               </div>
             </li>
           ))}
-          {d && !d.subscriptions.length && <li className="px-4 py-4 text-sm text-stone-500">Abonelik bulunamadı.</li>}
+          {d && !subs.length && <li className="px-4 py-4 text-sm text-stone-500">Abonelik bulunamadı.</li>}
         </ul>
       </section>
 

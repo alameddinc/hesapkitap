@@ -398,6 +398,16 @@ CAPABILITIES = (
                               # DELETE …/files/{fid}; "Garantiye ekle": GET /api/warranties/draft?entry_id|txn_id, kayıtlı fişler
                               # GET /api/warranties/receipts?q; yeni fotoğraf POST /api/receipts/parse → receipt_file. Push "garanti";
                               # ortak defter sayfası "garantiler"
+    "store_subscriptions",    # uygulama mağazası abonelikleri (app/store_subs.py): GET /api/subscriptions/apps {items
+                              # [aday: id, title (adsız: "Apple aboneliği"), status abonelik|aday|degil|iptal, cycle,
+                              # cycle_text "her ay 14'ü", amount, next_date, next_text, first_text, price_up, guesses
+                              # ("Olabilir"), charges, manage [{store, url, app_url}], pending (ekstreye düşmemiş)], other,
+                              # totals {monthly, yearly, text}, help}; PUT /api/subscriptions/apps/{id} {action adlandir|
+                              # abonelik|degil|iptal|aktif|bilmiyorum|sifirla, catalog_id?, name?, cycle?, date?};
+                              # GET /api/subscriptions/catalog; POST /api/subscriptions/apps/screenshot (files[], ocr_text[],
+                              # store?; 1 görüntü = 1 okuma); POST …/apps/manual; PATCH|DELETE …/apps/sources/{id};
+                              # /api/savings subscriptions[].store + logo. Push "abonelik" yenilemeye 3 gün kala, yol
+                              # #/diger/tasarruf/abonelik/<id>
 )
 
 

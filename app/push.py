@@ -84,7 +84,8 @@ TYPES = {
     "butce": ("Bütçe uyarısı", True),
     "faiz": ("Faiz ve vade farkı", True),
     "gelir": ("Beklenen gelir yatmadı", True),
-    "abonelik": ("Abonelik zammı ve iptal sonrası çekim", True),
+    # mağaza aboneliğinin yenilenmesine 3 gün kala (app/store_subs.reminders), zam, iptal sonrası çekim
+    "abonelik": ("Abonelik yenileme, zam ve iptal sonrası çekim", True),
     "ozet": ("Dönem özeti", True),
     "belge": ("Gelen belge işlendi", True),
     "ortak": ("Ortak defterde yeni kayıt", False),
@@ -995,6 +996,16 @@ def _garanti(u: dict, today: date) -> list[dict]:
                         "götür; fatura ve garanti belgesi Garantiler'de.", f"{R_GARANTI}/{w['id']}"))
     return out
 
+def _abonelik(u: dict, today: date) -> list[dict]:
+    """Uygulama mağazası aboneliği (adsız aday dahil) yenilenmeden REMIND_DAYS gün önce. Tasarruf paketinde değilse ya
+    da ortak defterde Tasarruf sayfası üyeye kapalıysa yok. Dokununca aboneliğin ayrıntısı."""
+    from app import book, plans, store_subs
+
+    r = book.active()
+    if (r and "tasarruf" in r["hidden_pages"]) or not plans.allows(u, "tasarruf"):
+        return []
+    return store_subs.reminders(today)
+
 
 def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
     """Bugünün zamanlı bildirimleri (açık türler), kullanıcının defterinde ve görebildiği kadarıyla. Bağlam: use_space."""
@@ -1005,7 +1016,8 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
                      ("ortak", lambda: _ortak(u, today)), ("zekat", lambda: _zekat(today)), ("aile", lambda: _aile(u)),
                      ("fiyat", lambda: _fiyat(today)), ("borc", lambda: _borc(today)),
                      ("kumbara", lambda: _kumbara(today)), ("kart_suresi", lambda: _kart_suresi(today)),
-                     ("sadaka", lambda: _sadaka(today)), ("garanti", lambda: _garanti(u, today))):
+                     ("sadaka", lambda: _sadaka(today)), ("garanti", lambda: _garanti(u, today)),
+                     ("abonelik", lambda: _abonelik(u, today))):
         if kind != "odeme" and not on.get(kind):
             continue
         try:
@@ -1076,7 +1088,7 @@ def _ctx() -> tuple[dict, str | None] | None:
 
 def statement_items(today: date) -> list[dict]:
     """Ekstre okununca: faiz / vade farkı ve abonelik (iptal sonrası çekim, paket düşmemiş, çift çekim, zam)."""
-    from app import book, finance, insight_state, money
+    from app import book, finance, insight_state, money, store_subs
 
     out = []
     cur = finance.current_period(today)
@@ -1090,15 +1102,22 @@ def statement_items(today: date) -> list[dict]:
             if (k.startswith("faiz:") or k.startswith("vade_farki:")) and not book.hide_fees():
                 out.append(item("faiz", k, i["title"], i.get("detail") or "", R_FAIZ))
             elif k.split(":")[0] in ("iptal_cekim", "paket", "dup"):
-                out.append(item("abonelik", k, i["title"], i.get("detail") or "", R_TASARRUF))
+                tg = i.get("target") or {}  # mağaza aboneliği: ayrıntısına
+                rt = store_subs.route(tg["id"]) if tg.get("screen") == "abonelik" and tg.get("id") else R_TASARRUF
+                out.append(item("abonelik", k, i["title"], i.get("detail") or "", rt))
     recent = (today - timedelta(days=45)).isoformat()
     for s in finance.subscriptions():
         prev = s.get("prev_monthly")
+        # mağaza satırı ("APPLE"): aylık toplam yeni bir abonelikle de artar; zammı aday bazında price_up_items söyler
+        if s.get("store"):
+            continue
         if s["status"] == "aktif" and prev and s["last_seen"] >= recent and money.gt(s["monthly"], prev * 1.05):
             slug = finance._slug(s["merchant"])
             out.append(item("abonelik", f"abonelik:zam:{slug}:{s['last_period']}", f"{s['merchant'].title()} zamlandı",
                             f"{money.tl(prev, trim=True)} → {money.tl(s['monthly'], trim=True)}. Kullanmıyorsan "
                             "Tasarruf'tan iptal edildi diye işaretle.", R_TASARRUF))
+    if not (book.active() and "tasarruf" in book.active()["hidden_pages"]):
+        out += store_subs.price_up_items(today)  # mağaza aboneliğinde zam (adsız aday dahil)
     return out
 
 
