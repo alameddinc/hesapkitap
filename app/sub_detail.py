@@ -11,13 +11,22 @@ Ay: işlemin tarihinin takvim ayı ("Ekim 2026'da ne ödedim"). Ay satırında d
 abonelikte döviz tutarı değiştiyse zam/indirim, yalnız TL %3'ten fazla değiştiyse "kur" (zam sayılmaz; azı gösterilmez). Aynı ayda birden çok çekim
 "adet" farkıdır, zam sayılmaz.
 
+Ödemesiz aylar (?gaps=1, yetenek subscription_gaps; eski istemci istemez, yanıtı değişmez): döngü aylıksa (ödemeli ayların
+ilk çekimleri arasındaki aralığın ortancası 20–45 gün; _cycle) ilk ödeme ile son ödeme arasındaki ödemesiz aylar ve son
+ödemeden sonra bugüne (iptal edildiyse iptal gününe) kadar beklenen günü geçmiş aylar "gap" satırı olur (tutar 0, rozet
+yok). Sonda yalnız verisi olan aylar: kart işlemleri o kartın son ekstre kesimine, hesap dökümü işlemleri o hesabın son
+kaydına kadar bilinir (ekstresi henüz gelmemiş ay "Ödeme yok" görünmez). Yıllık ya da belirsiz döngüde boşluk gösterilmez.
+Zam/kur rozeti boşluk aylarını atlar: önceki ÖDEMELİ ayla karşılaştırılır.
+
 Toplamlar sunucuda (istemci toplamaz): tümü ve son 12 ay (bu ay dahil 12 takvim ayı); dövizli olanlarda döviz toplamı.
 Ortak defter: gizli kart/hesap işlemleri db okumalarında süzülür (sayılmaz, listelenmez); sayfa "tasarruf" kapalıysa uç
 kapalı (app/book.py, /api/subscriptions öneki).
 """
+import calendar
 import re
-from collections import defaultdict
-from datetime import date
+from collections import Counter, defaultdict
+from datetime import date, timedelta
+from statistics import median
 
 from app import db, finance, money, store_subs, sub_catalog
 from app.textnorm import merchant_name
@@ -56,7 +65,62 @@ def _fx_text(by: dict[str, float]) -> str | None:
 def _card_txn(t: dict) -> dict:
     fx = _fx(t)
     return {"uid": f"c{t['id']}", "date": str(t["txn_date"])[:10], "row_month": t["period"], "amount": float(t["amount"]),
-            "label": _card_label(t), "via": "kart", "fx": fx, "description": t["description"]}
+            "label": _card_label(t), "via": "kart", "fx": fx, "description": t["description"],
+            "_src": ("kart", t.get("account"))}
+
+
+GAP_SLACK = 3  # beklenen çekim gününden sonra bu kadar gün geçmeden ay "ödemesiz" sayılmaz (hafta sonu, geç yansıma)
+
+
+def _cycle(txns: list[dict]) -> str | None:
+    """Döngü tahmini (store_subs._cycle gibi, ama ay başına ilk çekim): ödemeli ayların ilk çekim günleri arasındaki
+    aralığın ortancası 20–45 gün → "aylik", 300+ → "yillik", gerisi (tek ödeme, üç aylık vb.) None."""
+    firsts: dict[str, date] = {}
+    for x in sorted(txns, key=lambda x: x["date"]):
+        firsts.setdefault(x["date"][:7], date.fromisoformat(x["date"]))
+    ds = list(firsts.values())
+    if len(ds) < 2:
+        return None
+    g = median((b - a).days for a, b in zip(ds, ds[1:]))
+    return "aylik" if 20 <= g <= 45 else "yillik" if g >= 300 else None
+
+
+def _coverage(txns: list[dict]) -> str | None:
+    """Verinin bilindiği son gün: işlemlerin geldiği kartların son ekstre kesimi ve hesapların son kaydı (en geçi)."""
+    srcs = {x["_src"] for x in txns if x.get("_src")}
+    last: list[str] = []
+    cards = {k for v, k in srcs if v == "kart"}
+    if cards:
+        last += [str(t["period_end"])[:10] for t in db.card_transactions() if t.get("account") in cards and t.get("period_end")]
+    accs = {k for v, k in srcs if v == "hesap"}
+    if accs:
+        last += [str(e["entry_date"])[:10] for e in db.list_entries() if e.get("account_id") in accs and e.get("entry_date")]
+    return max(last, default=None)
+
+
+def _gap_months(txns: list[dict], paid: list[str], end: date | None) -> list[str]:
+    """Aylık abonelikte ödemesiz aylar (YYYY-MM): ilk ve son ödeme arası + son ödemeden sonra end'e kadar beklenen günü
+    (en sık çekim günü + GAP_SLACK) geçmiş aylar."""
+    if not paid or _cycle(txns) != "aylik":
+        return []
+    have = set(paid)
+    out = []
+    m = paid[0]
+    while m < paid[-1]:
+        if m not in have:
+            out.append(m)
+        m = finance.add_months(m, 1)
+    if end:
+        days = Counter(int(x["date"][8:10]) for x in txns[-6:])
+        day = max(days, key=lambda d: (days[d], d))
+        m = finance.add_months(paid[-1], 1)
+        while True:
+            y, mo = int(m[:4]), int(m[5:7])
+            if date(y, mo, min(day, calendar.monthrange(y, mo)[1])) + timedelta(days=GAP_SLACK) > end:
+                break
+            out.append(m)
+            m = finance.add_months(m, 1)
+    return out
 
 
 def _since(today: date) -> str:
@@ -103,9 +167,10 @@ def _change(cur: dict, prev: dict | None) -> dict | None:
 
 
 def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount: float | None,
-             changed_at: str | None) -> dict:
+             changed_at: str | None, gaps: bool = False) -> dict:
     """Ortak gövde: toplamlar, ay ay, işlemler (yeniden eskiye). cancelled_at: iptal günü (sonraki çekim uyarılı);
-    new_amount + changed_at: paket düşürüldü (sonraki aylarda yeni tutarın %15 fazlası "fazla")."""
+    new_amount + changed_at: paket düşürüldü (sonraki aylarda yeni tutarın %15 fazlası "fazla"). gaps: aylık
+    abonelikte ödemesiz aylar da ("gap": true, tutar 0) listelenir."""
     txns = sorted(txns, key=lambda x: (x["date"], x["uid"]))
     by: dict[str, dict] = {}
     for x in txns:
@@ -124,10 +189,20 @@ def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount
         m["amount"] = money.money(m["amount"]) + 0.0
         m["change"] = _change(m, prev)
         m["over"] = bool(new_amount is not None and changed_at and ym > changed_at[:7] and m["amount"] > new_amount * 1.15)
-        prev = m
+        prev = m  # boşluk ayları bu döngüde yok: değişim hep önceki ÖDEMELİ aya göre
         months.append(m)
     since = _since(today)
-    out_months = [{k: v for k, v in m.items() if k != "_fx"} | {"fx_text": _fx_text(m["_fx"])} for m in reversed(months)]
+    out_months = [{k: v for k, v in m.items() if k != "_fx"} | {"fx_text": _fx_text(m["_fx"])} | ({"gap": False} if gaps else {})
+                  for m in months]
+    if gaps and txns:
+        stop = [today]
+        if cancelled_at:
+            stop.append(date.fromisoformat(cancelled_at[:10]))
+        cov = _coverage(txns)
+        end = min(stop + [date.fromisoformat(cov)]) if cov else None
+        out_months += [{"month": ym, "label": month_label(ym), "amount": 0.0, "count": 0, "after_cancel": False, "change": None,
+                        "over": False, "fx_text": None, "gap": True} for ym in _gap_months(txns, sorted(by), end)]
+    out_months.sort(key=lambda m: m["month"], reverse=True)
     out_txns = [{"uid": x["uid"], "date": x["date"], "month": x["row_month"], "amount": money.money(x["amount"]) + 0.0,
                  "label": x["label"], "via": x["via"], "fx": f"{x['fx'][0]:g} {x['fx'][1]}" if x["fx"] else None,
                  "description": x["description"], "after_cancel": x["after_cancel"]} for x in reversed(txns)]
@@ -146,7 +221,7 @@ def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount
 
 # ---------------------------------------------------------------- kart aboneliği
 
-def card_detail(merchant: str, today: date | None = None) -> dict | None:
+def card_detail(merchant: str, today: date | None = None, gaps: bool = False) -> dict | None:
     today = today or date.today()
     states = db.subscription_states()
     groups = finance.subscription_groups(states)
@@ -159,7 +234,7 @@ def card_detail(merchant: str, today: date | None = None) -> dict | None:
     status = st["status"] if st else "aktif"
     cancelled_at = st["changed_at"] if st and status == "iptal" else None
     new_amount = st["new_amount"] if st and status == "dusuruldu" else None
-    body = _payload([_card_txn(t) for t in ts], today, cancelled_at, new_amount, st["changed_at"] if st else None)
+    body = _payload([_card_txn(t) for t in ts], today, cancelled_at, new_amount, st["changed_at"] if st else None, gaps)
     monthly = sub["monthly"] if sub else None
     status_text = {"aktif": "Etkin", "iptal": "İptal ettim", "dusuruldu": "Paket düşürüldü"}[status]
     return {
@@ -190,11 +265,11 @@ def _store_txns(charges: list[dict]) -> list[dict]:
             continue
         out.append({"uid": c["uid"], "date": str(e["entry_date"])[:10], "row_month": e["month"], "amount": float(e["amount"]),
                     "label": accs.get(e.get("account_id")) or "Hesap dökümü", "via": "hesap", "fx": None,
-                    "description": e["description"]})
+                    "description": e["description"], "_src": ("hesap", e.get("account_id")) if e.get("account_id") else None})
     return out
 
 
-def store_detail(sid: str, today: date | None = None) -> dict | None:
+def store_detail(sid: str, today: date | None = None, gaps: bool = False) -> dict | None:
     today = today or date.today()
     it = store_subs.find(sid, today)
     if not it:
@@ -203,7 +278,7 @@ def store_detail(sid: str, today: date | None = None) -> dict | None:
     charges = [{"uid": c["uid"]} for c in x["_charges"]] if x else [{"uid": c["uid"]} for c in it["charges"]]
     status = it["status"]
     cancelled_at = it["cancelled_at"] if status == "iptal" else None
-    body = _payload(_store_txns(charges), today, cancelled_at, None, None)
+    body = _payload(_store_txns(charges), today, cancelled_at, None, None, gaps)
     status_text = {"abonelik": "Etkin", "aday": "Tek çekim · abonelik mi?", "iptal": "İptal ettim",
                    "degil": "Abonelik değil"}.get(status, status)
     if it["stale"]:

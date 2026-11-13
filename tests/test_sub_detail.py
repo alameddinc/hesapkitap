@@ -174,3 +174,74 @@ def test_store_detail_bank_entry(tmpdb, client):
     assert r["totals"]["all"]["count"] == 3
     assert {x["via"] for x in r["transactions"]} == {"hesap"} and r["transactions"][0]["uid"].startswith("m")
     assert r["transactions"][0]["label"] == "Hesap dökümü"
+
+
+# ---------------------------------------------------------------- ödemesiz aylar (?gaps=1, yetenek subscription_gaps)
+
+@pytest.fixture
+def gappy(tmpdb):
+    """Aylık TL abonelik (her ayın 9'u), Mart–Nisan 2026 ödemesiz, Mayıs'ta zam; son ödeme Ağustos. Kartın ekstreleri
+    Ekim 2026'ya kadar geliyor (ödemesiz aylarda başka harcama var). Yıllık abonelik aynı kartta her Mart."""
+    for k in range(10):  # Oca 2026 – Eki 2026
+        y, m = 2026, k + 1
+        rows = [(date(y, m, 15), "ORNEK MARKET", 120.0, None)]
+        if m in (1, 2, 5, 6, 7, 8):
+            rows.append((date(y, m, 9), "ORNEK DIZI", 100.0 if m < 5 else 130.0, None))
+        _stmt(tmpdb, date(y, m, 20), rows)
+    for y in (2024, 2025):
+        _stmt(tmpdb, date(y, 3, 20), [(date(y, 3, 2), "ORNEK YILLIK", 900.0, None)])
+    _stmt(tmpdb, date(2026, 3, 21), [(date(2026, 3, 2), "ORNEK YILLIK", 990.0, None)])
+    _set_cat(tmpdb, "ORNEK DIZI")
+    _set_cat(tmpdb, "ORNEK YILLIK")
+    return tmpdb
+
+
+def test_gaps_monthly_interior_and_tail(gappy):
+    from app import sub_detail
+
+    d = sub_detail.card_detail("ORNEK DIZI", TODAY, gaps=True)
+    ms = {m["month"]: m for m in d["months"]}
+    # ara (Mart, Nisan) ve son ödemeden sonra ekstresi gelmiş aylar (Eylül, Ekim); Kasım'ın ekstresi yok → gösterilmez
+    assert [m["month"] for m in d["months"] if m["gap"]] == ["2026-10", "2026-09", "2026-04", "2026-03"]
+    assert "2026-11" not in ms and [m["month"] for m in d["months"]][0] == "2026-10"
+    assert ms["2026-03"] == {"month": "2026-03", "label": "Mart 2026", "amount": 0.0, "count": 0, "after_cancel": False,
+                             "change": None, "over": False, "fx_text": None, "gap": True}
+    # zam rozeti boşluğu atlar: Mayıs önceki ödemeli ay Şubat'la karşılaştırılır
+    assert ms["2026-05"]["change"] == {"kind": "zam", "diff": 30.0, "from": 100.0, "to": 130.0, "fx_text": None}
+    assert ms["2026-05"]["gap"] is False
+    # toplamlar ve işlemler değişmez
+    assert d["totals"]["all"]["count"] == 6 and len(d["transactions"]) == 6
+    # gaps istenmezse yanıt eskisi gibi (gap alanı da yok)
+    old = sub_detail.card_detail("ORNEK DIZI", TODAY)
+    assert [m["month"] for m in old["months"]] == ["2026-08", "2026-07", "2026-06", "2026-05", "2026-02", "2026-01"]
+    assert "gap" not in old["months"][0]
+
+
+def test_gaps_tail_stops_at_cancel_and_today(gappy):
+    from app import db, sub_detail
+
+    db.set_subscription_state("ORNEK DIZI", "iptal", "2026-09-05", None, None)
+    d = sub_detail.card_detail("ORNEK DIZI", TODAY, gaps=True)
+    # iptal 5 Eylül: Eylül'ün çekim günü (9) iptalden sonra → Eylül de Ekim de "ödeme yok" diye gösterilmez
+    assert [m["month"] for m in d["months"] if m["gap"]] == ["2026-04", "2026-03"]
+    # bugün ekstre kesiminden önceyse bugün sınırdır (beklenen gün + 3 gün geçmemiş ay yok)
+    db.set_subscription_state("ORNEK DIZI", "aktif", None, None, None)
+    d = sub_detail.card_detail("ORNEK DIZI", date(2026, 9, 11), gaps=True)
+    assert [m["month"] for m in d["months"] if m["gap"]] == ["2026-04", "2026-03"]
+    d = sub_detail.card_detail("ORNEK DIZI", date(2026, 9, 12), gaps=True)
+    assert [m["month"] for m in d["months"] if m["gap"]] == ["2026-09", "2026-04", "2026-03"]
+
+
+def test_gaps_yearly_and_single_none(gappy, client):
+    from app import sub_detail
+
+    d = sub_detail.card_detail("ORNEK YILLIK", TODAY, gaps=True)
+    assert [m["month"] for m in d["months"]] == ["2026-03", "2025-03", "2024-03"] and not any(m["gap"] for m in d["months"])
+    assert d["months"][0]["change"]["kind"] == "zam"
+    assert sub_detail._cycle([{"date": "2026-01-09"}]) is None
+    assert sub_detail._cycle([{"date": f"2026-{m:02d}-09"} for m in (1, 4, 7)]) is None  # üç aylık: boşluk yok
+    r = client.get("/api/subscriptions/detail", params={"merchant": "ORNEK DIZI", "gaps": 1}).json()
+    assert sum(m["gap"] for m in r["months"]) == 4
+    r = client.get("/api/subscriptions/detail", params={"merchant": "ORNEK DIZI"}).json()
+    assert all("gap" not in m for m in r["months"])
+    assert "subscription_gaps" in client.get("/api/meta").json()["capabilities"]

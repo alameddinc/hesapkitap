@@ -12,12 +12,13 @@ import { SubLogoBox, type SubLogo } from "./AppSubs";
 
 // Abonelik ayrıntısı (sunucu app/sub_detail.py, yetenek subscription_detail): toplam ödenen (son 12 ay / tümü), ay ay
 // tutar (zam/indirim belirgin, dövizlide kur farkı ayrı; kur farkı yalnız TL %3+ değişince, eşik sunucuda), işlemler (dokununca
-// mevcut işlem düzenleme penceresi).
+// mevcut işlem düzenleme penceresi). Aylık abonelikte ödemesiz aylar (yetenek subscription_gaps, ?gaps=1; döngüyü sunucu
+// tahmin eder, yıllıkta gelmez) soluk "Ödeme yok" satırı; zam/kur rozeti sunucuda önceki ödemeli aya göre.
 // Toplamlar sunucudan; istemci toplamaz. Tutarlar tl() ile (göz kapalıysa ••••).
 
 interface Total { amount: number; count: number; since: string | null; first_date: string | null; fx_text: string | null; text: string | null }
 interface Change { kind: "zam" | "indirim" | "kur" | "adet"; diff: number; from: number; to: number; fx_text: string | null }
-interface Month { month: string; label: string; amount: number; count: number; fx_text: string | null; change: Change | null; after_cancel: boolean; over: boolean }
+interface Month { month: string; label: string; amount: number; count: number; fx_text: string | null; change: Change | null; after_cancel: boolean; over: boolean; gap?: boolean }
 interface Txn { uid: string; date: string; month: string; amount: number; label: string; via: "kart" | "hesap"; fx: string | null; description: string; after_cancel: boolean }
 export interface SubDetailData {
   kind: "card" | "store"; key: string; title: string; logo: SubLogo; status: string; status_text: string; status_date: string | null;
@@ -31,7 +32,7 @@ const refKey = (r: SubRef) => ("merchant" in r ? `m:${r.merchant}` : `a:${r.app}
 const refQuery = (r: SubRef) => ("merchant" in r ? `merchant=${encodeURIComponent(r.merchant)}` : `app=${encodeURIComponent(r.app)}`);
 
 export function useSubDetail(r: SubRef) {
-  return useQuery({ queryKey: ["subscription-detail", refKey(r)], queryFn: () => send<SubDetailData>(`/api/subscriptions/detail?${refQuery(r)}`) });
+  return useQuery({ queryKey: ["subscription-detail", refKey(r)], queryFn: () => send<SubDetailData>(`/api/subscriptions/detail?${refQuery(r)}&gaps=1`) });
 }
 
 function ChangeBadge({ c }: { c: Change }) {
@@ -84,7 +85,12 @@ export function SubPayments({ d }: { d: SubDetailData }) {
       <section>
         <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Ay ay</h3>
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-          {months.map((m) => (
+          {months.map((m) => m.gap ? (
+            <li key={m.month} className="flex items-baseline justify-between gap-3 py-1.5 text-stone-500 dark:text-stone-400" data-testid="sub-gap">
+              <span className="min-w-0">{m.label}</span>
+              <span className="shrink-0 text-xs">Ödeme yok</span>
+            </li>
+          ) : (
             <li key={m.month} className="py-1.5">
               <div className="flex items-baseline justify-between gap-3">
                 <span className="min-w-0">
@@ -106,7 +112,7 @@ export function SubPayments({ d }: { d: SubDetailData }) {
               )}
             </li>
           ))}
-          {!months.length && <li className="py-2 text-xs text-stone-500">Son 12 ayda ödeme yok. Tümü'ne bak.</li>}
+          {!months.some((m) => !m.gap) && <li className="py-2 text-xs text-stone-500">Son 12 ayda ödeme yok. Tümü'ne bak.</li>}
         </ul>
       </section>
 
