@@ -29,6 +29,7 @@ SERDIVAN SAHINBEY SEHITKAMIL MELIKGAZI KOCASINAN TALAS ATAKUM ILKADIM ORTAHISAR 
 DALAMAN DATCA KUSADASI AYVALIK EDREMIT BANDIRMA CORLU CERKEZKOY SULEYMANPASA PAMUKKALE MERKEZEFENDI YENISEHIR
 TOROSLAR MEZITLI TARSUS ERDEMLI ANTAKYA ISKENDERUN DOSEMEALTI
 MERKEZ SUBE SUBESI MAGAZA MAGAZASI AVM
+IST ANK IZM
 """
 
 # Yabancı şehirler (dijital hizmetlerin fatura adresi) ve ülke adları / kodları
@@ -72,3 +73,14 @@ def strip_location(text: str) -> str:
     while ws and (ws[-1] in loc or ws[-1].isdigit()):
         ws.pop()
     return " ".join(ws)
+
+
+@functools.lru_cache(maxsize=1)
+def _prefixes() -> frozenset[str]:
+    """Konum sözcüklerinin kesik başları ('TU', 'ISTANB')."""
+    return frozenset(w[:i] for w in words() for i in range(1, len(w)))
+
+
+def is_prefix(word: str) -> bool:
+    """Kelime bir konum sözcüğünün kesik başı mı: 'TU' (TURKIYE), 'ISTANB' (ISTANBUL)."""
+    return word.isalpha() and word in _prefixes()

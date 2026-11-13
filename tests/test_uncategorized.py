@@ -112,9 +112,10 @@ def test_suggestion_sources(client, tmpdb):
     # hiçbir şey bilinmiyor
     _entry(client, "Bilinmez Ltd", 30)
     by = {x["key"]: x["suggestion"] for x in _groups(client, m)["groups"]}
-    assert by["i:c:ORNEKPAZARKADIKOY"]["category"] == "Market & Gıda" and by["i:c:ORNEKPAZARKADIKOY"]["source"] == "gecmis"
-    assert 0 < by["i:c:ORNEKPAZARKADIKOY"]["confidence"] <= 1
-    assert by["i:c:ORNEKGIYIMMAGAZA"] == {"category": "Giyim", "source": "kural", "confidence": 0.8}
+    # işyeri anahtarında sondaki konum / şube eki yok (textnorm NAME_VERSION 2): 'ORNEKPAZAR KADIKOY' → 'ORNEKPAZAR'
+    assert by["i:c:ORNEKPAZAR"]["category"] == "Market & Gıda" and by["i:c:ORNEKPAZAR"]["source"] == "gecmis"
+    assert 0 < by["i:c:ORNEKPAZAR"]["confidence"] <= 1
+    assert by["i:c:ORNEKGIYIM"] == {"category": "Giyim", "source": "kural", "confidence": 0.8}
     from app.card_excel import sector_category
 
     expect = sector_category("MARKET VE ALISVERIS MERKEZLERI")

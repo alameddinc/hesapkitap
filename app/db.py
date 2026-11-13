@@ -870,6 +870,12 @@ def init_db() -> None:
         c.execute("""UPDATE entries SET debt_id = (SELECT debt_id FROM debt_payments p WHERE p.entry_id = entries.id)
                      WHERE debt_id IS NULL AND id IN (SELECT entry_id FROM debt_payments WHERE entry_id IS NOT NULL)""")
         _sync_default_rules(c)
+        try:  # işyeri adı kuralı sürümü: boş defter işaretlenir, eski defter arka plan taşımasına (app/merchant_rekey.py)
+            from app import merchant_rekey
+
+            merchant_rekey.mark_book(c)
+        except sqlite3.OperationalError:
+            pass
     auto_update_cycle()
     _ensure_imported_bank_accounts()
     _once("salary_linked_v2", link_salary_entries)
@@ -913,24 +919,46 @@ def _gateway_descriptions(c) -> set[str]:
     return out
 
 
+def _name_descriptions(c) -> set[str]:
+    """İşyeri adı hesaplanan bütün açıklamalar (ad kuralı sürümü değişince; app/merchant_rekey.py): kart işlemleri,
+    kayıtlar ve hesap hareketlerinin bankadaki metni."""
+    out = {r[0] for r in c.execute("SELECT DISTINCT description FROM transactions") if r[0]}
+    for r in c.execute("SELECT DISTINCT description, note FROM entries"):
+        note = r[1] or ""
+        d = note.partition("\n")[0][len("Hesap hareketi · "):] if note.startswith("Hesap hareketi · ") else ""
+        out.update(x for x in (r[0], d) if x)
+    return out
+
+
 def migrate_gateway_keys(old=None, new=None) -> dict:
     """Ödeme aracısı önekleri işyeri adından atılıyor: 'PAYCO/ORNEK BILISIM' eskiden 'PAYCO' adıyla, şimdi 'ORNEK
-    BILISIM' adıyla görünür. İşyeri adı saklanmaz (açıklamadan hesaplanır); yalnız işyeri ADINA bağlı kullanıcı ayarları
-    yeni ada taşınır, rakam ve kategori değişmez. old / new: textnorm.GatewaySet (varsayılan: aracısız → geçerli liste).
-    - abonelik durumu (subscription_state, anahtar = eski ad): yeni adlara kopyalanır (eski satır kalır; INSERT OR IGNORE),
-    - işyeri kısma hedefi (savings_goals kind='merchant'): eski ad tek bir yeni ada gidiyorsa adı güncellenir,
-    - öğrenilmiş eşleşme kuralı (match_rules.pattern = işyeri adı): yeni adlara kopyalanır (eski kural kalır),
-    - sabit kalemin eşleşme anahtarı (recurring.match_key 'm:<ad>'): tek yeni ada gidiyorsa güncellenir.
-    Liste daralırsa (onay kaldırıldı) aynı kural ters yönde çalışır. Tekrar çalışması bir şey değiştirmez. Rapor
-    settings'te (gateway_keys_v1_report) ve günlükte; rules / recurring yalnız sıfır değilse rapora girer."""
-    import json
-    import logging
-
-    from app.categorize import fold_key
+    BILISIM' adıyla görünür. old / new: textnorm.GatewaySet (varsayılan: aracısız → geçerli liste). Taşıma kuralı
+    migrate_name_keys'te. Rapor settings'te (gateway_keys_v1_report) ve günlükte."""
     from app.textnorm import GatewaySet, current_gateways, merchant_name_with
 
     old = old or GatewaySet((), fuzzy=False)
     new = new or current_gateways()
+    return migrate_name_keys(lambda d: merchant_name_with(d, old), lambda d: merchant_name_with(d, new),
+                             _gateway_descriptions, "gateway_keys_v1_report", "ödeme aracısı göçü")
+
+
+def migrate_name_keys(old_name, new_name, descriptions=_name_descriptions, report_key: str = "merchant_names_report",
+                      label: str = "işyeri adı göçü") -> dict:
+    """İşyeri adı kuralı değişti (ödeme aracısı listesi, ad kuralı sürümü): old_name(açıklama) → new_name(açıklama).
+    İşyeri adı saklanmaz (açıklamadan hesaplanır); yalnız işyeri ADINA bağlı kullanıcı ayarları yeni ada taşınır, rakam
+    ve kategori değişmez:
+    - abonelik durumu (subscription_state, anahtar = eski ad): yeni adlara kopyalanır (eski satır kalır); birkaç eski
+      ad aynı yeni ada inerse ya da yeni adda zaten durum varsa en son değiştirilen (changed_at) geçerli,
+    - işyeri kısma hedefi (savings_goals kind='merchant'): eski ad tek bir yeni ada gidiyorsa adı güncellenir,
+    - öğrenilmiş eşleşme kuralı (match_rules.pattern = işyeri adı): yeni adlara kopyalanır (eski kural kalır),
+    - sabit kalemin eşleşme anahtarı (recurring.match_key 'm:<ad>'): tek yeni ada gidiyorsa güncellenir.
+    Ters yönde de aynı kural çalışır. Tekrar çalışması bir şey değiştirmez. Rapor settings'te (report_key) ve günlükte;
+    rules / recurring yalnız sıfır değilse rapora girer. descriptions(c): adı hesaplanacak açıklamalar."""
+    import json
+    import logging
+
+    from app.categorize import fold_key
+
     report = {"subscriptions": 0, "goals": 0, "ambiguous_goals": 0}
     extra = {"rules": 0, "recurring": 0}
 
@@ -945,17 +973,26 @@ def migrate_gateway_keys(old=None, new=None) -> dict:
         if not (subs or goals or rules or recs):
             return report
         moved: dict[str, set] = {}
-        for d in _gateway_descriptions(c):
-            a, b = merchant_name_with(d, old), merchant_name_with(d, new)
+        for d in descriptions(c):
+            a, b = old_name(d), new_name(d)
             if a != b:
                 moved.setdefault(a, set()).add(b)
         if not moved:
             return report
+        # birden çok eski ad tek yeni ada inebilir ('SPOTIFY.COM ISTANBUL TR' ve 'SPOTIFY.COM/ISTANBUL' → 'SPOTIFY'):
+        # en son değiştirilen durum geçerli; yeni adda daha yeni (ya da aynı tarihli) durum varsa o kalır
+        best: dict[str, dict] = {}
         for name, st in subs.items():
-            for nm in sorted(moved.get(name, ())):
-                report["subscriptions"] += c.execute(
-                    "INSERT OR IGNORE INTO subscription_state (merchant, status, changed_at, new_amount, note) "
-                    "VALUES (?, ?, ?, ?, ?)", (nm, st["status"], st["changed_at"], st.get("new_amount"), st.get("note"))).rowcount
+            for nm in moved.get(name, ()):
+                if nm not in best or str(st["changed_at"] or "") > str(best[nm]["changed_at"] or ""):
+                    best[nm] = st
+        for nm, st in sorted(best.items()):
+            cur = subs.get(nm)
+            if cur is not None and str(cur["changed_at"] or "") >= str(st["changed_at"] or ""):
+                continue
+            report["subscriptions"] += c.execute(
+                "INSERT OR REPLACE INTO subscription_state (merchant, status, changed_at, new_amount, note) "
+                "VALUES (?, ?, ?, ?, ?)", (nm, st["status"], st["changed_at"], st.get("new_amount"), st.get("note"))).rowcount
         from app.textnorm import normalize
 
         for gl in goals:
@@ -981,8 +1018,8 @@ def migrate_gateway_keys(old=None, new=None) -> dict:
                 c.execute("UPDATE recurring SET match_key = ? WHERE id = ?", (next(iter(ks)), r["id"]))
                 extra["recurring"] += 1
         report.update({k: v for k, v in extra.items() if v})
-        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('gateway_keys_v1_report', ?)", (json.dumps(report),))
-    logging.getLogger(__name__).info("ödeme aracısı göçü: %s", report)
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (report_key, json.dumps(report)))
+    logging.getLogger(__name__).info("%s: %s", label, report)
     return report
 
 

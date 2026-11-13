@@ -35,9 +35,15 @@ def _merchant_name_cached(description: str) -> str:
 merchant_name.cache_clear = _merchant_name_cached.cache_clear  # eski çağıranlar için
 
 
-def merchant_name_with(description: str, gs: "GatewaySet") -> str:
-    """merchant_name, verilen aracı kümesiyle (önbelleksiz): eski / yeni aracı listesine göre adı karşılaştırmak için
-    (app/db.py migrate_gateway_keys)."""
+# İşyeri adı kuralının sürümü. Artınca her defterde ada bağlı ayarlar (abonelik durumu, kısma hedefi, öğrenilmiş
+# eşleşme kuralı, sabit kalem anahtarı) eski addan yeni ada arka planda taşınır (app/merchant_rekey.py).
+# 1: ilk kural; 2 (13.11.2026): sondaki konum eki atılır ('SPOTIFY.COM ISTANBUL TR' → 'SPOTIFY').
+NAME_VERSION = 2
+
+
+def merchant_name_with(description: str, gs: "GatewaySet", version: int = NAME_VERSION) -> str:
+    """merchant_name, verilen aracı kümesiyle (önbelleksiz): eski / yeni aracı listesine (app/db.py
+    migrate_gateway_keys) ya da eski / yeni ad kuralı sürümüne (app/merchant_rekey.py) göre adı karşılaştırmak için."""
     import re
 
     norm = gs.strip(normalize(description))  # 'PAYCO/ORNEK BILISIM' → 'ORNEK BILISIM' (aracı değil asıl işyeri)
@@ -53,9 +59,55 @@ def merchant_name_with(description: str, gs: "GatewaySet") -> str:
     # sayı ve 'Q1W2E3' gibi işlem referans kodlarını at; 'A101', 'F202' gibi kısa kodlar kalsın
     words = [w for w in head.split()
              if not re.fullmatch(r"[\d\-#]+", w) and not (len(w) >= 5 and re.search(r"\d", w))]
+    if version >= 2:
+        words = drop_trailing_location(words)  # 'SPOTIFY.COM ISTANBUL TR' → 'SPOTIFY.COM', 'MIGROS KADIKOY' → 'MIGROS'
     name = " ".join(words[:3]) or norm
     name = re.sub(r"\.COM(\.TR)?$", "", name)  # 'SPOTIFY.COM' -> 'SPOTIFY'
     return MERCHANT_ALIASES.get(name, name)
+
+
+# Konum eki atılınca geriye yalnız bunlardan biri kalırsa atılmaz: 'CAFE TAKSIM', 'OTEL ANKARA' ayrı işyerleri
+GENERIC_SHOP_WORDS = frozenset("""
+CAFE KAFE CAFFE KAHVE KAHVECI OTEL HOTEL MOTEL PANSIYON HOSTEL RESTORAN RESTAURANT RESTAURANTE LOKANTA LOKANTASI
+KEBAP KEBAPCI KEBABCI DONER DONERCI PIDE PIDECI BUFE BUFESI PASTANE PASTANESI PASTAHANE FIRIN FIRINI EKMEK BAKKAL
+MARKET MARKETI SUPERMARKET MANAV KASAP KASABI ECZANE ECZANESI KUAFOR BERBER OTOPARK OTOPARKI KIRTASIYE BAR PUB
+GALERI BUTIK GIYIM AVM CARSI PAZAR GARAJ TERMINAL OTOGAR SPOR GYM KLINIK HASTANE HASTANESI OPTIK TICARET
+""".split())
+# Önünde şehir yokken de atılan iki harfli ülke kodları (ekstrede sık: 'ORNEK OYUN NL'); ötekiler ('AT', 'NO', 'IT',
+# 'BE', 'CA'…) yalnız bir konumun ardından ('VIENNA AT'): tek başına kelime / kısaltma olabilir
+_SOLO_CODES = frozenset({"TR", "US", "GB", "UK", "IE", "NL", "LU", "DE", "SE", "CY"})
+# İl ama sık soyadı / kişi adı: sonda yazınca işyeri sahibinin adı olabilir ('ORNEK AYDIN')
+_KEEP_TRAILING = frozenset({"AYDIN"})
+
+
+def drop_trailing_location(words: list[str]) -> list[str]:
+    """Sondaki konum sözcüklerini at (app/places.py sözlüğü: il, büyük ilçe, yabancı şehir, ülke adı / kodu, 'IST'):
+    ['SPOTIFY.COM', 'ISTANBUL', 'TR'] → ['SPOTIFY.COM']. Kesik son parça da atılır: bir konumun ardından gelen, en çok
+    3 harflik konum başlangıcı ('ISTANBUL TU'); tek başına kesik sözcük atılmaz ('ORNEK BAHCE' ≠ BAHCELIEVLER).
+    Atılmaz: hepsi konumsa ('ISTANBUL', 'ISTANBUL TR'), kalan tek kelime genel bir dükkân adıysa ('CAFE TAKSIM') ya da
+    tek karakterse. Sayılar önceden atılmış olmalı (merchant_name). Zincir + şube ('ORNEKZINCIR KADIKOY') tek işyeri
+    olur: eğik çizgili yazılış ('ORNEKZINCIR/KADIKOY') zaten öyleydi; şube ham açıklamada ve fişin konum alanında kalır."""
+    from app import places
+
+    loc = places.words()
+    ws = list(words)
+    if len(ws) < 2:
+        return ws
+    cut = len(ws)
+    last = ws[-1]
+    if last not in loc and len(ws) >= 3 and ws[-2] in loc and len(last) <= 3 and places.is_prefix(last):
+        cut -= 1  # satır sonunda kesilmiş ülke: 'ISTANBUL TU' (TURKIYE)
+    while cut > 0 and ws[cut - 1] in loc and ws[cut - 1] not in _KEEP_TRAILING:
+        w = ws[cut - 1]
+        if len(w) == 2 and w not in _SOLO_CODES and (cut < 2 or ws[cut - 2] not in loc):
+            break  # 'ORNEK DUKKAN AT' / 'ORNEK BUFE NO': iki harf tek başına ancak yaygın ülke koduysa
+        cut -= 1
+    if cut == len(ws) or cut == 0:
+        return ws
+    rest = ws[:cut]
+    if len(rest) == 1 and (rest[0] in GENERIC_SHOP_WORDS or len(rest[0]) < 2):
+        return ws
+    return rest
 
 
 # Satıcının adı önde olan önekler (pazar yeri / merchant of record): merchant_name bunları kendisi işler, ödeme aracısı
