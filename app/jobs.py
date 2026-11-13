@@ -382,6 +382,13 @@ async def scheduler() -> None:
                 log.info("ürün grupları yeniden gruplama: %s", got)
         except Exception:  # noqa: BLE001
             log.exception("regroup tick failed")
+        try:  # işyeri adı kuralı sürümü yükseldiyse ada bağlı ayarlar defter defter yeni ada (app/merchant_rekey.py)
+            from app import merchant_rekey
+
+            if merchant_rekey.pending() and (got := await asyncio.to_thread(merchant_rekey.tick)):
+                log.info("işyeri adı sürümü: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("merchant rekey tick failed")
         try:  # yapay zekâ okuması tutmayan ekstreler: şablonla yeniden okunabilir mi (app/statement_reread.py; önbellek)
             from app import statement_reread
 
