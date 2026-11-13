@@ -484,14 +484,12 @@ def bill_without_due(doc: dict, text: str | None, categories: list[str] | None =
     abonelik değil ve ödeme dekontu değilse alışveriş belgesidir (restoran / market e-Arşivi; 12.11 cihaz testi: karekodu
     okunamayan restoran fişi Ödemeler'e düşüyordu) → fiş. Telefon metni yoksa karar verilmez (eski davranış). sale: karekod
     POS satış sorgulama bağlantısı (parse "sale"): metin olmasa da, kurum işareti olsa da fiş."""
-    from app import bill_templates
-
     if doc.get("type") != "bill" or doc.get("paid") or doc.get("due_date") or not (text or sale):
         return doc
     if not sale and ((doc.get("category") or "") in _BILL_KEEP or bill_like(None, text)):
         return doc
-    if text and bill_templates.is_paid_doc(text):
-        return doc
+    # "ödenmiştir" (bill_templates.is_paid_doc) burada bakılmaz: mağazanın e-Arşivi de "kredi kartı ile ödenmiştir" yazar.
+    # Kurum işareti yoksa (yukarıda bill_like) alışveriştir; fatura dekontu yalnız okuma "ödendi" dediyse (doc.paid) (13.11)
     amount = doc.get("amount")
     if not isinstance(amount, (int, float)) or amount <= 0:
         return doc

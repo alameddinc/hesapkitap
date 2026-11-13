@@ -559,3 +559,21 @@ def test_pos_sale_link_qr_makes_receipt(tmpdb):
     r = karekod.apply_hints(dict(doc), q, None, ["Kafe & Restoran"])
     assert r["type"] == "receipt" and r["total"] == 108.0 and r["date"] == _day(3).isoformat()
     assert karekod.apply_hints(dict(doc, due_date=_day(-20).isoformat()), q, None, [])["type"] == "bill"
+
+
+def test_shop_earsiv_pdf_without_qr_becomes_receipt(tmpdb, monkeypatch):
+    """13.11: mağazanın (IKEA, online mağaza) e-Arşiv PDF'i karekodsuz gelse de alışveriştir: yapay zekâ "fatura" (son
+    ödemesiz) dese de PDF'in metin katmanıyla son kontrol fiş yapar. Kurum faturası PDF'i fatura kalır."""
+    from app import receipt
+    from tests.test_upload_docs import text_pdf
+
+    shop = text_pdf(["ORNEK MOBILYA MAGAZACILIK A.S.", "e-Arsiv Fatura", "Fatura No: ABC2026000000077",
+                     "Fatura Tarihi: 10.11.2026", "KITAPLIK 1 x 1.499,00", "LAMBA 1 x 349,00",
+                     "Mal Hizmet Toplam Tutari 1.848,00", "Odenecek Tutar 1.848,00 TL", "KREDI KARTI ILE ODENMISTIR"])
+    util = text_pdf(["ORNEK ELEKTRIK PERAKENDE SATIS A.S.", "e-Fatura", "Abone No: 1234567", "Tuketim 210 kWh",
+                     "Odenecek Tutar 450,00 TL"])
+    said = {"type": "bill", "provider": "Ornek", "amount": None, "due_date": None, "paid": False, "category": "Faturalar"}
+    monkeypatch.setattr(receipt, "enabled", lambda: True)
+    for data, total, want in ((shop, 1848.0, "receipt"), (util, 450.0, "bill")):
+        monkeypatch.setattr(receipt, "_parse_document_ai", lambda *a, _t=total, **k: dict(said, amount=_t))
+        assert receipt.parse_document(data, "application/pdf", ["Ev & Mobilya", "Diğer"])["type"] == want

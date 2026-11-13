@@ -738,7 +738,9 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
     if text and (hit := bill_templates.read(text)):
         return bill_templates.as_doc(hit)  # telefon metni kurumun fatura şablonunu tutuyor: yapay zekâsız
     # kural okumasının metni: telefon metni, yoksa (karekod sunucuda okunduysa) PDF metin katmanı
-    rule_text = text or (bill_templates.text_of(data, mime) if code and not more else None)
+    # PDF'te metin katmanı her zaman (karekod okunmasa da): IKEA / online mağazanın e-Arşiv PDF'i alışveriştir; son kontrol
+    # (karekod.bill_without_due: son ödeme / kurum işareti yoksa fiş) metinsiz karar veremez (13.11)
+    rule_text = text or (bill_templates.text_of(data, mime) if (code or mime == "application/pdf") and not more else None)
     if (rule_text or code) and (hit := rule_read(rule_text, qr, categories)):
         return hit  # karekod (fatura / akaryakıt) ya da POS slibi: yapay zekâsız (app/karekod.py)
     qr_vkn = code.get("vkn") if code and not karekod.is_bill(code, rule_text) else None
