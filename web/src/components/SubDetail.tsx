@@ -18,7 +18,8 @@ import { SubLogoBox, type SubLogo } from "./AppSubs";
 
 interface Total { amount: number; count: number; since: string | null; first_date: string | null; fx_text: string | null; text: string | null }
 interface Change { kind: "zam" | "indirim" | "kur" | "adet"; diff: number; from: number; to: number; fx_text: string | null }
-interface Month { month: string; label: string; amount: number; count: number; fx_text: string | null; change: Change | null; after_cancel: boolean; over: boolean; gap?: boolean }
+interface Month { month: string; label: string; amount: number; count: number; fx_text: string | null; change: Change | null; after_cancel: boolean; over: boolean; gap?: boolean;
+  /** sondaki 2'den çok ödemesiz ay tek satır: label "Mart 2026'dan beri ödeme yok (8 ay)" */ gap_since?: string; gap_count?: number }
 interface Txn { uid: string; date: string; month: string; amount: number; label: string; via: "kart" | "hesap"; fx: string | null; description: string; after_cancel: boolean }
 export interface SubDetailData {
   kind: "card" | "store"; key: string; title: string; logo: SubLogo; status: string; status_text: string; status_date: string | null;
@@ -51,7 +52,7 @@ function ChangeBadge({ c }: { c: Change }) {
 }
 
 /** Ödemeler: toplam, ay ay, işlemler. Kart aboneliği penceresi ve mağaza aboneliği ayrıntısı bunu kullanır. */
-export function SubPayments({ d }: { d: SubDetailData }) {
+export function SubPayments({ d, onCancel }: { d: SubDetailData; onCancel?: () => void }) {
   const ui = useUI();
   const openRow = useOpenRow();
   const [range, setRange] = useState<"last12" | "all">("last12");
@@ -85,7 +86,13 @@ export function SubPayments({ d }: { d: SubDetailData }) {
       <section>
         <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Ay ay</h3>
         <ul className="divide-y divide-stone-100 dark:divide-stone-800">
-          {months.map((m) => m.gap ? (
+          {months.map((m) => m.gap && m.gap_count ? (
+            <li key={m.month} className="py-1.5 text-stone-500 dark:text-stone-400" data-testid="sub-gap-ozet">
+              {m.label}
+              {onCancel && d.status !== "iptal" && <> · <button type="button" onClick={onCancel}
+                className="text-blue-700 underline underline-offset-2 dark:text-blue-400">iptal ettiysen işaretle</button></>}
+            </li>
+          ) : m.gap ? (
             <li key={m.month} className="flex items-baseline justify-between gap-3 py-1.5 text-stone-500 dark:text-stone-400" data-testid="sub-gap">
               <span className="min-w-0">{m.label}</span>
               <span className="shrink-0 text-xs">Ödeme yok</span>
@@ -141,18 +148,18 @@ export function SubPayments({ d }: { d: SubDetailData }) {
 }
 
 /** Mağaza aboneliği ayrıntısının içinde: ödemeler bölümü (yükleniyor/hata durumuyla). */
-export function SubPaymentsFor({ r }: { r: SubRef }) {
+export function SubPaymentsFor({ r, onCancel }: { r: SubRef; onCancel?: () => void }) {
   const q = useSubDetail(r);
   return (
     <>
       <SorguDurumu q={q} etiket="Ödemeler yükleniyor"><SatirIskelet n={4} /></SorguDurumu>
-      {q.data && <SubPayments d={q.data} />}
+      {q.data && <SubPayments d={q.data} onCancel={onCancel} />}
     </>
   );
 }
 
 /** Kart aboneliği (Tasarruf > Abonelikler satırı): başlık + ödemeler. */
-export default function SubDetailModal({ r, title, onClose }: { r: SubRef; title: string; onClose: () => void }) {
+export default function SubDetailModal({ r, title, onClose, onCancel }: { r: SubRef; title: string; onClose: () => void; onCancel?: () => void }) {
   const q = useSubDetail(r);
   const d = q.data;
   return (
@@ -176,7 +183,7 @@ export default function SubDetailModal({ r, title, onClose }: { r: SubRef; title
           </div>
         )}
         <SorguDurumu q={q} etiket="Abonelik yükleniyor"><SatirIskelet n={4} /></SorguDurumu>
-        {d && <SubPayments d={d} />}
+        {d && <SubPayments d={d} onCancel={onCancel} />}
       </div>
     </Modal>
   );

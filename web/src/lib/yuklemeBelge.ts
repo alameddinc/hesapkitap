@@ -41,6 +41,10 @@ export function belgeSil(key: string | undefined) {
   emit();
 }
 
+/** Vazgeç onayı (okuma hakkı zaten düştü; mobil kuyruk-durum ile aynı söz). */
+export const VAZGEC_SORU = "Okunan belge kaydedilmeyecek. Vazgeçilsin mi?\n\nBu okuma hakkından düştü; vazgeçersen gider ya da fatura olarak eklenmez.";
+export const VAZGEC_OPT = { confirm: "Evet, vazgeç", cancel: "Hayır", danger: true } as const;
+
 /** Testler için: depoyu boşalt. */
 export function sifirlaTest() { liste = []; seq = 0; emit(); }
 

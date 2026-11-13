@@ -287,7 +287,9 @@ export default function Savings() {
 
       {adding && d && <GoalForm data={d} onClose={() => setAdding(false)} />}
       {downgrade && <DowngradeForm sub={downgrade} onClose={() => setDowngrade(null)} />}
-      {detail && <SubDetailModal r={{ merchant: detail.merchant }} title={title(detail.merchant)} onClose={() => setDetail(null)} />}
+      {detail && <SubDetailModal r={{ merchant: detail.merchant }} title={title(detail.merchant)} onClose={() => setDetail(null)}
+        onCancel={() => void ask(`${title(detail.merchant)} "İptal ettim" olarak işaretlensin mi?\n\nSonra yine çekilirse seni uyarırız.`, { confirm: "İptal ettim", danger: false })
+          .then((ok) => { if (ok) setSub.mutate({ merchant: detail.merchant, status: "iptal" }); })} />}
     </div>
   );
 }

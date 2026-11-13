@@ -16,7 +16,9 @@ ilk çekimleri arasındaki aralığın ortancası 20–45 gün; _cycle) ilk öde
 ödemeden sonra bugüne (iptal edildiyse iptal gününe) kadar beklenen günü geçmiş aylar "gap" satırı olur (tutar 0, rozet
 yok). Sonda yalnız verisi olan aylar: kart işlemleri o kartın son ekstre kesimine, hesap dökümü işlemleri o hesabın son
 kaydına kadar bilinir (ekstresi henüz gelmemiş ay "Ödeme yok" görünmez). Yıllık ya da belirsiz döngüde boşluk gösterilmez.
-Zam/kur rozeti boşluk aylarını atlar: önceki ÖDEMELİ ayla karşılaştırılır.
+Zam/kur rozeti boşluk aylarını atlar: önceki ÖDEMELİ ayla karşılaştırılır. Sondaki (son ödemeden sonraki) ödemesiz aylar
+TAIL_MAX'tan çoksa tek özet satırı olur: {gap true, gap_since, gap_count, label "Mart 2026'dan beri ödeme yok (8 ay)"};
+istemci yanına "iptal ettiysen işaretle" koyar. Aradaki boşluklar ay ay kalır.
 
 Toplamlar sunucuda (istemci toplamaz): tümü ve son 12 ay (bu ay dahil 12 takvim ayı); dövizli olanlarda döviz toplamı.
 Ortak defter: gizli kart/hesap işlemleri db okumalarında süzülür (sayılmaz, listelenmez); sayfa "tasarruf" kapalıysa uç
@@ -69,6 +71,7 @@ def _card_txn(t: dict) -> dict:
             "_src": ("kart", t.get("account"))}
 
 
+TAIL_MAX = 2  # sondaki ödemesiz ay bundan çoksa tek özet satırı
 GAP_SLACK = 3  # beklenen çekim gününden sonra bu kadar gün geçmeden ay "ödemesiz" sayılmaz (hafta sonu, geç yansıma)
 
 
@@ -96,6 +99,20 @@ def _coverage(txns: list[dict]) -> str | None:
     if accs:
         last += [str(e["entry_date"])[:10] for e in db.list_entries() if e.get("account_id") in accs and e.get("entry_date")]
     return max(last, default=None)
+
+
+def _gap_rows(txns: list[dict], paid: list[str], end: date | None) -> list[dict]:
+    """Ödemesiz ay satırları: ara boşluklar ay ay; sondakiler TAIL_MAX'tan çoksa tek özet satırı (ayı: sondaki son ay)."""
+    gaps = _gap_months(txns, paid, end)
+    row = lambda ym, label: {"month": ym, "label": label, "amount": 0.0, "count": 0, "after_cancel": False,  # noqa: E731
+                             "change": None, "over": False, "fx_text": None, "gap": True}
+    tail = [ym for ym in gaps if ym > paid[-1]] if paid else []
+    out = [row(ym, month_label(ym)) for ym in gaps if ym not in tail or len(tail) <= TAIL_MAX]
+    if len(tail) > TAIL_MAX:
+        y, m = int(tail[0][:4]), int(tail[0][5:7])
+        out.append(row(tail[-1], f"{AY[m - 1]} {store_subs.year_loc(y)}n beri ödeme yok ({len(tail)} ay)")
+                   | {"gap_since": tail[0], "gap_count": len(tail)})
+    return out
 
 
 def _gap_months(txns: list[dict], paid: list[str], end: date | None) -> list[str]:
@@ -200,8 +217,7 @@ def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount
             stop.append(date.fromisoformat(cancelled_at[:10]))
         cov = _coverage(txns)
         end = min(stop + [date.fromisoformat(cov)]) if cov else None
-        out_months += [{"month": ym, "label": month_label(ym), "amount": 0.0, "count": 0, "after_cancel": False, "change": None,
-                        "over": False, "fx_text": None, "gap": True} for ym in _gap_months(txns, sorted(by), end)]
+        out_months += _gap_rows(txns, sorted(by), end)
     out_months.sort(key=lambda m: m["month"], reverse=True)
     out_txns = [{"uid": x["uid"], "date": x["date"], "month": x["row_month"], "amount": money.money(x["amount"]) + 0.0,
                  "label": x["label"], "via": x["via"], "fx": f"{x['fx'][0]:g} {x['fx'][1]}" if x["fx"] else None,

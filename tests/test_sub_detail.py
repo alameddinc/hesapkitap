@@ -245,3 +245,21 @@ def test_gaps_yearly_and_single_none(gappy, client):
     r = client.get("/api/subscriptions/detail", params={"merchant": "ORNEK DIZI"}).json()
     assert all("gap" not in m for m in r["months"])
     assert "subscription_gaps" in client.get("/api/meta").json()["capabilities"]
+
+
+def test_gaps_long_tail_one_summary_row(gappy):
+    """Sondaki ödemesiz ay 2'den çoksa tek özet satırı; aradakiler ay ay. 2 ve azı ay ay."""
+    from app import sub_detail
+
+    d = sub_detail.card_detail("ORNEK DIZI", date(2027, 2, 12), gaps=True)
+    # ekstre Ekim'e kadar: Eylül, Ekim (2 ay) → ay ay
+    assert [m["month"] for m in d["months"] if m["gap"]] == ["2026-10", "2026-09", "2026-04", "2026-03"]
+    for m in (11, 12):  # Kasım–Aralık ekstreleri de geldi: sonda 4 ödemesiz ay
+        _stmt(gappy, date(2026, m, 20), [(date(2026, m, 15), "ORNEK MARKET", 120.0, None)])
+    d = sub_detail.card_detail("ORNEK DIZI", date(2027, 2, 12), gaps=True)
+    gaps = [m for m in d["months"] if m["gap"]]
+    assert [m["month"] for m in gaps] == ["2026-12", "2026-04", "2026-03"]
+    top = gaps[0]
+    assert top["label"] == "Eylül 2026'dan beri ödeme yok (4 ay)" and top["gap_since"] == "2026-09" and top["gap_count"] == 4
+    assert top["amount"] == 0.0 and top["change"] is None
+    assert "gap_count" not in gaps[1]

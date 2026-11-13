@@ -457,7 +457,9 @@ CAPABILITIES = (
                               # (döngü sunucuda tahmin: ilk çekimler arası ortanca 20–45 gün) ilk ödeme ile bugün / iptal
                               # günü arasındaki ödemesiz aylar {gap true, amount 0, count 0, change null}; sonda yalnız
                               # verisi olan (kartın son ekstre kesimi / hesabın son kaydı) aylar. Zam/kur rozeti önceki
-                              # ödemeli aya göre. Yıllıkta boşluk yok. gaps verilmezse yanıt eskisi gibi
+                              # ödemeli aya göre. Sondaki ödemesiz ay 2'den çoksa tek özet satırı {gap true, gap_since,
+                              # gap_count, label "Mart 2026'dan beri ödeme yok (8 ay)"}. Yıllıkta boşluk yok. gaps
+                              # verilmezse yanıt eskisi gibi
     "card_early_close",       # taksitleri erken kapattım (app/early_close.py): GET /api/cards/summary cards[].early_close
                               # {available, rest, fee_left (faiz gizliyse null), hint, months [{month, label}], default_month,
                               # record {month, label, amount, total, rest, saved, at, text, saved_text} | null, detected

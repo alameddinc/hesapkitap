@@ -16,7 +16,7 @@ import SorguDurumu from "./SorguDurumu";
 import { RereadSheet, rereadDismiss } from "./StatementReread";
 import { OKU } from "../lib/yenidenOku";
 import { BelgeOzet, useBekleyenBelgeler, useBelgeAc } from "./YuklemeBelge";
-import { belgeSil, isFatura, yapilacakBaslik, yapilacakNeden, type BekleyenBelge } from "../lib/yuklemeBelge";
+import { VAZGEC_OPT, VAZGEC_SORU, belgeSil, isFatura, yapilacakBaslik, yapilacakNeden, type BekleyenBelge } from "../lib/yuklemeBelge";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
@@ -413,7 +413,7 @@ function OkunanBelge({ b }: { b: BekleyenBelge }) {
         <BelgeOzet r={r} className="block break-words text-xs text-stone-600 dark:text-stone-300" />
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        <button className="btn-ghost border border-stone-300 px-3 dark:border-stone-700" onClick={() => belgeSil(b.key)}
+        <button className="btn-ghost border border-stone-300 px-3 dark:border-stone-700" onClick={() => void ask(VAZGEC_SORU, VAZGEC_OPT).then((ok) => { if (ok) belgeSil(b.key); })}
           aria-label={`${baslik}: vazgeç`}>Vazgeç</button>
         <button className="btn-primary px-3" onClick={() => { belgeSil(b.key); ac(r, b.file); }} aria-label={`${baslik}: onay formunu aç`}>Onayla</button>
       </div>

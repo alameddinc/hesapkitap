@@ -21,7 +21,8 @@ import { ReportProblem } from "../components/Feedback";
 import { ReportButton, useCap } from "../components/Support";
 import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
 import { BelgeOzet, useBekleyenBelgeler, useBelgeAc } from "../components/YuklemeBelge";
-import { belgeBekliyor, belgeleriAl, belgeSil, bekleyenBelgeler, durumMetni, gonderilir, isFatura, type Satir } from "../lib/yuklemeBelge";
+import { ask } from "../lib/ask";
+import { VAZGEC_OPT, VAZGEC_SORU, belgeBekliyor, belgeleriAl, belgeSil, bekleyenBelgeler, durumMetni, gonderilir, isFatura, type Satir } from "../lib/yuklemeBelge";
 
 export default function Statements() {
   const ui = useUI();
@@ -55,7 +56,9 @@ export default function Statements() {
     if (r.belgeKey) { belgeSil(r.belgeKey); setAcildi((a) => new Set(a).add(r.belgeKey!)); }
     belgeAc(r, sent.get(r.filename) ?? null);
   };
-  const vazgec = (r: Satir) => { belgeSil(r.belgeKey); setResults((old) => old.filter((o) => o !== r)); };
+  const vazgec = (r: Satir) => void ask(VAZGEC_SORU, VAZGEC_OPT).then((ok) => {
+    if (ok) { belgeSil(r.belgeKey); setResults((old) => old.filter((o) => o !== r)); }
+  });
   const sendFiles = async (files: File[], password?: string, kind?: DocKind) => {
     if (busy) return;
     setSent((m) => new Map([...m, ...files.map((f) => [f.name, f] as const)]));

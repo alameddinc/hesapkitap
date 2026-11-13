@@ -8022,7 +8022,8 @@ def subscription_detail(merchant: str | None = Query(None, min_length=1, max_len
     transactions [{uid, date, month, amount, label, via kart|hesap, fx, description, after_cancel}], fx, fx_note,
     after_cancel {amount, count}|null}. İşleme dokununca: uid ile mevcut işlem ayrıntısı (month: satırın dönemi).
     gaps=1 (yetenek subscription_gaps): months[] her satırda gap; aylık abonelikte ödemesiz aylar da {gap true, amount 0,
-    count 0, change null} satırı olarak gelir (yıllıkta gelmez)."""
+    count 0, change null} satırı olarak gelir (yıllıkta gelmez); sondaki 2'den çok ödemesiz ay tek özet satırı (gap_since,
+    gap_count, label "… beri ödeme yok (N ay)")."""
     from app import sub_detail
 
     if bool(merchant) == bool(app_id):
