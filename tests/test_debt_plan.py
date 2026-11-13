@@ -230,7 +230,12 @@ def test_empty_plan(client):
 # ---------------------------------------------------------------- ortak defter
 
 def test_shared_book_permissions_and_visibility(owner, tmpdb):  # noqa: F811
+    from datetime import date, timedelta
+
     _seed_cards(tmpdb)
+    with tmpdb.connect() as c:  # API gerçek tarihle hesaplar: görünen kartın son ödemesi hep ileride (13.11'de geçmişti)
+        c.execute("UPDATE statements SET due_date = ? WHERE card_no = '4111***1111'",
+                  ((date.today() + timedelta(days=10)).isoformat(),))
     _seed_people(owner)
     viewer = _member(owner, "goren", role="viewer")
     editor = _member(owner, "esim")
