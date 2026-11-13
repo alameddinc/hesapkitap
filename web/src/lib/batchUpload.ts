@@ -53,7 +53,7 @@ export async function prepare(files: File[]): Promise<{ send: File[]; skipped: U
 
 /** Partileri sırayla gönder; onProgress(gönderilen, toplam) her parti sonunda. */
 export async function uploadInBatches(files: File[], opts: {
-  password?: string; remember?: boolean; kind?: DocKind;
+  password?: string; remember?: boolean; kind?: DocKind; docs?: boolean;
   onProgress?: (done: number, total: number) => void;
   onBatch?: (res: UploadResult[]) => void;
 }): Promise<UploadResult[]> {
@@ -63,7 +63,7 @@ export async function uploadInBatches(files: File[], opts: {
     const part = files.slice(i, i + BATCH);
     let res: UploadResult[];
     try {
-      res = await api.upload(part, opts.password, opts.remember, opts.kind);
+      res = await api.upload(part, opts.password, opts.remember, opts.kind, opts.docs);
     } catch (e) {
       const why = uploadError(e);
       res = part.map((f) => ({ filename: f.name, status: "error" as const, message: why }));

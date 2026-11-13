@@ -4,6 +4,7 @@ import { ApiError, call, send } from "./lib/apiError";
 import { bookHeaders, type BookKey } from "./lib/saveBook";
 import { setCycleStartDay } from "./format";
 import { toServer, type ReceiptCheck, type ReceiptItem, type Reread } from "./components/receipt/check";
+import type { DocResult } from "./components/AddSheet";
 
 export type Kind = "harcama" | "iade" | "faiz_ucret" | "odeme" | "gelir" | "gider" | "borc";
 
@@ -649,8 +650,10 @@ export interface ImportBatch {
 
 export interface UploadResult {
   filename: string;
-  status: "saved" | "duplicate" | "error" | "password_required" | "account_statement" | "ask";
+  status: "saved" | "duplicate" | "error" | "password_required" | "account_statement" | "ask" | "document";
   guess?: DocKind; // ask: türünden emin değil, tahmin
+  /** yetenek upload_docs (docs=true): ekstre olmayan fiş/fatura belge olarak okundu; doc = POST /api/documents/parse yanıtı */
+  doc_type?: "bill" | "receipt"; doc?: DocResult; charged?: number;
   message?: string;
   bank?: string;
   card_no?: string;
@@ -802,12 +805,14 @@ export const api = {
   setMailSenders: (senders: string[]) => req<{ senders: string[] }>("PUT", "/api/mail/senders", { senders }),
 
   statements: () => req<Statement[]>("GET", "/api/statements"),
-  upload: (files: File[], password?: string, remember?: boolean, kind?: DocKind) => {
+  /** docs (yetenek upload_docs): ekstre olmayan fiş/fatura belge olarak okunur (status "document") */
+  upload: (files: File[], password?: string, remember?: boolean, kind?: DocKind, docs?: boolean) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     if (password) fd.append("password", password);
     if (remember) fd.append("remember", "true");
     if (kind) fd.append("kind", kind);
+    if (docs) fd.append("docs", "true");
     return req<UploadResult[]>("POST", "/api/statements/upload", fd);
   },
   /** İlk gün özeti: yüklenen ekstrelerin kimlikleri (boşsa her kartın son ekstresi) */

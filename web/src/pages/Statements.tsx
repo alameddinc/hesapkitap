@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { temizMetin } from "../lib/hataAcikla";
 import { send as apiSend } from "../lib/apiError";
-import { AlertTriangle, CheckCircle2, FileQuestion, FileUp, KeyRound, Landmark, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileQuestion, FileText, FileUp, KeyRound, Landmark, Loader2, Receipt, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { DURUM } from "../lib/durum";
 import { okumaIstegiAl, okumaSakla, okumaSil } from "../lib/okumaKutusu";
@@ -20,11 +20,14 @@ import { prepare, uploadInBatches } from "../lib/batchUpload";
 import { ReportProblem } from "../components/Feedback";
 import { ReportButton, useCap } from "../components/Support";
 import SorguDurumu, { SatirIskelet } from "../components/SorguDurumu";
+import { BelgeOzet, useBekleyenBelgeler, useBelgeAc } from "../components/YuklemeBelge";
+import { belgeBekliyor, belgeleriAl, belgeSil, bekleyenBelgeler, durumMetni, gonderilir, isFatura, type Satir } from "../lib/yuklemeBelge";
 
 export default function Statements() {
   const ui = useUI();
   const list = useQuery({ queryKey: ["statements"], queryFn: api.statements });
-  const [results, setResults] = useState<UploadResult[]>([]);
+  // onay bekleyen fiş/faturalar (lib/yuklemeBelge): sayfadan çıkıp dönünce de listede
+  const [results, setResults] = useState<Satir[]>(() => bekleyenBelgeler().map((b) => b.result));
   const [drag, setDrag] = useState(false);
   const [locked, setLocked] = useState<File[]>([]); // şifre isteyen dosyalar
   const [pw, setPw] = useState("");
@@ -43,6 +46,16 @@ export default function Statements() {
   const busy = progress != null;
   const [sent, setSent] = useState(() => new Map<string, File>()); // "Bildir": satırın dosyası (yalnız onayla gönderilir)
   const canReport = useCap("upload_report");
+  // yetenek upload_docs: ekstre olmayan fiş fotoğrafı / fatura PDF'i belge olarak okunur, onayla kaydedilir
+  const docs = useCap("upload_docs");
+  useBekleyenBelgeler(); // Yapılacaklar'dan onaylanan / vazgeçilen satır burada da güncellensin
+  const belgeAc = useBelgeAc();
+  const [acildi, setAcildi] = useState(() => new Set<string>()); // onay formu açılan belgeler: "Yeniden aç"
+  const onayla = (r: Satir) => {
+    if (r.belgeKey) { belgeSil(r.belgeKey); setAcildi((a) => new Set(a).add(r.belgeKey!)); }
+    belgeAc(r, sent.get(r.filename) ?? null);
+  };
+  const vazgec = (r: Satir) => { belgeSil(r.belgeKey); setResults((old) => old.filter((o) => o !== r)); };
   const sendFiles = async (files: File[], password?: string, kind?: DocKind) => {
     if (busy) return;
     setSent((m) => new Map([...m, ...files.map((f) => [f.name, f] as const)]));
@@ -50,11 +63,14 @@ export default function Statements() {
     setProgress({ done: 0, total: files.length });
     try {
       const { send, skipped } = await prepare(files);
-      if (!retry) setResults(skipped);
+      if (!retry) setResults([...skipped, ...bekleyenBelgeler().map((b) => b.result)]); // onay bekleyenler kalır
       const res = [...skipped, ...await uploadInBatches(send, {
-        password, remember, kind,
+        password, remember, kind, docs,
         onProgress: (done, total) => setProgress({ done: done + skipped.length, total: total + skipped.length }),
-        onBatch: (part) => { if (!retry) setResults((old) => [...old, ...part]); },
+        onBatch: (part) => {
+          belgeleriAl(part, (name) => files.find((f) => f.name === name) ?? null);
+          if (!retry) setResults((old) => [...old, ...part]);
+        },
       })];
       if (retry) setResults((old) => [...old.filter((o) => !files.some((f) => f.name === o.filename)), ...res]);
       if (password) setPw("");
@@ -83,7 +99,7 @@ export default function Statements() {
   const [stored, setStored] = useState(false);
   const send = (files: FileList | null) => {
     if (quota.full) return setFull({ kind: "belge" });
-    const ok = Array.from(files ?? []).filter((f) => /\.(pdf|xlsx|xls|csv)$/i.test(f.name));
+    const ok = Array.from(files ?? []).filter((f) => gonderilir(f, docs));
     if (!ok.length) return;
     if (navigator.onLine === false) {
       void okumaSakla("belge", ok.map((f) => ({ blob: f, name: f.name })));
@@ -128,7 +144,7 @@ export default function Statements() {
         className={cx("card flex cursor-pointer flex-col items-center gap-2 border-2 border-dashed p-8 text-center",
           drag && "border-blue-500 bg-blue-50 dark:bg-blue-950/30")}>
         {busy ? <Loader2 className="animate-spin text-blue-600" /> : <FileUp className="text-blue-600" />}
-        <div className="font-medium" aria-live="polite">{progress ? `Okunuyor: ${progress.done}/${progress.total} belge` : "Ekstre ya da hesap dökümü bırak veya seç"}</div>
+        <div className="font-medium" aria-live="polite">{progress ? `Okunuyor: ${progress.done}/${progress.total} belge` : docs ? "Ekstre, hesap dökümü ya da fiş / fatura bırak veya seç" : "Ekstre ya da hesap dökümü bırak veya seç"}</div>
         {progress && progress.total > 0 && (
           <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-stone-200 dark:bg-stone-700" role="progressbar"
             aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done} aria-label="Yükleme ilerlemesi">
@@ -139,9 +155,10 @@ export default function Statements() {
         <div className="text-xs text-stone-500">
           Kredi kartı ekstresi (PDF) ya da vadesiz hesap dökümü (PDF, Excel, CSV) — hangisi olduğunu kendisi anlar ·
           birden fazla dosya seçebilirsin · her banka (hazır okuyucu: VakıfBank, Kuveyt Türk; diğerleri genel okuyucu, olmazsa yapay zekâ ile)
+          {docs && <> · fiş fotoğrafı ya da fatura PDF'i de okunur; onaylayınca kaydedilir</>}
         </div>
         <ReadsLine />
-        <input ref={input} type="file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
+        <input ref={input} type="file" accept={`application/pdf,.pdf,.xlsx,.xls,.csv,text/csv${docs ? ",image/*,.heic,.heif" : ""}`} multiple className="hidden" onChange={(e) => { send(e.target.files); e.target.value = ""; }} />
       </div>
       )}
       {full && <QuotaFullModal onClose={() => setFull(null)} upgrade={full.upgrade} info={full}
@@ -180,6 +197,7 @@ export default function Statements() {
           [n((r) => r.status === "saved" || r.status === "account_statement"), "okundu"],
           [n((r) => r.status === "duplicate"), "zaten vardı / aynı dosya"],
           [n((r) => r.status === "ask" || r.status === "password_required"), "senden bilgi bekliyor"],
+          [n((r) => r.status === "document"), "fiş / fatura onayını bekliyor"],
           [n((r) => r.status === "error"), "okunamadı"],
         ].filter(([c]) => c) as [number, string][];
         return (
@@ -193,13 +211,33 @@ export default function Statements() {
         <ul className="space-y-2">
           {results.map((r, i) => (
             <li key={i} className="card flex items-start gap-3 p-3 text-sm">
-              {r.status === "account_statement" ? <Landmark className="text-blue-600" size={18} />
+              {r.status === "document" ? (isFatura(r) ? <FileText className="shrink-0 text-blue-600" size={18} /> : <Receipt className="shrink-0 text-blue-600" size={18} />)
+                : r.status === "account_statement" ? <Landmark className="text-blue-600" size={18} />
                 : r.status === "ask" ? <FileQuestion className="text-amber-600" size={18} />
                 : r.status === "error" ? <XCircle className="text-red-600" size={18} />
                 : r.status === "password_required" ? <KeyRound className="text-amber-600" size={18} />
                 : <CheckCircle2 className="text-green-600" size={18} />}
-              <div>
-                <div className="font-medium">{r.filename}</div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium break-words">{r.filename}</div>
+                {r.status === "document" && (() => {
+                  const bekliyor = belgeBekliyor(r.belgeKey);
+                  return (
+                    <div className="space-y-1.5" data-testid="yukleme-belge">
+                      <div className="text-blue-700 dark:text-blue-400">{bekliyor || !r.belgeKey || !acildi.has(r.belgeKey) ? durumMetni(r) : "Onay formu açıldı"}</div>
+                      <BelgeOzet r={r} className="block break-words text-xs text-stone-600 dark:text-stone-300" />
+                      <div className="flex flex-wrap gap-2">
+                        {bekliyor ? <>
+                          <button className="btn-primary px-3 py-1.5" onClick={() => onayla(r)} aria-label={`${r.filename}: onay formunu aç`}>Onayla</button>
+                          <button className="btn-ghost border border-stone-300 px-3 py-1.5 dark:border-stone-700" onClick={() => vazgec(r)}
+                            aria-label={`${r.filename}: vazgeç`}>Vazgeç</button>
+                        </> : (
+                          <button className="btn-ghost border border-stone-300 px-3 py-1.5 dark:border-stone-700" onClick={() => onayla(r)}
+                            aria-label={`${r.filename}: onay formunu yeniden aç`}>Yeniden aç</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {r.status === "error" && <div className="space-y-1">
                   <div className="text-red-600 dark:text-red-400">{temizMetin(r.message) ?? "Bu dosya okunamadı."}</div>
                   {/* dosya adı bağlama gitmez (kişisel veri olabilir) */}
