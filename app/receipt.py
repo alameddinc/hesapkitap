@@ -671,6 +671,10 @@ def _thinking_config(model: str | None, level: str | None) -> dict | None:
     if not level or level not in THINKING_LEVELS or not model:
         return None
     m = model.lower().removeprefix("models/")
+    if "flash-lite" in m:
+        # lite model ayar gönderilmezse hiç düşünmez (ölçüm: 2–11.11 düşünme 0); "low" göndermek ~400 token düşündürüp
+        # maliyeti artırıyordu (12.11). Düzey yalnız güçlü modeli (yeniden okuma) kısar
+        return None
     if m.startswith("gemini-3"):
         return {"thinkingLevel": level}
     if m.startswith("gemini-2.5"):

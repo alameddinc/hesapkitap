@@ -306,7 +306,8 @@ def test_thinking_setting(monkeypatch, tmpdb):
     assert receipt.receipt_thinking() == "medium"
     monkeypatch.setenv("HESAPKITAP_RECEIPT_THINKING", "saçma")
     assert receipt.receipt_thinking() == "low"
-    assert receipt._thinking_config("gemini-3.1-flash-lite", "low") == {"thinkingLevel": "low"}
+    assert receipt._thinking_config("gemini-3.1-flash-lite", "low") is None  # lite kendiliğinden düşünmez (13.11 ölçüm)
+    assert receipt._thinking_config("gemini-3.5-flash", "low") == {"thinkingLevel": "low"}
     assert receipt._thinking_config("gemini-2.5-flash", "minimal") == {"thinkingBudget": 0}
     assert receipt._thinking_config("gemini-2.5-pro", "minimal") == {"thinkingBudget": 128}
     assert receipt._thinking_config("baska-model", "low") is None
@@ -336,8 +337,12 @@ def test_receipt_call_sends_thinking_and_cost_record_unchanged(monkeypatch, tmpd
     bodies = _capture(monkeypatch)
     before = _ai_calls()
     receipt._parse_document_ai(_photo("white"), "image/jpeg", CATS)
-    assert bodies[-1]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
+    # varsayılan lite model: ayar gönderilmez (kendiliğinden düşünmez; "low" düşündürüp maliyeti artırıyordu, 13.11)
+    assert "thinkingConfig" not in bodies[-1]["generationConfig"]
     assert _ai_calls() == before + 1  # ai_calls kaydı aynen
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")  # düşünen model: düzey gönderilir
+    receipt._parse_document_ai(_photo("white"), "image/jpeg", CATS)
+    assert bodies[-1]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
     monkeypatch.setenv("HESAPKITAP_RECEIPT_THINKING", "off")
     receipt._parse_document_ai(_photo("white"), "image/jpeg", CATS)
     assert "thinkingConfig" not in bodies[-1]["generationConfig"]
@@ -349,6 +354,7 @@ def test_receipt_call_sends_thinking_and_cost_record_unchanged(monkeypatch, tmpd
 
 def test_thinking_rejected_by_model_retries_without(monkeypatch, tmpdb):
     monkeypatch.delenv("HESAPKITAP_RECEIPT_THINKING", raising=False)
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")  # lite'a düzey gönderilmez; düşünen model
     bodies = _capture(monkeypatch, status_first=400)
     d = receipt._parse_document_ai(_photo("white"), "image/jpeg", CATS)
     assert d["total"] == 10.0 and len(bodies) == 2 and "thinkingConfig" not in bodies[1]["generationConfig"]
