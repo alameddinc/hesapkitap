@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { METIN, TERIM } from "../lib/terimler";
-import { BellOff, Check, Clock, Copy, CreditCard, FileText, GitMerge, HandCoins, Inbox, Landmark, Link2, MoreHorizontal, Pencil, X } from "lucide-react";
+import { BellOff, Check, Clock, Copy, CreditCard, FileText, GitMerge, HandCoins, Inbox, Landmark, Link2, MoreHorizontal, Pencil, Receipt, X } from "lucide-react";
 import { ask } from "../lib/ask";
 import { useEffect, useRef, useState } from "react";
 import { api, errStatus, movedCount } from "../api";
@@ -15,6 +15,8 @@ import { grupBaslik, grupla, grupOzet } from "../lib/belgeGrubu";
 import SorguDurumu from "./SorguDurumu";
 import { RereadSheet, rereadDismiss } from "./StatementReread";
 import { OKU } from "../lib/yenidenOku";
+import { BelgeOzet, useBekleyenBelgeler, useBelgeAc } from "./YuklemeBelge";
+import { VAZGEC_OPT, VAZGEC_SORU, belgeSil, isFatura, yapilacakBaslik, yapilacakNeden, type BekleyenBelge } from "../lib/yuklemeBelge";
 
 /** /api/reminders: kararlı id ("ekstre:<kart>:<YYYY-MM>"), aynı veri ileride push bildirimlerinde de kullanılır. */
 export interface Reminder {
@@ -394,6 +396,31 @@ function Row({ r, onRun }: { r: Reminder; onRun: () => void }) {
   );
 }
 
+/** Ekstreler'de toplu yüklemede okunan fiş/fatura (lib/yuklemeBelge): Onayla → dolu onay formu, Vazgeç → düşer.
+ *  Mobil Yapılacaklar "Okunan fatura onay bekliyor" ile aynı sözler; bu satırlar istemcide (sayfa yenilenince gider). */
+function OkunanBelge({ b }: { b: BekleyenBelge }) {
+  const ac = useBelgeAc();
+  const r = b.result;
+  const Ic = isFatura(r) ? FileText : Receipt;
+  const baslik = yapilacakBaslik(r);
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-2 py-2.5 sm:flex-nowrap sm:px-3" data-testid="yapilacak-belge">
+      <span className="flex h-11 w-[52px] shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300" aria-hidden="true">
+        <Ic size={18} /></span>
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="break-words text-sm font-semibold">{baslik}</div>
+        <p className="break-words text-xs text-stone-500 dark:text-stone-400">{r.filename} · {yapilacakNeden(r)}</p>
+        <BelgeOzet r={r} className="block break-words text-xs text-stone-600 dark:text-stone-300" />
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <button className="btn-ghost border border-stone-300 px-3 dark:border-stone-700" onClick={() => void ask(VAZGEC_SORU, VAZGEC_OPT).then((ok) => { if (ok) belgeSil(b.key); })}
+          aria-label={`${baslik}: vazgeç`}>Vazgeç</button>
+        <button className="btn-primary px-3" onClick={() => { belgeSil(b.key); ac(r, b.file); }} aria-label={`${baslik}: onay formunu aç`}>Onayla</button>
+      </div>
+    </li>
+  );
+}
+
 /** Özet "Yapılacaklar". İki ve daha çok bekleyen belge (ekstre / döküm) tek "N belge bekleniyor" grubunda; her biri
  * kendi satırında (lib/belgeGrubu, mobille aynı). Boşsa hiç görünmez. */
 export default function Reminders() {
@@ -407,8 +434,9 @@ export default function Reminders() {
   const answers = useAnswers();
   const viewer = isViewer(useBook().data);
   const [integrity, setIntegrity] = useState<Reminder | null>(null);
+  const belgeler = useBekleyenBelgeler();
   const items = q.data ?? [];
-  if (!items.length) return null;
+  if (!items.length && !belgeler.length) return null;
   const units = grupla(items);
   const shown = all ? units : units.slice(0, 3);
   const run = (r: Reminder) => {
@@ -430,13 +458,14 @@ export default function Reminders() {
     <section className="card overflow-visible">
       <div className="flex items-baseline justify-between gap-2 px-3 pt-3 sm:px-4">
         <h2 className="font-display text-lg font-semibold tracking-tight">Yapılacaklar
-          <span className="ml-1.5 align-middle text-xs font-medium text-stone-400 tabular-nums">{items.length}</span></h2>
+          <span className="ml-1.5 align-middle text-xs font-medium text-stone-400 tabular-nums">{items.length + belgeler.length}</span></h2>
         {units.length > 3 && (
           <button className="text-sm text-blue-600 hover:underline dark:text-blue-400" onClick={() => setAll(!all)}>
             {all ? "Daha az" : "Tümü"}</button>
         )}
       </div>
       <ul className="divide-y divide-stone-100 px-1 pb-1 dark:divide-stone-800">
+        {belgeler.map((b) => <OkunanBelge key={b.key} b={b} />)}
         {shown.map((u) => u.tip === "tek" ? one(u.r) : (
           <li key="belge-grubu" className="px-1 py-2.5 sm:px-2" aria-labelledby="belge-grubu">
             <div className="flex items-start gap-3 px-1 pb-2">

@@ -235,7 +235,9 @@ function Detail({ s, help, onClose }: { s: AppSub; help: Help; onClose: () => vo
           </div>
 
           {detailCap && !s.pending && (
-            <div className="border-t border-stone-100 pt-3 dark:border-stone-800"><SubPaymentsFor r={{ app: s.id }} /></div>
+            <div className="border-t border-stone-100 pt-3 dark:border-stone-800"><SubPaymentsFor r={{ app: s.id }}
+              onCancel={() => void ask(`${s.title} "İptal ettim" olarak işaretlensin mi?\n\nSonra yine çekilirse seni uyarırız.`, { confirm: "İptal ettim", danger: false })
+                .then((ok) => { if (ok) run({ action: "iptal" }); })} /></div>
           )}
           {!detailCap && s.charges.length > 0 && (
             <div className="border-t border-stone-100 pt-3 dark:border-stone-800">

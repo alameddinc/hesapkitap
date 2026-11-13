@@ -8013,18 +8013,22 @@ def put_subscription(body: SubState):
 
 @app.get("/api/subscriptions/detail")
 def subscription_detail(merchant: str | None = Query(None, min_length=1, max_length=200),
-                        app_id: str | None = Query(None, alias="app", min_length=1, max_length=40)):
+                        app_id: str | None = Query(None, alias="app", min_length=1, max_length=40),
+                        gaps: bool = Query(False)):
     """Abonelik ayrıntısı (yetenek subscription_detail; app/sub_detail.py): ?merchant=<Tasarruf satırının merchant'ı>
     ya da ?app=<mağaza adayı id>. {kind card|store, key, title, logo, status, status_text, status_date, amount, per,
     totals {all, last12: {amount, count, since, first_date, fx_text, text}}, since12, months [{month, label, amount,
     count, fx_text, change {kind zam|indirim|kur|adet, diff, from, to, fx_text}|null, after_cancel, over}],
     transactions [{uid, date, month, amount, label, via kart|hesap, fx, description, after_cancel}], fx, fx_note,
-    after_cancel {amount, count}|null}. İşleme dokununca: uid ile mevcut işlem ayrıntısı (month: satırın dönemi)."""
+    after_cancel {amount, count}|null}. İşleme dokununca: uid ile mevcut işlem ayrıntısı (month: satırın dönemi).
+    gaps=1 (yetenek subscription_gaps): months[] her satırda gap; aylık abonelikte ödemesiz aylar da {gap true, amount 0,
+    count 0, change null} satırı olarak gelir (yıllıkta gelmez); sondaki 2'den çok ödemesiz ay tek özet satırı (gap_since,
+    gap_count, label "… beri ödeme yok (N ay)")."""
     from app import sub_detail
 
     if bool(merchant) == bool(app_id):
         raise HTTPException(422, "merchant ya da app verilmeli")
-    out = sub_detail.card_detail(merchant) if merchant else sub_detail.store_detail(app_id)
+    out = sub_detail.card_detail(merchant, gaps=gaps) if merchant else sub_detail.store_detail(app_id, gaps=gaps)
     if not out:
         raise HTTPException(404, "Abonelik bulunamadı")
     return out
