@@ -378,7 +378,60 @@ def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
     for r in out:
         if r.get("subcategory") and (r["category"], r["subcategory"]) not in valid:
             r["subcategory"] = None
+    _mark_zakat(out)
     return sorted(out, key=lambda r: (r["date"], r["uid"]), reverse=True)
+
+
+# ---------------------------------------------------------------- zekât ayrı grup (yetenek zakat_category)
+
+ZAKAT_GROUP = "Zekât"  # raporlama grubu: DB'de kategori yok, satırın kategorisi "Bağış & Sadaka" kalır
+DONATION_CATEGORY = "Bağış & Sadaka"  # app/donations.CATEGORY (döngüsel içe aktarma olmasın diye burada da)
+
+
+def _zakat_links() -> tuple[set[int], set[int]]:
+    """Zekât ödemesine bağlı (elle kayıt id'leri, kart işlemi id'leri): zakat_payments.entry_id / txn_id, eşleşmenin iki
+    yanı dahil (elle kayıt ↔ ekstre satırı: entries.linked_txn_id). Tablo/sütun yoksa (eski ya da boş defter) boş."""
+    import sqlite3
+
+    with db.connect() as c:
+        try:
+            pays = c.execute("SELECT entry_id, txn_id FROM zakat_payments "
+                             "WHERE entry_id IS NOT NULL OR txn_id IS NOT NULL").fetchall()
+        except sqlite3.OperationalError:  # zakat_payments ya da entry_id/txn_id sütunu henüz yok
+            return set(), set()
+        if not pays:
+            return set(), set()
+        links = c.execute("SELECT id, linked_txn_id FROM entries WHERE linked_txn_id IS NOT NULL").fetchall()
+    ents = {e for e, _ in pays if e is not None}
+    txns = {t for _, t in pays if t is not None}
+    txns |= {t for e, t in links if e in ents}   # zekât kaydı ekstreyle eşleşti: sayılan kart satırı
+    ents |= {e for e, t in links if t in txns}   # zekât diye işaretlenen kart satırının eşleşmiş elle kaydı
+    return ents, txns
+
+
+def _mark_zakat(rows: list[dict]) -> None:
+    """Zekât ödemesine bağlı "Bağış & Sadaka" satırlarına donation_kind "zekat" (istemci rozeti; Özet/İstatistik'te ayrı
+    "Zekât" grubu: report_category). Kategori değişmez, toplamlar değişmez. Ortak defterde Zekât sayfası üyeye
+    kapalıysa işaret yok (sayfanın verisi sızmasın)."""
+    from app import book
+
+    rules = book.active()
+    if rules and "zekat" in (rules.get("hidden_pages") or []):
+        return
+    ents, txns = _zakat_links()
+    if not (ents or txns):
+        return
+    for r in rows:
+        if r.get("category") != DONATION_CATEGORY:
+            continue
+        src, rid = r.get("source"), r.get("id")
+        if (src == "manual" and rid in ents) or (src == "card" and rid in txns):
+            r["donation_kind"] = "zekat"
+
+
+def report_category(r: dict) -> str:
+    """Raporlardaki kategori grubu: zekâta bağlı satır "Zekât", diğerleri kendi kategorisi."""
+    return ZAKAT_GROUP if r.get("donation_kind") == "zekat" else r["category"]
 
 
 def _apply_splits(rows: list[dict]) -> list[dict]:
@@ -462,10 +515,13 @@ TOTALS_DEFINITIONS = {  # metinler app/terms.py terimleriyle
 
 
 def _group(rows: list[dict], key: str) -> list[dict]:
+    """key "category": raporlama grubu (report_category; zekât ayrı "Zekât")."""
     agg: dict[str, dict] = defaultdict(lambda: {"amount": 0.0, "count": 0})
+    of = report_category if key == "category" else (lambda r: r[key])
     for r in rows:
-        agg[r[key]]["amount"] += r["amount"]
-        agg[r[key]]["count"] += 1
+        k = of(r)
+        agg[k]["amount"] += r["amount"]
+        agg[k]["count"] += 1
     out = [{"name": k, "amount": _round(v["amount"]), "count": v["count"]} for k, v in agg.items() if money.gt(v["amount"], 0)]
     return sorted(out, key=lambda x: -x["amount"])
 
@@ -478,11 +534,11 @@ def _group_categories(rows: list[dict]) -> list[dict]:
     subs: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         if r.get("subcategory"):
-            subs[r["category"]].append(r)
+            subs[report_category(r)].append(r)
     for g in out:
         if not subs.get(g["name"]):
             continue
-        mine = [r for r in rows if r["category"] == g["name"]]
+        mine = [r for r in rows if report_category(r) == g["name"]]
         kids = _group([r for r in mine if r.get("subcategory")], "subcategory")
         rest = [r for r in mine if not r.get("subcategory")]
         left = sum(r["amount"] for r in rest)
@@ -913,7 +969,7 @@ def budget_split(month: str, people: list[dict]) -> dict[str, list[dict]]:
     sp = Spenders(people)
     agg: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for r in _spend_rows(month):
-        agg[r["category"]][sp.of(r)] += r["amount"]
+        agg[report_category(r)][sp.of(r)] += r["amount"]
     return {cat: sorted(({"key": k, "user_id": None if k == SHARED else int(k[1:]), "name": sp.name(k),
                           "left": sp.left(k), "amount": _round(v)} for k, v in d.items() if money.gt(v, 0)), key=lambda x: -x["amount"])
             for cat, d in agg.items()}

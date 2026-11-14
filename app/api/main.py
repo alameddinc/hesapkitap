@@ -2676,7 +2676,9 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     Ortak defterde her satırda spender ("u<id>"|"ortak") ve spender_set (kayıtta elle seçilmiş mi; PUT /api/spender).
     q: metin araması (yetenek "txn_search"): işyeri, açıklama, kategori, alt kategori, not, kişi ve tutar içinde; büyük/küçük
     harf ve Türkçe harf farkı gözetmez. month verilmezse TÜM dönemlerde arar (ücretsizde açık pencerede); her satırda
-    month (dönem anahtarı) var, istemci döneme göre gruplar."""
+    month (dönem anahtarı) var, istemci döneme göre gruplar.
+    Zekât (yetenek "zakat_category"): zekât ödemesine bağlı satırda donation_kind "zekat" (kategori "Bağış & Sadaka" kalır);
+    category süzgeci raporlama grubuna göredir: category=Zekât yalnız bunlar, category=Bağış & Sadaka bunlar hariç."""
     _history_gate(month)
     rows = finance.transactions(month, include_deleted, include_estimates)
     ppl = _shared_people()
@@ -2688,8 +2690,8 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
         rows = [r for r in rows if plans.history_ok(u, r["month"])]
     if card:  # tek kartın satırları (ekstre ana kart numarası; elle kayıtta son 4 hane): Kartlar ekranı geçmişi
         rows = [r for r in rows if finance.of_card(r, card)]
-    if category:
-        rows = [r for r in rows if r["category"] == category]
+    if category:  # raporlama grubu (Özet/İstatistik by_category adı): "Zekât" sanal grup, "Bağış & Sadaka" zekâtsız
+        rows = [r for r in rows if finance.report_category(r) == category]
     if subcategory:
         rows = [r for r in rows if r.get("subcategory") == subcategory]
     if q and q.strip():
