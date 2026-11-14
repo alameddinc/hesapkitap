@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { cx, dateTR, maskText, tl, tlCompact } from "../format";
 import Segmented from "./Segmented";
+import { useCap } from "./hooks";
 
 interface Cmp {
   month: string; start: string; end: string; length: number; day: number; variable_only: boolean;
@@ -28,7 +29,8 @@ const short = (d: string) => `${Number(d.slice(8, 10))} ${TR_MON[Number(d.slice(
 
 /** Bir günün harcamaları: kategori özeti + kalem kalem. */
 function DayPanel({ date, all, onClose }: { date: string; all: boolean; onClose: () => void }) {
-  const q = useQuery({ queryKey: ["day", date, all], queryFn: () => send<DayDetail>(`/api/day/${date}?all=${all}`) });
+  const zk = useCap("zakat_category");
+  const q = useQuery({ queryKey: ["day", date, all, zk], queryFn: () => send<DayDetail>(`/api/day/${date}?all=${all}${zk ? "&zakat=1" : ""}`) });
   const d = q.data;
   return (
     <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-700">

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Row } from "../api";
-import { hasTxnFilter, matchTxnFilter, parseTxnFilter, txnFilterHash, txnFilterLabel } from "./txnFilter.ts";
+import { hasTxnFilter, matchTxnFilter, parseTxnFilter, reportCategory, txnFilterHash, txnFilterLabel } from "./txnFilter.ts";
 
 const row = (o: Partial<Row>): Row => ({ month: "2026-03", category: "Market", merchant: "Örnek Market", card: "Örnek Kart",
   counts_as_spend: true, ...o } as Row);
@@ -67,4 +67,15 @@ test("eski sunucu bayrak vermezse istemci kuralı (kart ödemesi gider değil)",
   const f = { gider: true };
   assert.equal(matchTxnFilter(row({ counts_as_spend: undefined, kind: "harcama" }), f), true);
   assert.equal(matchTxnFilter(row({ counts_as_spend: undefined, kind: "odeme" }), f), false);
+});
+
+test("zekât ayrı grup (yetenek zakat_category): Zekât süzgeci yalnız zekât, Bağış & Sadaka zekâtsız", () => {
+  const sadaka = row({ category: "Bağış & Sadaka" });
+  const zekat = row({ category: "Bağış & Sadaka", donation_kind: "zekat" });
+  assert.equal(reportCategory(zekat), "Zekât");
+  assert.equal(reportCategory(sadaka), "Bağış & Sadaka");
+  assert.equal(matchTxnFilter(zekat, { kategori: "Zekât" }), true);
+  assert.equal(matchTxnFilter(sadaka, { kategori: "Zekât" }), false);
+  assert.equal(matchTxnFilter(zekat, { kategori: "Bağış & Sadaka" }), false);
+  assert.equal(matchTxnFilter(sadaka, { kategori: "Bağış & Sadaka" }), true);
 });

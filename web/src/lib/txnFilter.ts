@@ -48,9 +48,15 @@ export function txnFilterHash(f: TxnFilter): string {
   return `/islemler${qs ? `?${qs}` : ""}`;
 }
 
+/** Kırılımdaki grup adı (sunucu finance.report_category, ?zakat=1): zekâta bağlı satır "Zekât", diğerleri kategorisi.
+ *  Eski sunucuda donation_kind yok: kategori. */
+export const ZAKAT_GROUP = "Zekât";
+export const reportCategory = (r: Pick<Row, "category" | "donation_kind">): string =>
+  r.donation_kind === "zekat" ? ZAKAT_GROUP : r.category;
+
 /** currentMonth: yıl süzgecinde (gider=1) içinde bulunulan dönemden sonraki taksit parçaları yıl özetine girmez; burada da. */
 export function matchTxnFilter(r: Row, f: TxnFilter, currentMonth?: string): boolean {
-  if (f.kategori && r.category !== f.kategori) return false;
+  if (f.kategori && reportCategory(r) !== f.kategori) return false;
   if (f.isyeri && r.merchant !== f.isyeri) return false;
   if (f.kart && r.card !== f.kart) return false;
   if (f.yil && !r.month.startsWith(`${f.yil}-`)) return false;

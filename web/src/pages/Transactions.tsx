@@ -47,7 +47,8 @@ export default function Transactions() {
   const spenders = useSpenders(); // süzgeç başlığında "Kim harcadı: Ayşe"
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("all");
-  const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
+  const zk = useCap("zakat_category");
+  const summary = useQuery({ queryKey: ["summary", ui.month, zk], queryFn: () => api.summary(ui.month, zk) });
   const needle = fold(q.trim());
   // arama varsayılan olarak TÜM dönemlerde (sunucu ?q=; yetenek txn_search): seçili dönemde yoksa "Bu filtrede işlem yok"
   // denip kalınmasın. "Sadece X dönemi" çipiyle eski davranış. Sonuçlar döneme göre gruplu.

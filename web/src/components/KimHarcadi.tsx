@@ -6,7 +6,7 @@ import { call } from "../lib/apiError";
 import { openTxns } from "../lib/txnFilter";
 import { ek, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
-import { useBook, usePeople } from "./hooks";
+import { useBook, useCap, usePeople } from "./hooks";
 import { LockBadge, usePlan, useLock } from "./Plan";
 import { barOf, KisiNokta, ORTAK, useSpenders } from "./Spender";
 import SorguDurumu, { SatirIskelet } from "./SorguDurumu";
@@ -36,8 +36,9 @@ export function KimHarcadi({ month }: { month: string }) {
   const ui = useUI();
   const [detail, setDetail] = useState(false);
   const book = useBook().data;
-  const q = useQuery({ queryKey: ["member-spend", month], enabled: !lock && pp.multi, retry: false,
-    queryFn: () => call<MemberSpend>("GET", `/api/book/member-spend?month=${month}`) });
+  const zk = useCap("zakat_category");
+  const q = useQuery({ queryKey: ["member-spend", month, zk], enabled: !lock && pp.multi, retry: false,
+    queryFn: () => call<MemberSpend>("GET", `/api/book/member-spend?month=${month}${zk ? "&zakat=1" : ""}`) });
   if (lock) {
     if (!plan?.hosted) return null;
     return (

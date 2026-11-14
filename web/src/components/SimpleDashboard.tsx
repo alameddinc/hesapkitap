@@ -10,7 +10,7 @@ import { addMonths, dateTR, tl, periodLabel } from "../format";
 import { useUI } from "../ui";
 import { payableKey } from "../lib/odeme";
 import { EstimateNote } from "./Estimates";
-import { isViewer, useBook, useMeta, useUiPrefs } from "./hooks";
+import { isViewer, useBook, useCap, useMeta, useUiPrefs } from "./hooks";
 
 /** Sade görünüm: büyük yazı, tek bakışta "bu ay ne kadar harcadım" (kuruşu kuruşuna), yaklaşan ödemeler, iki düğme. */
 export default function SimpleDashboard() {
@@ -18,9 +18,10 @@ export default function SimpleDashboard() {
   const { save } = useUiPrefs();
   const viewer = isViewer(useBook().data); // ortak defterde sadece görür
   const meta = useMeta().data;
-  const summary = useQuery({ queryKey: ["summary", ui.month], queryFn: () => api.summary(ui.month) });
+  const zk = useCap("zakat_category");
+  const summary = useQuery({ queryKey: ["summary", ui.month, zk], queryFn: () => api.summary(ui.month, zk) });
   const prevMonth = addMonths(ui.month, -1);
-  const prev = useQuery({ queryKey: ["summary", prevMonth], queryFn: () => api.summary(prevMonth) });
+  const prev = useQuery({ queryKey: ["summary", prevMonth, zk], queryFn: () => api.summary(prevMonth, zk) });
   const payables = useQuery({ queryKey: ["payables"], queryFn: api.payables });
   useEffect(() => { if (meta) gorunumAcildi("sade", meta.capabilities); }, [meta]); // ölçüm: yalnız toplam
   const t = summary.data?.totals;

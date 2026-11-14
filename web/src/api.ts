@@ -22,6 +22,8 @@ export interface Row {
   amount: number;
   kind: Kind;
   category: string;
+  /** yetenek zakat_category: zekât ödemesine bağlı satır (kategori "Bağış & Sadaka" kalır); raporda "Zekât" grubu */
+  donation_kind?: "zekat";
   /** alt kategori (sunucu yeteneği "subcategories"; ana kategoriye bağlı, boş olabilir) */
   subcategory?: string | null;
   card: string | null;
@@ -715,12 +717,14 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
 export const api = {
   // dönem adları (periodLabel) ay dönümüne göre: meta her geldiğinde gün güncellenir (defter değişince de)
   meta: () => req<Meta>("GET", "/api/meta").then((m) => { setCycleStartDay(m.cycle_start_day); return m; }),
-  summary: (month: string) => req<Summary>("GET", `/api/summary${q({ month })}`),
+  /** zakat: yetenek zakat_category → by_category'de zekât ayrı "Zekât" grubu (useCap("zakat_category")) */
+  summary: (month: string, zakat = false) => req<Summary>("GET", `/api/summary${q({ month, zakat: zakat ? 1 : undefined })}`),
   installments: (month: string) => req<TaksitListesi>("GET", `/api/installments${q({ month })}`),
   /** Özet uyarısını kişi başına gizle / gizlemeyi geri al (summary.insights[].key) */
   dismissInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/dismiss", { key }),
   restoreInsight: (key: string) => req<{ ok: true; key: string }>("POST", "/api/insights/restore", { key }),
-  hiddenInsights: (month?: string) => req<HiddenInsight[]>("GET", `/api/insights/hidden${q({ month })}`),
+  hiddenInsights: (month?: string, zakat = false) =>
+    req<HiddenInsight[]>("GET", `/api/insights/hidden${q({ month, zakat: zakat ? 1 : undefined })}`),
   transactions: (month?: string, includeDeleted = false, includeEstimates = false) =>
     req<Row[]>("GET", `/api/transactions${q({ month, include_deleted: includeDeleted, include_estimates: includeEstimates || undefined })}`),
   /** Metin araması (yetenek txn_search): month yoksa tüm dönemler; her satırda month (dönem anahtarı). İlk 500 sonuç. */
