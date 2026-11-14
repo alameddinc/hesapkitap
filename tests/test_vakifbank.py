@@ -72,3 +72,33 @@ def test_supplementary_cards():
     assert {t.card for t in st.transactions} == {"5400***9012", "5400***3456"}
     assert {t.card_holder for t in st.transactions if t.card == "5400***3456"} == {"MEHMET YILMAZ"}
     assert round(sum(t.amount for t in st.transactions if t.txn_type == FEE), 2) == st.interest_fees == 676.40
+
+
+# Kasım 2026'dan beri VakıfBank tutarları Türkçe biçimde yazıyor (53.888,98): eski okuyucu "53.88"de kesip işlemleri
+# hiç tanımıyordu (0 işlem, özet ₺53,88). İki biçim de okunur.
+def test_turkish_number_format_purchase():
+    t = p("04.11.2026 ORNEK MAGAZA/ISTANBUL 1.249,99")
+    assert (t.amount, t.txn_type) == (1249.99, PURCHASE)
+
+
+def test_turkish_number_format_payment_and_previous_skip():
+    assert p("13.10.2026 ÖNCEKİ DÖNEM HESAP ÖZETİ BAKİYENİZ 12.345,67") is None
+    t = p("18.10.2026 ÖDEMENİZ İÇİN TEŞEKKÜRLER +12.345,67")
+    assert (t.amount, t.txn_type) == (-12345.67, PAYMENT)
+
+
+def test_turkish_number_format_installment_and_fx():
+    t = p("20.10.2026 TKPAY/ORNEK TEKNOLOJI 2. Taksit 9.499,91 10x9.499,91")
+    assert (t.installment_no, t.installments_left, t.installment_left_amount, t.amount) == (2, 10, 9499.91, 9499.91)
+    t = p("09.11.2026 14.59 USD Hetzner Online/www.hetzner.c 746,74")
+    assert (t.amount, t.orig_amount, t.orig_currency) == (746.74, 14.59, "USD")
+
+
+def test_turkish_number_format_summary():
+    from app.parsers.vakifbank import _summary_amount, parse_amount
+
+    text = "Önceki Hesap Bakiyesi 53.888,98\nDönem Içi Islemler 1.234,56\nÖdemeler +53.888,98\n"
+    assert _summary_amount(text, "Önceki Hesap Bakiyesi") == 53888.98
+    assert _summary_amount(text, r"Dönem I[çc]i I[şs]lemler") == 1234.56
+    assert _summary_amount(text, "Ödemeler") == 53888.98
+    assert (parse_amount("6,240.00"), parse_amount("6.240,00"), parse_amount("0,76")) == (6240.0, 6240.0, 0.76)

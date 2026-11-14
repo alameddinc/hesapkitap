@@ -5,11 +5,20 @@ from datetime import date, datetime
 import pdfplumber
 
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND, Statement, Transaction
-from app.textnorm import normalize, parse_amount
+from app.textnorm import normalize
+
+
+def parse_amount(raw: str) -> float:
+    """'6,240.00' (eski) ya da '6.240,00' (Kasım 2026+) -> 6240.0; baştaki + atılır."""
+    raw = raw.strip().replace("+", "")
+    if re.search(r",\d{2}$", raw):  # Türkçe biçim: nokta binlik, virgül ondalık
+        return float(raw.replace(".", "").replace(",", "."))
+    return float(raw.replace(",", ""))
 
 BANK = "VakıfBank"
 
-_AMT = r"\+?\d{1,3}(?:,\d{3})*\.\d{2}"
+# Tutar: eski ekstreler ABD biçimi (6,240.00), Kasım 2026'dan beri Türkçe biçim (6.240,00); ikisi de okunur
+_AMT = r"\+?(?:\d{1,3}(?:,\d{3})*\.\d{2}|\d{1,3}(?:\.\d{3})*,\d{2})(?![\d.,])"
 _DATE = r"\d{2}\.\d{2}\.\d{4}"
 
 # 20.09.2026 TKPAY/ORNEK TEKNOLOJI 1. Taksit 6,240.00 5x6,240.00 125
