@@ -8394,7 +8394,8 @@ def _pdf_text(data: bytes) -> str | None:
 @_heavy
 def classify_document(file: UploadFile = File(...)):
     """Paylaş seçim sayfası için öneri (yetenek dekont_parse): yalnız PDF metni, yapay zekâsız, hak düşmez, dosya
-    saklanmaz. {suggest: "dekont" | "ekstre" | null}. Fotoğrafta (metin yok) null."""
+    saklanmaz. {suggest: "dekont" | "ekstre" | "fis" | null}; "fis" (yetenek share_pdf_receipt): mağazanın satış
+    e-Arşivi / e-Faturası (son ödemesiz, kurum işaretsiz). Fotoğrafta (metin yok) null."""
     from app import dekont_parse
 
     data = _file_bytes(file)

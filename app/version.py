@@ -485,6 +485,10 @@ CAPABILITIES = (
                               # PATCH …/{id} {status yeni|inceleniyor|duzeltildi, note, fixed_version, user_text,
                               # notify_users}. Push "sistem" (yöneticiye, yol #/diger/ayarlar/sorunlar) ve "duzeltme"
                               # (kullanıcıya: "… düzelttik, tekrar deneyebilirsin")
+    "share_pdf_receipt",      # Paylaş ile gelen PDF fiş olabilir: POST /api/documents/classify suggest "fis" (fatura
+                              # biçimli, son ödemesiz, kurum işaretsiz satış e-Arşivi / e-Faturası; kurum faturası null).
+                              # İstemci "Fiş / makbuz" seçeneğini gösterir, belge yükleme yoluyla (statements/upload
+                              # docs=true) okur; sonuç fiş onayına gider. Eski sunucu: seçenek yok
 )
 
 

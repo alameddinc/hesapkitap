@@ -43,12 +43,17 @@ def is_transfer(text: str | None) -> bool:
 
 
 def classify_text(text: str | None) -> str | None:
-    """PDF metninden öneri (Paylaş seçim sayfası): dekont | ekstre | None. Hak düşmez, yapay zekâ yok."""
+    """PDF metninden öneri (Paylaş seçim sayfası): dekont | ekstre | fis | None. Hak düşmez, yapay zekâ yok.
+    fis (yetenek share_pdf_receipt): fatura biçimli (e-Arşiv / e-Fatura) ama son ödemesiz, kurum işaretsiz satış
+    belgesi — mağaza / restoran fişi; okuma da bunu fiş yapar (karekod.bill_without_due). Kurum faturası: öneri yok."""
     if not text:
         return None
     if is_transfer(text):
         return "dekont"
-    from app.mailbox import classify
+    from app.mailbox import classify, looks_like_bill
+
+    if looks_like_bill(text):
+        return "fis" if sale_doc(text) else None
 
     try:
         kind, sure = classify(text)
@@ -57,6 +62,16 @@ def classify_text(text: str | None) -> str | None:
     if kind in ("account", "card") and sure:
         return "ekstre"
     return None
+
+
+def sale_doc(text: str) -> bool:
+    """Fatura biçimli metin alışveriş belgesi mi: son ödeme / kurum (abonelik, kamu hizmeti, fatura şablonu) işareti
+    yok ve en az bir tutar var. "Ödenmiştir" bakılmaz: mağazanın e-Arşivi de "kredi kartı ile ödenmiştir" yazar."""
+    from app import karekod
+
+    if karekod.bill_like(None, text):
+        return False
+    return bool(karekod._amounts(karekod._text_lines(text)[1]))
 
 
 # ---------------------------------------------------------------- IBAN

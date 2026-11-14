@@ -312,10 +312,74 @@ def test_classify(client, monkeypatch):
     assert _pdf(client, "/api/documents/classify").json() == {"suggest": None}
 
 
+# Paylaş PDF önerisi "fis" (yetenek share_pdf_receipt). Metinler uydurmadır.
+SALE_EARSIV = """ORNEK EV GERECLERI TICARET A.S.
+e-Arşiv Fatura
+Fatura No: XYZ2026000000123
+Fatura Tarihi: 08.11.2026
+ETTN: 11111111-2222-3333-4444-555555555555
+SANDALYE 2 x 750,00 1.500,00
+MASA LAMBASI 1 x 349,90 349,90
+KDV %20 308,32
+Ödenecek Tutar 1.849,90 TL
+Kredi kartı ile ödenmiştir"""
+LOKANTA_EARSIV = """ORNEK LOKANTA GIDA LTD. STI.
+e-Arşiv Fatura
+Fatura No: LOK2026000000042
+Fatura Tarihi: 09.11.2026
+Yerinde tüketim
+MERCIMEK CORBASI 1 x 90,00
+IZGARA KOFTE 1 x 330,00
+Genel Toplam 420,00 TL"""
+UTIL_DUE = """ORNEK DOGALGAZ DAGITIM A.S.
+e-Fatura
+Fatura No: DGZ2026000009876
+Fatura Tarihi: 01.11.2026
+Son Ödeme Tarihi: 20.11.2026
+Tesisat No: 1234567
+Ödenecek Tutar 612,40 TL"""
+UTIL_ABONE = """ORNEK ELEKTRIK PERAKENDE SATIS A.S.
+e-Fatura
+Fatura No: ELK2026000005555
+Abone No: 7654321
+Tüketim 210 kWh
+Ödenecek Tutar 450,00 TL"""
+CARD_EKSTRE = """ORNEK BANK KREDI KARTI HESAP EKSTRESI
+Hesap Kesim Tarihi: 05.11.2026
+Son Ödeme Tarihi: 15.11.2026
+Dönem Borcu: 3.250,00 TL
+Asgari Ödeme Tutarı: 1.300,00 TL
+01.11.2026 ORNEK MARKET 250,00"""
+ACCT_EKSTRE = """ORNEK BANK
+Vadesiz Hesap Hareketleri
+Hesap No: 0000000
+01.11.2026 10:15 Maaş 25.000,00
+03.11.2026 12:30 Kira -10.000,00"""
+
+
+@pytest.mark.parametrize("text,want", [(SALE_EARSIV, "fis"), (LOKANTA_EARSIV, "fis"), (UTIL_DUE, None),
+                                       (UTIL_ABONE, None), (DEKONT, "dekont"), (CARD_EKSTRE, "ekstre"),
+                                       (ACCT_EKSTRE, "ekstre"), ("Fatura metni", None), ("", None)])
+def test_classify_text_receipt(tmpdb, text, want):
+    """Satış e-Arşivi (son ödemesiz, kurum işaretsiz, "ödenmiştir" yazsa da) fiş; son ödemeli / aboneli kurum faturası
+    öneri yok (ne fiş ne ekstre: Fatura seçeneği); dekont ve ekstre eskisi gibi."""
+    from app import dekont_parse
+
+    assert dekont_parse.classify_text(text) == want
+
+
+def test_classify_endpoint_receipt(client, monkeypatch):
+    _pdf_text(monkeypatch, SALE_EARSIV)
+    assert _pdf(client, "/api/documents/classify", name="belge.pdf").json() == {"suggest": "fis"}
+    _pdf_text(monkeypatch, UTIL_DUE)
+    assert _pdf(client, "/api/documents/classify", name="fatura.pdf").json() == {"suggest": None}
+
+
 def test_capability_listed():
     from app import version
 
     assert "dekont_parse" in version.CAPABILITIES
+    assert "share_pdf_receipt" in version.CAPABILITIES
 
 
 @pytest.mark.parametrize("path", ["/api/dekont/parse", "/api/dekont/save", "/api/documents/classify"])
