@@ -490,13 +490,14 @@ CAPABILITIES = (
                               # İstemci "Fiş / makbuz" seçeneğini gösterir, belge yükleme yoluyla (statements/upload
                               # docs=true) okur; sonuç fiş onayına gider. Eski sunucu: seçenek yok
     "zakat_category",         # zekât sadakadan ayrı: zekât ödemesine bağlı hareket (zakat_payments.entry_id / txn_id,
-                              # ekstreyle eşleşmenin iki yanı) /api/transactions (ve satır döndüren her uç) satırında
-                              # donation_kind "zekat"; kategori "Bağış & Sadaka" kalır. Kategori kırılımlarında
-                              # (/api/summary by_category, budgets, /api/year-summary categories, /api/day by_category,
-                              # member-spend categories, bütçe by_person) ayrı "Zekât" grubu; toplamlar aynı.
-                              # Gruba dokununca süzgeç: satırda donation_kind == "zekat" ? "Zekât" : category ile
-                              # karşılaştır, ya da /api/transactions?category=Zekât (Bağış & Sadaka = zekâtsız).
-                              # Ortak defterde Zekât sayfası üyeye kapalıysa işaret ve grup yok
+                              # ekstreyle eşleşmenin iki yanı) satırında (/api/transactions ve satır döndüren her uç)
+                              # donation_kind "zekat"; kategori "Bağış & Sadaka" kalır. OPT-IN ?zakat=1: /api/summary
+                              # by_category (+ kategori artışı uyarısı, /api/insights/hidden), /api/year-summary
+                              # categories, /api/day by_category, /api/book/member-spend categories ayrı "Zekât" grubu
+                              # verir; parametresiz eski yanıt (zekât Bağış & Sadaka içinde). Toplamlar aynı. Bütçe
+                              # (/api/budgets spent, by_person) her istemcide zekâtsız. Süzgeç: satırda donation_kind ==
+                              # "zekat" ? "Zekât" : category ile karşılaştır, ya da /api/transactions?category=Zekât
+                              # (Bağış & Sadaka = zekâtsız). Ortak defterde Zekât sayfası üyeye kapalıysa işaret/grup yok
 )
 
 

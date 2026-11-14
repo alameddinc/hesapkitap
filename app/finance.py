@@ -14,6 +14,8 @@ from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 # Hesap önbelleği: aynı veritabanı durumu için ağır hesaplar (tüm işlemler, plan, ödemeler) bir kez yapılır.
 # Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur.
@@ -31,7 +33,8 @@ def _memo(fn):
     def wrap(*args, **kwargs):
         u = db.current_user()  # ortak defter üyesi süzülmüş veri görür: sonuç sahibininkiyle karışmasın
         viewer = u["id"] if u and u.get("member_of") else None
-        key = (fn.__name__, _db_stamp(), viewer, date.today(), repr(args), repr(sorted(kwargs.items())))
+        key = (fn.__name__, _db_stamp(), viewer, date.today(), _ZAKAT_SPLIT.get(), repr(args),
+               repr(sorted(kwargs.items())))
         # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada _CACHE.clear() yapsa da KeyError olmaz.
         hit = _CACHE.get(key, _MISS)
         if hit is _MISS:
@@ -385,6 +388,9 @@ def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
 # ---------------------------------------------------------------- zekât ayrı grup (yetenek zakat_category)
 
 ZAKAT_GROUP = "Zekât"  # raporlama grubu: DB'de kategori yok, satırın kategorisi "Bağış & Sadaka" kalır
+# Kırılımda ayrı "Zekât" grubu yalnız isteyen istemciye (?zakat=1; eski istemci süzgeci category ile karşılaştırır,
+# grup dokununca boş kalırdı). Bütçe her zaman ayrı (budgets). Önbellek anahtarında (_memo) yer alır.
+_ZAKAT_SPLIT: ContextVar[bool] = ContextVar("zakat_split", default=False)
 DONATION_CATEGORY = "Bağış & Sadaka"  # app/donations.CATEGORY (döngüsel içe aktarma olmasın diye burada da)
 
 
@@ -429,9 +435,21 @@ def _mark_zakat(rows: list[dict]) -> None:
             r["donation_kind"] = "zekat"
 
 
-def report_category(r: dict) -> str:
-    """Raporlardaki kategori grubu: zekâta bağlı satır "Zekât", diğerleri kendi kategorisi."""
-    return ZAKAT_GROUP if r.get("donation_kind") == "zekat" else r["category"]
+@contextmanager
+def zakat_split(on: bool = True):
+    """Bu blokta kategori kırılımları zekâtı ayrı "Zekât" grubunda verir (istemci ?zakat=1)."""
+    token = _ZAKAT_SPLIT.set(bool(on))
+    try:
+        yield
+    finally:
+        _ZAKAT_SPLIT.reset(token)
+
+
+def report_category(r: dict, split: bool | None = None) -> str:
+    """Raporlardaki kategori grubu: ayrım açıksa (split; verilmezse zakat_split bloğu) zekâta bağlı satır "Zekât",
+    diğerleri kendi kategorisi."""
+    on = _ZAKAT_SPLIT.get() if split is None else split
+    return ZAKAT_GROUP if on and r.get("donation_kind") == "zekat" else r["category"]
 
 
 def _apply_splits(rows: list[dict]) -> list[dict]:
@@ -821,8 +839,9 @@ def budgets(month: str, by_category: list[dict] | None = None) -> list[dict]:
     limits = db.list_budgets()
     if not limits:
         return []
-    if by_category is None:
-        by_category = category_spend(month)
+    if by_category is None or not _ZAKAT_SPLIT.get():  # bütçe her istemcide zekâtsız (zekât sadaka bütçesine girmez)
+        with zakat_split():
+            by_category = category_spend(month)
     spent = {g["name"]: g["amount"] for g in by_category}
     out = []
     for cat, limit in limits.items():
@@ -969,7 +988,7 @@ def budget_split(month: str, people: list[dict]) -> dict[str, list[dict]]:
     sp = Spenders(people)
     agg: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for r in _spend_rows(month):
-        agg[report_category(r)][sp.of(r)] += r["amount"]
+        agg[report_category(r, split=True)][sp.of(r)] += r["amount"]  # bütçe kırılımı: budgets gibi hep ayrı
     return {cat: sorted(({"key": k, "user_id": None if k == SHARED else int(k[1:]), "name": sp.name(k),
                           "left": sp.left(k), "amount": _round(v)} for k, v in d.items() if money.gt(v, 0)), key=lambda x: -x["amount"])
             for cat, d in agg.items()}

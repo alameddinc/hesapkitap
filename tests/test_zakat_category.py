@@ -29,19 +29,29 @@ def _setup(client) -> None:
     assert r.status_code == 200, r.text
 
 
-def _groups(client) -> dict[str, float]:
-    return {g["name"]: g["amount"] for g in client.get("/api/summary", params={"month": MONTH}).json()["by_category"]}
+def _groups(client, zakat: bool = True) -> dict[str, float]:
+    params = {"month": MONTH, **({"zakat": 1} if zakat else {})}
+    return {g["name"]: g["amount"] for g in client.get("/api/summary", params=params).json()["by_category"]}
 
 
 def test_zakat_separate_group_same_total(client, tmpdb):
     _setup(client)
-    s = client.get("/api/summary", params={"month": MONTH}).json()
+    s = client.get("/api/summary", params={"month": MONTH, "zakat": 1}).json()
     groups = {g["name"]: g for g in s["by_category"]}
     assert groups[CAT]["amount"] == 10000 and groups[CAT]["count"] == 1
     assert groups["Zekât"]["amount"] == 20000 and groups["Zekât"]["count"] == 1
     # yalnız gruplama: toplam gider ve grupların toplamı aynı
     assert s["totals"]["expense"] == 30300
     assert round(sum(g["amount"] for g in s["by_category"]), 2) == 30300
+
+
+def test_old_client_without_param_sees_single_group(client, tmpdb):
+    """Eski istemci (1.0.9) ?zakat göndermez: kırılım bugünkü gibi, zekât Bağış & Sadaka içinde; aynı önbellekte iki
+    biçim karışmaz."""
+    _setup(client)
+    assert _groups(client) == {"Zekât": 20000, CAT: 10000, "Market & Gıda": 300}
+    assert _groups(client, zakat=False) == {CAT: 30000, "Market & Gıda": 300}
+    assert _groups(client) == {"Zekât": 20000, CAT: 10000, "Market & Gıda": 300}
 
 
 def test_rows_keep_category_and_carry_donation_kind(client, tmpdb):
@@ -69,11 +79,15 @@ def test_category_filter_virtual_group(client, tmpdb):
 
 def test_year_summary_and_day_detail_split(client, tmpdb):
     _setup(client)
-    y = client.get("/api/year-summary", params={"year": 2026}).json()
+    y = client.get("/api/year-summary", params={"year": 2026, "zakat": 1}).json()
     cats = {c["name"]: c["amount"] for c in y["categories"]}
     assert cats[CAT] == 10000 and cats["Zekât"] == 20000 and y["expense"] == 30300
-    d = client.get("/api/day/2026-10-20").json()
+    d = client.get("/api/day/2026-10-20", params={"zakat": 1}).json()
     assert {c["name"] for c in d["by_category"]} == {"Zekât"} and d["rows"][0]["donation_kind"] == "zekat"
+    # parametresiz (eski istemci): eski yanıt
+    y = client.get("/api/year-summary", params={"year": 2026}).json()
+    assert {c["name"]: c["amount"] for c in y["categories"]}[CAT] == 30000
+    assert {c["name"] for c in client.get("/api/day/2026-10-20").json()["by_category"]} == {CAT}
 
 
 def test_zakat_marked_card_row_and_linked_statement(client, tmpdb):
@@ -115,7 +129,9 @@ def test_budget_follows_groups(client, tmpdb):
     _setup(client)
     assert client.put("/api/budgets", json={"category": CAT, "monthly_limit": 15000}).status_code == 200
     b = next(x for x in client.get("/api/budgets", params={"month": MONTH}).json()["status"] if x["category"] == CAT)
-    assert b["spent"] == 10000
+    assert b["spent"] == 10000  # parametresiz istekte de: bütçe her istemcide zekâtsız
+    s = client.get("/api/summary", params={"month": MONTH}).json()
+    assert next(x for x in s["budgets"] if x["category"] == CAT)["spent"] == 10000
 
 
 def test_capability(client):
@@ -127,6 +143,10 @@ def test_member_without_zakat_page_sees_plain_category(owner):
     _setup(owner)
     m = _member(owner, name="esim", role="editor")
     assert _groups(m)["Zekât"] == 20000
+    sp = m.get("/api/book/member-spend", params={"month": MONTH, "zakat": 1}).json()
+    assert {c["name"] for p in sp["people"] for c in p["categories"]} >= {"Zekât", CAT}
+    sp = m.get("/api/book/member-spend", params={"month": MONTH}).json()
+    assert "Zekât" not in {c["name"] for p in sp["people"] for c in p["categories"]}
     owner.put("/api/book/rules", json={"hidden_pages": ["zekat"]})
     g = _groups(m)
     assert "Zekât" not in g and g[CAT] == 30000

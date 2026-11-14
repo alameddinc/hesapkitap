@@ -2511,12 +2511,14 @@ def _history_gate(month: str | None) -> None:
 
 
 @app.get("/api/summary")
-def summary(month: str | None = None):
-    """month verilmezse içinde bulunulan dönem (mobil uygulama ayı beklemeden ister)."""
+def summary(month: str | None = None, zakat: bool = False):
+    """month verilmezse içinde bulunulan dönem (mobil uygulama ayı beklemeden ister). zakat=1 (yetenek zakat_category):
+    by_category ve kategori artışı uyarısında zekât ayrı "Zekât" grubu; yoksa Bağış & Sadaka içinde (eski istemci)."""
     _history_gate(month)
     from app import insight_state
 
-    out = finance.summary(month or finance.current_period())
+    with finance.zakat_split(zakat):
+        out = finance.summary(month or finance.current_period())
     out["insights_hidden"] = insight_state.hidden_count(out["insights"])  # kişinin kapattığı uyarılar (önbellek dışında süzülür)
     out["insights"] = insight_state.visible(out["insights"])
     return out
@@ -2549,12 +2551,13 @@ class InsightKeyIn(BaseModel):
 
 
 @app.get("/api/insights/hidden")
-def insights_hidden(month: str | None = None):
+def insights_hidden(month: str | None = None, zakat: bool = False):
     """Bu dönemin gizlenen uyarıları: [{key, title, level, detail}] (Özet'te "N gizli uyarı · Göster" → Geri getir)."""
     _history_gate(month)
     from app import insight_state
 
-    return insight_state.hidden(finance.summary(month or finance.current_period())["insights"])
+    with finance.zakat_split(zakat):  # Özet ile aynı uyarı kümesi (zakat=1 → zekât ayrı)
+        return insight_state.hidden(finance.summary(month or finance.current_period())["insights"])
 
 
 @app.post("/api/insights/dismiss")
@@ -2691,7 +2694,7 @@ def transactions(month: str | None = None, include_deleted: bool = False, includ
     if card:  # tek kartın satırları (ekstre ana kart numarası; elle kayıtta son 4 hane): Kartlar ekranı geçmişi
         rows = [r for r in rows if finance.of_card(r, card)]
     if category:  # raporlama grubu (Özet/İstatistik by_category adı): "Zekât" sanal grup, "Bağış & Sadaka" zekâtsız
-        rows = [r for r in rows if finance.report_category(r) == category]
+        rows = [r for r in rows if finance.report_category(r, split=True) == category]
     if subcategory:
         rows = [r for r in rows if r.get("subcategory") == subcategory]
     if q and q.strip():
@@ -5462,9 +5465,10 @@ def compare(month: str | None = None, all: bool = False):
 
 
 @app.get("/api/day/{d}")
-def day_detail(d: date, all: bool = True):
-    """O günün harcamaları (Özet → karşılaştırma → güne dokun)."""
-    return finance.day_detail(d.isoformat(), variable_only=not all)
+def day_detail(d: date, all: bool = True, zakat: bool = False):
+    """O günün harcamaları (Özet → karşılaştırma → güne dokun). zakat=1: by_category'de zekât ayrı "Zekât" grubu."""
+    with finance.zakat_split(zakat):
+        return finance.day_detail(d.isoformat(), variable_only=not all)
 
 
 @app.get("/api/prices")
@@ -6945,8 +6949,10 @@ def dismiss_salary_drift(body: SalaryDriftIn):
 
 
 @app.get("/api/year-summary")
-def year_summary(year: int | None = None):
-    return finance.year_summary(year or date.today().year)
+def year_summary(year: int | None = None, zakat: bool = False):
+    """zakat=1 (yetenek zakat_category): categories içinde zekât ayrı "Zekât" grubu."""
+    with finance.zakat_split(zakat):
+        return finance.year_summary(year or date.today().year)
 
 
 def _digest_key(month: str) -> str:
@@ -7073,7 +7079,7 @@ def _shared_people() -> list[dict]:
 
 
 @app.get("/api/book/member-spend")
-def book_member_spend(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
+def book_member_spend(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"), zakat: bool = False):
     """Kim ne harcadı (Aile, plans "aile_rapor"): ortak defterde dönemin gideri kişi başına, kategori kırılımıyla.
     Harcayan (finance.Spenders): kayıtta elle seçilen (PUT /api/spender; sabit kalemde her ay) → elle kaydı ekleyen →
     kart işleminde eşleştiği elle kaydı ekleyen → kartın kişisi (PUT /api/cards/{card_no}/spender) → "Ortak" (key
@@ -7088,7 +7094,8 @@ def book_member_spend(month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"))
     ppl = _shared_people()
     if not ppl:
         return {"month": m, "shared": False, "total": 0.0, "people": [], "me": u["id"] if u else None}
-    out = finance.member_spend(m, ppl)
+    with finance.zakat_split(zakat):  # zakat=1: kişinin categories kırılımında zekât ayrı
+        out = finance.member_spend(m, ppl)
     for p in out["people"]:
         p["me"] = bool(u and p["user_id"] == u["id"])
     return {**out, "shared": True, "me": u["id"] if u else None}
