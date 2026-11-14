@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type Insight } from "../api";
 import { cx, maskText } from "../format";
 import { useUI, type Route } from "../ui";
-import { routeVisible, useBook, useMeta } from "./hooks";
+import { routeVisible, useBook, useCap, useMeta } from "./hooks";
 import SorguDurumu from "./SorguDurumu";
 
 const STYLE = {
@@ -135,7 +135,8 @@ export function HiddenInsights({ count, month }: { count: number; month?: string
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const q = useQuery({ queryKey: ["insights-hidden", month], queryFn: () => api.hiddenInsights(month), enabled: open && count > 0 });
+  const zk = useCap("zakat_category");
+  const q = useQuery({ queryKey: ["insights-hidden", month, zk], queryFn: () => api.hiddenInsights(month, zk), enabled: open && count > 0 });
   if (count <= 0) return null;
   const restore = async (k: string) => {
     setBusy(k);

@@ -6,6 +6,7 @@ import { useId } from "react";
 import { api, type Insight } from "../api";
 import BarList from "../components/BarList";
 import { openTxns } from "../lib/txnFilter";
+import { useCap } from "../components/hooks";
 import Compare from "../components/Compare";
 import { KimHarcadi } from "../components/KimHarcadi";
 import MonthPicker from "../components/MonthPicker";
@@ -128,7 +129,8 @@ export function TrendChart({ trend, onPick }: { trend: TrendPoint[]; onPick: (m:
 export default function Stats() {
   const ui = useUI();
   const { month, setMonth } = ui;
-  const summary = useQuery({ queryKey: ["summary", month], queryFn: () => api.summary(month) });
+  const zk = useCap("zakat_category");
+  const summary = useQuery({ queryKey: ["summary", month, zk], queryFn: () => api.summary(month, zk) });
   const s = summary.data;
   return (
     <div className="space-y-4">

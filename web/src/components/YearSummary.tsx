@@ -8,6 +8,7 @@ import { maskText, tl, periodLabel } from "../format";
 import BarList from "./BarList";
 import { openTxns, type TxnFilter } from "../lib/txnFilter";
 import Kpi from "./Kpi";
+import { useCap } from "./hooks";
 
 interface MonthTotal { month: string; income: number; expense: number; net: number }
 interface Year {
@@ -27,7 +28,8 @@ export default function YearSummary() {
     const y = Number(new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("yil"));
     return y >= 2000 && y <= 2100 ? y : new Date().getFullYear();
   });
-  const q = useQuery({ queryKey: ["year-summary", year], queryFn: () => send<Year>(`/api/year-summary?year=${year}`) });
+  const zk = useCap("zakat_category"); // zekât ayrı "Zekât" grubu (süzgeç: txnFilter reportCategory)
+  const q = useQuery({ queryKey: ["year-summary", year, zk], queryFn: () => send<Year>(`/api/year-summary?year=${year}${zk ? "&zakat=1" : ""}`) });
   const y = q.data;
   const open = (f: TxnFilter) => openTxns({ ...f, yil: year, gider: true });
   if (!y || (!y.months && y.years.length === 0)) return null;

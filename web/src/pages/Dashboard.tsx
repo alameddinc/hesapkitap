@@ -25,7 +25,8 @@ import Holdings from "../components/Holdings";
 import { InterestHistory, TrendChart } from "./Stats";
 import { EstimateNote, isEstimate } from "../components/Estimates";
 import { PlanGate } from "../components/Plan";
-import { inSharedBook, routeVisible, useBook, useDemo, useMeta, useUiPrefs } from "../components/hooks";
+import { inSharedBook, routeVisible, useBook, useCap, useDemo, useMeta, useUiPrefs } from "../components/hooks";
+import { reportCategory } from "../lib/txnFilter";
 import Payables from "../components/Payables";
 import TxnList from "../components/TxnList";
 import TaksitSatiri from "../components/Taksitler";
@@ -142,7 +143,8 @@ export default function Dashboard() {
   const demo = useDemo().data;
   const { ui: prefs, save: savePrefs } = useUiPrefs();
   const { month, setMonth } = ui;
-  const summary = useQuery({ queryKey: ["summary", month], queryFn: () => api.summary(month) });
+  const zk = useCap("zakat_category");
+  const summary = useQuery({ queryKey: ["summary", month, zk], queryFn: () => api.summary(month, zk) });
   const txns = useQuery({ queryKey: ["txns", month], queryFn: () => api.transactions(month) });
   const [sel, setSel] = useState<Sel>(null);
   const [insightFilter, setInsightFilter] = useState<Insight | null>(null);
@@ -152,13 +154,13 @@ export default function Dashboard() {
   const detail = useMemo(() => {
     const rows = (txns.data ?? []).filter((r) => !r.pending && !r.skipped && !r.linked && r.kind !== "odeme" && !isEstimate(r));
     if (sel) {
-      const pick = (r: Row) => (sel.by === "category" ? r.category : sel.by === "merchant" ? r.merchant : r.card);
+      const pick = (r: Row) => (sel.by === "category" ? reportCategory(r) : sel.by === "merchant" ? r.merchant : r.card);
       return rows.filter((r) => pick(r) === sel.name && r.kind !== "gelir");
     }
     const f = insightFilter?.filter;
     if (f) {
       return (txns.data ?? []).filter((r) => !isEstimate(r) &&
-        (f.kind ? r.kind === f.kind : true) && (f.category ? r.category === f.category : true) &&
+        (f.kind ? r.kind === f.kind : true) && (f.category ? reportCategory(r) === f.category : true) &&
         (f.fx ? !!r.fx : true) && (f.pending ? !!r.pending : true) && (f.awaiting ? !!r.awaiting_statement : true));
     }
     return null;
