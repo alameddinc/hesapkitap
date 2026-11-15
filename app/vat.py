@@ -3,7 +3,11 @@
 Yapay zekâ okuması (receipt.DOC_PROMPT) bu alanları verir; boş bıraktıysa ya da okuma yerelse (Tesseract, PDF metni,
 telefondaki OCR metni) fiş metnindeki "TOPKDV", "%1 *18,25", "V.NO: …", "… V.D." satırlarından kural ile doldurulur.
 
-VKN yalnız 10 hane ve kontrol hanesi tutuyorsa saklanır. Şahıs firmasının 11 haneli TCKN'si kişisel veridir: saklanmaz.
+tax_no: 10 haneli VKN (kontrol hanesi tutan) ya da şahıs firmasının 11 haneli T.C. kimlik numarası (TCKN; resmî
+algoritma: ilk hane 0 değil, 10. ve 11. hane kontrol basamağı). Önceden TCKN saklanmıyordu: şahıs marketinin fişinde
+vergi no boş kalıyor, kullanıcı elle de giremiyordu (15.11.2026). TCKN kişisel veridir: kullanıcının kendi kaydında ve
+muhasebeci fiş listesinde tam değer durur; günlükte / olay kaydında yazılmaz (app/logs.py maskeler), ekranda mask() ile.
+Fiş şablonu imzası (app/receipt_templates.py) ve karekod "vkn" alanı yalnız VKN'dir (vkn()): TCKN özeti tutulmaz.
 """
 import json
 import re
@@ -28,12 +32,47 @@ def vkn_valid(v: str) -> bool:
     return (10 - s % 10) % 10 == d[9]
 
 
-def vkn(v) -> str | None:
-    """Model/OCR/kullanıcıdan gelen vergi numarası → geçerli 10 haneli VKN ya da None (11 haneli TCKN saklanmaz)."""
+def tckn_valid(v: str) -> bool:
+    """T.C. kimlik numarası kontrol basamakları (Nüfus ve Vatandaşlık İşleri algoritması): 11 hane, ilk hane 0 değil;
+    10. hane = (tek sıradakiler × 7 − çift sıradakiler) mod 10; 11. hane = ilk 10 hanenin toplamı mod 10."""
+    if not re.fullmatch(r"[1-9]\d{10}", v or ""):
+        return False
+    d = [int(c) for c in v]
+    if (sum(d[0:9:2]) * 7 - sum(d[1:8:2])) % 10 != d[9]:
+        return False
+    return sum(d[:10]) % 10 == d[10]
+
+
+def _digits(v) -> str | None:
     if v is None or isinstance(v, bool):
         return None
-    digits = re.sub(r"[\s.\-/]", "", str(v))
-    return digits if vkn_valid(digits) else None
+    return re.sub(r"[\s.\-/]", "", str(v))
+
+
+def vkn(v) -> str | None:
+    """Model/OCR/kullanıcıdan gelen vergi numarası → geçerli 10 haneli VKN ya da None (TCKN değil: şablon imzası,
+    karekod "vkn"). Saklanan alan (tax_no) için tax_id()."""
+    digits = _digits(v)
+    return digits if digits and vkn_valid(digits) else None
+
+
+def tax_id(v) -> str | None:
+    """Fişin tax_no alanı: geçerli 10 haneli VKN ya da geçerli 11 haneli TCKN (şahıs firması); değilse None."""
+    digits = _digits(v)
+    return digits if digits and (vkn_valid(digits) or tckn_valid(digits)) else None
+
+
+def is_tckn(v) -> bool:
+    digits = _digits(v)
+    return bool(digits) and tckn_valid(digits)
+
+
+def mask(v) -> str | None:
+    """Ekranda gösterim: TCKN ilk 3 + son 2 hane ("123******50"); VKN (şirket numarası) olduğu gibi."""
+    if not v:
+        return None
+    s = str(v)
+    return s[:3] + "*" * (len(s) - 5) + s[-2:] if is_tckn(s) else s
 
 
 def tax_office(v) -> str | None:
@@ -91,7 +130,7 @@ def _sane(doc: dict) -> None:
 def of_raw(raw: dict, total: float | None) -> dict:
     """Modelin ham JSON'undan fişin vergi alanları."""
     doc = {"total": total, "vat_total": _num(raw.get("vat_total")), "vat_lines": lines_of(raw.get("vat_lines")),
-           "tax_no": vkn(raw.get("tax_no")), "tax_office": tax_office(raw.get("tax_office"))}
+           "tax_no": tax_id(raw.get("tax_no")), "tax_office": tax_office(raw.get("tax_office"))}
     _sane(doc)
     doc.pop("total")
     return doc
@@ -106,10 +145,20 @@ def _up(s: str) -> str:
     return s.replace("i", "İ").replace("ı", "I").upper()
 
 
-_VAT_TOTAL = re.compile(r"TOP\s*\.?\s*KDV|TOPLAM\s*KDV|KDV\s*TOPLAM[I]?|TOPLAM\s*VERG[İI]")
-_VAT_LINE = re.compile(rf"^\s*(?:KDV\s*)?%\s*0?(\d{{1,2}})\s*[*:]?\s*{_AMOUNT}\s*$")
-_VKN = re.compile(r"(?:VKN|V\.\s?K\.\s?N\.?|V\s?\.?\s?NO|VERG[İI]\s*(?:K[İI]ML[İI]K\s*)?N(?:O|UMARASI)|V\.\s?D\.?[^\n]{0,40}?NO)"
+# KDV toplamı: "TOPKDV", "TOPLAM KDV", "KDV TOPLAMI", "KDV TUTARI", "HESAPLANAN KDV" (KDV DAHİL / MATRAH değil); tek başına
+# "KDV *4,55" satırı da (oransız; şahıs marketinin küçük yazar kasası böyle yazar — 15.11.2026)
+_NOT_VAT = r"(?!\s*(?:DAH[İI]L|HAR[İI]Ç|MATRAH))"
+_VAT_TOTAL = re.compile(r"(?:TOP\s*\.?\s*KDV|TOPLAM\s*KDV|KDV\s*TOPLAM[I]?|TOPLAM\s*VERG[İI]|KDV\s*TUTAR[I]?|HESAPLANAN\s*KDV)"
+                        + _NOT_VAT)
+_VAT_ONLY = re.compile(rf"^\s*KDV\s*[*:=]?\s*{_AMOUNT}\s*(?:TL)?\s*$")
+# oran satırı: "%1 *18,25", "KDV %20 3,33", "KDV(%10) *4,55", "%10 KDV *4,55", "KDV %10,00 *4,55", "… 4,55 TL"
+_VAT_LINE = re.compile(rf"^\s*(?:KDV\s*)?\(?\s*%\s*0?(\d{{1,2}})(?:[.,]00?)?\s*\)?\s*(?:KDV\s*)?[*:=]?\s*{_AMOUNT}"
+                       r"\s*(?:TL)?\s*$")
+_VKN = re.compile(r"(?:VKN\s*/\s*TCKN|VKN|V\.\s?K\.\s?N\.?|TCKN|T\.?\s?C\.?\s*(?:K[İI]ML[İI]K\s*)?N(?:O|UMARASI)|"
+                  r"V\s?\.?\s?NO|VERG[İI]\s*(?:K[İI]ML[İI]K\s*)?N(?:O|UMARASI)|V\.\s?D\.?[^\n]{0,40}?NO)"
                   r"\s*[:.]?\s*(\d[\d\s]{9,13})(?!\d)")
+# alıcı bloğu (e-Arşiv: "SAYIN …", "ALICI"): sonrasındaki 11 haneli numara alıcının TCKN'sidir, satıcının değil
+_BUYER = re.compile(r"\b(?:SAYIN|ALICI|M[ÜU]ŞTER[İI]|MUSTERI)\b")
 _OFFICE_AFTER = re.compile(r"(?:VERG[İI]\s*DA[İI]RES[İI]|V\.\s?D(?:\.|\b))\s*[:.]?\s*([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ.\- ]{1,30}?)"
                            r"(?=\s*(?:V\.?\s?NO|VKN|N[O0]\b|:|\d|$))")
 _OFFICE_BEFORE = re.compile(r"([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ\- ]{1,30}?)\s*(?:VERG[İI]\s*DA[İI]RES[İI]|V\.\s?D\.)")
@@ -121,22 +170,27 @@ def from_text(text: str) -> dict:
     vat_total = None
     vat_lines: list[dict] = []
     tax_no = office = None
+    buyer = False
     for i, line in enumerate(lines):
         u = _up(line)
-        if vat_total is None and _VAT_TOTAL.search(u):
+        if vat_total is None and (m := _VAT_ONLY.match(u)):
+            vat_total = _num(m.group(1))
+        elif vat_total is None and _VAT_TOTAL.search(u) and not _VAT_LINE.match(u):
             vals = re.findall(_AMOUNT, line)
-            if not vals and i + 1 < len(lines) and re.fullmatch(rf"\*?\s*{_AMOUNT}", lines[i + 1]):
+            if not vals and i + 1 < len(lines) and re.fullmatch(rf"\*?\s*{_AMOUNT}\s*(?:TL)?", lines[i + 1].strip()):
                 vals = re.findall(_AMOUNT, lines[i + 1])
             if vals:
                 vat_total = _num(vals[-1])
         if (m := _VAT_LINE.match(u)) and int(m.group(1)) in RATES:
             vat_lines.append({"rate": int(m.group(1)), "amount": m.group(2)})
+        buyer = buyer or bool(_BUYER.search(u))
         if tax_no is None and (m := _VKN.search(u)):
-            tax_no = vkn(m.group(1))
+            t = tax_id(m.group(1))
+            tax_no = None if buyer and t and is_tckn(t) else t
         for pat in (_OFFICE_AFTER, _OFFICE_BEFORE) if office is None else ():
             m = pat.search(u)
             name = m and m.group(1).strip(" .:-")
-            if name and not re.match(r"V\.?\s?NO|VKN|NO\b", name) and not re.search(r"\b(MAH|CAD|SOK|SK|NO)\b\.?$", name):
+            if name and not re.match(r"V\.?\s?NO|VKN|TCKN|T\.?\s?C\.?(?:\s|$)|NO\b", name) and not re.search(r"\b(MAH|CAD|SOK|SK|NO)\b\.?$", name):
                 office = tax_office(_title(name))
                 if office:
                     break

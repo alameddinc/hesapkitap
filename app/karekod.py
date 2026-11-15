@@ -15,7 +15,8 @@ Tanınan içerikler (parse):
 - GİB e-Fatura / e-Arşiv karekodu (Karekod Standardı v1.1): JSON; anahtarlar küçük harf, bazı yazılımlarda boşluklu
   ya da büyük harfli ("hesaplanankdv (8)", "KDVMatrah(20)"); tutarlar "1234.56" ya da "1.234,56"; tarih YYYY-AA-GG.
   JSON bozuksa (tek tırnak, kesik) anahtar:değer çiftleri toleranslı ayıklanır. kind "gib".
-  Alıcının VKN/TCKN'si (avkntckn) ALINMAZ (kişisel veri). Satıcı TCKN'si (11 hane) saklanmaz (app/vat.py kuralı).
+  Alıcının VKN/TCKN'si (avkntckn) ALINMAZ (kişisel veri). Satıcı numarası: "vkn" yalnız 10 haneli VKN (fiş şablonu
+  imzası, kurum araması); "tax_no" VKN ya da şahıs firmasının geçerli 11 haneli TCKN'si (fişin tax_no alanı, app/vat.py).
 - Akaryakıt pompası ÖKC karekodu: "VKN TARİH FİŞNO YAKIT_İSMİ YAKIT_MİKTARI" iki yazımda:
   "@" ayırıcılı, tarih GG-AA-YYYY ("1234567890@05-11-2026@0012@MOTORIN@35,42") ve boşluklu, tarih YYYY-AA-GG + SSDD
   ("1234567890 2026-11-05 1420 0012 MOTORIN 35,42"). SON ALAN LİTREDİR (toplam değil). kind "pompa".
@@ -159,7 +160,8 @@ def _gib(raw: dict) -> dict | None:
     if not lines and (a := _amount(d.get("hesaplanankdv"))):
         vat_total = a
     seller = re.sub(r"\D", "", str(d.get("vkntckn") or ""))
-    return {"kind": "gib", "vkn": vat.vkn(seller), "tckn": len(seller) == 11, "date": _iso(d.get("tarih")),
+    return {"kind": "gib", "vkn": vat.vkn(seller), "tax_no": vat.tax_id(seller), "tckn": len(seller) == 11,
+            "date": _iso(d.get("tarih")),
             "no": str(d.get("no") or "").strip()[:20] or None, "ettn": str(d.get("ettn") or "").strip()[:40] or None,
             "scenario": str(d.get("senaryo") or "").strip().upper()[:20] or None,
             "type": str(d.get("tip") or "").strip().upper()[:20] or None,
@@ -184,7 +186,8 @@ def _pump(s: str) -> dict | None:
         return None
     if not day or lt is None:
         return None
-    return {"kind": "pompa", "vkn": vat.vkn(seller), "tckn": len(seller) == 11, "date": day,
+    return {"kind": "pompa", "vkn": vat.vkn(seller), "tax_no": vat.tax_id(seller), "tckn": len(seller) == 11,
+            "date": day,
             "no": no.strip()[:20] or None, "fuel": re.sub(r"\s+", " ", fuel).strip()[:30] or None, "liters": lt}
 
 
@@ -296,8 +299,8 @@ def fuel_doc(qr: dict, text: str | None, categories: list[str]) -> dict | None:
            "items": [item], "legal_name": legal, "address": None, "branch": None, "confidence": "yüksek",
            "source": "karekod", "rule": "qr_fuel", "qr": {"kind": "pompa"}}
     doc = vat.fill(doc, text)
-    if qr.get("vkn"):
-        doc["tax_no"] = qr["vkn"]
+    if qr.get("tax_no"):
+        doc["tax_no"] = qr["tax_no"]
     return doc
 
 
@@ -420,6 +423,11 @@ def shopping(qr: dict | None, text: str | None, due: str | None = None) -> bool:
     return not bill_like(qr, text, due)
 
 
+def _tax_no(qr: dict) -> str | None:
+    """Karekodun satıcı numarası fişin tax_no'su olarak: VKN ya da geçerli TCKN (eski / sözde karekodda yalnız "vkn")."""
+    return qr.get("tax_no") or qr.get("vkn")
+
+
 def as_receipt(doc: dict, qr: dict, text: str | None, categories: list[str] | None = None) -> dict:
     """Yapay zekânın (ya da yerel okumanın) "fatura" dediği alışveriş e-Arşivi → fiş (harcama): tutar karekodun
     odenecek'i (yoksa vergidahil), tarih karekoddan, VKN ve KDV dökümü karekoddan, işyeri okumanın kurum adından (yoksa
@@ -445,15 +453,15 @@ def as_receipt(doc: dict, qr: dict, text: str | None, categories: list[str] | No
            "payment_card": None, "installments": inst, "card_last4": last4,
            "category": "Diğer" if "Diğer" in cats or not cats else cats[0], "items": items[:40],
            "legal_name": doc.get("legal_name") or legal, "address": None, "branch": None,
-           "vat_total": qr.get("vat_total"), "vat_lines": qr.get("vat_lines") or [], "tax_no": qr.get("vkn"),
+           "vat_total": qr.get("vat_total"), "vat_lines": qr.get("vat_lines") or [], "tax_no": _tax_no(qr),
            "tax_office": None, "confidence": "orta", "source": doc.get("source") or "yapay_zeka"}
     for k in ("engine", "note", "model"):
         if doc.get(k):
             out[k] = doc[k]
     if text:
         vat.fill(out, text)
-        if qr.get("vkn"):
-            out["tax_no"] = qr["vkn"]
+        if _tax_no(qr):
+            out["tax_no"] = _tax_no(qr)
     out["qr_fixed"] = ["type"]
     return out
 
@@ -501,7 +509,7 @@ def bill_without_due(doc: dict, text: str | None, categories: list[str] | None =
             date = ocr.parse_text(text, categories or ["Diğer"]).get("date")
         except ValueError:
             date = None
-    pseudo = {"kind": "metin", "total": round(float(amount), 2), "date": date, "vkn": doc.get("tax_no"),
+    pseudo = {"kind": "metin", "total": round(float(amount), 2), "date": date, "tax_no": doc.get("tax_no"),
               "currency": "TRY"}
     out = as_receipt(doc, pseudo, text, categories)
     out["qr_fixed"] = ["type"]
@@ -533,11 +541,15 @@ def apply_hints(doc: dict, qr: dict | None, text: str | None = None, categories:
         if not doc.get("date") and _date_ok(qr.get("date")):
             doc["date"] = qr["date"]
             fixed.append("date")
-        if qr.get("vkn") and not doc.get("tax_no"):
-            doc["tax_no"] = qr["vkn"]
+        if _tax_no(qr) and not doc.get("tax_no"):
+            doc["tax_no"] = _tax_no(qr)
             fixed.append("tax_no")
         if qr["kind"] == "gib" and tl and qr.get("vat_lines") and not doc.get("vat_lines"):
             doc["vat_lines"], doc["vat_total"] = qr["vat_lines"], qr["vat_total"]
+            fixed.append("vat")
+        elif qr["kind"] == "gib" and tl and qr.get("vat_total") and not doc.get("vat_total") \
+                and isinstance(doc.get("total"), (int, float)) and qr["vat_total"] < doc["total"]:
+            doc["vat_total"] = qr["vat_total"]  # karekodda oransız "hesaplanankdv": yalnız toplam
             fixed.append("vat")
     if fixed:
         doc["qr_fixed"] = fixed

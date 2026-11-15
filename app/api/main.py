@@ -2840,7 +2840,7 @@ class EntryIn(BaseModel):
     # kim harcadı (ortak defter, yetenek save_book_choice): "u<id>" | "ortak"; otomatikten (ekleyen) farklıysa saklanır
     spender: str | None = Field(None, max_length=20)
     # fişin vergi bilgisi (okuma yanıtındaki alanlar; app/vat.py)
-    tax_no: str | None = Field(None, max_length=20)  # satıcının VKN'si: 10 hane, kontrol hanesi tutmalı
+    tax_no: str | None = Field(None, max_length=20)  # satıcının VKN'si (10 hane) ya da şahıs firmasının TCKN'si (11 hane)
     tax_office: str | None = Field(None, max_length=80)
     vat_total: Money | None = Field(None, ge=0)
     vat_lines: list[dict] | None = Field(None, max_length=10)  # [{rate: 1|10|20, amount}]
@@ -2871,7 +2871,8 @@ class EntryPatch(BaseModel):
 
 
 def _tax_fields(data: dict) -> None:
-    """Fişin vergi alanları (yerinde): boş → None, VKN 10 hane ve kontrol hanesi tutmalı (11 haneli TCKN saklanmaz),
+    """Fişin vergi alanları (yerinde): boş → None, vergi no 10 haneli VKN ya da şahıs firmasının 11 haneli TCKN'si (kontrol
+    haneleri tutmalı; hata metni numarayı yazmaz — TCKN kişisel veri, olay kaydına düşmesin),
     KDV dökümü JSON metni olarak; dökümü verilip toplamı verilmediyse toplam dökümden."""
     import json as _json
 
@@ -2881,8 +2882,8 @@ def _tax_fields(data: dict) -> None:
         data["legal_name"] = (data["legal_name"] or "").strip()[:120] or None
     if "tax_no" in data:
         raw = re.sub(r"[\s.\-/]", "", data["tax_no"] or "")
-        if raw and not vat.vkn(raw):
-            raise HTTPException(422, "Vergi numarası 10 haneli olmalı (11 haneli T.C. kimlik numarası saklanmaz); "
+        if raw and not vat.tax_id(raw):
+            raise HTTPException(422, "Vergi no 10 haneli vergi numarası ya da 11 haneli T.C. kimlik numarası olmalı; "
                                      "fişteki numarayı kontrol et.")
         data["tax_no"] = raw or None
     if "tax_office" in data:
@@ -5512,10 +5513,19 @@ def prices(since: date | None = None, store: str | None = None, brand: str | Non
 def prices_suggest(q: str = Query("", max_length=80), limit: int = Query(8, ge=1, le=20)):
     """Fiş kalemi / elle gider kalem adı önerisi (price_suggest): {items: [{name, group_key, group_label, last_price,
     last_store, count}], did_you_mean: {name, group_label} | null} — kendi fişlerindeki adlar (neredeyse aynı
-    yazılışlar birleşik), sonra genel ürün adları (app/price_advice.py suggest)."""
-    from app import price_advice
+    yazılışlar birleşik), sonra genel ürün adları (app/price_advice.py suggest).
+    Paket kapısı ve ortak defterin "fiyatlar" sayfa kuralı bu uca uygulanmaz (fiş kalemi düzenlemek her pakette var;
+    plans.UNGATED, book.PAGE_OPEN): fiyat takibi paketinde yoksa ya da üyeye kapalıysa yanıtta yalnız adlar durur,
+    last_price / last_store null."""
+    from app import book, price_advice
 
-    return price_advice.suggest(q, limit)
+    out = price_advice.suggest(q, limit)
+    u = db.current_user()
+    m = book.member()
+    hidden = bool(m) and "fiyatlar" in book.rules(m["id"])["hidden_pages"]
+    if hidden or not plans.allows(u, "fiyatlar"):
+        out["items"] = [{**i, "last_price": None, "last_store": None} for i in out["items"]]
+    return out
 
 
 @app.get("/api/prices/market")

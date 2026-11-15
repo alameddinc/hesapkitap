@@ -37,6 +37,8 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "alisveris": ("/api/shopping-list", "/api/shopping-trips"),
     "garantiler": ("/api/warranties",),
 }
+# kapalı sayfanın önekinde olsa da açık: fiş kalemi adı önerisi (fiyatlar kapalıysa yanıtta fiyat yok; prices_suggest)
+PAGE_OPEN = ("/api/prices/suggest",)
 PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ekstreler", "hesaplar": "Hesaplar",
                "transferler": "Transferler", "borclar": "Borç / Alacak", "zekat": "Zekât ve Sadaka",
                "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar", "alisveris": "Alışveriş listesi", "garantiler": "Garantiler"}
@@ -168,7 +170,7 @@ def denied(method: str, path: str) -> str | None:
     m = member()
     r = rules(m["id"]) if m else rules()
     for page in r["hidden_pages"]:
-        if any(path.startswith(p) for p in PAGES.get(page, ())):
+        if path not in PAGE_OPEN and any(path.startswith(p) for p in PAGES.get(page, ())):
             return "Bu sayfa ortak defterde kapalı"
     if re.fullmatch(r"/api/entries/\d+/candidates", path):  # eşleştirme adayları ham kart işlemlerinden gelir
         return "Bu işlemi defter sahibi yapabilir"

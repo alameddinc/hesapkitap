@@ -40,6 +40,28 @@ export function vknValid(v: string): boolean {
   return (10 - (s % 10)) % 10 === Number(v[9]);
 }
 
+/** T.C. kimlik no kontrol basamakları (sunucu app/vat.py tckn_valid ile aynı): ilk hane 0 değil, 10. ve 11. hane. */
+export function tcknValid(v: string): boolean {
+  if (!/^[1-9]\d{10}$/.test(v)) return false;
+  const d = [...v].map(Number);
+  const odd = d[0] + d[2] + d[4] + d[6] + d[8];
+  const even = d[1] + d[3] + d[5] + d[7];
+  if ((((odd * 7 - even) % 10) + 10) % 10 !== d[9]) return false;
+  return (odd + even + d[9]) % 10 === d[10];
+}
+
+/** Ekranda vergi no: şahıs firmasının TCKN'si (kişisel veri) ilk 3 + son 2 hane; VKN olduğu gibi. */
+export const taxNoShown = (v: string | null | undefined) =>
+  v && tcknValid(v) ? `${v.slice(0, 3)}${"•".repeat(6)}${v.slice(-2)}` : v;
+
+/** Düzenleme denetimi: 10 haneli VKN ya da 11 haneli TCKN; boşsa null. */
+export function taxNoError(no: string): string | null {
+  if (!no) return null;
+  if (no.length === 11) return tcknValid(no) ? null : "Bu 11 haneli T.C. kimlik numarası geçerli değil; fişteki numarayı kontrol et.";
+  if (no.length !== 10) return "Vergi no 10 haneli vergi numarası ya da 11 haneli T.C. kimlik numarasıdır.";
+  return vknValid(no) ? null : "Bu vergi numarası geçerli değil; fişteki numarayı kontrol et.";
+}
+
 const RATES = [1, 10, 20] as const;
 const sum = (l: VatLine[]) => Math.round(l.reduce((a, x) => a + x.amount, 0) * 100) / 100; // parity-ok: GİRDİ
 /** "%1 ₺18,25 · %20 ₺3,33" */
@@ -77,8 +99,8 @@ export default function TaxCard({ value, onSave, readOnly }: {
               <span className="font-semibold tabular-nums">{vat != null ? tl(vat) : "—"}</span>
               {breakdown && <span className="text-xs tabular-nums text-stone-500">{breakdown}</span>}
             </>)}
-            {(value.tax_no || value.tax_office) && row("Vergi no", <>
-              <span className="tabular-nums">{value.tax_no ?? "—"}</span>
+            {(value.tax_no || value.tax_office) && row(value.tax_no && tcknValid(value.tax_no) ? "T.C. kimlik no" : "Vergi no", <>
+              <span className="tabular-nums">{taxNoShown(value.tax_no) ?? "—"}</span>
               {value.tax_office && <span className="text-xs text-stone-500">{value.tax_office} V.D.</span>}
             </>)}
             {value.legal_name && row("Unvan", <span>{value.legal_name}</span>)}
@@ -108,8 +130,7 @@ function TaxEdit({ value, onClose, onSave }: { value: TaxInfo; onClose: () => vo
   const linesSum = lines.length ? sum(lines) : null;
   const tot = parsed(total);
   const no = taxNo.replace(/\D/g, "");
-  const noErr = !no ? null : no.length === 11 ? "11 haneli T.C. kimlik numarası saklanmaz; firmanın 10 haneli vergi numarasını yaz."
-    : no.length !== 10 ? "Vergi numarası 10 hanedir." : !vknValid(no) ? "Bu vergi numarası geçerli değil; fişteki numarayı kontrol et." : null;
+  const noErr = taxNoError(no);
 
   async function save() {
     if (noErr) { setErr(noErr); return; }
@@ -153,8 +174,8 @@ function TaxEdit({ value, onClose, onSave }: { value: TaxInfo; onClose: () => vo
         <h3 className="text-xs font-semibold tracking-wide text-stone-500 uppercase">Satıcı</h3>
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
-            <label className="label" htmlFor="tax-no">Vergi no</label>
-            <input id="tax-no" className="input tabular-nums" inputMode="numeric" autoComplete="off" maxLength={14} placeholder="10 hane"
+            <label className="label" htmlFor="tax-no">Vergi no / T.C. kimlik no</label>
+            <input id="tax-no" className="input tabular-nums" inputMode="numeric" autoComplete="off" maxLength={14} placeholder="10 ya da 11 hane"
               value={taxNo} onChange={(e) => setTaxNo(e.target.value.replace(/[^\d ]/g, ""))} />
           </div>
           <div>
