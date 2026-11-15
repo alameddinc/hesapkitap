@@ -6718,7 +6718,9 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
                    total_debt=stmt.total_debt, txn_count=len(stmt.transactions),
                    reconciliation_diff=stmt.reconciliation_diff(), ai=stmt.ai_parsed, source=stmt.source,
                    **({"cached": True} if slot.hit else {}))
-        ai_called = stmt.ai_parsed and not slot.hit
+        # kural okuması kapıdan geçmediği için yapay zekâya düşüldüyse (parsers._gate_fallback) okuma kullanıcının
+        # seçimi değil: "zaten vardı"da yedek çağrı ayrıca sayılmaz (belge başına tek sayım aynen)
+        ai_called = stmt.ai_parsed and not slot.hit and not getattr(stmt, "gate_fallback", None)
         if not slot.hit:  # şablon isabet ölçümü (önbellekten dönen okuma sayılmaz)
             from app import template_stats
 

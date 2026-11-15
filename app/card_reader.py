@@ -1310,6 +1310,7 @@ def read(text: str) -> Statement | None:
             res = None
         if res and res[1] and plausible(res[0]):
             templates._used(t["id"])
+            res[0].reader = f"sablon:{t['id']}"  # tutarlılık kapısı alarmı: hangi şablon (app/parsers/gate.py)
             return res[0]
         failed.append(t["id"])
     templates._failed(failed)
@@ -1318,6 +1319,7 @@ def read(text: str) -> Statement | None:
         spec, st = learned
         if spec["bank"] and templates.save(spec):  # banka adı bilinmiyorsa kaydetme (yanlış eşleşmesin)
             templates.share_async(spec)
+        st.reader = "sablon:yeni"
         return st
     return None
 

@@ -13,6 +13,8 @@ Kaynaklar:
   hatası 422 ve 401/402/403/404/409 kaydedilmez) ve uçların açıkça işaretledikleri (note: okunamayan ekstre/döküm/fiş/
   fatura/dekont, okuma hakkı doldu). Uç işaret koyduysa durum kodundan ayrıca kayıt çıkmaz.
 - Arka plan işleri: "ekstre.jobs" günlüğüne düşen ERROR (log işleyicisi).
+- Sistem (system_event): kural okuması tutarlılık kapısından geçmedi ("parser_drift", app/parsers/gate.py); yer =
+  banka, örnek bağlamı yalnız sabit anahtar + sayı (RAW_OZET), uyarı banka başına günde bir (DAILY_ALERT).
 - İstemci: POST /api/incidents/client (yakalanmamış JS hatası, ekran çökmesi, ağ zaman aşımı, sunucuya ulaşılamadı,
   telefon eklentisi hatası). Oturumsuz da kabul; saatlik sınır (kişi / bağlantı başı, bellekte; adres saklanmaz).
 
@@ -80,6 +82,9 @@ KODLAR: dict[str, tuple[str, str, str, str | None]] = {
     "belge_okunamadi": ("Belge okunamadı", "uyari", "sunucu", "Belge okuma sorununu"),
     "dekont_okunamadi": ("Dekont okunamadı", "uyari", "sunucu", "Dekont okuma sorununu"),
     "okuma_servisi": ("Okuma servisi hatası (yapay zekâ)", "kritik", "sunucu", "Belge okuma sorununu"),
+    # sunucu: kural okuması (banka parser'ı / kart şablonu) tutarlılık kapısından geçmedi (app/parsers/gate.py) —
+    # banka ekstre biçimini değiştirmiş olabilir. Yer = banka; uyarı banka başına günde bir (DAILY_ALERT).
+    "parser_drift": ("Ekstre okuyucu kayması (banka biçimi değişmiş olabilir)", "kritik", "sunucu", None),
     # sunucu: arka plan
     "is_hatasi": ("Arka plan işi başarısız", "kritik", "is", None),
     # istemci (mobil + web)
@@ -90,6 +95,11 @@ KODLAR: dict[str, tuple[str, str, str, str | None]] = {
     "eklenti_hatasi": ("Telefon özelliği hatası (kamera, dosya…)", "uyari", "istemci", "Telefon özelliğiyle ilgili sorunu"),
 }
 CLIENT_CODES = frozenset(k for k, v in KODLAR.items() if v[2] == "istemci")
+# yer (place) başına takvim gününde (UTC) bir uyarı; saatlik ALERT_GAP ve "yeni tür / ani artış" kuralı yerine
+DAILY_ALERT = {"parser_drift": "Banka ekstre biçimi değişmiş olabilir"}
+# örnek bağlamı kisa_ozet'ten geçmeyen türler: özeti kod kurar, yalnız sabit anahtar + sayı (app/parsers drift_summary)
+RAW_OZET = frozenset({"parser_drift"})
+_RAW_OK = re.compile(r"^[\w:=.·\- ]*$")
 PLATFORMS = ("ios", "android", "web")
 
 
@@ -188,7 +198,7 @@ def record(code: str, place: str = "-", *, uid: int | None = None, app_version: 
     if code not in KODLAR or not enabled():
         return
     ev = {"code": code, "place": (place or "-")[:90], "uid": int(uid) if uid else 0, "ver": surum(app_version),
-          "platform": platform if platform in PLATFORMS else None, "ozet": kisa_ozet(ozet), "http": http,
+          "platform": platform if platform in PLATFORMS else None, "ozet": _ozet(code, ozet), "http": http,
           "at": at or time.time()}
     with _lock:
         if len(_buf) >= BUFFER_MAX:
@@ -199,6 +209,21 @@ def record(code: str, place: str = "-", *, uid: int | None = None, app_version: 
         _start()
         if n >= FLUSH_AT:
             _wake.set()
+
+
+def _ozet(code: str, ozet: str | None) -> str | None:
+    """Sayısal özetli türde (RAW_OZET) metin yalnız harf/rakam/=/:/·/./- içeriyorsa aynen (en çok 300); değilse
+    kisa_ozet süzgeci (rakamlar da atılır)."""
+    if code in RAW_OZET and ozet and _RAW_OK.match(str(ozet)):
+        return str(ozet)[:300]
+    return kisa_ozet(ozet)
+
+
+def system_event(code: str, place: str, ozet: str | None = None) -> None:
+    """Sistemin kendisinin fark ettiği sorun (ör. okuyucu kayması): istek içindeyse kullanıcı id'si bağlamdan,
+    değilse oturumsuz. Uç işaretlerinden (note) bağımsız: yükleme başarılı bitse de kaydedilir."""
+    ctx = _ctx.get()
+    record(code, place, uid=(ctx or {}).get("uid"), ozet=ozet)
 
 
 def _start() -> None:
@@ -495,7 +520,11 @@ def _alerts(touched: dict[int, dict]) -> None:
             users = c.execute("SELECT COUNT(DISTINCT user_id), COALESCE(SUM(count), 0) FROM incidents WHERE kind_id = ? "
                               "AND last_at >= ?", (kid, since)).fetchone()
             why = None
-            if t["reopened"]:
+            if k["code"] in DAILY_ALERT:  # yer başına günde bir: bugün uyarıldıysa geç
+                if k["alerted_at"] and k["alerted_at"][:10] == _utc(now)[:10]:
+                    continue
+                why = DAILY_ALERT[k["code"]]
+            elif t["reopened"]:
                 why = "Düzeltilen sorun yeniden görüldü"
             elif t["new"] and sev == "kritik":
                 why = "Yeni hata türü"
@@ -503,7 +532,7 @@ def _alerts(touched: dict[int, dict]) -> None:
                 why = "Ani artış"
             if not why:
                 continue
-            if k["alerted_at"] and now - datetime.strptime(k["alerted_at"], "%Y-%m-%d %H:%M:%S").replace(
+            if k["code"] not in DAILY_ALERT and k["alerted_at"] and now - datetime.strptime(k["alerted_at"], "%Y-%m-%d %H:%M:%S").replace(
                     tzinfo=timezone.utc).timestamp() < ALERT_GAP:
                 continue
             _alert_times[:] = [x for x in _alert_times if now - x < 3600]
