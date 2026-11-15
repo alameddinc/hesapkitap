@@ -519,7 +519,8 @@ CAPABILITIES = (
                               # dönemki taksit/abonelikleri; pending_cards'takiler orada, çift sayım yok), "card_interest"
                               # (son ödeme günü geçmiş, en az asgarisi ödenmiş kalana faiz+vergi tahmini),
                               # "card_late_interest" (hiç ya da asgarinin altında ödenmiş: gecikme faizi+vergi tahmini),
-                              # "bills" (dönem içinde vadeli ödenmemiş faturalar = expected.parts.pending_bills),
+                              # "bills" (dönem içinde vadeli ödenmemiş faturalar = expected.parts.pending_bills; + önceki
+                              # dönemden kalan ödenmemiş faturalar, Ay sonunda kalacak'ta yok; bills_items[].overdue),
                               # "recurring" (girilmemiş düzenli giderler = summary.pending.expense). Dökümler
                               # <key>_items [{title, amount, date (fatura vadesi / düzenli ödeme günü / son ödeme; kart dışı
                               # taksitte null), …}]; card_debt_items [{title, amount, date, overdue}]. pending_cards_items

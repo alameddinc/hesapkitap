@@ -2905,7 +2905,9 @@ def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
     Kaynak Ay sonunda kalacak ile aynı (plan → içinde bulunulan dönemin satırları; expected.parts), böylece bir kalem
     iki ekranda farklı sayılmaz:
     - bills: dönem içinde vadesi gelen ödenmemiş faturalar (plan "fatura" = parts.pending_bills; ödenen fatura zaten
-      bakiyeden/karttan düşmüştür, sonraki dönemin faturası düşülmez).
+      bakiyeden/karttan düşmüştür, sonraki dönemin faturası düşülmez) + vadesi önceki dönemde geçmiş, hâlâ ödenmemiş
+      faturalar (hâlâ borç; lead 15.11). Bu ikinciler Ay sonunda kalacak'ta YOK (plan yalnız o dönemin faturası): iki rakam
+      arasındaki bilinçli fark. items[].overdue: son ödeme günü geçti. Düzenli ödemede geçmiş dönem düşülmez (tahmin).
     - recurring: bu dönemin girilmemiş düzenli giderleri (pending_recurring = summary.pending.expense =
       parts.pending_recurring_expense). Girilince (bankadan ya da kartla) bekleyen olmaktan çıkar: bir kez sayılır.
     - pending_other: plan'ın bu dönemki taksit/abonelik satırlarından, kesilecek kart ekstreleri (pending_cards) içinde
@@ -2925,9 +2927,10 @@ def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
         out[key]["amount"] = _round(out[key]["amount"] + item["amount"])
 
     cur = current_period(today)
-    for b in db.list_bills():  # plan'ın "fatura" satırı ile aynı kural
-        if b["paid_at"] is None and b["due_date"] and db.period_of(b["due_date"]) == cur and money.gt(b["amount"] or 0, 0):
-            add("bills", {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"]})
+    for b in db.list_bills():  # bu dönem: plan'ın "fatura" satırı ile aynı kural; önceki dönemden kalan ödenmemiş de (gecikti)
+        if b["paid_at"] is None and b["due_date"] and db.period_of(b["due_date"]) <= cur and money.gt(b["amount"] or 0, 0):
+            add("bills", {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"],
+                          "overdue": b["due_date"] < today.isoformat()})
     for r in pending_recurring(cur, db.list_recurring(), db.list_entries(cur)):
         if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
             add("recurring", {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],

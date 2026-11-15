@@ -126,7 +126,7 @@ def test_unpaid_bill_this_period_deducted(book):
     nw = _nw(book)
     row = _parts(nw)["bills"]
     assert row == {"key": "bills", "label": "Ödenmemiş faturalar", "amount": 640.0, "sign": "−"}
-    assert nw["bills_items"] == [{"title": "Örnek Elektrik", "amount": 640.0, "date": T.isoformat(), "id": bid}]
+    assert nw["bills_items"] == [{"title": "Örnek Elektrik", "amount": 640.0, "date": T.isoformat(), "id": bid, "overdue": False}]
     assert nw["spendable"] == round(once["spendable"] - 640.0, 2) == _from_parts(nw) == nw["totals"]["spendable"]
     assert _expected(book)["parts"]["pending_bills"] == 640.0  # Ay sonunda kalacak ile aynı kalem
 
@@ -146,6 +146,27 @@ def test_bill_due_next_period_not_deducted(book):
     nw = _nw(book)
     assert "bills" not in _parts(nw) and nw["spendable"] == once["spendable"]
     assert _expected(book)["parts"]["pending_bills"] == 0
+
+
+def test_overdue_bill_from_previous_period_deducted(book):
+    """Vadesi önceki dönemde geçmiş, hâlâ ödenmemiş fatura hâlâ borç: düşülür (gecikti). Ay sonunda kalacak bugünkü
+    kuralında (yalnız bu dönemin faturası): bilinçli fark. Ödenince düşmez."""
+    once = _nw(book)
+    old_due = finance.period_bounds(finance.current_period())[0] - timedelta(days=3)
+    bid = _bill(book, 480.0, old_due, provider="Örnek Doğalgaz")
+    nw = _nw(book)
+    assert _parts(nw)["bills"]["amount"] == 480.0
+    assert nw["bills_items"] == [{"title": "Örnek Doğalgaz", "amount": 480.0, "date": old_due.isoformat(), "id": bid, "overdue": True}]
+    assert nw["spendable"] == round(once["spendable"] - 480.0, 2) == _from_parts(nw)
+    assert _expected(book)["parts"]["pending_bills"] == 0  # Ay sonunda kalacak'a girmez
+    assert book.post(f"/api/bills/{bid}/pay", json={"amount": 480.0, "paid_at": T.isoformat()}).status_code == 200
+    assert "bills" not in _parts(_nw(book))
+
+
+def test_overdue_recurring_from_previous_period_not_deducted(book):
+    """Geçmiş dönemde girilmemiş düzenli ödeme (tahmin) düşülmez: yalnız bu dönemin kirası."""
+    _rent(book)  # başlangıç 2 dönem önce; geçmiş dönemlerin kirası girilmedi
+    assert _parts(_nw(book))["recurring"]["amount"] == 15000.0
 
 
 # ---------------------------------------------------------------- düzenli ödemeler (kira, aidat)
@@ -214,15 +235,19 @@ def test_every_pending_expense_counted_once(client, tmpdb):
                 nxt_pe=T - timedelta(days=15), nxt_due=T - timedelta(days=5), lines=_lines(card=CARD_B, left=6))
     assert client.post(f"/api/statements/{sid}/pay", json={"amount": 3400.0, "paid_at": (T - timedelta(days=36)).isoformat()}).status_code == 200
     _bill(client, 640.0, T)
+    late = _bill(client, 480.0, finance.period_bounds(finance.current_period())[0] - timedelta(days=3), provider="Örnek Doğalgaz")
     _rent(client)
     nw, exp = _nw(client), _expected(client)
     p = _parts(nw)
+    # önceki dönemden kalan ödenmemiş fatura yalnız Ödemelerden sonra'da (gecikti); Ay sonunda kalacak'ta yok
+    prev = sum(x["amount"] for x in nw["bills_items"] if x["id"] == late)
+    assert prev == 480.0 and all(x["overdue"] for x in nw["bills_items"] if x["id"] == late)
     cur = finance.current_period()
     # açık dönemi bu dönemde kesilen kartın kesin kısmı Ay sonunda kalacak'ta taksit/abonelik satırı (değilse sonraki ay)
     in_cur = sum(x["installments"] + x["subscriptions"] for x in nw["pending_cards_items"]
                  if any(m["month"] == cur and any(ln.get("account") == x["account"] and ln["type"] in ("taksit", "abonelik")
                                                   for ln in m["lines"]) for m in finance.plan(1)["months"]))
-    got = p["bills"]["amount"] + p["recurring"]["amount"] + p["pending_other"]["amount"] + in_cur
+    got = p["bills"]["amount"] - prev + p["recurring"]["amount"] + p["pending_other"]["amount"] + in_cur
     assert round(got, 2) == exp["parts"]["pending_expense"]
     keys = [x["key"] for x in nw["spendable_parts"]]
     assert len(keys) == len(set(keys))
