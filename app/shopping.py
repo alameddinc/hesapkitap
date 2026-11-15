@@ -807,6 +807,13 @@ def update(rid: int, data: dict) -> dict | None:
             c.execute("UPDATE shopping_list SET done = ?, done_at = CASE WHEN ? THEN CURRENT_TIMESTAMP END WHERE id = ?",
                       (int(bool(data["done"])), int(bool(data["done"])), rid))
         r = dict(c.execute("SELECT * FROM shopping_list WHERE id = ?", (rid,)).fetchone())
+    if sets.get("store") or (sets.get("brand") and sets.get("brand_auto") == 0):  # son seçilenler (shop_free_pick)
+        from app import shop_recent
+
+        try:
+            shop_recent.record(sets.get("brand") if sets.get("brand_auto") == 0 else None, sets.get("store"))
+        except Exception:  # noqa: BLE001 — satır kaydedildi; son seçilenler listesi yalnız kolaylık
+            pass
     return _row_out(r)
 
 

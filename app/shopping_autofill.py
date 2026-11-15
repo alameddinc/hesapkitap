@@ -83,35 +83,31 @@ def _fold(s: str) -> str:
 
 def suggest(q: str, limit: int = SUGGEST_MAX) -> dict:
     """Yazarken öneri: {items [{text, group_key, label, source recent|own|product|group, count?, last_price?, place?}]}.
-    Önce geçmiş alışverişteki satırlar, sonra kendi aldığın ürün grupları (çok alınan önce), sonra kendi aldığın ürünlerin
-    adları ("Örneksan Slims Mavi Sigara · son ₺95"; app/shopping_known.py, en çok shopping_known.SUGGEST_MAX), sonra
-    ürün grubu adları ("Süt · 1 L"). Kişinin fişleri ve geçmişi defter başına önbellekte (her tuşta yeniden okunmaz)."""
-    from app import product_groups, shopping, shopping_known, system
+    Sıra önce eşleşme katmanı (app/search_rank.py: birebir > ilk kelime > başka kelime başı > kelime içinde > bir harf
+    hata; Türkçe harf / büyük-küçük farkı yok): "şeker" yazınca Şeker, sonra Şekerleme — kişi Şekerlemeyi daha sık alsa
+    da. Aynı katmanda kişinin geçmişi önce: geçmiş alışverişteki satırlar, kendi aldığın ürün grupları (çok alınan önce),
+    kendi aldığın ürünlerin adları ("Örneksan Slims Mavi Sigara · son ₺95"; app/shopping_known.py, en çok
+    shopping_known.SUGGEST_MAX), sonra ürün grubu adları ("Süt · 1 L"). 2 harften kısa sorgu boş. Kişinin fişleri ve
+    geçmişi defter başına önbellekte (her tuşta yeniden okunmaz)."""
+    from app import product_groups, search_rank, shopping, shopping_known, system
 
     q = " ".join((q or "").split())[:40]
     s = _fold(q)
-    if len(s) < 2:
+    if len(s) < search_rank.MIN_LEN:
         return {"items": []}
-    out: list[dict] = []
-    seen: set[str] = set()
+    cands: list[tuple[tuple, str, str | None, str | None, str, dict]] = []
 
-    def push(text: str, key: str | None, label: str | None, source: str, **extra) -> None:
-        sig = key or text.strip().lower()
-        if sig in seen or len(out) >= limit:
-            return
-        seen.add(sig)
-        out.append({"text": text, "group_key": key, "label": label, "source": source, **extra})
-
-    def hit(*names: str | None) -> bool:
-        return any(n and (_fold(n).startswith(s) or f"-{s}" in _fold(n)) for n in names)
+    def add(t: int | None, order: tuple, text: str, key: str | None, label: str | None, source: str, **extra) -> None:
+        if t is not None:
+            cands.append(((t, *order), text, key, label, source, extra))
 
     # 1. son kullanılan satırlar (geçmiş alışveriş; listede olanlar değil)
     have_b, have_t = _in_list(fast=True)
-    for x in _recent_trip_items():
-        if hit(x.get("text"), x.get("label")) and _base(x.get("group_key")) not in have_b \
-                and x["text"].strip().lower() not in have_t:
-            push(x["text"], x.get("group_key") if x.get("group_key") and "|" in x["group_key"] else None,
-                 x.get("label"), "recent")
+    for i, x in enumerate(_recent_trip_items()):
+        if _base(x.get("group_key")) in have_b or x["text"].strip().lower() in have_t:
+            continue
+        add(search_rank.best_tier(q, x.get("text"), _name(x.get("label"))), (0, 0, i), x["text"],
+            x.get("group_key") if x.get("group_key") and "|" in x["group_key"] else None, x.get("label"), "recent")
     # 2. kendi aldıkların (ürün grubu; son DUE_DAYS gün)
     since = (date.today() - timedelta(days=DUE_DAYS)).isoformat()
     counts: dict[str, int] = defaultdict(int)
@@ -122,34 +118,61 @@ def suggest(q: str, limit: int = SUGGEST_MAX) -> dict:
         if g and not g.get("pending") and p["last_date"] >= since:
             counts[g["key"]] += p["count"]
             labels[g["key"]] = g["label"]
-    for k in sorted(counts, key=lambda k: (-counts[k], k)):
-        if hit(labels[k]):
-            push(_name(labels[k]), k if "|" in k else None, labels[k], "own", count=counts[k])
-    # 3. kendi aldığın ürünlerin adları ("örnek" → "Örneksan Slims Mavi Sigara · son ₺95")
-    for x in shopping_known.suggest(q):
-        if x["text"].strip().lower() not in have_t:
-            push(x["text"], x["group_key"], x["label"], "product", count=x["count"], last_price=x["last_price"],
-                 place=x["place"])
-    # 4. ürün grupları (sunucu geneli adlar; fiyatı en çok bilinen boy önce)
-    if len(out) < limit:
-        with system.connect() as c:
-            rows = c.execute("SELECT group_key, MAX(label) FROM product_groups WHERE group_key != '' AND "
-                             "(group_key LIKE ? OR group_key LIKE ?) GROUP BY group_key LIMIT 300",
-                             (f"{s}%", f"%-{s}%")).fetchall()
-        keys = {r[0]: r[1] for r in rows}
-        bases = sorted({_base(k) for k in keys})
-        common = shopping.common_sizes(bases)
-        rank = {k: i for v in common.values() for i, k in enumerate(v)}
+    for k in counts:
+        add(search_rank.tier(q, _name(labels[k]), strict=True), (1, -counts[k], k), _name(labels[k]),
+            k if "|" in k else None, labels[k], "own", count=counts[k])
+    # 3. kendi aldığın ürünlerin adları ("örnek" → "Örneksan Slims Mavi Sigara · son ₺95"); katmanı en iyi olanlar
+    named = []
+    for p in prods:
+        if p["name"].strip().lower() in have_t:
+            continue
+        t = search_rank.tier(q, p["name"])
+        if t is not None:
+            named.append((t, -p["count"], p["last_date"], p))
+    named.sort(key=lambda x: x[2], reverse=True)  # en yeni önce, sonra (kararlı) katman ve çok alınan
+    named.sort(key=lambda x: (x[0], x[1]))
+    from app import money
 
-        def order(k: str) -> tuple:
-            b = _base(k)
-            return (not b.startswith(s), len(b), b, k not in rank, rank.get(k, 99), k)
+    for t, _, _, p in named[:shopping_known.SUGGEST_MAX]:
+        k = (p.get("group") or {}).get("key")
+        price = p["last_price"]
+        add(t, (2, -p["count"], p["name"]), p["name"], k if k and "|" in k else None,
+            f"{p['name']} · son {money.tl(price, trim=True)}" if price else p["name"], "product",
+            count=p["count"], last_price=price, place=p["place"])
+    # 4. ürün grupları (sunucu geneli adlar; fiyatı en çok bilinen boy önce): kelime başı, içinde geçen (≥ 3 harf) ve
+    # bir harf hatalı genel adlar (sözlük, ≥ 4 harf)
+    slug = product_groups.slug(q)
+    pats = [f"{slug}%", f"%-{slug}%"] + ([f"%{slug}%"] if len(s.replace(" ", "")) >= search_rank.INSIDE_MIN else [])
+    fuzzy = sorted({product_groups.slug(g) for g in product_groups.GENERICS
+                    if search_rank.tier(q, g, strict=True) == search_rank.FUZZY}) \
+        if len(s.replace(" ", "")) >= search_rank.FUZZY_MIN else []
+    where = " OR ".join(["group_key LIKE ?"] * len(pats) + ["group_key = ? OR group_key LIKE ?"] * len(fuzzy))
+    args = pats + [a for f in fuzzy for a in (f, f"{f}|%")]
+    with system.connect() as c:
+        rows = c.execute(f"SELECT group_key, MAX(label) FROM product_groups WHERE group_key != '' AND ({where}) "
+                         "GROUP BY group_key LIMIT 600", args).fetchall()
+    keys = {r[0]: r[1] for r in rows}
+    bases = sorted({_base(k) for k in keys})
+    common = shopping.common_sizes(bases)
+    rank = {k: i for v in common.values() for i, k in enumerate(v)}
+    for k, lab in keys.items():
+        if "|" not in k and common.get(k):
+            continue  # boysuz ad: yaygın boyu zaten önerilir
+        b = _base(k)
+        label = lab if "|" in k else product_groups.labels([k]).get(k, lab)
+        add(search_rank.tier(q, _name(lab), strict=True), (3, len(b), b, k not in rank, rank.get(k, 99), k),
+            _name(lab), k if "|" in k else None, label, "group")
 
-        for k in sorted(keys, key=order):
-            if "|" not in k and common.get(k):
-                continue  # boysuz ad: yaygın boyu zaten önerilir
-            push(_name(keys[k]), k if "|" in k else None, keys[k] if "|" in k else product_groups.labels([k]).get(k, keys[k]),
-                 "group")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for _, text, key, label, source, extra in sorted(cands, key=lambda x: x[0]):
+        sig = key or text.strip().lower()
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append({"text": text, "group_key": key, "label": label, "source": source, **extra})
+        if len(out) >= limit:
+            break
     return {"items": out}
 
 

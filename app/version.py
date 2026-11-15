@@ -230,6 +230,11 @@ CAPABILITIES = (
                               # (L|kg|adet), varsayılan boy o türden (miktarla aynı boy önce); "kahve" gibi üst adda
                               # biçimlerin boyları (size_label "Türk Kahvesi · 100 g"); PATCH text'te miktar okunur
                               # ("1 kg çekirdek kahve" → text "çekirdek kahve", qty 1, unit kg)
+    "shop_free_pick",         # marka / mağaza serbest metin + son seçilenler: GET /api/shopping-list/recent-picks →
+                              # {brands, stores} (kişi başı, yeni → eski); PATCH {brand: "<yazılan>"} / {store:
+                              # "<yazılan>"} fiyat verisinde olmasa da kaydedilir. Öneri sırası: /api/shopping-list/
+                              # suggest, /api/prices/groups, /api/prices/suggest birebir > ilk kelime > kelime başı >
+                              # içinde > bir harf hata (app/search_rank.py; Türkçe harf / büyük-küçük farkı yok)
     "summary_installments",   # /api/summary installments {month, current, total, count, in_spend, expected, remaining,
                               # remaining_count} — dönemin taksitleri, harcamaya EKLENMEZ (in_spend zaten totals.expense
                               # içinde; expected ekstresi beklenen); GET /api/installments?month → aynısı + items [{uid,
