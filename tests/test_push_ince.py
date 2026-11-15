@@ -1,6 +1,6 @@
 """Bildirimlerin ince ayarı (app/push.py; envanter: hesapkitap-mobile docs/bildirimler.md): metin uzunlukları (başlık ≤ 40,
 gövde ≤ 90), faize yönlendirme yok, aynı kişinin aynı güne düşen borçları tek bildirim, kesimden 1 gün sonra "ekstreni
-yükle", son ödemeye 3 ve 1 gün kala, aynı tür + aynı nesne günde bir, sessiz saat 22–09 varsayılanı, Android kanalı,
+yükle", son ödemeye 3 ve 1 gün kala ve son gün, aynı tür + aynı nesne günde bir, sessiz saat 22–09 varsayılanı, Android kanalı,
 iOS rozeti, tür örneği (POST /api/push/test {kind}). Kişiler, kartlar ve tutarlar uydurma."""
 import json
 import re
@@ -122,11 +122,15 @@ def test_ekstre_one_day_after_cut_and_payment_3_and_1_days(client):
     assert odeme(date(2026, 12, 3)) == []
     [one] = odeme(date(2026, 12, 4))
     assert one["title"] == "Son ödeme yarın · ••9602" and one["id"].endswith(":1gun")
-    assert odeme(date(2026, 12, 5)) == []
+    [son] = odeme(date(2026, 12, 5))  # son gün sabahı: faizden korumanın en önemli anı
+    assert son["title"] == "Bugün son gün · ••9602 · ₺2.500" and son["id"].endswith(":songun")
+    assert son["body"] == "Örnek Banka · 5 Aralık Cumartesi. Ödediysen işaretle."
+    _ok(son)
+    assert odeme(date(2026, 12, 6)) == []
     # ödendi: bildirim yok
     with db.connect() as c:
         c.execute("UPDATE statements SET paid_amount = total_debt WHERE period_end = '2026-11-24'")
-    assert odeme(date(2026, 12, 4)) == []
+    assert odeme(date(2026, 12, 4)) == [] and odeme(date(2026, 12, 5)) == []
 
 
 def test_same_person_same_day_debts_single_push(client):

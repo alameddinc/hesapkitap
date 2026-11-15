@@ -814,14 +814,14 @@ def system_alert(pid: str, title: str, text: str, route: str = R_SISTEM) -> int:
 
 # ---------------------------------------------------------------- zamanlı türler (kullanıcının defterinde)
 
-ODEME_DAYS = {3: "3gun", 1: "1gun"}  # kart son ödemesine 3 gün ve 1 gün kala (ödenmediyse)
+ODEME_DAYS = {3: "3gun", 1: "1gun", 0: "songun"}  # kart son ödemesine 3 gün, 1 gün kala ve son gün (ödenmediyse)
 GUN = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
 
 def _odeme_ekstre_dokum(today: date, on: dict) -> list[dict]:
     """Yapılacaklar'ın (app/reminders.build) kart son ödemesi, ekstre ve döküm maddeleri; bildirim metni kısa.
-    - odeme: son ödemeye 3 gün ve 1 gün kala, ödenmediyse (reminders: ödendiyse madde yok). Tutar dönem borcunun
-      kalanı (asgari değil).
+    - odeme: son ödemeye 3 gün, 1 gün kala ve son gün sabahı (sessiz saat bitince; faizden korumanın en önemli anı),
+      ödenmediyse (reminders: ödendiyse madde yok). Tutar dönem borcunun kalanı (asgari değil).
     - ekstre: kesimden (ekstredeki "sonraki kesim", yoksa öğrenilen kesim günü) 1 gün sonra, o kesimin ekstresi
       yüklenmediyse; EKSTRE_FRESH günden sonra bildirim yok (Yapılacaklar'da durur). Yapılacaklar kesimden 2 gün sonra
       gösterir (banka PDF'i geç gönderebilir); bildirim bir gün önce "ekstreni yükle" der.
@@ -838,11 +838,15 @@ def _odeme_ekstre_dokum(today: date, on: dict) -> list[dict]:
             tag = ODEME_DAYS.get((due - today).days)
             if not tag:
                 continue
-            when = "yarın" if tag == "1gun" else "3 gün sonra"
             amt = f" · {money.tl(r['amount'], trim=True)}" if r.get("amount") else ""
-            out.append(item("odeme", f"{r['id']}:{tag}", f"Son ödeme {when} · ••{r['last4']}",
-                            f"{_ad(r['bank'], 24)}{amt} · {due.day} {AY[due.month - 1]} {GUN[due.weekday()]}. "
-                            "Ödediysen işaretle.", R_ODEMELER, obj=f"kart:{r['last4']}"))
+            if tag == "songun":  # "Bugün son gün · ••1234 · ₺4.250"
+                title = f"Bugün son gün · ••{r['last4']}{amt}"
+                body = f"{_ad(r['bank'], 24)} · {due.day} {AY[due.month - 1]} {GUN[due.weekday()]}. Ödediysen işaretle."
+            else:
+                title = f"Son ödeme {'yarın' if tag == '1gun' else '3 gün sonra'} · ••{r['last4']}"
+                body = (f"{_ad(r['bank'], 24)}{amt} · {due.day} {AY[due.month - 1]} {GUN[due.weekday()]}. "
+                        "Ödediysen işaretle.")
+            out.append(item("odeme", f"{r['id']}:{tag}", title, body, R_ODEMELER, obj=f"kart:{r['last4']}"))
         elif r["kind"] == "ekstre" and on["ekstre"] and (today - date.fromisoformat(r["due"])).days <= EKSTRE_FRESH:
             cut = date.fromisoformat(r["due"])
             out.append(item("ekstre", r["id"], f"{AY[cut.month - 1]} ekstreni yükle · ••{r['last4']}",
@@ -1575,7 +1579,7 @@ def after_trip_complete(trip: dict) -> list[dict]:
 
 # Tür başına örnek (Ayarlar › Bildirimler › Türleri dene; docs/bildirimler.md tablosu). Metinler uydurma; yol gerçek.
 SAMPLES: dict[str, tuple[str, str, str]] = {
-    "odeme": ("Son ödeme yarın · ••1234", "Örnek Banka · ₺4.250 · 5 Aralık Cuma. Ödediysen işaretle.", R_ODEMELER),
+    "odeme": ("Bugün son gün · ••1234 · ₺4.250", "Örnek Banka · 5 Aralık Cuma. Ödediysen işaretle.", R_ODEMELER),
     "fatura": ("Örnek Elektrik faturası · 2 gün", "Son ödeme 7 Aralık · ₺640", R_ODEMELER),
     "ekstre": ("Kasım ekstreni yükle · ••1234", "Örnek Banka · kesim 24 Kasım. Yükle, son ödeme günün güncellensin.",
                R_EKSTRELER),

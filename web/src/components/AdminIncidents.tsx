@@ -199,7 +199,7 @@ function Ayrinti({ id, onClose }: { id: number; onClose: () => void }) {
               <span className="label">Düzeltmenin geldiği uygulama sürümü</span>
               <input className="input" maxLength={20} value={form.fixed_version ?? d.fixed_version ?? ""} placeholder="ör. 1.0.9 (boş: sunucu düzeltmesi)"
                 onChange={(e) => setForm((f) => ({ ...f, fixed_version: e.target.value }))} />
-              <span className="mt-1 block text-xs text-stone-500">Altındaki sürümü kullananlara bildirimde "Önce uygulamayı güncelle." eklenir.</span>
+              <span className="mt-1 block text-xs text-stone-500">Altındaki sürümü kullananlara bildirim "… düzelttik; uygulamayı güncelleyip tekrar dene." olur (özel metinde sonuna "Önce uygulamayı güncelle.").</span>
             </label>
             {d.notifiable || metin ? (
               <label className="block">

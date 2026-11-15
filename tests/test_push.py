@@ -379,7 +379,7 @@ def test_daily_digest_and_member_hidden_card(owner, keys):  # noqa: F811
     assert b["payload"]["kind"] == "odeme" and "9602" in b["payload"]["title"] and "1234" not in json.dumps(b["payload"])
     assert b["payload"]["id"] == "odeme:5400******9602:2026-11-05:3gun"
     assert push.flush(_at("2026-11-02T09:31")) == 2
-    # 2 gün kala yok; 1 gün kala ("yarın") ikinci kez; son gün yok
+    # 2 gün kala yok; 1 gün kala ("yarın") ikinci kez; son gün sabahı üçüncü kez
     assert push.run_daily(_at("2026-11-03T09:30")) == {admin["id"]: 0, me["id"]: 0}
     done = push.run_daily(_at("2026-11-04T09:30"))
     assert done == {admin["id"]: 1, me["id"]: 1}
@@ -387,7 +387,9 @@ def test_daily_digest_and_member_hidden_card(owner, keys):  # noqa: F811
     assert b["payload"]["id"].endswith(":1gun") and b["payload"]["title"] == "Son ödeme yarın · ••9602"
     assert b["payload"]["body"] == "VakıfBank · ₺2.500 · 5 Kasım Perşembe. Ödediysen işaretle."
     assert push.flush(_at("2026-11-04T09:31")) == 2
-    assert push.run_daily(_at("2026-11-05T09:30")) == {admin["id"]: 0, me["id"]: 0}
+    assert push.run_daily(_at("2026-11-05T09:30")) == {admin["id"]: 1, me["id"]: 1}
+    [b] = push.queue(me["id"])
+    assert b["payload"]["id"].endswith(":songun") and b["payload"]["title"] == "Bugün son gün · ••9602 · ₺2.500"
 
 
 def test_daily_kinds_fatura_butce_ozet_ortak(owner, keys):  # noqa: F811
