@@ -4,6 +4,8 @@ import json
 import os
 from datetime import date
 
+import pytest
+
 from app import price_import, price_sources, system
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "resmi_fiyat_ornek.json")
@@ -33,6 +35,21 @@ def test_import_maps_chains_groups_and_skips_unknown():
     assert price_import.import_data(_data(), DAY)["rows"] == 4 and len(_rows()) == 4     # yeniden: üzerine yazar
     with system.connect() as c:
         assert c.execute("SELECT COUNT(*) FROM community_prices").fetchone()[0] == 0      # topluluktan ayrı
+
+
+class _Gun(date):
+    """Test verisi DAY tarihli; kaynak penceresi (WINDOW_DAYS) bugüne göre süzdüğü için takvim ilerleyince testler
+    kendiliğinden kırmızıya dönüyordu (15.11.2026). Bugünü DAY'e sabitle."""
+
+    @classmethod
+    def today(cls):
+        return DAY
+
+
+@pytest.fixture(autouse=True)
+def _sabit_gun(monkeypatch):
+    monkeypatch.setattr(price_sources, "date", _Gun)
+    monkeypatch.setattr(price_import, "date", _Gun)
 
 
 def test_official_source_offers():
