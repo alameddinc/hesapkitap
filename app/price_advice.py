@@ -160,7 +160,14 @@ def suggest(q: str, limit: int = SUGGEST_MAX) -> dict:
         toks = k.split()
         return all(any(t.startswith(w) for t in toks) for w in qt)
 
-    hits = sorted((k for k in merged if prefix_hit(k)), key=lambda k: (not k.startswith(qk), -merged[k]["count"], k))
+    from app import search_rank
+
+    # birebir > ilk kelime > başka kelime başı (app/search_rank.py); aynı katmanda çok alınan önce
+    def tier(k: str) -> int:
+        t = search_rank.tier(qk, k)
+        return search_rank.WORD_PREFIX if t is None else t
+
+    hits = sorted((k for k in merged if prefix_hit(k)), key=lambda k: (tier(k), -merged[k]["count"], k))
     near = None
     if len(qk) >= 4:
         cands = [k for k in merged if k != qk and db.near_same(qk, k)]
@@ -181,7 +188,7 @@ def suggest(q: str, limit: int = SUGGEST_MAX) -> dict:
                     "last_price": m["last_price"], "last_store": m["last_store"], "count": m["count"]})
     if len(out) < limit:  # genel ürün adları (sözlük): "Süt", "Soğuk Çay"
         have = {db.product_key(o["name"]) for o in out}
-        for gname in product_groups.GENERICS:
+        for gname in sorted(product_groups.GENERICS, key=lambda g: search_rank.tier(q, g, strict=True) or 0):  # birebir önce
             gk = db.product_key(gname)
             if gk in have or not all(any(t.startswith(w) for t in gk.split()) for w in qt):
                 continue

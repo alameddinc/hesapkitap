@@ -5562,11 +5562,18 @@ def price_groups(q: str | None = None, limit: int = 30):
     last = own.last_dates() if own else {}
     mine = sorted((k for k in labels if k in last), key=lambda k: (last[k], k), reverse=True)
     keys = mine + sorted((k for k in labels if k not in last), key=lambda k: labels[k])
-    if q and "|" not in q:  # "1l süt" / "süt 1 lt": o boy önce; sonra adı tam aranan ürün ("süt" → Süt, Çikolatalı Süt değil)
-        from app import product_groups
+    if q and "|" not in q:  # "1l süt" / "süt 1 lt": o boy önce; sonra eşleşme katmanı (app/search_rank.py: "süt" → Süt,
+        # Süt Tozu, Çikolatalı Süt; "şeker" → Şeker, Şekerleme); aynı katmanda kendi aldıkların (sıralama kararlı)
+        from app import product_groups, search_rank
 
         word, size = product_groups.query_parts(q)
-        keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word))  # sıralama kararlı
+        wq = word.replace("-", " ") if size else q
+        def name(k: str) -> str:  # adı bilinmeyen grupta (etiket = anahtar) anahtarın kendisi: "toz-seker|1kg" → toz seker
+            return k.split("|")[0].replace("-", " ") if labels[k] == k else labels[k].split(" · ")[0]
+
+        tier = {k: (search_rank.tier(wq, name(k), strict=labels[k] != k) if wq else None) for k in keys}
+        tier = {k: (t if t is not None else search_rank.INSIDE) for k, t in tier.items()}  # anahtarda geçen (_match)
+        keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), tier[k]))
     keys = keys[:limit * 2]
     from app import shop_stores
 
@@ -5580,7 +5587,7 @@ def price_groups(q: str | None = None, limit: int = 30):
 
         word, size = product_groups.query_parts(q)
         per = lambda k: min((o.get("unit_price_per") or 1e12) for o in best[k])  # noqa: E731
-        keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), k.split("|")[0] != word, per(k)))
+        keys.sort(key=lambda k: (not (size and k.endswith(f"|{size}")), tier[k], k.split("|")[0] != word, per(k)))
     from app import product_groups
 
     paths = product_groups.paths(keys[:limit])
@@ -5739,6 +5746,16 @@ def shopping_frequent(limit: int = Query(8, ge=1, le=12)):
     from app import shopping_autofill
 
     return shopping_autofill.frequent(limit)
+
+
+@app.get("/api/shopping-list/recent-picks")
+def shopping_recent_picks():
+    """Son seçilen markalar ve mağazalar (shop_free_pick; kişi başı, yeni → eski, en çok 8): {brands, stores}. Marka ve
+    mağaza serbest metindir: PATCH /api/shopping-list/{id} {brand: "Örnekmarka"} ya da {store: "Örnek Bakkal"} fiyat
+    verisinde olmasa da kaydedilir (fiyatı yoksa satırda brand_missing / store_missing)."""
+    from app import shop_recent
+
+    return shop_recent.get()
 
 
 @app.get("/api/shopping-list/due")
