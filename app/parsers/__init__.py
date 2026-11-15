@@ -1,6 +1,7 @@
 """Banka tespiti + parser registry. Yeni banka = yeni modül + DETECTORS'a bir satır."""
 import io
 import logging
+import re
 import threading
 
 import pdfplumber
@@ -145,6 +146,7 @@ def parse_text(text: str) -> Statement | None:
             st = parse(text)
             if st is not None:
                 st.source = "parser"
+                st.reader = f"parser:{getattr(parse, '__module__', '?').rsplit('.', 1)[-1]}"  # alarm: hangi okuyucu
             return st
     from app import card_reader
 
@@ -172,7 +174,10 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
     zekâ. Yapay zekâ okuması doğrulanırsa aynı bankanın sonraki ekstreleri için şablon öğretir (card_reader.learn_from_ai;
     şifreli PDF'te şifre çözülmüş metinden). Şifreli PDF için verilen şifreler sırayla denenir; olmazsa PasswordRequired.
     Okuma önbelleği (doc_cache.reading ile açılmışsa): yapay zekâdan önce bakılır (PDF açıldıktan, yerel okuma
-    olmadıktan sonra), yapay zekânın okuduğu yazılır."""
+    olmadıktan sonra), yapay zekânın okuduğu yazılır.
+
+    Tutarlılık kapısı (app/parsers/gate.py): kural okuması (parser / şablon) denklemi, işlem toplamını, 0 işlem ve
+    ölçek kaymasını geçemezse kayıttan önce yönetici alarmı ("parser_drift") ve yedek yol (_gate_fallback)."""
     try:
         text, used_pw = _text_with_passwords(data, passwords or [])
     except PasswordRequired:
@@ -188,42 +193,115 @@ def parse_statement(data: bytes, allow_ai: bool = True, passwords: list[str] | N
         _log.info("PDF açılamadı: %s", str(e)[:300])
         raise ValueError(PDF_UNREADABLE) from e
     if st := parse_text(text):
-        return st
+        if not allow_ai:  # iç yeniden okuma (tarih backfill'i): kapı/alarm yok, eski davranış
+            return st
+        from app.parsers import gate
+
+        verdict = gate.check(st)
+        if verdict.ok:
+            return st
+        return _gate_fallback(data, text, used_pw, st, verdict)
     from app import receipt
 
     if allow_ai and receipt.enabled():
-        from app import doc_cache
-        from app.parsers.ai import parse_pdf_with_ai
-
-        cache = doc_cache.current()
-        if cache is not None and (hit := cache.get()) is not None:  # aynı ekstre bu defterde yapay zekâyla okunmuştu
-            try:
-                st = Statement.from_dict(hit)
-            except (TypeError, ValueError):
-                st = None
-            if st is not None:
-                st.ai_parsed, st.source = True, "yapay_zeka"
-                from app import card_reader
-
-                # ilk okumada öğrenilemediyse (eski sürüm) şimdi dene: yapay zekâ çağrısı yok, kayıtlı kural varsa no-op
-                spec = card_reader.learn_from_ai(text, st)
-                return card_reader.fixed_read(text, st, spec) or st
-        try:
-            # şifreli PDF'i model okuyamaz: çözülmüş metni gönder
-            st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")
-        except receipt.ReceiptError as e:
-            from app import errors
-
-            raise ValueError(f"Banka tanınamadı ve yapay zekâ ile okunamadı: {errors.user_text(e, 502)}") from e
-        st.ai_parsed, st.source = True, "yapay_zeka"
-        from app import card_reader
-
-        st.template_miss = _template_miss(text)  # şablon isabet ölçümü (app/template_stats.py)
-        spec = card_reader.learn_from_ai(text, st)  # hata okumayı bozmaz
-        # yapay zekânın işlemleri denklemi tutmuyor, aynı belgeden şablon tutuyor: kullanıcı düzeltilmiş okumayı görür
-        st = card_reader.fixed_read(text, st, spec) or st
-        if cache is not None:
-            cache.put(st.to_dict())
-        return st
+        return _ai_read(data, text, used_pw, lambda: _template_miss(text))
     raise ValueError(f"Banka tanınamadı. Desteklenen: {SUPPORTED}. "
                      "Diğer bankalar için GEMINI_API_KEY tanımlarsan yapay zekâ ile okunur.")
+
+
+def _ai_read(data: bytes, text: str, used_pw: str | None, miss) -> Statement:
+    """Yapay zekâ okuması (önce okuma önbelleği). ReceiptError'ı kullanıcı metnine çevirir; NotAStatement geçer.
+    miss(): şablon isabet ölçümünün nedeni (app/template_stats.py) — yalnız gerçek çağrıda, şablon öğrenilmeden önce."""
+    from app import card_reader, doc_cache, receipt
+    from app.parsers.ai import parse_pdf_with_ai
+
+    cache = doc_cache.current()
+    if cache is not None and (hit := cache.get()) is not None:  # aynı ekstre bu defterde yapay zekâyla okunmuştu
+        try:
+            st = Statement.from_dict(hit)
+        except (TypeError, ValueError):
+            st = None
+        if st is not None:
+            st.ai_parsed, st.source = True, "yapay_zeka"
+            # ilk okumada öğrenilemediyse (eski sürüm) şimdi dene: yapay zekâ çağrısı yok, kayıtlı kural varsa no-op
+            spec = card_reader.learn_from_ai(text, st)
+            return card_reader.fixed_read(text, st, spec) or st
+    try:
+        # şifreli PDF'i model okuyamaz: çözülmüş metni gönder
+        st = parse_pdf_with_ai(data) if used_pw is None else parse_pdf_with_ai(text.encode(), mime="text/plain")
+    except receipt.ReceiptError as e:
+        from app import errors
+
+        raise ValueError(f"Banka tanınamadı ve yapay zekâ ile okunamadı: {errors.user_text(e, 502)}") from e
+    st.ai_parsed, st.source = True, "yapay_zeka"
+    st.template_miss = miss()
+    spec = card_reader.learn_from_ai(text, st)  # hata okumayı bozmaz
+    # yapay zekânın işlemleri denklemi tutmuyor, aynı belgeden şablon tutuyor: kullanıcı düzeltilmiş okumayı görür
+    st = card_reader.fixed_read(text, st, spec) or st
+    if cache is not None:
+        cache.put(st.to_dict())
+    return st
+
+
+def _gate_fallback(data: bytes, text: str, used_pw: str | None, st: Statement, verdict) -> Statement:
+    """Kural okuması kapıdan geçmedi (app/parsers/gate.py): yönetici alarmı (incidents "parser_drift", banka başına
+    günde bir), sonra sırayla
+    1. bankaya özel parser patladıysa kart şablonları (kayıtlı ya da yapay zekâsız öğrenilen; ücretsiz),
+    2. yapay zekâ okuması (GEMINI_API_KEY varsa; önbellek dahil),
+    kapıyı geçen ilk okuma döner; hiçbiri geçmezse (ya da yapay zekâ yok / hata verdi) kural okuması aynen döner:
+    bugünkü akış (kayıt + "Rakamlar tutmadı" doğrulaması, app/verification.py).
+    Okuma hakkı: belge başına tek sayım (main.upload_statements charge) — yedek yol ek hak düşürmez; dönen okumada
+    gate_fallback işaretlidir (yükleme ucu "zaten vardı"da da yedek yapay zekâ çağrısını kullanıcıya saymaz)."""
+    from app import card_reader, receipt
+    from app.parsers import gate
+
+    reader = getattr(st, "reader", None) or f"{st.source}:?"
+    _report_drift(st, reader, verdict)
+    if st.source == "parser":
+        try:
+            alt = card_reader.read(text)
+        except Exception:  # noqa: BLE001 - şablon denemesi okumayı bozmaz
+            _log.warning("kapı yedeği: şablon denemesi hata verdi", exc_info=True)
+            alt = None
+        if alt is not None and gate.check(alt).ok:
+            alt.gate_fallback = verdict.check
+            _log.info("kapı yedeği: %s yerine şablon okuması (%s)", reader, getattr(alt, "reader", "sablon"))
+            return alt
+    if not receipt.enabled():
+        return st
+    try:
+        ai = _ai_read(data, text, used_pw, lambda: "parser_drift")
+    except Exception as e:  # noqa: BLE001 - yapay zekâ yoksa / hata verdiyse eski akış (kural okuması kaydedilir)
+        _log.warning("kapı yedeği: yapay zekâ okuyamadı (%s): %s", reader, str(e)[:200])
+        return st
+    ai.gate_fallback = verdict.check
+    ai_verdict = gate.check(ai)
+    if ai_verdict.ok:
+        _log.info("kapı yedeği: %s yerine yapay zekâ okuması", reader)
+        return ai
+    _log.warning("kapı yedeği: yapay zekâ okuması da tutmadı (%s, %s); kural okuması kalır", reader, ai_verdict.check)
+    st.gate_fallback = verdict.check
+    st.gate_ai_called = True  # yapay zekâ çağrıldı ama sonucu kullanılmadı (maliyet ölçümü)
+    return st
+
+
+def _report_drift(st: Statement, reader: str, verdict) -> None:
+    """Yönetici alarmı: banka, okuyucu, kontrol ve sayılar — isim, kart no, işyeri/açıklama yok. Hata fırlatmaz."""
+    try:
+        from app import incidents
+
+        ozet = drift_summary(reader, verdict)
+        _log.warning("okuyucu kayması: banka=%s %s", st.bank, ozet)
+        incidents.system_event("parser_drift", st.bank or "?", ozet)
+    except Exception:  # noqa: BLE001 - alarm okumayı bozmaz
+        _log.warning("okuyucu kayması kaydedilemedi", exc_info=True)
+
+
+_READER_RE = re.compile(r"[^a-z0-9_:]")
+
+
+def drift_summary(reader: str, verdict) -> str:
+    """Alarmın sayısal özeti: sabit anahtarlar + sayılar (gate.numbers). Okuyucu adı küçük harf/rakam/":" ile sınırlı."""
+    reader = _READER_RE.sub("", str(reader).lower())[:40] or "?"
+    nums = " · ".join(f"{k}={v}" for k, v in (verdict.numbers or {}).items() if isinstance(v, (int, float)))
+    return f"okuyucu={reader} · kontrol={verdict.check} · {nums}".strip(" ·")
