@@ -15,3 +15,15 @@ def test_version_check(client, monkeypatch):
     assert client.get("/api/version").json()["behind"] == 0  # sürüm değişince önbellek yenilenir
     monkeypatch.delenv("APP_VERSION")
     assert version.platform() == "docker"
+
+
+def test_ui_default_flag(monkeypatch):
+    from app import version
+
+    assert "ui_default" in version.CAPABILITIES
+    monkeypatch.delenv("HESAPKITAP_UI_DEFAULT", raising=False)
+    assert version.handshake()["flags"]["ui_default"] == "a"
+    monkeypatch.setenv("HESAPKITAP_UI_DEFAULT", "eski")
+    assert version.handshake()["flags"]["ui_default"] == "eski"
+    monkeypatch.setenv("HESAPKITAP_UI_DEFAULT", "baska")
+    assert version.handshake()["flags"]["ui_default"] == "a"

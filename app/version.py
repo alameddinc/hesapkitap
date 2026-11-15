@@ -17,6 +17,7 @@ REPO = os.environ.get("HESAPKITAP_REPO", "alameddinc/hesapkitap")
 # artar; CAPABILITIES yalnız eklenir (bir yetenek adı kaldırılmaz, anlamı değişmez). İstemci bilmediği adı yok sayar.
 API_VERSION = 2
 CAPABILITIES = (
+    "ui_default",             # flags.ui_default "a" | "eski": istemcinin varsayılan görünümü (acil geri dönüş; env HESAPKITAP_UI_DEFAULT)
     "idempotency",            # Idempotency-Key başlığı: kopan yanıtta tek kayıt
     "email_verify",           # kayıtta e-posta kodu adımı (açık olup olmadığı: flags.email_verify_required)
     "sessions",               # /api/me/sessions: açık oturumlar, iptal
@@ -521,7 +522,9 @@ def handshake(with_version: bool = False) -> dict:
 
     out = {"api_version": API_VERSION, "capabilities": list(CAPABILITIES), "app_update": app_update.config(),
            "flags": {"email_verify_required": email_verify.required(),
-                     "hold_unverified": os.environ.get("HESAPKITAP_HOLD_UNVERIFIED", "0").strip() == "1"}}
+                     "hold_unverified": os.environ.get("HESAPKITAP_HOLD_UNVERIFIED", "0").strip() == "1",
+                     # yeni tasarımda acil geri dönüş: seçim yapmamış kullanıcılar bu görünümle açılır ("a" | "eski")
+                     "ui_default": "eski" if os.environ.get("HESAPKITAP_UI_DEFAULT", "a").strip() == "eski" else "a"}}
     if with_version:
         out["version"] = current()
     return out
