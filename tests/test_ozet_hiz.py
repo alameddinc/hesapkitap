@@ -4,9 +4,12 @@
   (önbellek anahtarında zekât yok: Özet zakat=1, Net durum / Ödemeler zakat'sız ister, iki kez hesaplanmıyordu);
 - kısa plan (plan(3), plan(1)) 6 aylık planın ilk ayları ile birebir aynı (ayrıca hesaplanmaz);
 - ekstre listesi damga değişmedikçe bir kez okunur; çağıranın değişikliği önbelleğe sızmaz, yazınca tazelenir;
-- Özet açılışının bütün uçları ortak önbellekle de, her biri boş önbellekle de aynı yanıtı verir.
+- Özet açılışının bütün uçları ortak önbellekle de, her biri boş önbellekle de aynı yanıtı verir;
+- hesap önbelleği dolunca en uzun süredir kullanılmayan kayıt düşer (LRU): bir kişinin açılışı ötekinin önbelleğini
+  boşaltmaz; yazandan kalan eski damgalı kayıtlar okunmaz, en eski olarak düşer.
 Veriler uydurma (sahte ekstreler, kurgu adlar)."""
 import json
+from collections import OrderedDict
 from datetime import date, timedelta
 
 import pytest
@@ -165,7 +168,7 @@ def test_ozet_acilisi_ortak_onbellekle_ayni_yanit(dolu):
     _clear()
     misses = []
 
-    class Say(dict):
+    class Say(OrderedDict):
         def __setitem__(self, k, v):
             misses.append(k[0])
             super().__setitem__(k, v)
@@ -179,3 +182,94 @@ def test_ozet_acilisi_ortak_onbellekle_ayni_yanit(dolu):
     assert misses.count("_plan") == 1, misses
     assert misses.count("_payables") == 1, misses
     assert json.dumps(tek["/api/summary?zakat=1"]["totals"]) == json.dumps(tek["/api/summary"]["totals"])
+
+
+# ---------------------------------------------------------------- hesap önbelleği: LRU (çok kullanıcı)
+
+def test_lru_en_eskiyi_atar_kullanilani_tutar(monkeypatch):
+    monkeypatch.setattr(finance, "_CACHE", OrderedDict())
+    monkeypatch.setattr(finance, "_CACHE_MAX", 3)
+    calls = []
+
+    @finance._memo
+    def kare(n):
+        calls.append(n)
+        return {"n": n * n}
+
+    for n in (1, 2, 3):
+        assert kare(n) == {"n": n * n}
+    assert kare(1) == {"n": 1}  # 1 yeniden kullanıldı: en eski artık 2
+    kare(4)  # sınır aşıldı
+    names = [k[5] for k in finance._CACHE]
+    assert names == ["(3,)", "(1,)", "(4,)"] and len(finance._CACHE) == 3
+    calls.clear()
+    assert kare(1) == {"n": 1} and kare(3) == {"n": 9} and kare(4) == {"n": 16}
+    assert calls == []  # hepsi önbellekten (eski davranış: taşınca hepsi silinirdi)
+    assert kare(2) == {"n": 4} and calls == [2]  # atılan yeniden hesaplanır, rakam aynı
+    assert not finance._LOCKS  # tek uçuş kilitleri birikmez
+
+
+def _iki_defter(tmp_path, monkeypatch, client):
+    """İki ayrı defter (kişi A ve B): aynı süreçte ayrı dosyalar, ayrı damgalar."""
+    from tests.conftest import STATEMENTS, fixture_bytes
+
+    paths = {}
+    for who in ("a", "b"):
+        p = str(tmp_path / f"{who}.db")
+        monkeypatch.setattr(db, "DB_PATH", p)
+        db.init_db()
+        files = [("files", (n.replace(".txt", ".pdf"), fixture_bytes(n), "application/pdf")) for n in STATEMENTS]
+        assert client.post("/api/statements/upload", files=files).status_code == 200
+        if who == "b":
+            client.post("/api/entries", json={"entry_date": TODAY.isoformat(), "description": "ORNEK MARKET",
+                                              "amount": 777, "kind": "gider", "category": "Market & Gıda"})
+        paths[who] = p
+    return paths
+
+
+OZET_KISA = ["/api/summary?zakat=1", "/api/net-worth", "/api/payables", "/api/debt-plan", "/api/cards/summary?recent=20"]
+
+
+def test_lru_bir_kisinin_acilisi_otekini_silmez(tmp_path, monkeypatch, client):
+    paths = _iki_defter(tmp_path, monkeypatch, client)
+
+    def ac(who):
+        monkeypatch.setattr(db, "DB_PATH", paths[who])
+        return {u: client.get(u).json() for u in OZET_KISA}
+
+    _clear()
+    a1 = ac("a")
+    n_a = len(finance._CACHE)
+    monkeypatch.setattr(finance, "_CACHE_MAX", n_a + 5)  # B'nin açılışı sığmaz: eski düzende ikisi birden silinirdi
+    b1 = ac("b")
+    a_keys = [k for k in finance._CACHE if k[1][0] == paths["a"]]
+    b_keys = [k for k in finance._CACHE if k[1][0] == paths["b"]]
+    assert len(finance._CACHE) == n_a + 5
+    assert a_keys, "A'nın kayıtları tamamen silindi"
+    assert len(b_keys) >= 5
+    # rakamlar aynı: önbellekten de, boş önbellekle de
+    assert ac("a") == a1 and ac("b") == b1
+    _clear()
+    assert ac("a") == a1 and ac("b") == b1
+    assert a1["/api/summary?zakat=1"]["totals"] != b1["/api/summary?zakat=1"]["totals"]  # iki defter gerçekten ayrı
+
+
+def test_lru_yazinca_eski_damgali_kayit_okunmaz_ve_duser(dolu, monkeypatch):
+    _clear()
+    once = dolu.get("/api/summary").json()
+    old_stamp = db.stamp()
+    old = [k for k in finance._CACHE if k[1] == old_stamp]
+    assert old
+    r = dolu.post("/api/entries", json={"entry_date": TODAY.isoformat(), "description": "ORNEK KAFE", "amount": 150,
+                                        "kind": "gider", "category": "Kafe & Restoran"})
+    assert r.status_code == 200
+    assert db.stamp() != old_stamp  # yazma damgayı değiştirdi: eski anahtarlar bir daha eşleşmez
+    sonra = dolu.get("/api/summary").json()
+    assert round(sonra["totals"]["expense"] - once["totals"]["expense"], 2) == 150
+    # eski kayıtlar en başta (en uzun süredir kullanılmayan): sınır gelince ilk onlar düşer
+    keys = list(finance._CACHE)
+    assert keys[:len(old)] == old
+    monkeypatch.setattr(finance, "_CACHE_MAX", len(keys) - len(old))
+    finance.available_months()  # yeni damgayla bir kayıt daha: sınırı aşar
+    assert not [k for k in finance._CACHE if k[1] == old_stamp]
+    assert dolu.get("/api/summary").json() == sonra

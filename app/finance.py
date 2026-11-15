@@ -13,13 +13,20 @@ from app import db, money, rawnote, store_subs, sub_catalog, terms
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
+import os
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 # Hesap önbelleği: aynı veritabanı durumu için ağır hesaplar (tüm işlemler, plan, ödemeler) bir kez yapılır.
-# Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur.
-_CACHE: dict = {}
+# Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur; yazandan kalan eski
+# kayıtlar bir daha okunmaz, en eski olarak düşer. Süreç geneli, tüm defterler ortak: dolunca en uzun süredir
+# kullanılmayan kayıt atılır (LRU; önce hepsi siliniyordu: bir kişinin açılışı ötekinin önbelleğini boşaltıyordu).
+# Ölçü (uydurma ~2.200 hareketli defter): bir Özet açılışı ~23 kayıt, ~3,4 MB (en büyüğü tüm satırlar ~2,3 MB);
+# 512 kayıt ≈ 22 kişinin açılışı, en kötü ~75 MB. HESAPKITAP_CALC_CACHE ile değiştirilir.
+_CACHE_MAX = max(16, int(os.environ.get("HESAPKITAP_CALC_CACHE", "512")))
+_CACHE: OrderedDict = OrderedDict()
 _LOCKS: dict = {}
 _LOCKS_GUARD = threading.Lock()
 _MISS = object()
@@ -42,9 +49,13 @@ def _memo(fn=None, *, zakat: bool = True):
         viewer = u["id"] if u and u.get("member_of") else None
         key = (fn.__name__, _db_stamp(), viewer, date.today(), _ZAKAT_SPLIT.get() if zakat else None, repr(args),
                repr(sorted(kwargs.items())))
-        # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada _CACHE.clear() yapsa da KeyError olmaz.
+        # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada kaydı atsa da KeyError olmaz.
         hit = _CACHE.get(key, _MISS)
-        if hit is _MISS:
+        if hit is not _MISS:
+            with _LOCKS_GUARD:
+                if key in _CACHE:
+                    _CACHE.move_to_end(key)  # yeni kullanıldı: en son atılır
+        else:
             # aynı anda gelen istekler (Özet + ay özeti) aynı ağır hesabı ikişer kez yapmasın: ikincisi birinciyi bekler
             with _LOCKS_GUARD:
                 lock = _LOCKS.setdefault(key, threading.Lock())
@@ -52,11 +63,13 @@ def _memo(fn=None, *, zakat: bool = True):
                 hit = _CACHE.get(key, _MISS)
                 if hit is _MISS:
                     hit = fn(*args, **kwargs)
-                    with _LOCKS_GUARD:  # temizlik ve ekleme tek kilit altında (eşzamanlı clear/insert yarışmasın)
-                        if len(_CACHE) > 128:
-                            _CACHE.clear()
-                            _LOCKS.clear()
+                    with _LOCKS_GUARD:  # atma ve ekleme tek kilit altında (eşzamanlı yazımlar yarışmasın)
                         _CACHE[key] = hit
+                        _CACHE.move_to_end(key)
+                        while len(_CACHE) > _CACHE_MAX:
+                            _CACHE.popitem(last=False)
+                        # tek uçuş kilidi artık gereksiz (sonraki okumalar önbellekten); bekleyenler kendi kopyasını tutar
+                        _LOCKS.pop(key, None)
         # çağıran sonucu değiştirse de önbellek bozulmasın
         if isinstance(hit, list) and all(isinstance(x, dict) for x in hit):
             return [dict(x) for x in hit]
