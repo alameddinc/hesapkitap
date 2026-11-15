@@ -405,7 +405,15 @@ GATED_RX = [(None, re.compile(r"/api/cards/(?:[^/]+/spender|spenders)"), "aile_r
             ("PUT", re.compile(r"/api/jars/\d+/people/\d+/exempt/[\d-]+"), "kumbara")]  # "Bu ay yok" işaretle (geri alma serbest)
 
 
+# kilitli önekin altında herkese açık uçlar: fiş kalemi / elle kalem adı önerisi (/api/prices/suggest) fiş özelliğidir,
+# fiyat takibi değil. Önceden "/api/prices" öneki yüzünden ücretsiz pakette 402 dönüyor, istemcideki öneri sessizce hiç
+# çıkmıyordu (15.11.2026). Fiyat takibi kapalıyken yanıtta fiyat / mağaza yoktur (yalnız adlar; prices_suggest).
+UNGATED = ("/api/prices/suggest",)
+
+
 def gate_for(path: str, method: str = "GET") -> str | None:
+    if path in UNGATED:
+        return None
     for m, rx, f in GATED_RX:
         if (m is None or m == method) and rx.fullmatch(path):
             return f

@@ -5513,10 +5513,19 @@ def prices(since: date | None = None, store: str | None = None, brand: str | Non
 def prices_suggest(q: str = Query("", max_length=80), limit: int = Query(8, ge=1, le=20)):
     """Fiş kalemi / elle gider kalem adı önerisi (price_suggest): {items: [{name, group_key, group_label, last_price,
     last_store, count}], did_you_mean: {name, group_label} | null} — kendi fişlerindeki adlar (neredeyse aynı
-    yazılışlar birleşik), sonra genel ürün adları (app/price_advice.py suggest)."""
-    from app import price_advice
+    yazılışlar birleşik), sonra genel ürün adları (app/price_advice.py suggest).
+    Paket kapısı ve ortak defterin "fiyatlar" sayfa kuralı bu uca uygulanmaz (fiş kalemi düzenlemek her pakette var;
+    plans.UNGATED, book.PAGE_OPEN): fiyat takibi paketinde yoksa ya da üyeye kapalıysa yanıtta yalnız adlar durur,
+    last_price / last_store null."""
+    from app import book, price_advice
 
-    return price_advice.suggest(q, limit)
+    out = price_advice.suggest(q, limit)
+    u = db.current_user()
+    m = book.member()
+    hidden = bool(m) and "fiyatlar" in book.rules(m["id"])["hidden_pages"]
+    if hidden or not plans.allows(u, "fiyatlar"):
+        out["items"] = [{**i, "last_price": None, "last_store": None} for i in out["items"]]
+    return out
 
 
 @app.get("/api/prices/market")
