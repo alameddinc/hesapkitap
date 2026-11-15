@@ -266,7 +266,7 @@ def test_push_once_for_detected(client, card, monkeypatch):
     items = [i for i in push.statement_items(date(2026, 11, 16)) if i["id"].startswith("erken_kapama:")]
     assert len(items) == 1 and items[0]["kind"] == "faiz" and items[0]["route"] == push.R_FAIZ
     assert items[0]["id"] == "erken_kapama:0001:2026-11-15"
-    assert items[0]["title"] == "Mavi Bank …0001: taksitler erken kapandı" and "₺690,00" in items[0]["body"]
+    assert items[0]["title"] == "Taksitler erken kapandı" and items[0]["body"].startswith("Mavi Bank …0001 · ₺690")
 
 
 # ---------------------------------------------------------------- ortak defter

@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS push_devices (   -- telefona bildirim (app/push.py): 
     platform TEXT NOT NULL,              -- ios | android
     env TEXT,                            -- iOS: production | sandbox
     app_version TEXT,
+    features TEXT,                       -- uygulamanın bildirdiği özellikler, virgüllü (badge, channels; app/push.py)
     created TEXT,
     last_seen TEXT
 );
@@ -524,6 +525,8 @@ def _migrate(c) -> None:
     # arka planda parça parça (product_groups.regroup_tick, jobs.scheduler). 07.11.2026: bağlantı açılışında tek işlemde
     # yapılınca canlı sunucu 15 dk kilitlendi (25 bin başlık × indekssiz UPDATE).
     c.execute("CREATE INDEX IF NOT EXISTS official_prices_title ON official_prices(title)")
+    if "features" not in {r[1] for r in c.execute("PRAGMA table_info(push_devices)")}:  # rozet / kanal (app/push.py)
+        _alter(c, "ALTER TABLE push_devices ADD COLUMN features TEXT")
 
 
 def init() -> None:

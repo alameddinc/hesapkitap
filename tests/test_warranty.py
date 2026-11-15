@@ -321,16 +321,15 @@ def test_push_stages_30_and_7_once_each(client, tmpdb):
     assert set(got) == {f"garanti:{a}:2026-12-12:30gun", f"garanti:{b}:2026-11-19:7gun", f"garanti:{c}:2026-11-25:30gun"}
     it = got[f"garanti:{b}:2026-11-19:7gun"]
     assert it["kind"] == "garanti" and it["route"] == f"#/diger/garantiler/{b}"
-    assert it["title"] == "Örnek Saç Kurutma: garantinin bitmesine 7 gün kaldı"
-    assert it["body"] == ("Garanti 19 Kasım 2026 tarihinde bitiyor. Arızası varsa şimdi servise götür; fatura ve garanti "
-                          "belgesi Garantiler'de.")
+    assert it["title"] == "Örnek Saç Kurutma · garanti 7 gün kaldı"
+    assert it["body"] == "Bitiş 19 Kasım 2026. Arıza varsa servise götür; belgeler Garantiler'de."
     # ertesi günler aynı aşama yeniden gitmez (kimlik aynı → push_sent), 7 güne girince ikinci bildirim
     sent = push.notify(1, list(got.values()), background=False)
     assert sent and not push.notify(1, push._garanti({"id": 1}, TODAY + timedelta(days=1)), background=False)
     later = push._garanti({"id": 1}, date(2026, 12, 6))
     assert f"garanti:{a}:2026-12-12:7gun" in {i["id"] for i in later}
     last = {i["id"]: i for i in push._garanti({"id": 1}, date(2026, 12, 12))}
-    assert last[f"garanti:{a}:2026-12-12:7gun"]["title"] == "Örnek Fırın: garantinin bugün bitiyor"
+    assert last[f"garanti:{a}:2026-12-12:7gun"]["title"] == "Örnek Fırın · garanti bugün bitiyor"
 
 
 def test_push_needs_new_app_and_toggle(client, tmpdb):

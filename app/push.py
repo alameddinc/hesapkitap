@@ -12,8 +12,15 @@ Gönderim
 - Geçersiz cihaz (FCM UNREGISTERED / 404, APNs 410 / BadDeviceToken / Unregistered): kayıt silinir.
 
 Yük: {title, body, route ("#/…" uygulama içi yol), kind (tür), id (tekil anahtar)}. Android'de notification + data,
-kanal "hatirlatma", tag = id; iOS'ta aps.alert, thread-id = kind, apns-collapse-id = id: aynı anahtar ikinci kez
-gelirse eskisinin üstüne yazar.
+kanal türe göre (CHANNELS / KIND_CHANNEL: Ödemeler, Hatırlatmalar, Destek, Aile…; kanalı olmayan eski uygulamada FCM
+manifest'teki "hatirlatma"ya düşer), tag = id; iOS'ta aps.alert, thread-id = kind, apns-collapse-id = id: aynı anahtar
+ikinci kez gelirse eskisinin üstüne yazar. iOS rozeti (aps.badge): okunmamış destek yanıtı + bekleyen Yapılacaklar
+(uygulamanın son açılışında GET /api/push/badge ile yazılan sayı); yalnız cihaz kaydında "badge" özelliği olan
+uygulamaya (rozeti açılışta kendisi güncelleyen sürüm; eskisinde rozet hiç düşmezdi).
+
+Metin (docs: hesapkitap-mobile docs/bildirimler.md): başlık en çok TITLE_MAX (40), gövde en çok BODY_MAX (90) karakter;
+uzun "neden / önlem" açıklaması gövdeye girmez, bildirimin açtığı ekranda durur. Faize yönlendiren öneri yok ("asgari
+öde" gibi). Kişi / kart / kumbara adı uzunsa adı kısalır (_ad), tarih ve tutar kalır. Sınır item()'da da güvence.
 
 Zamanlama
 - Günlük iş (app/jobs.scheduler her dakika tick): Türkiye saatiyle 09:00'dan sonra cihazı olan her kullanıcı için bir
@@ -28,7 +35,8 @@ Zamanlama
   diğerlerine gider ("Mehmet alışverişi tamamladı · 7 ürün alındı"). Yapan kişiye hiçbir zaman gitmez; listeyi gizlenen
   üyeye gitmez.
 - Sessiz saatler (varsayılan 22:00–09:00): kuyruktaki bildirim sessiz saat bitince gider.
-- Tekrar yok: aynı (kullanıcı, id) bir kez (push_sent; 60 gün sonra temizlenir).
+- Tekrar yok: aynı (kullanıcı, id) bir kez (push_sent; 60 gün sonra temizlenir). Ayrıca aynı tür + aynı nesne (obj: kart,
+  kişi, kumbara…) günde bir kez: farklı kimlikli iki bildirim aynı gün aynı şey için gitmez.
 
 Saklama: sistem veritabanı (push_devices, push_prefs, push_sent, push_queue; app/system.py şeması).
 """
@@ -55,7 +63,18 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 APNS_HOSTS = {"production": "api.push.apple.com", "sandbox": "api.sandbox.push.apple.com"}
 DEFAULT_TEAM_ID = "D78HMKA7Z8"
 DEFAULT_TOPIC = "com.alameddinc.hesapkitap"
-ANDROID_CHANNEL = "hatirlatma"
+ANDROID_CHANNEL = "hatirlatma"  # varsayılan kanal (manifest default_notification_channel_id ile aynı)
+TITLE_MAX, BODY_MAX = 40, 90    # bildirim metni sınırı (kilit ekranında tek bakışta okunur)
+# Android bildirim kanalları (kimlik → Türkçe ad): uygulama kayıtta oluşturur (hesapkitap-mobile src/lib/push.ts KANALLAR),
+# kişi telefonun ayarlarından ayrı ayrı kapatabilir. Kimlikler değişmez (Android kanalı bir kez oluşur).
+CHANNELS = {"odemeler": "Ödemeler", "hatirlatma": "Hatırlatmalar", "destek": "Destek", "aile": "Aile ve ortak defter",
+            "zekat": "Zekât ve sadaka", "duyuru": "Duyurular"}
+KIND_CHANNEL = {"odeme": "odemeler", "fatura": "odemeler", "borc": "odemeler", "faiz": "odemeler", "abonelik": "odemeler",
+                "butce": "odemeler",
+                "destek": "destek", "duzeltme": "destek", "geri_bildirim": "destek", "sistem": "destek",
+                "aile": "aile", "ortak": "aile", "liste": "aile",
+                "zekat": "zekat", "sadaka": "zekat", "duyuru": "duyuru"}  # gerisi "hatirlatma"
+LONG_TEXT_KINDS = {"duyuru"}  # yöneticinin yazdığı duyuru: sınırı app/announce.py (başlık 80, gövde 300)
 
 HTTP_CLIENT = None   # FCM + Google OAuth; testler httpx.MockTransport'lu istemci koyar
 APNS_CLIENT = None   # APNs (HTTP/2); testler sahte istemci koyar
@@ -68,7 +87,7 @@ DAILY_HOUR = 9          # günlük iş bu saatten sonra (Türkiye saati)
 MAX_SEPARATE = 3        # özet kapalıyken en çok bu kadar ayrı bildirim; fazlası tek özet
 MAX_TRIES = 3           # ağ hatasında yeniden deneme (kuyrukta)
 EVENT_DELAY = 20.0      # ekstre kaydı sonrası olay hesabı (toplu yüklemede tek hesap)
-TEST_EVERY = 60         # POST /api/push/test: dakikada bir
+TEST_EVERY = 60         # POST /api/push/test: dakikada bir (tür örneğinde tür başına)
 EKSTRE_FRESH = 7        # kesimden bu kadar gün geçtiyse "ekstre yükle" artık bildirim olmaz (Yapılacaklar'da durur)
 DOKUM_FRESH = 10
 GELIR_LATE = 2          # beklenen gelir gününden bu kadar gün sonra
@@ -135,7 +154,7 @@ R_FAIZ, R_ISLEMLER, R_TASARRUF, R_ZEKAT = "#/diger/faiz", "#/islemler", "#/diger
 R_GELENLER, R_POSTA, R_ORTAK = "#/diger/gelenler", "#/diger/posta", "#/diger/ortak-defter"
 R_FIYATLAR, R_ALISVERIS = "#/diger/fiyatlar", "#/diger/alisveris"
 R_BORC_PLANI = "#/diger/borc-plani"
-R_BORCLAR = "#/diger/borclar"  # /kayit/<id> ile o kayıt açık (alacak hatırlatması)
+R_BORCLAR = "#/diger/borclar"  # /kisi/<ad> ile o kişinin kayıtları (borç / alacak günü), /kayit/<id> ile o kayıt
 R_SADAKA = "#/diger/zekat/sadaka"  # Zekât ve Sadaka, sadaka formu açık (eski uygulama: Zekât ve Sadaka ana sayfası)
 R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<id> ile o kumbaranın sayfası
 R_GARANTI = "#/diger/garantiler"  # /<id> ile ürünün ayrıntısı
@@ -341,6 +360,11 @@ def collapse_id(pid: str) -> str:
     return pid if pid.isascii() and len(pid) <= 64 else "h:" + hashlib.sha256(pid.encode()).hexdigest()[:40]
 
 
+def channel_of(kind: str) -> str:
+    """Android bildirim kanalı (türün konusu); bilinmeyen tür Hatırlatmalar."""
+    return KIND_CHANNEL.get(kind, ANDROID_CHANNEL)
+
+
 def fcm_message(token: str, p: dict) -> dict:
     cid = collapse_id(p["id"])
     return {"message": {
@@ -348,12 +372,14 @@ def fcm_message(token: str, p: dict) -> dict:
         "notification": {"title": p["title"], "body": p["body"]},
         "data": {"route": p.get("route") or R_OZET, "kind": p["kind"], "id": p["id"],
                  **({"action": p["action"]} if p.get("action") else {})},
-        "android": {"priority": "HIGH", "notification": {"channel_id": ANDROID_CHANNEL, "tag": cid}},
+        "android": {"priority": "HIGH", "notification": {"channel_id": channel_of(p["kind"]), "tag": cid}},
     }}
 
 
-def apns_payload(p: dict) -> dict:
-    return {"aps": {"alert": {"title": p["title"], "body": p["body"]}, "sound": "default", "thread-id": p["kind"]},
+def apns_payload(p: dict, badge: int | None = None) -> dict:
+    """badge: uygulama simgesindeki sayı (None: dokunulmaz; yalnız rozeti kendisi güncelleyen uygulamaya verilir)."""
+    return {"aps": {"alert": {"title": p["title"], "body": p["body"]}, "sound": "default", "thread-id": p["kind"],
+                    **({"badge": badge} if badge is not None else {})},
             "route": p.get("route") or R_OZET, "kind": p["kind"], "id": p["id"],
             **({"action": p["action"]} if p.get("action") else {})}
 
@@ -387,9 +413,9 @@ def send_fcm(token: str, p: dict) -> str:
     return "error"
 
 
-def send_apns(token: str, env: str | None, p: dict) -> str:
+def send_apns(token: str, env: str | None, p: dict, badge: int | None = None) -> str:
     host = APNS_HOSTS.get(env or "production", APNS_HOSTS["production"])
-    body = json.dumps(apns_payload(p), ensure_ascii=False, separators=(",", ":")).encode()
+    body = json.dumps(apns_payload(p, badge), ensure_ascii=False, separators=(",", ":")).encode()
     for attempt in (0, 1):
         try:
             headers = {"authorization": f"bearer {apns_jwt(fresh=bool(attempt))}",
@@ -422,12 +448,18 @@ def deliver(uid: int, p: dict) -> dict:
     only = p.get("only") if isinstance(p.get("only"), dict) else None
     if only:
         from app import announce
+    badge: list[int | None] = []  # kişi başı bir kez hesaplanır (yalnız rozetli iOS cihazı varsa)
     for d in devices(uid):
         if not _platform_on(d["platform"]):
             continue
         if only and not announce.device_matches(d, only.get("platform") or "all", only.get("below")):
             continue
-        res = send_fcm(d["token"], p) if d["platform"] == "android" else send_apns(d["token"], d["env"], p)
+        if d["platform"] == "android":
+            res = send_fcm(d["token"], p)
+        else:
+            if "badge" in features(d) and not badge:
+                badge.append(badge_count(uid))
+            res = send_apns(d["token"], d["env"], p, badge[0] if badge and "badge" in features(d) else None)
         if res == "ok":
             out["sent"] += 1
         elif res == "invalid":
@@ -445,9 +477,15 @@ def valid_token(token: str) -> bool:
     return bool(TOKEN_RE.match(token or ""))
 
 
-def register(uid: int, token: str, platform: str, env: str | None = None, app_version: str | None = None) -> None:
-    """Cihazı kaydet. Aynı belge başka kullanıcıdaysa (telefonda hesap değişti) bu kullanıcıya taşınır."""
+FEATURES = {"badge", "channels"}  # istemcinin bildirdiği özellikler (badge: rozeti açılışta kendisi günceller)
+
+
+def register(uid: int, token: str, platform: str, env: str | None = None, app_version: str | None = None,
+             feats: list[str] | None = None) -> None:
+    """Cihazı kaydet. Aynı belge başka kullanıcıdaysa (telefonda hesap değişti) bu kullanıcıya taşınır. feats: uygulamanın
+    bildirdiği özellikler (FEATURES içinden; gönderilmediyse boş: eski uygulama)."""
     now = _utc_iso()
+    fs = ",".join(sorted({f for f in feats or [] if f in FEATURES})) or None
     env = env if platform == "ios" and env in APNS_HOSTS else ("production" if platform == "ios" else None)
     with system.connect() as c:
         old = c.execute("SELECT user_id FROM push_devices WHERE token = ?", (token,)).fetchone()
@@ -456,12 +494,12 @@ def register(uid: int, token: str, platform: str, env: str | None = None, app_ve
             old = None
         if old:
             # sürüm her kayıtta güncellenir (uygulama güncellenince); gönderilmediyse eskisi kalır
-            c.execute("UPDATE push_devices SET platform = ?, env = ?, app_version = COALESCE(?, app_version), last_seen = ? "
-                      "WHERE token = ?",
-                      (platform, env, app_version, now, token))
+            c.execute("UPDATE push_devices SET platform = ?, env = ?, app_version = COALESCE(?, app_version), features = ?, "
+                      "last_seen = ? WHERE token = ?",
+                      (platform, env, app_version, fs, now, token))
         else:
-            c.execute("INSERT INTO push_devices (token, user_id, platform, env, app_version, created, last_seen) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?)", (token, uid, platform, env, app_version, now, now))
+            c.execute("INSERT INTO push_devices (token, user_id, platform, env, app_version, features, created, last_seen) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (token, uid, platform, env, app_version, fs, now, now))
         extra = [r[0] for r in c.execute("SELECT token FROM push_devices WHERE user_id = ? ORDER BY last_seen DESC, "
                                          "created DESC LIMIT -1 OFFSET ?", (uid, MAX_DEVICES))]
         for t in extra:  # sınır: en uzun süredir görünmeyen düşer
@@ -476,6 +514,37 @@ def unregister(uid: int, token: str) -> bool:
 def devices(uid: int) -> list[dict]:
     with system.connect() as c:
         return [dict(r) for r in c.execute("SELECT * FROM push_devices WHERE user_id = ? ORDER BY last_seen DESC", (uid,))]
+
+
+def features(d: dict) -> set[str]:
+    return set((d.get("features") or "").split(",")) - {""}
+
+
+def badge_count(uid: int) -> int | None:
+    """iOS rozeti: okunmamış destek yanıtı + Yapılacaklar (uygulamanın son açılışında GET /api/push/badge ile yazılan
+    sayı). Hesaplanamazsa None (rozet olduğu gibi kalır)."""
+    try:
+        from app import support
+
+        return int(support.unread(uid)["unread"]) + int(system.get(f"push:todos:{uid}") or 0)
+    except Exception:  # noqa: BLE001 - rozet gönderimi engellemez
+        log.warning("push: rozet sayısı hesaplanamadı", exc_info=True)
+        return None
+
+
+def badge(uid: int) -> dict:
+    """GET /api/push/badge (bağlam: kişinin açık defteri): Yapılacaklar sayısını yazar (sonraki bildirimlerin rozeti),
+    {count, todos, support} döner."""
+    from app import reminders, support
+
+    try:
+        todos = len(reminders.build())
+    except Exception:  # noqa: BLE001 - Yapılacaklar hesaplanamazsa yalnız destek sayılır
+        log.exception("push: rozet Yapılacaklar")
+        todos = 0
+    system.put(f"push:todos:{uid}", str(todos))
+    sup = int(support.unread(uid)["unread"])
+    return {"count": todos + sup, "todos": todos, "support": sup}
 
 
 def forget_devices(uid: int) -> None:
@@ -635,8 +704,39 @@ def flush_soon() -> None:
 
 # ---------------------------------------------------------------- birleştirme
 
-def item(kind: str, pid: str, title: str, body: str, route: str) -> dict:
-    return {"kind": kind, "id": pid, "title": _clean(title)[:120], "body": _clean(body)[:400], "route": route}
+def item(kind: str, pid: str, title: str, body: str, route: str, obj: str | None = None) -> dict:
+    """obj: bildirimin konusu (kart, kişi, kumbara…): aynı tür + aynı obj günde bir kez (notify). Metin TITLE_MAX /
+    BODY_MAX'a sığdırılır (kaynak metinler zaten kısa; bu güvence, ör. uzun ad)."""
+    long = kind in LONG_TEXT_KINDS
+    out = {"kind": kind, "id": pid, "title": _fit(_clean(title), 120 if long else TITLE_MAX),
+           "body": _fit(_clean(body), 400 if long else BODY_MAX), "route": route}
+    if obj:
+        out["obj"] = obj
+    return out
+
+
+def _fit(s: str, n: int) -> str:
+    """En çok n karakter; uzunsa kelime sınırında kesilir, sonuna "…"."""
+    if len(s) <= n:
+        return s
+    cut = s[:n - 1]
+    sp = cut.rfind(" ")
+    if sp >= n * 0.6:
+        cut = cut[:sp]
+    return cut.rstrip(" ,;:·-–—") + "…"
+
+
+def _ad(name: str, n: int = 18) -> str:
+    """Bildirim metnindeki ad (kişi, kart, kumbara, ürün): uzunsa kısalır; tarih / tutar kesilmesin diye önce ad kısalır."""
+    name = _clean(name)
+    return name if len(name) <= n else name[:n - 1].rstrip(" ,;:·-") + "…"
+
+
+def _cumle(s: str) -> str:
+    """Metnin ilk cümlesi (uzun açıklamadan bildirim gövdesi)."""
+    s = _clean(s)
+    m = re.match(r"^(.+?[.!?])(\s|$)", s)
+    return m[1] if m else s
 
 
 def _clean(s: str) -> str:
@@ -650,7 +750,7 @@ def summary(items: list[dict], today: date, rest: bool = False) -> dict:
     parts = ", ".join(f"{n} {NOUNS.get(k, k)}" for k, n in counts.items())
     return {"kind": "gunluk", "id": f"gunluk:{today.isoformat()}" + (":diger" if rest else ""),
             "title": "Bugünün hatırlatmaları" if not rest else "Diğer hatırlatmalar",
-            "body": f"Bugün {parts}" if not rest else f"Ayrıca {parts}", "route": R_OZET}
+            "body": _fit(f"Bugün {parts}" if not rest else f"Ayrıca {parts}", BODY_MAX), "route": R_OZET}
 
 
 def combine(items: list[dict], digest: bool, today: date) -> list[dict]:
@@ -670,9 +770,20 @@ def notify(uid: int, items: list[dict], now: datetime | None = None, daily: bool
     now = now or _now()
     p = get_prefs(uid)
     fresh = []
+    days: set[str] = set()
     for i in items:
-        if p["types"].get(i["kind"]) and i["id"] not in {x["id"] for x in fresh} and claim(uid, i["id"], now.date()):
-            fresh.append(i)
+        if not p["types"].get(i["kind"]) or i["id"] in {x["id"] for x in fresh}:
+            continue
+        # aynı tür + aynı nesne günde bir (kimliği farklı olsa da): önce bakılır, kimlik ancak gidecekse harcanır
+        dk = f"gun:{i['kind']}:{i['obj']}:{now.date().isoformat()}" if i.get("obj") else None
+        if dk and (dk in days or was_sent(uid, dk)):
+            continue
+        if not claim(uid, i["id"], now.date()):
+            continue
+        if dk:
+            claim(uid, dk, now.date())
+            days.add(dk)
+        fresh.append(i)
     out = combine(fresh, bool(p["digest"]) and daily, now.date())
     for x in out:
         if x["kind"] == "gunluk":
@@ -703,22 +814,45 @@ def system_alert(pid: str, title: str, text: str, route: str = R_SISTEM) -> int:
 
 # ---------------------------------------------------------------- zamanlı türler (kullanıcının defterinde)
 
+ODEME_DAYS = {3: "3gun", 1: "1gun"}  # kart son ödemesine 3 gün ve 1 gün kala (ödenmediyse)
+GUN = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+
+
 def _odeme_ekstre_dokum(today: date, on: dict) -> list[dict]:
-    from app import reminders
+    """Yapılacaklar'ın (app/reminders.build) kart son ödemesi, ekstre ve döküm maddeleri; bildirim metni kısa.
+    - odeme: son ödemeye 3 gün ve 1 gün kala, ödenmediyse (reminders: ödendiyse madde yok). Tutar dönem borcunun
+      kalanı (asgari değil).
+    - ekstre: kesimden (ekstredeki "sonraki kesim", yoksa öğrenilen kesim günü) 1 gün sonra, o kesimin ekstresi
+      yüklenmediyse; EKSTRE_FRESH günden sonra bildirim yok (Yapılacaklar'da durur). Yapılacaklar kesimden 2 gün sonra
+      gösterir (banka PDF'i geç gönderebilir); bildirim bir gün önce "ekstreni yükle" der.
+    - dokum: dönem kapanınca."""
+    from app import money, reminders
 
     if not (on["odeme"] or on["ekstre"] or on["dokum"]):
         return []
     out = []
-    for r in reminders.build(today):  # ortak defter yetkisi, gizli sayfa/kart ve kişinin kapattıkları burada süzülü
+    # ortak defter yetkisi, gizli sayfa/kart ve kişinin kapattıkları burada süzülü
+    for r in reminders.build(today, ekstre_grace=0):
         if r["kind"] == "odeme" and on["odeme"]:
-            left = (date.fromisoformat(r["due"]) - today).days
-            tag = "3gun" if left == 3 else "songun" if left == 0 else None
-            if tag:
-                out.append(item("odeme", f"{r['id']}:{tag}", r["title"], r["text"], R_ODEMELER))
+            due = date.fromisoformat(r["due"])
+            tag = ODEME_DAYS.get((due - today).days)
+            if not tag:
+                continue
+            when = "yarın" if tag == "1gun" else "3 gün sonra"
+            amt = f" · {money.tl(r['amount'], trim=True)}" if r.get("amount") else ""
+            out.append(item("odeme", f"{r['id']}:{tag}", f"Son ödeme {when} · ••{r['last4']}",
+                            f"{_ad(r['bank'], 24)}{amt} · {due.day} {AY[due.month - 1]} {GUN[due.weekday()]}. "
+                            "Ödediysen işaretle.", R_ODEMELER, obj=f"kart:{r['last4']}"))
         elif r["kind"] == "ekstre" and on["ekstre"] and (today - date.fromisoformat(r["due"])).days <= EKSTRE_FRESH:
-            out.append(item("ekstre", r["id"], r["title"], r["text"], R_EKSTRELER))
+            cut = date.fromisoformat(r["due"])
+            out.append(item("ekstre", r["id"], f"{AY[cut.month - 1]} ekstreni yükle · ••{r['last4']}",
+                            f"{_ad(r['bank'], 24)} · kesim {cut.day} {AY[cut.month - 1]}. Yükle, son ödeme günün "
+                            "güncellensin.", R_EKSTRELER, obj=f"kart:{r['last4']}"))
         elif r["kind"] == "dokum" and on["dokum"] and (today - date.fromisoformat(r["due"])).days <= DOKUM_FRESH:
-            out.append(item("dokum", r["id"], r["title"], r["text"], R_EKSTRELER))
+            ay = r["title"].split(" · ", 1)[-1]  # "Ekim dökümü" / "Ekim dönemi dökümü"
+            out.append(item("dokum", r["id"], f"{_ad(r['bank'], 16)} · {ay}",
+                            "Dönem kapandı. Dökümü yükle; maaş ve havaleler eşleşsin.", R_EKSTRELER,
+                            obj=f"hesap:{r['account_id']}"))
     return out
 
 
@@ -731,60 +865,75 @@ def _fatura(today: date) -> list[dict]:
             continue
         if (date.fromisoformat(b["due_date"]) - today).days == 2:
             d = date.fromisoformat(b["due_date"])
-            out.append(item("fatura", f"fatura:{b['id']}:{b['due_date']}:2gun", f"{b['provider']} faturası",
-                            f"Son ödeme {d.day} {AY[d.month - 1]} (2 gün kaldı) · {money.tl(b['amount'], trim=True)}",
-                            R_ODEMELER))
+            out.append(item("fatura", f"fatura:{b['id']}:{b['due_date']}:2gun", f"{_ad(b['provider'], 22)} faturası · 2 gün",
+                            f"Son ödeme {d.day} {AY[d.month - 1]} · {money.tl(b['amount'], trim=True)}",
+                            R_ODEMELER, obj=f"fatura:{b['id']}"))
     return out
 
 
+BORC_DAYS = {1: "1gun", 0: "songun"}  # borç / alacak günü: 1 gün kala ve o gün
+
+
+def _tutarlar(xs: list[tuple[float, str]]) -> str:
+    """Birim birim toplam: "₺14.000", "₺1.000 + 50 USD"."""
+    by: dict[str, float] = {}
+    for amt, unit in xs:
+        by[unit or "TRY"] = by.get(unit or "TRY", 0) + amt
+    return " + ".join(_amount(v, u) for u, v in sorted(by.items(), key=lambda x: x[0] != "TRY"))
+
+
 def _borc(today: date) -> list[dict]:
-    """Borçta (Borç / Alacak "borcum") söz verilen ya da kesin ödeme günü ve ödeme planındaki her taksit: 2 gün kala ve
-    o gün. Dokununca Borç planı. Alacakta (yetenek debt_terms_receivable) aynı günler, nötr metin ("Ahmet: 2. taksit günü
-    bugün"); dokununca Borç / Alacak'ta o kayıt. Borç / Alacak ortak defterde üyeye kapalıysa yok."""
-    from app import debt_plan, money
+    """Borçta ve alacakta söz verilen ya da kesin ödeme günü ve ödeme planındaki her taksit: 1 gün kala ve o gün. Aynı
+    kişinin aynı güne düşen kayıtları TEK bildirim ("Ahmet · 7 borç · ₺14.000 yarın"); borç ve alacak ayrı. Dokununca
+    Borç / Alacak'ta o kişi (#/diger/borclar/kisi/<ad>). Alacak metni nötr. Borç / Alacak ortak defterde üyeye kapalıysa
+    yok."""
+    from urllib.parse import quote
+
+    from app import debt_plan
 
     if debt_plan._hidden_people():
         return []
-    out = []
+    groups: dict[tuple[str, str, str, int], list[dict]] = {}
     for d in db.list_debts(open_only=True):
-        if d["written_off_at"] or d["remaining"] <= 0:
+        if d["written_off_at"] or d["remaining"] <= 0 or not (d.get("person") or "").strip():
             continue
-        alacak = d["direction"] == "alacak"
-        route = f"{R_BORCLAR}/kayit/{d['id']}" if alacak else R_BORC_PLANI
         sch = d.get("schedule")
-        if sch:  # ödeme planı: her taksitten 2 gün önce ve o gün (ödenmişse yok)
+        if sch:  # ödeme planı: taksit gününden 1 gün önce ve o gün (ödenmişse yok)
             nx = sch["next"]
             if not nx:
                 continue
-            left = (date.fromisoformat(nx["date"]) - today).days
-            if left not in (0, 2):
-                continue
-            when = "bugün" if left == 0 else "2 gün sonra"
-            amt = money.tl(max(nx["left"], sch["due_now"]), trim=True)
-            key = f"borc:{d['id']}:taksit{nx['no']}:{nx['date']}:{'songun' if left == 0 else '2gun'}"
-            if alacak:
-                out.append(item("borc", key, f"{d['person']}: {nx['no']}. taksit günü {when}",
-                                f"Taksit {amt}. Geldiyse Borç / Alacak'ta işaretle.", route))
-            else:
-                out.append(item("borc", key, f"{d['person']}: {nx['no']}. taksitin günü {when}",
-                                f"Taksit {amt}. Ödediysen Borç planında işaretle.", route))
+            day, amt, unit, no = nx["date"], max(nx["left"], sch["due_now"]), "TRY", nx["no"]
+        elif d["due_date"]:
+            day, amt, unit, no = d["due_date"], d["remaining"], d["asset"], None
+        else:
             continue
-        if not d["due_date"]:
+        left = (date.fromisoformat(day) - today).days
+        if left not in BORC_DAYS:
             continue
-        left = (date.fromisoformat(d["due_date"]) - today).days
-        if left not in (0, 2):
-            continue
-        amt = money.tl(d["remaining"], trim=True) if d["asset"] == "TRY" else f"{d['remaining']:g} {d['asset']}"
-        when = "bugün" if left == 0 else "2 gün sonra"
-        key = f"borc:{d['id']}:{d['due_date']}:{'songun' if left == 0 else '2gun'}"
-        if alacak:
-            what = "ödeme günü" if d.get("strict") else "söz verdiği gün"
-            out.append(item("borc", key, f"{d['person']}: {what} {when}",
-                            f"Kalan {amt}. Geldiyse Borç / Alacak'ta işaretle.", route))
-            continue
-        what = "ödeme günü" if d.get("strict") else "söz verdiğin ödeme günü"  # kesin tarih: vade
-        out.append(item("borc", key, f"{d['person']}: {what} {when}",
-                        f"Kalan {amt}. Ödediysen Borç planında işaretle.", route))
+        person = " ".join(d["person"].split())
+        groups.setdefault((d["direction"], person.casefold(), day, left), []).append(
+            {"person": person, "amount": amt, "unit": unit, "no": no, "strict": bool(d.get("strict"))})
+    out = []
+    for (direction, key, day, left), xs in groups.items():
+        alacak = direction == "alacak"
+        person = xs[0]["person"]
+        name = _ad(person, 16)
+        when = "bugün" if left == 0 else "yarın"
+        tot = _tutarlar([(x["amount"], x["unit"]) for x in xs])
+        sig = hashlib.sha256(key.encode()).hexdigest()[:10]
+        mark = "Geldiyse" if alacak else "Ödediysen"
+        if len(xs) > 1:
+            title = f"{name} · {len(xs)} {'alacak' if alacak else 'borç'} · {tot} {when}"
+            body = f"Toplam {tot}. {'Gelenleri' if alacak else 'Ödediklerini'} Borç / Alacak'ta işaretle."
+        elif xs[0]["no"]:
+            title = f"{name} · {xs[0]['no']}. taksit {when}"
+            body = f"Taksit {tot}. {mark} Borç / Alacak'ta işaretle."
+        else:
+            title = f"{name} · {tot} {when}"
+            what = "Ödeme günü" if xs[0]["strict"] else ("Söz verdiği gün" if alacak else "Söz verdiğin gün")
+            body = f"{what}. {mark} Borç / Alacak'ta işaretle."
+        out.append(item("borc", f"borc:kisi:{direction}:{sig}:{day}:{BORC_DAYS[left]}", title, body,
+                        f"{R_BORCLAR}/kisi/{quote(person, safe='')}", obj=f"kisi:{direction}:{sig}"))
     return out
 
 
@@ -805,13 +954,14 @@ def _butce(today: date) -> list[dict]:
         for th in (100, 80):
             if b["pct"] >= th:
                 slug = finance._slug(b["category"])  # Özet uyarısının anahtarıyla aynı
-                title = f"{b['category']} bütçesi aşıldı" if th == 100 else f"{b['category']} bütçesinin %{b['pct']:.0f} kadarı harcandı"
+                cat = _ad(b["category"], 22)
+                title = f"{cat}: bütçe aşıldı" if th == 100 else f"{cat}: bütçenin %{b['pct']:.0f} kadarı doldu"
                 body = f"{money.tl(b['spent'], trim=True)} / {money.tl(b['limit'], trim=True)}"
                 who = [f"{'Sen' if u and p['user_id'] == u['id'] else p['name']} {money.tl(p['amount'], trim=True)}"
                        for p in split.get(b["category"], [])]
                 if len(who) > 1 or (who and split[b["category"]][0]["user_id"] != (u or {}).get("id")):
                     body += " · " + ", ".join(who[:3])
-                out.append(item("butce", f"butce:{month}:{slug}:{th}", title, body, R_BUTCELER))
+                out.append(item("butce", f"butce:{month}:{slug}:{th}", title, body, R_BUTCELER, obj=f"butce:{slug}"))
                 break
     return out
 
@@ -838,9 +988,9 @@ def _gelir(today: date) -> list[dict]:
         lo = exp - timedelta(days=7)
         if any(lo <= d <= today for d in mine) or not any(exp - timedelta(days=70) <= d < lo for d in mine):
             continue
-        out.append(item("gelir", f"gelir:{r['id']}:{m}", f"{r['description']} yatmadı görünüyor",
-                        f"Beklenen gün {exp.day} {AY[exp.month - 1]}'di ({money.tl(r['amount'], trim=True)}). Yattıysa "
-                        "hesap dökümünü yükle; yatmadıysa işverenine sor.", R_ISLEMLER))
+        out.append(item("gelir", f"gelir:{r['id']}:{m}", f"{_ad(r['description'], 22)} yatmadı mı?",
+                        f"Beklenen gün {exp.day} {AY[exp.month - 1]} · {money.tl(r['amount'], trim=True)}. Yattıysa "
+                        "dökümü yükle.", R_ISLEMLER, obj=f"gelir:{r['id']}"))
     return out
 
 
@@ -887,12 +1037,10 @@ def _zekat(today: date) -> list[dict]:
     if not prefs.enabled("zekat") or (r and "zekat" in r["hidden_pages"]):
         return []
     out = []
-    for msg in zakat.reminders(today) + zakat.holy_reminders(today):
-        m = re.search(r"<b>(.*?)</b>", msg)
-        title = _clean(m[1]) if m else "Zekât"
-        body = _clean(msg.replace(m[0], "", 1) if m else msg).lstrip("🌙🐑 ·").strip() or title
-        out.append(item("zekat", f"zekat:{today.isoformat()}:{hashlib.sha256(msg.encode()).hexdigest()[:12]}",
-                        title, body, R_ZEKAT))
+    # kimlik Telegram metninin özeti (eskisiyle aynı: aynı gün ikinci kez gitmez); bildirim metni kısa sürümü
+    for x in zakat.reminder_items(today) + zakat.holy_items(today):
+        out.append(item("zekat", f"zekat:{today.isoformat()}:{hashlib.sha256(x['html'].encode()).hexdigest()[:12]}",
+                        x["title"], x["body"], R_ZEKAT))
     return out
 
 
@@ -921,7 +1069,7 @@ def _fiyat(today: date) -> list[dict]:
 
     one = rises[0].get("product_key") if len(rises) == 1 else None  # tek ürün: doğrudan o ürünün sayfası
     route = f"{R_FIYATLAR}/{quote(one, safe='')}" if one else R_FIYATLAR
-    return [item("fiyat", f"fiyat:{sig}", "Fiyat artışı", price_alerts.digest(rises), route)]
+    return [item("fiyat", f"fiyat:{sig}", "Fiyat artışı", price_alerts.digest(rises, shown=1), route)]
 
 
 def _hesaplar_hidden() -> bool:
@@ -962,10 +1110,9 @@ def _kumbara(today: date) -> list[dict]:
         if (money.le(left, 0) if unit == "TRY" else left <= 1e-9):  # altın/döviz miktarı yuvarlanmaz
             continue
         out.append(item("kumbara", f"kumbara:{j['id']}:{dl.isoformat()}:{KUMBARA_DAYS}gun",
-                        f"{j['name']}: hedef tarihine {KUMBARA_DAYS} gün kaldı",
-                        f"Hedef {_amount(j['goal'], unit)}, biriken {_amount(j['balance'], unit)}; {_amount(left, unit)} "
-                        f"eksik. Son gün {dl.day} {AY[dl.month - 1]}. Ekleyebilir ya da tarihi değiştirebilirsin.",
-                        f"{R_KUMBARA}/{j['id']}"))
+                        f"{_ad(j['name'], 22)}: hedefe {KUMBARA_DAYS} gün",
+                        f"Hedefe {_amount(left, unit)} tamamlanacak · son gün {dl.day} {AY[dl.month - 1]}.",
+                        f"{R_KUMBARA}/{j['id']}", obj=f"kumbara:{j['id']}"))
     return out
 
 
@@ -1012,9 +1159,11 @@ def _kumbara_pay(u: dict, today: date) -> list[dict]:
                 parts.append(f"{ay} {_amount(me['due_total'], unit)} tamamlanacak.")
             else:
                 parts.append(f"Önceki aylardan {_amount(me['due_total'], unit)} tamamlanacak.")
-        body = " ".join(parts) + " Attıysan kumbaraya işle."
-        out.append(item("kumbara_pay", f"kumbara_pay:{j['id']}:{st['month']}", f"{j['name']}: bu ayki payın", body,
-                        f"{R_KUMBARA}/{j['id']}"))
+        body = " ".join(parts)
+        # sığdığı kadar: "Attıysan kumbaraya işle." / "Attıysan işle." (rakamlar kesilmesin)
+        body += next((x for x in (" Attıysan kumbaraya işle.", " Attıysan işle.") if len(body + x) <= BODY_MAX), "")
+        out.append(item("kumbara_pay", f"kumbara_pay:{j['id']}:{st['month']}", f"{_ad(j['name'], 24)}: bu ayki payın",
+                        body, f"{R_KUMBARA}/{j['id']}", obj=f"kumbara:{j['id']}"))
     return out
 
 
@@ -1034,9 +1183,9 @@ def _kart_suresi(today: date) -> list[dict]:
         if left not in KART_DAYS or not money.gt(w.get("current") or 0, 0):
             continue
         out.append(item("kart_suresi", f"kart_suresi:{w['id']}:{exp.isoformat()}:{left}gun",
-                        f"{w['name']}: son kullanmaya {left} gün kaldı",
-                        f"Kartta {money.tl(w['current'], trim=True)} var; {exp.day} {AY[exp.month - 1]} sonrası "
-                        "kullanılamayabilir. Harcamayı planla.", R_YEMEK))
+                        f"{_ad(w['name'], 22)}: {left} gün kaldı",
+                        f"Son kullanma {exp.day} {AY[exp.month - 1]}. Kartta {money.tl(w['current'], trim=True)} var; "
+                        "harcamayı planla.", R_YEMEK, obj=f"kart_suresi:{w['id']}"))
     return out
 
 
@@ -1069,10 +1218,10 @@ def _garanti(u: dict, today: date) -> list[dict]:
             continue
         end = date.fromisoformat(w["ends_at"])
         left = w["days_left"]
-        when = "bugün bitiyor" if left == 0 else f"bitmesine {left} gün kaldı"
-        out.append(item("garanti", f"garanti:{w['id']}:{end.isoformat()}:{stage}", f"{w['name']}: garantinin {when}",
-                        f"Garanti {end.day} {AY[end.month - 1]} {end.year} tarihinde bitiyor. Arızası varsa şimdi servise "
-                        "götür; fatura ve garanti belgesi Garantiler'de.", f"{R_GARANTI}/{w['id']}"))
+        when = "bugün bitiyor" if left == 0 else f"{left} gün kaldı"
+        out.append(item("garanti", f"garanti:{w['id']}:{end.isoformat()}:{stage}", f"{_ad(w['name'], 17)} · garanti {when}",
+                        f"Bitiş {end.day} {AY[end.month - 1]} {end.year}. Arıza varsa servise götür; belgeler "
+                        "Garantiler'de.", f"{R_GARANTI}/{w['id']}", obj=f"garanti:{w['id']}"))
     return out
 
 def _abonelik(u: dict, today: date) -> list[dict]:
@@ -1180,17 +1329,20 @@ def statement_items(today: date) -> list[dict]:
                 continue
             seen.add(k)
             if (k.startswith("faiz:") or k.startswith("vade_farki:")) and not book.hide_fees():
-                out.append(item("faiz", k, i["title"], i.get("detail") or "", R_FAIZ))
+                out.append(item("faiz", k, *faiz_text(i), R_FAIZ, obj=k.rsplit(":", 1)[0]))
             elif k.split(":")[0] in ("iptal_cekim", "paket", "dup"):
                 tg = i.get("target") or {}  # mağaza aboneliği: ayrıntısına
                 rt = store_subs.route(tg["id"]) if tg.get("screen") == "abonelik" and tg.get("id") else R_TASARRUF
-                out.append(item("abonelik", k, i["title"], i.get("detail") or "", rt))
+                out.append(item("abonelik", k, *abonelik_text(i), rt))
     if not book.hide_fees():  # ekstrede taksitler erken kapandı (app/early_close.py): kart ve son ekstre başına bir kez
         for c in finance.early_close_cards():
             d = c.get("detected")
             if d:
+                saved = d.get("saved")
                 out.append(item("faiz", f"erken_kapama:{c['card_no'][-4:]}:{c.get('period_end') or ''}",
-                                f"{c['card']}: taksitler erken kapandı", d["text"], R_FAIZ))
+                                "Taksitler erken kapandı",
+                                f"{_ad(c['card'], 24)}" + (f" · {money.tl(saved, trim=True)} vade farkından kurtuldun."
+                                                           if saved and money.gt(saved, 0) else "."), R_FAIZ))
     recent = (today - timedelta(days=45)).isoformat()
     for s in finance.subscriptions():
         prev = s.get("prev_monthly")
@@ -1199,12 +1351,37 @@ def statement_items(today: date) -> list[dict]:
             continue
         if s["status"] == "aktif" and prev and s["last_seen"] >= recent and money.gt(s["monthly"], prev * 1.05):
             slug = finance._slug(s["merchant"])
-            out.append(item("abonelik", f"abonelik:zam:{slug}:{s['last_period']}", f"{s['merchant'].title()} zamlandı",
+            out.append(item("abonelik", f"abonelik:zam:{slug}:{s['last_period']}", f"{_ad(s['merchant'].title(), 28)} zamlandı",
                             f"{money.tl(prev, trim=True)} → {money.tl(s['monthly'], trim=True)}. Kullanmıyorsan "
-                            "Tasarruf'tan iptal edildi diye işaretle.", R_TASARRUF))
+                            "Tasarruf'ta iptal et.", R_TASARRUF, obj=f"abonelik:{slug}"))
     if not (book.active() and "tasarruf" in book.active()["hidden_pages"]):
         out += store_subs.price_up_items(today)  # mağaza aboneliğinde zam (adsız aday dahil)
     return out
+
+
+FAIZ_TITLE = re.compile(r"^Faiz alarmı: (.+?) …(\S{4}) bu dönem (.+?) faiz ve vergi")
+VADE_TITLE = re.compile(r"sana (.+?) daha vade farkı")
+
+
+def faiz_text(i: dict) -> tuple[str, str]:
+    """Faiz / vade farkı uyarısının (finance.insights) bildirim metni: kart ve tutar; "Neden / Önlem" ekranda
+    (Faiz ve ücretler)."""
+    m = FAIZ_TITLE.match(i.get("title") or "")
+    if m:
+        return f"Faiz alarmı · {_ad(m[1], 18)} …{m[2]}", f"Bu dönem {m[3]} faiz ve vergi. Nedeni Faiz ve ücretler'de."
+    m = VADE_TITLE.search(i.get("title") or "")
+    if m:
+        return f"Taksit vade farkı: {m[1]}", "Önümüzdeki aylarda ödenecek. Ayrıntı Faiz ve ücretler'de."
+    return i.get("title") or "Faiz ve ücretler", "Ayrıntı Faiz ve ücretler'de."
+
+
+def abonelik_text(i: dict) -> tuple[str, str]:
+    """Abonelik uyarısının (iptal sonrası çekim, paket düşmemiş, benzer çekim) bildirim metni: adı kısalır, ilk cümle."""
+    t = i.get("title") or ""
+    for a, b in ((" iptal edilmişti ama yine çekildi", ": iptalden sonra çekim"), (" paketi düşmemiş görünüyor", ": paket düşmemiş")):
+        if t.endswith(a):
+            t = _ad(t[:-len(a)], TITLE_MAX - len(b)) + b
+    return t, _cumle(i.get("detail") or "")
 
 
 _pending: dict[str, threading.Timer] = {}
@@ -1396,15 +1573,60 @@ def after_trip_complete(trip: dict) -> list[dict]:
 
 # ---------------------------------------------------------------- test bildirimi
 
-def send_test(uid: int) -> dict:
-    """Sessiz saat ve tercihlerden bağımsız, hemen. Dakikada bir (çağıran denetler: test_allowed)."""
-    system.put(f"push:test:{uid}", str(time.time()))
+# Tür başına örnek (Ayarlar › Bildirimler › Türleri dene; docs/bildirimler.md tablosu). Metinler uydurma; yol gerçek.
+SAMPLES: dict[str, tuple[str, str, str]] = {
+    "odeme": ("Son ödeme yarın · ••1234", "Örnek Banka · ₺4.250 · 5 Aralık Cuma. Ödediysen işaretle.", R_ODEMELER),
+    "fatura": ("Örnek Elektrik faturası · 2 gün", "Son ödeme 7 Aralık · ₺640", R_ODEMELER),
+    "ekstre": ("Kasım ekstreni yükle · ••1234", "Örnek Banka · kesim 24 Kasım. Yükle, son ödeme günün güncellensin.",
+               R_EKSTRELER),
+    "dokum": ("Örnek Banka · Kasım dökümü", "Dönem kapandı. Dökümü yükle; maaş ve havaleler eşleşsin.", R_EKSTRELER),
+    "butce": ("Market: bütçenin %85 kadarı doldu", "₺8.500 / ₺10.000", R_BUTCELER),
+    "faiz": ("Faiz alarmı · Örnek Banka …1234", "Bu dönem ₺279,63 faiz ve vergi. Nedeni Faiz ve ücretler'de.", R_FAIZ),
+    "gelir": ("Maaş yatmadı mı?", "Beklenen gün 15 Kasım · ₺40.000. Yattıysa dökümü yükle.", R_ISLEMLER),
+    "abonelik": ("Örnek Müzik 3 gün sonra yenileniyor", "₺59,99 · 8 Aralık · App Store. Kullanmıyorsan önceden iptal "
+                 "edebilirsin.", R_TASARRUF),
+    "ozet": ("Kasım dönemi bitti", "Gelir ₺52.000 · Gider ₺41.300 · Net ₺10.700", R_OZET),
+    "belge": ("Postayla gelen belge işlendi", "Örnek Banka ekstresi kaydedildi", R_POSTA),
+    "ortak": ("Ortak defterde yeni kayıt", "Dünden beri 3 yeni kayıt eklendi", R_ISLEMLER),
+    "zekat": ("Zekât yılı 7 gün sonra doluyor", "Ayşe: güncel hesapla ₺3.150 ödenecek.", R_ZEKAT),
+    "aile": ("Ayşe ortak deftere katıldı", "Görür ve ekler yetkisiyle. Yetkisini Üyeler'de değiştirebilirsin.", R_ORTAK),
+    "geri_bildirim": ("Geri bildirim: ornek", "Ekstre yüklerken uygulama kapandı", R_DESTEK_ADMIN),
+    "destek": ("Destek yanıtladı", "Yanıtı görmek için dokun.", R_DESTEK),
+    "fiyat": ("Fiyat artışı", "Sık aldığın 2 üründe fiyat arttı: Süt 1 L Örnek Market ₺36 → ₺42 ve 1 ürün daha",
+              R_FIYATLAR),
+    "sistem": ("Fiyat toplama: gecikme", "Örnek bölge verisi bugün gelmedi.", R_SISTEM),
+    "liste": ("Alışveriş listesi", "Ayşe listeye 3 ürün ekledi: süt, yumurta, elma", R_ALISVERIS),
+    "borc": ("Ahmet · 7 borç · ₺14.000 yarın", "Toplam ₺14.000. Ödediklerini Borç / Alacak'ta işaretle.",
+             f"{R_BORCLAR}/kisi/Ahmet"),
+    "duyuru": ("Yeni sürüm hazır", "Bildirimler artık daha kısa.", R_OZET),
+    "kumbara": ("Tatil: hedefe 7 gün", "Hedefe ₺2.500 tamamlanacak · son gün 22 Aralık.", R_KUMBARA),
+    "kumbara_pay": ("Ev kumbarası: bu ayki payın", "Bu ay payın ₺1.000. Attıysan işle.", R_KUMBARA),
+    "kart_suresi": ("Örnek Yemek Kartı: 7 gün kaldı", "Son kullanma 22 Kasım. Kartta ₺320 var; harcamayı planla.",
+                    R_YEMEK),
+    "sadaka": ("Hayırlı Cumalar", "Bu hafta sadaka verdiysen not edelim mi?", R_SADAKA),
+    "garanti": ("Bulaşık makinesi · garanti 30 gün kaldı", "Bitiş 15 Aralık 2026. Arıza varsa servise götür; belgeler "
+                "Garantiler'de.", R_GARANTI),
+    "duzeltme": ("Sorun düzeltildi", "Ekstre okuma hatasını düzelttik; tekrar deneyebilirsin.", R_EKSTRELER),
+}
+
+
+def send_test(uid: int, kind: str | None = None) -> dict:
+    """Sessiz saat ve tercihlerden bağımsız, hemen. Dakikada bir (çağıran denetler: test_allowed). kind: o türün örneği
+    (SAMPLES; gerçek tür, kanal ve yol: dokununca o ekran açılır), yoksa "Bildirimler açık"."""
+    system.put(test_key(uid, kind), str(time.time()))
+    if kind:
+        title, body, route = SAMPLES[kind]
+        return deliver(uid, item(kind, f"test:{kind}:{int(time.time())}", title, body, route))
     return deliver(uid, {"kind": "test", "id": f"test:{int(time.time())}", "title": "Bildirimler açık",
                          "body": "HesapKitap hatırlatmaları bu telefona gelecek.", "route": "#/diger/ayarlar"})
 
 
-def test_allowed(uid: int) -> bool:
-    v = system.get(f"push:test:{uid}")
+def test_key(uid: int, kind: str | None = None) -> str:
+    return f"push:test:{uid}" + (f":{kind}" if kind else "")
+
+
+def test_allowed(uid: int, kind: str | None = None) -> bool:
+    v = system.get(test_key(uid, kind))
     try:
         return not v or time.time() - float(v) >= TEST_EVERY
     except ValueError:

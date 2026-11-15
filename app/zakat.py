@@ -455,20 +455,34 @@ def holy_insights(today: date | None = None) -> list[dict]:
     return out
 
 
-def holy_reminders(today: date) -> list[str]:
-    """Telegram: Ramazan'a 30 ve 7 gün; bayrama 10 gün kala fitre; Kurban'a 45 ve 14 gün."""
+def holy_items(today: date) -> list[dict]:
+    """Ramazan'a 30 ve 7 gün; bayrama 10 gün kala fitre; Kurban'a 45 ve 14 gün. {html (Telegram), title, body (push,
+    kısa)}."""
     h = holy(today)
     d = {x["key"]: x for x in h["days"]}
     f = h["fitre"]
     fitre = f"{f['people']} kişi × {_tl0(f['amount'])} = <b>{_tl0(f['total'])}</b>" if f["amount"] else "tutarı Zekât → Sadaka'da gir"
-    msgs = []
-    if d["ramazan"]["days_left"] in (30, 7):
-        msgs.append(f"🌙 <b>Ramazan'a {d['ramazan']['days_left']} gün</b> (≈ {d['ramazan']['date'][8:10]}.{d['ramazan']['date'][5:7]}) · fitre: {fitre}")
+    kisa = f"{f['people']} kişi × {_tl0(f['amount'])} = {_tl0(f['total'])}" if f["amount"] else "tutarı Sadaka'da gir"
+    out = []
+    r = d["ramazan"]
+    if r["days_left"] in (30, 7):
+        dm = f"{r['date'][8:10]}.{r['date'][5:7]}"
+        out.append({"html": f"🌙 <b>Ramazan'a {r['days_left']} gün</b> (≈ {dm}) · fitre: {fitre}",
+                    "title": f"Ramazan'a {r['days_left']} gün", "body": f"≈ {dm} · fitre: {kisa}"})
     if h["in_ramadan"] and d["ramazan_bayrami"]["days_left"] == 10:
-        msgs.append(f"🌙 <b>Fitreyi unutma</b> · bayrama 10 gün · {fitre}")
-    if d["kurban"]["days_left"] in (45, 14):
-        msgs.append(f"🐑 <b>Kurban Bayramı'na {d['kurban']['days_left']} gün</b> (≈ {d['kurban']['date'][8:10]}.{d['kurban']['date'][5:7]})")
-    return msgs
+        out.append({"html": f"🌙 <b>Fitreyi unutma</b> · bayrama 10 gün · {fitre}",
+                    "title": "Fitreyi unutma", "body": f"Bayrama 10 gün · {kisa}"})
+    k = d["kurban"]
+    if k["days_left"] in (45, 14):
+        dm = f"{k['date'][8:10]}.{k['date'][5:7]}"
+        out.append({"html": f"🐑 <b>Kurban Bayramı'na {k['days_left']} gün</b> (≈ {dm})",
+                    "title": f"Kurban Bayramı'na {k['days_left']} gün", "body": f"≈ {dm}"})
+    return out
+
+
+def holy_reminders(today: date) -> list[str]:
+    """Telegram: Ramazan'a 30 ve 7 gün; bayrama 10 gün kala fitre; Kurban'a 45 ve 14 gün."""
+    return [x["html"] for x in holy_items(today)]
 
 
 # ---------------------------------------------------------------- hesap
@@ -1261,35 +1275,45 @@ def wipe() -> dict:
     return n
 
 
-def reminders(today: date) -> list[str]:
-    """Zekât yılı dolmasına 7 gün kala ve dolduğu gün (Telegram)."""
-    msgs = []
+def reminder_items(today: date) -> list[dict]:
+    """Zekât yılı dolmasına 7 gün kala ve dolduğu gün; ek kontrol günü. {html (Telegram), title, body (push, kısa)}."""
+    out = []
     with db.connect() as c:  # yıl başlangıcı girilmemişse fiyat bile çekme
         _init(c)
         if not c.execute("SELECT 1 FROM zakat_people WHERE hawl_start IS NOT NULL OR check_date IS NOT NULL").fetchone():
-            return msgs
+            return out
     try:
         data = compute(today)
     except Exception:  # noqa: BLE001 - fiyat/hesap hatası diğer hatırlatmaları engellemesin
         log.exception("zekât hesabı")
-        return msgs
+        return out
     from app.money import tl
 
     for p in data["people"]:
+        name = p["name"] if len(p["name"]) <= 16 else p["name"][:15] + "…"
         ck = p.get("check")
         if ck and ck["days_left"] in (7, 0):
             when = "BUGÜN" if ck["days_left"] == 0 else "7 gün sonra"
-            msgs.append(f"🌙 <b>Zekât kontrolü</b> · {p['name']}: {date.fromisoformat(ck['date']):%d.%m.%Y} ({ck['hijri']}) — {when}\n"
-                        f"Bugünkü toplamla zekât {tl(ck['zakat_now'])}, son bir yılda ödenen {tl(ck['paid'])} → "
-                        f"fark: <b>{tl(ck['difference'])}</b>")
+            out.append({"html": f"🌙 <b>Zekât kontrolü</b> · {p['name']}: {date.fromisoformat(ck['date']):%d.%m.%Y} ({ck['hijri']}) — {when}\n"
+                                f"Bugünkü toplamla zekât {tl(ck['zakat_now'])}, son bir yılda ödenen {tl(ck['paid'])} → "
+                                f"fark: <b>{tl(ck['difference'])}</b>",
+                        "title": "Zekât kontrolü bugün" if ck["days_left"] == 0 else "Zekât kontrolü 7 gün sonra",
+                        "body": f"{name}: bugünkü toplamla fark {tl(ck['difference'])}."})
         h = p["hawl"]
         if not h or h["days_left"] not in (7, 0) or h["remaining"] <= 0:
             continue
         when = "BUGÜN doluyor" if h["days_left"] == 0 else "7 gün kaldı"
         amount = tl(h["remaining"])
-        msgs.append(f"🌙 <b>Zekât</b> · {p['name']}: yıl {date.fromisoformat(h['due']):%d.%m.%Y} ({h['due_hijri']}) — {when}\n"
-                    f"Güncel hesap: <b>{amount}</b> ödenecek")
-    return msgs
+        out.append({"html": f"🌙 <b>Zekât</b> · {p['name']}: yıl {date.fromisoformat(h['due']):%d.%m.%Y} ({h['due_hijri']}) — {when}\n"
+                            f"Güncel hesap: <b>{amount}</b> ödenecek",
+                    "title": "Zekât yılı bugün doluyor" if h["days_left"] == 0 else "Zekât yılı 7 gün sonra doluyor",
+                    "body": f"{name}: güncel hesapla {amount} ödenecek."})
+    return out
+
+
+def reminders(today: date) -> list[str]:
+    """Zekât yılı dolmasına 7 gün kala ve dolduğu gün (Telegram)."""
+    return [x["html"] for x in reminder_items(today)]
 
 
 def upcoming_checks(today: date | None = None, window: int = 7) -> list[dict]:

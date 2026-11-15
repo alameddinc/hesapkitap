@@ -132,11 +132,11 @@ def test_plan_added_later_feeds_debt_plan_and_push(client):
     after = dp.build(monthly=5000, today=TODAY)
     assert [d["kind"] for d in after["debts"] if d["id"] == did] == ["fixed"]
     assert after["totals"]["fixed_this_month"] == 2000
-    assert any("1. taksitin günü 2 gün sonra" in x["title"] for x in push._borc(TODAY))
+    assert any("1. taksit yarın" in x["title"] for x in push._borc(date(2026, 11, 11)))
     assert any(p["id"] == did and p["due_date"] == "2026-11-12" for p in finance.payables(TODAY) if p["type"] == "debt")
     client.delete(f"/api/debts/{did}/schedule")
     assert [d["kind"] for d in dp.build(monthly=5000, today=TODAY)["debts"] if d["id"] == did] == ["person"]
-    assert not any("taksit" in x["title"] for x in push._borc(TODAY))
+    assert not any("taksit" in x["title"] for x in push._borc(date(2026, 11, 11)))
 
 
 def test_texts_never_suggest_restructuring(client):

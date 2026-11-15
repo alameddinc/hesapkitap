@@ -136,8 +136,8 @@ def test_kumbara_push_seven_days_before_when_behind(client, tmpdb):
     assert len(got) == 1
     it = got[0]
     assert it["kind"] == "kumbara" and it["route"] == f"#/diger/kumbara/{jid}"
-    assert it["title"] == "Örnek tatil: hedef tarihine 7 gün kaldı"
-    assert "Hedef ₺5.000" in it["body"] and "biriken ₺1.000" in it["body"] and "₺4.000 eksik" in it["body"]
+    assert it["title"] == "Örnek tatil: hedefe 7 gün"
+    assert it["body"].startswith("Hedefe ₺4.000 tamamlanacak · son gün ")  # dil nötr ("eksik" değil)
     assert it["id"] == f"kumbara:{jid}:{(TODAY + timedelta(days=7)).isoformat()}:7gun"
     # başka gün yok (tek hatırlatma); hedefe ulaşan, hedefsiz, tarihsiz ve kapalı kumbara yok
     assert push._kumbara(TODAY - timedelta(days=1)) == [] and push._kumbara(TODAY + timedelta(days=1)) == []
@@ -187,7 +187,7 @@ def test_card_expiry_push_30_and_7_days(client, tmpdb):
     assert set(got) == {f"kart_suresi:{w30}:{e30}:30gun", f"kart_suresi:{w7}:{e7}:7gun"}
     it = got[f"kart_suresi:{w7}:{e7}:7gun"]
     assert it["kind"] == "kart_suresi" and it["route"] == "#/diger/yemek-kartlari"
-    assert it["title"] == "Örnek yemek kartı: son kullanmaya 7 gün kaldı" and "₺750" in it["body"]
+    assert it["title"] == "Örnek yemek kartı: 7 gün kaldı" and "₺750" in it["body"] and "Son kullanma" in it["body"]
 
 
 def test_new_types_in_prefs_labels(owner):  # noqa: F811

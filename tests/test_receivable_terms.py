@@ -73,22 +73,21 @@ def test_receivable_with_installments_tracked_and_reminded(client):
     assert d["creditor_type"] == "kisi" and s["creditor_label"] == "Kişi"  # varsayılan kişi
     assert d["plan_interest"] is None and s["interest"] is None  # alacağa faiz sorulmaz, gönderilse de yazılmaz
     assert s["next"]["no"] == 1 and s["next"]["date"] == "2026-11-12" and s["count"] == 3
-    # hatırlatma: 2 gün kala ve o gün, nötr metin, dokununca Borç / Alacak'ta o kayıt
-    items = [x for x in push._borc(TODAY) if f"borc:{did}:" in x["id"]]
+    # hatırlatma: 1 gün kala ve o gün, nötr metin, dokununca Borç / Alacak'ta o kişi
+    ahmet = "#/diger/borclar/kisi/Ahmet"
+    items = [x for x in push._borc(date(2026, 11, 11)) if x["route"] == ahmet]
     assert len(items) == 1
-    assert items[0]["title"] == "Ahmet: 1. taksit günü 2 gün sonra"
+    assert items[0]["title"] == "Ahmet · 1. taksit yarın"
     assert items[0]["body"] == "Taksit ₺1.000. Geldiyse Borç / Alacak'ta işaretle."
-    assert items[0]["route"] == f"#/diger/borclar/kayit/{did}" and items[0]["kind"] == "borc"
-    assert [x["title"] for x in push._borc(date(2026, 11, 12)) if f"borc:{did}:" in x["id"]] == \
-        ["Ahmet: 1. taksit günü bugün"]
-    assert not [x for x in push._borc(date(2026, 11, 11)) if f"borc:{did}:" in x["id"]]
+    assert items[0]["kind"] == "borc" and items[0]["id"].startswith("borc:kisi:alacak:")
+    assert [x["title"] for x in push._borc(date(2026, 11, 12)) if x["route"] == ahmet] == ["Ahmet · 1. taksit bugün"]
+    assert not [x for x in push._borc(TODAY) if x["route"] == ahmet]
     # "Aldım" (tutar boş): sıradaki taksit; sonra 2. taksit hatırlatılır
     r = client.post(f"/api/debts/{did}/pay", json={"paid_at": "2026-11-12"})
     assert r.status_code == 200, r.text
     d = _debt(client, did)
     assert d["paid_amount"] == 1000.0 and d["schedule"]["paid_count"] == 1 and d["schedule"]["next"]["no"] == 2
-    assert [x["title"] for x in push._borc(date(2026, 12, 10)) if f"borc:{did}:" in x["id"]] == \
-        ["Ahmet: 2. taksit günü 2 gün sonra"]
+    assert [x["title"] for x in push._borc(date(2026, 12, 11)) if x["route"] == ahmet] == ["Ahmet · 2. taksit yarın"]
     # erken kapatma alanları alacakta yok
     r = client.post("/api/debts", json={"person": "Y", "direction": "alacak", **PLAN, "plan_interest": "var",
                                         "payoff_amount": 2500})
@@ -101,12 +100,14 @@ def test_receivable_promise_date_reminded_by_existing_rule(client):
     soz = _alacak(client, person="Ayşe", amount=750, due_date="2026-11-12")
     kesin = _alacak(client, person="Örnek Firma", amount=900, due_date="2026-11-12", creditor_type="kurum",
                     due_strict=True)
-    got = {x["id"].split(":")[1]: x for x in push._borc(TODAY) if x["id"].startswith("borc:")}
-    assert got[str(soz)]["title"] == "Ayşe: söz verdiği gün 2 gün sonra"
-    assert got[str(soz)]["body"] == "Kalan ₺750. Geldiyse Borç / Alacak'ta işaretle."
-    assert got[str(kesin)]["title"] == "Örnek Firma: ödeme günü 2 gün sonra"
-    assert got[str(soz)]["route"] == f"#/diger/borclar/kayit/{soz}"
-    assert not [x for x in push._borc(date(2026, 11, 11)) if x["id"].startswith(f"borc:{soz}:")]
+    assert soz and kesin
+    got = {x["title"].split(" · ")[0]: x for x in push._borc(date(2026, 11, 11))}
+    assert got["Ayşe"]["title"] == "Ayşe · ₺750 yarın"
+    assert got["Ayşe"]["body"] == "Söz verdiği gün. Geldiyse Borç / Alacak'ta işaretle."
+    assert got["Örnek Firma"]["title"] == "Örnek Firma · ₺900 yarın"
+    assert got["Örnek Firma"]["body"] == "Ödeme günü. Geldiyse Borç / Alacak'ta işaretle."
+    assert got["Ayşe"]["route"] == "#/diger/borclar/kisi/Ay%C5%9Fe"
+    assert not push._borc(TODAY)
 
 
 def test_debt_plan_and_payables_do_not_take_receivables(client):
@@ -177,7 +178,9 @@ def test_receivable_texts_never_suggest_interest_or_restructuring(client):
     for d in client.get("/api/debts").json():
         for s in _all_strings(d):
             assert not _banned_in(s) and not _restructure_in(s) and "faiz" not in s.lower(), s
-    for x in push._borc(TODAY):
+    got = push._borc(date(2026, 11, 11))
+    assert len(got) == 2
+    for x in got:
         for s in (x["title"], x["body"]):
             assert not _banned_in(s) and not _restructure_in(s) and "faiz" not in s.lower(), s
 

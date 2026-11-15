@@ -336,8 +336,10 @@ def test_push_strict_due_date(client):
 
     _post(client, person="Örnek Mağaza", amount=3000, debt_date="2026-10-01", due_date="2026-11-13",
           creditor_type="magaza")
-    two = push._borc(date(2026, 11, 11))
-    assert len(two) == 1 and two[0]["title"] == "Örnek Mağaza: ödeme günü 2 gün sonra"
+    assert push._borc(date(2026, 11, 11)) == []  # 2 gün kala yok (1 gün kala ve o gün)
+    one = push._borc(date(2026, 11, 12))
+    assert len(one) == 1 and one[0]["title"] == "Örnek Mağaza · ₺3.000 yarın"
+    assert one[0]["body"] == "Ödeme günü. Ödediysen Borç / Alacak'ta işaretle."
 
 
 def test_no_interest_steering_words_in_v4_outputs(client):

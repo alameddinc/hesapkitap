@@ -684,10 +684,11 @@ def reminders(today: date) -> list[dict]:
         if left != REMIND_DAYS:
             continue
         amt = money.tl(i["amount"], trim=True)
+        when = when_text(left).lower()
         out.append(push.item("abonelik", f"abonelik:yenileme:{i['id']}:{i['next_date']}",
-                             f"{when_text(left)} {i['title']} {amt} yenileniyor",
-                             f"{_dm(nd)} · {i['store_label']}. Kullanmıyorsan yenilenmeden önce iptal edebilirsin: "
-                             "Aboneliklerimi yönet.", route(i["id"])))
+                             f"{push._ad(i['title'], push.TITLE_MAX - len(when) - 13)} {when} yenileniyor",
+                             f"{amt} · {_dm(nd)} · {i['store_label']}. Kullanmıyorsan önceden iptal edebilirsin.",
+                             route(i["id"]), obj=f"abonelik:{i['id']}"))
     return out
 
 
@@ -700,9 +701,10 @@ def price_up_items(today: date, recent_days: int = 45) -> list[dict]:
     for i in items(today):
         up = i.get("price_up")
         if i["status"] == "abonelik" and up and i["last_date"] >= recent:
-            out.append(push.item("abonelik", f"abonelik:zam:store:{i['id']}:{i['last_date']}", f"{i['title']} zamlandı",
+            out.append(push.item("abonelik", f"abonelik:zam:store:{i['id']}:{i['last_date']}",
+                                 f"{push._ad(i['title'], 28)} zamlandı",
                                  f"{money.tl(up['from'], trim=True)} → {money.tl(up['to'], trim=True)}. Kullanmıyorsan "
-                                 "iptal edip iptal ettim diye işaretle.", route(i["id"])))
+                                 "iptal edip işaretle.", route(i["id"]), obj=f"abonelik:{i['id']}"))
     return out
 
 

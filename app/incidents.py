@@ -526,8 +526,8 @@ def _send_alert(k: dict, why: str, users: int, count: int) -> None:
     body = f"{k['place']} · son {SPIKE_WINDOW} dk: {users} kişi, {count} kez" + (f" · {sample['ozet']}" if sample.get("ozet") else "")
     pid = f"sorun:{k['id']}:{_utc()[:13]}"
     for a in _admins():
-        try:
-            push.notify(a["id"], [push.item("sistem", pid, title, body, R_SORUNLAR)])
+        try:  # bildirimde başlık kısa (neden), tür adı gövdede; Telegram'da tam metin
+            push.notify(a["id"], [push.item("sistem", pid, why, f"{label} · {body}", R_SORUNLAR)])
         except Exception:  # noqa: BLE001
             log.exception("sorun uyarısı push")
     try:
@@ -658,8 +658,9 @@ def fix_text(code: str, custom: str | None = None, update: bool = False) -> str 
     if not notice and not custom:
         return None
     head = (custom or notice).strip().rstrip(".")
-    out = f"{head} düzelttik; tekrar deneyebilirsin." if not custom else f"{head}."
-    return out + (" Önce uygulamayı güncelle." if update else "")
+    if not custom:  # bildirim gövdesi kısa kalsın (≤ 90): güncelleme notu cümlenin içinde
+        return f"{head} düzelttik; " + ("uygulamayı güncelleyip tekrar dene." if update else "tekrar deneyebilirsin.")
+    return f"{head}." + (" Önce uygulamayı güncelle." if update else "")
 
 
 def _turkce(text: str) -> bool:

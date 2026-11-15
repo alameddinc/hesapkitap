@@ -273,8 +273,12 @@ def purge(u: dict, now: datetime | None = None) -> None:
     rc_delete_customer(u["id"])
     _apple_revoke(u["id"])
     system.delete_user(u["id"])
-    for k in ("consent", "pw_unset", "push:daily", "push:test"):  # KVKK: onay kaydı (IP içerir) da gider
+    for k in ("consent", "pw_unset", "push:daily", "push:test", "push:todos"):  # KVKK: onay kaydı (IP içerir) da gider
         system.put(f"{k}:{u['id']}", None)
+    from app import push
+
+    for kind in push.SAMPLES:  # tür örneği deneme zamanları (Ayarlar › Bildirimler › Türleri dene)
+        system.put(push.test_key(u["id"], kind), None)
     _record(u, "self", now, None, purged=True)
     log.info("hesap kalıcı olarak silindi: %s", u["id"])
 
