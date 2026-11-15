@@ -29,11 +29,18 @@ def _db_stamp() -> tuple:
     return db.stamp()
 
 
-def _memo(fn):
+def _memo(fn=None, *, zakat: bool = True):
+    """zakat=False: sonuç zekât ayrımına (zakat_split, ?zakat=1) bağlı değil; anahtarda yer almaz. Özet zakat=1 ile,
+    Net durum / Ödemeler / Borç planı zakat'sız ister: plan, ödemeler ve satırlar iki kez hesaplanmasın (Özet açılışı).
+    Yalnız kategori kırılımına (report_category / _group "category") hiç dokunmayan hesaplarda kullanılır
+    (tests/test_ozet_hiz.py iki kipte aynı sonucu dener)."""
+    if fn is None:
+        return lambda f: _memo(f, zakat=zakat)
+
     def wrap(*args, **kwargs):
         u = db.current_user()  # ortak defter üyesi süzülmüş veri görür: sonuç sahibininkiyle karışmasın
         viewer = u["id"] if u and u.get("member_of") else None
-        key = (fn.__name__, _db_stamp(), viewer, date.today(), _ZAKAT_SPLIT.get(), repr(args),
+        key = (fn.__name__, _db_stamp(), viewer, date.today(), _ZAKAT_SPLIT.get() if zakat else None, repr(args),
                repr(sorted(kwargs.items())))
         # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada _CACHE.clear() yapsa da KeyError olmaz.
         hit = _CACHE.get(key, _MISS)
@@ -332,10 +339,10 @@ def _estimate_totals(rows: list[dict]) -> dict:
             "estimated_income": _round(sum(r["amount"] for r in rows if r["kind"] == INCOME))}
 
 
-@_memo
+@_memo(zakat=False)
 def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
     states, aliases = db.subscription_states(), db.merchant_aliases()
-    card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
+    card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted, period=month)]
     entries = db.list_entries(month)
     rows = []
     for e in entries:
@@ -573,7 +580,7 @@ def reference_month(today: date | None = None) -> str:
     return max(periods) if periods else add_months(ym(today or date.today()), -1)
 
 
-@_memo  # her ekran /api/meta'yı çağırıyor: tüm kart işlemleri ve kayıtlar her istekte okunmasın
+@_memo(zakat=False)  # her ekran /api/meta'yı çağırıyor: tüm kart işlemleri ve kayıtlar her istekte okunmasın
 def available_months() -> list[str]:
     ms = {t["period"] for t in db.card_transactions()} | {e["month"] for e in db.list_entries()}
     ms.add(current_period())
@@ -1079,7 +1086,7 @@ def card_projection() -> dict:
     return out
 
 
-@_memo
+@_memo(zakat=False)
 def _next_cut(st: dict) -> tuple[date, date | None]:
     """Son ekstreden sonraki kesim ve son ödeme günü (ekstrede yazmıyorsa bir ay sonrası)."""
     pe = date.fromisoformat(st["period_end"])
@@ -1287,7 +1294,7 @@ def _inst_parts(inst: str | None) -> tuple[int, int] | None:
         return None
 
 
-@_memo
+@_memo(zakat=False)
 def installments_due(month: str, today: date | None = None) -> dict:
     """Dönemin (Özet'te seçili ay) taksitleri: "Bu ay ödenecek taksitler · ₺4.250 · 6 taksit" ve kalan taksit borcu.
 
@@ -1542,9 +1549,21 @@ def _plan_parts(lines: list[dict]) -> dict:
     return parts
 
 
-@_memo  # yalnız defter verisine ve güne bağlı; Planlama, Özet (summary/insights) ve hatırlatmalar aynı sonucu paylaşır
+PLAN_BASE = 6  # bundan kısa plan 6 aylığın ilk ayları (aynı hesap): Özet plan(6), Net durum / Ödemeler plan(3) ister
+
+
 def plan(months: int = 6, today: date | None = None) -> dict:
+    """İleriye dönük aylık plan. Her ay yalnız kendinden öncekilere bağlı (cumulative), dues / projection / recurring
+    aydan bağımsız: kısa plan uzun planın ilk ayları. Tek hesap paylaşılır (bugün açıkça anahtarda)."""
     today = today or date.today()
+    if months >= PLAN_BASE:
+        return _plan(months, today)
+    p = _plan(PLAN_BASE, today)
+    return {**p, "months": p["months"][:max(months, 0)]}
+
+
+@_memo(zakat=False)  # yalnız defter verisine ve güne bağlı; Planlama, Özet (summary/insights) ve hatırlatmalar aynı sonucu paylaşır
+def _plan(months: int, today: date) -> dict:
     start = current_period(today)
     span = [add_months(start, i) for i in range(months)]
     proj = card_projection()
@@ -1793,10 +1812,14 @@ def _card_interest_fn(today: date):
     return f
 
 
-@_memo
 def payables(today: date | None = None) -> list[dict]:
-    """Ödenecekler: kart ekstreleri, faturalar ve henüz kesilmemiş ekstrelerin tahmini."""
-    today = today or date.today()
+    """Ödenecekler: kart ekstreleri, faturalar ve henüz kesilmemiş ekstrelerin tahmini. payables() ile
+    payables(bugün) aynı önbellek kaydı (bugün açıkça anahtarda)."""
+    return _payables(today or date.today())
+
+
+@_memo(zakat=False)
+def _payables(today: date) -> list[dict]:
     out = []
     interest = None
     statements = db.list_statements()
