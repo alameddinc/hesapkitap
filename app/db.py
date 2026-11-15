@@ -633,7 +633,7 @@ MIGRATIONS = [
     ("bank_documents", "verified", "INTEGER"),    # bakiye zinciri: 1 tuttu, 0 tutmadı, 2 kullanıcı onayladı (app/verification.py)
     # fişin vergi bilgisi (app/vat.py): muhasebeci listesi (GET /api/receipts/export) ve kaydın fiş bölümü
     ("entries", "legal_name", "TEXT"),            # fişteki resmi unvan
-    ("entries", "tax_no", "TEXT"),                # satıcının VKN'si (10 hane, kontrol hanesi tutan; TCKN saklanmaz)
+    ("entries", "tax_no", "TEXT"),                # satıcının VKN'si (10 hane) ya da şahıs firmasının TCKN'si (11 hane); kontrol haneleri tutan
     ("entries", "tax_office", "TEXT"),            # vergi dairesi
     ("entries", "vat_total", "REAL"),             # fişteki toplam KDV
     ("entries", "vat_lines", "TEXT"),             # KDV dökümü JSON: [{"rate": 1, "amount": 18.25}]

@@ -243,7 +243,7 @@ def vkn_of(text: str) -> str | None:
                 for j in (i - 1, i + 1) if 0 <= j < len(lines)):
             if v := vat.vkn(ln.replace(" ", "")):
                 return v
-    return vat.from_text(text).get("tax_no")
+    return vat.vkn(vat.from_text(text).get("tax_no"))  # imza yalnız VKN: TCKN'nin özeti tutulmaz
 
 
 # ---------------------------------------------------------------- etiket eşleme (OCR harf hatasına toleranslı)
@@ -784,8 +784,10 @@ def explain_build(text: str, doc: dict, vkn: str | None = None) -> tuple[dict | 
     if why := ai_reason(doc, lines, need_sum=False):
         return None, why
     ai_sum = ai_reason(doc, lines) is None  # yapay zekânın kalemleri fiş toplamını tutuyor
+    from app import vat
+
     vkn = vkn or vkn_of(text)
-    ai_vkn = doc.get("tax_no")
+    ai_vkn = vat.vkn(doc.get("tax_no"))  # okumanın TCKN'si (şahıs firması) imza değildir
     if vkn and ai_vkn and vkn != ai_vkn:
         return None, "vkn_conflict"  # metin ile fotoğraf farklı VKN gösteriyor: güvenme
     words = _text_words(lines)

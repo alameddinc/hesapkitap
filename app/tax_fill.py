@@ -5,8 +5,9 @@ Neden (kullanıcı, 05.11.2026): muhasebeci listesinde aynı kafenin bir fişi V
 "MÜDÜRLÜĞÜ", "Ankara Kurumlar" / "ANKARA KURUMLAR" gibi iki yazım.
 
 Güvenlik: işyeri adı birden çok farklı VKN'ye çıkıyorsa (aynı adlı iki ayrı işletme, ör. "Cafe") tahmin yapılmaz.
-Kayıtlar DEĞİŞMEZ; doldurulan alan çağıranın sözlüğüne yazılır (dışa aktarım ve okuma önizlemesi). Yalnız 10 haneli,
-kontrol hanesi tutan VKN kullanılır (app/vat.py).
+Kayıtlar DEĞİŞMEZ; doldurulan alan çağıranın sözlüğüne yazılır (dışa aktarım ve okuma önizlemesi). Yalnız kontrol
+haneleri tutan numara kullanılır: 10 haneli VKN ya da şahıs firmasının 11 haneli TCKN'si (app/vat.py tax_id; aynı
+defterin kendi fişleri, defter dışına çıkmaz).
 """
 from collections import Counter, defaultdict
 
@@ -43,7 +44,7 @@ class Book:
         self.names: dict[str, Counter] = defaultdict(Counter)
         self.offices: dict[str, Counter] = defaultdict(Counter)
         for e in entries:
-            t = vat.vkn(e.get("tax_no"))
+            t = vat.tax_id(e.get("tax_no"))
             if not t:
                 continue
             for k in {_key(e.get("description")), _key(e.get("legal_name"))} - {""}:
@@ -57,7 +58,7 @@ class Book:
         """e'nin kopyası: eksik vergi alanları dolu, yazımlar tek biçim. filled: doldurulan alan adları."""
         out = dict(e)
         filled = []
-        t = vat.vkn(e.get("tax_no"))
+        t = vat.tax_id(e.get("tax_no"))
         if not t:
             cands = Counter()
             for k in {_key(e.get("description")), _key(e.get("legal_name"))} - {""}:

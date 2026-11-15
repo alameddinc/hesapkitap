@@ -524,9 +524,9 @@ SADECE şu JSON'u döndür:
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
-  "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV tutarı veya null",
+  "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV / KDV tutarı (şahıs firması fişinde de) veya null",
   "vat_lines": [{{"rate": 1, "amount": 0.00}}],
-  "tax_no": "sadece fiş: satıcının 10 haneli vergi no (V.NO, VKN, V.D. … NO); 11 haneli TCKN ise null",
+  "tax_no": "sadece fiş: satıcının vergi no (V.NO, VKN, VKN/TCKN, V.D. … NO): 10 haneli VKN ya da şahıs firmasının 11 haneli T.C. kimlik no'su; alıcınınki değil",
   "tax_office": "sadece fiş: vergi dairesi adı (ör. Kadıköy) veya null",
   "items": [{{"name": "fişteki satır yazısı", "product": "standart ürün adı", "brand": "marka veya null", "qty": 1, "unit": "adet", "unit_price": null, "amount": 0.00, "split": null}}],
   "confidence": "yüksek | orta | düşük"
@@ -574,9 +574,9 @@ SADECE şu JSON'u TEK SATIR, girintisiz döndür (null olan alanı ve kalemde q 
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
-  "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV tutarı veya null",
+  "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV / KDV tutarı (şahıs firması fişinde de) veya null",
   "vat_lines": [{{"rate": 1, "amount": 0.00}}],
-  "tax_no": "sadece fiş: satıcının 10 haneli vergi no (V.NO, VKN, V.D. … NO); 11 haneli TCKN ise null",
+  "tax_no": "sadece fiş: satıcının vergi no (V.NO, VKN, VKN/TCKN, V.D. … NO): 10 haneli VKN ya da şahıs firmasının 11 haneli T.C. kimlik no'su; alıcınınki değil",
   "tax_office": "sadece fiş: vergi dairesi adı (ör. Kadıköy) veya null",
   "items": [{{"n": "fişteki satır yazısı (name)", "p": "standart ürün adı (product)", "b": "marka (brand) veya null", "q": 1, "u": "adet", "up": null, "a": 0.00}}],
   "confidence": "yüksek | orta | düşük"
