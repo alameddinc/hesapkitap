@@ -513,6 +513,17 @@ CAPABILITIES = (
                               # income, count, label (tek gelirse adı, yoksa "Beklenen gelirler"), date (en geç), main
                               # {label, amount, date}} | null: bu dönemin beklenen gelirleri (summary.pending.income ile
                               # aynı kaynak) gelince; yalnız bilgi ("Maaş gelince (16 Kas): +₺X")
+    "spendable_all_due",      # GET /api/net-worth spendable ("Ödemelerden sonra") bu dönemin (dönem sonuna kadar) KESİN
+                              # ödemelerinin hepsini düşer: yukarıdakilere ek olarak spendable_parts'ta yalnız sıfırdan
+                              # büyükse yeni satırlar: "pending_other" (kesilecek ekstre listesinde olmayan kartların bu
+                              # dönemki taksit/abonelikleri; pending_cards'takiler orada, çift sayım yok), "card_interest"
+                              # (son ödeme günü geçmiş, en az asgarisi ödenmiş kalana faiz+vergi tahmini),
+                              # "card_late_interest" (hiç ya da asgarinin altında ödenmiş: gecikme faizi+vergi tahmini),
+                              # "bills" (dönem içinde vadeli ödenmemiş faturalar = expected.parts.pending_bills),
+                              # "recurring" (girilmemiş düzenli giderler = summary.pending.expense). Dökümler
+                              # <key>_items [{title, amount, date (fatura vadesi / düzenli ödeme günü / son ödeme; kart dışı
+                              # taksitte null), …}]; card_debt_items [{title, amount, date, overdue}]. pending_cards_items
+                              # satırında account. Yeni gelir ve değişken harcama tahmini dahil değil (forecast_net'te)
 )
 
 
