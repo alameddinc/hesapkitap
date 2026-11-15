@@ -13,13 +13,20 @@ from app import db, money, rawnote, store_subs, sub_catalog, terms
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
+import os
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 # Hesap önbelleği: aynı veritabanı durumu için ağır hesaplar (tüm işlemler, plan, ödemeler) bir kez yapılır.
-# Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur.
-_CACHE: dict = {}
+# Anahtar veritabanı dosyasının değişim zamanı + boyutu: her yazmada kendiliğinden geçersiz olur; yazandan kalan eski
+# kayıtlar bir daha okunmaz, en eski olarak düşer. Süreç geneli, tüm defterler ortak: dolunca en uzun süredir
+# kullanılmayan kayıt atılır (LRU; önce hepsi siliniyordu: bir kişinin açılışı ötekinin önbelleğini boşaltıyordu).
+# Ölçü (uydurma ~2.200 hareketli defter): bir Özet açılışı ~23 kayıt, ~3,4 MB (en büyüğü tüm satırlar ~2,3 MB);
+# 512 kayıt ≈ 22 kişinin açılışı, en kötü ~75 MB. HESAPKITAP_CALC_CACHE ile değiştirilir.
+_CACHE_MAX = max(16, int(os.environ.get("HESAPKITAP_CALC_CACHE", "512")))
+_CACHE: OrderedDict = OrderedDict()
 _LOCKS: dict = {}
 _LOCKS_GUARD = threading.Lock()
 _MISS = object()
@@ -29,15 +36,26 @@ def _db_stamp() -> tuple:
     return db.stamp()
 
 
-def _memo(fn):
+def _memo(fn=None, *, zakat: bool = True):
+    """zakat=False: sonuç zekât ayrımına (zakat_split, ?zakat=1) bağlı değil; anahtarda yer almaz. Özet zakat=1 ile,
+    Net durum / Ödemeler / Borç planı zakat'sız ister: plan, ödemeler ve satırlar iki kez hesaplanmasın (Özet açılışı).
+    Yalnız kategori kırılımına (report_category / _group "category") hiç dokunmayan hesaplarda kullanılır
+    (tests/test_ozet_hiz.py iki kipte aynı sonucu dener)."""
+    if fn is None:
+        return lambda f: _memo(f, zakat=zakat)
+
     def wrap(*args, **kwargs):
         u = db.current_user()  # ortak defter üyesi süzülmüş veri görür: sonuç sahibininkiyle karışmasın
         viewer = u["id"] if u and u.get("member_of") else None
-        key = (fn.__name__, _db_stamp(), viewer, date.today(), _ZAKAT_SPLIT.get(), repr(args),
+        key = (fn.__name__, _db_stamp(), viewer, date.today(), _ZAKAT_SPLIT.get() if zakat else None, repr(args),
                repr(sorted(kwargs.items())))
-        # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada _CACHE.clear() yapsa da KeyError olmaz.
+        # Sonuç yerel değişkende tutulur: başka bir iş parçacığı arada kaydı atsa da KeyError olmaz.
         hit = _CACHE.get(key, _MISS)
-        if hit is _MISS:
+        if hit is not _MISS:
+            with _LOCKS_GUARD:
+                if key in _CACHE:
+                    _CACHE.move_to_end(key)  # yeni kullanıldı: en son atılır
+        else:
             # aynı anda gelen istekler (Özet + ay özeti) aynı ağır hesabı ikişer kez yapmasın: ikincisi birinciyi bekler
             with _LOCKS_GUARD:
                 lock = _LOCKS.setdefault(key, threading.Lock())
@@ -45,11 +63,13 @@ def _memo(fn):
                 hit = _CACHE.get(key, _MISS)
                 if hit is _MISS:
                     hit = fn(*args, **kwargs)
-                    with _LOCKS_GUARD:  # temizlik ve ekleme tek kilit altında (eşzamanlı clear/insert yarışmasın)
-                        if len(_CACHE) > 128:
-                            _CACHE.clear()
-                            _LOCKS.clear()
+                    with _LOCKS_GUARD:  # atma ve ekleme tek kilit altında (eşzamanlı yazımlar yarışmasın)
                         _CACHE[key] = hit
+                        _CACHE.move_to_end(key)
+                        while len(_CACHE) > _CACHE_MAX:
+                            _CACHE.popitem(last=False)
+                        # tek uçuş kilidi artık gereksiz (sonraki okumalar önbellekten); bekleyenler kendi kopyasını tutar
+                        _LOCKS.pop(key, None)
         # çağıran sonucu değiştirse de önbellek bozulmasın
         if isinstance(hit, list) and all(isinstance(x, dict) for x in hit):
             return [dict(x) for x in hit]
@@ -332,10 +352,10 @@ def _estimate_totals(rows: list[dict]) -> dict:
             "estimated_income": _round(sum(r["amount"] for r in rows if r["kind"] == INCOME))}
 
 
-@_memo
+@_memo(zakat=False)
 def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
     states, aliases = db.subscription_states(), db.merchant_aliases()
-    card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted) if not month or t["period"] == month]
+    card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted, period=month)]
     entries = db.list_entries(month)
     rows = []
     for e in entries:
@@ -573,7 +593,7 @@ def reference_month(today: date | None = None) -> str:
     return max(periods) if periods else add_months(ym(today or date.today()), -1)
 
 
-@_memo  # her ekran /api/meta'yı çağırıyor: tüm kart işlemleri ve kayıtlar her istekte okunmasın
+@_memo(zakat=False)  # her ekran /api/meta'yı çağırıyor: tüm kart işlemleri ve kayıtlar her istekte okunmasın
 def available_months() -> list[str]:
     ms = {t["period"] for t in db.card_transactions()} | {e["month"] for e in db.list_entries()}
     ms.add(current_period())
@@ -1079,7 +1099,7 @@ def card_projection() -> dict:
     return out
 
 
-@_memo
+@_memo(zakat=False)
 def _next_cut(st: dict) -> tuple[date, date | None]:
     """Son ekstreden sonraki kesim ve son ödeme günü (ekstrede yazmıyorsa bir ay sonrası)."""
     pe = date.fromisoformat(st["period_end"])
@@ -1287,7 +1307,7 @@ def _inst_parts(inst: str | None) -> tuple[int, int] | None:
         return None
 
 
-@_memo
+@_memo(zakat=False)
 def installments_due(month: str, today: date | None = None) -> dict:
     """Dönemin (Özet'te seçili ay) taksitleri: "Bu ay ödenecek taksitler · ₺4.250 · 6 taksit" ve kalan taksit borcu.
 
@@ -1542,9 +1562,21 @@ def _plan_parts(lines: list[dict]) -> dict:
     return parts
 
 
-@_memo  # yalnız defter verisine ve güne bağlı; Planlama, Özet (summary/insights) ve hatırlatmalar aynı sonucu paylaşır
+PLAN_BASE = 6  # bundan kısa plan 6 aylığın ilk ayları (aynı hesap): Özet plan(6), Net durum / Ödemeler plan(3) ister
+
+
 def plan(months: int = 6, today: date | None = None) -> dict:
+    """İleriye dönük aylık plan. Her ay yalnız kendinden öncekilere bağlı (cumulative), dues / projection / recurring
+    aydan bağımsız: kısa plan uzun planın ilk ayları. Tek hesap paylaşılır (bugün açıkça anahtarda)."""
     today = today or date.today()
+    if months >= PLAN_BASE:
+        return _plan(months, today)
+    p = _plan(PLAN_BASE, today)
+    return {**p, "months": p["months"][:max(months, 0)]}
+
+
+@_memo(zakat=False)  # yalnız defter verisine ve güne bağlı; Planlama, Özet (summary/insights) ve hatırlatmalar aynı sonucu paylaşır
+def _plan(months: int, today: date) -> dict:
     start = current_period(today)
     span = [add_months(start, i) for i in range(months)]
     proj = card_projection()
@@ -1793,10 +1825,14 @@ def _card_interest_fn(today: date):
     return f
 
 
-@_memo
 def payables(today: date | None = None) -> list[dict]:
-    """Ödenecekler: kart ekstreleri, faturalar ve henüz kesilmemiş ekstrelerin tahmini."""
-    today = today or date.today()
+    """Ödenecekler: kart ekstreleri, faturalar ve henüz kesilmemiş ekstrelerin tahmini. payables() ile
+    payables(bugün) aynı önbellek kaydı (bugün açıkça anahtarda)."""
+    return _payables(today or date.today())
+
+
+@_memo(zakat=False)
+def _payables(today: date) -> list[dict]:
     out = []
     interest = None
     statements = db.list_statements()

@@ -1555,6 +1555,14 @@ def list_statements() -> list[dict]:
     Durum app/statement_fix.evaluate: needs_check (tutmuyor, onay yok), check_kind ("rows": özet doğru, işlem listesi
     tutmuyor | "summary": özet rakamları tutmuyor | null), fix_badge / fix_title (rozet, tek cümle), fix_diff (satırlar −
     beklenen), fix_hint (ne eksik / fazla: {kind, text, suggest, row_id}), rows_diff (önceki + satırlar − yeni borç)."""
+    # tek Özet açılışında ~50 kez okunuyordu (her biri işlemlerle birleşik GROUP BY): damga değişmedikçe bir kez.
+    # Üye süzgeci ve faiz gizleme kişiye bağlı (_viewer). Çağıran satırı değiştirebilir: kopyası döner.
+    import copy
+
+    return [{**s, "fix_hint": copy.deepcopy(s["fix_hint"])} for s in _cached("statements", _load_statements, _viewer())]
+
+
+def _load_statements() -> list[dict]:
     from app import book, statement_fix
 
     with connect() as c:
@@ -1621,8 +1629,9 @@ def delete_statement(statement_id: int) -> None:
 
 # ---------------------------------------------------------------- card transactions
 
-def card_transactions(include_deleted: bool = False) -> list[dict]:
-    """Tüm kart işlemleri; 'period' = ekstre kesim ayı (YYYY-MM). Ortak defter üyesine gizlenenler süzülür."""
+def card_transactions(include_deleted: bool = False, period: str | None = None) -> list[dict]:
+    """Tüm kart işlemleri; 'period' = ekstre kesim ayı (YYYY-MM). Ortak defter üyesine gizlenenler süzülür.
+    period verilirse yalnız o dönemin satırları (kopyalamadan önce süzülür: Planlama her ay için ayrı ister)."""
     from app import book
 
     def load():
@@ -1633,7 +1642,7 @@ def card_transactions(include_deleted: bool = False) -> list[dict]:
                     {'' if include_deleted else 'WHERE t.is_deleted = 0'}
                     ORDER BY t.txn_date DESC, t.id DESC""")))
     # tek istekte birkaç kez okunuyor; çağıran satırı değiştirebilir: kopyası döner
-    return [dict(r) for r in _cached("card_txns", load, include_deleted, _viewer())]
+    return [dict(r) for r in _cached("card_txns", load, include_deleted, _viewer()) if not period or r["period"] == period]
 
 
 CARD_EDITABLE = {"category", "subcategory", "txn_type", "note", "is_deleted", "description", "hidden"}
