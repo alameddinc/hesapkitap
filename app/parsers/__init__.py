@@ -1,6 +1,7 @@
 """Banka tespiti + parser registry. Yeni banka = yeni modül + DETECTORS'a bir satır."""
 import io
 import logging
+import math
 import re
 import threading
 
@@ -300,8 +301,16 @@ def _report_drift(st: Statement, reader: str, verdict) -> None:
 _READER_RE = re.compile(r"[^a-z0-9_:]")
 
 
+def _whole_tl(v: float) -> int:
+    """Tam TL (kuruş yok), yarım yukarı (sıfırdan uzağa): 17,50 → 18, −0,50 → −1."""
+    return int(math.copysign(math.floor(abs(v) + 0.5), v))
+
+
 def drift_summary(reader: str, verdict) -> str:
-    """Alarmın sayısal özeti: sabit anahtarlar + sayılar (gate.numbers). Okuyucu adı küçük harf/rakam/":" ile sınırlı."""
+    """Alarmın sayısal özeti: sabit anahtarlar + sayılar (gate.numbers), tutarlar tam TL'ye yuvarlı (kuruş alarma
+    girmez; oran/fark teşhisi için yeterli). Okuyucu adı küçük harf/rakam/":" ile sınırlı. Kapının kendisi kuruşlu
+    sayılarla karar verir; yuvarlama yalnız alarm metninde."""
     reader = _READER_RE.sub("", str(reader).lower())[:40] or "?"
-    nums = " · ".join(f"{k}={v}" for k, v in (verdict.numbers or {}).items() if isinstance(v, (int, float)))
+    nums = " · ".join(f"{k}={_whole_tl(v)}" for k, v in (verdict.numbers or {}).items()
+                      if isinstance(v, (int, float)) and not isinstance(v, bool))
     return f"okuyucu={reader} · kontrol={verdict.check} · {nums}".strip(" ·")

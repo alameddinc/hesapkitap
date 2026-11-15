@@ -256,13 +256,13 @@ def test_alarm_once_per_bank_per_day(owner, nokeys, monkeypatch):  # noqa: F811
     sent = []
     real = incidents._send_alert
     monkeypatch.setattr(incidents, "_send_alert", lambda k, *a: sent.append(k["place"]) or real(k, *a))
-    ozet = "okuyucu=parser:vakifbank · kontrol=islem_yok · islem=0 · donem_borcu=17.75"
+    ozet = "okuyucu=parser:vakifbank · kontrol=islem_yok · islem=0 · donem_borcu=18"
     for _ in range(3):
         incidents.system_event("parser_drift", "VakıfBank", ozet)
         incidents.flush()
     q = _sistem(admin)
     assert len(q) == 1 and q[0]["title"].startswith("Banka ekstre biçimi değişmiş olabilir")
-    assert "VakıfBank" in q[0]["body"] and "kontrol=islem_yok" in q[0]["body"] and "17.75" in q[0]["body"]
+    assert "VakıfBank" in q[0]["body"] and "kontrol=islem_yok" in q[0]["body"] and "donem_borcu=18" in q[0]["body"]
     # başka banka: ayrı alarm
     incidents.system_event("parser_drift", "Kuveyt Türk", ozet.replace("vakifbank", "kuveytturk"))
     incidents.flush()
@@ -297,6 +297,8 @@ def test_alarm_has_no_personal_data(owner, nokeys, pdf, old_parser, no_templates
     for bad in (holder, *holder.split(), card, card[:4], card[-4:], "ORNEK", *merchants, "Şube", "000000000000"):
         assert bad not in blob, bad
     assert "kontrol=islem_yok" in blob and "islem=0" in blob
+    # tutarlar tam TL (kuruş yok): eski okuyucu dönem borcunu 17.8806 okumuştu → 18
+    assert "donem_borcu=18 " in blob and not re.search(r"=-?\d+\.\d", blob)
 
 
 def test_raw_summary_only_for_safe_text():
@@ -313,5 +315,7 @@ def test_drift_summary_has_only_numbers_and_fixed_keys():
     r = gate.check(st)
     s = parsers.drift_summary("parser:Vakıf Bank!<x>", r)
     assert s.startswith("okuyucu=parser:vakfbankx · kontrol=olcek")
-    assert "AYŞE" not in s and "ORNEK" not in s and "donem_borcu=123456.78" in s
+    assert "AYŞE" not in s and "ORNEK" not in s and "donem_borcu=123457" in s and "en_buyuk_islem=54" in s
+    assert not re.search(r"=-?\d+\.\d", s)  # kuruş yok
+    assert [parsers._whole_tl(v) for v in (17.5, 17.49, -0.5, -12.51, 0.0)] == [18, 17, -1, -13, 0]
     assert incidents._ozet("parser_drift", s) == s
