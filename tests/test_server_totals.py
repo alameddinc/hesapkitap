@@ -128,7 +128,7 @@ def test_meta_and_status_handshake(client):
     for cap in ("idempotency", "email_verify", "invites_v2", "raw_note", "payables_totals", "transactions_paging",
                 "inbox_documents", "debt_payment_delete"):
         assert cap in m["capabilities"], cap
-    assert set(m["server"]["flags"]) == {"email_verify_required", "hold_unverified"} and "version" in m["server"]
+    assert set(m["server"]["flags"]) == {"email_verify_required", "hold_unverified", "ui_default"} and "version" in m["server"]
     s = client.get("/api/auth/status").json()
     assert s["api_version"] == m["api_version"] and s["capabilities"] == m["capabilities"]
     assert "version" not in s  # girişsiz uçta commit yok
