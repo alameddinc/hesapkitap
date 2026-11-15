@@ -38,7 +38,13 @@ def test_net_worth_counts_only_latest_statement(two_unpaid):
     # eski ekstre ayrı "gecikmiş" bilgisi olarak döner, toplama girmez
     assert [(o["amount"], o["due_date"]) for o in nw["card_overdue"]] == [(10000.0, "2026-09-25")]
     assert nw["totals"]["card_overdue"] == 10000.0
-    assert nw["spendable"] == nw["cash"] - 15000.0 - nw["payable"] - nw["reserved"] - nw["zakat_due"]
+    # son ödemesi geçmiş, ödenmemiş son ekstre: kalanına gecikme faizi + vergi tahmini de düşülür (spendable_all_due);
+    # devreden eski ekstre ne kalanıyla ne faiziyle ikinci kez sayılmaz
+    from app import debt_plan
+
+    late = debt_plan.monthly_interest(15000.0, debt_plan.GENERIC_RATE)
+    assert [x["remaining"] for x in nw["card_late_interest_items"]] == [15000.0]
+    assert nw["spendable"] == round(nw["cash"] - 15000.0 - late - nw["payable"] - nw["reserved"] - nw["zakat_due"], 2)
     assert [c["unpaid"] for c in nw["credit_cards"]] == [15000.0]
 
 

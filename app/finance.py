@@ -2753,11 +2753,15 @@ def net_worth(today: date | None = None) -> dict:
       net_after_estimates ile aynı rakam (o eski adıyla da kalır).
     - net (ve totals.net): eski tanım, kesilecek ekstre DÜŞÜLMEZ. Eski istemciler bunu "Net durum" diye gösteriyor;
       anlamı değişmez (kırılmasın).
-    Harcanabilir (spendable; yetenek "spendable_pending_cards"): nakit − kesilmiş ödenmemiş ekstre − kesilecek kart
-    ekstrelerinin KESİN kısmı (pending_cards, _pending_cards) − TL borç − kumbara − zekât borcu. Kesin kısım "her zamanki
-    harcama" (değişken) tahminini içermez; o Dönem sonu'nda (forecast_net). net_display'deki card_estimated bunun
+    Ödemelerden sonra (spendable; yetenekler "spendable_pending_cards", "spendable_all_due"): nakit − kumbara − bu dönemin
+    (dönem sonuna kadar) KESİN ödemelerinin hepsi: kesilmiş ödenmemiş ekstre (card_debt) − kesilecek kart ekstrelerinin
+    KESİN kısmı (pending_cards, _pending_cards) − kesilecek ekstre listesinde olmayan kartların bu dönemki bilinen taksit ve
+    abonelikleri (pending_other) − son ödeme günü geçmiş kalana işleyecek faiz ve vergi tahmini (card_interest /
+    card_late_interest) − bu dönem vadeli ödenmemiş faturalar (bills) − girilmemiş düzenli giderler (recurring) − TL borç −
+    zekât borcu. Kalemlerin ayrıntısı _due_this_period. Kesin kısım "her zamanki harcama" (değişken) tahminini ve yeni
+    gelirleri içermez; onlar Ay sonunda kalacak'ta (expected.forecast_net). net_display'deki card_estimated pending_cards'ın
     üst kümesidir (kesim tahmini = kesin kısım + kalan değişken pay), iki formül ayrı: çift düşüm yok.
-    spendable_after_income: Harcanabilir + bu dönem beklenen gelirler (bilgi; spendable'ı değiştirmez)."""
+    spendable_after_income: spendable + bu dönem beklenen gelirler (bilgi; spendable'ı değiştirmez)."""
     today = today or date.today()
     accounts = db.list_accounts()
     cash = sum(a["current"] for a in accounts if a["current"] is not None)
@@ -2821,13 +2825,21 @@ def net_worth(today: date | None = None) -> dict:
     rem_by = {d["id"]: d["remaining"] for d in open_try if d["direction"] == "borc"}
     in_jar = _round(sum(min(max(0.0, b), max(0.0, rem_by[i])) for i, b in jars.get("by_debt", {}).items() if i in rem_by))
     payable_sp = payable - in_jar
-    spendable = cash - card_debt - pending_cards - payable_sp - jars["total"] - zakat_due
-    spendable_parts = [{"key": k, "label": lbl, "amount": _round(v), "sign": sg} for k, lbl, v, sg in (
-        ("cash", "Bankadaki ve nakit para", cash, "+"), ("card_debt", "Ödenecek kart ekstresi", card_debt, "−"),
-        ("pending_cards", "Kesilecek kart ekstreleri (harcadıkların)", pending_cards, "−"),
-        ("payable", "TL borçların" + (" (kumbarada ayrılan kısmı hariç)" if in_jar else ""), payable_sp, "−"),
-        ("reserved", "Kumbaraya ayrılan", jars["total"], "−"),
-        ("zakat_due", "Ödenmemiş zekât", zakat_due, "−"))]
+    due = _due_this_period(today, pending_items)
+    extra = sum(due[k]["amount"] for k in DUE_KEYS)
+    spendable = cash - card_debt - pending_cards - payable_sp - jars["total"] - zakat_due - extra
+    # eski satırlar (cash … zakat_due) her zaman, sırası aynı; yeni satırlar (DUE_KEYS) yalnız sıfırdan büyükse
+    rows = [("cash", "Bankadaki ve nakit para", cash, "+"), ("card_debt", "Ödenecek kart ekstresi", card_debt, "−"),
+            ("pending_cards", "Kesilecek kart ekstreleri (harcadıkların)", pending_cards, "−")]
+    rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("pending_other", "card_interest", "card_late_interest")]
+    rows += [("payable", "TL borçların" + (" (kumbarada ayrılan kısmı hariç)" if in_jar else ""), payable_sp, "−")]
+    rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("bills", "recurring")]
+    rows += [("reserved", "Kumbaraya ayrılan", jars["total"], "−"), ("zakat_due", "Ödenmemiş zekât", zakat_due, "−")]
+    spendable_parts = [{"key": k, "label": lbl, "amount": _round(v), "sign": sg} for k, lbl, v, sg in rows
+                       if k not in DUE_KEYS or money.gt(v, 0)]
+    card_items = [{"title": c["title"], "amount": c["amount"], "date": c["due_date"],
+                   "overdue": bool(c["due_date"] and c["due_date"] < today.isoformat())}
+                  for c in cards if not c["estimated"]]
     # ekranda gösterilen Net durum: kesilecek kart ekstresi (tahmini) de düşülür (docstring)
     net_disp = _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable - zakat_due)
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "spendable": _round(spendable), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
@@ -2847,6 +2859,10 @@ def net_worth(today: date | None = None) -> dict:
             "spendable_parts": spendable_parts,  # formülün kalemleri (sign '+'/'−'); istemci yalnız gösterir
             # kesilecek kart ekstrelerinin kesin kısmı (kart başına; Harcanabilir'den düşülen) ve maaş gelince ne olur
             "pending_cards": _round(pending_cards), "pending_cards_items": pending_items,
+            # yetenek spendable_all_due: kesilmiş ekstre kart başına (overdue: son ödeme günü geçti) ve yeni satırların
+            # dökümü [{title, amount, date, …}] (satır yoksa boş liste)
+            "card_debt_items": card_items,
+            **{f"{k}_items": due[k]["items"] for k in DUE_KEYS},
             "spendable_after_income": _spendable_after_income(spendable, today),
             "spendable_explain": SPENDABLE_EXPLAIN + (SPENDABLE_JAR_NOTE if in_jar else ""),
             "stale": stale}
@@ -2871,8 +2887,76 @@ def _pending_cards(today: date) -> list[dict]:
         amt = _round(min(max(0.0, cyc.get("so_far") or 0.0), max(0.0, p["amount"] or 0.0)))
         if not money.gt(amt, 0):
             continue
-        out.append({"title": p["title"], "amount": amt, "installments": cyc["installments"],
+        out.append({"title": p["title"], "account": cyc["account"], "amount": amt, "installments": cyc["installments"],
                     "subscriptions": cyc["subscriptions"], "spent": cyc["spent"], "cut": cyc["cut"], "due_date": p["due_date"]})
+    return out
+
+
+DUE_KEYS = ("pending_other", "card_interest", "card_late_interest", "bills", "recurring")
+DUE_LABELS = {"pending_other": "Bekleyen taksit ve abonelikler (kart dışı)",
+              "card_interest": "Tahmini faiz ve vergi (devreden kalana)",
+              "card_late_interest": "Tahmini gecikme faizi ve vergi",
+              "bills": "Ödenmemiş faturalar", "recurring": "Düzenli ödemeler (kira, aidat…)"}
+
+
+def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
+    """Ödemelerden sonra'nın (spendable) yeni kalemleri (yetenek spendable_all_due): {key: {amount, items}}.
+
+    Kaynak Ay sonunda kalacak ile aynı (plan → içinde bulunulan dönemin satırları; expected.parts), böylece bir kalem
+    iki ekranda farklı sayılmaz:
+    - bills: dönem içinde vadesi gelen ödenmemiş faturalar (plan "fatura" = parts.pending_bills; ödenen fatura zaten
+      bakiyeden/karttan düşmüştür, sonraki dönemin faturası düşülmez) + vadesi önceki dönemde geçmiş, hâlâ ödenmemiş
+      faturalar (hâlâ borç; lead 15.11). Bu ikinciler Ay sonunda kalacak'ta YOK (plan yalnız o dönemin faturası): iki rakam
+      arasındaki bilinçli fark. items[].overdue: son ödeme günü geçti. Düzenli ödemede geçmiş dönem düşülmez (tahmin).
+    - recurring: bu dönemin girilmemiş düzenli giderleri (pending_recurring = summary.pending.expense =
+      parts.pending_recurring_expense). Girilince (bankadan ya da kartla) bekleyen olmaktan çıkar: bir kez sayılır.
+    - pending_other: plan'ın bu dönemki taksit/abonelik satırlarından, kesilecek kart ekstreleri (pending_cards) içinde
+      kartı OLMAYANLAR (ör. son ödeme günü geçmiş, sonraki ekstresi yüklenmemiş kart). pending_cards'taki kartın taksit
+      ve abonelikleri orada sayılır: ÇİFT SAYIM YOK.
+    - card_interest / card_late_interest: kartın son ekstresinin son ödeme günü geçti ve kalan var: kalana bu ay
+      işleyecek faiz ve vergi tahmini (debt_plan.card_interest "after_due"; Kartlar ekranının faiz satırıyla aynı hesap,
+      oran ekstreden, yoksa genel oran). En az asgari ödenmişse "devreden kalana", hiç ödenmemiş ya da asgarinin altında
+      ödenmişse "gecikme". Son ödeme günü gelmemişse yok (kalanın tamamı zaten card_debt'te düşülüyor). Sonraki ekstre
+      gelince o kartın son ekstresi odur (eskisi rolled_into): kalan ve faiz yeni ekstrenin toplamında, bir kez. Ortak
+      defterde faiz gizliyse tutar yok → satır yok.
+    Yeni gelir ve değişken "her zamanki harcama" tahmini dahil değil (Ay sonunda kalacak'ta)."""
+    out = {k: {"amount": 0.0, "items": []} for k in DUE_KEYS}
+
+    def add(key: str, item: dict) -> None:
+        out[key]["items"].append(item)
+        out[key]["amount"] = _round(out[key]["amount"] + item["amount"])
+
+    cur = current_period(today)
+    for b in db.list_bills():  # bu dönem: plan'ın "fatura" satırı ile aynı kural; önceki dönemden kalan ödenmemiş de (gecikti)
+        if b["paid_at"] is None and b["due_date"] and db.period_of(b["due_date"]) <= cur and money.gt(b["amount"] or 0, 0):
+            add("bills", {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"],
+                          "overdue": b["due_date"] < today.isoformat()})
+    for r in pending_recurring(cur, db.list_recurring(), db.list_entries(cur)):
+        if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
+            add("recurring", {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],
+                              "recurring_id": r["recurring_id"]})
+    covered = {x["account"] for x in pending_items}
+    covered |= {p["cycle"]["account"] for p in payables(today) if p["type"] == "estimate" and p.get("cycle")}
+    row = next((m for m in plan(1, today=today)["months"] if m["month"] == cur), None)
+    for ln in (row or {}).get("lines", []):
+        if ln["type"] in ("taksit", "abonelik") and ln["kind"] == EXPENSE and ln.get("account") not in covered \
+                and money.gt(ln["amount"] or 0, 0):
+            add("pending_other", {"title": ln["description"], "amount": _round(ln["amount"]), "date": None,
+                                  "account": ln.get("account"), "type": ln["type"]})
+    interest = None
+    for st in db.latest_card_statements(today.isoformat()).values():
+        left = db.statement_remaining(st, today.isoformat())
+        if not left or not st["due_date"] or st["due_date"] >= today.isoformat():
+            continue
+        interest = interest or _card_interest_fn(today)
+        ci = interest(st["card_no"], left, st)
+        if not ci or ci.get("state") != "after_due" or not money.gt(ci.get("amount") or 0, 0):
+            continue
+        paid = (st["paid_amount"] or 0.0) if st["paid_at"] else 0.0
+        late = not money.gt(paid, 0) or (st["min_payment"] is not None and money.gt(st["min_payment"], paid))
+        add("card_late_interest" if late else "card_interest",
+            {"title": f"{st['bank']} {st['card_no']}", "amount": _round(ci["amount"]), "date": st["due_date"],
+             "remaining": _round(left), "statement_id": st["id"]})
     return out
 
 
@@ -2894,13 +2978,16 @@ def _spendable_after_income(spendable: float, today: date) -> dict | None:
             "main": {"label": main["description"], "amount": _round(main["amount"]), "date": main["date"]}}
 
 
-SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − ödenecek kart ekstresi − kesilecek kart ekstrelerinin "
-                     "kesinleşen kısmı (kartla yaptığın, ekstresi henüz kesilmemiş harcamalar, ekstresi gelecek taksitler "
-                     "ve abonelikler) − TL borçların − kumbaraya ayrılan − ödenmemiş zekât. Henüz yapmadığın \"her zamanki "
-                     "harcama\" tahmini dahil değil; o Dönem sonu'nda. Altın/döviz, alacakların ve yemek/hediye kartları "
-                     "dahil değil; eksiye düştüyse ödenecekler eldeki parayı aşıyor demektir. Bugünün rakamıdır: Dönem "
-                     "sonu ise dönem bitene kadar beklenen gelirleri (maaş gibi) de katar; bu yüzden Harcanabilir eksiyken "
-                     "Dönem sonu artı olabilir.")
+SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − kumbaraya ayrılan − bu dönemin kesin ödemelerinin "
+                     "hepsi: ödenecek kart ekstresi, kesilecek kart ekstrelerinin kesinleşen kısmı (kartla yaptığın, "
+                     "ekstresi henüz kesilmemiş harcamalar, ekstresi gelecek taksitler ve abonelikler), dönem içinde "
+                     "vadesi gelen ödenmemiş faturalar, girilmemiş düzenli ödemeler (kira, aidat gibi), TL borçların ve "
+                     "ödenmemiş zekât. Son ödeme günü geçmiş kart borcu varsa ona işleyecek faiz ve vergi tahmini de "
+                     "düşülür; tamamını ödersen faiz durur. Henüz yapmadığın \"her zamanki harcama\" tahmini ve "
+                     "beklenen gelirler dahil değil; onlar Dönem sonu'nda (Ay sonunda kalacak). Altın/döviz, "
+                     "alacakların ve yemek/hediye kartları dahil değil; eksiye düştüyse ödenecekler eldeki parayı aşıyor "
+                     "demektir. Bugünün rakamıdır: Dönem sonu dönem bitene kadar beklenen gelirleri (maaş gibi) de "
+                     "katar; bu yüzden bu rakam eksiyken Dönem sonu artı olabilir.")
 
 
 SPENDABLE_JAR_NOTE = (" Bir borç için kumbarada biriktirdiğin para o borcun kalanından düşülmüş sayılır: borç ve kumbara "
