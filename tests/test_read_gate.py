@@ -262,7 +262,10 @@ def test_alarm_once_per_bank_per_day(owner, nokeys, monkeypatch):  # noqa: F811
         incidents.flush()
     q = _sistem(admin)
     assert len(q) == 1 and q[0]["title"].startswith("Banka ekstre biçimi değişmiş olabilir")
-    assert "VakıfBank" in q[0]["body"] and "kontrol=islem_yok" in q[0]["body"] and "donem_borcu=18" in q[0]["body"]
+    # bildirim gövdesi kısa (≤ 90; bildirim ince ayarı): banka adı orada, sayısal ayrıntı Sorunlar kaydında (sample)
+    assert "VakıfBank" in q[0]["body"]
+    ornek = next(k for k in _kinds() if k["place"] == "VakıfBank")["sample"] or ""
+    assert "kontrol=islem_yok" in ornek and "donem_borcu=18" in ornek
     # başka banka: ayrı alarm
     incidents.system_event("parser_drift", "Kuveyt Türk", ozet.replace("vakifbank", "kuveytturk"))
     incidents.flush()
