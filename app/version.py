@@ -67,6 +67,11 @@ CAPABILITIES = (
                               # (kontrol: istemci tutarı vurgular, "Tutarı fişle karşılaştır"); text_match {date, merchant}
     "push",                   # telefona bildirim: POST/DELETE /api/push/devices, GET/PUT /api/push/prefs (enabled: sunucuda
                               # yapılandırılmış mı), POST /api/push/test; yük data {route, kind, id}
+    "push_badge",             # iOS rozeti: GET /api/push/badge {count, todos, support}; POST /api/push/devices features
+                              # ["badge", "channels"] (badge: bildirimde aps.badge = okunmamış destek + Yapılacaklar)
+    "push_test_kinds",        # POST /api/push/test {kind}: o türün örnek bildirimi (gerçek kanal ve yol); tür başına
+                              # dakikada bir. Android kanalları (push.CHANNELS): odemeler, hatirlatma, destek, aile,
+                              # zekat, duyuru (FCM android.notification.channel_id türe göre)
     "push_announce",          # yöneticinin duyurusu: POST /api/admin/announce/preview {platform, below_version, test_only} →
                               # {users, devices, by_platform, opted_out, enabled}; POST /api/admin/announce {title (≤80),
                               # body (≤300), route "#/…"|"store", platform all|ios|android, below_version, test_only,

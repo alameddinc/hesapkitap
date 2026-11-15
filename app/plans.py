@@ -711,15 +711,21 @@ def seat_notice_items(u: dict) -> list[tuple[int, dict]]:
     owner = system.user(u["member_of"]) or {}
     pid = f"koltuk:{u['id']}:{lapsed_at(u).replace(' ', 'T')}"
     g = grace_until(u)
-    extra = f" Premium {g.strftime('%d.%m.%Y')} tarihine kadar açık." if g and g > datetime.now(timezone.utc) else ""
+    extra = f" {g.strftime('%d.%m')} tarihine kadar açık." if g and g > datetime.now(timezone.utc) else ""
     name = (u.get("username") or "").split("@")[0]
+    def sig(head: str, *tails: str) -> str:  # bildirim gövdesi ≤ 90: sığan en uzun son cümle
+        return head + next((t for t in tails if len(head + t) <= push.BODY_MAX), "")
+
     out = [(u["id"], push.item("aile", pid, "Aile koltukları dolu",
-                               "Premium'un bitti, Aile koltukları dolu." + extra + " Premium'u yenileyebilir ya da aile "
-                               "yöneticisinden koltuk isteyebilirsin.", push.R_ORTAK))]
+                               sig("Premium'un bitti, Aile koltukları dolu." + extra,
+                                   " Yenileyebilir ya da koltuk isteyebilirsin.", " Yenile ya da koltuk iste.",
+                                   " Koltuk isteyebilirsin."),
+                               push.R_ORTAK))]
     if owner:
         out.append((owner["id"], push.item("aile", pid, "Aile koltukları dolu",
-                                           f"{name}: Premium'u bitti, koltuklar dolu." + extra +
-                                           " Üye listesinden koltuk verebilirsin.", push.R_ORTAK)))
+                                           sig(f"{push._ad(name, 16)}: Premium'u bitti, koltuklar dolu." + extra,
+                                               " Üyelerden koltuk verebilirsin.", " Koltuk verebilirsin."),
+                                           push.R_ORTAK)))
     return out
 
 

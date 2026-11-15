@@ -4126,6 +4126,13 @@ class PushDeviceIn(BaseModel):
     platform: Literal["ios", "android"]
     env: Literal["production", "sandbox"] | None = None
     app_version: str | None = Field(default=None, max_length=40)
+    # uygulamanın bildirdiği özellikler (badge: rozeti açılışta kendisi günceller → bildirimde aps.badge; channels:
+    # Türkçe Android kanalları kurulu); bilinmeyen yok sayılır
+    features: list[str] | None = Field(default=None, max_length=10)
+
+
+class PushTestIn(BaseModel):
+    kind: str | None = Field(default=None, max_length=40)  # o türün örnek bildirimi (push.SAMPLES)
 
 
 class PushTokenIn(BaseModel):
@@ -4158,8 +4165,17 @@ def push_device_add(body: PushDeviceIn):
 
     if not push.valid_token(body.token):
         raise HTTPException(422, "Geçersiz cihaz belgesi")
-    push.register(_push_uid(), body.token, body.platform, body.env, body.app_version)
+    push.register(_push_uid(), body.token, body.platform, body.env, body.app_version, body.features)
     return {"ok": True}
+
+
+@app.get("/api/push/badge")
+def push_badge():
+    """iOS rozeti (uygulama açılınca / ön plana gelince): {count, todos (Yapılacaklar), support (okunmamış destek
+    yanıtı)}. Yapılacaklar sayısı saklanır: sonraki bildirimlerin aps.badge'ine girer."""
+    from app import push
+
+    return push.badge(_push_uid())
 
 
 @app.delete("/api/push/devices")
@@ -4254,18 +4270,24 @@ def admin_announcements():
 
 
 @app.post("/api/push/test")
-def push_test():
-    """Kullanıcının cihazlarına "Bildirimler açık" (dakikada bir)."""
+def push_test(body: PushTestIn | None = None):
+    """Kullanıcının cihazlarına "Bildirimler açık" (dakikada bir). {kind}: o türün örnek bildirimi (gerçek tür, kanal ve
+    yol; tür başına dakikada bir). Yöneticiye özel türler (geri_bildirim, sistem) yalnız yöneticiye."""
     from app import push
 
     uid = _push_uid()
+    kind = (body.kind if body else None) or None
+    if kind is not None:
+        admin = (db.current_user() or {}).get("role") == "admin"
+        if kind not in push.SAMPLES or (kind in push.ADMIN_TYPES and not admin):
+            raise HTTPException(422, "Bilinmeyen bildirim türü")
     if not push.enabled():
         raise HTTPException(409, "Bildirimler bu sunucuda kapalı")
     if not push.devices(uid):
         raise HTTPException(409, "Kayıtlı telefon yok; uygulamada bildirim iznini aç")
-    if not push.test_allowed(uid):
+    if not push.test_allowed(uid, kind):
         raise HTTPException(429, "Bir dakika sonra yeniden dene", headers={"Retry-After": str(push.TEST_EVERY)})
-    return {"ok": True, **push.send_test(uid)}
+    return {"ok": True, **push.send_test(uid, kind)}
 
 
 JarUnit = Literal["TRY", "ALTIN_24", "ALTIN_22", "CEYREK", "YARIM", "TAM", "CUMHURIYET", "ATA", "GUMUS", "USD", "EUR", "GBP"]

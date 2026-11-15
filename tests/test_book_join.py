@@ -258,7 +258,8 @@ def test_lapse_when_full_grace_then_free_access_continues(hosted, pushes):
     to = {uid: i for uid, i in pushes}
     assert set(to) == {ayse["id"], owner["id"]}
     assert to[ayse["id"]]["body"].startswith("Premium'un bitti, Aile koltukları dolu.")
-    assert "aile yöneticisinden koltuk isteyebilirsin" in to[ayse["id"]]["body"]
+    assert "oltuk iste" in to[ayse["id"]]["body"] and len(to[ayse["id"]]["body"]) <= 90  # bildirim kısa
+    assert "tarihine kadar açık" in to[ayse["id"]]["body"]
     assert to[owner["id"]]["body"].startswith("ayse: Premium'u bitti, koltuklar dolu.")
     assert to[owner["id"]]["route"] == "#/diger/ortak-defter" and to[ayse["id"]]["kind"] == "aile"
     assert c.get("/api/prices").status_code == 200

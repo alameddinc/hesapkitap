@@ -258,7 +258,7 @@ def test_fixed_notifies_users_once_with_update_hint(owner, nokeys):  # noqa: F81
     assert r.status_code == 200 and r.json()["notified"] == 2  # deniz kapattı
     qa = [x["payload"] for x in push.queue(ayse["id"]) if x["payload"]["kind"] == "duzeltme"]
     qc = [x["payload"] for x in push.queue(can["id"]) if x["payload"]["kind"] == "duzeltme"]
-    assert qa[0]["body"] == "Fiş okuma sorununu düzelttik; tekrar deneyebilirsin. Önce uygulamayı güncelle."
+    assert qa[0]["body"] == "Fiş okuma sorununu düzelttik; uygulamayı güncelleyip tekrar dene."
     assert qc[0]["body"] == "Fiş okuma sorununu düzelttik; tekrar deneyebilirsin." and qc[0]["route"] == "#/ekle"
     assert qa[0]["title"] == "Sorun düzeltildi"
     # aynı durumu yeniden kaydetmek ikinci haber göndermez
@@ -310,7 +310,8 @@ def test_alert_new_kritik_once_per_hour(owner, nokeys):  # noqa: F811
     incidents.record("js_hatasi", "ozet", platform="web")
     incidents.flush()
     q = _sistem(admin)
-    assert len(q) == 1 and q[0]["title"] == "Yeni hata türü: Uygulama hatası (yakalanmamış)"
+    assert len(q) == 1 and q[0]["title"] == "Yeni hata türü"
+    assert q[0]["body"].startswith("Uygulama hatası (yakalanmamış) · ozet")
     assert q[0]["route"] == "#/diger/ayarlar/sorunlar" and "ozet" in q[0]["body"]
     # aynı tür yine: saat dolmadan uyarı yok
     for i in range(6):

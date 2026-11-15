@@ -281,15 +281,15 @@ def test_push_reminds_each_installment(client):
     from app import push
 
     did = _sched(client, day=12)
-    two = push._borc(date(2026, 11, 10))
-    assert len(two) == 1 and two[0]["kind"] == "borc" and "1. taksitin günü 2 gün sonra" in two[0]["title"]
-    assert "₺2.000" in two[0]["body"] and two[0]["route"] == "#/diger/borc-plani"
-    assert push._borc(date(2026, 11, 11)) == []
+    one = push._borc(date(2026, 11, 11))
+    assert len(one) == 1 and one[0]["kind"] == "borc" and "1. taksit yarın" in one[0]["title"]
+    assert "₺2.000" in one[0]["body"] and one[0]["route"].startswith("#/diger/borclar/kisi/")
+    assert push._borc(date(2026, 11, 10)) == []
     assert "bugün" in push._borc(date(2026, 11, 12))[0]["title"]
     client.post(f"/api/debts/{did}/pay", json={"amount": 2000, "paid_at": "2026-11-10"})
     assert push._borc(date(2026, 11, 12)) == []  # ödendi
-    nxt = push._borc(date(2026, 12, 10))
-    assert len(nxt) == 1 and "2. taksitin" in nxt[0]["title"] and nxt[0]["id"] != two[0]["id"]
+    nxt = push._borc(date(2026, 12, 11))
+    assert len(nxt) == 1 and "2. taksit" in nxt[0]["title"] and nxt[0]["id"] != one[0]["id"]
 
 
 @pytest.mark.parametrize("n,ek", [(1, "i"), (2, "si"), (3, "ü"), (5, "i"), (6, "sı"), (9, "u"), (10, "u"), (15, "i"),

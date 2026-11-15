@@ -205,13 +205,13 @@ def test_reminder_three_days_before(apple_two):
     mon = next(i for i in store_subs.items(TODAY) if i["cycle"] == "aylik")
     assert store_subs.reminders(date(2026, 12, 10)) == []
     [r] = store_subs.reminders(date(2026, 12, 11))
-    assert r["kind"] == "abonelik" and r["title"] == "3 gün sonra Apple aboneliği ₺59,99 yenileniyor"
-    assert r["body"].startswith("14 Aralık · App Store.") and r["route"] == f"#/diger/tasarruf/abonelik/{mon['id']}"
+    assert r["kind"] == "abonelik" and r["title"] == "Apple aboneliği 3 gün sonra yenileniyor"
+    assert r["body"].startswith("₺59,99 · 14 Aralık · App Store.") and r["route"] == f"#/diger/tasarruf/abonelik/{mon['id']}"
     assert r["id"] == f"abonelik:yenileme:{mon['id']}:2026-12-14"
     assert store_subs.when_text(1) == "Yarın"
     # yıllık: 3 Mart'a 3 gün kala
     [y] = store_subs.reminders(date(2027, 2, 28))
-    assert "Apple aboneliği ₺599,99" in y["title"]
+    assert "Apple aboneliği" in y["title"] and y["body"].startswith("₺599,99 · ")
     # push günlük işinde (Tasarruf Premium; kendi sunucusunda her şey açık)
     u = {"id": 1, "username": "ornek"}
     items = push.collect(u, date(2026, 12, 11), {"types": {k: True for k in push.TYPES}})
@@ -226,7 +226,8 @@ def test_named_reminder_text(tmpdb):
 
     _load(tmpdb, _months(2026, range(7, 12), 9, "GOOGLE *YouTube", 79.99))
     [r] = store_subs.reminders(date(2026, 12, 6))
-    assert r["title"] == "3 gün sonra YouTube Premium ₺79,99 yenileniyor" and "Google Play" in r["body"]
+    assert r["title"] == "YouTube Premium 3 gün sonra yenileniyor" and "Google Play" in r["body"]
+    assert r["body"].startswith("₺79,99 · ")
 
 
 def test_cancel_then_charged_again(apple_two):

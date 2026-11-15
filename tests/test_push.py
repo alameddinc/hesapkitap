@@ -232,7 +232,7 @@ def test_fcm_request_and_rs256_assertion(client, keys):
     assert msg["token"] == FCM_TOKEN
     assert msg["notification"] == {"title": "VakıfBank ••9602", "body": "Son ödeme 3 gün sonra"}
     assert msg["data"] == {"route": "#/diger/odemeler", "kind": "odeme", "id": p["id"]}
-    assert msg["android"]["notification"] == {"channel_id": "hatirlatma", "tag": p["id"]}
+    assert msg["android"]["notification"] == {"channel_id": "odemeler", "tag": p["id"]}  # tür → Android kanalı
 
 
 def test_apns_request_headers_and_es256_jwt(client, keys):
@@ -379,11 +379,17 @@ def test_daily_digest_and_member_hidden_card(owner, keys):  # noqa: F811
     assert b["payload"]["kind"] == "odeme" and "9602" in b["payload"]["title"] and "1234" not in json.dumps(b["payload"])
     assert b["payload"]["id"] == "odeme:5400******9602:2026-11-05:3gun"
     assert push.flush(_at("2026-11-02T09:31")) == 2
-    # son gün sabahı ikinci kez; 1 ve 2 gün kala yok
-    assert push.run_daily(_at("2026-11-04T09:30")) == {admin["id"]: 0, me["id"]: 0}
-    done = push.run_daily(_at("2026-11-05T09:30"))
+    # 2 gün kala yok; 1 gün kala ("yarın") ikinci kez; son gün sabahı üçüncü kez
+    assert push.run_daily(_at("2026-11-03T09:30")) == {admin["id"]: 0, me["id"]: 0}
+    done = push.run_daily(_at("2026-11-04T09:30"))
     assert done == {admin["id"]: 1, me["id"]: 1}
-    assert push.queue(me["id"])[0]["payload"]["id"].endswith(":songun")
+    [b] = push.queue(me["id"])
+    assert b["payload"]["id"].endswith(":1gun") and b["payload"]["title"] == "Son ödeme yarın · ••9602"
+    assert b["payload"]["body"] == "VakıfBank · ₺2.500 · 5 Kasım Perşembe. Ödediysen işaretle."
+    assert push.flush(_at("2026-11-04T09:31")) == 2
+    assert push.run_daily(_at("2026-11-05T09:30")) == {admin["id"]: 1, me["id"]: 1}
+    [b] = push.queue(me["id"])
+    assert b["payload"]["id"].endswith(":songun") and b["payload"]["title"] == "Bugün son gün · ••9602 · ₺2.500"
 
 
 def test_daily_kinds_fatura_butce_ozet_ortak(owner, keys):  # noqa: F811
@@ -440,22 +446,24 @@ def test_gelir_late_only_when_usually_seen(client, keys):
 def test_zekat_only_when_module_on(client, keys, monkeypatch):
     from app import db, push, zakat
 
-    monkeypatch.setattr(zakat, "reminders", lambda today: ["🌙 <b>Zekât</b> · Ali: yıl 10.11.2026 — 7 gün kaldı\n"
-                                                           "Güncel hesap: <b>1.250,00 TL</b> ödenecek"])
-    monkeypatch.setattr(zakat, "holy_reminders", lambda today: [])
+    monkeypatch.setattr(zakat, "reminder_items", lambda today: [{
+        "html": "🌙 <b>Zekât</b> · Ali: yıl 10.11.2026 — 7 gün kaldı\nGüncel hesap: <b>1.250,00 TL</b> ödenecek",
+        "title": "Zekât yılı 7 gün sonra doluyor", "body": "Ali: güncel hesapla ₺1.250 ödenecek."}])
+    monkeypatch.setattr(zakat, "holy_items", lambda today: [])
     db.set_setting("modules", json.dumps({"zekat": False}))
     assert push._zekat(date(2026, 11, 3)) == []
     db.set_setting("modules", json.dumps({"zekat": True}))
     [z] = push._zekat(date(2026, 11, 3))
-    assert z["title"] == "Zekât" and z["route"] == "#/diger/zekat" and "<b>" not in z["body"]
-    assert z["body"].startswith("Ali: yıl 10.11.2026")
+    assert z["title"] == "Zekât yılı 7 gün sonra doluyor" and z["route"] == "#/diger/zekat" and "<b>" not in z["body"]
+    assert z["body"] == "Ali: güncel hesapla ₺1.250 ödenecek."
 
 
 def test_member_with_hidden_zekat_page_gets_none(owner, keys, monkeypatch):  # noqa: F811
     from app import db, push, system, zakat
 
-    monkeypatch.setattr(zakat, "reminders", lambda today: ["🌙 <b>Zekât</b> · Ali"])
-    monkeypatch.setattr(zakat, "holy_reminders", lambda today: [])
+    monkeypatch.setattr(zakat, "reminder_items", lambda today: [{"html": "🌙 <b>Zekât</b> · Ali", "title": "Zekât",
+                                                                  "body": "Ali"}])
+    monkeypatch.setattr(zakat, "holy_items", lambda today: [])
     _member(owner)
     owner.put("/api/book/rules", json={"hidden_pages": ["zekat"]})
     with db.use_space(None, system.user_by_name("esim")):

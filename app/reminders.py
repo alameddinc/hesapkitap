@@ -152,10 +152,11 @@ def _cut_rule(sts: list[dict]) -> tuple[int, bool]:
     return ends[-1].day, len(tail) == 2 and all(eom(d) and d.day >= 28 for d in tail)
 
 
-def card_cuts(now: date) -> list[dict]:
+def card_cuts(now: date, grace: int = EKSTRE_GRACE) -> list[dict]:
     """Kart başına beklenen son kesim (bugüne kadar geçmiş olan) ve son ödeme günü. Ekstrede "sonraki kesim" yazıyorsa o,
     yoksa öğrenilen kesim günüyle ay ay ilerlenir; bir ay atlanmışsa hatırlatma en son geçen kesime kayar (eski ayda
-    takılıp kalmaz). Dönen: [{card_no, statement (son ekstre), cut, due, missed (yüklenmeyen kesim sayısı)}]."""
+    takılıp kalmaz). Dönen: [{card_no, statement (son ekstre), cut, due, missed (yüklenmeyen kesim sayısı)}]. grace:
+    kesimden sonra beklenen gün (push bildirimi 0: kesimden 1 gün sonra)."""
     by_card: dict[str, list[dict]] = {}
     for s in db.list_statements():  # ortak defterde gizli kart burada süzülü
         by_card.setdefault(s["card_no"], []).append(s)
@@ -173,7 +174,7 @@ def card_cuts(now: date) -> list[dict]:
         missed = 1
         while True:
             nxt = _add_month(cut, day, month_end)
-            if (now - nxt).days < EKSTRE_GRACE + 1:
+            if (now - nxt).days < grace + 1:
                 break
             cut, missed = nxt, missed + 1
             due = cut + gap if gap else None
@@ -181,14 +182,14 @@ def card_cuts(now: date) -> list[dict]:
     return out
 
 
-def _ekstre(now: date, posta: bool) -> list[dict]:
+def _ekstre(now: date, posta: bool, grace: int = EKSTRE_GRACE) -> list[dict]:
     """Her kart için ayrı: beklenen kesimin üstünden EKSTRE_GRACE gün geçti, o kesimin ekstresi yok. Ekstre yüklenince
     (elle, posta, Paylaş) son ekstre ilerler ve madde kendiliğinden düşer."""
     out = []
-    for k in card_cuts(now):
+    for k in card_cuts(now, grace):
         card_no, st, cut, due = k["card_no"], k["statement"], k["cut"], k["due"]
         since = (now - cut).days
-        if since < EKSTRE_GRACE + 1:
+        if since < grace + 1:
             continue
         if (now - date.fromisoformat(st["period_end"])).days > EKSTRE_STALE:
             continue  # aylardır ekstre gelmiyor: kart muhtemelen kullanılmıyor, ısrar etme
@@ -288,6 +289,7 @@ def _odeme(now: date) -> list[dict]:
             continue
         when = "bugün" if left == 0 else "yarın" if left == 1 else f"{left} gün sonra"
         ay = AY[date.fromisoformat(st["period_end"]).month - 1]
+        rest = max(0.0, (st["total_debt"] or 0) - (st.get("paid_amount") or 0))  # dönem borcunun kalanı (asgari değil)
         out.append({"id": f"odeme:{_cid(card_no)}:{due.isoformat()}", "kind": "odeme",
                     "severity": "urgent" if left <= 1 else "warn",
                     "title": f"{st['bank']} ••{_last4(card_no)} · Son ödeme {when}",
@@ -296,7 +298,7 @@ def _odeme(now: date) -> list[dict]:
                     "cta": "Ödemeye bak", "route": "ozet", "action": "pay", "due": due.isoformat(),
                     "tag": "Bugün" if left == 0 else "Yarın" if left == 1 else f"{left} gün kaldı",
                     "period": _month(due), "bank": st["bank"], "last4": _last4(card_no), "card_no": card_no,
-                    "statement_id": st["id"]})
+                    "statement_id": st["id"], "amount": round(rest, 2)})
     return out
 
 
@@ -449,13 +451,14 @@ def _ekstre_oku() -> list[dict]:
         return []
 
 
-def build(now: date | None = None, include_hidden: bool = False) -> list[dict]:
-    """Bugün gösterilecek hatırlatmalar (önce acil olanlar)."""
+def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: int = EKSTRE_GRACE) -> list[dict]:
+    """Bugün gösterilecek hatırlatmalar (önce acil olanlar). ekstre_grace: push bildirimi 0 verir (kesimden 1 gün
+    sonra "ekstreni yükle"); Yapılacaklar varsayılanla (banka PDF'i geç gönderebilir)."""
     now = now or today()
     items: list[dict] = []
     upload = _can_upload()
     if upload and not _page_hidden("ekstreler"):
-        items += _ekstre(now, _posta_on())
+        items += _ekstre(now, _posta_on(), ekstre_grace)
     if upload and not _page_hidden("hesaplar"):
         items += _dokum(now)
     if not _page_hidden("ekstreler"):

@@ -324,10 +324,11 @@ def test_push_reminds_promised_day(client):
 
     client.post("/api/debts", json={"person": "Örnek Kişi", "direction": "borc", "amount": 5000,
                                     "debt_date": "2026-06-01", "due_date": "2026-11-12"})
-    two = push._borc(date(2026, 11, 10))
-    assert [i["kind"] for i in two] == ["borc"] and "2 gün sonra" in two[0]["title"] and two[0]["route"] == "#/diger/borc-plani"
-    assert "₺5.000" in two[0]["body"]
-    assert push._borc(date(2026, 11, 11)) == []
+    one = push._borc(date(2026, 11, 11))
+    assert [i["kind"] for i in one] == ["borc"] and one[0]["title"] == "Örnek Kişi · ₺5.000 yarın"
+    assert one[0]["route"] == "#/diger/borclar/kisi/%C3%96rnek%20Ki%C5%9Fi"  # Borç / Alacak'ta o kişi
+    assert one[0]["body"] == "Söz verdiğin gün. Ödediysen Borç / Alacak'ta işaretle."
+    assert push._borc(date(2026, 11, 10)) == []
     assert "bugün" in push._borc(date(2026, 11, 12))[0]["title"]
     assert push.TYPES["borc"][1] is True
 

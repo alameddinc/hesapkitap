@@ -165,10 +165,11 @@ def announce(owner_id: int, m: dict, joined: bool) -> None:
         name = (m.get("username") or "").split("@")[0] or "Biri"
         rl = book_role_label(m)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        it = (push.item("aile", f"katildi:{m['id']}:{stamp}", f"{name} ortak deftere katıldı",
-                        f"{rl} yetkisiyle. Üyelerde yetkisini ve ondan gizlenenleri değiştirebilirsin." if rl else
-                        "Üyelerde yetkisini ve ondan gizlenenleri değiştirebilirsin.", push.R_ORTAK) if joined else
-              push.item("aile", f"ayrildi:{m['id']}:{stamp}", f"{name} ortak defterden ayrıldı",
+        # başlıkta ad kısalır ("… ortak deftere katıldı" kalır: uygulama kutlamada adı başlıktan okur)
+        it = (push.item("aile", f"katildi:{m['id']}:{stamp}", f"{push._ad(name, 18)} ortak deftere katıldı",
+                        f"{rl} yetkisiyle. Yetkisini Üyeler'de değiştirebilirsin." if rl else
+                        "Yetkisini ve gizlenenleri Üyeler'de değiştirebilirsin.", push.R_ORTAK) if joined else
+              push.item("aile", f"ayrildi:{m['id']}:{stamp}", f"{push._ad(name, 18)} ortak defterden ayrıldı",
                         "Kendi defteriyle devam ediyor; ortak defteri artık görmüyor.", push.R_ORTAK))
         push.notify(owner_id, [it], urgent=joined)
     except Exception:  # noqa: BLE001
