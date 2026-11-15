@@ -498,6 +498,15 @@ CAPABILITIES = (
                               # (/api/budgets spent, by_person) her istemcide zekâtsız. Süzgeç: satırda donation_kind ==
                               # "zekat" ? "Zekât" : category ile karşılaştır, ya da /api/transactions?category=Zekât
                               # (Bağış & Sadaka = zekâtsız). Ortak defterde Zekât sayfası üyeye kapalıysa işaret/grup yok
+    "spendable_pending_cards",  # GET /api/net-worth spendable (ve totals.spendable) kesilecek kart ekstrelerinin KESİN
+                              # kısmını da düşer: pending_cards (totals.pending_cards) = kartla girilmiş ekstresiz
+                              # harcama + ekstresi gelecek bilinen taksit + abonelik (değişken tahmin hariç; kart başına
+                              # pending_cards_items [{title, amount, installments, subscriptions, spent, cut,
+                              # due_date}]); spendable_parts satırı key "pending_cards". Sunucu hesabı: eski istemci de
+                              # yeni rakamı görür (bilinçli). spendable_after_income {amount (= spendable + income),
+                              # income, count, label (tek gelirse adı, yoksa "Beklenen gelirler"), date (en geç), main
+                              # {label, amount, date}} | null: bu dönemin beklenen gelirleri (summary.pending.income ile
+                              # aynı kaynak) gelince; yalnız bilgi ("Maaş gelince (16 Kas): +₺X")
 )
 
 
