@@ -2449,6 +2449,41 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
         return {"card_payment_id": cid, "linked": False, "link": "elle"}
 
 
+def add_cycle_payment(card_no: str, bank: str, amount: float, paid_at: str, account_id: int | None = None) -> dict:
+    """Ekstresi yüklenmemiş döngüye elle kart ödemesi (finance.cycle_payments okur; statement_id boş). account_id
+    verilirse o hesaptan çıkan ödeme (bakiye düşer); aynı hesapta, aynı tutarda (±0,01), ±3 gün içinde dökümden gelmiş
+    ekstreye bağlanmamış kart ödemesi varsa yeni kayıt açılmaz (o zaten döngüye sayılır). Ekstre yüklenince
+    reassign_statement_payments ödemeyi ona atar. Dönüş: {card_payment_id, linked}."""
+    amount = money.money(amount)
+    last4 = (card_no or "")[-4:] or None
+    with connect() as c:
+        acc = None
+        if account_id is not None:
+            acc = c.execute("SELECT id, name FROM accounts WHERE id = ? AND kind IN ('banka', 'nakit')", (account_id,)).fetchone()
+            if not acc:
+                raise ValueError("Hesap bulunamadı (banka ya da nakit olmalı)")
+            found = c.execute(
+                "SELECT id FROM card_payments WHERE import_hash IS NOT NULL AND statement_id IS NULL AND account_id = ? "
+                "AND ROUND(amount * 100) = ? AND pay_date BETWEEN date(?, '-3 days') AND date(?, '+3 days') LIMIT 1",
+                (account_id, money.kurus(amount), paid_at, paid_at)).fetchone()
+            if found:
+                if last4:
+                    c.execute("UPDATE card_payments SET card_last4 = COALESCE(card_last4, ?) WHERE id = ?", (last4, found["id"]))
+                return {"card_payment_id": found["id"], "linked": True}
+        cid = c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, description, account_id, "
+                        "created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                        (paid_at, amount, last4, acc["name"] if acc else None,
+                         f"Kart ödemesi · {bank} •••• {last4 or ''}".strip(), account_id)).lastrowid
+        return {"card_payment_id": cid, "linked": False}
+
+
+def remove_cycle_payments(card_no: str, cut: str) -> int:
+    """Kesimden sonraki, ekstreye bağlanmamış ELLE girilmiş döngü ödemelerini sil (dökümdekiler kalır)."""
+    with connect() as c:
+        return c.execute("DELETE FROM card_payments WHERE import_hash IS NULL AND statement_id IS NULL AND card_last4 = ? "
+                         "AND pay_date > ?", ((card_no or "")[-4:], cut)).rowcount
+
+
 BILL_FIELDS = ("provider", "description", "amount", "due_date", "category", "note", "file_name")
 
 

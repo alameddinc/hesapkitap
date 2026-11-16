@@ -108,7 +108,30 @@ def _spends(r: dict, kinds: tuple = ()) -> bool:
     """Gider sayılan satır (birikim hariç)."""
     return r["kind"] in (kinds or (*CARD_SPEND, FEE, EXPENSE)) and not _saving(r)
 SUBSCRIPTION_CATEGORIES = {"Dijital Abonelik", "AI & Yazılım Abonelik"}
-VARIABLE_LOOKBACK = 6  # değişken harcama tahmini için son kaç dönem (medyan: tek uç ay tahmini şişirmesin)
+VARIABLE_LOOKBACK = 6  # değişken harcama geçmişi: son kaç dönem okunur (tahmin variable_estimate)
+VARIABLE_WEIGHTS = (3, 2, 1)  # son 3 dönem ağırlıklı ortalama (en yeni 3); backtest: app/card_backtest.py
+
+
+def is_variable_spend(t: dict) -> bool:
+    """Kart satırı "her zamanki harcama" (değişken) mı: taksitsiz alışveriş/iade + O DÖNEMDE AÇILAN taksitli alışverişin
+    ilk taksiti (1/N; U3 16.11: yeni taksitlerin ilk taksiti hiçbir yerde yoktu, tahmin sistematik düşüktü). Sonraki
+    taksitler (2/N…) son ekstreden bilinir (installments), abonelikler ayrı."""
+    return t["txn_type"] in CARD_SPEND and t["category"] not in SUBSCRIPTION_CATEGORIES \
+        and (t["installment_no"] is None or t["installment_no"] == 1)
+
+
+def variable_estimate(history: list[float], method: str = "weighted") -> float:
+    """Geçmiş dönemlerin değişken harcamasından (eskiden yeniye) sıradaki dönemin tahmini.
+    weighted (varsayılan): son 3 dönem 3:2:1 ağırlıklı ortalama — artış trendini medyandan hızlı izler, tek uç ayın
+    etkisi 1/2'yi geçmez. median: eski yöntem (son VARIABLE_LOOKBACK dönemin medyanı). Seçim backtest'le
+    (app/card_backtest.py: sentetik + canlı kopya, ortalama mutlak yüzde hata)."""
+    if not history:
+        return 0.0
+    if method == "median":
+        return median(history[-VARIABLE_LOOKBACK:])
+    w = VARIABLE_WEIGHTS[:len(history)]
+    last = history[-len(w):][::-1]  # en yeni önce
+    return sum(a * b for a, b in zip(w, last)) / sum(w)
 
 
 # ---------------------------------------------------------------- helpers
@@ -295,6 +318,10 @@ def _salary_entry(e: dict, salary_ids: set) -> bool:
             or bool(SALARY_TEXT.search(_fold(e["description"] or ""))))
 
 
+SALARY_GRACE_DAYS = 7  # geçmiş dönemin yatmamış maaşı beklenen günden bu kadar gün "bekliyor" kalır (takvim günü;
+# iş günü yardımcısı app/workdays.py gelince ≈5 iş günü)
+
+
 def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) -> list[dict]:
     done = {e["recurring_id"] for e in entries if e["recurring_id"] and e["month"] == month}
     ov = db.recurring_overrides()
@@ -311,6 +338,12 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
         row = _pending_row(r, month, ov)
         is_salary = _is_salary(r)
         if r["kind"] == INCOME and is_salary and salary_seen:  # o ayın maaşı dökümden gelmiş: "bekliyor" gösterme
+            continue
+        if past and r["kind"] == INCOME and is_salary and not salary_seen \
+                and date.fromisoformat(row["date"]) + timedelta(days=SALARY_GRACE_DAYS) >= date.today():
+            # beklenen gün hafta sonu/bayrama denk gelmiş olabilir (15'i Cumartesi → Pazartesi yatar): dönem bitse de
+            # tolerans içinde maaş "bekliyor" kalır (Maaş gelince'ye girer; lead 16.11 kayma A)
+            out.append(row)
             continue
         if past and r["kind"] == INCOME and is_salary and not salary_seen:
             # maaş tahmini GERÇEK gelire sayılır (ayrılmaz): dökümü yüklenmemiş/elle giren kullanıcıda geçmiş aylar
@@ -1073,14 +1106,10 @@ def card_projection() -> dict:
                 subs.setdefault(m, {"description": m, "amount": 0.0, "category": t["category"], "txn_id": t["id"]})
                 subs[m]["amount"] += t["amount"]
 
-        # Değişken = toplam kart harcaması - taksitli satırlar - abonelikler; son N dönem ortalaması
+        # Değişken = taksitsiz harcama + o dönem açılan taksitlerin ilk taksiti − abonelikler (is_variable_spend);
+        # tahmin variable_estimate (son 3 dönem ağırlıklı)
         periods = sorted({p for (a, p) in by_acc_period if a == acc})[-VARIABLE_LOOKBACK:]
-        variable = []
-        for p in periods:
-            v = sum(t["amount"] for t in by_acc_period[(acc, p)]
-                    if t["txn_type"] in CARD_SPEND and t["installment_no"] is None
-                    and t["category"] not in SUBSCRIPTION_CATEGORIES)
-            variable.append(v)
+        variable = [sum(t["amount"] for t in by_acc_period[(acc, p)] if is_variable_spend(t)) for p in periods]
 
         for m, sub in subs.items():
             if states.get(m, {}).get("status") == "dusuruldu" and states[m]["new_amount"] is not None:
@@ -1093,7 +1122,7 @@ def card_projection() -> dict:
             "next_due_date": st["next_due_date"], "next_period_end": st["next_period_end"],
             "installments": installments, "early_close": close,
             "subscriptions": [{**s, "amount": _round(s["amount"])} for s in subs.values()],
-            "variable_avg": _round(median(variable)) if variable else 0.0,
+            "variable_avg": _round(variable_estimate(variable)),
             "variable_periods": len(variable),
         }
     return out
@@ -1120,8 +1149,8 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
     """Kesilmemiş ekstre, kart başına: bugüne kadar ne birikti, kesimde tahminen ne olur.
 
     Bugüne kadar = son ekstreden devreden taksitler + abonelikler + son kesimden beri elle/fişle girilen kart harcamaları.
-    Kesimde = taksit + abonelik + değişken harcama; değişken için geçmiş dönemlerin medyanı ile "şu ana kadarki +
-    kalan günlerin payı"ndan büyüğü alınır (harcama girilmese de tahmin geçmişin altına düşmez).
+    Kesimde = taksit + abonelik + değişken harcama; değişken için geçmişten tahmin (variable_estimate) ile "şu ana
+    kadarki + kalan günlerin payı"ndan büyüğü alınır (harcama girilmese de tahmin geçmişin altına düşmez).
     Hangi karttan ödendiği belli olmayan harcamalar en çok kullanılan karta yazılır ve ayrıca gösterilir.
     Kesimden önceki (devreden) eşleşmemiş elle kayıt, kesilmiş son ekstrede bağsız aynı tutarlı/yakın tarihli satır
     varsa sayılmaz: o harcama zaten ekstrede (card_debt), açık dönemde ikinci kez sayılmasın.
@@ -1673,7 +1702,7 @@ def _plan(months: int, today: date) -> dict:
                                                  + (f" (girilen {money.tl(cyc['spent'], decimals=0)} hariç)" if cyc["spent"] else "")})
             elif p["variable_avg"] > 0:
                 lines.append({"type": "degisken", "kind": EXPENSE, "amount": p["variable_avg"],
-                              "description": f"{acc} tahmini kart harcaması (son {p['variable_periods']} dönem medyanı)",
+                              "description": f"{acc} tahmini kart harcaması (son {min(3, p['variable_periods'])} dönem ağırlıklı)",
                               "account": acc})
         # --- kısma hedefleri: ekstresi olmayan aylarda değişken kart tahmini hedef kadar azalır
         saving = sum(g["baseline"] - g["target"] for g in goals if g["start_month"] <= m and g["baseline"] > g["target"])
@@ -1925,14 +1954,20 @@ def _payables(today: date) -> list[dict]:
                     "days_left": (date.fromisoformat(d["due_date"]) - today).days,
                     "paid_amount": d["paid_amount"] or None, "paid_at": d["settled_at"], "status": status,
                     "in_total": status != "odendi"})
-    # Kesilmemiş ekstreler: tahmini tutar, ödeme butonu yok
-    for d in plan(3, today=today)["dues"]:
-        if d["estimated"] and (date.fromisoformat(d["date"]) - today).days <= 45:
-            out.append({"type": "estimate", "id": None, "title": f"{d['bank']} {d['account']}",
-                        "subtitle": "Sonraki ekstre (tahmini)", "amount": d["amount"] or 0, "min_payment": None,
-                        "due_date": d["date"], "days_left": (date.fromisoformat(d["date"]) - today).days,
-                        "paid_amount": None, "paid_at": None, "status": "tahmini", "cycle": d.get("cycle"),
-                        "in_total": False})
+    # Kesilmemiş (ya da kesilmiş ama ekstresi yüklenmemiş) ekstreler: tahmini tutar. Ekstre yüklenmeden o döngüye kart
+    # ödemesi geldiyse (dökümden ya da POST /api/cards/cycle-pay) cycle_paid (yetenek cycle_paid): status yine "tahmini"
+    est_dues = [d for d in plan(3, today=today)["dues"]
+                if d["estimated"] and (date.fromisoformat(d["date"]) - today).days <= 45]
+    cyc_paid = cycle_payments(today, [d["cycle"] for d in est_dues if d.get("cycle")])
+    for d in est_dues:
+        item = {"type": "estimate", "id": None, "title": f"{d['bank']} {d['account']}",
+                "subtitle": "Sonraki ekstre (tahmini)", "amount": d["amount"] or 0, "min_payment": None,
+                "due_date": d["date"], "days_left": (date.fromisoformat(d["date"]) - today).days,
+                "paid_amount": None, "paid_at": None, "status": "tahmini", "cycle": d.get("cycle"),
+                "in_total": False, "card_no": d["account"]}
+        if d["account"] in cyc_paid:
+            item["cycle_paid"] = cyc_paid[d["account"]]
+        out.append(item)
     # key: kalemin kararlı, benzersiz kimliği (yetenek payables_key). Tahminin id'si yok (None): iki kartın tahmini aynı
     # günde düşünce istemcinin "tür-id-tarih" anahtarı çakışıyordu ve React çakışan satırı silmeden bırakıp her yeniden
     # sıralamada (Ödendi / Geri al) bir kopya biriktiriyordu. Aynı anahtar ikinci kez gelirse (olmamalı) ilki kalır.
@@ -1945,6 +1980,68 @@ def _payables(today: date) -> list[dict]:
             uniq.append(x)
     order = {"gecikti": 0, "kismi": 1, "bekliyor": 2, "tahmini": 3, "odendi": 4}
     return sorted(uniq, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
+
+
+CYCLE_PAID_SHARE = 0.8  # tahminin bu payı kadar ödendiyse döngü ödendi sayılır (tahmin kesin değil)
+
+
+def _paid_need(cy: dict) -> float:
+    """Döngü ödendi sayılmak için gereken: kesin kısım (so_far) ile tahminin %80'inden küçüğü (kesin kısım yoksa %80)."""
+    share = CYCLE_PAID_SHARE * (cy.get("at_cut") or 0.0)
+    return min(cy["so_far"], share) if money.gt(cy.get("so_far") or 0, 0) else share
+
+
+def cycle_payments(today: date, cycles: list[dict]) -> dict[str, dict]:
+    """Ekstresi henüz yüklenmemiş döngüye gelen kart ödemeleri (U2, 16.11): kesimi GEÇMİŞ (cut < bugün) tahmini döngü
+    için card_payments'ta (dökümden "kart ödemesi" ya da elle POST /api/cards/cycle-pay) kesimden sonra, son ödeme
+    günü + PAY_GRACE_DAYS'e kadar, henüz bir ekstreye bağlanmamış ödemeler. Kart son 4 hanesi tutuyorsa o kartın;
+    hanesi yoksa (başka bankanın kartına EFT) tutarı tek bir döngünün kesin kısmını ya da tahminin %80'ini karşılıyorsa
+    o döngünün. Son yüklenmiş ekstrenin ödeme penceresi bu döngünün kesimiyle biter (db._statement_windows): aynı ödeme
+    iki yerde sayılmaz. Ekstre yüklenince ödeme ona atanır (db.reassign_statement_payments), döngü tahmini düşer.
+    Dönüş: {kart no: {amount, date (son ödeme), covered (ödendi sayılır: ≥ kesin kısım ya da ≥ tahminin %80'i),
+    manual (elle girilmiş kayıt var), payment_ids}}."""
+    cyc = [c for c in cycles if c and c.get("cut") and c["cut"] < today.isoformat()]
+    if not cyc:
+        return {}
+    with db.connect() as c:
+        pays = [dict(r) for r in c.execute(
+            "SELECT id, pay_date, amount, card_last4, import_hash FROM card_payments WHERE amount > 0 "
+            "AND statement_id IS NULL AND pay_date <= ? ORDER BY pay_date, id", (today.isoformat(),))]
+
+    def window(cy: dict) -> tuple[str, str]:
+        due = date.fromisoformat(cy["due"]) if cy.get("due") else date.fromisoformat(cy["cut"]) + timedelta(days=10)
+        return cy["cut"], (due + timedelta(days=db.PAY_GRACE_DAYS)).isoformat()
+
+    got: dict[str, list] = defaultdict(list)
+    for p in pays:
+        d = p["pay_date"][:10]
+        inw = [cy for cy in cyc if window(cy)[0] < d <= window(cy)[1]]
+        if p["card_last4"]:
+            inw = [cy for cy in inw if cy["account"][-4:] == p["card_last4"]]
+        else:  # tutar o döngünün ödeme eşiği ile tahminin 1,5 katı arasında olmalı (başka kartın ödemesi sayılmasın)
+            inw = [cy for cy in inw if money.gt(_paid_need(cy), 0) and money.ge(p["amount"], _paid_need(cy))
+                   and money.le(p["amount"], 1.5 * (cy.get("at_cut") or 0))]
+            if len(inw) != 1:  # kartı belli değil, birden çok döngüye uyuyor: hiçbirine yazılmaz
+                continue
+        if inw:
+            got[inw[0]["account"]].append(p)
+    out = {}
+    latest = db.latest_card_statements(today.isoformat())
+    for cy in cyc:
+        ps = got.get(cy["account"])
+        if not ps:
+            continue
+        # son yüklenmiş ekstrenin kalanı varsa (geç ödendi, kesimden sonra) ödeme önce onu kapatır: döngüye fazlası
+        st = latest.get(cy["account"])
+        owed = db.statement_remaining(st, today.isoformat()) if st else 0.0
+        total = _round(max(0.0, sum(p["amount"] for p in ps) - owed))
+        if not money.gt(total, 0):
+            continue
+        need = _paid_need(cy)
+        out[cy["account"]] = {"amount": total, "date": ps[-1]["pay_date"][:10],
+                              "covered": money.ge(total, need) if money.gt(need, 0) else True,
+                              "manual": any(p["import_hash"] is None for p in ps), "payment_ids": [p["id"] for p in ps]}
+    return out
 
 
 def paid_recurring(today: date | None = None) -> list[dict]:
@@ -2813,7 +2910,11 @@ def net_worth(today: date | None = None) -> dict:
     zekât borcu. Kalemlerin ayrıntısı _due_this_period. Kesin kısım "her zamanki harcama" (değişken) tahminini ve yeni
     gelirleri içermez; onlar Ay sonunda kalacak'ta (expected.forecast_net). net_display'deki card_estimated pending_cards'ın
     üst kümesidir (kesim tahmini = kesin kısım + kalan değişken pay), iki formül ayrı: çift düşüm yok.
-    spendable_after_income: spendable + bu dönem beklenen gelirler (bilgi; spendable'ı değiştirmez)."""
+    spendable_after_income: spendable + bu dönem beklenen gelirler (bilgi; spendable'ı değiştirmez).
+    TEK UFUK (U1, lead 16.11; yetenek spendable_horizon): yukarıdaki kalemlerin hepsi vade ≤ spend_horizon (dönem sonu;
+    dönemin bitmesine ≤1 gün kaldıysa sonraki dönem sonu) ise düşülür (gecikmiş ve vadesiz dahil). Ufuk sonrası, sonraki
+    dönem sonuna kadar vadeliler spendable_later (düşülmez; sonraki dönemin düzenli ödemeleri yok). Ekstresi yüklenmemiş
+    döngüye kart ödemesi geldiyse (U2, cycle_payments) o döngünün kesin kısmı ve net_display tahmini ödenen kadar azalır."""
     today = today or date.today()
     accounts = db.list_accounts()
     cash = sum(a["current"] for a in accounts if a["current"] is not None)
@@ -2827,13 +2928,42 @@ def net_worth(today: date | None = None) -> dict:
                           "estimated": False, "statement_id": st["id"]})
     for p in payables(today):
         if p["type"] == "estimate":
-            cards.append({"title": p["title"], "amount": p["amount"], "due_date": p["due_date"], "estimated": True})
+            amt, paid = p["amount"], p.get("cycle_paid")
+            if paid:  # ekstresi yüklenmemiş döngü ödendi: para hesaptan çıktı, tahmin ikinci kez düşülmez
+                amt = 0.0 if paid["covered"] else _round(max(0.0, amt - paid["amount"]))
+            if money.gt(amt, 0):
+                cards.append({"title": p["title"], "amount": amt, "due_date": p["due_date"], "estimated": True})
         elif p.get("rolled_into"):  # gecikmiş eski ekstre: bilgi, toplamda yok (kalanı son ekstrede)
             overdue.append({"title": p["title"], "amount": _round(p["amount"] - (p["paid_amount"] or 0)),
                             "due_date": p["due_date"], "statement_id": p["id"], "rolled_into": p["rolled_into"]})
     card_debt = sum(c["amount"] for c in cards if not c["estimated"])
     card_est = sum(c["amount"] for c in cards if c["estimated"])
-    pending_items = _pending_cards(today)
+    # Ödemelerden sonra'nın TEK ufku (spend_horizon): vadesi ufka kadar olan (geçmiş ve vadesiz dahil) kalemler düşülür,
+    # ufuktan sonraki dönemin sonuna kadar vadeli olanlar spendable_later'da (bilgi; düşülmez)
+    hz = spend_horizon(today)
+    h_end, l_end = hz["end"].isoformat(), hz["later_end"].isoformat()
+    later: list[dict] = []
+
+    def in_h(due: str | None) -> bool:
+        return not due or due <= h_end
+
+    def to_later(title: str, amount: float, due: str | None, kind: str, **extra) -> None:
+        if due and h_end < due <= l_end and money.gt(amount, 0):
+            later.append({"title": title, "amount": _round(amount), "due_date": due, "type": kind, **extra})
+
+    card_debt_now = 0.0
+    for c in cards:
+        if c["estimated"]:
+            continue
+        if in_h(c["due_date"]):
+            card_debt_now += c["amount"]
+        else:
+            to_later(c["title"], c["amount"], c["due_date"], "card", statement_id=c.get("statement_id"))
+    pending_all = _pending_cards(today)
+    pending_items = [x for x in pending_all if in_h(x["due_date"])]
+    for x in pending_all:
+        if not in_h(x["due_date"]):
+            to_later(x["title"], x["amount"], x["due_date"], "card_estimate", account=x["account"])
     pending_cards = sum(x["amount"] for x in pending_items)
     open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
     receivable = sum(d["remaining"] for d in open_try if d["direction"] == "alacak")
@@ -2852,7 +2982,8 @@ def net_worth(today: date | None = None) -> dict:
         credit_cards.append({"title": title, "bank": st["bank"], "card_no": card_no, "last_period_end": st["period_end"],
                              "last_total": st["total_debt"], "last_due": st["due_date"], "paid_at": st["paid_at"],
                              "unpaid": unpaid, "next_estimate": nxt["amount"] if nxt else None,
-                             "next_due": nxt["due_date"] if nxt else None, "cycle": nxt.get("cycle") if nxt else None})
+                             "next_due": nxt["due_date"] if nxt else None, "cycle": nxt.get("cycle") if nxt else None,
+                             "next_paid": nxt.get("cycle_paid") if nxt else None})
     # dökümü daha önce yüklenmiş ama bakiyesi bilinmeyen bankalar (tampon özelliğinden önceki yüklemeler)
     from app.bank_import import short_bank
 
@@ -2876,12 +3007,24 @@ def net_worth(today: date | None = None) -> dict:
     # max(kalan − kumbara, 0) + kumbara düşülür (kalan ve kumbara ikisi birden değil)
     rem_by = {d["id"]: d["remaining"] for d in open_try if d["direction"] == "borc"}
     in_jar = _round(sum(min(max(0.0, b), max(0.0, rem_by[i])) for i, b in jars.get("by_debt", {}).items() if i in rem_by))
-    payable_sp = payable - in_jar
-    due = _due_this_period(today, pending_items)
+    # TL borç ufukla: vadesi ufka kadar (vadesiz, gecikmiş dahil) olan kısım düşülür; ödeme planlı borçta ufka kadar vadesi
+    # gelen taksitler. Kumbaranın karşıladığı kısım önce düşer (kumbara zaten "reserved"da: iki kez sayılmaz)
+    payable_sp = 0.0
+    for d in open_try:
+        if d["direction"] != "borc" or not money.gt(d["remaining"], 0):
+            continue
+        now, nxt, nxt_due = _debt_due_split(d, h_end, l_end)
+        covered = min(max(0.0, jars.get("by_debt", {}).get(d["id"], 0.0)), d["remaining"])
+        c_now = min(covered, now)
+        payable_sp += now - c_now
+        to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "debt", debt_id=d["id"])
+    due = _due_this_period(today, pending_all, hz)
+    for b in due.pop("_later_bills"):
+        to_later(b["title"], b["amount"], b["date"], "bill", bill_id=b["id"])
     extra = sum(due[k]["amount"] for k in DUE_KEYS)
-    spendable = cash - card_debt - pending_cards - payable_sp - jars["total"] - zakat_due - extra
+    spendable = cash - card_debt_now - pending_cards - payable_sp - jars["total"] - zakat_due - extra
     # eski satırlar (cash … zakat_due) her zaman, sırası aynı; yeni satırlar (DUE_KEYS) yalnız sıfırdan büyükse
-    rows = [("cash", "Bankadaki ve nakit para", cash, "+"), ("card_debt", "Ödenecek kart ekstresi", card_debt, "−"),
+    rows = [("cash", "Bankadaki ve nakit para", cash, "+"), ("card_debt", "Ödenecek kart ekstresi", card_debt_now, "−"),
             ("pending_cards", "Kesilecek kart ekstreleri (harcadıkların)", pending_cards, "−")]
     rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("pending_other", "card_interest", "card_late_interest")]
     rows += [("payable", "TL borçların" + (" (kumbarada ayrılan kısmı hariç)" if in_jar else ""), payable_sp, "−")]
@@ -2891,7 +3034,10 @@ def net_worth(today: date | None = None) -> dict:
                        if k not in DUE_KEYS or money.gt(v, 0)]
     card_items = [{"title": c["title"], "amount": c["amount"], "date": c["due_date"],
                    "overdue": bool(c["due_date"] and c["due_date"] < today.isoformat())}
-                  for c in cards if not c["estimated"]]
+                  for c in cards if not c["estimated"] and in_h(c["due_date"])]
+    later.sort(key=lambda x: (x["due_date"], x["title"]))
+    spendable_later = {"total": _round(sum(x["amount"] for x in later)), "items": later,
+                       "from": h_end, "until": l_end}
     # ekranda gösterilen Net durum: kesilecek kart ekstresi (tahmini) de düşülür (docstring)
     net_disp = _round(cash + in_wallets + hold["self_total"] - card_debt - card_est + receivable - payable - zakat_due)
     return {"reserved": jars["total"], "free": _round(cash - jars["total"]), "spendable": _round(spendable), "accounts": accounts, "cash": _round(cash), "cards": cards, "card_debt": _round(card_debt),
@@ -2915,7 +3061,10 @@ def net_worth(today: date | None = None) -> dict:
             # dökümü [{title, amount, date, …}] (satır yoksa boş liste)
             "card_debt_items": card_items,
             **{f"{k}_items": due[k]["items"] for k in DUE_KEYS},
-            "spendable_after_income": _spendable_after_income(spendable, today),
+            "spendable_after_income": _spendable_after_income(spendable, today, hz["periods"]),
+            # yetenek spendable_horizon: ufuk (bu tarihe kadar vadeli olanlar düşüldü) ve ufuktan sonra, bir sonraki dönem
+            # sonuna kadar vadeli kesin ödemeler ("Maaştan sonra ödenecek"; spendable'dan DÜŞÜLMEZ)
+            "spendable_horizon": h_end, "spendable_later": spendable_later,
             "spendable_explain": SPENDABLE_EXPLAIN + (SPENDABLE_JAR_NOTE if in_jar else ""),
             "stale": stale}
 
@@ -2937,11 +3086,53 @@ def _pending_cards(today: date) -> list[dict]:
         if not cyc:
             continue
         amt = _round(min(max(0.0, cyc.get("so_far") or 0.0), max(0.0, p["amount"] or 0.0)))
+        paid = p.get("cycle_paid")
+        if paid:  # ekstresi yüklenmemiş döngüye kart ödemesi geldi: ödendiyse düşülmez, eksikse kalan
+            amt = 0.0 if paid["covered"] else _round(max(0.0, amt - paid["amount"]))
         if not money.gt(amt, 0):
             continue
         out.append({"title": p["title"], "account": cyc["account"], "amount": amt, "installments": cyc["installments"],
-                    "subscriptions": cyc["subscriptions"], "spent": cyc["spent"], "cut": cyc["cut"], "due_date": p["due_date"]})
+                    "subscriptions": cyc["subscriptions"], "spent": cyc["spent"], "cut": cyc["cut"], "due_date": p["due_date"],
+                    **({"paid_amount": paid["amount"]} if paid else {})})
     return out
+
+
+def spend_horizon(today: date) -> dict:
+    """Ödemelerden sonra'nın (spendable) TEK ufku (lead 16.11): içinde bulunulan dönemin son günü. Dönemin sonuna en çok
+    1 gün kaldıysa (son gün ya da bir önceki gün; maaş genelde dönüm gününden hemen önce yatar, ertesi dönemin ödemeleri
+    artık bu paradan çıkar) bir sonraki dönemin son günü. Kesilmiş ekstre kalanı, kesilecek ekstrenin kesin kısmı, TL borç,
+    fatura, düzenli ödeme, kart dışı taksit/abonelik: vadesi ufka kadar olan (geçmiş ve vadesiz dahil) düşülür.
+    Dönüş: {end, periods (ufkun kapsadığı dönemler, cur ilk), later_end (spendable_later'ın sonu: ufuktan sonraki dönemin
+    son günü)}."""
+    cur = current_period(today)
+    end = period_bounds(cur)[1]
+    periods = [cur]
+    if (end - today).days <= 1:
+        periods.append(add_months(cur, 1))
+        end = period_bounds(periods[-1])[1]
+    return {"end": end, "periods": periods, "later_end": period_bounds(add_months(periods[-1], 1))[1]}
+
+
+def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str | None]:
+    """TL borcun kalanı ufka göre: (ufka kadar vadeli, ufuk sonrası l_end'e kadar vadeli, o kısmın vadesi).
+    Vadesiz ya da vadesi geçmiş/ufuk içinde: tamamı şimdi. Ödeme planlı borç: ufka kadar vadesi gelen taksitlerden
+    ödenmemiş kısım şimdi, l_end'e kadarki taksitler sonra (daha ilerisi hiçbirinde)."""
+    from app import debt_schedule
+
+    rem = max(0.0, d["remaining"] or 0.0)
+    if debt_schedule.is_scheduled(d) and not d.get("settled_at"):
+        rows = debt_schedule.installments(d)
+        paid = debt_schedule.plan_paid(d)
+        thru_h = sum(r["amount"] for r in rows if r["date"] <= h_end)
+        thru_l = sum(r["amount"] for r in rows if r["date"] <= l_end)
+        now = min(rem, max(0.0, thru_h - paid))
+        nxt = min(rem - now, max(0.0, thru_l - paid - now))
+        nd = next((r["date"] for r in rows if h_end < r["date"] <= l_end), None)
+        return _round(now), _round(nxt), nd
+    due = d.get("due_date")
+    if not due or due <= h_end:
+        return _round(rem), 0.0, None
+    return 0.0, (_round(rem) if due <= l_end else 0.0), due
 
 
 DUE_KEYS = ("pending_other", "card_interest", "card_late_interest", "bills", "recurring")
@@ -2951,7 +3142,7 @@ DUE_LABELS = {"pending_other": "Bekleyen taksit ve abonelikler (kart dışı)",
               "bills": "Ödenmemiş faturalar", "recurring": "Düzenli ödemeler (kira, aidat…)"}
 
 
-def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
+def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = None) -> dict[str, dict]:
     """Ödemelerden sonra'nın (spendable) yeni kalemleri (yetenek spendable_all_due): {key: {amount, items}}.
 
     Kaynak Ay sonunda kalacak ile aynı (plan → içinde bulunulan dönemin satırları; expected.parts), böylece bir kalem
@@ -2971,30 +3162,48 @@ def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
       ödenmişse "gecikme". Son ödeme günü gelmemişse yok (kalanın tamamı zaten card_debt'te düşülüyor). Sonraki ekstre
       gelince o kartın son ekstresi odur (eskisi rolled_into): kalan ve faiz yeni ekstrenin toplamında, bir kez. Ortak
       defterde faiz gizliyse tutar yok → satır yok.
-    Yeni gelir ve değişken "her zamanki harcama" tahmini dahil değil (Ay sonunda kalacak'ta)."""
+    Yeni gelir ve değişken "her zamanki harcama" tahmini dahil değil (Ay sonunda kalacak'ta).
+    Ufuk (hz = spend_horizon; verilmezse bugünden): "bu dönem" = ufkun kapsadığı dönemler (dönemin son günü ya da bir
+    önceki günü ise bir sonraki dönem de), faturada vade ≤ ufuk. Ufuk sonrası, sonraki dönem sonuna kadar vadeli ödenmemiş
+    faturalar "_later_bills"te (çağıran spendable_later'a taşır). Sonraki dönemin düzenli ödemeleri/taksitleri ufukta
+    değilse hiçbir yerde yok (o dönem başlayınca bekleyen olur)."""
     out = {k: {"amount": 0.0, "items": []} for k in DUE_KEYS}
+    hz = hz or spend_horizon(today)
+    h_end, l_end = hz["end"].isoformat(), hz["later_end"].isoformat()
+    later_bills: list[dict] = []
 
     def add(key: str, item: dict) -> None:
         out[key]["items"].append(item)
         out[key]["amount"] = _round(out[key]["amount"] + item["amount"])
 
-    cur = current_period(today)
-    for b in db.list_bills():  # bu dönem: plan'ın "fatura" satırı ile aynı kural; önceki dönemden kalan ödenmemiş de (gecikti)
-        if b["paid_at"] is None and b["due_date"] and db.period_of(b["due_date"]) <= cur and money.gt(b["amount"] or 0, 0):
-            add("bills", {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"],
-                          "overdue": b["due_date"] < today.isoformat()})
-    for r in pending_recurring(cur, db.list_recurring(), db.list_entries(cur)):
-        if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
-            add("recurring", {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],
-                              "recurring_id": r["recurring_id"]})
+    for b in db.list_bills():  # vade ≤ ufuk: plan'ın "fatura" satırı ile aynı kural; önceki dönemden kalan ödenmemiş de (gecikti)
+        if b["paid_at"] is None and b["due_date"] and money.gt(b["amount"] or 0, 0):
+            item = {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"],
+                    "overdue": b["due_date"] < today.isoformat()}
+            if b["due_date"] <= h_end:
+                add("bills", item)
+            elif b["due_date"] <= l_end:
+                later_bills.append(item)
+    recurring, rows = db.list_recurring(), plan(len(hz["periods"]), today=today)["months"]
+    # önceki dönemin girilmemiş düzenli gideri vadesinden TRANSFER_LATE_DAYS gün sonrasına kadar hâlâ ödenecek (gecikti;
+    # ör. 16'sı Cumartesi vadeli kira Pazartesi ödenir, dönem 17'sinde başladı; lead 16.11 kayma B). Daha eskisi düşülmez
+    late_from = (today - timedelta(days=db.TRANSFER_LATE_DAYS)).isoformat()
+    prev = add_months(hz["periods"][0], -1)
+    for per in [prev, *hz["periods"]]:
+        for r in pending_recurring(per, recurring, db.list_entries(per)):
+            if per == prev and not (late_from <= r["date"] <= today.isoformat()):
+                continue
+            if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
+                add("recurring", {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],
+                                  "recurring_id": r["recurring_id"], **({"overdue": True} if per == prev else {})})
     covered = {x["account"] for x in pending_items}
     covered |= {p["cycle"]["account"] for p in payables(today) if p["type"] == "estimate" and p.get("cycle")}
-    row = next((m for m in plan(1, today=today)["months"] if m["month"] == cur), None)
-    for ln in (row or {}).get("lines", []):
-        if ln["type"] in ("taksit", "abonelik") and ln["kind"] == EXPENSE and ln.get("account") not in covered \
-                and money.gt(ln["amount"] or 0, 0):
-            add("pending_other", {"title": ln["description"], "amount": _round(ln["amount"]), "date": None,
-                                  "account": ln.get("account"), "type": ln["type"]})
+    for row in (m for m in rows if m["month"] in hz["periods"]):
+        for ln in row.get("lines", []):
+            if ln["type"] in ("taksit", "abonelik") and ln["kind"] == EXPENSE and ln.get("account") not in covered \
+                    and money.gt(ln["amount"] or 0, 0):
+                add("pending_other", {"title": ln["description"], "amount": _round(ln["amount"]), "date": None,
+                                      "account": ln.get("account"), "type": ln["type"]})
     interest = None
     for st in db.latest_card_statements(today.isoformat()).values():
         left = db.statement_remaining(st, today.isoformat())
@@ -3009,17 +3218,24 @@ def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
         add("card_late_interest" if late else "card_interest",
             {"title": f"{st['bank']} {st['card_no']}", "amount": _round(ci["amount"]), "date": st["due_date"],
              "remaining": _round(left), "statement_id": st["id"]})
+    out["_later_bills"] = later_bills
     return out
 
 
-def _spendable_after_income(spendable: float, today: date) -> dict | None:
+def _spendable_after_income(spendable: float, today: date, periods: list[str] | None = None) -> dict | None:
     """Harcanabilir + bu dönem beklenen gelirler (bilgi alanı; istemci "Maaş gelince (16 Kas): +₺X" satırı).
     Beklenen gelir = Özet summary.pending.income ile aynı kaynak (pending_recurring: bu dönemin girilmemiş sabit gelir
     kalemleri; o ayın maaşı dökümden gelmişse yok) = Dönem sonu'nun pending_income'u. Gelir yoksa None.
-    label: tek gelirse adı, birden çoksa "Beklenen gelirler"; date: en geç beklenen gelirin tarihi; main: en büyük gelir."""
-    cur = current_period(today)
-    rows = [r for r in pending_recurring(cur, db.list_recurring(), db.list_entries(cur))
-            if r.get("pending") and r["kind"] == INCOME and money.gt(r["amount"] or 0, 0)]
+    label: tek gelirse adı, birden çoksa "Beklenen gelirler"; date: en geç beklenen gelirin tarihi; main: en büyük gelir.
+    periods: Ödemelerden sonra'nın ufkundaki dönemler (spend_horizon; ödemeleri düşülen dönemlerin gelirleri)."""
+    rec = db.list_recurring()
+    periods = periods or [current_period(today)]
+    # önceki dönemin hâlâ beklenen (SALARY_GRACE_DAYS içinde yatmamış) maaşı da (pending_recurring yalnız onu bekletir)
+    prev, salary_ids = add_months(periods[0], -1), {r["id"] for r in rec if _is_salary(r)}
+    rows = [r for per in [prev, *periods] for r in pending_recurring(per, rec, db.list_entries(per))
+            if r.get("pending") and r["kind"] == INCOME and money.gt(r["amount"] or 0, 0)
+            and (per != prev or (r["recurring_id"] in salary_ids
+                                 and date.fromisoformat(r["date"]) + timedelta(days=SALARY_GRACE_DAYS) >= today))]
     if not rows:
         return None
     income = _round(sum(r["amount"] for r in rows))
@@ -3039,7 +3255,9 @@ SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − kumbaraya 
                      "beklenen gelirler dahil değil; onlar Dönem sonu'nda (Ay sonunda kalacak). Altın/döviz, "
                      "alacakların ve yemek/hediye kartları dahil değil; eksiye düştüyse ödenecekler eldeki parayı aşıyor "
                      "demektir. Bugünün rakamıdır: Dönem sonu dönem bitene kadar beklenen gelirleri (maaş gibi) de "
-                     "katar; bu yüzden bu rakam eksiyken Dönem sonu artı olabilir.")
+                     "katar; bu yüzden bu rakam eksiyken Dönem sonu artı olabilir. Tek ufuk: vadesi dönem sonuna "
+                     "kadar olanlar (dönemin son günündeysen bir sonraki dönemin sonuna kadar) düşülür; daha sonra "
+                     "vadeli olanlar \"Maaştan sonra ödenecek\" diye ayrıca gösterilir, düşülmez.")
 
 
 SPENDABLE_JAR_NOTE = (" Bir borç için kumbarada biriktirdiğin para o borcun kalanından düşülmüş sayılır: borç ve kumbara "

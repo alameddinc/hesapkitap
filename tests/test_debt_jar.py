@@ -8,6 +8,20 @@ import pytest
 from tests.test_book import _member, owner  # noqa: F401  (owner: fixture)
 from tests.test_debt_plan import _all_strings, _banned_in
 
+
+@pytest.fixture(autouse=True)
+def _genis_ufuk(monkeypatch):
+    """Bu dosya Ödemelerden sonra kalemlerinin kuralını sınar; TEK UFUK (spend_horizon, lead 16.11) bugünün takvimine
+    bağlı olduğundan burada sabit ve geniş (bugün + 400 gün, yalnız içinde bulunulan dönem); ufuk kuralı
+    tests/test_spendable_horizon.py'de sabit tarihlerle."""
+    from datetime import timedelta as _td
+
+    from app import finance as _f
+
+    monkeypatch.setattr(_f, "spend_horizon", lambda today: {"end": today + _td(days=400), "periods": [_f.current_period(today)],
+                                                             "later_end": today + _td(days=430)})
+
+
 TODAY = date(2026, 11, 11)
 
 

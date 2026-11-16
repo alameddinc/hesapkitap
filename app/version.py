@@ -548,6 +548,23 @@ CAPABILITIES = (
                               # kendisi düzenlenir). Giden havale kategori/açıklama + tutar + vade penceresiyle (vadeden
                               # 10 gün önce – 15 gün sonra) düzenli ödemeye kendiliğinden bağlanır; dönemi vadenin dönemi
                               # (istatistik, Bu ay, Ödemelerden sonra'nın recurring kalemi oradan)
+    "spendable_horizon",      # GET /api/net-worth "Ödemelerden sonra" (spendable) TEK ufukla: vadesi spendable_horizon'a
+                              # (içinde bulunulan dönemin son günü; dönemin bitmesine ≤1 gün kaldıysa sonraki dönemin son
+                              # günü) kadar olan (geçmiş ve vadesiz dahil) kesin ödemeler düşülür: kesilmiş ekstre kalanı,
+                              # kesilecek ekstrenin kesin kısmı, TL borç (planlıysa ufka kadarki taksitler), fatura, düzenli
+                              # ödeme, kart dışı taksit/abonelik. spendable_later {total, items [{title, amount, due_date,
+                              # type: card|card_estimate|debt|bill, statement_id?|account?|debt_id?|bill_id?}], from, until}:
+                              # ufuktan sonra, bir sonraki dönem sonuna (until) kadar vadeli bugünkü yükümlülükler
+                              # ("Maaştan sonra ödenecek"; DÜŞÜLMEZ; sonraki dönemin düzenli ödemeleri yok).
+                              # pending_cards_items / card_debt_items yalnız ufuktakiler. spendable_after_income ufkun
+                              # dönemlerindeki beklenen gelirler. Eski istemci yalnız yeni rakamı görür (bilinçli)
+    "cycle_paid",             # ekstresi yüklenmemiş (kesimi geçmiş) kart döngüsü ödendi: GET /api/payables tahmin
+                              # satırında card_no ve cycle_paid {amount, date, covered, manual, payment_ids} (dökümden
+                              # kart ödemesi ya da elle); covered (≥ kesin kısım ya da ≥ tahminin %80'i) ise döngü
+                              # Ödemelerden sonra'dan ve Net durumun kesilecek ekstre tahmininden düşülmez, değilse kalan.
+                              # status yine "tahmini". net-worth credit_cards[].next_paid aynı nesne. Elle: POST
+                              # /api/cards/cycle-pay {card_no, amount, paid_at?, account_id?} (kesim gelmediyse 409; hesap
+                              # verilirse bakiye düşer), geri al DELETE /api/cards/cycle-pay?card_no=… (yalnız elle girilen)
 )
 
 

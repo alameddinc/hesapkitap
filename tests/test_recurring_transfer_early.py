@@ -53,7 +53,8 @@ def test_early_rent_transfer_counts_for_next_period(tmpdb, client):
     # bu dönemin kirası bekleyen değil (Özet bekleyen gider ve Ödemelerden sonra)
     assert not [r for r in finance.transactions(cur) if r.get("pending") and r.get("recurring_id") == rid]
     nw = client.get("/api/net-worth").json()
-    assert not [x for x in nw["recurring_items"] if x["recurring_id"] == rid]
+    lo, hi = (x.isoformat() for x in finance.period_bounds(cur))  # bu dönemin kirası (ufuk sonraki döneme uzarsa onunki kalır)
+    assert not [x for x in nw["recurring_items"] if x["recurring_id"] == rid and lo <= x["date"] <= hi]
     # Ay sonunda kalacak (plan / expected) da bu dönemin kirasını ikinci kez düşmez; gerçekleşen giderde bir kez
     exp = client.get("/api/summary", params={"month": cur}).json()["expected"]
     assert exp["parts"]["pending_recurring_expense"] == 0
