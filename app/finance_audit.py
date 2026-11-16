@@ -132,7 +132,7 @@ def snapshot(today: date) -> dict:
             a["current"] = db._account_balance(c, a)
     snap["owner_names"] = [_squash(n) for n in (db.owner_names() + db.card_holders()) if len(_squash(n)) >= 6]
     snap["today"] = today.isoformat()
-    owners = db.card_holders() + db.owner_names()
+    owners = db.owner_names()  # kart sahibi adı değil, öğrenilmiş hesap sahibi adı (lead 16.11)
     snap["owner_party"] = [e["id"] for e in snap["entries"] if e.get("import_hash") and not e.get("not_virman")
                            and e["kind"] in ("gelir", "gider") and db.owner_party_transfer(
                                e.get("description") or "", e["amount"] if e["kind"] == "gelir" else -e["amount"], owners)]

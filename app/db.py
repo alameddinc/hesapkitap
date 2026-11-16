@@ -2658,31 +2658,48 @@ def link_unknown_statement_payments() -> int:
     return n
 
 
+UNKNOWN_FRESH_DAYS = 14  # aday hesabın çapası bundan eskiyse belirsiz ödeme düşülmez (bayat hesap: giriş/çıkış da eksik)
+UNKNOWN_PAY_WINDOW = 20  # kesimden son ödeme + bu kadar gün içindeki kart ödemesi o ekstrenin (finance_audit.PAY_WINDOW)
+
+
 def unknown_statement_payments(today: str | None = None, statements: list[dict] | None = None,
                                accounts: list[dict] | None = None) -> list[dict]:
     """Hesabı belli olmayan kart ekstresi ödemeleri: elle "ödendi" denmiş, hangi hesaptan çıktığı söylenmemiş
     (bağlı kart ödemesi kaydı yok; 'Hesaptan değil / nakit' de denmemiş), son UNKNOWN_PAY_DAYS gün. Hepsi uyarıda
-    ("hesabı belli değil — seç"); TUTARI yalnız deducted olanlar düşülür (finance.net_worth: free/spendable/net):
-    ADAY hesaplardan hiçbirinin bakiyesi ödemeden SONRA elle girilmediyse (lead 16.11, H1). Adaylar: kartın son
-    ödendiği hesap (last_pay_accounts) + kartla aynı bankadaki banka hesapları; aday yoksa bütün banka/nakit hesapları.
-    Bir adayın ELLE girilmiş çapası ödemeden yeniyse ödeme o bakiyenin içinde sayılır (çift düşüm olmasın). Döküm
-    çapası sayılmaz: döküm ödeme gününü kapsıyorsa ve ödeme satırı içindeyse link_unknown_statement_payments zaten
-    bağlar; bağlanmadıysa döküm ödemeyi İÇERMİYOR demektir. Aynı gün: çapanın güncellendiği an (updated_at) ödemenin
-    işaretlendiği andan (paid_marked_at) sonraysa içinde; işaretleme anı bilinmiyorsa (eski kayıt) içinde.
-    Karar defterin TÜM hesaplarıyla verilir (ortak defter üyesi de sahiple aynı rakamı görür; H3); `accounts` yalnız
-    "hesap var mı" için. Dönüş: [{statement_id, title, bank, card_no, amount, paid_at, deducted}] (ödeme tarihine göre)."""
+    ("hesabı belli değil — seç"). TUTARI MUHAFAZAKÂR kuralla düşülür (lead 16.11, canlı kopya: şüphede DÜŞME, UYAR) —
+    deducted yalnız şunların HEPSİ doğruysa:
+      (a) işaretlenme anı biliniyor (paid_marked_at; döngü ödemesinde created_at) — eski kayıt düşülmez;
+      (b) aynı ödemenin bağsız karşılığı YOK: ekstreye bağlanmamış dökümden kart ödemesi (son 4 hane tutuyor ya da
+          hanesizse tutar ±1) ya da dökümden aynı tutarlı (±1) gider, kesim → son ödeme + UNKNOWN_PAY_WINDOW gün
+          (döngüde ödeme günü −20 / +7). Karşılık varsa ödeme bir bakiyede: düşülmez. Okumada eşleştirilir, YAZILMAZ;
+      (c) aday hesapların HİÇBİRİNİN çapası (döküm dahil, her kaynak) ödemeden sonra değil: as_of > ödeme günü ya da
+          aynı gün updated_at > işaretlenme anı ise ödeme o bakiyenin içinde (döküm kapanış bakiyesi o güne kadarki her
+          ödemeyi içerir);
+      (d) aday hesaplardan en az birinin çapası GÜNCEL (≤ UNKNOWN_FRESH_DAYS gün): bayat hesapta giriş/çıkış da eksik,
+          yalnız ödemeyi düşmek çift sayım olurdu (hesap_guncel_degil uyarısı ayrıca çıkar).
+    Adaylar: kartın son ödendiği hesap (last_pay_accounts) + kartla aynı bankadaki banka hesapları; yoksa bütün
+    banka/nakit hesapları. Karar defterin TÜM hesaplarıyla (ortak defter üyesi = sahip). `accounts` kullanılmaz (eski
+    imza). Dönüş: [{statement_id, title, bank, card_no, amount, paid_at, deducted, reason}] (ödeme tarihine göre);
+    reason: düşülmediyse neden (isaretlenme_yok | karsilik_var | capa_sonra | capa_bayat), düşüldüyse None."""
     from datetime import date as _date, timedelta as _td
 
     from app import book
     from app.bank_import import short_bank
 
     day = today or _date.today().isoformat()
-    since = (_date.fromisoformat(day) - _td(days=UNKNOWN_PAY_DAYS)).isoformat()
+    d0 = _date.fromisoformat(day)
+    since = (d0 - _td(days=UNKNOWN_PAY_DAYS)).isoformat()
     with book.owner_view():  # çapa kararı görünürlükten bağımsız
         accs = [a for a in list_accounts() if a.get("as_of") and (a.get("kind") or "banka") in ("banka", "nakit")]
     if not accs:
         return []
     hints = last_pay_accounts()
+    with connect() as c:
+        bank_pays = rows(c.execute("SELECT id, pay_date, amount, card_last4 FROM card_payments WHERE import_hash IS NOT NULL "
+                                   "AND import_hash NOT LIKE 'mail:%' AND statement_id IS NULL AND amount > 0"))
+        bank_gider = rows(c.execute("SELECT entry_date AS pay_date, amount FROM entries WHERE kind = 'gider' "
+                                    "AND import_hash IS NOT NULL AND import_hash NOT LIKE 'mail:%' AND skipped = 0 "
+                                    "AND recurring_id IS NULL AND linked_txn_id IS NULL AND entry_date >= ?", (since,)))
 
     def adaylar(bank: str | None, last4: str | None) -> list[dict]:
         sb = short_bank(bank).casefold() if bank else None
@@ -2691,16 +2708,30 @@ def unknown_statement_payments(today: str | None = None, statements: list[dict] 
                                                      and short_bank(a["name"]).casefold() == sb)]
         return out or accs
 
-    def icinde(pd: str, marked: str | None, bank: str | None = None, last4: str | None = None) -> bool:
-        for a in adaylar(bank, last4):
-            if a.get("source") == "dokum":
-                continue
+    def karsilik(lo: str, hi: str, amount: float, last4: str | None) -> bool:
+        for p in bank_pays:
+            if lo < p["pay_date"][:10] <= hi and (p["card_last4"] == last4 if p["card_last4"] and last4
+                                                  else money.le(abs(p["amount"] - amount), 1)):
+                return True
+        return any(lo < g["pay_date"][:10] <= hi and money.le(abs(g["amount"] - amount), 1) for g in bank_gider)
+
+    def neden(pd: str, marked: str | None, window: tuple[str, str], amount: float, bank: str | None,
+              last4: str | None) -> str | None:
+        if not marked:
+            return "isaretlenme_yok"
+        if karsilik(window[0], window[1], amount, last4):
+            return "karsilik_var"
+        cands = adaylar(bank, last4)
+        for a in cands:
             ad = a["as_of"][:10]
-            if ad > pd:
-                return True
-            if ad == pd and (not marked or (a.get("updated_at") or "") > marked):
-                return True
-        return False
+            if ad > pd or (ad == pd and (a.get("updated_at") or "") > marked):
+                return "capa_sonra"
+        if not any((d0 - _date.fromisoformat(a["as_of"][:10])).days <= UNKNOWN_FRESH_DAYS for a in cands):
+            return "capa_bayat"
+        return None
+
+    def item(base: dict, why: str | None) -> dict:
+        return {**base, "deducted": why is None, "reason": why}
 
     out = []
     for s in list_statements() if statements is None else statements:
@@ -2710,11 +2741,14 @@ def unknown_statement_payments(today: str | None = None, statements: list[dict] 
         pd = s["paid_at"][:10]
         if pd < since or pd > day:
             continue
-        out.append({"statement_id": s["id"], "title": f"{s['bank']} {s['card_no']}", "bank": s["bank"],
-                    "card_no": s["card_no"], "amount": round(s["paid_amount"], 2), "paid_at": pd,
-                    "deducted": not icinde(pd, s.get("paid_marked_at"), s.get("bank"), (s.get("card_no") or "")[-4:] or None)})
-    # ekstresi yüklenmemiş döngüye hesabı verilmeden girilen ödeme (add_cycle_payment): aynı kavram, aynı çapa kuralı
-    # (işaretlenme anı = created_at). statement_id None, card_payment_id ve cycle True
+        due = s.get("due_date") or s["period_end"]
+        win = (s["period_end"][:10], (_date.fromisoformat(due[:10]) + _td(days=UNKNOWN_PAY_WINDOW)).isoformat())
+        l4 = (s.get("card_no") or "")[-4:] or None
+        out.append(item({"statement_id": s["id"], "title": f"{s['bank']} {s['card_no']}", "bank": s["bank"],
+                         "card_no": s["card_no"], "amount": round(s["paid_amount"], 2), "paid_at": pd},
+                        neden(pd, s.get("paid_marked_at"), win, s["paid_amount"], s.get("bank"), l4)))
+    # ekstresi yüklenmemiş döngüye hesabı verilmeden girilen ödeme (add_cycle_payment): aynı kavram, aynı kural
+    # (işaretlenme anı = created_at; karşılık penceresi ödeme günü −20 / +7). statement_id None, card_payment_id, cycle
     with connect() as c:
         cyc = rows(c.execute("SELECT id, pay_date, amount, card_last4, description, created_at FROM card_payments "
                              "WHERE import_hash IS NULL AND statement_id IS NULL AND account_id IS NULL AND account IS NULL "
@@ -2722,10 +2756,12 @@ def unknown_statement_payments(today: str | None = None, statements: list[dict] 
     banks = {(x.get("card_no") or "")[-4:]: x.get("bank") for x in sorted(list_statements(), key=lambda x: x["period_end"])}
     for r in cyc:
         pd = r["pay_date"][:10]
-        out.append({"statement_id": None, "card_payment_id": r["id"], "cycle": True,
-                    "title": (r["description"] or "Kart ödemesi").replace("Kart ödemesi · ", ""), "bank": None,
-                    "card_no": r["card_last4"], "amount": round(r["amount"], 2), "paid_at": pd,
-                    "deducted": not icinde(pd, r["created_at"], banks.get(r["card_last4"]), r["card_last4"])})
+        pdd = _date.fromisoformat(pd)
+        win = ((pdd - _td(days=21)).isoformat(), (pdd + _td(days=7)).isoformat())
+        out.append(item({"statement_id": None, "card_payment_id": r["id"], "cycle": True,
+                         "title": (r["description"] or "Kart ödemesi").replace("Kart ödemesi · ", ""), "bank": None,
+                         "card_no": r["card_last4"], "amount": round(r["amount"], 2), "paid_at": pd},
+                        neden(pd, r["created_at"], win, r["amount"], banks.get(r["card_last4"]), r["card_last4"])))
     return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"] or 0, x.get("card_payment_id") or 0))
 
 
@@ -3391,6 +3427,8 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
     - gelen: gönderen kalıptan okunuyor ve hesap sahibinin adı ("AYSE ORNEK 'DAN GELEN FAST", "X tarafından ... gelen EFT")
     - giden: açıklamada hesap sahibinin adı geçiyor, havale/FAST/EFT ve alıcı OKUNAMIYOR (Halkbank "GIDEN FAST - X
       TARAFINDAN GONDERILEN" alıcıyı kesiyor). Alıcı başka biri olarak okunuyorsa kendi hesabı değildir.
+    Ad: dökümden ÖĞRENİLMİŞ hesap sahibi adı (owner_names); yoksa verilen adlardan kart sahibi olmayanlar. Kart sahibi
+    adları (ek kart: eş, çocuk) hiçbir durumda sayılmaz.
     Kurum/şirket adı, kart ödemesi ve para çekme bank_import.classify_reason'da zaten ayrılır. Yanlışsa kullanıcı
     "Kendi hesaplarım arası değil" der (own_transfer_to_entry, not_virman); karşı bacak hiç gelmezse finans denetimi
     7 gün sonra hangi hesaba gittiğini sorar (app/finance_audit.py virman_bekliyor)."""
@@ -3401,12 +3439,13 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
 
     # dökümden öğrenilen hesap sahibi adı önce: kart sahipleri ek kart sahiplerini de (eş, çocuk) içerir; onlardan gelen
     # para kullanıcının kendi hesabından gelmiş sayılmasın. Öğrenilmiş ad yoksa verilen adlar.
-    learned = owner_names()
-    pool = learned or owners or []
+    # kart sahibi adları kullanılmaz (lead 16.11): öğrenilmiş hesap sahibi adı; yoksa çağıranın verdiği adlardan kart
+    # sahibi OLMAYANLAR (dökümün hesap sahibi)
+    holders = {_squash(h) for h in card_holders()}
+    pool = owner_names() or [o for o in owners or [] if o and _squash(o) not in holders]
     names = {_squash(o) for o in pool if o and len(_squash(o)) >= 6}
     if not names or not desc:
         return False
-    owners = list(pool)
     n = normalize(desc)
     if not _re.search(r"\b(FAST|EFT|HAVALE)\b", n) or _INSTITUTION.search(n):
         return False
@@ -3415,7 +3454,7 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
         return bool(sr and sr[0] in names)
     if sr and len(sr[1]) >= 3:
         return sr[1] in names  # alıcı okunuyor: yalnız kendisiyse
-    return _names_owner(desc, owners)
+    return _names_owner(desc, sorted(names))
 
 
 def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, import_hash: str | None,
