@@ -540,6 +540,14 @@ CAPABILITIES = (
     "dekont_doc",             # POST /api/documents/parse dekont=1 ve /api/statements/upload dekont_docs=1: para transferi
                               # dekontu (Gelen FAST dahil) fatura/fiş sanılmaz → {type: "dekont", …dekont okuması} /
                               # status document, doc_type "dekont"
+    "payables_recurring",     # GET /api/payables?recurring=1: ödenmiş düzenli giderler de listede (Ödemeler "Bu ay
+                              # ödendi"): {type: "recurring", id (kayıt id), recurring_id, title (kalemin adı), subtitle,
+                              # amount (o dönemin planı), paid_amount, paid_at, due_date (o dönemin vadesi), month,
+                              # early (vadeden önce ödendi), entry_uid ("m<id>": dokununca hareket), status "odendi",
+                              # in_total false, key}. totals.paid_this_month bunları da sayar. Geri al YOK (hareketin
+                              # kendisi düzenlenir). Giden havale kategori/açıklama + tutar + vade penceresiyle (vadeden
+                              # 10 gün önce – 15 gün sonra) düzenli ödemeye kendiliğinden bağlanır; dönemi vadenin dönemi
+                              # (istatistik, Bu ay, Ödemelerden sonra'nın recurring kalemi oradan)
 )
 
 

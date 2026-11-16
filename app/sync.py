@@ -472,16 +472,19 @@ def attach_recurring_row(c, data: dict, r: dict) -> int | None:
     açılmaz, iki kez sayılmaz). data: satırdan açılacak kayıt (açıklama, kişi, kurum, tutar). Kayıt bankadaki tutarı,
     kişiyi ve fatura kurumunu alır; tarihi ve dönemi (onaylandığı ay) korunur. "Eşleşmeyi geri al" ayırır."""
     rec = db.recurring_for(c, data)
-    if not rec:
+    # adı/kişisi tutmayan giden havale: kategorisi ya da açıklaması tutan kalemlerin elle onaylanmış kaydı (tutar ve
+    # tarih aşağıda bakılır); yoksa aynı dönem iki kez sayılırdı (onay + havale)
+    recs = [rec] if rec else db.transfer_recurring_candidates(c, data)
+    if not recs:
         return None
     d, amount = date.fromisoformat(r["date"]), data["amount"]
     rejects = _rejects(c)
     best = None
     for m in db.rows(c.execute(
-            "SELECT * FROM entries WHERE recurring_id = ? AND import_hash IS NULL AND skipped = 0 AND linked_txn_id IS NULL "
-            "AND wallet_id IS NULL AND debt_id IS NULL "
+            "SELECT * FROM entries WHERE recurring_id IN (%s) AND import_hash IS NULL AND skipped = 0 "
+            "AND linked_txn_id IS NULL AND wallet_id IS NULL AND debt_id IS NULL "
             "AND COALESCE(payment, '') NOT IN ('kredi_karti', 'kart', 'altin_bozdurma', 'altin') "
-            "AND id NOT IN (SELECT entry_id FROM entry_matches)", (rec["id"],))):
+            "AND id NOT IN (SELECT entry_id FROM entry_matches)" % ",".join("?" * len(recs)), [x["id"] for x in recs])):
         gap = abs((date.fromisoformat(m["entry_date"]) - d).days)
         if gap > RECURRING_DAYS or (m["id"], f"h:{r['hash']}") in rejects:
             continue

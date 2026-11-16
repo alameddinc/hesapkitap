@@ -1123,6 +1123,8 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
     Kesimde = taksit + abonelik + değişken harcama; değişken için geçmiş dönemlerin medyanı ile "şu ana kadarki +
     kalan günlerin payı"ndan büyüğü alınır (harcama girilmese de tahmin geçmişin altına düşmez).
     Hangi karttan ödendiği belli olmayan harcamalar en çok kullanılan karta yazılır ve ayrıca gösterilir.
+    Kesimden önceki (devreden) eşleşmemiş elle kayıt, kesilmiş son ekstrede bağsız aynı tutarlı/yakın tarihli satır
+    varsa sayılmaz: o harcama zaten ekstrede (card_debt), açık dönemde ikinci kez sayılmasın.
     """
     today = today or date.today()
     proj = card_projection() if proj is None else proj
@@ -1157,6 +1159,27 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         return {}
     main = max(out.values(), key=lambda c: c["variable_avg"])["account"]
     aliases = db.card_aliases()
+    # kesilmiş son ekstrenin, hiçbir elle kayda bağlanmamış satırları (kart başına): kesimden önceki eşleşmemiş elle kayıt
+    # bunlardan biriyse (tutar ±%1 / ₺1, tarih ±POSTING_DAYS) ekstrede ZATEN var (card_debt'te): devreden sayılmaz (çift
+    # sayım olurdu). Her ekstre satırı bir kez.
+    linked = {e["linked_txn_id"] for e in entries if e.get("linked_txn_id")}
+    stmt_rows: dict[str, list[dict]] = defaultdict(list)
+    for t in db.card_transactions(period=None):
+        p = proj.get(t["account"])
+        if p and t["account"] in out and t["period"] == p["latest_period"] and t["id"] not in linked \
+                and t["txn_type"] in CARD_SPEND:
+            stmt_rows[t["account"]].append(t)
+
+    def in_statement(e: dict, acc: str | None) -> bool:
+        d = date.fromisoformat(e["entry_date"])
+        for a in [acc] if acc else list(stmt_rows):
+            for t in stmt_rows[a]:
+                if money.le(abs(t["amount"] - e["amount"]), max(1.0, e["amount"] / 100)) \
+                        and abs((date.fromisoformat(t["txn_date"]) - d).days) <= db.POSTING_DAYS:
+                    stmt_rows[a].remove(t)
+                    return True
+        return False
+
     for e in entries:
         if e["payment"] != "kredi_karti" or e["kind"] != EXPENSE or e["linked_txn_id"] or e["skipped"]:
             continue
@@ -1170,6 +1193,8 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         # provizyonda kalıp bu ekstreye devretmiştir (carried); daha eskisi "ekstrede bulunamadı" diye sorulur
         carried = e["entry_date"] <= c["start"]
         if carried and e["entry_date"] <= (date.fromisoformat(c["start"]) - timedelta(days=db.POSTING_DAYS)).isoformat():
+            continue
+        if carried and in_statement(e, acc):  # ekstreye girmiş ama eşleşmemiş: kesilmiş ekstrede sayılı
             continue
         amt = e["amount"] / max(1, int(e.get("installments") or 1))  # taksitliyse bu ekstreye ilk taksit düşer
         c["spent"] += amt
@@ -1920,6 +1945,33 @@ def _payables(today: date) -> list[dict]:
             uniq.append(x)
     order = {"gecikti": 0, "kismi": 1, "bekliyor": 2, "tahmini": 3, "odendi": 4}
     return sorted(uniq, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
+
+
+def paid_recurring(today: date | None = None) -> list[dict]:
+    """Ödenmiş düzenli giderler (kira, aidat…) Ödemeler'in "Bu ay ödendi" listesi için (yetenek payables_recurring;
+    GET /api/payables?recurring=1). Kalem = sabit kaleme bağlı gider kaydı (dökümden gelen havale ya da elle onay), ödeme
+    tarihi son PAYABLE_WINDOW gün içinde; "bu ay yok" (atlanan) hariç. status hep "odendi", in_total False: açık
+    toplamlara (open, this_period) girmez; paid_this_month'a girer. due_date: o dönemin vadesi; early: vadeden önce
+    ödendi (16'sında yatan, 17'si vadeli kira). entry_uid ("m<id>"): istemci dokununca hareketi (transfer) açar.
+    Bekleyen düzenli giderler burada yok (Ödemelerden sonra'nın recurring kalemi)."""
+    today = today or date.today()
+    since = (today - timedelta(days=PAYABLE_WINDOW)).isoformat()
+    recs = {r["id"]: r for r in db.list_recurring() if r["kind"] == EXPENSE}
+    ov = db.recurring_overrides()
+    out = []
+    for e in db.list_entries():
+        r = recs.get(e.get("recurring_id"))
+        if not r or e["skipped"] or e["kind"] != EXPENSE or not (since <= e["entry_date"] <= today.isoformat()):
+            continue
+        due = db.occurrence_date(e["month"], db.day_at(r, e["month"]))
+        out.append({"type": "recurring", "id": e["id"], "recurring_id": r["id"], "title": r["description"],
+                    "subtitle": " · ".join(x for x in ("Düzenli ödeme", e.get("counterparty")) if x),
+                    "amount": _round(db.planned_amount(r, e["month"], ov)), "min_payment": None, "due_date": due,
+                    "days_left": (date.fromisoformat(due) - today).days, "paid_amount": _round(e["amount"]),
+                    "paid_at": e["entry_date"], "status": "odendi", "in_total": False, "category": r["category"],
+                    "month": e["month"], "early": e["entry_date"] < due, "entry_uid": f"m{e['id']}",
+                    "key": f"recurring:{e['id']}"})
+    return sorted(out, key=lambda x: x["paid_at"], reverse=True)
 
 
 def payables_totals(today: date | None = None, items: list[dict] | None = None, days: int | None = None) -> dict:

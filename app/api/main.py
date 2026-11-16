@@ -3375,7 +3375,10 @@ def _with_gross_net(data: dict) -> dict:
 @app.post("/api/recurring")
 def create_recurring(body: RecurringIn):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
-    return {"id": db.create_recurring(_with_gross_net(body.model_dump()))}
+    rid = db.create_recurring(_with_gross_net(body.model_dump()))
+    if body.kind == "gider":  # elle açılan kalem: dökümden önceden gelmiş bu dönemin kira havalesi bağlansın ("bekliyor"
+        db.link_recurring_transfers()  # görünmesin). Öneriden kabul kendi serisini bağlar (accept_recurring_suggestion)
+    return {"id": rid}
 
 
 @app.patch("/api/recurring/{rid}")
@@ -8453,12 +8456,17 @@ class PayIn(BaseModel):
 
 
 @app.get("/api/payables")
-def payables(totals: bool = False, days: int | None = Query(None, ge=0, le=366)):
+def payables(totals: bool = False, days: int | None = Query(None, ge=0, le=366), recurring: bool = False):
     """Ödenecekler (liste; eski istemciler için değişmedi). totals=1: {"items": [...], "totals": {...}}: istemci toplamı
     kendisi hesaplamasın (finance.payables_totals). Kalemde in_total: toplama girer mi; rolled_into: kalanı bu id'li
     son ekstreye devretmiş ödenmemiş eski ekstre (gecikmiş bilgisi). days=N (totals'ı da açar): totals.window =
-    vadesi N gün içinde ya da geçmiş, toplama giren kalemlerin kalanı (başlık toplamı; tahmin ayrı: window.estimated)."""
+    vadesi N gün içinde ya da geçmiş, toplama giren kalemlerin kalanı (başlık toplamı; tahmin ayrı: window.estimated).
+    recurring=1 (yetenek payables_recurring): ödenmiş düzenli giderler de (type "recurring", status "odendi", in_total
+    false, entry_uid → hareket; finance.paid_recurring). Yalnız isteyen istemciye: eski istemci bilinmeyen türü
+    ekstre/fatura gibi "geri al"a götürürdü."""
     items = finance.payables()
+    if recurring:
+        items = items + finance.paid_recurring()
     if totals or days is not None:
         return {"items": items, "totals": finance.payables_totals(items=items, days=days)}
     return items
