@@ -577,6 +577,9 @@ CAPABILITIES = (
                               # Fonlama ilkesi (16.11): ufukta beklenen gelir varsa hesap ufuktan sonraki ilk gelirin bir gün
                               # öncesine (until) uzar ve o gelirin fonladığı kesin ödemeler düşülür: parts key "funded",
                               # funded_items [{title, amount, date, type}]; istemci "<until>'de kalacak" yazar
+                              # KULLANICI KARARI 16.11: ana sayı MAAŞA KADAR — until = sonraki maaştan bir gün önce,
+                              # label_kind "maasa_kadar" | "donem_sonu" (maaş kalemi yoksa), income/funded 0, no_new_spend
+                              # == spendable; after_salary {date, income, variable_card} | null ikincil bilgi
     "payables_in_horizon",    # GET /api/payables her kalemde in_horizon: vadesi Ödemelerden sonra'nın ufkunda (gecikmiş ve
                               # vadesiz dahil). İstemci ufuk dışı TAHMİNİ kart satırını (type estimate) Yaklaşan'da göstermez
     "statement_pay_account",  # kart ekstresi Ödendi'nin hesabı: POST /api/statements/{id}/pay account_id X → o hesaptan

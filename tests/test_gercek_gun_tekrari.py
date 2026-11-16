@@ -301,9 +301,9 @@ def invariants(nw) -> None:
     assert nw["spendable_later"]["total"] >= 0 and all(x["amount"] > 0 for x in nw["spendable_later"]["items"])
     p = {x["key"]: x["amount"] for x in fb["parts"]}
     assert round(p["free"] - p["payments"] + p["income"] - p["funded"] - p["variable"], 2) == fb["amount"]
-    # fonlama ilkesi: gelir eklendiyse onun fonladığı (until'e kadar vadeli) kesin ödemeler de düşüldü
-    assert fb["no_new_spend"] == round(nw["spendable"] + p["income"] - p["funded"], 2)
-    assert (p["income"] > 0) == (fb["until"] > fb["horizon"]) or not p["income"] or fb["until"] >= fb["horizon"]
+    # MAAŞA KADAR (kullanıcı kararı 16.11): maaş eklenmez, no_new_spend == spendable, ana sayı ≤ spendable
+    assert p["income"] == 0 and p["funded"] == 0 and fb["no_new_spend"] == nw["spendable"]
+    assert fb["amount"] <= nw["spendable"] + 0.005 and fb["label_kind"] in ("maasa_kadar", "donem_sonu")
 
 
 # ---------------------------------------------------------------- beklenen değerler (ELLE)
@@ -335,7 +335,7 @@ def invariants(nw) -> None:
 #   f/g: 28.555,87 − 17.607 = 10.948,87   h: kişi borcu nakit ödendi → 28.555,87 − 5.357 = 23.198,87
 # Maaştan sonra (spendable_later): V2 Ara döngüsü (son ödeme 23 Ara > ufuk 16 Ara) kesin kısmı = taksit 2.750; K1 Ara
 #   (25 Ara) 2.150; V1'in Ara döngüsü modellenmiyor (ekstresi yüklenmemiş kartta yalnız açık döngü). Toplam 4.900.
-# Ay sonunda kalacak: no_new_spend = spendable + Ara maaşı (15 Ara ≤ ufuk) 86.500 − o maaşın fonladığı (14 Oca'ya kadar).
+# Ana sayı (MAAŞA KADAR, kullanıcı kararı 16.11): spendable − 14 Ara'ya kadar nakitten çıkacak tahmini harcama; maaş eklenmez.
 
 EXP = {  # adım: (bakiyeler H, V, K), free, spendable
     "0": ((HALK0, -30360.72, KUVEYT0), 169562.51, 58855.43),
@@ -369,8 +369,8 @@ def test_step_balances_and_invariants(client, tmpdb, monkeypatch, k):
     assert not [x for x in n["pending_cards_items"] if x["due_date"] > "2026-12-16"]
     p = {x["key"]: x["amount"] for x in n["spendable_parts"]}
     assert p["payable"] == (0.0 if k == "h" else KISI_BORC) and p["bills"] == BILLS and p["reserved"] == JAR
-    fbp = {x["key"]: x["amount"] for x in n["forecast_balance"]["parts"]}
-    assert n["forecast_balance"]["no_new_spend"] == round(n["spendable"] + SALARY - fbp["funded"], 2)
+    assert n["forecast_balance"]["no_new_spend"] == n["spendable"]
+    assert n["forecast_balance"]["after_salary"]["income"] == (0.0 if k in ("g", "h") else SALARY) or k in ("g", "h")
 
 
 @pytest.mark.parametrize("k", list(EXP))
@@ -447,17 +447,15 @@ def test_g_next_day_new_period(client, tmpdb, monkeypatch):
 
 
 def test_forecast_variable_on_last_day(client, tmpdb, monkeypatch):
-    """FONLAMA İLKESİ (lead 16.11, canlı vaka): 16 Kas son gün, ufuk 16 Ara; ufka giren 15 Ara maaşı (86.500) eklenince o
-    maaşın fonladığı her şey de düşülür: hesap sonraki maaşın (15 Oca) bir gün öncesine, 14 Oca'ya kadar (until).
-    Önceki beklenti (97.448,87) maaşı ekleyip Aralık kart ekstrelerini ve 18 Ara kirasını düşmüyordu (çok iyimser).
-    f: 10.948,87 + 86.500 − funded 36.150 (kira 31.250 + V2 kesin 2.750 + K1 kesin 2.150) = 61.298,87 (yeni harcama
-    yapmazsan); − tahmini kart 122.350,04 (V1/V2/K1 döngülerinin kalan değişken payı; ekstreleri 14 Oca'dan önce ödenir)
-    = −61.051,17. Kart dışı değişken gider geçmişi yok → 0."""
+    """KULLANICI KARARI (16.11, canlı ekran): ana sayı "MAAŞA KADAR kalacak" = bir sonraki maaşın (15 Ara) bir gün
+    öncesine (14 Ara) kadar Ödemelerden sonra − nakitten çıkacak tahmini harcama. Maaş EKLENMEZ, maaşın fonladıkları
+    (kira, Aralık ekstreleri) bu sayıda yok ("Maaştan sonra ödenecek"te). Önceki fonlama sürümü (−61.051,17, 14 Oca'ya
+    kadar) kullanıcıya anlamsız geldi. f: kart dışı değişken gider geçmişi yok → 0; kart harcaması ekstreleri 23–25 Ara'da
+    (14 Ara'dan SONRA) ödenir → yalnız bilgi (113.079,39). Ana sayı = 10.948,87."""
     _, n = run(client, tmpdb, monkeypatch, "f")
     fb = n["forecast_balance"]
     p = {x["key"]: x["amount"] for x in fb["parts"]}
-    assert fb["until"] == "2027-01-14" and fb["horizon"] == "2026-12-16"
-    assert p["funded"] == 36150.0 and p["variable"] == 122350.04 and p["variable_card_later"] == 0.0
-    assert {x["type"] for x in fb["funded_items"]} == {"recurring", "card_estimate"}
-    assert fb["no_new_spend"] == round(n["spendable"] + 86500.0 - 36150.0, 2) == 61298.87
-    assert fb["amount"] == -61051.17
+    assert (fb["until"], fb["label_kind"]) == ("2026-12-14", "maasa_kadar")
+    assert p["variable"] == 0.0 and p["variable_card_later"] == 113079.39
+    assert fb["amount"] == fb["no_new_spend"] == n["spendable"] == 10948.87
+    assert fb["after_salary"] == {"date": "2026-12-15", "income": 86500.0, "variable_card": 113079.39}
