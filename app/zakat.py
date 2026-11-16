@@ -790,6 +790,12 @@ def account_balances_at(day: date) -> dict[int, float | None]:
                                  FROM entries WHERE account_id = ? AND skipped = 0 AND entry_date > ?
                                  AND (entry_date < ? OR (entry_date = ? AND id <= ?))""",
                               (a["id"], d, a["as_of"], a["as_of"], anchor)).fetchone()[0]
+            # elle kaydın çapa günü cevabı (entries.in_anchor; db._account_balance ile aynı kural): içinde mi cevaptan
+            for r in c.execute("""SELECT kind, amount, entry_date, in_anchor FROM entries WHERE account_id = ?
+                                  AND skipped = 0 AND in_anchor IS NOT NULL AND id > ? AND entry_date > ?
+                                  AND entry_date <= ?""", (a["id"], anchor, d, a["as_of"])):
+                signed = r["amount"] if r["kind"] == "gelir" else -r["amount"]
+                flows += signed * ((r["in_anchor"] == 1) - (r["entry_date"] < a["as_of"]))
             for x in extra:
                 if not d < x["date"] <= a["as_of"]:
                     continue

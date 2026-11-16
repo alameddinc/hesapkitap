@@ -128,6 +128,9 @@ def snapshot(today: date) -> dict:
                           "WHERE t.is_deleted = 0 AND COALESCE(s.source, '') <> 'excel'"),
             "own_transfers": _q(c, "SELECT id, transfer_date, amount, account_id, account, import_hash, pair_id, source "
                                    "FROM own_transfers"),
+            # fatura Ödendi'de "Hesabımdan değil" denmiş kayıtlar (bills.paid_via): hesapsiz_hareket sormaz
+            "bill_outside": [r[0] for r in c.execute("SELECT entry_id FROM bills WHERE paid_via = 'disarida' "
+                                                     "AND entry_id IS NOT NULL")],
             "last_activity": c.execute(
                 "SELECT MAX(x) FROM (SELECT MAX(created_at) AS x FROM entries UNION ALL SELECT MAX(uploaded_at) "
                 "FROM statements UNION ALL SELECT MAX(created_at) FROM card_payments)").fetchone()[0],
@@ -262,9 +265,10 @@ def hesapsiz_hareket(s: dict) -> list[dict]:
     if not anchors:
         return []
     lo, hi = min(anchors), s["today"]
+    outside = set(s.get("bill_outside") or ())  # "Hesabımdan değil" denmiş fatura ödemesi
     return [{"ref": f"entry:{e['id']}", "amount": money.money(e["amount"]), "date": e["entry_date"], "kind": e["kind"]}
             for e in s["entries"]
-            if not e.get("account_id") and not e.get("skipped") and not e.get("debt_id") and not e.get("wallet_id")
+            if e["id"] not in outside and not e.get("account_id") and not e.get("skipped") and not e.get("debt_id") and not e.get("wallet_id")
             and e.get("payment") != "kredi_karti" and (e.get("payment") == "havale" or e.get("import_hash"))
             and lo < e["entry_date"][:10] <= hi]
 

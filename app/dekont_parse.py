@@ -256,11 +256,23 @@ def _own_info(f: dict, s: dict, r: dict, side: str | None, accounts: list[dict])
             out["match"] = m
             out["from_account"] = out["from_account"] or m["from_account"]
             out["to_account"] = out["to_account"] or m["to_account"]
+        elif m := own_maybe(f["date"], f["amount"], f.get("ref") or "", from_acc, to_acc):
+            out["maybe_match"] = m  # yetenek own_transfer_maybe: istemci sorar, onayda link_to
     return out
 
 
 def _clean_ref(ref: str | None) -> str:
     return re.sub(r"[^0-9A-Za-z]", "", ref or "")[:30]
+
+
+def _legs_fit(legs: list[dict], from_acc: int | None, to_acc: int | None) -> bool:
+    """Bulunan aktarımın bacakları bu dekontun hesaplarına uyuyor mu: çıkış bacağı kaynak, giriş bacağı hedef hesapta
+    (biliniyorsa). Aynı gün aynı tutarlı ATM çekimi (kaynak → nakit) başka hesaba giden aktarımın dekontunu almasın."""
+    for x in legs:
+        want = from_acc if x["amount"] < 0 else to_acc
+        if want and x.get("account_id") and x["account_id"] != want:
+            return False
+    return True
 
 
 def own_match(on: str, amount: float, ref: str, from_acc: int | None, to_acc: int | None) -> dict | None:
@@ -274,15 +286,40 @@ def own_match(on: str, amount: float, ref: str, from_acc: int | None, to_acc: in
         for acc, signed in ((from_acc, -amount), (to_acc, amount)):
             if (leg := db.find_own_leg(on, signed, acc, ref or None)) is not None:
                 legs = db.own_pair_legs(leg["id"]) if leg.get("pair_id") else [leg]
+                if not _legs_fit(legs, from_acc, to_acc):
+                    legs = []
+                    continue
                 break
     if not legs:
         return None
+    return _match_out(legs, "Bu aktarım kayıtlı: dekont ona bağlanır")
+
+
+MAYBE_MSG = "Bu aktarım daha önce eklenmiş olabilir — bağla?"
+
+
+def _match_out(legs: list[dict], message: str) -> dict:
     out_leg = next((x for x in legs if x["amount"] < 0), None)
     in_leg = next((x for x in legs if x["amount"] > 0), None)
-    return {"id": (out_leg or in_leg)["pair_id"] or (out_leg or in_leg)["id"],
+    first = out_leg or in_leg
+    return {"id": first["pair_id"] or first["id"], "date": first["transfer_date"],
             "from_account": (out_leg or {}).get("account_id"), "to_account": (in_leg or {}).get("account_id"),
             "has_file": {"from": bool((out_leg or {}).get("receipt_file")), "to": bool((in_leg or {}).get("receipt_file"))},
-            "message": "Bu aktarım kayıtlı: dekont ona bağlanır"}
+            "message": message}
+
+
+def own_maybe(on: str, amount: float, ref: str, from_acc: int | None, to_acc: int | None) -> dict | None:
+    """Sorgu numarasız, kesin olmayan aday (farklı gün ya da birden çok aday; S3): kendiliğinden bağlanmaz, istemci
+    "bağla?" diye sorar, onayda POST /api/own-transfers link_to = id ile gönderir."""
+    ref = _clean_ref(ref)
+    if db.own_leg_by_ref(ref):
+        return None
+    for acc, signed in ((from_acc, -amount), (to_acc, amount)):
+        if (leg := db.own_leg_maybe(on, signed, acc, ref or None)) is not None:
+            legs = db.own_pair_legs(leg["id"]) if leg.get("pair_id") else [leg]
+            if _legs_fit(legs, from_acc, to_acc):
+                return _match_out(legs, MAYBE_MSG)
+    return None
 
 
 def _account_by_bank(bank: str | None, accounts: list[dict]) -> int | None:
@@ -436,12 +473,18 @@ def save(b: dict) -> dict:
         n = c.execute("SELECT COUNT(*) FROM entries WHERE import_hash = ? OR import_hash LIKE ?", (h, h + "~%")).fetchone()[0]
     if n:
         h = f"{h}~{n + 1}"
-    eid = db.create_entry({
+    data = {
         "entry_date": b["date"], "description": desc[:120], "amount": amount, "kind": kind,
         "category": cp.get("category") or "Kategorisiz", "payment": "havale",
         "note": f"Hesap hareketi · {raw}" + (f"\n{user_note}" if user_note else ""),
         "import_hash": h, "counterparty": who, "account_id": b.get("account_id"),
-        "receipt_file": b.get("dekont_file"), "created_by": b.get("created_by")})
+        "receipt_file": b.get("dekont_file"), "created_by": b.get("created_by"), "month": db.period_of(b["date"])}
+    # kira/aidat havalesi düzenli kaleme (S2); kişiyle açık borç/alacak varsa borç eşleşmesi önce gelir (aşağıda)
+    if kind == "gider" and not b.get("debt_id") and not (b.get("debt_link", True) and any(
+            d["asset"] == "TRY" and _key(d["person"]) == _key(who) for d in db.list_debts(open_only=True))):
+        with db.connect() as c:
+            db.dekont_recurring(c, data)
+    eid = db.create_entry(data)
     debt = None
     if b.get("debt_id"):
         d = next((x for x in db.list_debts() if x["id"] == b["debt_id"]), None)
@@ -481,6 +524,15 @@ def save_own(b: dict) -> dict:
         files["giden" if e["kind"] == "gider" else "gelen"] = files["giden" if e["kind"] == "gider" else "gelen"] or e["receipt_file"]
     if side and dfile:
         files[side] = dfile
+    if b.get("link_to"):  # kullanıcı "bağla" dedi (maybe_match): o aktarımın bacakları, tutar ve hesaplar tutmalı
+        legs = db.own_pair_legs(b["link_to"])
+        accs = {x["account_id"] for x in legs}
+        if not legs or any(not money.eq(abs(x["amount"]), amount) for x in legs) or not accs <= {from_id, to_id}:
+            raise db.OwnTransferError("Bağlanacak aktarım bu dekontla uyuşmuyor")
+        out = _link_legs(legs, b, amount, ref, files, replaced)
+        _drop_entries(replaced)
+        return out
+    maybe = None
     if from_dekont:
         legs = []
         if hit := db.own_leg_by_ref(ref):
@@ -489,16 +541,23 @@ def save_own(b: dict) -> dict:
             for acc, signed in ((from_id, -amount), (to_id, amount)):
                 if (leg := db.find_own_leg(b["date"], signed, acc, ref or None)) is not None:
                     legs = db.own_pair_legs(leg["id"]) if leg.get("pair_id") else [leg]
+                    if not _legs_fit(legs, from_id, to_id):
+                        legs = []
+                        continue
                     break
         if legs:
             out = _link_legs(legs, b, amount, ref, files, replaced)
             _drop_entries(replaced)
             return out
+        maybe = own_maybe(b["date"], amount, ref, from_id, to_id)
     pid = db.add_own_pair(b["date"], amount, from_id, to_id, b.get("description"), b.get("note"),
                           source="dekont" if from_dekont else "elle", ref=ref or None, from_file=files["giden"],
                           to_file=files["gelen"], created_by=b.get("created_by"))
     _drop_entries(replaced)
-    return {"id": pid, "linked": False, "created": 2, "replaced": [e["id"] for e in replaced]}
+    out = {"id": pid, "linked": False, "created": 2, "replaced": [e["id"] for e in replaced]}
+    if maybe:  # yeni kayıt açıldı; istemci "bu aktarım daha önce eklenmiş olabilir" diye gösterebilir
+        out["maybe_match"] = maybe
+    return out
 
 
 def _link_legs(legs: list[dict], b: dict, amount: float, ref: str, files: dict, replaced: list[dict]) -> dict:

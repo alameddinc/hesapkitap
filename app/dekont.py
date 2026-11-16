@@ -70,10 +70,13 @@ def parse(text: str) -> dict:
 
 
 def _title(name: str) -> str:
-    """'ELİF ŞAHİN' → 'Elif Şahin' (Türkçe i/ı doğru)."""
+    """'ELİF ŞAHİN' → 'Elif Şahin', 'ORNEK EV SAHIBI' → 'Ornek Ev Sahibi' (Türkçe büyük/küçük harf kuralı). Metinde
+    'İ' varsa banka Türkçe yazıyordur: I → ı, İ → i. Hiç 'İ' yoksa banka ASCII basıyordur (İ yerine I): I → i
+    (bank_import._pretty ile aynı kural)."""
     if not name.isupper():
         return name
-    return " ".join(w[:1] + w[1:].replace("I", "ı").replace("İ", "i").lower() for w in name.split())
+    dotless = "İ" in name
+    return " ".join(w[:1] + w[1:].replace("I", "ı" if dotless else "i").replace("İ", "i").lower() for w in name.split())
 
 
 def import_text(text: str) -> dict:

@@ -626,6 +626,19 @@ CAPABILITIES = (
                               # /api/recurring/{id}/confirm), "bu_ay_yok" (POST /api/recurring/{id}/skip)]. Beklenen gelire
                               # girmez: summary.pending.income, plan income/parts, spendable_after_income hariç;
                               # summary.pending.late_income / late_count ayrıca. Yoksa satır "bekliyor" görünür
+    "bill_pay_account",       # fatura Ödendi'nin hesabı: POST /api/bills/{id}/pay {account_id, in_balance} — X → o hesaptan
+                              # (bakiye düşer; payment verilmediyse havale; kredi_karti ile 422); null → hesabımdan değil
+                              # (nakit / takip edilmeyen hesap; bills.paid_via "disarida", denetim hesapsiz_hareket
+                              # sormaz); anahtar yok → eski davranış (hesabı belirsiz, denetim uyarır; yeniden ödemede
+                              # önceki hesap korunur). Ödeme günü hesabın çapa günü/öncesiyse yanıtta anchor_conflict
+                              # {account_id, name, as_of}; in_balance anchor_conflict ile aynı anlam. Ödenmiş açılan
+                              # fatura (POST /api/bills paid_at) aynı alanları alır. GET /api/bills satırında paid_via
+    "own_transfer_maybe",     # dekonttan hesaplar arası aktarım: sorgu numarası tutmayan kayıtlı bacak yalnız ±1 gün
+                              # penceresinde TEK aday ve AYNI gündeyse kendiliğinden bağlanır (own.match). Farklı gün ya da
+                              # birden çok aday: dekont okumasında own.maybe_match {id, date, from_account, to_account,
+                              # has_file, message "Bu aktarım daha önce eklenmiş olabilir — bağla?"}; istemci sorar,
+                              # "Bağla" → POST /api/own-transfers link_to = maybe_match.id (tutar/hesaplar tutmazsa 422);
+                              # "Yeni aktarım" → link_to'suz (yeni iki bacak; yanıtta maybe_match bilgi olarak)
 )
 
 

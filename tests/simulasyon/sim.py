@@ -280,7 +280,6 @@ class Sim:
         self.rent_wait: list[tuple] = []
         self.rent_app_pending: set = set()
         self.unknown: list[dict] = []
-        self.lost: list[tuple] = []                # (seq, hesap, ±tutar) dekontu eski aktarıma bağlanıp kaybolan
         self.two_sal_seen = False              # hesapsız Ödendi: {stmt, amount, day, seq, acc, linked}
         self.steps: list[str] = []
         self.mismatches: list[Mismatch] = []
@@ -771,8 +770,9 @@ class Sim:
                              "dekont_side": (r or {}).get("doc_direction") or "giden"})
             r = self.api("post", "/api/own-transfers", json=body)
             ms.informed = md.informed = True
-            if r and r.get("linked"):
-                self.lost += [(ms.seq, src.cfg.key, amt), (md.seq, dst.cfg.key, -amt)]  # iki bacak da uygulamada (döküm kipindeki bacak döküm gelene dek)
+            if r and r.get("linked"):  # S3 düzeldi: yeni aktarımın dekontu kayıtlı başka aktarıma bağlanmamalı
+                self.fail("K1_aktarim_birlesti", "yeni aktarımın dekontu kayıtlı başka bir aktarıma bağlandı",
+                          {"linked": False}, {k: r.get(k) for k in ("id", "linked", "created")})
         self.log(f"aktarım {src.cfg.key}→{dst.cfg.key} {amt}{' ATM' if atm else ''} "
                  f"({'elle' if both_elle else 'karışık/döküm'})")
 
@@ -1072,9 +1072,6 @@ class Sim:
                 tot += s.amount
         return round(tot, 2)
 
-    def lost_transfer(self, a: Acc) -> float:
-        return round(sum(x for seq, key, x in self.lost if key == a.cfg.key and seq > a.anchor_seq), 2)
-
     def two_salary_bug(self, a_inc: float, e_inc: float) -> bool:
         """Bulgu modeli: iki maaşlı defterde dökümdeki maaş satırı ilk "MAAS" kalemine bağlanır ve o dönemin elle
         girilmiş öbür maaşının üstüne yazılır → öbür kalem "bekliyor" kalır (fark = bir maaş tutarı)."""
@@ -1088,12 +1085,6 @@ class Sim:
             return False
         ds = {round(x.amount - y.amount, 2) for x in sal for y in sal if x is not y}
         return any(abs(diff - k) <= EPS for k in ds) or any(abs(abs(diff) - x.amount) <= EPS for x in sal)
-
-    def dekont_rent_bug(self, diff: float) -> bool:
-        if not self.p.rent or self.p.rent[3] != "dekont" or diff <= EPS:
-            return False
-        k = diff / self.p.rent[0]
-        return abs(k - round(k)) < 1e-6
 
     def dokum_covers(self, card: Card, st: Stmt) -> bool:
         a = self.accs[card.cfg.pay_acc]
@@ -1134,11 +1125,7 @@ class Sim:
             got = app_bal.get(a.id)
             if got is None or abs(got - e) > EPS:
                 k1 = True
-                lost = self.lost_transfer(a)
-                if got is not None and lost and abs(got - e - lost) <= EPS:
-                    self.fail("BULGU_dekont_aktarim_birlesti", f"{a.cfg.key}: yeni aktarımın dekontu önceki günün "
-                                                              f"elle aktarımına bağlandı, {lost} kayıp", e, got)
-                elif got is not None and self.two_salary_k1(got - e):
+                if got is not None and self.two_salary_k1(got - e):
                     self.fail("BULGU_iki_maas_dokum", f"{a.cfg.key}: elle girilmiş maaşın tutarı/tarihi dökümdeki "
                               "öbür maaşla değiştirildi", e, got)
                 else:
@@ -1182,10 +1169,6 @@ class Sim:
                 if k == "pending_cards" and abs(parts.get(k, 0.0) - ep["_pending_alt"]) <= EPS:
                     self.fail("BULGU_kesim_sonrasi_harcama", "kesimden SONRA elle girilen kart harcaması, ekstresi "
                               "yüklenmemiş KAPANMIŞ döngünün son ödemesine yazıldı", ep[k], parts.get(k))
-                    continue
-                if k == "recurring" and self.dekont_rent_bug(parts.get(k, 0.0) - ep[k]):
-                    self.fail("BULGU_dekont_kira", "dekonttan kaydedilen kira düzenli kaleme bağlanmadı: kira hâlâ "
-                              f"'bekliyor' ve ikinci kez düşülüyor: {nw.get('recurring_items')}", ep[k], parts.get(k))
                     continue
                 extra = ""
                 if k == "pending_cards":
