@@ -355,3 +355,56 @@ def test_payables_in_horizon(book):
     assert by[("bill", "2026-11-19")] is True
     assert by[("estimate", "2026-12-23")] is False  # ufuk 16 Ara
     assert by[("debt", "2026-12-31")] is False  # kesin kalem: listede kalır, istemci gizlemez
+
+
+# ---------------------------------------------------------------- U2 ↔ B1: hesabı belirsiz döngü ödemesi tek kavram
+
+def _acc_id(client):
+    a = client.get("/api/accounts").json()
+    return (a if isinstance(a, list) else a["accounts"])[0]["id"]
+
+
+def test_cycle_pay_without_account_is_unknown_payment(cut_passed, client, monkeypatch):
+    """Hesap verilmeden döngü ödendi: döngü düşülmez, ödeme "hesabı belli değil" kalemi olarak düşülür (çapası ödemeden
+    eski: deducted); spendable bir kez azalır (çift düşüm ya da hiç düşmeme yok)."""
+    import app.finance as f
+
+    real = f.net_worth
+    monkeypatch.setattr(f, "net_worth", lambda today=None: real(today or date(2026, 11, 20)))
+    before = _nw(date(2026, 11, 20))
+    r = client.post("/api/cards/cycle-pay", json={"card_no": CARD, "amount": 9000.0, "paid_at": "2026-11-19"})
+    assert r.status_code == 200, r.text
+    nw = _nw(date(2026, 11, 20))
+    assert _pending(nw) == {}
+    items = [u for u in nw["unknown_payments_items"] if u.get("cycle")]
+    assert len(items) == 1 and items[0]["amount"] == 9000.0 and items[0]["deducted"]
+    # önce: kesin kısım 5.250 düşülüyordu; sonra: ödenen 9.000 düşülüyor
+    assert nw["spendable"] == round(before["spendable"] + (INST + 4000.0) - 9000.0, 2)
+
+
+def test_cycle_pay_outside_and_with_account(cut_passed, client):
+    """account_id null (hesaptan değil): belirsiz değil. account_id X: o hesabın bakiyesi düşer, belirsiz değil."""
+    r = client.post("/api/cards/cycle-pay", json={"card_no": CARD, "amount": 9000.0, "paid_at": "2026-11-19",
+                                                   "account_id": None})
+    assert r.status_code == 200, r.text
+    assert not [u for u in _nw(date(2026, 11, 20))["unknown_payments_items"] if u.get("cycle")]
+    client.request("DELETE", "/api/cards/cycle-pay", params={"card_no": CARD})
+    r = client.post("/api/cards/cycle-pay", json={"card_no": CARD, "amount": 9000.0, "paid_at": "2026-11-19",
+                                                   "account_id": _acc_id(client)})
+    assert r.status_code == 200, r.text
+    nw = _nw(date(2026, 11, 20))
+    assert not [u for u in nw["unknown_payments_items"] if u.get("cycle")]
+    assert nw["cash"] == CASH - 9000.0
+
+
+def test_unknown_cycle_pay_merges_with_bank_statement_row(cut_passed, client, tmpdb):
+    """Belirsiz döngü ödemesinden sonra dökümde aynı ödeme gelir: elle kayıt silinir, döngüye dökümdeki sayılır."""
+    r = client.post("/api/cards/cycle-pay", json={"card_no": CARD, "amount": 9000.0, "paid_at": "2026-11-19"})
+    assert r.status_code == 200, r.text
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, description, import_hash) "
+                  "VALUES ('2026-11-18', 9000, '1234', 'Örnek Banka', 'KREDI KARTI ODEMESI', 'h-ornek-9')")
+    assert tmpdb.link_unknown_statement_payments() >= 1
+    nw = _nw(date(2026, 11, 20))
+    assert not [u for u in nw["unknown_payments_items"] if u.get("cycle")]
+    assert _pending(nw) == {}

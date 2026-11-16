@@ -319,8 +319,13 @@ def _salary_entry(e: dict, salary_ids: set) -> bool:
             or bool(SALARY_TEXT.search(_fold(e["description"] or ""))))
 
 
-SALARY_GRACE_DAYS = 7  # geçmiş dönemin yatmamış maaşı beklenen günden bu kadar gün "bekliyor" kalır (takvim günü;
-# iş günü yardımcısı app/workdays.py gelince ≈5 iş günü)
+SALARY_GRACE_DAYS = 5  # geçmiş dönemin yatmamış maaşı beklenen günden bu kadar İŞ GÜNÜ "bekliyor" kalır (hafta sonu ve
+# resmi/dini bayram app/workdays.py; 15'i Cumartesi → Pazartesi + 5 iş günü)
+
+
+def salary_awaited(expected: str, today: date) -> bool:
+    """Beklenen günü geçmiş maaş hâlâ beklenir mi (SALARY_GRACE_DAYS iş günü içinde)."""
+    return workdays.add_business_days(expected, SALARY_GRACE_DAYS) >= today
 
 
 def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) -> list[dict]:
@@ -341,7 +346,7 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
         if r["kind"] == INCOME and is_salary and salary_seen:  # o ayın maaşı dökümden gelmiş: "bekliyor" gösterme
             continue
         if past and r["kind"] == INCOME and is_salary and not salary_seen \
-                and date.fromisoformat(row["date"]) + timedelta(days=SALARY_GRACE_DAYS) >= date.today():
+                and salary_awaited(row["date"], date.today()):
             # beklenen gün hafta sonu/bayrama denk gelmiş olabilir (15'i Cumartesi → Pazartesi yatar): dönem bitse de
             # tolerans içinde maaş "bekliyor" kalır (Maaş gelince'ye girer; lead 16.11 kayma A)
             out.append(row)
@@ -2511,9 +2516,11 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                                                  if u["deducted"] else
                                                  "Bir hesabının bakiyesi ödemeden sonra güncellendiği için ödeme o "
                                                  "bakiyenin içinde sayılıyor, ayrıca düşülmüyor."),
-                        "pay": {"type": "statement", "id": u["statement_id"]},
-                        "key": f"belirsiz_odeme:{u['statement_id']}:{u['paid_at']}:{_round(u['amount']):g}",
-                        "target": {"screen": "odemeler", "type": "statement", "id": u["statement_id"]}})
+                        **({"pay": {"type": "statement", "id": u["statement_id"]},
+                            "target": {"screen": "odemeler", "type": "statement", "id": u["statement_id"]}}
+                           if u["statement_id"] else {"target": {"screen": "kartlar"}}),
+                        "key": f"belirsiz_odeme:{u['statement_id'] or 'c' + str(u.get('card_payment_id'))}:{u['paid_at']}:"
+                               f"{_round(u['amount']):g}"})
         # 2++) Bakiyesi eksi ya da uzun süredir güncellenmemiş hesap (sessiz kalmasın)
         for a in account_alerts(accs, today).values():
             out.append({"level": "uyari", "title": a["text"].split(" — ")[0],
@@ -3320,7 +3327,7 @@ def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict,
     """Bakiye tabanlı "Ay sonunda kalacak" (H1, lead 16.11; yetenek forecast_balance). Ufuk = Ödemelerden sonra'nın
     ufku (spend_horizon), ikisi tutarlı:
       no_new_spend ("Yeni harcama yapmazsan") = spendable + ufka kadar beklenen gelir (spendable_after_income.income:
-                     girilmemiş sabit gelirler, SALARY_GRACE_DAYS içinde yatmamış maaş dahil)
+                     girilmemiş sabit gelirler, SALARY_GRACE_DAYS iş günü içinde yatmamış maaş dahil)
       amount       = no_new_spend − ufka kadar kalan günlerin tahmini kart harcaması (açık döngü başına henüz
                      harcanmamış değişken pay: min(variable_at_cut − spent, variable_avg × kalan gün / döngü günü))
     Bekleyen düzenli ödeme / taksit / abonelik spendable'da zaten (ufka kadar vadeliler); ayrıca düşülmez.
@@ -3354,7 +3361,7 @@ def _spendable_after_income(spendable: float, today: date, periods: list[str] | 
     rows = [r for per in [prev, *periods] for r in pending_recurring(per, rec, db.list_entries(per))
             if r.get("pending") and r["kind"] == INCOME and money.gt(r["amount"] or 0, 0)
             and (per != prev or (r["recurring_id"] in salary_ids
-                                 and date.fromisoformat(r["date"]) + timedelta(days=SALARY_GRACE_DAYS) >= today))]
+                                 and salary_awaited(r["date"], today)))]
     if not rows:
         return None
     income = _round(sum(r["amount"] for r in rows))

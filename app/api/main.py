@@ -8503,7 +8503,9 @@ class CyclePayIn(BaseModel):
     card_no: str = Field(min_length=4, max_length=40)
     amount: Money = Field(gt=0)
     paid_at: date | None = None  # boş: bugün
-    account_id: int | None = None  # ödemenin çıktığı banka/nakit hesabı (isteğe bağlı; verilirse bakiye düşer)
+    # ödemenin çıktığı hesap (ekstre Ödendi ile aynı): X → o hesap (bakiye düşer); null → hesaptan değil (nakit);
+    # anahtar yok → hesabı belirsiz (unknown_payments; döküm gelince birleşir)
+    account_id: int | None = None
 
 
 def _estimate_cycle(card_no: str) -> dict:
@@ -8525,7 +8527,8 @@ def pay_estimate_cycle(body: CyclePayIn):
         raise HTTPException(409, "Bu dönemin ekstresi henüz kesilmedi; ödeme önceki ekstreye sayılır")
     _visible_or_404("account", body.account_id)
     try:
-        r = db.add_cycle_payment(body.card_no, cyc.get("bank") or "", body.amount, on, body.account_id)
+        acc = body.account_id if "account_id" in body.model_fields_set else db._KEEP  # anahtar yok: hesabı belirsiz
+        r = db.add_cycle_payment(body.card_no, cyc.get("bank") or "", body.amount, on, acc)
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
     return {"ok": True, **r}

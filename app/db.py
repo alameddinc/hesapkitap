@@ -2521,16 +2521,30 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
         return {"card_payment_id": cid, "linked": False, "link": "elle"}
 
 
-def add_cycle_payment(card_no: str, bank: str, amount: float, paid_at: str, account_id: int | None = None) -> dict:
-    """Ekstresi yüklenmemiş döngüye elle kart ödemesi (finance.cycle_payments okur; statement_id boş). account_id
-    verilirse o hesaptan çıkan ödeme (bakiye düşer); aynı hesapta, aynı tutarda (±0,01), ±3 gün içinde dökümden gelmiş
-    ekstreye bağlanmamış kart ödemesi varsa yeni kayıt açılmaz (o zaten döngüye sayılır). Ekstre yüklenince
-    reassign_statement_payments ödemeyi ona atar. Dönüş: {card_payment_id, linked}."""
+CYCLE_OUTSIDE = "disarida"  # card_payments.account: "Hesaptan değil / nakit" denmiş döngü ödemesi (belirsiz sayılmaz)
+
+
+def add_cycle_payment(card_no: str, bank: str, amount: float, paid_at: str, account_id=_KEEP) -> dict:
+    """Ekstresi yüklenmemiş döngüye elle kart ödemesi (finance.cycle_payments okur; statement_id boş). Hesap, ekstre
+    Ödendi'siyle (mark_statement_paid / B1) aynı üç hâl:
+      account_id X     → o hesaptan çıkan ödeme (bakiye düşer); aynı hesapta, aynı tutarda, ±3 gün içinde dökümden
+                         gelmiş ekstreye bağlanmamış kart ödemesi varsa yeni kayıt açılmaz (o bağlanır, linked);
+      account_id None  → hesaptan değil (nakit / takip edilmeyen hesap): account = CYCLE_OUTSIDE, belirsiz sayılmaz;
+      verilmedi (_KEEP)→ HESABI BELİRSİZ: account_id ve account boş. unknown_statement_payments'ta (çapa kuralıyla
+                         düşülür) ve döküm gelince link_unknown_statement_payments dökümdeki aynı ödemeyle birleştirir
+                         (elle kayıt silinir; çift sayım yok).
+    Ekstre yüklenince reassign_statement_payments ödemeyi ona atar. Dönüş: {card_payment_id, linked}."""
     amount = money.money(amount)
     last4 = (card_no or "")[-4:] or None
     with connect() as c:
         acc = None
-        if account_id is not None:
+        outside = account_id is None
+        if account_id is _KEEP:
+            account_id = None
+            found = _unknown_cycle_candidate(c, last4, amount, paid_at)
+            if found:  # döküm zaten gelmiş: belirsiz değil, o ödeme döngüye sayılır
+                return {"card_payment_id": found, "linked": True}
+        elif account_id is not None:
             acc = c.execute("SELECT id, name FROM accounts WHERE id = ? AND kind IN ('banka', 'nakit')", (account_id,)).fetchone()
             if not acc:
                 raise ValueError("Hesap bulunamadı (banka ya da nakit olmalı)")
@@ -2544,9 +2558,20 @@ def add_cycle_payment(card_no: str, bank: str, amount: float, paid_at: str, acco
                 return {"card_payment_id": found["id"], "linked": True}
         cid = c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, description, account_id, "
                         "created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                        (paid_at, amount, last4, acc["name"] if acc else None,
+                        (paid_at, amount, last4, acc["name"] if acc else (CYCLE_OUTSIDE if outside else None),
                          f"Kart ödemesi · {bank} •••• {last4 or ''}".strip(), account_id)).lastrowid
         return {"card_payment_id": cid, "linked": False}
+
+
+def _unknown_cycle_candidate(c, last4: str | None, amount: float, paid_at: str) -> int | None:
+    """Belirsiz döngü ödemesinin dökümdeki karşılığı: ekstreye bağlı olmayan, dökümden gelmiş kart ödemesi; aynı tutar,
+    tarih −20 / +7 gün (_unknown_payment_candidate ile aynı pencere), kart hanesi biliniyorsa aynı. En yakın tarih."""
+    r = c.execute(
+        "SELECT id FROM card_payments WHERE import_hash IS NOT NULL AND import_hash NOT LIKE 'mail:%' "
+        "AND statement_id IS NULL AND ROUND(amount * 100) = ? AND pay_date BETWEEN date(?, '-20 days') AND date(?, '+7 days') "
+        "AND (card_last4 IS NULL OR ? IS NULL OR card_last4 = ?) ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1",
+        (money.kurus(amount), paid_at, paid_at, last4, last4, paid_at)).fetchone()
+    return r["id"] if r else None
 
 
 def remove_cycle_payments(card_no: str, cut: str) -> int:
@@ -2594,6 +2619,13 @@ def link_unknown_statement_payments() -> int:
             if found:
                 c.execute("UPDATE card_payments SET statement_id = ? WHERE id = ?", (s["id"], found))
                 n += 1
+        # ekstresi yüklenmemiş döngünün belirsiz elle ödemesi (add_cycle_payment, hesap verilmedi): dökümdeki aynı ödeme
+        # gelince elle kayıt silinir; döngüye artık dökümdeki sayılır (tek ödeme, bakiye dökümden)
+        for r in c.execute("SELECT id, card_last4, amount, pay_date FROM card_payments WHERE import_hash IS NULL "
+                           "AND statement_id IS NULL AND account_id IS NULL AND account IS NULL").fetchall():
+            if _unknown_cycle_candidate(c, r["card_last4"], r["amount"], r["pay_date"]):
+                c.execute("DELETE FROM card_payments WHERE id = ?", (r["id"],))
+                n += 1
     return n
 
 
@@ -2635,7 +2667,19 @@ def unknown_statement_payments(today: str | None = None, statements: list[dict] 
         out.append({"statement_id": s["id"], "title": f"{s['bank']} {s['card_no']}", "bank": s["bank"],
                     "card_no": s["card_no"], "amount": round(s["paid_amount"], 2), "paid_at": pd,
                     "deducted": not icinde(pd, s.get("paid_marked_at"))})
-    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"]))
+    # ekstresi yüklenmemiş döngüye hesabı verilmeden girilen ödeme (add_cycle_payment): aynı kavram, aynı çapa kuralı
+    # (işaretlenme anı = created_at). statement_id None, card_payment_id ve cycle True
+    with connect() as c:
+        cyc = rows(c.execute("SELECT id, pay_date, amount, card_last4, description, created_at FROM card_payments "
+                             "WHERE import_hash IS NULL AND statement_id IS NULL AND account_id IS NULL AND account IS NULL "
+                             "AND amount > 0 AND pay_date BETWEEN ? AND ?", (since, day)))
+    for r in cyc:
+        pd = r["pay_date"][:10]
+        out.append({"statement_id": None, "card_payment_id": r["id"], "cycle": True,
+                    "title": (r["description"] or "Kart ödemesi").replace("Kart ödemesi · ", ""), "bank": None,
+                    "card_no": r["card_last4"], "amount": round(r["amount"], 2), "paid_at": pd,
+                    "deducted": not icinde(pd, r["created_at"])})
+    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"] or 0, x.get("card_payment_id") or 0))
 
 
 def last_pay_accounts() -> dict[str, int]:
