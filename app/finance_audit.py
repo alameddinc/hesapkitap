@@ -112,7 +112,7 @@ def snapshot(today: date) -> dict:
     with db.connect() as c:
         snap = {
             "statements": _q(c, "SELECT id, bank, card_no, period_end, due_date, total_debt, paid_at, paid_amount, "
-                                "paid_source, source FROM statements"),
+                                "paid_source, paid_via, source FROM statements"),
             "card_payments": _q(c, "SELECT id, pay_date, amount, card_last4, account_id, statement_id, import_hash "
                                    "FROM card_payments"),
             "accounts": _q(c, "SELECT * FROM accounts WHERE kind IN ('banka', 'nakit')"),
@@ -165,8 +165,8 @@ def odendi_hesapsiz(s: dict) -> list[dict]:
     for st in s["statements"]:
         if st.get("source") == "excel" or not st.get("paid_at") or not money.gt(st.get("paid_amount") or 0, 0):
             continue
-        if st["id"] in linked:
-            continue
+        if st["id"] in linked or st.get("paid_via") == "disarida":
+            continue  # bağlı ödeme var ya da kullanıcı "hesaptan değil" dedi
         lo, hi = st["period_end"], (_d(st.get("due_date") or st["period_end"]) + timedelta(days=PAY_WINDOW)).isoformat()
         l4 = _l4(st["card_no"])
         if any(lo <= p["pay_date"] <= hi and ((p.get("card_last4") or "") == l4 if p.get("card_last4")

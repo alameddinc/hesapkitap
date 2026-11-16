@@ -139,11 +139,19 @@ def test_card_payment_without_account_is_flagged(tmpdb):
     """Sebep 1 düzelene dek denetim yakalar; düzeldikten sonra da (eski veri) yakalamaya devam etmeli."""
     _acc(tmpdb, BANK_A, 20000.0, as_of=T - timedelta(days=3))
     sid = _stmt(tmpdb, 3000.0)
-    tmpdb.mark_statement_paid(sid, 3000.0, T.isoformat(), None)
+    tmpdb.mark_statement_paid(sid, 3000.0, T.isoformat())  # hesap anahtarı yok: hesabı belirsiz
     res = finance_audit.check(T)
     assert res["refs"]["odendi_hesapsiz"] == [f"statement:{sid}"] and res["amounts"]["odendi_hesapsiz"] == 3000.0
     # bakiye ödemeden SONRA güncellendiyse ödeme bakiyenin içindedir: uyarı yok
     tmpdb.set_account_balance(BANK_A, 17000.0, (T + timedelta(days=1)).isoformat(), "elle")
+    assert "odendi_hesapsiz" not in _codes()
+
+
+def test_card_payment_outside_tracked_accounts_not_flagged(tmpdb):
+    """Kullanıcı "hesaptan değil" (nakit / takip edilmeyen hesap) dediyse hesap sorulmaz."""
+    _acc(tmpdb, BANK_A, 20000.0, as_of=T - timedelta(days=3))
+    sid = _stmt(tmpdb, 3000.0)
+    tmpdb.mark_statement_paid(sid, 3000.0, T.isoformat(), None)
     assert "odendi_hesapsiz" not in _codes()
 
 
