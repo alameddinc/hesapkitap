@@ -328,3 +328,44 @@ def test_list_debts_schedule_uses_given_today(client, tmpdb):
     a = tmpdb.list_debts(today=date(2030, 1, 2))[0]["schedule"]
     b = tmpdb.list_debts(today=date(2030, 3, 2))[0]["schedule"]
     assert a != b
+
+
+# ---------------------------------------------------------------- gecikmiş maaş: "Gecikti — maaş yattı mı?" (lead P6)
+
+def _late_book(tmpdb):
+    """Takvim ayı; maaş 10'u (10 Kas 2026 Salı), Kasım'da yatmadı. Tolerans 5 iş günü → 17 Kas."""
+    _calendar_month(tmpdb)
+    return _salary(tmpdb, "Maaş", 50000.0, 10)
+
+
+def test_late_salary_status_not_in_expected_income(tmpdb):
+    rid = _late_book(tmpdb)
+    day = date(2026, 11, 20)
+    row = next(r for r in finance.transactions("2026-11", today=day) if r.get("recurring_id") == rid)
+    assert row["pending"] and row["status"] == "gecikti" and row["status_label"] == "Gecikti — maaş yattı mı?"
+    assert row["actions"] == ["yatti_dokum", "yatti_elle", "bu_ay_yok"]
+    pend = finance.summary("2026-11", today=day)["pending"]
+    assert pend["income"] == 0 and pend["late_income"] == 50000.0 and pend["late_count"] == 1
+    m = finance.plan(1, today=day)["months"][0]
+    line = next(l for l in m["lines"] if l.get("recurring_id") == rid)
+    assert line["status"] == "gecikti" and line["amount"] == 50000.0
+    assert m["income"] == 0 and m["parts"]["pending_income"] == 0 and "gelir" not in m["groups"]
+    nw = finance.net_worth(day)
+    assert nw["spendable_after_income"] is None  # Maaş gelince'de yok; next_salary_date de 10 Ara'yı esas alır
+    assert nw["spendable_pre_salary"]["salary_date"] == "2026-12-10"
+
+
+def test_salary_within_tolerance_still_waiting(tmpdb):
+    rid = _late_book(tmpdb)
+    day = date(2026, 11, 13)
+    row = next(r for r in finance.transactions("2026-11", today=day) if r.get("recurring_id") == rid)
+    assert row["pending"] and "status" not in row
+    assert finance.summary("2026-11", today=day)["pending"]["income"] == 50000.0
+
+
+def test_late_salary_actions_clear_status(client, tmpdb):
+    """"Bu ay yok" (skip) ya da "yattı" (confirm): satır gecikmiş olmaktan çıkar."""
+    rid = _late_book(tmpdb)
+    day = date(2026, 11, 20)
+    assert client.post(f"/api/recurring/{rid}/skip", json={"month": "2026-11"}).status_code == 200
+    assert not [r for r in finance.transactions("2026-11", today=day) if r.get("status") == "gecikti"]
