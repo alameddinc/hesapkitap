@@ -416,3 +416,87 @@ def test_api_items_and_own_pair(client, tmpdb):
     assert r.status_code == 200, r.text
     assert not [i for i in client.get("/api/finance-audit").json()["items"] if i["code"] == "transfer_cift"]
     assert client.post("/api/finance-audit/own-pair", json={"out_entry_id": 999, "in_entry_id": 998}).status_code == 422
+
+
+# ---------------------------------------------------------------- kendi adına giden/gelen havale (karşı taraf = kullanıcı)
+
+OWNER = "AYSE ORNEK"
+OUT_DESC = f"GIDEN FAST - {OWNER} TARAFINDAN GONDERILEN"            # Halkbank: alıcı kesik
+IN_DESC = f"Aktarim,{OWNER} 'DAN GELEN FAST ODEMESI"                 # Halkbank gelen kalıbı: gönderen = kullanıcı
+OTHER_DESC = f"GIDEN FAST - {OWNER} TARAFINDAN GONDERILEN,MEHMET DENEME,TR12 0001 0000 0000 0000 0000 01,"
+
+
+def _row(day, amount, desc, h):
+    return {"date": day.isoformat(), "amount": amount, "description": desc, "type": "gelir" if amount > 0 else "gider",
+            "hash": h}
+
+
+def _own_rows(db):
+    with db.connect() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM own_transfers ORDER BY id")]
+
+
+def _entries(db):
+    with db.connect() as c:
+        return [dict(r) for r in c.execute("SELECT id, kind, amount FROM entries")]
+
+
+def test_own_name_outgoing_is_not_expense_and_pairs_on_counter_leg(tmpdb):
+    tmpdb.remember_owner_name(OWNER)
+    a = _acc(tmpdb, BANK_A, 30000.0, as_of=T - timedelta(days=1))
+    b = _acc(tmpdb, BANK_B, 5000.0, as_of=T - timedelta(days=1))
+    day = T - timedelta(days=3)
+    cash0 = _nw()["cash"]
+    st = tmpdb.import_bank_rows([_row(day, -14000.0, OUT_DESC, "h-out")], BANK_A, account_id=a)
+    assert st["gider"] == 0 and st.get("virman_bekliyor") == 1
+    assert _entries(tmpdb) == []
+    assert [r["amount"] for r in _own_rows(tmpdb)] == [-14000.0]
+    assert _nw()["cash"] == cash0                     # dökümün bakiyesi çapada: aktarım nakdi değiştirmez
+    # karşı bacak (öbür bankanın dökümü) gelince: tek aktarım (iki bacak), gelir de yok
+    tmpdb.import_bank_rows([_row(day, 14000.0, IN_DESC, "h-in")], BANK_B, account_id=b)
+    legs = _own_rows(tmpdb)
+    assert sorted(r["amount"] for r in legs) == [-14000.0, 14000.0] and {r["account_id"] for r in legs} == {a, b}
+    assert _entries(tmpdb) == [] and _nw()["cash"] == cash0
+    assert "virman_bekliyor" not in finance_audit.check(T + timedelta(days=10))["counts"]
+
+
+def test_outgoing_to_named_other_person_stays_expense(tmpdb):
+    tmpdb.remember_owner_name(OWNER)
+    a = _acc(tmpdb, BANK_A, 30000.0, as_of=T - timedelta(days=1))
+    st = tmpdb.import_bank_rows([_row(T - timedelta(days=3), -2500.0, OTHER_DESC, "h-other")], BANK_A, account_id=a)
+    assert st["gider"] == 1 and not _own_rows(tmpdb)
+
+
+def test_unpaired_own_leg_asks_after_7_days_and_counter_leg_fixes_cash(client, tmpdb):
+    tmpdb.remember_owner_name(OWNER)
+    day = T - timedelta(days=9)
+    a = _acc(tmpdb, BANK_A, 16000.0, as_of=T - timedelta(days=1))   # A'nın dökümü aktarımı içeriyor
+    b = _acc(tmpdb, BANK_B, 5000.0, as_of=day - timedelta(days=5))   # B'nin bakiyesi aktarımdan önce girilmiş
+    tmpdb.import_bank_rows([_row(day, -14000.0, OUT_DESC, "h-out")], BANK_A, account_id=a)
+    assert "virman_bekliyor" not in finance_audit.check(day + timedelta(days=6))["counts"]  # 7 gün dolmadı
+    finance_audit.run(T)
+    it = next(i for i in client.get("/api/finance-audit").json()["items"] if i["code"] == "virman_bekliyor")
+    assert it["action"] == "own_leg" and it["amount"] == 14000.0
+    cash0 = _nw()["cash"]
+    r = client.post("/api/finance-audit/own-leg", json={"own_transfer_id": it["own_transfer_id"], "account_id": b})
+    assert r.status_code == 200, r.text
+    assert _nw()["cash"] == round(cash0 + 14000.0, 2)  # para B'ye girdi: B'nin eski bakiyesi tamamlandı
+    assert "virman_bekliyor" not in finance_audit.check(T)["counts"]
+    assert client.post("/api/finance-audit/own-leg", json={"own_transfer_id": it["own_transfer_id"],
+                                                           "account_id": b}).status_code == 422  # ikinci bacak yok
+
+
+def test_legacy_own_name_entry_flagged_and_converted(client, tmpdb):
+    tmpdb.remember_owner_name(OWNER)
+    a = _acc(tmpdb, BANK_A, 30000.0, as_of=T - timedelta(days=1))
+    eid = tmpdb.create_entry({"entry_date": (T - timedelta(days=4)).isoformat(), "description": OUT_DESC,
+                              "amount": 14000.0, "kind": "gider", "category": "Kategorisiz", "payment": "havale",
+                              "account_id": a, "import_hash": "h-eski"})
+    res = finance_audit.check(T)
+    assert res["refs"].get("kendi_adi_hareket") == [f"entry:{eid}"]
+    cash0 = _nw()["cash"]
+    r = client.post("/api/finance-audit/entry-to-transfer", json={"entry_id": eid})
+    assert r.status_code == 200, r.text
+    assert _entries(tmpdb) == [] and [x["import_hash"] for x in _own_rows(tmpdb)] == ["h-eski"]
+    assert _nw()["cash"] == cash0
+    assert "kendi_adi_hareket" not in finance_audit.check(T)["counts"]

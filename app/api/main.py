@@ -3983,6 +3983,51 @@ def finance_audit_own_pair(body: OwnPairFixIn):
     return {"ok": True, **out}
 
 
+class OwnLegFixIn(BaseModel):
+    own_transfer_id: int
+    account_id: int  # öbür bacağın hesabı (kullanıcının kendi hesabı)
+
+
+@app.post("/api/finance-audit/own-leg")
+def finance_audit_own_leg(body: OwnLegFixIn):
+    """virman_bekliyor maddesi "Hangi hesap?": tek bacaklı aktarımın öbür bacağı seçilen hesaba (elle bacak; o hesabın
+    dökümü gelince ona bağlanır). Başkasına gittiyse istemci PATCH /api/own-transfers/{id} not_transfer kullanır.
+    Ortak defter üyesi 403; aynı hesap / bacak zaten var 422."""
+    from app import finance_audit
+
+    _own_owner_only()
+    _visible_or_404("account", body.account_id)
+    u = db.current_user() or {}
+    try:
+        leg = db.add_counter_leg(body.own_transfer_id, body.account_id, u.get("id"))
+    except db.OwnTransferError as e:
+        raise HTTPException(422, str(e)) from e
+    finance_audit.run()
+    return {"ok": True, "counter_id": leg, **_own_out(body.own_transfer_id)}
+
+
+class EntryToTransferIn(BaseModel):
+    entry_id: int
+    account_id: int | None = None  # öbür bacağın hesabı; yoksa tek bacak (karşı bacak beklenir)
+
+
+@app.post("/api/finance-audit/entry-to-transfer")
+def finance_audit_entry_to_transfer(body: EntryToTransferIn):
+    """kendi_adi_hareket maddesi: karşı tarafı kullanıcının kendisi olan gelir/gider kaydı aktarım bacağı olur (bakiye
+    değişmez); account_id verilirse öbür bacak o hesaba. Ortak defter üyesi 403; çevrilemezse 422."""
+    from app import finance_audit
+
+    _own_owner_only()
+    if body.account_id is not None:
+        _visible_or_404("account", body.account_id)
+    try:
+        out = finance_audit.entry_to_transfer(body.entry_id, body.account_id)
+    except (finance_audit.FixError, db.OwnTransferError) as e:
+        raise HTTPException(422, str(e)) from e
+    finance_audit.run()
+    return {"ok": True, **out}
+
+
 @app.get("/api/admin/finance-audit")
 def admin_finance_audit(day: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
     """Finans tutarlılık denetimi, sınıf bazında: {day, spaces, with_issues, by_code: {kod: {books, count, label}}}.
