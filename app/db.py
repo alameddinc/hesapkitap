@@ -610,6 +610,11 @@ MIGRATIONS = [
     # saniye sorunu yok; H7). NULL (eski çapa, göç): created_at > updated_at yedek kuralı
     ("accounts", "anchor_card_payment_id", "INTEGER"),
     ("accounts", "anchor_transfer_id", "INTEGER"),
+    # kullanıcının cevabı (yetenek anchor_conflict): ödeme / aktarım hesabın çapa gününde ya da öncesinde girildiyse
+    # "bu ödeme o bakiyede zaten var mı?" — 1: çapanın içinde (bakiyeden düşmez), 0: çapadan sonra (düşer), NULL: tarih +
+    # anchor_*_id kuralı (eski istemci)
+    ("card_payments", "in_anchor", "INTEGER"),
+    ("own_transfers", "in_anchor", "INTEGER"),
     ("entries", "account_id", "INTEGER"),       # gelirin girdiği / giderin çıktığı hesap (banka, nakit)
     ("recurring", "account_id", "INTEGER"),     # sabit kalemin hesabı (Maaş → Halkbank)
     ("debts", "account_id", "INTEGER"),         # borcun verildiği/alındığı hesap
@@ -5093,6 +5098,27 @@ def propose_split(items: list[dict], category: str | None, total: float | None) 
 ANCHOR_IDS = "(SELECT COALESCE(MAX(id), 0) FROM card_payments), (SELECT COALESCE(MAX(id), 0) FROM own_transfers)"
 
 
+def anchor_conflict(account_id: int | None, day: str | None) -> dict | None:
+    """Hesaplı ödeme / aktarım kaydı: ödeme günü hesabın çapa gününde ya da öncesindeyse {account_id, name, as_of}
+    (istemci "Bu ödeme o bakiyede zaten var mı?" diye sorar, in_balance gönderir); değilse None."""
+    if account_id is None or not day:
+        return None
+    with connect() as c:
+        a = c.execute("SELECT id, name, as_of FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not a or not a["as_of"] or str(day)[:10] > a["as_of"][:10]:
+        return None
+    return {"account_id": a["id"], "name": a["name"], "as_of": a["as_of"][:10]}
+
+
+def set_in_anchor(table: str, ids: list[int], in_balance: bool | None) -> None:
+    """Kullanıcının cevabını yaz (elle kayıtlar; dökümden gelenlere dokunulmaz: onlar zaten bakiyede)."""
+    if in_balance is None or not ids or table not in ("card_payments", "own_transfers"):
+        return
+    with connect() as c:
+        c.execute(f"UPDATE {table} SET in_anchor = ? WHERE id IN ({','.join('?' * len(ids))}) "
+                  "AND (import_hash IS NULL OR import_hash LIKE 'mail:%')", (int(bool(in_balance)), *ids))
+
+
 def set_account_balance(name: str, balance: float, as_of: str, source: str = "elle", kind: str = "banka",
                         origin: str | None = None) -> None:
     """Bakiye çapası: o tarihteki bakiye. Sonraki (ve aynı gün sonradan girilen) hareketler bunun üstüne eklenir.
@@ -5139,16 +5165,22 @@ def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | N
     cp_id, tr_id = a.get("anchor_card_payment_id"), a.get("anchor_transfer_id")
     cards = c.execute("""SELECT COALESCE(SUM(amount), 0) FROM card_payments WHERE account_id = ?
                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%')
-                         AND (pay_date > ? OR (pay_date = ? AND (CASE WHEN ? IS NOT NULL THEN id > ?
-                              ELSE COALESCE(created_at, '') > COALESCE(?, '') END)))
+                         AND CASE WHEN pay_date > ? THEN COALESCE(in_anchor, 0) = 0
+                              WHEN in_anchor IS NOT NULL THEN in_anchor = 0
+                              WHEN pay_date = ? THEN (CASE WHEN ? IS NOT NULL THEN id > ?
+                                   ELSE COALESCE(created_at, '') > COALESCE(?, '') END)
+                              ELSE 0 END
                          AND pay_date <= ?""",
                       (a["id"], a["as_of"], a["as_of"], cp_id, cp_id, a.get("updated_at"), hi)).fetchone()[0]
     flows -= cards
     # elle / dekonttan girilen aktarım çapa günü girildiyse bakiye güncellemesinden sonra mı (kart ödemesi gibi)
     flows += c.execute("""SELECT COALESCE(SUM(amount), 0) FROM own_transfers WHERE account_id = ?
                           AND (import_hash IS NULL OR import_hash LIKE 'mail:%')
-                          AND (transfer_date > ? OR (transfer_date = ? AND (CASE WHEN ? IS NOT NULL THEN id > ?
-                               ELSE created_at IS NOT NULL AND created_at > COALESCE(?, '') END)))
+                          AND CASE WHEN transfer_date > ? THEN COALESCE(in_anchor, 0) = 0
+                               WHEN in_anchor IS NOT NULL THEN in_anchor = 0
+                               WHEN transfer_date = ? THEN (CASE WHEN ? IS NOT NULL THEN id > ?
+                                    ELSE created_at IS NOT NULL AND created_at > COALESCE(?, '') END)
+                               ELSE 0 END
                           AND transfer_date <= ?""",
                        (a["id"], a["as_of"], a["as_of"], tr_id, tr_id, a.get("updated_at"), hi)).fetchone()[0]
     debt = 0.0

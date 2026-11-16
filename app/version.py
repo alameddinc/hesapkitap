@@ -595,6 +595,12 @@ CAPABILITIES = (
                               # path parse|classify|upload|dekont, reason "user_changed_type", to_type?} ile bildirir
                               # (içerik / kişisel veri yok). /api/admin/incidents: kalemde group "belge_okuma"; durum
                               # sayılarına (counts) girmez, özeti doc_reads {kinds, count, users, items [{id, place, count, users}]}
+    "anchor_conflict",        # hesaplı ödeme / aktarım (POST /api/statements/{id}/pay, /api/cards/cycle-pay, /api/own-transfers)
+                              # ödeme günü hesabın çapa (bakiye) günü ya da öncesiyse yanıtta anchor_conflict {account_id,
+                              # name, as_of} (aktarımda + anchor_conflicts). İstek alanı in_balance: true → bu ödeme o bakiyede
+                              # zaten var (bakiyeden düşmez), false → bakiyeden sonra yapıldı (düşer); yoksa eski kural (önceki
+                              # gün içinde, aynı gün kayıt sırası). İstemci formda sorar: "X bakiyesini bugün güncelledin. Bu
+                              # ödeme o bakiyede zaten var mı?" (varsayılan seçim yok)
     "finance_audit_own_question",  # Yapılacaklar kendi_adi_hareket: karşı bacak bulunduysa action entry_to_transfer
                               # (+ counter_account_id, counter_entry_id | counter_own_transfer_id); bulunmadıysa action
                               # "own_question" (title "Alıcısı okunamadı — …", cta "Kendi hesabım" → hesap seç → POST
