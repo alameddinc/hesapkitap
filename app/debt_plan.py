@@ -111,7 +111,7 @@ import math
 import re
 from datetime import date
 
-from app import db, debt_schedule, money
+from app import db, debt_schedule, money, workdays
 
 ORDERS = ("tarih", "kucuk")
 LEGACY_ORDERS = {"faiz": "tarih", "soz": "tarih"}  # eski kayıtlı ayarlar ve eski istemciler
@@ -570,7 +570,7 @@ def card_interest(remaining: float, due_date: str | None, paid: float | None, ra
             else f"Hesap yaklaşık: aylık {pct} faiz ve vergiler (BSMV, KKDF); bankanın oranı ekstrende yazar.")
     out = {"remaining": remaining, "amount": None if fees_hidden else y, "rate": rate, "rate_source": source,
            "rate_note": None if fees_hidden else note, "due_date": due_date}
-    if due_date < today.isoformat():
+    if workdays.past_due(due_date, today):  # son ödeme tatile denk geldiyse ilk iş günü sayılır
         text = (f"Kalan {_tl(remaining)} borca faiz ve vergi eklenir; ödemedikçe her ay büyür." if fees_hidden else
                 f"Kalan {_tl(remaining)} borca bu ay yaklaşık {_tl(y)} faiz ve vergi eklenir; ödemedikçe her ay büyür.")
         return {**out, "state": "after_due", "level": "bad", "text": text}

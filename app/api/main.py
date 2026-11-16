@@ -8480,7 +8480,8 @@ class StatementPayIn(PayIn):
 def pay_statement(sid: int, body: StatementPayIn):
     """Ekstre ödendi / ödemeyi düzelt. account_id: X → o hesaptan çıkan kart ödemesi kaydı (gider değil, bakiye düşer);
     null → bağlı elle kayıt kaldırılır; anahtar yok → bağlı elle kaydın hesabı korunur, tutar/tarih güncellenir. Dökümden
-    gelen kayda yazılmaz (tutar farklıysa warning). Dönüş: {ok, card_payment_id, linked, link, warning?}."""
+    gelen kayda yazılmaz (tutar farklıysa warning). İlk işaretlemede anahtar yok: hesabı belirsiz (yetenek
+    statement_pay_account; net-worth unknown_payments). Dönüş: {ok, card_payment_id, linked, link, warning?}."""
     if not any(x["id"] == sid for x in db.list_statements()):
         raise HTTPException(404, "Ekstre bulunamadı")
     _visible_or_404("account", body.account_id)
@@ -8578,6 +8579,7 @@ def parse_bill(file: UploadFile = File(...), transfer_check: bool = Form(False))
     from app import dekont_parse, doc_reads
 
     if mime == "application/pdf" and transfer_check and dekont_parse.is_transfer(_pdf_text(data)):
+        _incidents.doc_mismatch("fatura", "dekont")  # sorun kaydı: yalnız tür/yol/sebep
         return {"looks_like_transfer": True, "source": "metin", "provider": None, "amount": None, "file_name": None}
     read, read_mime, photo = _prepare_photo(data, mime)
     name = db.save_bill_file(photo, ".jpg") if photo else db.save_bill_file(data, BILL_TYPES[mime])
@@ -8599,6 +8601,8 @@ def parse_bill(file: UploadFile = File(...), transfer_check: bool = Form(False))
             parsed["charged"] = charged
         doc_cache.put(data, doc_cache.FATURA, {k: v for k, v in parsed.items() if k != "file_name"})
     warn = db.take_storage_warning()
+    if parsed.get("looks_like_transfer"):
+        _incidents.doc_mismatch("fatura", "dekont")
     return {**parsed, "file_name": name, **({"storage_warning": warn} if warn else {})}
 
 
@@ -8705,6 +8709,7 @@ def _dekont_read(data: bytes, mime: str, text_hint: str = "") -> dict:
     out.update(source=source, dekont_file=dfile)
     if fields.get("not_transfer"):
         out["not_transfer"] = True  # model: bu bir transfer dekontu değil (istemci uyarır)
+        _incidents.doc_mismatch("dekont")
     ai = source == "yapay_zeka"
     if not (isinstance(out.get("amount"), (int, float)) and out["amount"] > 0 and out.get("date")):
         if ai:  # yapay zekâ okuyamadı: günün ilk denemeleri ücretsiz (_mark_unreadable)
@@ -9989,6 +9994,11 @@ class ClientIncident(BaseModel):
     app_version: str | None = Field(None, max_length=40)
     platform: Literal["ios", "android", "web"] | None = None
     plugin: str | None = Field(None, max_length=40)        # eklenti_hatasi: kamera | dosya | paylas | push …
+    # belge_okuma (yetenek doc_read_report): yalnız sabit değerler; içerik yok
+    doc_type: Literal["fis", "fatura", "dekont", "ekstre", "dokum", "belge"] | None = None
+    to_type: Literal["fis", "fatura", "dekont", "ekstre", "dokum", "belge"] | None = None
+    path: Literal["parse", "classify", "upload", "dekont"] | None = None
+    reason: Literal["user_changed_type"] | None = None
 
 
 class ClientIncidentsIn(BaseModel):
@@ -10005,7 +10015,7 @@ def incidents_client(request: Request, body: ClientIncidentsIn):
     u = db.current_user() or {}
     uid = u.get("id") if u.get("id") and not u.get("demo") else None
     key = f"u{uid}" if uid else incidents.anon_key(client_ip(request))
-    events = [e.model_dump() for e in body.events if e.code in incidents.CLIENT_CODES]
+    events = [e.model_dump() for e in body.events if e.code in incidents.CLIENT_CODES | incidents.CLIENT_EXTRA]
     ok = incidents.client_allowed(key, len(events), incidents.RATE_USER if uid else incidents.RATE_ANON)
     plat = funnel.platform_of(request.headers)
     n = incidents.client_events(events[:ok], uid, plat if plat in incidents.PLATFORMS else None)
