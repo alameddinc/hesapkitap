@@ -6467,6 +6467,9 @@ def patch_own_transfer(tid: int, body: OwnTransferPatch):
     if book.member():
         raise HTTPException(403, "Bu işlemi defter sahibi yapabilir")
     if body.not_transfer:
+        legs = db.own_pair_legs(tid)
+        if legs and any(x.get("source") for x in legs) and len(legs) > 1:
+            raise HTTPException(409, "Elle girilen aktarım gelir/gider sayılmaz; yanlışsa sil")
         eid = db.own_transfer_to_entry(tid)
         if eid is None:
             raise HTTPException(404, "Aktarım yok")
@@ -6477,6 +6480,110 @@ def patch_own_transfer(tid: int, body: OwnTransferPatch):
     if r is None:
         raise HTTPException(404, "Aktarım yok")
     return {"own_transfer": r}
+
+
+class OwnTransferIn(BaseModel):
+    """Hesaplar arası aktarım (yetenek own_transfer_manual): kaynak hesaptan hedef hesaba; gelir/gider sayılmaz."""
+    date: date
+    amount: Money = Field(gt=0, le=1_000_000_000)
+    from_account_id: int
+    to_account_id: int
+    description: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=500)
+    ref: str | None = Field(None, max_length=40)                                    # dekontun sorgu / referans no
+    dekont_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.(?:jpg|pdf)$")  # okuma yanıtındaki dosya
+    dekont_side: Literal["giden", "gelen"] | None = None                            # dekont hangi bacağın (doc_direction)
+
+    @model_validator(mode="after")
+    def _two_accounts(self):
+        if self.from_account_id == self.to_account_id:
+            raise ValueError("Nereden ve nereye aynı hesap olamaz")
+        return self
+
+
+def _own_owner_only() -> None:
+    from app import book
+
+    if book.member():
+        raise HTTPException(403, "Bu işlemi defter sahibi yapabilir")
+
+
+def _own_out(tid: int) -> dict:
+    legs = db.own_pair_legs(tid)
+    return {"id": tid, "legs": legs}
+
+
+@app.post("/api/own-transfers")
+def create_own_transfer(body: OwnTransferIn):
+    """Hesaplar arası aktarım ekle: iki bacak (kaynak −, hedef +), bakiyeler değişir, gelir/gider sayılmaz. Dekonttan
+    (ref / dekont_file): aynı aktarımın kayıtlı bacağı varsa yeni kayıt açılmaz, dekont ona bağlanır (linked true);
+    aynı sorgu numaralı yanlış gelir/gider kaydı aktarıma dönüşür (replaced). O hesabın dökümü gelince aynı hareketle
+    birleşir. 409 {detail, own_transfer_id}: bu dekont bu aktarımda zaten var. Ortak defter üyesi: 403."""
+    from app import dekont_parse, sync
+
+    _own_owner_only()
+    data = body.model_dump()
+    data["date"] = body.date.isoformat()
+    if data["dekont_file"] and not db.file_indexed("receipts", data["dekont_file"]):
+        data["dekont_file"] = None  # bu defterde saklanmış bir dosya değil: bağlanmaz
+    if u := db.current_user():
+        data["created_by"] = u["id"]
+    try:
+        out = dekont_parse.save_own(data)
+    except dekont_parse.Duplicate as e:
+        return JSONResponse({"detail": "Bu dekont zaten eklenmiş", "own_transfer_id": e.entry_id, "duplicate": True},
+                            status_code=409)
+    except db.OwnTransferError as e:
+        raise HTTPException(422, str(e)) from e
+    sync.reconcile()
+    return {**out, **_own_out(out["id"])}
+
+
+class OwnTransferEdit(BaseModel):
+    date: date
+    amount: Money = Field(gt=0, le=1_000_000_000)
+    from_account_id: int
+    to_account_id: int
+    description: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=500)
+
+
+@app.put("/api/own-transfers/{tid}")
+def edit_own_transfer(tid: int, body: OwnTransferEdit):
+    """Elle / dekonttan girilmiş (dökümle birleşmemiş) aktarımı değiştir: tarih, tutar, nereden, nereye, açıklama, not.
+    Dökümden gelen: 409 (yalnız PATCH ile açıklama/not)."""
+    _own_owner_only()
+    try:
+        db.update_own_pair(tid, body.date.isoformat(), body.amount, body.from_account_id, body.to_account_id,
+                           body.description, body.note)
+    except KeyError:
+        raise HTTPException(404, "Aktarım yok") from None
+    except db.OwnTransferError as e:
+        raise HTTPException(409 if "Dökümden" in str(e) else 422, str(e)) from e
+    return _own_out(db.own_pair_legs(tid)[0]["pair_id"] or tid)
+
+
+@app.delete("/api/own-transfers/{tid}")
+def delete_own_transfer(tid: int):
+    """Elle / dekonttan girilmiş aktarımı (iki bacağıyla) sil; dökümden gelen silinmez (409)."""
+    _own_owner_only()
+    try:
+        n = db.delete_own_pair(tid)
+    except KeyError:
+        raise HTTPException(404, "Aktarım yok") from None
+    except db.OwnTransferError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"deleted": n}
+
+
+@app.get("/api/own-transfers/{tid}/receipt")
+def own_transfer_receipt(tid: int):
+    """Aktarım bacağının dekontu (fotoğraf ya da PDF)."""
+    with db.connect() as c:
+        r = c.execute("SELECT id, transfer_date, receipt_file FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+    if not r or not r["receipt_file"]:
+        raise HTTPException(404, "Dekont yok")
+    return _stored_file("receipts", r["receipt_file"], f"dekont-{r['transfer_date']}-{tid}", inline=True)
 
 
 @app.patch("/api/transfers/people/{name}")
@@ -6568,13 +6675,13 @@ def _sniff_image(data: bytes, content_type: str | None, name: str) -> str | None
     return None
 
 
-def _upload_document(res: dict, data: bytes, mime: str) -> dict:
+def _upload_document(res: dict, data: bytes, mime: str, dekont_ok: bool = False) -> dict:
     """Yükleme kuyruğuna gelen fiş/fatura (yetenek upload_docs): belge okuma yolu (_read_document; okuma hakkı orada,
     her okuma düşer — önceki ekstre denemesi hak düşürmemiştir). Sonuç {status "document", doc_type bill|receipt, doc
     (POST /api/documents/parse yanıtı), message}; okunamadıysa status "error" (Türkçe neden, hak kuralları aynen)."""
     kind = "fatura_okunamadi" if mime == "application/pdf" else "fis_okunamadi"
     try:
-        doc = _read_document(data, mime)
+        doc = _read_document(data, mime, dekont_ok=dekont_ok)
     except QuotaFull as e:
         return {**res, "status": "error", "message": str(e.detail), **e.extra}
     except HTTPException as e:
@@ -6583,8 +6690,11 @@ def _upload_document(res: dict, data: bytes, mime: str) -> dict:
     except Exception as e:  # noqa: BLE001 - kuyruktaki öbür dosyalar sürsün
         logging.getLogger("hesapkitap.api").warning("yüklemede belge okunamadı", exc_info=True)
         return {**res, "status": "error", "message": errors.user_text(e, 502), "_inc": "okuma_servisi"}
-    if doc.get("unreadable"):
+    if doc.get("unreadable") and doc.get("type") != "dekont":
         return {**res, "status": "error", "message": doc.get("message") or UNREADABLE_MSG,
+                **({"charged": doc["charged"]} if doc.get("charged") else {})}
+    if doc.get("type") == "dekont":  # okunamadıysa da form açılır (dosya ekli, alanlar elle)
+        return {**res, "status": "document", "doc_type": "dekont", "doc": doc, "message": "Dekont okundu — onayla",
                 **({"charged": doc["charged"]} if doc.get("charged") else {})}
     bill = doc.get("type") == "bill"
     return {**res, "status": "document", "doc_type": "bill" if bill else "receipt", "doc": doc,
@@ -6597,17 +6707,19 @@ def _upload_document(res: dict, data: bytes, mime: str) -> dict:
 def upload_statements(files: list[UploadFile] = File(...), password: str | None = Form(None),
                       remember: bool = Form(False),
                       kind: Literal["card", "account", "dekont"] | None = Form(None),
-                      docs: bool = Form(False)):
+                      docs: bool = Form(False), dekont_docs: bool = Form(False)):
     """Kart ekstresi, hesap dökümü, dekont, kart Excel'i. docs (yetenek upload_docs; yeni istemci): ekstre olmayan
     fiş/fatura (fotoğraf, fatura PDF'i, kart ekstresi bulunamayan ama fatura işaretli PDF) belge okuma yoluyla okunur,
     sonuç status "document" (istemci fiş/fatura onay ekranını açar). docs yoksa (eski istemci) aynı belgeler Türkçe
-    nedenle "error" döner; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez."""
+    nedenle "error" döner; fotoğraf hiçbir durumda PDF ayrıştırıcıya gitmez.
+    dekont_docs (yetenek dekont_doc; docs ile): havale/EFT/FAST dekontu kendiliğinden gider/gelir kaydedilmez, okunur ve
+    status "document", doc_type "dekont" döner (istemci transfer formunu açar: yön, kişi ya da hesaplar arası)."""
     from app import undo
 
     limits.check_count(len(files))  # 413, Türkçe neden (web tüm seçimi tek istekte gönderir)
     names = ", ".join(f.filename or "dosya" for f in files)
     with undo.batch(f"Ekstre: {names[:120]}") as b:
-        results = _upload_statements(files, password, remember, kind, docs)
+        results = _upload_statements(files, password, remember, kind, docs, docs and dekont_docs)
         b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
                                                 "message")} for r in results]
     for r in results:  # okunamayan dosyalar sorun kaydına (yalnız neden kodu; dosya adı/içerik yok)
@@ -6630,7 +6742,7 @@ def _upload_incident(r: dict, had_password: bool) -> str | None:
 
 
 def _upload_statements(files: list[UploadFile], password: str | None, remember: bool,
-                       forced: str | None = None, docs: bool = False) -> list[dict]:
+                       forced: str | None = None, docs: bool = False, dekont_docs: bool = False) -> list[dict]:
     from app import doc_cache, doc_reads, mailbox, support
     from app.parsers import PasswordRequired
     from app.parsers.ai import NotAStatement
@@ -6652,7 +6764,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
             elif img not in BILL_TYPES:
                 results.append({**res, "status": "error", "message": UPLOAD_IMAGE_TYPE_MSG})
             else:  # okuma hakkı belge okuma yolunda (tek kontrol, tek sayım)
-                results.append(_upload_document(res, data, img))
+                results.append(_upload_document(res, data, img, dekont_docs))
             continue
         try:  # hazır sürüm: her yeni belge 1 okuma hakkı; doluysa bu dosya okunmaz
             doc_reads.check(data)
@@ -6695,6 +6807,9 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
         if not forced and guess == "account" and not getattr(guess, "sure", True):
             # hesap dökümü olduğundan emin değil: tahminle bakiyeyi bozma, kullanıcıya sor
             results.append({**res, "status": "ask", "guess": str(guess)})
+            continue
+        if kind == "dekont" and not forced and dekont_docs:  # yeni istemci: transfer formunda onaylanır
+            results.append(_upload_document(res, data, "application/pdf", True))
             continue
         if kind == "dekont":  # tek işlem: hesaba eklenir, bakiye değişmez
             from app import mailbox
@@ -8452,16 +8567,18 @@ def _pdf_text(data: bytes) -> str | None:
 
 @app.post("/api/documents/classify")
 @_heavy
-def classify_document(file: UploadFile = File(...)):
+def classify_document(file: UploadFile = File(...), ocr_text: str | None = Form(None)):
     """Paylaş seçim sayfası için öneri (yetenek dekont_parse): yalnız PDF metni, yapay zekâsız, hak düşmez, dosya
     saklanmaz. {suggest: "dekont" | "ekstre" | "fis" | null}; "fis" (yetenek share_pdf_receipt): mağazanın satış
-    e-Arşivi / e-Faturası (son ödemesiz, kurum işaretsiz). Fotoğrafta (metin yok) null."""
+    e-Arşivi / e-Faturası (son ödemesiz, kurum işaretsiz). Fotoğrafta: telefonda çıkarılan metin (ocr_text, yetenek
+    dekont_doc) havale/EFT/FAST dekontuysa "dekont", değilse null."""
     from app import dekont_parse
 
     data = _file_bytes(file)
     limits.check_size(data, file.filename)
     if (file.content_type or "") != "application/pdf" and not (file.filename or "").lower().endswith(".pdf"):
-        return {"suggest": None}
+        text = (ocr_text or "")[:receipt.MAX_OCR_CHARS]
+        return {"suggest": "dekont" if text and dekont_parse.is_transfer(text) else None}
     return {"suggest": dekont_parse.classify_text(_pdf_text(data))}
 
 
@@ -8488,9 +8605,9 @@ def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)
     Yanıt: {type: "dekont", direction: giden|gelen|null, amount, date, counterparty, counterparty_known, iban_last4,
     bank, description, transfer_type, ref, account_hint, own_transfer, parties {sender, receiver: {name, iban_last4,
     bank, is_me}}, duplicate? {entry_id, message}, debt_match? {id, person, direction, remaining, amount, full},
-    dekont_file, source: metin|yapay_zeka, unreadable?, message?, charged?}. IBAN tam dönmez (son 4 hane)."""
-    from app import dekont, dekont_parse, doc_reads
-
+    dekont_file, source: metin|yapay_zeka, unreadable?, message?, charged?}. IBAN tam dönmez (son 4 hane).
+    Kendi hesapları arası (gönderen = alıcı): own {from_account, to_account, side, match} (yetenek
+    own_transfer_manual); doc_direction: belgenin işlem türü (giden | gelen | null)."""
     data = _file_bytes(file)
     mime = file.content_type or ""
     if mime not in BILL_TYPES:
@@ -8499,6 +8616,13 @@ def parse_dekont(file: UploadFile = File(...), ocr_text: str | None = Form(None)
     text_hint = (ocr_text or "").strip()
     if len(text_hint) > receipt.MAX_OCR_CHARS:
         raise HTTPException(422, "Belgeden çıkarılan metin çok uzun")
+    return _dekont_read(data, mime, text_hint)
+
+
+def _dekont_read(data: bytes, mime: str, text_hint: str = "") -> dict:
+    """Dekont okuması (POST /api/dekont/parse ve belge okumasında dekont çıkan belge): yanıt parse_dekont gibi."""
+    from app import dekont, dekont_parse, doc_reads
+
     read, read_mime, photo = _prepare_photo(data, mime)
     dfile = _store_receipt(photo) if photo else _store_dekont_pdf(data) if mime == "application/pdf" else None
     from app import doc_cache
@@ -8775,7 +8899,8 @@ def delete_token(tid: int):
 @app.post("/api/documents/parse")
 @_heavy
 def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Form(None),
-                   ocr_source: str | None = Form(None), qr_text: list[str] = Form(default=[])):
+                   ocr_source: str | None = Form(None), qr_text: list[str] = Form(default=[]),
+                   dekont: bool = Form(False)):
     """Fiş veya fatura (foto/PDF): türünü kendisi anlar. Faturaysa dosya saklanır.
     Birden fazla dosya: uzun fişin sırayla çekilmiş parçaları (en fazla 4).
     ocr_text (yetenek receipt_text): telefonda çıkarılmış metin (ocr_source "vision" | "mlkit"). Yapay zekâ yine
@@ -8784,7 +8909,9 @@ def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Fo
     (_read_with_text). HESAPKITAP_RECEIPT_TEXT_FIRST=1: eski yol — metin fotoğraf yerine gider, tutarsızsa fotoğrafla
     bir kez daha okunur (_read_by_text).
     qr_text (yetenek receipt_qr; tekrarlanabilir): telefonun fotoğrafta çözdüğü karekod içerikleri (app/karekod.py):
-    karekodlu fatura / akaryakıt fişi yapay zekâsız okunur; eski uygulama göndermez (davranış aynı)."""
+    karekodlu fatura / akaryakıt fişi yapay zekâsız okunur; eski uygulama göndermez (davranış aynı).
+    dekont (yetenek dekont_doc): istemci dekont yanıtını tanıyor — belge para transferi dekontuysa (havale/EFT/FAST,
+    "Gelen FAST" dahil) fatura sanılmaz, yanıt {type: "dekont", …POST /api/dekont/parse yanıtı}. Eski istemci: aynı."""
     files = file[:4]
     data = _file_bytes(files[0])
     for f in files:
@@ -8800,7 +8927,8 @@ def parse_document(file: list[UploadFile] = File(...), ocr_text: str | None = Fo
 
     qr = karekod.clean(qr_text) if mime.startswith("image/") else []
     return _read_document(data, mime, more, ocr_text=text or None,
-                          ocr_source=ocr_source if ocr_source in ("vision", "mlkit") else "diger", qr=qr or None)
+                          ocr_source=ocr_source if ocr_source in ("vision", "mlkit") else "diger", qr=qr or None,
+                          dekont_ok=dekont)
 
 
 def _read_with_text(text: str | None, source: str, data: bytes, mime: str, cats: list[str], split: list[str],
@@ -8850,15 +8978,20 @@ def _read_by_text(text: str, source: str, data: bytes, mime: str, cats: list[str
 
 
 def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: str | None = None,
-                   ocr_source: str | None = None, qr: list[str] | None = None) -> dict:
+                   ocr_source: str | None = None, qr: list[str] | None = None, dekont_ok: bool = False) -> dict:
     """Fotoğraflar okunmadan önce küçültülür ve EXIF'ten arındırılır; fişin (ilk) fotoğrafı saklanır. qr: telefonun
     çözdüğü karekodlar (app/karekod.py). Okuma hakkı her başarılı okumada düşer — şablon, karekod ve POS slibi
     (yapay zekâsız, ₺0) dahil (doc_reads.charge aşağıda okuma yolundan bağımsız)."""
     import hashlib
 
-    from app import doc_cache, doc_reads
+    from app import dekont_parse, doc_cache, doc_reads
 
     original, original_mime = data, mime
+    # para transferi dekontu (yetenek dekont_doc; istemci dekont=1): fatura/fiş okunmaz, dekont okuması döner
+    # {type: "dekont", …parse_dekont yanıtı}. Önce telefon metni / PDF metni (yapay zekâsız tanıma)
+    if dekont_ok and not more and dekont_parse.is_transfer(
+            ocr_text or (_pdf_text(data) if mime == "application/pdf" else None)):
+        return _dekont_read(data, mime, ocr_text or "")
     # çok sayfalı (birden çok fotoğraflı) fiş tek belgedir: anahtar bütün parçaların özeti; hak her parçanın
     # ağırlığının toplamı (uzun PDF bir fotoğrafla birlikte gönderilince 1 hakka inmesin; doc_reads.weight_many)
     key = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in [data, *(d for d, _ in (more or []))])).digest() \
@@ -8913,6 +9046,9 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     except receipt.ReceiptError as e:
         raise HTTPException(502, errors.user_text(e, 502)) from e
+    if dekont_ok and not more and doc.get("looks_like_transfer"):
+        # model belgeyi para transferi dekontu dedi (metinden anlaşılmadı): dekont okumasıyla kimden kime okunur
+        return _dekont_read(original, original_mime, ocr_text or "")
     if qr_by_server and isinstance(doc.get("qr"), dict):
         doc["qr"]["server"] = True  # karekod sunucuda okundu (ölçüm; telefonda okunmadı)
     if _unreadable(doc):  # okunamadı: günün ilk denemeleri ücretsiz (bkz. _mark_unreadable)
