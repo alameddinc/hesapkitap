@@ -532,6 +532,14 @@ CAPABILITIES = (
                               # <key>_items [{title, amount, date (fatura vadesi / düzenli ödeme günü / son ödeme; kart dışı
                               # taksitte null), …}]; card_debt_items [{title, amount, date, overdue}]. pending_cards_items
                               # satırında account. Yeni gelir ve değişken harcama tahmini dahil değil (forecast_net'te)
+    "payables_recurring",     # GET /api/payables?recurring=1: ödenmiş düzenli giderler de listede (Ödemeler "Bu ay
+                              # ödendi"): {type: "recurring", id (kayıt id), recurring_id, title (kalemin adı), subtitle,
+                              # amount (o dönemin planı), paid_amount, paid_at, due_date (o dönemin vadesi), month,
+                              # early (vadeden önce ödendi), entry_uid ("m<id>": dokununca hareket), status "odendi",
+                              # in_total false, key}. totals.paid_this_month bunları da sayar. Geri al YOK (hareketin
+                              # kendisi düzenlenir). Giden havale kategori/açıklama + tutar + vade penceresiyle (vadeden
+                              # 10 gün önce – 15 gün sonra) düzenli ödemeye kendiliğinden bağlanır; dönemi vadenin dönemi
+                              # (istatistik, Bu ay, Ödemelerden sonra'nın recurring kalemi oradan)
 )
 
 

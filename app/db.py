@@ -1787,6 +1787,106 @@ def recurring_for(c, data: dict):
                                                         or (r["match_key"] and r["match_key"] == key))), None)
 
 
+# Giden havale/transfer → düzenli ödeme (kira, aidat, okul…): adı ve kişisi kalemden farklı olsa da (kalem elle "Kira"
+# diye açılmış, havale "Ayşe Örnek · SOKAK KİRA" diye gelmiş) kategori ya da açıklama, tutar ve vade penceresi tutuyorsa
+# o dönemin ödemesidir. Vadeden en çok TRANSFER_EARLY_DAYS gün önce (erken ödeme: ay dönümünden bir gün önce yatan kira
+# sonraki dönemin kirasıdır) ya da TRANSFER_LATE_DAYS gün sonra (gecikmeli). Tutar kalemin o dönemki tutarının
+# 1/TRANSFER_RATIO – TRANSFER_RATIO katı arası (kira artışı tutsun; "eksik tutar" tamamlaması gibi küçük ek ödeme tutmasın).
+TRANSFER_EARLY_DAYS = 10
+TRANSFER_LATE_DAYS = 15
+TRANSFER_RATIO = 1.6
+_GENERIC_CATEGORIES = {None, "", "Diğer", "Kategorisiz", "Diğer Gelir"}
+
+
+def _is_transfer_expense(data: dict) -> bool:
+    """Kişiye/hesaba giden para (havale, EFT, FAST; bankadan): kartla, nakitle, altınla, yemek kartıyla ödenen harcama değil."""
+    return (data.get("kind") == "gider" and not data.get("wallet_id") and not data.get("debt_id")
+            and (data.get("payment") == "havale" or bool(data.get("counterparty")))
+            and (data.get("payment") or "havale") in ("havale", "banka"))
+
+
+def _planned_in(c, rec, month: str) -> float:
+    """Sabit kalemin o dönemki tutarı (planned_amount'un brütsüz hâli; aynı bağlantıdan okur: yazma içinde çağrılır)."""
+    ov = c.execute("SELECT amount FROM recurring_overrides WHERE recurring_id = ? AND month = ?", (rec["id"], month)).fetchone()
+    if ov:
+        return ov[0]
+    ch = c.execute("SELECT amount FROM recurring_changes WHERE recurring_id = ? AND from_month <= ? "
+                   "ORDER BY from_month DESC, id DESC LIMIT 1", (rec["id"], month)).fetchone()
+    return ch[0] if ch else rec["amount"]
+
+
+def transfer_recurring_candidates(c, data: dict) -> list:
+    """Giden transferin kategorisi kalemin kategorisiyle aynı (genel kategori değil) ya da kalemin adının bütün kelimeleri
+    açıklamada/notta geçen gider sabit kalemleri (tutar ve tarih bakılmaz; çağıran bakar). Transfer değilse boş."""
+    from app.textnorm import normalize
+
+    if not _is_transfer_expense(data):
+        return []
+    cat = data.get("category")
+    words = set(normalize(" ".join(x for x in (data.get("description"), data.get("note")) if x)).split())
+    out = []
+    for rec in c.execute("SELECT * FROM recurring WHERE kind = 'gider' ORDER BY id").fetchall():
+        rw = set(normalize(rec["description"] or "").split())
+        if (cat not in _GENERIC_CATEGORIES and cat == rec["category"]) or (rw and rw <= words):
+            out.append(rec)
+    return out
+
+
+def _transfer_recurring_slots(c, data: dict, exclude_id: int | None = None) -> list[tuple[int, object, str]]:
+    """Kategori/açıklama + tutar + vade penceresi kuralıyla (yukarıda) bu giden transferin olabileceği düzenli ödeme
+    oluşumları: [(uzaklık gün, sabit kalem, dönem)], en yakını önce. Dolu (o döneme zaten bağlı kayıt var), etkin
+    olmayan ve atlanan dönem dışarıda. Kural yalnız ad/kişi anahtarı tutmayan kayıtlar için (recurring_for önce)."""
+    from datetime import date as _date
+
+    if not data.get("entry_date") or not money.gt(data.get("amount") or 0, 0):
+        return []
+    d = _date.fromisoformat(str(data["entry_date"])[:10])
+    out = []
+    for rec in transfer_recurring_candidates(c, data):
+        taken = {r[0] for r in c.execute("SELECT month FROM entries WHERE recurring_id = ? AND id IS NOT ?",
+                                         (rec["id"], exclude_id))}
+        for m in _months_around(period_of(d)):
+            if m in taken or rec["start_month"] > m or (rec["end_month"] and m > rec["end_month"]):
+                continue
+            gap = (d - _date.fromisoformat(occurrence_date(m, day_at(rec, m)))).days  # eksi: vadeden önce
+            if not -TRANSFER_EARLY_DAYS <= gap <= TRANSFER_LATE_DAYS:
+                continue
+            plan = _planned_in(c, rec, m)
+            if plan > 0 and not plan / TRANSFER_RATIO <= data["amount"] <= plan * TRANSFER_RATIO:
+                continue
+            out.append((abs(gap), abs(data["amount"] - plan) / plan if plan > 0 else 1.0, rec, m))
+    return [(g, r, m) for g, _, r, m in sorted(out, key=lambda x: (x[0], x[1], x[2]["id"]))]
+
+
+RECURRING_BACKFILL_DAYS = 45
+
+
+def link_recurring_transfers(today=None) -> int:
+    """Son RECURRING_BACKFILL_DAYS gündeki, hiçbir şeye bağlı olmayan giden havaleleri _transfer_recurring_slots
+    kuralıyla düzenli ödemeye bağla (kural gelmeden yüklenmiş ya da kalem havaleden SONRA açılmış). Tarih sırasıyla,
+    her oluşum bir kez; dönem oluşumun dönemi olur. Bölünmüş, fişli, borca/kumbaraya/ekstreye bağlı kayıt ve bakiye
+    çapası hariç. İdempotent; içe aktarma sonunda (kullanıcı eylemi) çalışır. Dönüş: bağlanan kayıt sayısı."""
+    from datetime import date as _date
+
+    since = ((today or _date.today()) - timedelta(days=RECURRING_BACKFILL_DAYS)).isoformat()
+    n = 0
+    with connect() as c:
+        if not c.execute("SELECT 1 FROM recurring WHERE kind = 'gider' LIMIT 1").fetchone():
+            return 0
+        es = rows(c.execute(
+            "SELECT * FROM entries WHERE kind = 'gider' AND recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL "
+            "AND wallet_id IS NULL AND linked_txn_id IS NULL AND receipt_file IS NULL AND entry_date >= ? "
+            "AND id NOT IN (SELECT entry_id FROM splits WHERE entry_id IS NOT NULL) "
+            "AND id NOT IN (SELECT anchor_entry_id FROM accounts WHERE anchor_entry_id IS NOT NULL) "
+            "ORDER BY entry_date, id", (since,)))
+        for e in es:
+            slots = _transfer_recurring_slots(c, e, e["id"])
+            if slots:
+                c.execute("UPDATE entries SET recurring_id = ?, month = ? WHERE id = ?", (slots[0][1]["id"], slots[0][2], e["id"]))
+                n += 1
+    return n
+
+
 def _recurring_gap(rec, month: str, d) -> int:
     """Kaydın tarihi ile sabit kalemin `month` dönemindeki gününün arası (gün)."""
     from datetime import date as _date
@@ -1812,12 +1912,23 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
         return
     rec = recurring_for(c, data)
     if not rec:
+        # adı/kişisi tutmayan giden havale: kategori ya da açıklama + tutar + vade penceresi (_transfer_recurring_slots).
+        # Bağlanınca dönemi oluşumun dönemi olur (16'sında yatan, 17'si vadeli kira o dönemin kirası: istatistikte orada)
+        slots = _transfer_recurring_slots(c, data, exclude_id)
+        if slots:
+            data["recurring_id"], data["month"] = slots[0][1]["id"], slots[0][2]
         return
     taken = {r["month"] for r in c.execute(
         "SELECT month FROM entries WHERE recurring_id = ? AND id IS NOT ?", (rec["id"], exclude_id))}
     best = _nearest_recurring_month(rec, data["entry_date"], taken)
     if best is None:
         return  # komşu dönemlerin hepsi dolu: bağlama, çift kayıt uyarısı görünsün
+    if taken and best != _nearest_recurring_month(rec, data["entry_date"]) and data.get("amount"):
+        # kendi dönemi dolu, komşu döneme kayacak: "eksik tutar" gibi küçük ek ödeme sonraki dönemin yerini kapmasın
+        # (o dönemin asıl ödemesi gelince bağlanamaz, dönem "ödenmedi" kalırdı). Küçük ödeme tek seferlik kalır.
+        plan = _planned_in(c, rec, best)
+        if plan > 0 and data["amount"] < plan / TRANSFER_RATIO:
+            return
     data["recurring_id"], data["month"] = rec["id"], best
 
 
@@ -3353,6 +3464,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     if asked:
         stats["eslesme_sorusu"] = asked
     link_salary_entries()  # maaş kalemi sonradan açıldıysa ya da banka metni kalemin adını taşımıyorsa
+    link_recurring_transfers()  # adı tutmayan kira/aidat havalesi (kural öncesi yüklenmiş ya da kalem sonradan açılmış)
     return stats
 
 

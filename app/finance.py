@@ -1922,6 +1922,33 @@ def _payables(today: date) -> list[dict]:
     return sorted(uniq, key=lambda x: (order[x["status"]], x["due_date"] if x["status"] != "odendi" else "~" + (x["paid_at"] or "")))
 
 
+def paid_recurring(today: date | None = None) -> list[dict]:
+    """Ödenmiş düzenli giderler (kira, aidat…) Ödemeler'in "Bu ay ödendi" listesi için (yetenek payables_recurring;
+    GET /api/payables?recurring=1). Kalem = sabit kaleme bağlı gider kaydı (dökümden gelen havale ya da elle onay), ödeme
+    tarihi son PAYABLE_WINDOW gün içinde; "bu ay yok" (atlanan) hariç. status hep "odendi", in_total False: açık
+    toplamlara (open, this_period) girmez; paid_this_month'a girer. due_date: o dönemin vadesi; early: vadeden önce
+    ödendi (16'sında yatan, 17'si vadeli kira). entry_uid ("m<id>"): istemci dokununca hareketi (transfer) açar.
+    Bekleyen düzenli giderler burada yok (Ödemelerden sonra'nın recurring kalemi)."""
+    today = today or date.today()
+    since = (today - timedelta(days=PAYABLE_WINDOW)).isoformat()
+    recs = {r["id"]: r for r in db.list_recurring() if r["kind"] == EXPENSE}
+    ov = db.recurring_overrides()
+    out = []
+    for e in db.list_entries():
+        r = recs.get(e.get("recurring_id"))
+        if not r or e["skipped"] or e["kind"] != EXPENSE or not (since <= e["entry_date"] <= today.isoformat()):
+            continue
+        due = db.occurrence_date(e["month"], db.day_at(r, e["month"]))
+        out.append({"type": "recurring", "id": e["id"], "recurring_id": r["id"], "title": r["description"],
+                    "subtitle": " · ".join(x for x in ("Düzenli ödeme", e.get("counterparty")) if x),
+                    "amount": _round(db.planned_amount(r, e["month"], ov)), "min_payment": None, "due_date": due,
+                    "days_left": (date.fromisoformat(due) - today).days, "paid_amount": _round(e["amount"]),
+                    "paid_at": e["entry_date"], "status": "odendi", "in_total": False, "category": r["category"],
+                    "month": e["month"], "early": e["entry_date"] < due, "entry_uid": f"m{e['id']}",
+                    "key": f"recurring:{e['id']}"})
+    return sorted(out, key=lambda x: x["paid_at"], reverse=True)
+
+
 def payables_totals(today: date | None = None, items: list[dict] | None = None, days: int | None = None) -> dict:
     """Ödemeler toplamı (istemci kendisi toplamasın). open: toplama giren kalemlerin (in_total) kalanı; card_debt:
     kart başına son ekstrenin kalanı (net durumla aynı kural); overdue: kalanı yeni ekstreye devretmiş, ödenmemiş eski
