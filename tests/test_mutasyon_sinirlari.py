@@ -57,7 +57,11 @@ def _cur() -> float:
 
 
 def test_alacak_acilisi_capa_gunu_cevapla(client, tmpdb, monkeypatch):
-    """POST /api/debts in_balance: çapa günü açılışta anchor_conflict döner; true → bakiyede var (düşmez)."""
+    """POST /api/debts in_balance (yetenek debt_opening_anchor): çapa günü açılışta anchor_conflict döner; true →
+    bakiyede var (düşmez)."""
+    from app import version
+
+    assert "debt_opening_anchor" in version.handshake()["capabilities"]
     freeze(monkeypatch, date(2026, 11, 10))
     aid = _acc(client, tmpdb, "2026-11-10", 24000.0)
     r = client.post("/api/debts", json={"person": "Örnek Arkadaş", "direction": "alacak", "amount": 6000.0,
