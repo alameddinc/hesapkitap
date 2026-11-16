@@ -160,7 +160,7 @@ def build(client, tmpdb, monkeypatch) -> dict:
                                         "plan_installment": INSTALLMENT, "plan_count": 7, "plan_start": "2026-05",
                                         "plan_day": 15, "debt_date": "2026-05-01"})
     assert r.status_code == 200, r.text
-    sultan = r.json()["id"]
+    komsu = r.json()["id"]
     r = client.post("/api/debts", json={"person": "Örnek Akraba", "direction": "borc", "amount": JAR,
                                         "debt_date": "2026-06-01", "due_date": "2026-12-31", "pay_terms": "tek"})
     assert r.status_code == 200, r.text
@@ -171,7 +171,7 @@ def build(client, tmpdb, monkeypatch) -> dict:
     jid = r.json()["id"]
     r = client.post(f"/api/jars/{jid}/moves", json={"amount": JAR, "move_date": "2026-11-15", "note": "Borç"})
     assert r.status_code == 200, r.text
-    return {"ids": ids, "v2": v2, "k1": k1, "sultan": sultan, "big": big, "jar": jid, "rent": rent.json()["id"]}
+    return {"ids": ids, "v2": v2, "k1": k1, "komsu": komsu, "big": big, "jar": jid, "rent": rent.json()["id"]}
 
 
 # ---------------------------------------------------------------- adımlar
@@ -254,7 +254,7 @@ def step_f(client, tmpdb, st):
 
 def step_h(client, tmpdb, st):
     """Kişi borcu (7 × 1.750) nakit (hesaptan değil) ödendi, 17 Kas."""
-    r = client.post(f"/api/debts/{st['sultan']}/pay", json={"paid_at": "2026-11-17"})
+    r = client.post(f"/api/debts/{st['komsu']}/pay", json={"paid_at": "2026-11-17"})
     assert r.status_code == 200, r.text
 
 
