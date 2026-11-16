@@ -103,3 +103,44 @@ def test_no_salary_item_old_rule(client, tmpdb, monkeypatch):
     assert client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": 1000.0}).status_code == 200
     _freeze(monkeypatch, date(2026, 12, 14))
     assert finance.spend_horizon(date(2026, 12, 14))["end"] == date(2026, 12, 16)
+
+
+# ---------------------------------------------------------------- fonlama ilkesi (canlı vaka 16.11, uydurma tutarlar)
+
+def _kira(tmpdb):
+    tmpdb.create_recurring({"description": "Kira", "amount": 12000.0, "kind": "gider", "category": "Kira & Aidat",
+                            "day_of_month": 18, "start_month": "2026-09"})
+    for d in ("2026-09-18", "2026-10-18", "2026-11-16"):  # Kasım kirası 16 Kas'ta erken ödendi
+        tmpdb.create_entry({"entry_date": d, "description": "Kira", "amount": 12000.0, "kind": "gider", "category": "Kira & Aidat"})
+
+
+def test_last_day_income_brings_its_obligations(book, monkeypatch):
+    """16 Kas son gün: ufuk 16 Ara, 15 Ara maaşı beklenen gelir. Maaş eklenince 18 Ara kirası ve 23 Ara kart ekstresi (kesin
+    kısım + kalan tahmin) da düşülür; hesap 14 Oca'ya (sonraki maaştan bir gün önce) kadar."""
+    _kira(book)
+    nw = _nw(monkeypatch, date(2026, 11, 16))
+    fb = nw["forecast_balance"]
+    p = {x["key"]: x["amount"] for x in fb["parts"]}
+    assert fb["horizon"] == "2026-12-16" and fb["until"] == "2027-01-14"
+    assert p["income"] == SALARY
+    kinds = {(x["type"], x["date"]) for x in fb["funded_items"]}
+    assert ("recurring", "2026-12-18") in kinds and ("card_estimate", "2026-12-23") in kinds
+    assert fb["no_new_spend"] == round(nw["spendable"] + SALARY - p["funded"], 2)
+    assert fb["amount"] <= fb["no_new_spend"] < round(nw["spendable"] + SALARY, 2)
+
+
+def test_mid_period_salary_not_yet(book, monkeypatch):
+    """Dönem ortası (25 Kas), 15 Ara maaşı bekleniyor: aynı ilke (until 14 Oca)."""
+    _kira(book)
+    fb = _nw(monkeypatch, date(2026, 11, 25))["forecast_balance"]
+    assert fb["until"] == "2027-01-14" and {x["date"] for x in fb["funded_items"]} >= {"2026-12-18"}
+
+
+def test_salary_arrived_no_income_until_is_horizon_plus_next(book, monkeypatch):
+    """15 Ara maaşı yattı (nakitte): ufuk 16 Oca; beklenen gelir Ocak maaşı → until 14 Şub; Aralık kartları spendable'da."""
+    _kira(book)
+    _maas(book, "2026-12-15")
+    nw = _nw(monkeypatch, date(2026, 12, 15))
+    fb = nw["forecast_balance"]
+    assert nw["spendable_horizon"] == "2027-01-16" and fb["until"] == "2027-02-14"
+    assert "2026-12-23" in {x["due_date"] for x in nw["pending_cards_items"]}

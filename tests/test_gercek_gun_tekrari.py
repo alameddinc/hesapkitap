@@ -300,7 +300,10 @@ def invariants(nw) -> None:
     assert nw["spendable"] <= nw["free"] + 0.005
     assert nw["spendable_later"]["total"] >= 0 and all(x["amount"] > 0 for x in nw["spendable_later"]["items"])
     p = {x["key"]: x["amount"] for x in fb["parts"]}
-    assert round(p["free"] - p["payments"] + p["income"] - p["variable"], 2) == fb["amount"]
+    assert round(p["free"] - p["payments"] + p["income"] - p["funded"] - p["variable"], 2) == fb["amount"]
+    # fonlama ilkesi: gelir eklendiyse onun fonladığı (until'e kadar vadeli) kesin ödemeler de düşüldü
+    assert fb["no_new_spend"] == round(nw["spendable"] + p["income"] - p["funded"], 2)
+    assert (p["income"] > 0) == (fb["until"] > fb["horizon"]) or not p["income"] or fb["until"] >= fb["horizon"]
 
 
 # ---------------------------------------------------------------- beklenen değerler (ELLE)
@@ -332,7 +335,7 @@ def invariants(nw) -> None:
 #   f/g: 28.555,87 − 17.607 = 10.948,87   h: kişi borcu nakit ödendi → 28.555,87 − 5.357 = 23.198,87
 # Maaştan sonra (spendable_later): V2 Ara döngüsü (son ödeme 23 Ara > ufuk 16 Ara) kesin kısmı = taksit 2.750; K1 Ara
 #   (25 Ara) 2.150; V1'in Ara döngüsü modellenmiyor (ekstresi yüklenmemiş kartta yalnız açık döngü). Toplam 4.900.
-# Ay sonunda kalacak: no_new_spend = spendable + Ara maaşı (15 Ara ≤ ufuk) 86.500.
+# Ay sonunda kalacak: no_new_spend = spendable + Ara maaşı (15 Ara ≤ ufuk) 86.500 − o maaşın fonladığı (14 Oca'ya kadar).
 
 EXP = {  # adım: (bakiyeler H, V, K), free, spendable
     "0": ((HALK0, -30360.72, KUVEYT0), 169562.51, 58855.43),
@@ -366,7 +369,8 @@ def test_step_balances_and_invariants(client, tmpdb, monkeypatch, k):
     assert not [x for x in n["pending_cards_items"] if x["due_date"] > "2026-12-16"]
     p = {x["key"]: x["amount"] for x in n["spendable_parts"]}
     assert p["payable"] == (0.0 if k == "h" else KISI_BORC) and p["bills"] == BILLS and p["reserved"] == JAR
-    assert n["forecast_balance"]["no_new_spend"] == round(n["spendable"] + SALARY, 2)
+    fbp = {x["key"]: x["amount"] for x in n["forecast_balance"]["parts"]}
+    assert n["forecast_balance"]["no_new_spend"] == round(n["spendable"] + SALARY - fbp["funded"], 2)
 
 
 @pytest.mark.parametrize("k", list(EXP))
@@ -443,12 +447,17 @@ def test_g_next_day_new_period(client, tmpdb, monkeypatch):
 
 
 def test_forecast_variable_on_last_day(client, tmpdb, monkeypatch):
-    """Lead kararı (16.11): "Ay sonunda kalacak" ufka (16 Ara) kadar NAKİT çıkışı. f'de tahmini kart harcaması 121.156,49
-    (V1 37.000×30/31 = 35.806,45 — kesimi geçmiş döngü, harcama sonraki ekstreye; V2 43.316,36; K1 42.033,68) ama bu
-    ekstreler 23–25 Ara'da (ufuktan SONRA) ödenir: toplamdan DÜŞÜLMEZ, bilgi satırı variable_card_later. Kart dışı
-    değişken gider geçmişi yok → 0. Ay sonunda kalacak = 10.948,87 + maaş 86.500 = 97.448,87 = yeni harcama yapmazsan."""
+    """FONLAMA İLKESİ (lead 16.11, canlı vaka): 16 Kas son gün, ufuk 16 Ara; ufka giren 15 Ara maaşı (86.500) eklenince o
+    maaşın fonladığı her şey de düşülür: hesap sonraki maaşın (15 Oca) bir gün öncesine, 14 Oca'ya kadar (until).
+    Önceki beklenti (97.448,87) maaşı ekleyip Aralık kart ekstrelerini ve 18 Ara kirasını düşmüyordu (çok iyimser).
+    f: 10.948,87 + 86.500 − funded 36.150 (kira 31.250 + V2 kesin 2.750 + K1 kesin 2.150) = 61.298,87 (yeni harcama
+    yapmazsan); − tahmini kart 122.350,04 (V1/V2/K1 döngülerinin kalan değişken payı; ekstreleri 14 Oca'dan önce ödenir)
+    = −61.051,17. Kart dışı değişken gider geçmişi yok → 0."""
     _, n = run(client, tmpdb, monkeypatch, "f")
     fb = n["forecast_balance"]
     p = {x["key"]: x["amount"] for x in fb["parts"]}
-    assert p["variable"] == 0.0 and p["variable_card_later"] == 121156.49
-    assert fb["amount"] == fb["no_new_spend"] == 97448.87 <= round(n["spendable"] + 86500.0, 2)
+    assert fb["until"] == "2027-01-14" and fb["horizon"] == "2026-12-16"
+    assert p["funded"] == 36150.0 and p["variable"] == 122350.04 and p["variable_card_later"] == 0.0
+    assert {x["type"] for x in fb["funded_items"]} == {"recurring", "card_estimate"}
+    assert fb["no_new_spend"] == round(n["spendable"] + 86500.0 - 36150.0, 2) == 61298.87
+    assert fb["amount"] == -61051.17
