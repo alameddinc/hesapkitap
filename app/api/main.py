@@ -3952,6 +3952,47 @@ def integrity_rerun():
     return out
 
 
+@app.get("/api/finance-audit")
+def finance_audit_items():
+    """Gece finans tutarlılık denetiminin bu defterdeki düzeltilebilir maddeleri (Yapılacaklar'da da var):
+    {day, items: [{id, code, title, text, cta, route, action, ...}]}. Ortak defter üyesine boş."""
+    from app import finance_audit
+
+    r = finance_audit.last() or {}
+    return {"day": r.get("day"), "items": finance_audit.todos()}
+
+
+class OwnPairFixIn(BaseModel):
+    out_entry_id: int
+    in_entry_id: int
+
+
+@app.post("/api/finance-audit/own-pair")
+def finance_audit_own_pair(body: OwnPairFixIn):
+    """"Aktarıma çevir" (transfer_cift maddesi): aynı tutarlı gider + gelir kaydı kendi hesapları arası aktarım olur.
+    Bakiyeler değişmez, gelir/gider toplamından düşer. Ortak defter üyesi: 403; çift değilse ya da kayıtlardan biri
+    bakiyenin dışındaysa 422 (Transferler ekranından eklenir). Ardından denetim yeniden koşar (madde düşer)."""
+    from app import finance_audit
+
+    _own_owner_only()
+    try:
+        out = finance_audit.own_pair(body.out_entry_id, body.in_entry_id)
+    except (finance_audit.FixError, db.OwnTransferError) as e:
+        raise HTTPException(422, str(e)) from e
+    finance_audit.run()
+    return {"ok": True, **out}
+
+
+@app.get("/api/admin/finance-audit")
+def admin_finance_audit(day: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    """Finans tutarlılık denetimi, sınıf bazında: {day, spaces, with_issues, by_code: {kod: {books, count, label}}}.
+    Yalnız sayılar (kişi, tutar, kayıt yok). Gün verilmezse son koşu günü."""
+    from app import finance_audit
+
+    _require_admin()
+    return finance_audit.admin_summary(day)
+
+
 @app.get("/api/onboarding")
 def onboarding(v: int = 1):
     """Başlarken: hangi adımlar tamam (Özet'teki rehber kartı). v=2: mobil sırası (hesap → gelir → kart → sabit

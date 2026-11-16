@@ -87,6 +87,9 @@ KODLAR: dict[str, tuple[str, str, str, str | None]] = {
     "parser_drift": ("Ekstre okuyucu kayması (banka biçimi değişmiş olabilir)", "kritik", "sunucu", None),
     # sunucu: arka plan
     "is_hatasi": ("Arka plan işi başarısız", "kritik", "is", None),
+    # gece finans tutarlılık denetimi (app/finance_audit.py): bir defterde yeni bir değişmez sınıfı ihlal edildi.
+    # Yer = sınıf kodu (odendi_hesapsiz, eksi_bakiye …), özet yalnız "n=<adet>"; tutar / kayıt / ad yok
+    "finans_tutarsizlik": ("Finans tutarlılık denetimi: yeni ihlal", "bilgi", "is", None),
     # istemci (mobil + web)
     "js_hatasi": ("Uygulama hatası (yakalanmamış)", "kritik", "istemci", "Uygulamada karşılaştığın hatayı"),
     "ekran_coktu": ("Ekran çöktü", "kritik", "istemci", "Ekranın kapanmasına yol açan hatayı"),
@@ -98,7 +101,7 @@ CLIENT_CODES = frozenset(k for k, v in KODLAR.items() if v[2] == "istemci")
 # yer (place) başına takvim gününde (UTC) bir uyarı; saatlik ALERT_GAP ve "yeni tür / ani artış" kuralı yerine
 DAILY_ALERT = {"parser_drift": "Banka ekstre biçimi değişmiş olabilir"}
 # örnek bağlamı kisa_ozet'ten geçmeyen türler: özeti kod kurar, yalnız sabit anahtar + sayı (app/parsers drift_summary)
-RAW_OZET = frozenset({"parser_drift"})
+RAW_OZET = frozenset({"parser_drift", "finans_tutarsizlik"})
 _RAW_OK = re.compile(r"^[\w:=.·\- ]*$")
 PLATFORMS = ("ios", "android", "web")
 

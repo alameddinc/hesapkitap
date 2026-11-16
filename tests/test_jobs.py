@@ -37,13 +37,18 @@ def test_reminders(tmpdb):
     assert any("dönemi bitti" in m for m in jobs.reminders(date(2026, 11, 1)))  # ay dönümünde özet
 
 
-def test_jobs_run_once_per_day(tmpdb):
+def test_jobs_run_once_per_day(tmpdb, monkeypatch):
+    import time
+
     from app import jobs
 
+    monkeypatch.setattr(jobs, "_STARTED", time.monotonic())  # süreç yeni açıldı: ağır finans denetimi bekler
     now = datetime(2026, 10, 19, 10, 0)
     assert {n for n, _ in jobs.due_jobs(now)} == {"backup", "remind", "wallet", "sessions", "integrity", "zakat", "pending"}
     tmpdb.set_setting("job:backup", "2026-10-19")
     assert {n for n, _ in jobs.due_jobs(now)} == {"remind", "wallet", "sessions", "integrity", "zakat", "pending"}
+    monkeypatch.setattr(jobs, "_STARTED", time.monotonic() - jobs.STARTUP_GRACE_S - 1)  # ısındı: o da sırada
+    assert "finance_audit" in {n for n, _ in jobs.due_jobs(now)}
     assert [n for n, _ in jobs.due_jobs(datetime(2026, 10, 20, 0, 30))] == []  # gece yarısı hemen bir şey çalışmaz
 
 
