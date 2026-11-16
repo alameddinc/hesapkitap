@@ -595,6 +595,12 @@ CAPABILITIES = (
                               # path parse|classify|upload|dekont, reason "user_changed_type", to_type?} ile bildirir
                               # (içerik / kişisel veri yok). /api/admin/incidents: kalemde group "belge_okuma"; durum
                               # sayılarına (counts) girmez, özeti doc_reads {kinds, count, users, items [{id, place, count, users}]}
+    "finance_audit_own_question",  # Yapılacaklar kendi_adi_hareket: karşı bacak bulunduysa action entry_to_transfer
+                              # (+ counter_account_id, counter_entry_id | counter_own_transfer_id); bulunmadıysa action
+                              # "own_question" (title "Alıcısı okunamadı — …", cta "Kendi hesabım" → hesap seç → POST
+                              # /api/finance-audit/entry-to-transfer {entry_id, account_id}; cta_no "Başkasına" → POST
+                              # /api/finance-audit/not-own {entry_id}: gider kalır, bir daha sorulmaz). Bilmeyen istemci
+                              # own_question'ı route ile kaydı açar. virman_bekliyor bekleme süresi 3 gün
 )
 
 

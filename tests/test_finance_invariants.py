@@ -483,7 +483,8 @@ def test_unpaired_own_leg_asks_after_7_days_and_counter_leg_fixes_cash(client, t
     a = _acc(tmpdb, BANK_A, 16000.0, as_of=T - timedelta(days=1))   # A'nın dökümü aktarımı içeriyor
     b = _acc(tmpdb, BANK_B, 5000.0, as_of=day - timedelta(days=5))   # B'nin bakiyesi aktarımdan önce girilmiş
     tmpdb.import_bank_rows([_row(day, -14000.0, OUT_DESC, "h-out")], BANK_A, account_id=a)
-    assert "virman_bekliyor" not in finance_audit.check(day + timedelta(days=6))["counts"]  # 7 gün dolmadı
+    assert "virman_bekliyor" not in finance_audit.check(day + timedelta(days=2))["counts"]  # 3 gün dolmadı
+    assert "virman_bekliyor" in finance_audit.check(day + timedelta(days=3))["counts"]
     finance_audit.run(T)
     it = next(i for i in client.get("/api/finance-audit").json()["items"] if i["code"] == "virman_bekliyor")
     assert it["action"] == "own_leg" and it["amount"] == 14000.0
@@ -496,20 +497,50 @@ def test_unpaired_own_leg_asks_after_7_days_and_counter_leg_fixes_cash(client, t
                                                            "account_id": b}).status_code == 422  # ikinci bacak yok
 
 
-def test_legacy_own_name_entry_flagged_and_converted(client, tmpdb):
+def test_legacy_own_name_entry_with_counter_leg_suggests_transfer(client, tmpdb):
+    """Eski kendi adına gider + öbür hesapta aynı tutar, ±1 gün giriş (karşı bacak) → "Aktarıma çevir"."""
     tmpdb.remember_owner_name(OWNER)
     a = _acc(tmpdb, BANK_A, 30000.0, as_of=T - timedelta(days=1))
-    eid = tmpdb.create_entry({"entry_date": (T - timedelta(days=4)).isoformat(), "description": OUT_DESC,
-                              "amount": 14000.0, "kind": "gider", "category": "Kategorisiz", "payment": "havale",
-                              "account_id": a, "import_hash": "h-eski"})
+    b = _acc(tmpdb, BANK_B, 5000.0, as_of=T - timedelta(days=1))
+    day = (T - timedelta(days=4)).isoformat()
+    eid = tmpdb.create_entry({"entry_date": day, "description": OUT_DESC, "amount": 14000.0, "kind": "gider",
+                              "category": "Kategorisiz", "payment": "havale", "account_id": a, "import_hash": "h-eski"})
+    tmpdb.create_entry({"entry_date": day, "description": IN_DESC, "amount": 14000.0, "kind": "gelir",
+                        "category": "Diğer Gelir", "payment": "havale", "account_id": b, "import_hash": "h-eski-in"})
     res = finance_audit.check(T)
-    assert res["refs"].get("kendi_adi_hareket") == [f"entry:{eid}"]
+    assert f"entry:{eid}" in res["refs"].get("kendi_adi_hareket", [])
+    finance_audit.run(T)
+    it = next(i for i in client.get("/api/finance-audit").json()["items"]
+              if i["code"] == "kendi_adi_hareket" and i["entry_id"] == eid)
+    assert it["action"] == "entry_to_transfer" and it["counter_account_id"] == b
     cash0 = _nw()["cash"]
     r = client.post("/api/finance-audit/entry-to-transfer", json={"entry_id": eid})
     assert r.status_code == 200, r.text
-    assert _entries(tmpdb) == [] and [x["import_hash"] for x in _own_rows(tmpdb)] == ["h-eski"]
+    assert [x["import_hash"] for x in _own_rows(tmpdb) if x["import_hash"] == "h-eski"] == ["h-eski"]
     assert _nw()["cash"] == cash0
-    assert "kendi_adi_hareket" not in finance_audit.check(T)["counts"]
+
+
+def test_legacy_own_name_entry_without_counter_only_asks(client, tmpdb):
+    """Karşı bacak yok (canlıdaki 18 eski kayıt gibi): yalnız soru; "Başkasına" → gider kalır, bir daha sorulmaz;
+    "Kendi hesabım" → hesap seç → aktarım."""
+    tmpdb.remember_owner_name(OWNER)
+    a = _acc(tmpdb, BANK_A, 30000.0, as_of=T - timedelta(days=1))
+    b = _acc(tmpdb, BANK_B, 5000.0, as_of=T - timedelta(days=10))
+    mk = lambda h: tmpdb.create_entry({"entry_date": (T - timedelta(days=4)).isoformat(), "description": OUT_DESC,  # noqa: E731
+                                       "amount": 14000.0, "kind": "gider", "category": "Kategorisiz", "payment": "havale",
+                                       "account_id": a, "import_hash": h})
+    e1, e2 = mk("h-q1"), mk("h-q2")
+    finance_audit.run(T)
+    items = {i["entry_id"]: i for i in client.get("/api/finance-audit").json()["items"] if i["code"] == "kendi_adi_hareket"}
+    assert {items[e1]["action"], items[e2]["action"]} == {"own_question"}
+    assert items[e1]["title"].startswith("Alıcısı okunamadı") and items[e1]["cta_no"] == "Başkasına"
+    assert client.post("/api/finance-audit/not-own", json={"entry_id": e1}).status_code == 200
+    assert [e["id"] for e in _entries(tmpdb) if e["id"] == e1] == [e1]  # gider kaldı
+    r = client.post("/api/finance-audit/entry-to-transfer", json={"entry_id": e2, "account_id": b})
+    assert r.status_code == 200, r.text
+    refs = finance_audit.check(T)["refs"].get("kendi_adi_hareket", [])
+    assert f"entry:{e1}" not in refs and f"entry:{e2}" not in refs
+
 
 
 # ---------------------------------------------------------------- yazmadan sonra yeniden denetim, madde ayrıntıları

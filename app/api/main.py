@@ -4016,6 +4016,25 @@ class EntryToTransferIn(BaseModel):
     account_id: int | None = None  # öbür bacağın hesabı; yoksa tek bacak (karşı bacak beklenir)
 
 
+class NotOwnIn(BaseModel):
+    entry_id: int
+
+
+@app.post("/api/finance-audit/not-own")
+def finance_audit_not_own(body: NotOwnIn):
+    """own_question maddesi "Başkasına": kayıt gelir/gider kalır ve bir daha sorulmaz (entries.not_virman). Evet →
+    POST /api/finance-audit/entry-to-transfer {entry_id, account_id}. Ortak defter üyesi 403; kayıt yoksa 422."""
+    from app import finance_audit
+
+    _own_owner_only()
+    try:
+        finance_audit.not_own(body.entry_id)
+    except finance_audit.FixError as e:
+        raise HTTPException(422, str(e)) from e
+    finance_audit.run()
+    return {"ok": True}
+
+
 @app.post("/api/finance-audit/entry-to-transfer")
 def finance_audit_entry_to_transfer(body: EntryToTransferIn):
     """kendi_adi_hareket maddesi: karşı tarafı kullanıcının kendisi olan gelir/gider kaydı aktarım bacağı olur (bakiye

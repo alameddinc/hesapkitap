@@ -23,10 +23,14 @@ Değişmezler (kod → anlamı; hepsi SALT-OKUNUR):
                        eksi değer taşıyor ya da serbest paradan (free) büyük
   duzenli_bekliyor     düzenli gider bu dönem "bekliyor" görünüyor ama dönemde aynı tutarlı (±%2) eşleşmemiş havale var:
                        ödenmiş, iki kez düşülüyor
-  virman_bekliyor      dökümden gelen tek bacaklı kendi hesabına aktarım (karşı taraf kullanıcının kendisi) VIRMAN_WAIT (7)
+  virman_bekliyor      dökümden gelen tek bacaklı kendi hesabına aktarım (karşı taraf kullanıcının kendisi) VIRMAN_WAIT (3)
                        gündür karşı bacaksız: "14.000 ₺ kendi hesabına mı gitti? Hangi hesap?" → hesap seç, çift kurulur
   kendi_adi_hareket    eski içe aktarmada karşı tarafı kullanıcının kendisi olan havale/FAST gelir/gider yazılmış
-                       (db.owner_party_transfer kuralı 16.11'den önce yoktu): aktarıma çevrilmeli
+                       (db.owner_party_transfer kuralı 16.11'den önce yoktu). Karşı bacağı VARSA (aynı tutar, ±1 gün,
+                       kullanıcının başka banka/nakit hesabında ters yönlü kayıt ya da aktarım bacağı) "Aktarıma çevir"
+                       (counter); yoksa yalnız soru "Alıcısı okunamadı — kendi hesabına mı gitti?" (Evet → hesap seç,
+                       Hayır → gider kalır, not_virman: bir daha sorulmaz). Alıcısı kesik kalıp başkasına ödemede de
+                       çıkıyor (canlı kopya 16.11): kanıtsız otomatik öneri yok
   bakiye_yok           bakiyesi bilinen hiçbir banka/nakit hesap yok ama "Ödemelerden sonra" borçları düşüp eksi çıkıyor:
                        rakam yalnız borçları gösteriyor (16.11 taramasında 2 defter)
 
@@ -57,7 +61,7 @@ ACTIVE_DAYS = 14        # defterde son bu kadar günde kayıt/belge yoksa çapa 
 PAY_WINDOW = 20         # ekstrenin kesiminden son ödeme +20 güne dek yapılan kart ödemesi o ekstreye sayılır (db ile aynı)
 RECUR_TOL = 0.02        # düzenli ödeme ↔ havale tutar toleransı
 MAX_ITEMS = 10
-VIRMAN_WAIT = 7         # tek bacaklı aktarım bu kadar gün karşı bacaksız kalırsa sorulur …
+VIRMAN_WAIT = 3         # tek bacaklı aktarım bu kadar gün karşı bacaksız kalırsa sorulur …
 VIRMAN_LOOKBACK = 60    # … ama bundan eskisi sorulmaz (geçmiş yığını; takip edilmeyen hesaba giden aktarımlar)
 
 CODES = ("odendi_hesapsiz", "eksi_bakiye", "capa_eski", "transfer_cift", "hesapsiz_hareket", "odenmis_ekstresiz",
@@ -380,10 +384,28 @@ def virman_bekliyor(s: dict) -> list[dict]:
     return out
 
 
+def _counter_leg(s: dict, e: dict) -> dict | None:
+    """Kaydın karşı bacağı: aynı tutar, ±1 gün, BAŞKA banka/nakit hesabında ters yönlü gelir/gider kaydı ya da aktarım
+    bacağı. {account_id, entry_id | own_transfer_id} ya da None."""
+    banks = {a["id"] for a in s["accounts"] if (a.get("kind") or "banka") in ("banka", "nakit")}
+    d, k = _d(e["entry_date"]), money.kurus(e["amount"])
+    want = "gelir" if e["kind"] == "gider" else "gider"
+    for o in s["entries"]:
+        if (o["id"] != e["id"] and o["kind"] == want and o.get("account_id") in banks - {e.get("account_id")}
+                and money.kurus(o["amount"]) == k and abs((_d(o["entry_date"]) - d).days) <= 1 and not o.get("skipped")):
+            return {"account_id": o["account_id"], "entry_id": o["id"]}
+    sign = 1 if e["kind"] == "gider" else -1  # gider → karşı hesapta giriş (+)
+    for t in s["own_transfers"]:
+        if (t.get("account_id") in banks - {e.get("account_id")} and money.kurus(t["amount"]) == sign * k
+                and abs((_d(t["transfer_date"]) - d).days) <= 1):
+            return {"account_id": t["account_id"], "own_transfer_id": t["id"]}
+    return None
+
+
 def kendi_adi_hareket(s: dict) -> list[dict]:
     ids = set(s.get("owner_party") or [])
     return [{"ref": f"entry:{e['id']}", "amount": money.money(e["amount"]), "date": e["entry_date"], "kind": e["kind"],
-             "account_id": e.get("account_id")}
+             "account_id": e.get("account_id"), "counter": _counter_leg(s, e)}
             for e in s["entries"] if e["id"] in ids and not e.get("skipped") and not e.get("debt_id")]
 
 
@@ -567,10 +589,21 @@ def _item(c, code: str, f: dict) -> dict | None:
                 "account_id": f.get("account_id"), "out": bool(out)}
     if code == "kendi_adi_hareket":
         gelir = f.get("kind") == "gelir"
-        return {**base, "title": f"{_tl(f['amount'])} kendi hesabın{'dan' if gelir else 'a'} mı?",
-                "text": f"Bu havalede karşı taraf sensin; {'gelir' if gelir else 'gider'} sayılıyor. Kendi hesapların "
-                        "arası aktarımsa çevir; Ödemelerden sonra ve aylık gider doğru çıksın.",
-                "cta": "Aktarıma çevir", "route": f"islemler/m{rest}", "action": "entry_to_transfer",
+        cnt = f.get("counter")
+        if cnt:  # karşı bacak bulundu: aktarım olduğu belli
+            acc = one("SELECT name FROM accounts WHERE id = ?", cnt["account_id"])
+            return {**base, "title": f"{_tl(f['amount'])} kendi hesapların arası aktarım",
+                    "text": f"Aynı tutar {acc['name'] if acc else 'başka hesabına'} {'çıkmış' if gelir else 'girmiş'}; bu "
+                            f"{'gelir' if gelir else 'gider'} değil, aktarım. Çevir; aylık gider doğru çıksın.",
+                    "cta": "Aktarıma çevir", "route": f"islemler/m{rest}", "action": "entry_to_transfer",
+                    "entry_id": int(rest), "account_id": f.get("account_id"), "counter_account_id": cnt["account_id"],
+                    **({"counter_entry_id": cnt["entry_id"]} if cnt.get("entry_id") else {}),
+                    **({"counter_own_transfer_id": cnt["own_transfer_id"]} if cnt.get("own_transfer_id") else {})}
+        return {**base, "severity": "info",
+                "title": f"Alıcısı okunamadı — kendi hesabın{'dan geldi' if gelir else 'a gitti'} mi?",
+                "text": f"Bu havalede alıcı okunamıyor, gönderen sensin. Kendi hesabınsa hangisi olduğunu seç; başkasınaysa "
+                        f"{'gelir' if gelir else 'gider'} olarak kalsın.",
+                "cta": "Kendi hesabım", "cta_no": "Başkasına", "route": f"islemler/m{rest}", "action": "own_question",
                 "entry_id": int(rest), "account_id": f.get("account_id")}
     if code == "bakiye_yok":
         return {**base, "title": "Banka hesabını ekle",
@@ -706,6 +739,13 @@ def own_pair(out_id: int, in_id: int) -> dict:
                                 e.get("note") or e["description"], e["import_hash"], account_id=e["account_id"])
         c.execute("DELETE FROM entries WHERE id IN (?, ?)", (out_id, in_id))
     return {"own_transfer_id": None}
+
+
+def not_own(eid: int) -> None:
+    """own_question "Başkasına": kayıt gelir/gider kalır, bir daha sorulmaz (not_virman; onarım/eşleme de taşımaz)."""
+    with db.connect() as c:
+        if not c.execute("UPDATE entries SET not_virman = 1 WHERE id = ? AND kind IN ('gelir', 'gider')", (eid,)).rowcount:
+            raise FixError("Kayıt bulunamadı")
 
 
 def entry_to_transfer(eid: int, to_account_id: int | None = None) -> dict:
