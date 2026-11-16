@@ -612,6 +612,11 @@ CAPABILITIES = (
                               # (yanıttaki own_transfer_id). Kayıt anlık görüntüden aynen döner (aynı parmak izi, mümkünse
                               # aynı id, not_virman); çevirirken eklenen öbür bacak silinir; bakiyeler önceki hâline döner.
                               # Kayıttan çevrilmemiş aktarım 422, ortak defter üyesi 403. {ok, entry_id, kind}
+    "debt_payment_note",      # borç ödemesi / tahsilatın notu: POST /api/debts/{id}/pay {note} (en çok 200 karakter);
+                              # GET /api/debts payments[].note. Eski sunucu alanı yok sayar (istemci borcun notuna ekler)
+    "debt_anchor_conflict",   # hesaplı borç ödemesi / tahsilatı (POST /api/debts/{id}/pay account_id) ödeme günü hesabın
+                              # çapa günü ya da öncesiyse yanıtta anchor_conflict {account_id, name, as_of}; istek alanı
+                              # in_balance (anchor_conflict ile aynı anlam). Yoksa eski kural: çapa gününden sonraki ödeme düşer
 )
 
 

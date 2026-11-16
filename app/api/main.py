@@ -6315,6 +6315,11 @@ class DebtPayIn(BaseModel):
     # erken kapatma (yetenek debt_payoff): ödeme planlı borç bu ödemeyle kapandı; bankanın almadığı kalan faiz borçtan
     # düşer (borç tutarı = ödenen toplam). Ödeme geri alınırsa borç ödenmemiş kapatma tutarıyla açılır
     close_early: bool = False
+    # ödemenin notu (yetenek debt_payment_note): "eşim nakit verdi"; boş → yok
+    note: str | None = Field(default=None, max_length=200)
+    # yetenek debt_anchor_conflict: hesaplı ödeme günü hesabın çapa günü ya da öncesiyse istemci sorar — true: bu ödeme o
+    # bakiyede zaten var (düşmez), false: bakiyeden sonra yapıldı (düşer); yoksa eski kural (çapa gününden sonraysa düşer)
+    in_balance: bool | None = None
 
 
 @app.get("/api/debts")
@@ -6506,15 +6511,18 @@ def pay_debt(did: int, body: DebtPayIn, request: Request):
                 raise HTTPException(422, "Erken kapatma yalnız açık, ödeme planı olan borçta yazılır")
             if body.amount is None:
                 raise HTTPException(422, "Kapatırken ödediğin tutarı yaz")
+        # çapa cevabı yalnız elle (hareketsiz) hesaplı ödemede anlamlı: hareket bağlıysa bakiyeyi hareket belirler
+        conf = db.anchor_conflict(body.account_id, body.paid_at.isoformat()) if body.entry_id is None else None
         pid = db.pay_debt(did, body.amount, body.paid_at.isoformat(), entry_id=body.entry_id, account_id=body.account_id,
-                          client_key=_client_key(request))
+                          client_key=_client_key(request), note=body.note, in_anchor=body.in_balance if conf else None)
         if body.close_early:
             db.close_debt_early(did)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
     except db.OverpayError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
-    return {"ok": True, "payment_id": pid}  # Geri al: DELETE /api/debt-payments/{payment_id}
+    # Geri al: DELETE /api/debt-payments/{payment_id}
+    return {"ok": True, "payment_id": pid, **({"anchor_conflict": conf} if conf else {})}
 
 
 class DebtWriteOffIn(BaseModel):

@@ -692,6 +692,11 @@ MIGRATIONS = [
     # kayıt açmasın (Idempotency-Key kaydı 24 saat tutulur; bu sütun kalıcıdır)
     ("debt_payments", "client_key", "TEXT"),
     ("shopping_list", "client_key", "TEXT"),
+    # borç ödemesi / tahsilatın notu (yetenek debt_payment_note): "Ödendi" sayfasında yazılır ("eşim nakit verdi")
+    ("debt_payments", "note", "TEXT"),
+    # çapa günü cevabı (yetenek debt_anchor_conflict; card_payments.in_anchor ile aynı anlam): 1 çapanın içinde (bakiyeden
+    # düşmez), 0 çapadan sonra (düşer), NULL eski kural (ödeme günü çapa gününden sonraysa)
+    ("debt_payments", "in_anchor", "INTEGER"),
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -4479,11 +4484,12 @@ class OverpayError(ValueError):
 
 
 def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None,
-             client_key: str | None = None) -> int:
+             client_key: str | None = None, note: str | None = None, in_anchor: bool | None = None) -> int:
     """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
     entry_id verilirse o hareket (havale/elle kayıt) borç hareketi olur: gelir/gider sayılmaz.
     Kalandan fazla ödeme reddedilir (OverpayError): önce borç "kapandı" görünürken fazlası da akışa/bakiyeye giriyordu.
-    client_key: istemcinin işlem kimliği; bu borçta aynı kimlikle ödeme varsa yenisi yazılmaz, o ödemenin id'si döner."""
+    client_key: istemcinin işlem kimliği; bu borçta aynı kimlikle ödeme varsa yenisi yazılmaz, o ödemenin id'si döner.
+    note: ödemenin notu; in_anchor: hesaplı ödemede çapa günü cevabı (debt_after_anchor), None: eski kural."""
     with connect() as c:
         d = c.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
         if not d:
@@ -4518,8 +4524,10 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
             fmt = lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")  # noqa: E731
             raise OverpayError(f"Kalan {fmt(left)} {unit}; {fmt(amt)} {unit} ödeme yazılamaz. Fazlası ayrı bir "
                                f"{'alacak' if d['direction'] == 'borc' else 'borç'} kaydı olarak girilebilir.")
-        pid = c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id, client_key) "
-                        "VALUES (?, ?, ?, ?, ?, ?)", (debt_id, amt, on, entry_id, account_id, client_key)).lastrowid
+        ia = None if in_anchor is None or account_id is None else int(bool(in_anchor))
+        pid = c.execute("INSERT INTO debt_payments (debt_id, amount, paid_at, entry_id, account_id, client_key, note, in_anchor) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (debt_id, amt, on, entry_id, account_id, client_key, (note or "").strip() or None, ia)).lastrowid
         if entry_id:
             c.execute("UPDATE entries SET debt_id = ?, category = 'Borç / Alacak' WHERE id = ?", (debt_id, entry_id))
         _recalc_debt(c, debt_id)
@@ -4865,7 +4873,7 @@ def debt_rows(month: str | None = None) -> list[dict]:
             if p["debt_id"] == d["id"] and not p["entry_id"]:
                 out.append({"uid": f"d{d['id']}p{p['id']}", "debt_id": d["id"], "date": p["paid_at"], "flow": -out_flow,
                             "amount": p["amount"], "person": d["person"], "account_id": p.get("account_id"),
-                            "step": "tahsil" if d["direction"] == "alacak" else "odendi"})
+                            "in_anchor": p.get("in_anchor"), "step": "tahsil" if d["direction"] == "alacak" else "odendi"})
         if d["written_off_at"]:
             left = round(d["amount"] - sum(p["amount"] for p in pays if p["debt_id"] == d["id"]), 2)
             if money.gt(left, 0):
@@ -5234,6 +5242,15 @@ def ensure_account(name: str, kind: str = "banka") -> int:
                          (name, kind)).lastrowid
 
 
+def debt_after_anchor(r: dict, as_of: str) -> bool:
+    """Borç adımı (debt_rows) hesabın çapasından sonra mı (bakiyeye eklenir)? card_payments.in_anchor ile aynı kural:
+    çapa gününden sonraysa çapanın içinde denmedikçe (in_anchor 1) sonra; çapa günü ya da öncesindeyse yalnız kullanıcı
+    "sonra yaptım" dediyse (in_anchor 0). Cevapsız (NULL, eski istemci / verilen-alınan adımı): tarih > çapa günü."""
+    if r["date"] > as_of:
+        return r.get("in_anchor") != 1
+    return r.get("in_anchor") == 0
+
+
 def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | None = None) -> float | None:
     """Çapa + çapadan sonraki hareketler (elle girilen, e-posta bildirimi, borç hareketleri). Bakiyesi hiç girilmemiş: None.
     until (YYYY-MM-DD): o günün sonundaki bakiye (çapa tarihinden önce olamaz; geçmiş için zakat.account_balances_at)."""
@@ -5271,7 +5288,7 @@ def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | N
                        (a["id"], a["as_of"], a["as_of"], tr_id, tr_id, a.get("updated_at"), hi)).fetchone()[0]
     debt = 0.0
     for d in debt_rows() if debts is None else debts:  # debts: çok hesaplı çağıran bir kez hesaplayıp verir
-        if d.get("account_id") == a["id"] and a["as_of"] < d["date"] <= hi and d["step"] != "vazgecildi":
+        if d.get("account_id") == a["id"] and d["date"] <= hi and d["step"] != "vazgecildi" and debt_after_anchor(d, a["as_of"]):
             debt += d["flow"] * d["amount"]
     return round(a["balance"] + flows + debt, 2)
 
