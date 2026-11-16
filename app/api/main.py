@@ -380,7 +380,7 @@ async def require_login(request: Request, call_next):
 # bu önekli uçlarda başarılı yazmadan sonra o defterde doğruluk denetimi yeniden çalışır (app/integrity.after_write)
 _INTEGRITY_WRITES = ("/api/entries", "/api/own-transfers", "/api/debts", "/api/debt-payments", "/api/statements",
                      "/api/bank-import", "/api/imports", "/api/accounts", "/api/card-transactions", "/api/splits",
-                     "/api/inbox", "/api/bills", "/share-target", "/api/share", "/api/dekont")
+                     "/api/inbox", "/api/bills", "/share-target", "/api/share", "/api/dekont", "/api/cards/cycle-pay")
 CSRF_ORIGINS = {o.rstrip("/") for o in APP_ORIGINS} | {
     o.strip().rstrip("/") for o in os.environ.get("HESAPKITAP_CSRF_ORIGINS", "").split(",") if o.strip()}
 _UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
@@ -8497,6 +8497,48 @@ def pay_statement(sid: int, body: StatementPayIn):
 def unpay_statement(sid: int):
     db.mark_statement_paid(sid, None, None)
     return {"ok": True}
+
+
+class CyclePayIn(BaseModel):
+    card_no: str = Field(min_length=4, max_length=40)
+    amount: Money = Field(gt=0)
+    paid_at: date | None = None  # boş: bugün
+    # ödemenin çıktığı hesap (ekstre Ödendi ile aynı): X → o hesap (bakiye düşer); null → hesaptan değil (nakit);
+    # anahtar yok → hesabı belirsiz (unknown_payments; döküm gelince birleşir)
+    account_id: int | None = None
+
+
+def _estimate_cycle(card_no: str) -> dict:
+    est = next((p for p in finance.payables() if p["type"] == "estimate" and p.get("card_no") == card_no
+                and p.get("cycle")), None)
+    if not est:
+        raise HTTPException(404, "Bu kartın ekstresi yüklenmemiş dönemi yok")
+    return est["cycle"]
+
+
+@app.post("/api/cards/cycle-pay")
+def pay_estimate_cycle(body: CyclePayIn):
+    """Ekstresi henüz yüklenmemiş (kesimi geçmiş) döngü ödendi (yetenek cycle_paid): card_payments'a elle kart ödemesi.
+    Ödemelerden sonra ve Net durum o döngünün tahminini düşmez (finance.cycle_payments); ekstre yüklenince ödeme ona
+    atanır. Kesim henüz gelmediyse 409 (ödeme önceki ekstreye sayılırdı). Dönüş: {ok, card_payment_id, linked}."""
+    cyc = _estimate_cycle(body.card_no)
+    on = (body.paid_at or date.today()).isoformat()
+    if on <= cyc["cut"]:
+        raise HTTPException(409, "Bu dönemin ekstresi henüz kesilmedi; ödeme önceki ekstreye sayılır")
+    _visible_or_404("account", body.account_id)
+    try:
+        acc = body.account_id if "account_id" in body.model_fields_set else db._KEEP  # anahtar yok: hesabı belirsiz
+        r = db.add_cycle_payment(body.card_no, cyc.get("bank") or "", body.amount, on, acc)
+    except ValueError as e:
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    return {"ok": True, **r}
+
+
+@app.delete("/api/cards/cycle-pay")
+def unpay_estimate_cycle(card_no: str = Query(min_length=4, max_length=40)):
+    """Elle girilen döngü ödemesini geri al (dökümden gelen kart ödemesine dokunulmaz)."""
+    cyc = _estimate_cycle(card_no)
+    return {"ok": True, "removed": db.remove_cycle_payments(card_no, cyc["cut"])}
 
 
 class BillIn(BaseModel):

@@ -145,10 +145,6 @@ def test_late_salary_current_period_still_expects_own_salary(book, monkeypatch, 
     assert finance.summary("2026-08", today=today)["totals"]["income"] == SALARY
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "pending_recurring: dönem bitince (17 Ağu) geçmiş dönemin yatmamış maaşı ANINDA 'tahmini, döküm yok' gerçek gelire "
-    "döner; içinde bulunulan dönemin beklenen gelirine (spendable_after_income) girmez. Hafta sonu/bayram toleransı "
-    "(beklenen gün + N iş günü) içinde 'bekliyor' kalmalı. Plan 2 → fix/odemelerden-sonra-tek-ufuk dalında."))
 def test_salary_due_saturday_not_yet_arrived_is_still_awaited(book, monkeypatch):
     """S1 (içe aktarmadan önce): 15 Ağu Cumartesi, bugün 17 Ağu Pazartesi sabah, Ağustos maaşı henüz görünmüyor.
     Beklenen: Ağustos maaşı 'bekliyor' (tahmini gerçek gelir değil) ve bu dönemin beklenen gelirlerinde (Maaş gelince)
@@ -296,11 +292,6 @@ def test_rent_shift_belongs_to_due_period(book, pay_date, source):
     assert (e["recurring_id"], e["month"]) == (rid, want)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "_due_this_period yalnız içinde bulunulan dönemin girilmemiş düzenli giderini düşer (bilinçli: 'geçmiş dönem "
-    "düşülmez'). 16 May Cumartesi vadeli kira Pazartesi ödenecek; 17 May Pazar günü dönem 2026-06 başladı ve Mayıs "
-    "kirası Ödemelerden sonra'dan düşer, para hâlâ hesapta. Tolerans penceresinde (≤ TRANSFER_LATE_DAYS) önceki "
-    "dönemin ödenmemiş kalemi de düşülmeli. Plan 8 → fix/odemelerden-sonra-tek-ufuk dalında."))
 def test_rent_due_saturday_still_deducted_on_sunday(book, monkeypatch):
     today = date(2026, 5, 17)
     _freeze(monkeypatch, today)

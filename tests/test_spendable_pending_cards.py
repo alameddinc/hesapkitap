@@ -10,6 +10,20 @@ from fastapi.testclient import TestClient
 from app import finance
 from app.parsers.base import PURCHASE, Statement, Transaction
 
+
+@pytest.fixture(autouse=True)
+def _genis_ufuk(monkeypatch):
+    """Bu dosya Ödemelerden sonra kalemlerinin kuralını sınar; TEK UFUK (spend_horizon, lead 16.11) bugünün takvimine
+    bağlı olduğundan burada sabit ve geniş (bugün + 400 gün, yalnız içinde bulunulan dönem); ufuk kuralı
+    tests/test_spendable_horizon.py'de sabit tarihlerle."""
+    from datetime import timedelta as _td
+
+    from app import finance as _f
+
+    monkeypatch.setattr(_f, "spend_horizon", lambda today: {"end": today + _td(days=400), "periods": [_f.current_period(today)],
+                                                             "later_end": today + _td(days=430)})
+
+
 CARD = "4543***1234"
 CARD_B = "5400***9602"
 T = date.today()
