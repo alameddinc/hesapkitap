@@ -4052,6 +4052,26 @@ def finance_audit_entry_to_transfer(body: EntryToTransferIn):
     return {"ok": True, **out}
 
 
+class TransferToEntryIn(BaseModel):
+    own_transfer_id: int
+
+
+@app.post("/api/finance-audit/transfer-to-entry")
+def finance_audit_transfer_to_entry(body: TransferToEntryIn):
+    """entry-to-transfer'ın geri alınması (yetenek transfer_undo): aktarım, çevrilmeden önceki gelir/gider kaydına aynen
+    döner (aynı parmak izi, not_virman); çevirirken eklenen öbür bacak silinir. Ortak defter üyesi 403; kayıttan
+    çevrilmemiş ya da yok 422. Dönüş {ok, entry_id, kind}."""
+    from app import finance_audit
+
+    _own_owner_only()
+    try:
+        out = finance_audit.transfer_to_entry(body.own_transfer_id)
+    except finance_audit.FixError as e:
+        raise HTTPException(422, str(e)) from e
+    finance_audit.run()
+    return {"ok": True, **out}
+
+
 @app.get("/api/admin/finance-audit")
 def admin_finance_audit(day: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
     """Finans tutarlılık denetimi, sınıf bazında: {day, spaces, with_issues, by_code: {kod: {books, count, label}}}.

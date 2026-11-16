@@ -543,6 +543,97 @@ def test_legacy_own_name_entry_without_counter_only_asks(client, tmpdb):
 
 
 
+# ---------------------------------------------------------------- aktarıma çevirmeyi geri al (transfer_undo)
+
+def _entry_row(db, eid):
+    with db.connect() as c:
+        r = c.execute("SELECT * FROM entries WHERE id = ?", (eid,)).fetchone()
+        return dict(r) if r else None
+
+
+def _dokum_gideri(db, a, day, h="h-geri", desc="GIDEN FAST - ORNEK KISI ACIKLAMA: BIRIKIM"):
+    """Dökümden gelen (çapanın içinde) gider; kullanıcı kategorisini, alt kategorisini, notunu ve kişisini düzenlemiş."""
+    st = db.import_bank_rows([_row(day, -14000.0, desc, h)], BANK_A, account_id=a)
+    assert st["gider"] == 1
+    eid = next(e["id"] for e in _entries(db))
+    db.update_entry(eid, {"category": "Diğer", "subcategory": "Birikim", "note": "kendi hesabıma", "counterparty": "Örnek Kişi"})
+    return eid
+
+
+@pytest.mark.parametrize("ikinci", [False, True])
+@pytest.mark.parametrize("capadan_sonra", [False, True])
+def test_entry_to_transfer_undo_restores_entry_and_balances(client, tmpdb, ikinci, capadan_sonra):
+    """Tek bacak (Bilmiyorum) ve iki bacak (öbür hesap seçildi); kayıt çapanın içinde ya da sonrasında: geri alınca kayıt
+    aynen (alanlar, parmak izi, id) döner, öbür bacak silinir, nakit ve hesap bakiyeleri çevirmeden önceki gibi."""
+    day = T - timedelta(days=4)
+    a = _acc(tmpdb, BANK_A, 30000.0, as_of=(day - timedelta(days=2)) if capadan_sonra else T - timedelta(days=1))
+    b = _acc(tmpdb, BANK_B, 5000.0, as_of=day - timedelta(days=10))
+    eid = _dokum_gideri(tmpdb, a, day)
+    once = _entry_row(tmpdb, eid)
+    cash0, accs0 = _nw()["cash"], {x["id"]: x.get("current") for x in tmpdb.list_accounts()}
+    r = client.post("/api/finance-audit/entry-to-transfer", json={"entry_id": eid, **({"account_id": b} if ikinci else {})})
+    assert r.status_code == 200, r.text
+    tid = r.json()["own_transfer_id"]
+    assert _entry_row(tmpdb, eid) is None and len(_own_rows(tmpdb)) == (2 if ikinci else 1)
+    ara = {x["id"]: x.get("current") for x in tmpdb.list_accounts()}
+    assert ara[a] == accs0[a]  # aktarım bacağı kaydın yerini aldı: kaynak bakiye değişmez
+    assert ara[b] == (round(accs0[b] + 14000.0, 2) if ikinci else accs0[b])  # öbür bacak B'nin çapasından sonra: girer
+    r = client.post("/api/finance-audit/transfer-to-entry", json={"own_transfer_id": tid})
+    assert r.status_code == 200, r.text
+    assert r.json()["kind"] == "gider" and r.json()["entry_id"] == eid
+    sonra = _entry_row(tmpdb, eid)
+    for k in ("entry_date", "description", "amount", "kind", "category", "subcategory", "note", "counterparty", "import_hash",
+              "account_id", "payment", "bank_doc_id", "created_at"):
+        assert sonra[k] == once[k], k
+    assert sonra["not_virman"] == 1
+    assert _own_rows(tmpdb) == []
+    assert _nw()["cash"] == cash0
+    assert {x["id"]: x.get("current") for x in tmpdb.list_accounts()} == accs0
+    # döküm yeniden yüklenince ikinci kayıt açılmaz (aynı parmak izi)
+    tmpdb.import_bank_rows([_row(day, -14000.0, "GIDEN FAST - ORNEK KISI ACIKLAMA: BIRIKIM", "h-geri")], BANK_A, account_id=a)
+    assert [e["id"] for e in _entries(tmpdb)] == [eid] and _own_rows(tmpdb) == []
+    assert _nw()["cash"] == cash0
+    # ikinci kez geri alma: aktarım yok
+    assert client.post("/api/finance-audit/transfer-to-entry", json={"own_transfer_id": tid}).status_code == 422
+
+
+def test_transfer_undo_keeps_counter_leg_from_other_statement(client, tmpdb):
+    """Öbür hesabın dökümü sonradan gelip elle bacakla birleştiyse o bacak silinmez, eşsiz kalır (gerçek döküm satırı)."""
+    tmpdb.remember_owner_name(OWNER)
+    day = T - timedelta(days=4)
+    a = _acc(tmpdb, BANK_A, 30000.0, as_of=T - timedelta(days=1))
+    b = _acc(tmpdb, BANK_B, 5000.0, as_of=day - timedelta(days=10))
+    eid = _dokum_gideri(tmpdb, a, day)
+    tid = client.post("/api/finance-audit/entry-to-transfer", json={"entry_id": eid, "account_id": b}).json()["own_transfer_id"]
+    tmpdb.import_bank_rows([_row(day, 14000.0, IN_DESC, "h-b-in")], BANK_B, account_id=b)
+    leg_b = next(x for x in _own_rows(tmpdb) if x["account_id"] == b)
+    assert leg_b["import_hash"] == "h-b-in"
+    assert client.post("/api/finance-audit/transfer-to-entry", json={"own_transfer_id": tid}).status_code == 200
+    rows = _own_rows(tmpdb)
+    assert [(x["id"], x["pair_id"]) for x in rows] == [(leg_b["id"], None)]
+    assert _entry_row(tmpdb, eid)["import_hash"] == "h-geri"
+
+
+def test_transfer_undo_refuses_plain_transfer_and_member(client, tmpdb, monkeypatch):
+    from app import book
+
+    a = _acc(tmpdb, BANK_A, 30000.0)
+    b = _acc(tmpdb, BANK_B, 5000.0)
+    tid = tmpdb.add_own_pair(T.isoformat(), 1000.0, a, b)
+    r = client.post("/api/finance-audit/transfer-to-entry", json={"own_transfer_id": tid})
+    assert r.status_code == 422 and "geri alınamaz" in r.json()["detail"]
+    assert client.post("/api/finance-audit/transfer-to-entry", json={"own_transfer_id": 999}).status_code == 422
+    monkeypatch.setattr(book, "member", lambda: {"owner": 1})
+    assert client.post("/api/finance-audit/transfer-to-entry", json={"own_transfer_id": tid}).status_code == 403
+    assert len(_own_rows(tmpdb)) == 2
+
+
+def test_transfer_undo_capability_advertised():
+    from app import version
+
+    assert "transfer_undo" in version.handshake()["capabilities"]
+
+
 # ---------------------------------------------------------------- yazmadan sonra yeniden denetim, madde ayrıntıları
 
 @pytest.mark.parametrize("method,path,want", [
