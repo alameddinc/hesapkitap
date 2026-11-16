@@ -1888,6 +1888,7 @@ def payables(today: date | None = None) -> list[dict]:
 @_memo(zakat=False)
 def _payables(today: date) -> list[dict]:
     out = []
+    h_end = spend_horizon(today)["end"].isoformat()
     interest = None
     statements = db.list_statements()
     latest = {st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
@@ -1975,6 +1976,9 @@ def _payables(today: date) -> list[dict]:
     uniq = []
     for x in out:
         x["key"] = f"{x['type']}:{x['id']}" if x["id"] is not None else f"{x['type']}:{x['title']}:{x['due_date']}"
+        # yetenek payables_in_horizon: vadesi Ödemelerden sonra'nın tek ufkunda mı (spend_horizon; gecikmiş dahil).
+        # Yön A Ödemeler ufuk dışı TAHMİNİ kart satırını göstermez; kesin kalemler ufuk dışında da listede
+        x["in_horizon"] = not x["due_date"] or x["due_date"] <= h_end
         if x["key"] not in seen:
             seen.add(x["key"])
             uniq.append(x)
@@ -3062,7 +3066,9 @@ def net_worth(today: date | None = None) -> dict:
             # dökümü [{title, amount, date, …}] (satır yoksa boş liste)
             "card_debt_items": card_items,
             **{f"{k}_items": due[k]["items"] for k in DUE_KEYS},
-            "spendable_after_income": _spendable_after_income(spendable, today, hz["periods"]),
+            "spendable_after_income": (sai := _spendable_after_income(spendable, today, hz["periods"])),
+            # yetenek forecast_balance: bakiye tabanlı "Ay sonunda kalacak" (aynı ufuk)
+            "forecast_balance": _forecast_balance(_round(cash - jars["total"]), spendable, sai, hz, today),
             # yetenek spendable_horizon: ufuk (bu tarihe kadar vadeli olanlar düşüldü) ve ufuktan sonra, bir sonraki dönem
             # sonuna kadar vadeli kesin ödemeler ("Maaştan sonra ödenecek"; spendable'dan DÜŞÜLMEZ)
             "spendable_horizon": h_end, "spendable_later": spendable_later,
@@ -3221,6 +3227,31 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
              "remaining": _round(left), "statement_id": st["id"]})
     out["_later_bills"] = later_bills
     return out
+
+
+def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict, today: date) -> dict:
+    """Bakiye tabanlı "Ay sonunda kalacak" (H1, lead 16.11; yetenek forecast_balance). Ufuk = Ödemelerden sonra'nın
+    ufku (spend_horizon), ikisi tutarlı:
+      no_new_spend ("Yeni harcama yapmazsan") = spendable + ufka kadar beklenen gelir (spendable_after_income.income:
+                     girilmemiş sabit gelirler, SALARY_GRACE_DAYS içinde yatmamış maaş dahil)
+      amount       = no_new_spend − ufka kadar kalan günlerin tahmini kart harcaması (açık döngü başına henüz
+                     harcanmamış değişken pay: min(variable_at_cut − spent, variable_avg × kalan gün / döngü günü))
+    Bekleyen düzenli ödeme / taksit / abonelik spendable'da zaten (ufka kadar vadeliler); ayrıca düşülmez.
+    Değişmez: amount ≤ no_new_spend ≤ spendable + beklenen gelir. Dönem akışı (gelir − gider) summary.expected'da kalır.
+    parts: [{key, label, amount, sign}] — free (Elinde şu an) +, payments (= free − spendable) −, income +, variable −."""
+    income = (sai or {}).get("income") or 0.0
+    days = max(0, (hz["end"] - today).days)
+    var = 0.0
+    for c in open_cycles(today).values():
+        rest = max(0.0, (c.get("variable_at_cut") or 0.0) - (c.get("spent") or 0.0))
+        var += min(rest, (c.get("variable_avg") or 0.0) * days / max(1, c.get("days_total") or 1))
+    var = _round(var)
+    base = _round(spendable + income)
+    parts = [{"key": "free", "label": "Elinde şu an", "amount": _round(free), "sign": "+"},
+             {"key": "payments", "label": "Ödemeler (dönem sonuna kadar)", "amount": _round(free - spendable), "sign": "−"},
+             {"key": "income", "label": "Beklenen gelir", "amount": _round(income), "sign": "+"},
+             {"key": "variable", "label": "Tahmini kart harcaması", "amount": var, "sign": "−"}]
+    return {"amount": _round(base - var), "no_new_spend": base, "horizon": hz["end"].isoformat(), "parts": parts}
 
 
 def _spendable_after_income(spendable: float, today: date, periods: list[str] | None = None) -> dict | None:

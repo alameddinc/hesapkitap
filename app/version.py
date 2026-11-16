@@ -567,6 +567,12 @@ CAPABILITIES = (
                               # status yine "tahmini". net-worth credit_cards[].next_paid aynı nesne. Elle: POST
                               # /api/cards/cycle-pay {card_no, amount, paid_at?, account_id?} (kesim gelmediyse 409; hesap
                               # verilirse bakiye düşer), geri al DELETE /api/cards/cycle-pay?card_no=… (yalnız elle girilen)
+    "forecast_balance",       # GET /api/net-worth forecast_balance {amount ("Ay sonunda kalacak", bakiye tabanlı), no_new_spend
+                              # ("Yeni harcama yapmazsan"), horizon (= spendable_horizon), parts [{key: free|payments|income|
+                              # variable, label, amount, sign}]}: spendable + ufka kadar beklenen gelir − ufka kadar kalan
+                              # günlerin tahmini kart harcaması. summary.expected (dönem akışı) değişmez; eski istemci onu görür
+    "payables_in_horizon",    # GET /api/payables her kalemde in_horizon: vadesi Ödemelerden sonra'nın ufkunda (gecikmiş ve
+                              # vadesiz dahil). İstemci ufuk dışı TAHMİNİ kart satırını (type estimate) Yaklaşan'da göstermez
 )
 
 

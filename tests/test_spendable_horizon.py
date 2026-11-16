@@ -295,3 +295,63 @@ def test_previous_period_rent_still_deducted_within_late_window(tmpdb, monkeypat
     assert [x.get("overdue") for x in sorted(due, key=lambda x: x["date"])] == [True, None]
     later = finance._due_this_period(date(2026, 6, 2), [])["recurring"]["items"]
     assert sorted(x["date"] for x in later) == ["2026-06-16"]
+
+
+# ---------------------------------------------------------------- H1: bakiye tabanlı "Ay sonunda kalacak"
+
+def _fb(day):
+    return finance.net_worth(day)["forecast_balance"]
+
+
+def _check_invariant(nw):
+    fb = nw["forecast_balance"]
+    income = (nw["spendable_after_income"] or {}).get("income") or 0.0
+    assert fb["amount"] <= fb["no_new_spend"] <= round(nw["spendable"] + income, 2) + 0.01
+    assert fb["horizon"] == nw["spendable_horizon"]
+    p = {x["key"]: x["amount"] for x in fb["parts"]}
+    assert round(p["free"] - p["payments"] + p["income"] - p["variable"], 2) == fb["amount"]
+    assert p["free"] == nw["free"]
+
+
+def test_forecast_balance_cut_passed_cycle_mid_and_last_day(cut_passed, client):
+    """Açık döngüde değişken tahmin var (geçmiş 10.000/dönem): ortada (20 Kas) kalan günlerin payı düşülür; son gün (16 Ara,
+    ufuk sonraki dönem sonu) yine aynı formül; maaş bekleniyorsa gelir eklenir."""
+    r = client.post("/api/recurring", json={"description": "Maaş", "amount": 40000.0, "kind": "gelir", "category": "Maaş",
+                                            "day_of_month": 15, "start_month": "2026-10"})
+    assert r.status_code == 200, r.text
+    for day in (date(2026, 11, 20), date(2026, 12, 15), date(2026, 12, 16)):
+        nw = _nw(day)
+        _check_invariant(nw)
+    mid = _nw(date(2026, 11, 20))["forecast_balance"]
+    assert mid["no_new_spend"] - mid["amount"] > 0  # kalan günlerin kart harcaması
+
+
+def test_forecast_balance_salary_arrives(book, client, monkeypatch):
+    """Maaş gelmeden: + beklenen gelir; maaş girilince gelir kalkar."""
+    # pending_recurring "geçmiş dönem" kararı date.today(); 15 Kas maaşının toleransı (7 gün) geçmiş olsun
+    _freeze(monkeypatch, date(2026, 11, 25))
+    r = client.post("/api/recurring", json={"description": "Maaş", "amount": 40000.0, "kind": "gelir", "category": "Maaş",
+                                            "day_of_month": 15, "start_month": "2026-10"})
+    assert r.status_code == 200, r.text
+    before = _nw(date(2026, 11, 25))
+    _check_invariant(before)
+    assert {x["key"]: x["amount"] for x in before["forecast_balance"]["parts"]}["income"] == 40000.0
+    acc = client.get("/api/accounts").json()
+    acc_id = (acc if isinstance(acc, list) else acc["accounts"])[0]["id"]
+    r = client.post("/api/entries", json={"entry_date": "2026-12-15", "description": "Maaş", "amount": 40000.0, "kind": "gelir",
+                                          "category": "Maaş", "payment": "havale", "account_id": acc_id})
+    assert r.status_code == 200, r.text
+    _freeze(monkeypatch, date(2026, 12, 15))
+    after = _nw(date(2026, 12, 15))
+    _check_invariant(after)
+    # Aralık maaşı girildi: gelirden kalktı; 15 Ara dönemin sondan bir önceki günü → ufuk 16 Oca, yalnız Ocak maaşı
+    assert after["spendable_horizon"] == "2027-01-16"
+    assert {x["key"]: x["amount"] for x in after["forecast_balance"]["parts"]}["income"] == 40000.0
+
+
+def test_payables_in_horizon(book):
+    items = finance.payables(date(2026, 11, 20))
+    by = {(x["type"], x["due_date"]): x["in_horizon"] for x in items}
+    assert by[("bill", "2026-11-19")] is True
+    assert by[("estimate", "2026-12-23")] is False  # ufuk 16 Ara
+    assert by[("debt", "2026-12-31")] is False  # kesin kalem: listede kalır, istemci gizlemez
