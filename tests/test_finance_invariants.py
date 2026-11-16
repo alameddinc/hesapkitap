@@ -362,7 +362,12 @@ def _f_cift_link(db):
         _entry(db, "gider", 600.0, None, payment="kredi_karti", linked_txn_id=tid)
 
 
+def _f_bakiye_yok(db):
+    _stmt(db, 2500.0)
+
+
 @pytest.mark.parametrize("setup,code,amount", [
+    (_f_bakiye_yok, "bakiye_yok", 2500.0),
     (_f_eksi, "eksi_bakiye", 3200.0), (_f_capa, "capa_eski", 4900.0), (_f_capa_stale, "capa_eski", 4900.0),
     (_f_hesapsiz, "hesapsiz_hareket", 777.0), (_f_transfer, "transfer_cift", 2500.0),
     (_f_duzenli, "duzenli_bekliyor", 1500.0), (_f_cift_link, "cift_satir", 600.0),

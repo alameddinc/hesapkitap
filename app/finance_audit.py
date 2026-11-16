@@ -23,6 +23,8 @@ Değişmezler (kod → anlamı; hepsi SALT-OKUNUR):
                        eksi değer taşıyor ya da serbest paradan (free) büyük
   duzenli_bekliyor     düzenli gider bu dönem "bekliyor" görünüyor ama dönemde aynı tutarlı (±%2) eşleşmemiş havale var:
                        ödenmiş, iki kez düşülüyor
+  bakiye_yok           bakiyesi bilinen hiçbir banka/nakit hesap yok ama "Ödemelerden sonra" borçları düşüp eksi çıkıyor:
+                       rakam yalnız borçları gösteriyor (16.11 taramasında 2 defter)
 
 Çıktı: {day, counts: {kod: n}, amounts: {kod: ₺}, refs: {kod: [kimlik]}, ms}. Defterin kendi ayarına
 (settings['finance_audit:last']) ve system.db finance_audit_runs'a (yalnız sayılar ve ₺ toplamı YOK — kod başına adet) yazılır;
@@ -53,7 +55,7 @@ RECUR_TOL = 0.02        # düzenli ödeme ↔ havale tutar toleransı
 MAX_ITEMS = 10
 
 CODES = ("odendi_hesapsiz", "eksi_bakiye", "capa_eski", "transfer_cift", "hesapsiz_hareket", "odenmis_ekstresiz",
-         "cift_satir", "harcanabilir_tutarsiz", "duzenli_bekliyor")
+         "cift_satir", "harcanabilir_tutarsiz", "duzenli_bekliyor", "bakiye_yok")
 LABELS = {
     "odendi_hesapsiz": "Ödendi işaretli ekstrenin hangi hesaptan ödendiği belli değil",
     "eksi_bakiye": "Hesap bakiyesi eksi görünüyor",
@@ -64,11 +66,12 @@ LABELS = {
     "cift_satir": "Aynı kart işlemi iki kez sayılıyor olabilir",
     "harcanabilir_tutarsiz": "Ödemelerden sonra kalemlerle tutmuyor",
     "duzenli_bekliyor": "Ödenmiş düzenli ödeme hâlâ bekliyor görünüyor",
+    "bakiye_yok": "Hiçbir hesabın bakiyesi girilmemiş, Ödemelerden sonra yalnız borçları gösteriyor",
 }
 # kullanıcının etkisi: ödemelerden sonra / bakiye ne yönde yanlış olabilir (uyarı metni için)
 SEVERITY = {"odendi_hesapsiz": "warn", "eksi_bakiye": "warn", "capa_eski": "info", "transfer_cift": "info",
             "hesapsiz_hareket": "info", "odenmis_ekstresiz": "warn", "cift_satir": "warn",
-            "harcanabilir_tutarsiz": "warn", "duzenli_bekliyor": "warn"}
+            "harcanabilir_tutarsiz": "warn", "duzenli_bekliyor": "warn", "bakiye_yok": "info"}
 
 
 def _q(c, sql: str, *args) -> list[dict]:
@@ -186,7 +189,7 @@ def capa_eski(s: dict) -> list[dict]:
         age = (today - _d(a["as_of"])).days
         if age < CAPA_WARN or (a["id"] not in used and a.get("source") != "dokum"):
             continue
-        out.append({"ref": f"account:{a['id']}", "amount": money.money(a["current"]), "date": a["as_of"], "days": age,
+        out.append({"ref": f"account:{a['id']}", "amount": money.money(abs(a["current"])), "date": a["as_of"], "days": age,
                     "stale": age > CAPA_STALE})
     return out
 
@@ -333,9 +336,17 @@ def duzenli_bekliyor(s: dict) -> list[dict]:
     return out
 
 
+def bakiye_yok(s: dict) -> list[dict]:
+    nw = s.get("nw")
+    if not nw or any(a.get("as_of") for a in s["accounts"]) or not money.lt(nw["spendable"], 0):
+        return []
+    return [{"ref": "accounts:none", "amount": money.money(-nw["spendable"]), "date": s["today"]}]
+
+
 CHECKS = {"odendi_hesapsiz": odendi_hesapsiz, "eksi_bakiye": eksi_bakiye, "capa_eski": capa_eski,
           "transfer_cift": transfer_cift, "hesapsiz_hareket": hesapsiz_hareket, "odenmis_ekstresiz": odenmis_ekstresiz,
-          "cift_satir": cift_satir, "harcanabilir_tutarsiz": harcanabilir_tutarsiz, "duzenli_bekliyor": duzenli_bekliyor}
+          "cift_satir": cift_satir, "harcanabilir_tutarsiz": harcanabilir_tutarsiz, "duzenli_bekliyor": duzenli_bekliyor,
+          "bakiye_yok": bakiye_yok}
 
 
 def audit(snap: dict) -> dict:
@@ -494,6 +505,11 @@ def _item(c, code: str, f: dict) -> dict | None:
                         "Ödemelerden sonra iki kez düşmesin.",
                 "cta": "Bağla", "route": f"islemler/m{eid}", "action": "match", "entry_id": int(eid),
                 "recurring_id": int(rid) if rid.isdigit() else None}
+    if code == "bakiye_yok":
+        return {**base, "title": "Banka hesabını ekle",
+                "text": "Hiçbir hesabın bakiyesini girmedin; Ödemelerden sonra yalnız kart borcunu ve ödemeleri düşüyor, "
+                        "bu yüzden eksi görünüyor. Hesabını ekle ya da dökümünü yükle.",
+                "cta": "Hesap ekle", "route": "hesaplar", "action": "account_balance"}
     if code == "harcanabilir_tutarsiz":
         return {**base, "title": "Ödemelerden sonra kontrol ediliyor",
                 "text": "Ödemelerden sonra rakamı kalemleriyle tutmadı. Bunu biz de gördük, inceliyoruz.",
