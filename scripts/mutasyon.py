@@ -31,7 +31,8 @@ DEFAULT = ("finance.net_worth finance.spend_horizon finance._deduct_end finance.
            "db.debt_after_anchor db.statement_remaining")
 TESTS = os.environ.get("MUT_TESTS", "tests/test_finans_cekismeli.py tests/test_finance_invariants.py "
                        "tests/test_gercek_gun_tekrari.py tests/test_p0_cekismeli.py tests/test_p0_maas_gun.py "
-                       "tests/simulasyon/test_belge_akisi.py").split()
+                       "tests/simulasyon/test_belge_akisi.py tests/simulasyon/test_bulgular.py "
+                       "tests/test_mutasyon_sinirlari.py").split()
 SWAP_CMP = {ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt, ast.Eq: ast.NotEq, ast.NotEq: ast.Eq}
 
 
