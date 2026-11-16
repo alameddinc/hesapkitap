@@ -13,7 +13,7 @@ HALK_IBAN = "TR110001200000000000000001"
 VAKIF_IBAN = "TR220001500000000000123456"
 
 GIDEN = f"""DEKONT
-MÜŞTERİ NO : 11111111 İŞLEM TARİHİ : 16/11/2026 - 05:59
+MÜŞTERİ NO : 11111111 İŞLEM TARİHİ : 16/11/2026 - 08:14
 IBAN : TR11 0001 2000 0000 0000 0000 01
 İŞLEM TÜRÜ : PARA TRANSFERİ - GİDEN FAST
 GÖNDEREN : {NAME}
@@ -23,7 +23,7 @@ ALICI IBAN : TR22 0001 5000 0000 0000 1234 56
 ALICI BANKA : TÜRKİYE VAKIFLAR BANKASI T.A.O.
 ÖDEME AMACI : BİREYSEL ÖDEME
 SORGU NO : 9900000001
-İŞLEM TUTARI (TL) : 145,000.00
+İŞLEM TUTARI (TL) : 137,500.00
 AÇIKLAMA : GİDEN FAST - {NAME} TARAFINDAN GÖNDERİLEN
 """
 
@@ -34,17 +34,17 @@ GELEN_OCR = f"""VAKIFBANK
 MÜŞTERİ AD SOYAD Deneme Kişioğlu
 MÜŞTERİ NUMARASI 222222222
 İŞLEM A01 Gelen FAST Anlık Ödeme
-İŞLEM TARİHİ 16.11.2026 05:59
+İŞLEM TARİHİ 16.11.2026 08:14
 BANKA Türkiye Halk Bankası A.Ş.
 ALICI HESAP NO 00150000000000123456
 GONDEREN AD SOYAD/UNVAN {NAME}
-İŞLEM TUTARI 145.000,00 TL
+İŞLEM TUTARI 137.500,00 TL
 SORGU REFERANS NO 9900000001
 İŞLEM AÇIKLAMASI
 GİDEN FAST - {NAME} TARAFINDAN GÖNDERİLEN
 """
 
-GELEN_AI = {"is_transfer": True, "amount": "145.000,00", "date": "2026-11-16", "sender_name": NAME,
+GELEN_AI = {"is_transfer": True, "amount": "137.500,00", "date": "2026-11-16", "sender_name": NAME,
             "sender_iban": None, "sender_bank": "Türkiye Halk Bankası A.Ş.", "receiver_name": "Deneme Kişioğlu",
             "receiver_iban": "00150000000000123456", "receiver_bank": None, "bank": "VakıfBank",
             "description": f"GİDEN FAST - {NAME} TARAFINDAN GÖNDERİLEN", "transfer_type": "fast",
@@ -140,7 +140,7 @@ def test_unknown_parties_direction_from_document(tmpdb):
 def test_documents_parse_incoming_fast_returns_dekont_with_phone_text(client, tmpdb, monkeypatch):
     _halk, vakif = _accounts(tmpdb)
     calls = _gemini(monkeypatch, lambda p: GELEN_AI if "PARA TRANSFERİ dekontu (havale" in p else
-                    {"doc_type": "fatura", "merchant": "VakıfBank", "total": 145000})
+                    {"doc_type": "fatura", "merchant": "VakıfBank", "total": 137500})
     d = client.post("/api/documents/parse", files={"file": ("v.jpg", _jpeg(), "image/jpeg")},
                     data={"ocr_text": GELEN_OCR, "ocr_source": "vision", "dekont": "1"}).json()
     assert d["type"] == "dekont" and d["own_transfer"] is True
@@ -151,11 +151,11 @@ def test_documents_parse_incoming_fast_returns_dekont_with_phone_text(client, tm
 
 def test_documents_parse_ai_says_transfer_then_dekont_read(client, tmpdb, monkeypatch):
     _accounts(tmpdb)
-    calls = _gemini(monkeypatch, lambda p: {"doc_type": "transfer", "merchant": "VakıfBank", "total": 145000}
+    calls = _gemini(monkeypatch, lambda p: {"doc_type": "transfer", "merchant": "VakıfBank", "total": 137500}
                     if "doc_type" in p else GELEN_AI)
     d = client.post("/api/documents/parse", files={"file": ("v2.jpg", _jpeg() + b"1", "image/jpeg")},
                     data={"dekont": "1"}).json()
-    assert d["type"] == "dekont" and d["amount"] == 145000 and len(calls) == 2
+    assert d["type"] == "dekont" and d["amount"] == 137500 and len(calls) == 2
     # eski istemci (dekont yok): bugünkü biçim (fatura) + looks_like_transfer, fatura şablonu öğrenilmez
     old = client.post("/api/documents/parse", files={"file": ("v3.jpg", _jpeg() + b"2", "image/jpeg")}).json()
     assert old["type"] == "bill" and old["looks_like_transfer"] is True
@@ -163,7 +163,7 @@ def test_documents_parse_ai_says_transfer_then_dekont_read(client, tmpdb, monkey
 
 def test_upload_queue_image_dekont(client, tmpdb, monkeypatch):
     _accounts(tmpdb)
-    _gemini(monkeypatch, lambda p: {"doc_type": "transfer", "merchant": "VakıfBank", "total": 145000}
+    _gemini(monkeypatch, lambda p: {"doc_type": "transfer", "merchant": "VakıfBank", "total": 137500}
             if "doc_type" in p else GELEN_AI)
     r = client.post("/api/statements/upload", files={"files": ("v.jpg", _jpeg() + b"q", "image/jpeg")},
                     data={"docs": "1", "dekont_docs": "1"}).json()[0]
@@ -185,16 +185,16 @@ def test_upload_queue_pdf_dekont_goes_to_form_for_new_client(client, tmpdb, monk
 
 def test_manual_transfer_moves_balance_not_income_or_expense(client, tmpdb):
     halk, vakif = _accounts(tmpdb)
-    r = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 145000, "from_account_id": halk,
+    r = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 137500, "from_account_id": halk,
                                                 "to_account_id": vakif, "description": "Birikim"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["linked"] is False and [x["amount"] for x in body["legs"]] == [-145000, 145000]
+    assert body["linked"] is False and [x["amount"] for x in body["legs"]] == [-137500, 137500]
     assert {x["pair_id"] for x in body["legs"]} == {body["id"]} and {x["source"] for x in body["legs"]} == {"elle"}
-    assert _current(tmpdb, "Halkbank") == 55000 and _current(tmpdb, "VakıfBank") == 146000
+    assert _current(tmpdb, "Halkbank") == 62500 and _current(tmpdb, "VakıfBank") == 138500
     assert _counts(tmpdb) == (2, 0)  # gelir/gider kaydı yok
     t = client.get("/api/transfers").json()["totals"]
-    assert (t["sent"], t["received"], t["own_in"], t["own_out"]) == (0, 0, 145000, 145000)
+    assert (t["sent"], t["received"], t["own_in"], t["own_out"]) == (0, 0, 137500, 137500)
 
 
 def test_same_day_transfer_after_balance_update_counts(client, tmpdb):
@@ -219,7 +219,7 @@ def test_validation(client, tmpdb):
 def test_two_dekonts_one_transfer(client, tmpdb, monkeypatch):
     halk, vakif = _accounts(tmpdb)
     first = client.post("/api/own-transfers", json={
-        "date": "2026-11-16", "amount": 145000, "from_account_id": halk, "to_account_id": vakif,
+        "date": "2026-11-16", "amount": 137500, "from_account_id": halk, "to_account_id": vakif,
         "ref": "9900000001", "dekont_file": None, "dekont_side": "giden"}).json()
     assert first["linked"] is False and {x["source"] for x in first["legs"]} == {"dekont"}
     # ikinci dekont (alıcı bankanın): okumada eşleşme görünür, kayıtta yeni bacak açılmaz
@@ -227,14 +227,14 @@ def test_two_dekonts_one_transfer(client, tmpdb, monkeypatch):
 
     out = dekont_parse.resolve({"sender_name": NAME,
                                 "receiver_name": NAME, "receiver_iban": VAKIF_IBAN, "sender_iban": HALK_IBAN,
-                                "amount": 145000.0, "date": "2026-11-16", "ref": "9900000001", "doc_direction": "gelen"})
+                                "amount": 137500.0, "date": "2026-11-16", "ref": "9900000001", "doc_direction": "gelen"})
     assert out["own"]["match"]["id"] == first["id"]
     second = client.post("/api/own-transfers", json={
-        "date": "2026-11-16", "amount": 145000, "from_account_id": halk, "to_account_id": vakif,
+        "date": "2026-11-16", "amount": 137500, "from_account_id": halk, "to_account_id": vakif,
         "ref": "9900000001", "dekont_side": "gelen"}).json()
     assert second["linked"] is True and second["id"] == first["id"] and second["created"] == 0
     assert _counts(tmpdb) == (2, 0)
-    assert _current(tmpdb, "Halkbank") == 55000 and _current(tmpdb, "VakıfBank") == 146000
+    assert _current(tmpdb, "Halkbank") == 62500 and _current(tmpdb, "VakıfBank") == 138500
 
 
 def test_second_dekont_file_attaches_and_repeat_is_duplicate(client, tmpdb):
@@ -244,12 +244,12 @@ def test_second_dekont_file_attaches_and_repeat_is_duplicate(client, tmpdb):
         for n in (a, b):
             c.execute("INSERT INTO stored_files (kind, name, size, created_at, legacy) VALUES ('receipts', ?, 1, "
                       "CURRENT_TIMESTAMP, 0)", (n,))
-    base = {"date": "2026-11-16", "amount": 145000, "from_account_id": halk, "to_account_id": vakif, "ref": "9900000001"}
+    base = {"date": "2026-11-16", "amount": 137500, "from_account_id": halk, "to_account_id": vakif, "ref": "9900000001"}
     p = client.post("/api/own-transfers", json={**base, "dekont_file": a, "dekont_side": "giden"}).json()
     client.post("/api/own-transfers", json={**base, "dekont_file": b, "dekont_side": "gelen"})
     with tmpdb.connect() as c:
         files = {r[0]: r[1] for r in c.execute("SELECT amount, receipt_file FROM own_transfers")}
-    assert files == {-145000: a, 145000: b}
+    assert files == {-137500: a, 137500: b}
     again = client.post("/api/own-transfers", json={**base, "dekont_file": b, "dekont_side": "gelen"})
     assert again.status_code == 409 and again.json()["own_transfer_id"] == p["id"]
 
@@ -257,45 +257,45 @@ def test_second_dekont_file_attaches_and_repeat_is_duplicate(client, tmpdb):
 def test_wrongly_saved_dekont_entry_becomes_transfer(client, tmpdb):
     """Önceden gider sanılıp kaydedilmiş aynı sorgu numaralı dekont: aktarıma dönüşür, çift sayım kalmaz."""
     halk, vakif = _accounts(tmpdb)
-    r = client.post("/api/dekont/save", json={"date": "2026-11-16", "amount": 145000, "direction": "giden",
+    r = client.post("/api/dekont/save", json={"date": "2026-11-16", "amount": 137500, "direction": "giden",
                                               "counterparty": "Deneme Kişioğlu", "account_id": halk,
                                               "ref": "9900000001"})
     assert r.status_code == 200
-    assert _current(tmpdb, "Halkbank") == 55000 and _current(tmpdb, "VakıfBank") == 1000
-    out = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 145000, "from_account_id": halk,
+    assert _current(tmpdb, "Halkbank") == 62500 and _current(tmpdb, "VakıfBank") == 1000
+    out = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 137500, "from_account_id": halk,
                                                   "to_account_id": vakif, "ref": "9900000001",
                                                   "dekont_side": "gelen"}).json()
     assert out["replaced"] == [r.json()["id"]]
     assert _counts(tmpdb) == (2, 0)
-    assert _current(tmpdb, "Halkbank") == 55000 and _current(tmpdb, "VakıfBank") == 146000
+    assert _current(tmpdb, "Halkbank") == 62500 and _current(tmpdb, "VakıfBank") == 138500
 
 
 def test_statement_leg_completed_by_dekont(client, tmpdb):
     """Halkbank dökümünde çıkış zaten virman; VakıfBank'ın dekontu eksik giriş bacağını ekler."""
     halk, vakif = _accounts(tmpdb)
     with tmpdb.connect() as c:
-        tmpdb.add_own_transfer(c, "2026-11-16", -145000.0, "Halkbank", "Kendi hesabına", "st-out", [], halk)
-    out = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 145000, "from_account_id": halk,
+        tmpdb.add_own_transfer(c, "2026-11-16", -137500.0, "Halkbank", "Kendi hesabına", "st-out", [], halk)
+    out = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 137500, "from_account_id": halk,
                                                   "to_account_id": vakif, "ref": "9900000001",
                                                   "dekont_side": "gelen"}).json()
     assert out["linked"] is True and out["created"] == 1
-    assert sorted(x["amount"] for x in out["legs"]) == [-145000, 145000]
-    assert _current(tmpdb, "VakıfBank") == 146000
+    assert sorted(x["amount"] for x in out["legs"]) == [-137500, 137500]
+    assert _current(tmpdb, "VakıfBank") == 138500
 
 
 def test_statement_import_merges_manual_legs(client, tmpdb):
     halk, vakif = _accounts(tmpdb)
-    pid = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 145000, "from_account_id": halk,
+    pid = client.post("/api/own-transfers", json={"date": "2026-11-16", "amount": 137500, "from_account_id": halk,
                                                   "to_account_id": vakif}).json()["id"]
-    st = tmpdb.import_bank_rows([{"date": "2026-11-16", "description": "GIDEN FAST - DENEME", "amount": -145000.0,
+    st = tmpdb.import_bank_rows([{"date": "2026-11-16", "description": "GIDEN FAST - DENEME", "amount": -137500.0,
                                   "type": "gider", "hash": "h-out"}], account="Halkbank", account_id=halk)
-    st2 = tmpdb.import_bank_rows([{"date": "2026-11-17", "description": "Gelen FAST", "amount": 145000.0,
+    st2 = tmpdb.import_bank_rows([{"date": "2026-11-17", "description": "Gelen FAST", "amount": 137500.0,
                                    "type": "gelir", "hash": "h-in"}], account="VakıfBank", account_id=vakif)
     assert st["virman"] == 1 and st2["virman"] == 1 and st["gider"] == 0 and st2["gelir"] == 0
     with tmpdb.connect() as c:
         legs = [dict(r) for r in c.execute("SELECT amount, import_hash, pair_id FROM own_transfers ORDER BY amount")]
-    assert legs == [{"amount": -145000, "import_hash": "h-out", "pair_id": pid},
-                    {"amount": 145000, "import_hash": "h-in", "pair_id": pid}]
+    assert legs == [{"amount": -137500, "import_hash": "h-out", "pair_id": pid},
+                    {"amount": 137500, "import_hash": "h-in", "pair_id": pid}]
     assert _counts(tmpdb)[1] == 0
 
 

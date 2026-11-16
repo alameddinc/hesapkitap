@@ -133,7 +133,7 @@ def test_anchor_rule_live_like(client, tmpdb):
     _acc(client, "İkinci Bank", "2026-10-29")
     _acc(client, "Üçüncü Bank", "2026-10-18")
     old = [_st(tmpdb, f"4000***{n}", a, "2026-10-08", f"e{n}") for n, a in ((1111, 50000.10), (2222, 54000.20), (3333, 74000.30))]
-    new = [_st(tmpdb, f"4000***{n}", a, "2026-11-08", f"y{n}") for n, a in ((2222, 53267.98), (3333, 51538.59))]
+    new = [_st(tmpdb, f"4000***{n}", a, "2026-11-08", f"y{n}") for n, a in ((2222, 48712.40), (3333, 47296.15))]
     for sid in old:
         client.post(f"/api/statements/{sid}/pay", json={"amount": 1, "paid_at": "2026-10-31"})
     for sid in new:
@@ -145,7 +145,7 @@ def test_anchor_rule_live_like(client, tmpdb):
     assert set(items) == set(old) | set(new)
     assert not any(items[s]["deducted"] for s in old)  # (b) bir çapa 15 Kas → bakiyenin içinde
     assert all(items[s]["deducted"] for s in new)  # (a) bütün çapalar ≤ 15 Kas
-    assert nw["unknown_payments"] == 104806.57  # beklenen düşüm: yalnız 16 Kas ödemeleri
+    assert nw["unknown_payments"] == 96008.55  # beklenen düşüm: yalnız 16 Kas ödemeleri
     keys = [i["key"] for i in finance.insights("2026-11", day) if i["key"].startswith("belirsiz_odeme:")]
     assert len(keys) == 5  # uyarı hepsinde
 
