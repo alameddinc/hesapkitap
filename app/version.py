@@ -629,8 +629,10 @@ CAPABILITIES = (
     "bill_pay_account",       # fatura Ödendi'nin hesabı: POST /api/bills/{id}/pay {account_id, in_balance} — X → o hesaptan
                               # (bakiye düşer; payment verilmediyse havale; kredi_karti ile 422); null → hesabımdan değil
                               # (nakit / takip edilmeyen hesap; bills.paid_via "disarida", denetim hesapsiz_hareket
-                              # sormaz); anahtar yok → eski davranış (hesabı belirsiz, denetim uyarır; yeniden ödemede
-                              # önceki hesap korunur). Ödeme günü hesabın çapa günü/öncesiyse yanıtta anchor_conflict
+                              # sormaz); anahtar yok → hesabı belirsiz (yeniden ödemede önceki hesap korunur): ekstrenin
+                              # belirsiz ödemesiyle TEK kavram — net-worth unknown_payments_items'ta type "fatura" (bill_id,
+                              # entry_id; ötekiler type "kart"), aynı muhafazakâr kuralla deducted, Özet uyarısı
+                              # "belirsiz_odeme:f<id>:…" (pay {type: "bill", id}), payables fatura satırında account_unknown. Ödeme günü hesabın çapa günü/öncesiyse yanıtta anchor_conflict
                               # {account_id, name, as_of}; in_balance anchor_conflict ile aynı anlam. Ödenmiş açılan
                               # fatura (POST /api/bills paid_at) aynı alanları alır. GET /api/bills satırında paid_via
     "own_transfer_maybe",     # dekonttan hesaplar arası aktarım: sorgu numarası tutmayan kayıtlı bacak yalnız ±1 gün

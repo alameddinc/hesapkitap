@@ -715,11 +715,11 @@ class Sim:
             self.log(f"fatura {b.provider} {b.amount} karttan otomatik")
             return
         a = self.accs[b.acc]
-        # faturanın "Ödendi"si hesap sormuyor (PayIn'de account_id yok): bakiye uygulamada düşmez → bildirilmemiş
-        self.move(b.acc, -b.amount, f"{b.provider.upper()} FATURA ODEMESI", informed=False, tag="fatura")
+        # S6 düzeldi: "Ödendi"de "Nereden ödendi?" (yetenek bill_pay_account) → hesaptan düşer (bildirilmiş hareket)
+        self.move(b.acc, -b.amount, f"{b.provider.upper()} FATURA ODEMESI", informed=True, tag="fatura")
         self.api("post", f"/api/bills/{b.bid}/pay", json={"amount": b.amount, "paid_at": self.today.isoformat(),
-                                                         "payment": "havale"})
-        self.log(f"fatura {b.provider} {b.amount} {a.cfg.key}'dan (hesap sorulmadı)")
+                                                         "payment": "havale", "account_id": a.id})
+        self.log(f"fatura {b.provider} {b.amount} {a.cfg.key}'dan")
 
     def do_cash(self) -> None:
         nakit = next((a for a in self.accs.values() if a.cfg.kind == "nakit"), None)

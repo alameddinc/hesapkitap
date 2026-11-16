@@ -3024,7 +3024,32 @@ def unknown_statement_payments(today: str | None = None, statements: list[dict] 
                          "title": (r["description"] or "Kart ödemesi").replace("Kart ödemesi · ", ""), "bank": None,
                          "card_no": r["card_last4"], "amount": round(r["amount"], 2), "paid_at": pd},
                         neden(pd, r["created_at"], win, r["amount"], banks.get(r["card_last4"]), r["card_last4"])))
-    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"] or 0, x.get("card_payment_id") or 0))
+    # fatura Ödendi'de hesap söylenmemiş (anahtar yok, eski istemci; yetenek bill_pay_account): aynı kavram, aynı kural.
+    # Havale / banka ya da yolu boş gider kaydı, hesabı yok, "Hesabımdan değil" denmemiş. Kartla ödenen ekstrede, nakitle
+    # ödenen elde (hesap takibi yok) belirsiz değil. İşaretlenme anı = gider kaydının created_at; karşılık penceresi
+    # ödeme günü −20 / +7 (dökümde aynı tutarlı gider). type "fatura"; ötekiler type "kart"
+    for b in unknown_bill_payments(since, day):
+        pd = b["entry_date"][:10]
+        pdd = _date.fromisoformat(pd)
+        win = ((pdd - _td(days=21)).isoformat(), (pdd + _td(days=7)).isoformat())
+        out.append(item({"statement_id": None, "bill_id": b["id"], "entry_id": b["entry_id"], "type": "fatura",
+                         "title": b["provider"], "bank": None, "card_no": None, "amount": round(b["amount"], 2),
+                         "paid_at": pd}, neden(pd, b["created_at"], win, b["amount"], None, None)))
+    for x in out:
+        x.setdefault("type", "kart")
+    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"] or 0, x.get("card_payment_id") or 0,
+                                      x.get("bill_id") or 0))
+
+
+def unknown_bill_payments(since: str, day: str) -> list[dict]:
+    """Hesabı belirsiz fatura ödemeleri (unknown_statement_payments'ın fatura kolu): bağlı gider kaydı hesapsız, ödeme
+    yolu havale / banka / boş, paid_via boş (Hesabımdan değil denmemiş), dökümden gelmemiş, ödeme günü [since, day]."""
+    with connect() as c:
+        return rows(c.execute(
+            "SELECT b.id, b.provider, e.id AS entry_id, e.entry_date, e.amount, e.created_at FROM bills b "
+            "JOIN entries e ON e.id = b.entry_id WHERE b.paid_via IS NULL AND e.account_id IS NULL AND e.wallet_id IS NULL "
+            "AND e.import_hash IS NULL AND e.skipped = 0 AND COALESCE(e.payment, 'havale') IN ('havale', 'banka') "
+            "AND e.amount > 0 AND e.entry_date BETWEEN ? AND ?", (since, day)))
 
 
 def last_pay_accounts() -> dict[str, int]:

@@ -111,14 +111,42 @@ def test_s6_hesabimdan_degil_bakiye_degismez_denetim_sormaz(client, tmpdb, monke
     assert not finance_audit.hesapsiz_hareket(s)
 
 
-def test_s6_anahtar_yok_eski_davranis_denetim_uyarir(client, tmpdb, monkeypatch):
+def test_s6_anahtar_yok_belirsiz_odeme_kart_kuraliyla(client, tmpdb, monkeypatch):
+    """Hesap söylenmemiş fatura ödemesi = ekstrenin belirsiz ödemesi: unknown_payments_items type fatura, güncel çapa
+    ödemeden önceyse free/spendable'dan düşülür, Özet uyarısı belirsiz_odeme:f<id>, denetim ikinci kez sormaz."""
     freeze(monkeypatch, date(2026, 11, 20))
     tmpdb.set_account_balance("Örnek Banka A", 10000.0, "2026-11-15", "elle")
     bid = _bill(client)
     assert client.post(f"/api/bills/{bid}/pay", json={"amount": 640.0, "paid_at": "2026-11-20",
                                                       "payment": "havale"}).status_code == 200
+    n = finance.net_worth(date(2026, 11, 20))
     assert _bal(date(2026, 11, 20)) == {"Örnek Banka A": 10000.0}
-    assert len(finance_audit.hesapsiz_hareket(finance_audit.snapshot(date(2026, 11, 20)))) == 1
+    it = [x for x in n["unknown_payments_items"] if x["type"] == "fatura"]
+    assert len(it) == 1 and it[0]["bill_id"] == bid and it[0]["deducted"] is True
+    assert n["unknown_payments"] == 640.0 and n["free"] == 9360.0
+    assert not finance_audit.hesapsiz_hareket(finance_audit.snapshot(date(2026, 11, 20)))
+    p = next(x for x in finance.payables(date(2026, 11, 20)) if x["type"] == "bill" and x["id"] == bid)
+    assert p["account_unknown"] is True
+    w = next(x for x in finance.insights("2026-11", date(2026, 11, 20)) if x.get("key", "").startswith(f"belirsiz_odeme:f{bid}:"))
+    assert "faturasını" in w["detail"] and w["pay"] == {"type": "bill", "id": bid}
+    # hesap sonradan seçilince belirsiz kalem kapanır, bakiye düşer
+    aid = _ids(tmpdb)["Örnek Banka A"]
+    client.post(f"/api/bills/{bid}/pay", json={"amount": 640.0, "paid_at": "2026-11-20", "account_id": aid})
+    n = finance.net_worth(date(2026, 11, 20))
+    assert not n["unknown_payments_items"] and _bal(date(2026, 11, 20)) == {"Örnek Banka A": 9360.0}
+
+
+def test_s6_belirsiz_fatura_capa_sonra_ya_da_karsilik_varsa_dusulmez(client, tmpdb, monkeypatch):
+    freeze(monkeypatch, date(2026, 11, 20))
+    tmpdb.set_account_balance("Örnek Banka A", 10000.0, "2026-11-21", "elle")  # bakiye ödemeden SONRA güncel
+    bid = _bill(client)
+    client.post(f"/api/bills/{bid}/pay", json={"amount": 640.0, "paid_at": "2026-11-20", "payment": "havale"})
+    it = finance.net_worth(date(2026, 11, 21))["unknown_payments_items"]
+    assert [(x["type"], x["deducted"], x["reason"]) for x in it] == [("fatura", False, "capa_sonra")]
+    # kartla / nakitle ödenen fatura belirsiz değil
+    b2 = _bill(client, 99.0)
+    client.post(f"/api/bills/{b2}/pay", json={"amount": 99.0, "paid_at": "2026-11-20", "payment": "kredi_karti"})
+    assert len(finance.net_worth(date(2026, 11, 21))["unknown_payments_items"]) == 1
 
 
 def test_s6_yeniden_odemede_hesap_korunur_ve_geri_al(client, tmpdb, monkeypatch):
