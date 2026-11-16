@@ -5,6 +5,7 @@ Her iş günde bir kez çalışır; çalıştığı gün settings tablosuna yaz�
 import asyncio
 import logging
 import os
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -191,17 +192,32 @@ def run_pending_cleanup(today: date) -> int:
     return support.prune_pending()
 
 
+def run_finance_audit(today: date) -> dict:
+    """Gece finans tutarlılık denetimi (app/finance_audit.py): salt-okunur; sonuç defterin ayarında, yöneticiye sayılar."""
+    from app import finance_audit
+
+    return finance_audit.run(today)
+
+
 INTEGRITY_HOUR = 4
+FINANCE_AUDIT_HOUR = 5  # doğruluk denetiminden sonra; ağır sayılır (net durum hesaplar)
+# açılışta ağır iş yok (07.11 kesinti dersi): süreç bu kadar saniye ayakta olmadan bu işler başlamaz, sonraki tura kalır
+STARTUP_GRACE_S = 600
+DEFERRED_AT_START = {"finance_audit"}
+_STARTED = time.monotonic()
 JOBS = [("zakat", 1, run_zakat), ("backup", BACKUP_HOUR, run_backup), ("remind", REMIND_HOUR, run_reminders), ("wallet", 1, run_wallet_loads),
-        ("sessions", 3, run_session_cleanup), ("integrity", INTEGRITY_HOUR, run_integrity), ("pending", 2, run_pending_cleanup)]
+        ("sessions", 3, run_session_cleanup), ("integrity", INTEGRITY_HOUR, run_integrity), ("pending", 2, run_pending_cleanup),
+        ("finance_audit", FINANCE_AUDIT_HOUR, run_finance_audit)]
 MAIN_ONLY = {"remind", "sessions"}  # Telegram'a yazan ve sistem veritabanına bakan işler yalnız yöneticinin alanında
 
 
 def due_jobs(now: datetime) -> list[tuple[str, callable]]:
     today = now.date().isoformat()
     main = _main_space()
+    warm = time.monotonic() - _STARTED >= STARTUP_GRACE_S
     return [(name, fn) for name, hour, fn in JOBS
-            if (main or name not in MAIN_ONLY) and now.hour >= hour and db.get_setting(f"job:{name}") != today]
+            if (main or name not in MAIN_ONLY) and now.hour >= hour and (warm or name not in DEFERRED_AT_START)
+            and db.get_setting(f"job:{name}") != today]
 
 
 def spaces() -> list[tuple[str | None, dict | None]]:

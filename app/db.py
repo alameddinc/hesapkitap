@@ -3386,6 +3386,38 @@ def _pairs_own_transfer_in(amount: float, day: str, desc: str, owners: list[str]
                          "LIMIT 1", (money.kurus(amount), account or "", day, day)).fetchone() is not None
 
 
+def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> bool:
+    """Karşı taraf kullanıcının kendisi (karşı bacak henüz yok): kendi hesabına aktarım, gelir/gider değil.
+    - gelen: gönderen kalıptan okunuyor ve hesap sahibinin adı ("AYSE ORNEK 'DAN GELEN FAST", "X tarafından ... gelen EFT")
+    - giden: açıklamada hesap sahibinin adı geçiyor, havale/FAST/EFT ve alıcı OKUNAMIYOR (Halkbank "GIDEN FAST - X
+      TARAFINDAN GONDERILEN" alıcıyı kesiyor). Alıcı başka biri olarak okunuyorsa kendi hesabı değildir.
+    Kurum/şirket adı, kart ödemesi ve para çekme bank_import.classify_reason'da zaten ayrılır. Yanlışsa kullanıcı
+    "Kendi hesaplarım arası değil" der (own_transfer_to_entry, not_virman); karşı bacak hiç gelmezse finans denetimi
+    7 gün sonra hangi hesaba gittiğini sorar (app/finance_audit.py virman_bekliyor)."""
+    import re as _re
+
+    from app.bank_import import _INSTITUTION, _sender_receiver, _squash
+    from app.textnorm import normalize
+
+    # dökümden öğrenilen hesap sahibi adı önce: kart sahipleri ek kart sahiplerini de (eş, çocuk) içerir; onlardan gelen
+    # para kullanıcının kendi hesabından gelmiş sayılmasın. Öğrenilmiş ad yoksa verilen adlar.
+    learned = owner_names()
+    pool = learned or owners or []
+    names = {_squash(o) for o in pool if o and len(_squash(o)) >= 6}
+    if not names or not desc:
+        return False
+    owners = list(pool)
+    n = normalize(desc)
+    if not _re.search(r"\b(FAST|EFT|HAVALE)\b", n) or _INSTITUTION.search(n):
+        return False
+    sr = _sender_receiver(desc)
+    if amount > 0:
+        return bool(sr and sr[0] in names)
+    if sr and len(sr[1]) >= 3:
+        return sr[1] in names  # alıcı okunuyor: yalnız kendisiyse
+    return _names_owner(desc, owners)
+
+
 def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, import_hash: str | None,
                      owners: list[str] | None = None, account_id: int | None = None) -> None:
     """Kendi hesapları arası aktarım kaydı: açıklama temiz (yön, bankalar, gönderenin mesajı), ham metin raw'da."""
@@ -3490,6 +3522,26 @@ def add_own_pair(day: str, amount: float, from_id: int, to_id: int, description:
         c.execute(ins, (day, amount, ta["name"], label[:500], ta["id"], out_id, source, ref or None, to_file, note or None,
                         created_by))
     return out_id
+
+
+def add_counter_leg(tid: int, account_id: int, created_by: int | None = None) -> int:
+    """Tek bacaklı aktarımın (dökümden, karşı bacağı yok) öbür bacağını kullanıcının seçtiği hesaba ekle: elle bacak
+    (source 'elle', import_hash boş: o hesabın çapasından sonraysa bakiyesine girer), pair_id = dökümdeki bacak. O hesabın
+    dökümü gelince aynı hareket bu bacağa bağlanır (import_bank_rows ±2 gün): iki kez sayılmaz. Yeni bacağın id'si."""
+    with connect() as c:
+        t = c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+        if not t:
+            raise OwnTransferError("Aktarım bulunamadı")
+        acc = _own_account(c, account_id)
+        if t["account_id"] == acc["id"]:
+            raise OwnTransferError("Nereden ve nereye aynı hesap olamaz")
+        if c.execute("SELECT 1 FROM own_transfers WHERE pair_id = ? AND id <> ?", (tid, tid)).fetchone():
+            raise OwnTransferError("Bu aktarımın öbür bacağı zaten var")
+        c.execute("UPDATE own_transfers SET pair_id = ? WHERE id = ?", (tid, tid))
+        return c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, account_id, pair_id, "
+                         "source, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, 'elle', CURRENT_TIMESTAMP, ?)",
+                         (t["transfer_date"], money.money(-t["amount"]), acc["name"], t["description"], acc["id"], tid,
+                          created_by)).lastrowid
 
 
 def _editable_pair(legs: list[dict]) -> bool:
@@ -3759,6 +3811,15 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
                                                                     account)):
             # karşılığı kendi başka hesabına giriş olarak zaten var (ör. Halkbank → VakıfBank): harcama değil, virman
             stats["virman"] += 1
+            with connect() as c:
+                add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
+            seen.add(r["hash"])
+            continue
+        if r["type"] in ("gider", "gelir") and owner_party_transfer(r["description"], r["amount"], owners):
+            # karşı taraf kullanıcının kendisi, karşı bacak henüz yok: kendi hesabına aktarım (bekleyen bacak); öbür
+            # bankanın dökümü gelince _pairs_own_transfer(_in) onu da aktarım yapar → iki bacak tek aktarım
+            stats["virman"] += 1
+            stats["virman_bekliyor"] = stats.get("virman_bekliyor", 0) + 1
             with connect() as c:
                 add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
             seen.add(r["hash"])

@@ -23,7 +23,9 @@ def _gider(db):
 def test_outgoing_first_then_incoming_repairs(tmpdb):
     db = tmpdb
     db.import_bank_rows(_rows([HALK_OUT, RENT]), account="Halkbank", owners=["AYŞE YILMAZ"])
-    assert _gider(db) == 147000  # henüz karşılığı yok: gider görünür
+    # 16.11: karşı taraf kullanıcının kendisi (alıcı kesik, adı geçiyor) → karşı bacak beklenen aktarım; gider değil
+    # (eskiden karşılığı gelene dek 147.000 gider görünüyordu). 7 gün karşılık gelmezse finans denetimi hesabı sorar.
+    assert _gider(db) == 27000
     db.import_bank_rows(_rows([VAKIF_IN]), account="VakıfBank", owners=["AYŞE YILMAZ"])
     assert _gider(db) == 27000  # yalnız kira kalır; 120.000 virmana taşındı
 

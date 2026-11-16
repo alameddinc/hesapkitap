@@ -428,6 +428,20 @@ def _dogruluk() -> list[dict]:
     return [t] if t else []
 
 
+def _finans() -> list[dict]:
+    """Gece finans tutarlılık denetiminin düzeltilebilir maddeleri (app/finance_audit.py; kimlik finans:<kod>:<kayıt>):
+    hesabı belli olmayan ödendi, eksi / eski bakiye, gelir+gider sayılmış aktarım … Ortak defter üyesine yok."""
+    from app import finance_audit
+
+    try:
+        return finance_audit.todos()
+    except Exception:  # noqa: BLE001 - denetim maddesi Yapılacaklar'ı bozmasın
+        import logging
+
+        logging.getLogger(__name__).exception("finans denetimi maddeleri hazırlanamadı")
+        return []
+
+
 def _sabit_tekrar(now: date) -> list[dict]:
     """"İki sabit kalem aynı olabilir" (app/recurring_dupes.py): sabit kalemleri değiştirebilene (sahip, tam yetkili
     üye), Planlama açıksa. Kimlik: sabit:<silinecek>:<kalacak>; birleşince ya da "Ayrı kalsın" denince düşer."""
@@ -480,6 +494,7 @@ def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: i
 
         logging.getLogger(__name__).exception("sabit kalem tekrarı hesaplanamadı")
     items += _dogruluk()
+    items += _finans()
     oku = _ekstre_oku()
     fix = {i["statement_id"] for i in oku}  # düzeltmesi hazır ekstrede "kontrol et" ayrıca sorulmaz
     items += [i for i in _belge(upload) if not (i.get("action") == "statement_confirm" and i.get("statement_id") in fix)]

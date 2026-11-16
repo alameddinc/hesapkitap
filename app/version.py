@@ -40,6 +40,8 @@ CAPABILITIES = (
     "inbox_documents",        # Gelen kutusu kind dokum|ekstre, /api/inbox/{id}/import ve /file
     "cards_summary",          # GET /api/cards/summary; /api/transactions?card=
     "integrity_details",      # dogruluk details[].items/hint, GET /api/integrity, POST /api/integrity/run
+    "finance_audit",          # Yapılacaklar kind 'finans' (code, action statement_pay_account|account_balance|upload|own_pair|match),
+                              # GET /api/finance-audit, POST /api/finance-audit/own-pair, own-leg, entry-to-transfer
     "bills_by_bill_month",    # /api/bills/summary months[] faturanın ait olduğu aya göre (paid_date / bill_month)
     "universal_links",        # davet link'i https://<adres>/davet/<kod> (+ web_link eski biçim)
     "insights_hidden",        # GET /api/insights/hidden: gizlenen Özet uyarıları (Geri getir: POST /api/insights/restore)
