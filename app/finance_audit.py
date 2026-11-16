@@ -523,7 +523,15 @@ def _item(c, code: str, f: dict) -> dict | None:
                 "account_id": int(rest), "bank": r["name"]}
     if code == "transfer_cift":
         a, b = (int(x) for x in rest.split(":"))
-        return {**base, "title": f"{_tl(f['amount'])} aynı gün gelir + gider",
+        legs = []  # iki kaydın özeti: yalnız kullanıcının kendi istemcisine (sorun kaydına / yöneticiye gitmez)
+        for eid, side in ((a, "out"), (b, "in")):
+            r = one("SELECT e.description, e.amount, e.entry_date, x.name FROM entries e LEFT JOIN accounts x "
+                    "ON x.id = e.account_id WHERE e.id = ?", eid)
+            if not r:
+                return None  # kayıt silinmiş: madde düşer
+            legs.append({"entry_id": eid, "side": side, "description": r["description"], "account": r["name"],
+                         "amount": r["amount"], "date": r["entry_date"]})
+        return {**base, "title": f"{_tl(f['amount'])} aynı gün gelir + gider", "legs": legs,
                 "text": f"{_tl(f['amount'])} bir hesabından çıkıp aynı gün öbür hesabına girmiş; ikisi de gelir/gider "
                         "sayılıyor. Kendi hesapların arası aktarımsa tek dokunuşla aktarıma çevir.",
                 "cta": "Aktarıma çevir", "route": f"islemler/m{a}", "action": "own_pair", "out_entry_id": a,
@@ -556,7 +564,7 @@ def _item(c, code: str, f: dict) -> dict | None:
                         "yok. Hangi hesabın? Seçersen iki hesabın bakiyesi de doğru olur; başkasına gittiyse 'Kendi "
                         "hesabım değil' de.",
                 "cta": "Hesabı seç", "route": f"transferler/v{rest}", "action": "own_leg", "own_transfer_id": int(rest),
-                "account_id": f.get("account_id")}
+                "account_id": f.get("account_id"), "out": bool(out)}
     if code == "kendi_adi_hareket":
         gelir = f.get("kind") == "gelir"
         return {**base, "title": f"{_tl(f['amount'])} kendi hesabın{'dan' if gelir else 'a'} mı?",
@@ -602,6 +610,58 @@ def todos() -> list[dict]:
 
 def signature(r: dict | None) -> str:
     return hashlib.sha256(json.dumps((r or {}).get("refs") or {}, sort_keys=True).encode()).hexdigest()[:10]
+
+
+# ---------------------------------------------------------------- yazmadan sonra (arka planda, gecikmeli)
+
+AFTER_WRITE_DELAY = 3.0  # saniye: art arda düzenlemeler tek koşuda birleşir
+# bu yazmalardan sonra (başarılıysa) o defterde denetim yeniden koşar: düzeltilen madde ertesi geceyi beklemesin
+AFTER_WRITE = re.compile(r"^(?:(?:PATCH|PUT) /api/accounts/\d+|(?:POST|DELETE) /api/statements/\d+/pay"
+                         r"|(?:PATCH|PUT|DELETE) /api/own-transfers/\d+|POST /api/own-transfers"
+                         r"|(?:PATCH|PUT) /api/entries/\d+)$")  # finance-audit düzeltme uçları zaten anında koşar
+_pending: dict = {}
+_pending_lock = __import__("threading").Lock()
+
+
+def wants_rerun(method: str, path: str) -> bool:
+    return bool(AFTER_WRITE.match(f"{method} {path.rstrip('/')}"))
+
+
+def refresh() -> dict | None:
+    """Yazmadan sonra: daha önce denetlenmiş defterde (son koşu var) tam ama tek kısa koşu; denetlenmemişse None."""
+    return run() if last() is not None else None
+
+
+def after_write(db_file: str | None, user: dict | None) -> None:
+    """İstekten sonra AFTER_WRITE_DELAY saniye bekleyip o defterde refresh (integrity.after_write ile aynı kalıp: defter
+    başına tek zamanlayıcı, bekleyen varsa ertelenir; JOBS_ENABLED kapalıyken — testler — hiç çalışmaz)."""
+    import os
+    import threading
+
+    from app import integrity
+
+    if not integrity.auto_enabled():
+        return
+    key = os.path.abspath(db_file or db.DB_PATH)
+
+    def go():
+        with _pending_lock:
+            _pending.pop(key, None)
+        try:
+            from app import book
+
+            with db.use_space(db_file, user), book.owner_view():
+                refresh()
+        except Exception:  # noqa: BLE001 - arka plan: isteği etkilemez
+            log.exception("yazma sonrası finans denetimi")
+
+    with _pending_lock:
+        if old := _pending.pop(key, None):
+            old.cancel()
+        t = threading.Timer(AFTER_WRITE_DELAY, go)
+        t.daemon = True
+        _pending[key] = t
+        t.start()
 
 
 # ---------------------------------------------------------------- tek dokunuşla düzeltme: gelir+gider → aktarım

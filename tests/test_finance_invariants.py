@@ -500,3 +500,59 @@ def test_legacy_own_name_entry_flagged_and_converted(client, tmpdb):
     assert _entries(tmpdb) == [] and [x["import_hash"] for x in _own_rows(tmpdb)] == ["h-eski"]
     assert _nw()["cash"] == cash0
     assert "kendi_adi_hareket" not in finance_audit.check(T)["counts"]
+
+
+# ---------------------------------------------------------------- yazmadan sonra yeniden denetim, madde ayrıntıları
+
+@pytest.mark.parametrize("method,path,want", [
+    ("PATCH", "/api/accounts/3", True), ("POST", "/api/statements/12/pay", True), ("DELETE", "/api/statements/12/pay", True),
+    ("PATCH", "/api/own-transfers/5", True), ("POST", "/api/own-transfers", True), ("PATCH", "/api/entries/9", True),
+    ("POST", "/api/entries", False), ("POST", "/api/statements/upload", False), ("GET", "/api/accounts/3", False),
+])
+def test_after_write_paths(method, path, want):
+    assert finance_audit.wants_rerun(method, path) is want
+
+
+def test_account_fix_reruns_audit_after_write(client, tmpdb, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("JOBS_ENABLED", "1")
+    monkeypatch.setattr(finance_audit, "AFTER_WRITE_DELAY", 0.0)
+    done = threading.Event()
+    real = finance_audit.refresh
+    monkeypatch.setattr(finance_audit, "refresh", lambda: (real(), done.set()))
+    aid = _acc(tmpdb, BANK_A, -3200.0)
+    finance_audit.run(T)
+    assert finance_audit.last()["counts"].get("eksi_bakiye") == 1
+    assert client.patch(f"/api/accounts/{aid}", json={"balance": 4100.0}).status_code == 200
+    assert done.wait(10)
+    assert "eksi_bakiye" not in finance_audit.last()["counts"]
+
+
+def test_after_write_skipped_when_never_audited(tmpdb):
+    assert finance_audit.refresh() is None and finance_audit.last() is None
+
+
+def test_own_pair_item_has_leg_summaries_and_own_leg_has_direction(client, tmpdb):
+    _f_transfer(tmpdb)
+    tmpdb.remember_owner_name(OWNER)
+    a = next(x["id"] for x in tmpdb.list_accounts() if x["name"] == BANK_A)
+    tmpdb.import_bank_rows([_row(T - timedelta(days=9), 14000.0, IN_DESC, "h-in-yalniz")], BANK_A, account_id=a)
+    finance_audit.run(T)
+    items = client.get("/api/finance-audit").json()["items"]
+    pair = next(i for i in items if i["code"] == "transfer_cift")
+    assert [(x["side"], x["account"], x["amount"]) for x in pair["legs"]] == [("out", BANK_A, 2500.0), ("in", BANK_B, 2500.0)]
+    assert all(x["description"] and x["date"] for x in pair["legs"])
+    leg = next(i for i in items if i["code"] == "virman_bekliyor")
+    assert leg["out"] is False
+
+
+def test_incident_never_carries_item_details(tmpdb, monkeypatch):
+    from app import incidents
+
+    got = []
+    monkeypatch.setattr(incidents, "record", lambda code, place="-", **kw: got.append((code, place, kw)))
+    _f_transfer(tmpdb)
+    finance_audit.run(T)
+    assert got and all(set(kw) <= {"uid", "ozet"} and str(kw.get("ozet", "")).startswith("n=") for _, _, kw in got)
+    assert all(BANK_A not in repr(g) and "2500" not in repr(g) for g in got)

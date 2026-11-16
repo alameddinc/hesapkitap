@@ -484,6 +484,11 @@ async def _require_login(request: Request, call_next):
         from app import integrity  # düzeltilen sorunun Yapılacaklar maddesi hemen düşsün (arka planda, gecikmeli)
 
         integrity.after_write(db_file if user else None, user)
+    if request.method in _UNSAFE and response.status_code < 400:
+        from app import finance_audit  # düzeltilen finans maddesi (bakiye, ödendi hesabı, aktarım) hemen düşsün
+
+        if finance_audit.wants_rerun(request.method, path):
+            finance_audit.after_write(db_file if user else None, user)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
