@@ -3207,17 +3207,33 @@ def _pending_cards(today: date) -> list[dict]:
 def spend_horizon(today: date) -> dict:
     """Ödemelerden sonra'nın (spendable) TEK ufku (lead 16.11): içinde bulunulan dönemin son günü. Dönemin sonuna en çok
     1 gün kaldıysa (son gün ya da bir önceki gün; maaş genelde dönüm gününden hemen önce yatar, ertesi dönemin ödemeleri
-    artık bu paradan çıkar) bir sonraki dönemin son günü. Kesilmiş ekstre kalanı, kesilecek ekstrenin kesin kısmı, TL borç,
+    artık bu paradan çıkar) ya da en çok SALARY_HORIZON_DAYS gün kaldı ve bu dönemin maaşı YATTIYSA (salary_arrived;
+    kullanıcı kararı 16.11: maaş girince sonraki dönemin kartları ana sayıya geçer) bir sonraki dönemin son günü. Kesilmiş ekstre kalanı, kesilecek ekstrenin kesin kısmı, TL borç,
     fatura, düzenli ödeme, kart dışı taksit/abonelik: vadesi ufka kadar olan (geçmiş ve vadesiz dahil) düşülür.
     Dönüş: {end, periods (ufkun kapsadığı dönemler, cur ilk), later_end (spendable_later'ın sonu: ufuktan sonraki dönemin
     son günü)}."""
     cur = current_period(today)
     end = period_bounds(cur)[1]
     periods = [cur]
-    if (end - today).days <= 1:
+    left = (end - today).days
+    if left <= 1 or (left <= SALARY_HORIZON_DAYS and salary_arrived(cur, today)):
         periods.append(add_months(cur, 1))
         end = period_bounds(periods[-1])[1]
     return {"end": end, "periods": periods, "later_end": period_bounds(add_months(periods[-1], 1))[1]}
+
+
+SALARY_HORIZON_DAYS = 7  # dönem sonuna bu kadar gün kala bu dönemin maaşı yattıysa ufuk sonraki dönem sonuna geçer
+
+
+def salary_arrived(period: str, today: date) -> bool:
+    """Bu dönemin maaşı yattı mı: maaş sabit kalemi (_is_salary) varsa ve o döneme bağlı (entries.month) gerçek, atlanmamış,
+    bugüne kadar tarihli maaş geliri kaydı varsa (sabit kaleme bağlı ya da maaş metni / kategorisi; bayram öncesi erken
+    yatan da dönemine bağlanır). Maaş kalemi yoksa False (ufuk eski kural)."""
+    salary_ids = {r["id"] for r in db.list_recurring() if r["kind"] == INCOME and _is_salary(r) and is_active(r, period)}
+    if not salary_ids:
+        return False
+    return any(e["kind"] == INCOME and e["month"] == period and not e["skipped"] and e["entry_date"] <= today.isoformat()
+               and (e.get("recurring_id") in salary_ids or _salary_entry(e, salary_ids)) for e in db.list_entries(period))
 
 
 def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str | None]:
