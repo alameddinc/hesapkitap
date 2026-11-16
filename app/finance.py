@@ -1866,7 +1866,7 @@ def _payables(today: date) -> list[dict]:
     for st in statements:
         if not st["due_date"] or st.get("source") == "excel":  # kart Excel'inden üretilen ekstre: borç ve son ödeme kurgu
             continue
-        status = _status(st["total_debt"], st["paid_amount"], st["due_date"], today)
+        status = _status(st["total_debt"], db.statement_paid(st), st["due_date"], today)
         age = (today - date.fromisoformat(st["due_date"])).days
         is_latest = st["id"] in latest
         if status == "odendi" and age > PAYABLE_WINDOW:
