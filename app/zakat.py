@@ -797,7 +797,8 @@ def account_balances_at(day: date) -> dict[int, float | None]:
                                 and (x["created_at"] or "") > (a.get("updated_at") or ""))
                 if not after_anchor:
                     flows += x["amount"]
-            flows += sum(r["flow"] * r["amount"] for r in debts if r.get("account_id") == a["id"] and d < r["date"] <= a["as_of"])
+            flows += sum(r["flow"] * r["amount"] for r in debts if r.get("account_id") == a["id"] and d < r["date"] <= a["as_of"]
+                         and not db.debt_after_anchor(r, a["as_of"]))  # "sonra yaptım" denen ödeme çapanın içinde değil
             out[a["id"]] = round(a["balance"] - flows, 2)
     return out
 

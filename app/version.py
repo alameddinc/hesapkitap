@@ -608,6 +608,11 @@ CAPABILITIES = (
                               # /api/finance-audit/entry-to-transfer {entry_id, account_id}; cta_no "Başkasına" → POST
                               # /api/finance-audit/not-own {entry_id}: gider kalır, bir daha sorulmaz). Bilmeyen istemci
                               # own_question'ı route ile kaydı açar. virman_bekliyor bekleme süresi 3 gün
+    "debt_payment_note",      # borç ödemesi / tahsilatın notu: POST /api/debts/{id}/pay {note} (en çok 200 karakter);
+                              # GET /api/debts payments[].note. Eski sunucu alanı yok sayar (istemci borcun notuna ekler)
+    "debt_anchor_conflict",   # hesaplı borç ödemesi / tahsilatı (POST /api/debts/{id}/pay account_id) ödeme günü hesabın
+                              # çapa günü ya da öncesiyse yanıtta anchor_conflict {account_id, name, as_of}; istek alanı
+                              # in_balance (anchor_conflict ile aynı anlam). Yoksa eski kural: çapa gününden sonraki ödeme düşer
 )
 
 
