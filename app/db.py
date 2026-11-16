@@ -3814,10 +3814,22 @@ def interest_charges(period: str) -> list[dict]:
     return out
 
 
+def statement_paid(st: dict, d: str | None = None) -> float | None:
+    """Ekstreye d günü itibarıyla ödenmiş sayılan tutar (yoksa None). Tek kural (Ödemeler durumu, Kartlarım, net
+    durum, kart borcu hepsi bunu kullanır): kullanıcı "ödendi" işaretlediyse (paid_at dolu) bugün ve sonrası için
+    ödenmiş sayılır, ödeme tarihi ileri bir gün seçilmiş olsa da (Ödemeler "ödendi" derken Kartlarım "Ödenecek"
+    demesin). Yalnız GEÇMİŞ bir gün (d < bugün) sorulursa o güne kadar yapılmış ödeme sayılır (paid_at ≤ d)."""
+    if not st.get("paid_at") or st.get("paid_amount") is None:
+        return None
+    if d is None or st["paid_at"] <= d or d >= date.today().isoformat():
+        return st["paid_amount"]
+    return None
+
+
 def statement_remaining(st: dict, d: str | None = None) -> float:
     """Ekstrenin d günü ödenmemiş kısmı (d yoksa bugün itibarıyla bilinen). Kısmi ödeme düşülür; 1 kuruşluk eksik
-    ödeme ödendi sayılır (finance._status ile aynı)."""
-    paid = (st["paid_amount"] or 0) if st["paid_at"] and (d is None or st["paid_at"] <= d) else 0
+    ödeme ödendi sayılır (finance._status ile aynı). Ödenmiş sayılma kuralı statement_paid."""
+    paid = statement_paid(st, d) or 0
     rem = (st["total_debt"] or 0) - paid
     return money.money(rem) if money.diff_k(rem, 0) > 1 else 0.0
 
