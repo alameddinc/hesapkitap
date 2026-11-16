@@ -225,7 +225,10 @@ def classify(desc: str, amount: float, owners: list[str] | None = None) -> str:
 
 
 def finalize(rows: list[dict], owners: list[str]) -> list[dict]:
-    """PDF'ten gelen satırlara tür ve parmak izi ekle."""
+    """PDF'ten gelen satırlara tür ve parmak izi ekle. Açıklamaya taşmış sayfa altbilgisi ('Sayfa No:1 / 1 Türkiye Halk
+    Bankası A.Ş halkbank.com.tr 0 850 …') ayıklanır (app/doc_footer.py)."""
+    from app import doc_footer
+
     out = []
     for r in rows:
         d = parse_date(r["date"])
@@ -234,9 +237,14 @@ def finalize(rows: list[dict], owners: list[str]) -> list[dict]:
         # Parmak izi açıklamaya bakmaz: model aynı satırı her okumada biraz farklı yazabilir; tarih + tutar +
         # bakiye (zincirle doğrulanmış) hareketi tek başına tanımlar, aynı PDF tekrar yüklenince çift kayıt olmaz
         bal = r.get("balance")
-        out.append({"date": d.isoformat(), "description": r["description"][:500], "amount": round(r["amount"], 2),
-                    "type": classify(r["description"], r["amount"], owners), "balance": bal,
-                    "hash": row_hash(d, "" if bal is not None else r["description"], r["amount"], f"{bal:.2f}" if bal is not None else "")})
+        raw = r["description"] or ""
+        desc = doc_footer.clean(raw)
+        item = {"date": d.isoformat(), "description": desc[:500], "amount": round(r["amount"], 2),
+                "type": classify(desc, r["amount"], owners), "balance": bal,
+                "hash": row_hash(d, "" if bal is not None else desc, r["amount"], f"{bal:.2f}" if bal is not None else "")}
+        if bal is None and desc != raw:  # bakiyesiz satırda iz açıklamaya bakar: altbilgili eski yükleme tekrar sayılsın
+            item["alt_hash"] = row_hash(d, raw, r["amount"], "")
+        out.append(item)
     _unique_hashes(out)
     pair_cancellations(out)
     return out
@@ -596,6 +604,9 @@ def _bank_in(text: str) -> str | None:
 def own_label(raw: str, amount: float, account: str | None, owners: list[str] | None = None) -> str:
     """Kendi hesapları arası aktarımın temiz açıklaması: 'Kendi hesabına · Halkbank → VakıfBank · not'. Gönderenin
     yazdığı mesaj (not) kaybolmaz; ham banka metni own_transfers.raw'da kalır."""
+    from app import doc_footer
+
+    raw = doc_footer.clean(raw) or ""  # eski yüklemelerin ham metninde sayfa altbilgisi olabilir
     acc = short_bank(account) if account else None
     other = None
     p = _parties(raw)

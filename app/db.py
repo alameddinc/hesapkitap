@@ -1765,8 +1765,13 @@ def list_entries(month: str | None = None) -> list[dict]:
             else:
                 out = book.filter_entries(rows(c.execute("SELECT * FROM entries ORDER BY entry_date DESC, id DESC")))
         info = sync.match_info()  # "Dökümle eşleşti" rozeti (eşleşmeyi geri al)
+        from app import doc_footer
+
         for e in out:
             e["match"] = info.get(e["id"])
+            if e.get("import_hash") and e.get("description"):
+                # eski dökümlerden açıklamaya taşmış sayfa altbilgisi: yalnız gösterimde ayıklanır (kayıt değişmez)
+                e["description"] = doc_footer.clean(e["description"])
         return out
     return [dict(e) for e in _cached("list_entries", load, month, _viewer())]
 
@@ -2054,14 +2059,89 @@ def cycle_mode() -> str:
     return get_setting("cycle_mode") or "auto"
 
 
-def auto_update_cycle() -> int | None:
-    """Otomatik moddaysa ay dönümünü kesim günlerine hizala. Değiştiyse yeni günü döner."""
+def _card_cut_basis(old: dict[str, int] | None) -> tuple[dict[str, int], bool]:
+    """Her kartın TEYİTLİ kesim günü ve bu çağrıda değişti mi. Teyit: son iki ekstre aynı günde kesilmiş (banka günü
+    gerçekten değiştirdiyse ikinci ekstrede görünür; tatil kayması tek seferliktir) ya da kart yeni (ilk görülüş:
+    olağan günü). Ay sonu kesimleri 28'e sabitlenir (28/30/31 farkı değişiklik sayılmaz)."""
+    from app import workdays
+
+    by_card: dict[str, list[str]] = {}
+    with connect() as c:
+        for r in c.execute("SELECT card_no, period_end FROM statements WHERE period_end IS NOT NULL ORDER BY period_end"):
+            by_card.setdefault(r[0], []).append(r[1])
+    new: dict[str, int] = {}
+    changed = False
+    for card, ds in by_card.items():
+        days = [min(28, int(str(d)[8:10])) for d in ds]
+        prev = (old or {}).get(card)
+        if len(days) >= 2 and days[-1] == days[-2]:
+            day = days[-1]
+        elif prev is not None:
+            day = prev
+        else:
+            day = min(28, workdays.usual_day(ds) or days[-1])
+        new[card] = day
+        changed = changed or prev != day
+    return new, changed and old is not None
+
+
+def auto_update_cycle(force: bool = False) -> int | None:
+    """Otomatik moddaysa ay dönümünü kesim günlerine hizala. Değiştiyse yeni günü döner.
+
+    Histerezis (16.11 canlı: öneri kuralı değişince 17 kendiliğinden 16 oldu, bütün kayıtların dönemi yeniden
+    hesaplandı): öneri mevcut günden yalnız 1 gün farklıysa gün DEĞİŞMEZ; ancak yeni kart eklendiyse ya da bir kartın
+    kesim günü gerçekten değiştiyse (son iki ekstre aynı yeni günü gösteriyor) değişir. ≥2 gün fark, ilk kurulum
+    (ay dönümü hiç ayarlanmamış) ve kullanıcının otomatiğe geçmesi (force) doğrudan uygular. Kural değişikliği tek
+    başına günü oynatmaz: teyitli kesim günleri (cycle_basis) değişmeden öneri değişse de mevcut gün kalır.
+    Otomatik değişiklik cycle_auto_change'e yazılır (arayüz: "Ay dönümü 17 → 16 oldu · Geri al"; undo_cycle_change)."""
+    import json as _json
+
     if cycle_mode() != "auto":
         return None
+    raw = get_setting("cycle_basis")
+    try:
+        old = {str(k): int(v) for k, v in _json.loads(raw).items()} if raw else None
+    except (ValueError, TypeError, AttributeError):
+        old = None
+    basis, evidence = _card_cut_basis(old)
+    if basis != old and (basis or old is not None):
+        set_setting("cycle_basis", _json.dumps(basis, sort_keys=True))
     sug = suggested_cycle_day()
-    if sug and sug != cycle_start_day():
-        return set_cycle_start_day(sug)
-    return None
+    cur = cycle_start_day()
+    if not sug or sug == cur:
+        return None
+    first = get_setting("cycle_start_day") is None
+    if not (force or first or abs(sug - cur) >= 2 or evidence):
+        return None
+    set_cycle_start_day(sug)
+    if not (force or first):
+        from datetime import date as _date
+
+        set_setting("cycle_auto_change", _json.dumps({"from": cur, "to": sug, "at": _date.today().isoformat()}))
+    return sug
+
+
+def cycle_auto_change() -> dict | None:
+    """Son otomatik ay dönümü değişikliği {from, to, at} (kullanıcı geri alana/kapatana kadar)."""
+    import json as _json
+
+    raw = get_setting("cycle_auto_change")
+    try:
+        v = _json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return v if isinstance(v, dict) and v.get("from") and v.get("to") else None
+
+
+def undo_cycle_change() -> int | None:
+    """Otomatik değişikliği geri al: eski güne dön ve elle seçilmiş say (otomatik bir daha oynatmaz)."""
+    ch = cycle_auto_change()
+    if not ch:
+        return None
+    set_setting("cycle_mode", "manual")
+    day = set_cycle_start_day(int(ch["from"]))
+    set_setting("cycle_auto_change", None)
+    return day
 
 
 def create_entry(data: dict) -> int:
@@ -3451,6 +3531,9 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
     names = {_squash(o) for o in pool if o and len(_squash(o)) >= 6}
     if not names or not desc:
         return False
+    from app import doc_footer
+
+    desc = doc_footer.clean(desc)  # 'X TARAFI Sayfa No:1 / 1 Türkiye Halk Bankası A.Ş …' → 'X TARAFI'
     n = normalize(desc)
     if not _re.search(r"\b(FAST|EFT|HAVALE)\b", n) or _INSTITUTION.search(n):
         return False

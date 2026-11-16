@@ -96,9 +96,16 @@ def noise_lines(text: str, dre: re.Pattern) -> set[str]:
     edenler — açıklamanın sık tekrarlanan devam satırları ('…,Ayşe Yılmaz,Tür' / 'kiye Vakiflar Bankasi…') sayfa
     ortasında da geçtiği için korunur. Sınır bilinmiyorsa eski kural: üç ve daha çok tekrar eden satır."""
     pages = _pages(text)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if (pages and len(pages) == 1) or (not pages and any(re.search(r"/\s*1$", ln) for ln in lines if _PAGE_NO.match(ln))):
+        # TEK SAYFA ('Sayfa No:1 / 1'): tekrar eden sayfa başlığı yoktur. Tekrar eden satırlar açıklamanın devam satırıdır
+        # (her ay aynı kendi hesabına FAST: 'NDAN GÖNDERILEN,Ayşe Yılmaz,Tür'); atılırsa açıklama 'X TARAFI' kalır
+        # (16.11 canlı). Yalnız sayfa no satırı altbilgidir; kalan altbilgi açıklamadan app/doc_footer.py ile ayıklanır.
+        return {_shape(ln) for ln in lines if _PAGE_NO.match(ln) and not dre.match(ln)}
     if not pages or len(pages) < 2:
         counts = Counter(ln.strip() for ln in text.splitlines() if ln.strip())
-        return {_shape(ln) for ln, n in counts.items() if n >= 3 and not dre.match(ln)}
+        # tek sayfalık dökümde altbilgi bir kez geçer: 'Sayfa No:1 / 1' satırı yine de altbilgidir
+        return {_shape(ln) for ln, n in counts.items() if (n >= 3 or _PAGE_NO.match(ln)) and not dre.match(ln)}
     total: Counter = Counter()
     edge: Counter = Counter()
     edge_pages: Counter = Counter()
