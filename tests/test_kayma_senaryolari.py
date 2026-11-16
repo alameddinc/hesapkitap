@@ -434,6 +434,30 @@ def test_month_end_cut_shift_moves_card_transactions_too(book):
     assert finance.summary("2027-10")["statements"][0]["period_end"] == "2027-11-01"
 
 
+def test_measure_script_finds_wrongly_linked_salary(book):
+    """scripts/olc_maas_donem.py (salt okuma): eski kuralla sonraki döneme bağlanmış geç maaşı bulur, veriyi değiştirmez."""
+    import importlib.util
+    from pathlib import Path
+
+    rid = _salary_rec(book)
+    ok = _salary(book, "2026-07-15", "bank")
+    late = book.create_entry({"entry_date": "2026-08-17", "description": BANK_SALARY_TEXT, "amount": SALARY,
+                              "kind": "gelir", "category": "Maaş", "recurring_id": rid, "month": "2026-09",
+                              "import_hash": "h-eski"})  # eski davranışın yazdığı hâl
+    nxt = book.create_entry({"entry_date": "2026-09-15", "description": BANK_SALARY_TEXT, "amount": SALARY,
+                             "kind": "gelir", "category": "Maaş", "import_hash": "h-eyl"})  # bağlanamamıştı
+    with book.connect() as c:
+        c.execute("UPDATE entries SET recurring_id = ?, month = '2026-09' WHERE id = ?", (rid, nxt))
+    path = Path(__file__).resolve().parents[1] / "scripts" / "olc_maas_donem.py"
+    spec = importlib.util.spec_from_file_location("olc_maas_donem", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    r = mod.measure(book.db_path())
+    assert r["double_periods"] == 1
+    assert [(m["entry_id"], m["now"], m["new"]) for m in r["moves"]] == [(late, "2026-09", "2026-08")]
+    assert _entry(book, late)["month"] == "2026-09" and _entry(book, ok)["month"] == "2026-07"  # yazmadı
+
+
 def test_next_cut_after_month_end_shift_is_same_month(book):
     """30 Eki 2027 Cumartesi → 1 Kas kesimi: sıradaki kesim 30 Kas (reminders) / 28 Kas (finance: gün 28 ile sınırlı),
     Aralık değil."""
