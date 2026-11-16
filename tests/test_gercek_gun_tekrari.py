@@ -380,13 +380,14 @@ def test_b_two_dekonts_one_transfer(client, tmpdb, monkeypatch):
 
 
 def test_c_halk_dokum_merges_and_classifies(client, tmpdb, monkeypatch):
-    """Dekontla girilmiş 128.500 bacağı dökümle birleşir (yeni kayıt yok); 45.200 kendi hesabına (virman)."""
+    """Dekontla girilmiş 128.500 bacağı dökümle birleşir (yeni kayıt yok); 45.200 kendi hesabına (virman); alıcısız kendi
+    adına 12.600 FAST da virman bacağı (karşı hesabı belli değil: pair yok; H6, finans-tutarlılık denetimi)."""
     st, _ = run(client, tmpdb, monkeypatch, "c")
     assert [r["type"] for r in st["halk_rows"]][:2] == ["virman", "virman"]
     with tmpdb.connect() as c:
         out = [tuple(r) for r in c.execute("SELECT amount, pair_id, import_hash IS NOT NULL FROM own_transfers "
                                            "WHERE account = 'Halkbank' ORDER BY amount")]
-    assert out == [(-T_VAKIF, 1, 1), (-T_KUVEYT, None, 1)]
+    assert out == [(-T_VAKIF, 1, 1), (-T_KUVEYT, None, 1), (-T_OWN, None, 1)]
 
 
 def test_c_own_name_fast_without_receiver_is_not_expense(client, tmpdb, monkeypatch):

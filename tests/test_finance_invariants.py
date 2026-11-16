@@ -119,12 +119,20 @@ def test_card_payment_from_account_keeps_net(tmpdb, pay):
 
 
 def test_card_payment_without_account_keeps_net(tmpdb):
+    """Hesabı SÖYLENMEDEN "ödendi" (account_id hiç verilmedi; B1 "hesabı belirsiz"): kart borcu kalkar, aynı tutar
+    belirsiz ödeme olarak düşülür (hiçbir hesabın elle bakiyesi ödemeden sonra girilmedi) → spendable ve net değişmez.
+    account_id=None ise B1 tanımında "hesaptan değil" (nakit / takip edilmeyen hesap): para izlenen bakiyelerden
+    çıkmadı, kart borcu kalkar, spendable ödenen kadar ARTAR (bilinçli; lead 16.11 entegrasyon)."""
     _acc(tmpdb, BANK_A, 20000.0, as_of=T - timedelta(days=3))
     sid = _stmt(tmpdb, 3000.0)
     before = _nw()
-    tmpdb.mark_statement_paid(sid, 3000.0, T.isoformat(), None)
+    tmpdb.mark_statement_paid(sid, 3000.0, T.isoformat())  # hesap verilmedi: belirsiz
     after = _nw()
-    assert after["spendable"] == before["spendable"]
+    assert after["unknown_payments"] == 3000.0
+    assert (after["spendable"], after["net"]) == (before["spendable"], before["net"])
+    tmpdb.mark_statement_paid(sid, 3000.0, T.isoformat(), None)  # hesaptan değil
+    outside = _nw()
+    assert outside["unknown_payments"] == 0 and outside["spendable"] == round(before["spendable"] + 3000.0, 2)
 
 
 def test_card_payment_without_account_is_flagged(tmpdb):
