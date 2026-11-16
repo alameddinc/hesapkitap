@@ -697,6 +697,9 @@ MIGRATIONS = [
     # çapa günü cevabı (yetenek debt_anchor_conflict; card_payments.in_anchor ile aynı anlam): 1 çapanın içinde (bakiyeden
     # düşmez), 0 çapadan sonra (düşer), NULL eski kural (ödeme günü çapa gününden sonraysa)
     ("debt_payments", "in_anchor", "INTEGER"),
+    # silinen sabit kalemin eski id'si (kalem silinince recurring_id NULL olur; FK SET NULL): o kaydın maaşı silinen
+    # kaleme aitti — kalan maaş kalemini "yattı" yapmaz, ona bağlanmaz (finance.salary_realized, link_salary_entries)
+    ("entries", "former_recurring_id", "INTEGER"),
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -1093,6 +1096,81 @@ def _is_salary_recurring(r: dict) -> bool:
                                      or "MAAS" in fold_key(r["description"]))
 
 
+SALARY_MATCH_RATIO = 0.20  # birden çok maaş kaleminde ad/işveren tutmuyorsa kayıt tutarı kalemin ±%20'si içinde olmalı
+_SALARY_NAME_STOP = {"UCRET", "UCRETI", "ODEME", "ODEMESI", "ODEMES", "AYLIK", "NET", "BRUT", "GELIR", "GELIRI", "ISCI",
+                     "PERSONEL", "BORDRO", "HESABI", "HESAP", "ICIN", "OCAK", "SUBAT", "MART", "NISAN", "MAYIS",
+                     "HAZIRAN", "TEMMUZ", "AGUSTOS", "EYLUL", "EKIM", "KASIM", "ARALIK"}
+
+
+def _salary_name_tokens(text: str | None) -> list[str]:
+    """Maaş kaleminin adındaki ayırt edici sözcükler (kişi/işveren: "Ayşe maaş" → AYSE); maaş sözcükleri ve ay adları
+    hariç (her maaş satırında geçer, ayırt etmez)."""
+    from app.categorize import fold_key
+
+    toks = (fold_key(w) for w in re.split(r"[\s\-–·/,.;:()]+", text or ""))
+    return [t for t in toks if len(t) >= 3 and not t.isdigit() and not SALARY_TEXT.search(t)
+            and t not in _SALARY_NAME_STOP]
+
+
+SALARY_MATCH_BDAYS = 3     # adsız eşleşmede kaydın günü kalemin gününden en çok bu kadar İŞ GÜNÜ uzak olabilir
+SALARY_MIN_SHARE = 0.5     # planlananın bu payından küçük satır o dönemin maaşı sayılmaz (fark/avans/eksik ödeme)
+# maaş metinli ama maaşın kendisi olmayan satırlar ("MAAS FARKI", "IKRAMIYE", "PRIM", "MAAS ACIGI"): maaşı yatmış saymaz
+_SALARY_EXTRA_WORDS = {"FARK", "FARKI", "FARKLARI", "IKRAMIYE", "IKRAMIYESI", "PRIM", "PRIMI", "PRIMLERI", "ACIK", "ACIGI",
+                       "ACIKI", "ODUL", "ODULU", "BONUS"}
+
+
+def is_salary_extra(text: str | None) -> bool:
+    """Maaş satırı ek ödeme mi (fark, ikramiye, prim, açık): sözcük bazında (ACIKLAMA gibi sözcükler tutmaz)."""
+    from app.categorize import fold_key
+
+    return any(fold_key(w) in _SALARY_EXTRA_WORDS for w in re.split(r"[\s\-–·/,.;:()]+", text or ""))
+
+
+def business_day_gap(a, b) -> int:
+    """İki gün arasındaki iş günü uzaklığı: (erken, geç] aralığındaki iş günü sayısı (hafta sonu/bayram sayılmaz;
+    15'i Cumartesi maaşı Pazartesi 17'sinde: 1)."""
+    from app import workdays
+
+    lo, hi = sorted((workdays._d(a), workdays._d(b)))
+    n, d = 0, lo
+    while d < hi and n <= 31:
+        d += timedelta(days=1)
+        n += workdays.is_business_day(d)
+    return n
+
+
+def salary_entry_fit(rec, e, due: str, planned: float, employers: list[str], loose: bool = False) -> tuple | None:
+    """Gelir kaydı `e` bu maaş kaleminin (`rec`; o dönemki günü `due`, tutarı `planned`) maaşı olabilir mi.
+    Tek kaynak: hem bağlama (link_salary_entries) hem finansın "o dönemin maaşı yattı mı" (finance.salary_realized)
+    birden çok maaş kalemi olduğunda bunu kullanır. Dönüş: sıralama anahtarı (küçük = daha iyi) ya da None (olamaz).
+    Öncelik: açıklamada işveren / kalem adındaki kişi-işveren sözcüğü > aynı hesap > en yakın gün > en yakın tutar.
+    Ad tutmuyorsa: gün kalemin gününden en çok SALARY_MATCH_BDAYS iş günü uzak, hesaplar (ikisi de biliniyorsa) aynı ve
+    tutar ±SALARY_MATCH_RATIO içinde olmalı; loose (ikinci tur: ilk turda kimseye uymayan satır, kalan kaleme) ise
+    tutar yalnız planlananın SALARY_MIN_SHARE'inden küçük olmamalı (zam %20'yi aşsa da o günün maaşı)."""
+    from app.categorize import fold_key
+
+    key = fold_key(e["description"] or "")
+    named = any(x and x in key for x in employers) or any(t in key for t in _salary_name_tokens(rec["description"]))
+    ra, ea = _row_get(rec, "account_id"), _row_get(e, "account_id")
+    acct = 0 if ra and ea and ra == ea else 2 if ra and ea else 1
+    amt = e["amount"] or 0
+    rel = abs(amt - planned) / planned if planned and planned > 0 else 1.0
+    gap = business_day_gap(str(e["entry_date"])[:10], due)
+    if not named:
+        if acct == 2 or gap > SALARY_MATCH_BDAYS:
+            return None
+        if rel > SALARY_MATCH_RATIO + 1e-9 and not (loose and planned and amt >= planned * SALARY_MIN_SHARE):
+            return None
+    return (0 if named else 1, acct, gap, rel)
+
+
+def _row_get(r, k):
+    try:
+        return r[k]
+    except (KeyError, IndexError):
+        return None
+
+
 def link_salary_entries() -> int:
     """Maaş satırı gibi görünen gelir kayıtları (bağlanmamış, kategorisi genel): kategori 'Maaş'; tek maaş kalemi varsa
     (ya da işveren adı tutuyorsa) o dönemin boş maaş yerine bağlanır. Böylece maaş her dönemde bir kez sayılır, gelir
@@ -1114,8 +1192,9 @@ def link_salary_entries() -> int:
             if r["recurring_id"] in salary_ids and r["category"] in _GENERIC_INCOME and is_salary_text(r["description"]):
                 c.execute("UPDATE entries SET category = 'Maaş' WHERE id = ?", (r["id"],))
                 n += 1
-        cands = rows(c.execute("SELECT id, entry_date, amount, description, month, category FROM entries WHERE kind = 'gelir' "
-                               "AND recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL ORDER BY entry_date, amount DESC"))
+        cands = rows(c.execute("SELECT id, entry_date, amount, description, month, category, account_id FROM entries WHERE kind = 'gelir' "
+                               "AND recurring_id IS NULL AND former_recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL "
+                               "ORDER BY entry_date, amount DESC"))
         for e in cands:
             if not is_salary_text(e["description"]) or e["category"] not in _GENERIC_INCOME and e["category"] != "Maaş":
                 continue
@@ -1123,12 +1202,32 @@ def link_salary_entries() -> int:
             active = [r for r in recs if r["start_month"] <= e["month"] and (not r["end_month"] or e["month"] <= r["end_month"])]
             by_emp = [r for r in active if any(x and x in key for x in employers[r["id"]])]
             rec = by_emp[0] if len(by_emp) == 1 else active[0] if len(active) == 1 else None
+            if rec is None and active and not is_salary_extra(e["description"]):
+                # birden çok maaş kalemi (iki iş, ailede iki kişi), işveren tek başına seçmiyor: boş dönemi olan kalemler
+                # arasında en iyi eşleşme (salary_entry_fit: ad/işveren > hesap > gün ≤3 iş günü > tutar ±%20); hiçbiri
+                # tutmazsa bağlanmaz (yanlış kaleme bağlamaktansa kategori yeter)
+                for loose in (False, True):  # ikinci tur: zamlı (±%20 dışı) ama kalemin gününde yatan maaş
+                    best = None
+                    for r in by_emp or active:
+                        slot = _recurring_slot(c, r, e["entry_date"], e["amount"], taken[r["id"]])
+                        if not slot:
+                            continue
+                        fit = salary_entry_fit(r, e, occurrence_date(slot, day_at(r, slot)), _planned_in(c, r, slot),
+                                               employers[r["id"]], loose)
+                        if fit is not None and (best is None or (fit, r["id"]) < best[:2]):
+                            best = (fit, r["id"], r)
+                    if best:
+                        break
+                rec = best[2] if best else None
             sets = {}
             if e["category"] != "Maaş":
                 sets["category"] = "Maaş"
             # dönem: kalemin gününe en yakın boş dönem (elle kayıtla aynı kural, _recurring_slot): 15'i maaşı Cumartesi
             # yüzünden 17'sinde (ay dönümü 17) yatsa da kendi döneminin maaşıdır, sonraki dönemin yerini kapmaz
             slot = _recurring_slot(c, rec, e["entry_date"], e["amount"], taken[rec["id"]]) if rec else None
+            if slot and (is_salary_extra(e["description"])
+                         or (e["amount"] or 0) < _planned_in(c, rec, slot) * SALARY_MIN_SHARE):
+                slot = None  # fark/ikramiye ya da maaşın yarısından küçük: o dönemin maaşının yerini kapmasın
             if slot and rec["start_month"] <= slot and (not rec["end_month"] or slot <= rec["end_month"]):
                 sets["recurring_id"] = rec["id"]
                 if slot != e["month"]:
@@ -1818,12 +1917,17 @@ def period_name_month(month: str, start_day: int | None = None) -> str:
 def occurrence_date(month: str, day: int, start_day: int | None = None) -> str:
     """Bir sabit kalemin (ayın `day`'inde) `month` dönemine denk gelen tarihi.
     Dönem = [önceki ayın ay dönümü günü, bu ayın ay dönümü günü - 1]. Ör. ay dönümü 3, maaş 20 →
-    Kasım dönemi (3 Eki – 2 Kas) maaşı 20 Ekim'dir."""
+    Kasım dönemi (3 Eki – 2 Kas) maaşı 20 Ekim'dir.
+    Gün o takvim ayının son gününe kırpılır (31'i maaşı Nisan'da 30, Şubat'ta 28/29); eskiden 28'e yuvarlanıyordu ve
+    31'i kirası/maaşı 3 gün erken görünüyordu. Ay dönümü 28'den büyük olamadığından (cycle_start_day) tarih yine dönemin
+    içinde kalır: day ≥ start ise önceki ayın day'i ≥ start, değilse day < start ≤ 28."""
+    import calendar
+
     start = start_day or cycle_start_day()
     y, m = map(int, month.split("-"))
     if start > 1 and day >= start:
         y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-    return f"{y:04d}-{m:02d}-{min(day, 28):02d}"
+    return f"{y:04d}-{m:02d}-{max(1, min(day, calendar.monthrange(y, m)[1])):02d}"
 
 
 def _months_around(period: str) -> list[str]:
@@ -2236,6 +2340,7 @@ def update_recurring(rid: int, data: dict) -> None:
 
 def delete_recurring(rid: int) -> None:
     with connect() as c:
+        c.execute("UPDATE entries SET former_recurring_id = recurring_id WHERE recurring_id = ?", (rid,))
         c.execute("DELETE FROM recurring WHERE id = ?", (rid,))
         drop_orphan_spenders(c)
 
@@ -4337,22 +4442,23 @@ def interest_charges(period: str) -> list[dict]:
     return out
 
 
-def statement_paid(st: dict, d: str | None = None) -> float | None:
+def statement_paid(st: dict, d: str | None = None, today: str | None = None) -> float | None:
     """Ekstreye d günü itibarıyla ödenmiş sayılan tutar (yoksa None). Tek kural (Ödemeler durumu, Kartlarım, net
     durum, kart borcu hepsi bunu kullanır): kullanıcı "ödendi" işaretlediyse (paid_at dolu) bugün ve sonrası için
     ödenmiş sayılır, ödeme tarihi ileri bir gün seçilmiş olsa da (Ödemeler "ödendi" derken Kartlarım "Ödenecek"
-    demesin). Yalnız GEÇMİŞ bir gün (d < bugün) sorulursa o güne kadar yapılmış ödeme sayılır (paid_at ≤ d)."""
+    demesin). Yalnız GEÇMİŞ bir gün (d < bugün) sorulursa o güne kadar yapılmış ödeme sayılır (paid_at ≤ d).
+    today: hesabın "bugün"ü (geçmiş tarihli hesapta o gün; verilmezse sistem günü)."""
     if not st.get("paid_at") or st.get("paid_amount") is None:
         return None
-    if d is None or st["paid_at"] <= d or d >= date.today().isoformat():
+    if d is None or st["paid_at"] <= d or d >= (today or date.today().isoformat()):
         return st["paid_amount"]
     return None
 
 
-def statement_remaining(st: dict, d: str | None = None) -> float:
+def statement_remaining(st: dict, d: str | None = None, today: str | None = None) -> float:
     """Ekstrenin d günü ödenmemiş kısmı (d yoksa bugün itibarıyla bilinen). Kısmi ödeme düşülür; 1 kuruşluk eksik
     ödeme ödendi sayılır (finance._status ile aynı). Ödenmiş sayılma kuralı statement_paid."""
-    paid = statement_paid(st, d) or 0
+    paid = statement_paid(st, d, today) or 0
     rem = (st["total_debt"] or 0) - paid
     return money.money(rem) if money.diff_k(rem, 0) > 1 else 0.0
 
@@ -4415,14 +4521,15 @@ DEBT_FIELDS = ("person", "direction", "asset", "amount", "debt_date", "due_date"
                "pay_terms", "due_strict", "payoff_amount", "payoff_date", "plan_rate")
 
 
-def list_debts(open_only: bool = False) -> list[dict]:
+def list_debts(open_only: bool = False, today=None) -> list[dict]:
+    """today: sıradaki taksit / bu ay ödenecek hangi güne göre (geçmiş tarihli hesapta o gün; verilmezse bugün)."""
     with connect() as c:
         out = rows(c.execute("SELECT * FROM debts" + (" WHERE settled_at IS NULL" if open_only else "")
                              + " ORDER BY settled_at IS NOT NULL, COALESCE(due_date, debt_date), id"))
     pays = debt_payments() if out else []
     from app import debt_schedule
 
-    today = date.today()
+    today = today or date.today()
     for d in out:
         d["remaining"] = 0.0 if d["written_off_at"] else round(d["amount"] - d["paid_amount"], 4)
         d["payments"] = [p for p in pays if p["debt_id"] == d["id"]]

@@ -309,7 +309,10 @@ def _check_invariant(nw):
     assert fb["amount"] <= fb["no_new_spend"] <= round(nw["spendable"] + income, 2) + 0.01
     assert fb["horizon"] == nw["spendable_horizon"]
     p = {x["key"]: x["amount"] for x in fb["parts"]}
-    assert round(p["free"] - p["payments"] + p["income"] - p["variable"], 2) == fb["amount"]
+    assert round(p["free"] - p["payments"] + p["income"] - p["funded"] - p["variable"], 2) == fb["amount"]
+    # fonlama ilkesi: gelir eklendiyse onun fonladığı (until'e kadar vadeli) kesin ödemeler de düşüldü
+    assert fb["no_new_spend"] == round(nw["spendable"] + p["income"] - p["funded"], 2)
+    assert (p["income"] > 0) == (fb["until"] > fb["horizon"]) or not p["income"] or fb["until"] >= fb["horizon"]
     assert p["free"] == nw["free"]
 
 
@@ -325,7 +328,9 @@ def test_forecast_balance_cut_passed_cycle_mid_and_last_day(cut_passed, client):
     mid = _nw(date(2026, 11, 20))["forecast_balance"]
     p = {x["key"]: x["amount"] for x in mid["parts"]}
     # kesimi geçmiş döngü: bundan sonraki kart harcaması sonraki ekstrede (son ödeme 25 Ara > ufuk 16 Ara): bilgi, düşülmez
-    assert p["variable_card_later"] > 0 and p["variable_card"] == 0 and mid["amount"] == mid["no_new_spend"]
+    # 15 Ara maaşı bekleniyor → hesap 14 Oca'ya kadar (fonlama ilkesi): kesimi geçmiş döngünün sonraki ekstresi (25 Ara)
+    # until'den önce ödenir → tahmini kart harcaması düşülür
+    assert mid["until"] == "2027-01-14" and p["variable_card"] > 0 and mid["amount"] < mid["no_new_spend"]
 
 
 def test_forecast_cash_variable_deducted(book, client, tmpdb, monkeypatch):

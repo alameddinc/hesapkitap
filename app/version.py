@@ -574,6 +574,9 @@ CAPABILITIES = (
                               # ("Yeni harcama yapmazsan"), horizon (= spendable_horizon), parts [{key: free|payments|income|
                               # variable, label, amount, sign}]}: spendable + ufka kadar beklenen gelir − ufka kadar kalan
                               # günlerin tahmini kart harcaması. summary.expected (dönem akışı) değişmez; eski istemci onu görür
+                              # Fonlama ilkesi (16.11): ufukta beklenen gelir varsa hesap ufuktan sonraki ilk gelirin bir gün
+                              # öncesine (until) uzar ve o gelirin fonladığı kesin ödemeler düşülür: parts key "funded",
+                              # funded_items [{title, amount, date, type}]; istemci "<until>'de kalacak" yazar
     "payables_in_horizon",    # GET /api/payables her kalemde in_horizon: vadesi Ödemelerden sonra'nın ufkunda (gecikmiş ve
                               # vadesiz dahil). İstemci ufuk dışı TAHMİNİ kart satırını (type estimate) Yaklaşan'da göstermez
     "statement_pay_account",  # kart ekstresi Ödendi'nin hesabı: POST /api/statements/{id}/pay account_id X → o hesaptan
@@ -617,6 +620,12 @@ CAPABILITIES = (
     "debt_anchor_conflict",   # hesaplı borç ödemesi / tahsilatı (POST /api/debts/{id}/pay account_id) ödeme günü hesabın
                               # çapa günü ya da öncesiyse yanıtta anchor_conflict {account_id, name, as_of}; istek alanı
                               # in_balance (anchor_conflict ile aynı anlam). Yoksa eski kural: çapa gününden sonraki ödeme düşer
+    "salary_late_status",     # cari dönemin maaşı beklenen günden 5 iş günü (SALARY_GRACE_DAYS) sonra hâlâ yatmadıysa bekleyen
+                              # satır (GET /api/transactions, plan months[].lines) status "gecikti", status_label
+                              # "Gecikti — maaş yattı mı?", actions ["yatti_dokum" (döküm yükle), "yatti_elle" (POST
+                              # /api/recurring/{id}/confirm), "bu_ay_yok" (POST /api/recurring/{id}/skip)]. Beklenen gelire
+                              # girmez: summary.pending.income, plan income/parts, spendable_after_income hariç;
+                              # summary.pending.late_income / late_count ayrıca. Yoksa satır "bekliyor" görünür
 )
 
 

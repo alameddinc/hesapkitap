@@ -146,7 +146,7 @@ def snapshot(today: date) -> dict:
         nw = finance.net_worth(today)
         snap["nw"] = {"spendable": nw["spendable"], "free": nw["free"], "parts": nw["spendable_parts"]}
         month = finance.current_period(today)
-        snap["pending_recurring"] = [r for r in finance.pending_recurring(month, db.list_recurring(), db.list_entries(month))
+        snap["pending_recurring"] = [r for r in finance.pending_recurring(month, db.list_recurring(), db.list_entries(month), today)
                                      if r.get("kind") == "gider" and r.get("pending", True)]
         snap["period"] = [d.isoformat() for d in finance.period_bounds(month)]
     except Exception:  # noqa: BLE001 - net durum hesaplanamazsa öbür denetimler sürsün
