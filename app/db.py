@@ -634,6 +634,9 @@ MIGRATIONS = [
     ("card_payments", "statement_id", "INTEGER"), # elle "ödendi" denen ekstre (POST /api/statements/{id}/pay)
     ("card_payments", "created_at", "TEXT"),      # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
     ("statements", "paid_source", "TEXT"),        # auto (ödemelerden eşleşti) | elle (kullanıcı işaretledi/geri aldı)
+    ("statements", "paid_marked_at", "TEXT"),     # elle "ödendi"nin işaretlendiği an (aynı gün çapa karşılaştırması)
+    ("statements", "paid_via", "TEXT"),           # elle ödendi ama hesaptan değil (nakit / takip edilmeyen hesap): 'disarida';
+                                                  # boş + bağlı kart ödemesi yok = hesabı belirsiz (unknown_statement_payments)
     ("statements", "confirmed_at", "TIMESTAMP"),  # kullanıcı "denklem tutmasa da rakamlar doğru" dedi
     ("statements", "available_limit", "REAL"),    # ekstrede yazan kullanılabilir limit (kesim günü itibarıyla)
     ("bank_documents", "verified", "INTEGER"),    # bakiye zinciri: 1 tuttu, 0 tutmadı, 2 kullanıcı onayladı (app/verification.py)
@@ -2399,6 +2402,12 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
       account_id None → bağlı elle kayıt silinir (bakiye geri gelir);
       account_id X → elle kayıt X hesabına taşınır ve güncellenir (yoksa açılır).
     Dökümden gelmiş bağlı kayda hiçbir durumda tutar/tarih yazılmaz; tutarı farklıysa 'warning' döner.
+
+    Hesabı belirsiz ödeme (yetenek statement_pay_account): ilk işaretlemede account_id verilmediyse (_KEEP: hızlı Ödendi,
+    eski istemci, "Bilmiyorum") dökümden gelmiş bağsız aynı ödeme aranır (_unknown_payment_candidate), bulunursa ona
+    bağlanır (linked); bulunmazsa ödeme hiçbir hesaptan düşmedi, unknown_statement_payments'ta
+    görünür ve döküm gelince link_unknown_statement_payments bağlar. account_id None ("Hesaptan değil", "Nakit"
+    hesabı yok): paid_via = 'disarida', belirsiz sayılmaz. _KEEP ile düzeltmede paid_via korunur.
     amount None: ödeme geri alınır — elle girilmiş bağlı kayıt silinir, dökümden gelmişse yalnız bağ kopar.
     Dönüş: {card_payment_id, linked (dökümden gelen kayda bağlı), link: 'elle'|'dokum'|None, warning?}."""
     amount = money.money(amount)
@@ -2407,9 +2416,12 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
             c.execute("DELETE FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,))
             c.execute("UPDATE card_payments SET statement_id = NULL WHERE statement_id = ?", (sid,))
             # kullanıcı geri aldı: otomatik eşleme bu ekstreyi yeniden işaretlemez
-            c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL, paid_source = 'elle' WHERE id = ?", (sid,))
+            c.execute("UPDATE statements SET paid_amount = NULL, paid_at = NULL, paid_source = 'elle', paid_via = NULL "
+                      "WHERE id = ?", (sid,))
             return {"card_payment_id": None, "linked": False, "link": None}
-        c.execute("UPDATE statements SET paid_amount = ?, paid_at = ?, paid_source = 'elle' WHERE id = ?", (amount, paid_at, sid))
+        c.execute("UPDATE statements SET paid_amount = ?, paid_at = ?, paid_source = 'elle', paid_marked_at = CURRENT_TIMESTAMP, "
+                  "paid_via = CASE ? WHEN 'yok' THEN 'disarida' WHEN 'kalsin' THEN paid_via ELSE NULL END WHERE id = ?",
+                  (amount, paid_at, "yok" if account_id is None else "kalsin" if account_id is _KEEP else "hesap", sid))
         manual = c.execute("SELECT * FROM card_payments WHERE statement_id = ? AND import_hash IS NULL", (sid,)).fetchone()
         dokum = c.execute("SELECT * FROM card_payments WHERE statement_id = ? AND import_hash IS NOT NULL", (sid,)).fetchone()
         if dokum:  # dökümün satırı gerçektir: ona yazılmaz; elle kopya varsa (olmamalı) silinir
@@ -2421,7 +2433,15 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
             return out
         if account_id is _KEEP:
             if not manual:
-                return {"card_payment_id": None, "linked": False, "link": None}
+                # hesabı söylenmedi (hızlı "Ödendi", eski istemci, "Bilmiyorum"): dökümden gelmiş, hiçbir ekstreye bağlı
+                # olmayan aynı ödeme varsa (herhangi bir hesap) ona bağlanır; yoksa hesabı belirsiz kalır, döküm
+                # gelince link_unknown_statement_payments bağlar (o zamana kadar Harcanabilir'den düşülür)
+                via = c.execute("SELECT paid_via FROM statements WHERE id = ?", (sid,)).fetchone()["paid_via"]
+                found = None if via else _unknown_payment_candidate(c, sid, amount, paid_at)
+                if found:
+                    c.execute("UPDATE card_payments SET statement_id = ? WHERE id = ?", (sid, found))
+                    return {"card_payment_id": found, "linked": True, "link": "dokum"}
+                return {"card_payment_id": None, "linked": False, "link": None}  # hesabı belirsiz (via yoksa)
             c.execute("UPDATE card_payments SET amount = ?, pay_date = ? WHERE id = ?", (amount, paid_at, manual["id"]))
             return {"card_payment_id": manual["id"], "linked": False, "link": "elle"}
         if account_id is None:
@@ -2447,6 +2467,132 @@ def mark_statement_paid(sid: int, amount: float | None, paid_at: str | None, acc
                         (paid_at, amount, (st["card_no"] or "")[-4:] or None, acc["name"],
                          f"Kart ödemesi · {st['bank']} •••• {(st['card_no'] or '')[-4:]}", account_id, sid)).lastrowid
         return {"card_payment_id": cid, "linked": False, "link": "elle"}
+
+
+UNKNOWN_PAY_DAYS = 60  # hesabı belirsiz ödeme bu kadar günden eskiyse artık aranmaz (bakiyeler o zamandan beri güncellendi)
+
+
+def _unknown_payment_candidate(c, sid: int, amount: float, paid_at: str | None) -> int | None:
+    """Hesabı belirsiz ödenen ekstrenin dökümdeki karşılığı: hiçbir ekstreye bağlı olmayan, dökümden gelmiş kart ödemesi;
+    aynı tutar (kuruşu kuruşuna), ödeme tarihi ekstre kesiminden sonra ve işaretlenen günün en çok 20 gün öncesi ile
+    7 gün sonrası arasında (kullanıcı ödemeyi sonradan da işaretler), kart son 4 hanesi biliniyorsa aynı. En yakın tarih."""
+    st = c.execute("SELECT card_no, period_end FROM statements WHERE id = ?", (sid,)).fetchone()
+    if not st or not paid_at:
+        return None
+    last4 = (st["card_no"] or "")[-4:] or None
+    r = c.execute(
+        "SELECT id FROM card_payments WHERE import_hash IS NOT NULL AND import_hash NOT LIKE 'mail:%' "
+        "AND statement_id IS NULL AND ROUND(amount * 100) = ? AND pay_date > ? "
+        "AND pay_date BETWEEN date(?, '-20 days') AND date(?, '+7 days') "
+        "AND (card_last4 IS NULL OR ? IS NULL OR card_last4 = ?) "
+        "ORDER BY ABS(julianday(pay_date) - julianday(?)) LIMIT 1",
+        (money.kurus(amount), st["period_end"], paid_at, paid_at, last4, last4, paid_at)).fetchone()
+    return r["id"] if r else None
+
+
+def link_unknown_statement_payments() -> int:
+    """Hesabı belirsiz ödenmiş (elle, bağlı kart ödemesi yok, 'disarida' değil) ekstreleri dökümden gelen kart
+    ödemeleriyle eşle (statement_id yazılır): ödeme artık o hesabın dökümünde, bakiyeye yansımış; "hesabı belirsiz"
+    kalemi kapanır, çift düşüm olmaz. Döküm yüklendikten sonra çağrılır. Bağlanan sayısı."""
+    n = 0
+    with connect() as c:
+        sts = c.execute(
+            "SELECT s.id, s.paid_amount, s.paid_at FROM statements s WHERE s.paid_source = 'elle' AND s.paid_at IS NOT NULL "
+            "AND COALESCE(s.paid_amount, 0) > 0 AND s.paid_via IS NULL AND COALESCE(s.source, '') <> 'excel' "
+            "AND s.paid_at >= date('now', ?) "
+            "AND NOT EXISTS (SELECT 1 FROM card_payments cp WHERE cp.statement_id = s.id) ORDER BY s.paid_at",
+            (f"-{UNKNOWN_PAY_DAYS + 20} days",)).fetchall()
+        for s in sts:
+            found = _unknown_payment_candidate(c, s["id"], s["paid_amount"], s["paid_at"])
+            if found:
+                c.execute("UPDATE card_payments SET statement_id = ? WHERE id = ?", (s["id"], found))
+                n += 1
+    return n
+
+
+def unknown_statement_payments(today: str | None = None, statements: list[dict] | None = None,
+                               accounts: list[dict] | None = None) -> list[dict]:
+    """Hesabı belli olmayan kart ekstresi ödemeleri: elle "ödendi" denmiş, hangi hesaptan çıktığı söylenmemiş
+    (bağlı kart ödemesi kaydı yok; 'Hesaptan değil / nakit' de denmemiş), son UNKNOWN_PAY_DAYS gün. Hepsi uyarıda
+    ("hesabı belli değil — seç"); TUTARI yalnız deducted olanlar düşülür (finance.net_worth: free/spendable/net):
+    ödeme gününden SONRA güncellenmiş hiçbir banka/nakit hesabı yoksa (bütün çapalar ödemeden eski). Bir hesabın çapası
+    ödemeden yeniyse ödeme o bakiyenin içinde sayılır (çift düşüm olmasın). Aynı gün: çapanın güncellendiği an
+    (updated_at) ödemenin işaretlendiği andan (paid_marked_at) sonraysa içinde; işaretleme anı bilinmiyorsa içinde.
+    Dönüş: [{statement_id, title, bank, card_no, amount, paid_at, deducted}] (ödeme tarihine göre)."""
+    from datetime import date as _date, timedelta as _td
+
+    day = today or _date.today().isoformat()
+    since = (_date.fromisoformat(day) - _td(days=UNKNOWN_PAY_DAYS)).isoformat()
+    accs = [a for a in (list_accounts() if accounts is None else accounts)
+            if a.get("as_of") and (a.get("kind") or "banka") in ("banka", "nakit")]
+    if not accs:
+        return []
+
+    def icinde(pd: str, marked: str | None) -> bool:  # ödeme bir hesabın bakiyesinde mi
+        for a in accs:
+            ad = a["as_of"][:10]
+            if ad > pd:
+                return True
+            if ad == pd and (not marked or (a.get("updated_at") or "") > marked):
+                return True
+        return False
+
+    out = []
+    for s in list_statements() if statements is None else statements:
+        if (s.get("paid_source") != "elle" or not s.get("paid_at") or not (s.get("paid_amount") or 0) > 0
+                or s.get("paid_via") or s.get("paid_link") or s.get("source") == "excel"):
+            continue
+        pd = s["paid_at"][:10]
+        if pd < since or pd > day:
+            continue
+        out.append({"statement_id": s["id"], "title": f"{s['bank']} {s['card_no']}", "bank": s["bank"],
+                    "card_no": s["card_no"], "amount": round(s["paid_amount"], 2), "paid_at": pd,
+                    "deducted": not icinde(pd, s.get("paid_marked_at"))})
+    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"]))
+
+
+def last_pay_accounts() -> dict[str, int]:
+    """Kart son 4 hanesi → o kartın ekstresinin en son ödendiği banka/nakit hesabı (Ödendi'de varsayılan hesap)."""
+    with connect() as c:
+        return {r["card_last4"]: r["account_id"] for r in c.execute(
+            "SELECT cp.card_last4, cp.account_id FROM card_payments cp JOIN accounts a ON a.id = cp.account_id "
+            "WHERE cp.card_last4 IS NOT NULL AND a.kind IN ('banka', 'nakit') ORDER BY cp.pay_date, cp.id")}
+
+
+def same_bank_accounts() -> dict[str, int]:
+    """Banka kısa adı (bank_import.short_bank) → o bankadaki banka hesabı; birden fazlaysa en çok kullanılan (hareket +
+    kart ödemesi sayısı, eşitse küçük id). Kartın ekstresi Ödendi'de son hesap yoksa varsayılan (pay_account_hint)."""
+    from app.bank_import import short_bank
+
+    with connect() as c:
+        accs = rows(c.execute(
+            "SELECT a.id, a.name, (SELECT COUNT(*) FROM entries e WHERE e.account_id = a.id) "
+            "+ (SELECT COUNT(*) FROM card_payments cp WHERE cp.account_id = a.id) AS n "
+            "FROM accounts a WHERE a.kind = 'banka' ORDER BY n DESC, a.id"))
+    from app import book
+
+    seen = {a["id"] for a in book.filter_accounts([dict(a, kind="banka") for a in accs])}
+    from app.textnorm import normalize
+
+    out: dict[str, int] = {}
+    for a in accs:
+        if a["id"] in seen:
+            out.setdefault(short_bank(a["name"]).casefold(), a["id"])
+            out.setdefault("ad:" + normalize(a["name"]), a["id"])  # bilinmeyen banka: hesabın adı bankayla başlıyorsa
+    return out
+
+
+def same_bank_account(bank: str | None, table: dict[str, int]) -> int | None:
+    """Kartın bankası → same_bank_accounts tablosundan hesap: kısa ad eşleşmesi, yoksa adı banka adıyla başlayan hesap."""
+    from app.bank_import import short_bank
+    from app.textnorm import normalize
+
+    if not bank:
+        return None
+    if (hit := table.get(short_bank(bank).casefold())) is not None:
+        return hit
+    b = normalize(bank)
+    return next((v for k, v in table.items() if k.startswith("ad:") and b and (k[3:] == b or k[3:].startswith(b + " "))), None)
 
 
 BILL_FIELDS = ("provider", "description", "amount", "due_date", "category", "note", "file_name")
@@ -3592,6 +3738,9 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
     # önce yüklenen dökümde gider sayılmış, bu dökümle karşılığı gelen kendi hesapları arası transferler
     # ekstrelerin ödendi işaretleri: bütün kart ödemelerinden, yükleme sırasından bağımsız
     stats["odendi_isaretlenen"] = reassign_statement_payments()["marked"]
+    # hesabı söylenmeden "ödendi" denmiş ekstre: dökümdeki aynı ödemeyle eşleşir (hesabı belirsiz kalemi kapanır)
+    # (yanıtın alanları değişmesin diye sayı stats'a yazılmaz)
+    link_unknown_statement_payments()
     moved = repair_own_transfers(owners)
     if moved:
         stats["virman"] += len(moved)

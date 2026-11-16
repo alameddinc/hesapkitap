@@ -118,7 +118,9 @@ def test_paid_statement_keeps_pending_part(book, tmpdb):
     assert r.status_code == 200, r.text
     nw = _nw(book)
     assert nw["card_debt"] == 0
-    assert nw["spendable"] == round(nw["cash"] - (INST + SUB + 900.0), 2)
+    # hesap söylenmedi ve hesabın çapası ödemeden önce: ödeme hesabı belirsiz, ayrıca düşülür (statement_pay_account)
+    assert nw["unknown_payments"] == STMT_TOTAL
+    assert nw["spendable"] == round(nw["cash"] - nw["unknown_payments"] - (INST + SUB + 900.0), 2)
 
 
 def test_spendable_parts_row(book):

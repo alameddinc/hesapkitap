@@ -128,8 +128,11 @@ def test_upload_failures_have_reason_codes(owner):  # noqa: F811
     assert r.status_code == 200 and r.json()[0]["status"] == "error" and "_inc" not in r.json()[0]
     r = owner.post("/api/statements/upload", files=[("files", ("bos.pdf", b"%PDF-1.4 bozuk", "application/pdf"))])
     assert r.json()[0]["status"] == "error"
-    codes = {x["code"]: x["place"] for x in _kinds()}
+    codes = {x["code"]: x["place"] for x in _kinds() if x["code"] != "belge_okuma"}
     assert codes == {"ekstre_yerine_foto": "POST /api/statements/upload", "ekstre_okunamadi": "POST /api/statements/upload"}
+    # kalıcı tür/yol/sebep sayımı (belge_okuma) da yazıldı
+    assert {x["place"] for x in _kinds() if x["code"] == "belge_okuma"} == {"ekstre/upload/type_mismatch",
+                                                                            "ekstre/upload/unreadable"}
     # fatura uç: yanlış tür 422 → okuma türü (iş kuralı değil)
     r = owner.post("/api/bills/parse", files={"file": ("a.txt", b"metin", "text/plain")})
     assert r.status_code == 422

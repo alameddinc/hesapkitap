@@ -93,8 +93,35 @@ KODLAR: dict[str, tuple[str, str, str, str | None]] = {
     "ag_zaman_asimi": ("Sunucu zamanında yanıt vermedi", "uyari", "istemci", "Yavaşlık sorununu"),
     "sunucuya_ulasilamadi": ("Sunucuya ulaşılamadı", "uyari", "istemci", "Bağlantı sorununu"),
     "eklenti_hatasi": ("Telefon özelliği hatası (kamera, dosya…)", "uyari", "istemci", "Telefon özelliğiyle ilgili sorunu"),
+    # belge okuma (yetenek doc_read_report): yer "tür/yol/sebep" — kalıcı sayım (hangi belge türü, hangi yolda, neden).
+    # Sunucu okunamayanı ve tür uyuşmazlığını kendisi yazar (yukarıdaki okuma kodlarından da türetilir: BELGE_OKUMA);
+    # kullanıcının okunan türü değiştirmesini istemci bildirir (sebep user_changed_type). İçerik / kişisel veri yok.
+    "belge_okuma": ("Belge okuma: tür / yol / sebep", "bilgi", "sunucu", None),
 }
 CLIENT_CODES = frozenset(k for k, v in KODLAR.items() if v[2] == "istemci")
+# istemcinin de bildirebildiği sunucu türleri (alanları sabit sözlükten: client_events)
+CLIENT_EXTRA = frozenset({"belge_okuma"})
+DOC_TYPES = ("fis", "fatura", "dekont", "ekstre", "dokum", "belge")   # belge: türü bilinmiyor
+DOC_PATHS = ("parse", "classify", "upload", "dekont")
+DOC_REASONS = ("unreadable", "type_mismatch", "user_changed_type")
+# mevcut okuma kodu → (tür, sebep): bu kodlar kaydedilirken belge_okuma da yazılır
+BELGE_OKUMA = {"ekstre_okunamadi": ("ekstre", "unreadable"), "dokum_okunamadi": ("dokum", "unreadable"),
+               "fis_okunamadi": ("fis", "unreadable"), "fatura_okunamadi": ("fatura", "unreadable"),
+               "dekont_okunamadi": ("dekont", "unreadable"), "belge_okunamadi": ("belge", "unreadable"),
+               "foto_bicimi": ("belge", "unreadable"), "ekstre_yerine_foto": ("ekstre", "type_mismatch"),
+               "ekstre_yerine_fatura": ("ekstre", "type_mismatch")}
+# sunucu ucu → yol
+DOC_PATH_OF = {"POST /api/statements/upload": "upload", "POST /api/bank-import/preview": "upload",
+               "POST /api/receipts/parse": "parse", "POST /api/bills/parse": "parse", "POST /api/documents/parse": "parse",
+               "POST /api/dekont/parse": "dekont", "POST /api/dekont/save": "dekont", "POST /api/documents/classify": "classify"}
+
+
+def belge_yeri(tur: str, yol: str, sebep: str, to: str | None = None) -> str:
+    """belge_okuma kaydının yeri: "fatura/parse/type_mismatch:dekont". Bilinmeyen değer "diger" (serbest metin yok)."""
+    t = tur if tur in DOC_TYPES else "belge"
+    y = yol if yol in DOC_PATHS else "diger"
+    r = sebep if sebep in DOC_REASONS else "diger"
+    return f"{t}/{y}/{r}" + (f":{to}" if to in DOC_TYPES else "")
 # yer (place) başına takvim gününde (UTC) bir uyarı; saatlik ALERT_GAP ve "yeni tür / ani artış" kuralı yerine
 DAILY_ALERT = {"parser_drift": "Banka ekstre biçimi değişmiş olabilir"}
 # örnek bağlamı kisa_ozet'ten geçmeyen türler: özeti kod kurar, yalnız sabit anahtar + sayı (app/parsers drift_summary)
@@ -209,6 +236,10 @@ def record(code: str, place: str = "-", *, uid: int | None = None, app_version: 
         _start()
         if n >= FLUSH_AT:
             _wake.set()
+    if code in BELGE_OKUMA:  # okuma sorunu: kalıcı tür/yol/sebep sayımı da (yer uçtan; asıl kayıttan sonra)
+        tur, sebep = BELGE_OKUMA[code]
+        record("belge_okuma", belge_yeri(tur, DOC_PATH_OF.get(place or "", "diger"), sebep), uid=uid,
+               app_version=app_version, platform=platform, http=http, at=at)
 
 
 def _ozet(code: str, ozet: str | None) -> str | None:
@@ -342,13 +373,22 @@ def mark_detail(detail) -> None:
         ctx["detail"] = detail
 
 
-def note(code: str, ozet: str | None = None) -> None:
-    """Uç bu istekte bir sorunu işaretler (ör. okunamayan fiş). İstek dışında çağrılırsa (iş, test) oturumsuz kayıt."""
+def note(code: str, ozet: str | None = None, place: str | None = None) -> None:
+    """Uç bu istekte bir sorunu işaretler (ör. okunamayan fiş). İstek dışında çağrılırsa (iş, test) oturumsuz kayıt.
+    place: kayıt yeri (yoksa uç kalıbı)."""
     ctx = _ctx.get()
     if ctx is None:
-        record(code, "-", ozet=ozet)
+        record(code, place or "-", ozet=ozet)
         return
-    ctx["notes"].append((code, ozet))
+    ctx["notes"].append((code, ozet, place))
+
+
+def doc_mismatch(tur: str, to: str | None = None) -> None:
+    """Sunucunun fark ettiği belge türü uyuşmazlığı (ör. fatura diye okunan belge havale dekontu): belge_okuma,
+    yol istek ucundan. İstek dışında yol "diger"."""
+    ctx = _ctx.get()
+    yol = DOC_PATH_OF.get(uc(ctx["request"]), "diger") if ctx and ctx.get("request") is not None else "diger"
+    note("belge_okuma", None, belge_yeri(tur, yol, "type_mismatch", to))
 
 
 HTTP_CODES = {500: "sunucu_hatasi", 502: "servis_yok", 504: "servis_yok", 503: "sunucu_mesgul", 413: "dosya_buyuk",
@@ -376,14 +416,14 @@ def finish(request, status: int, exc: BaseException | None = None) -> None:
             if place in READ_PLACES and code in ("is_kurali", "servis_yok", "sunucu_hatasi"):
                 code = READ_PLACES[place] if code == "is_kurali" else "okuma_servisi"
             ozet = _exc_ozet(exc) if exc is not None else _detail_ozet(ctx["detail"], status)
-            notes = [(code, ozet)]
+            notes = [(code, ozet, None)]
         from app import funnel
 
         plat = funnel.platform_of(request.headers)
         uid = ctx["uid"]
         ver = _device_version(uid, plat) if uid else None
-        for code, ozet in notes:
-            record(code, place, uid=uid, app_version=ver, platform=plat if plat in PLATFORMS else None, ozet=ozet,
+        for code, ozet, at_place in notes:
+            record(code, at_place or place, uid=uid, app_version=ver, platform=plat if plat in PLATFORMS else None, ozet=ozet,
                    http=status)
     except Exception:  # noqa: BLE001
         log.exception("sorun kaydı hazırlanamadı")
@@ -485,9 +525,16 @@ def client_events(events: list[dict], uid: int | None, platform: str | None) -> 
     n = 0
     for ev in events:
         code = ev.get("code")
+        plat = ev.get("platform") if ev.get("platform") in PLATFORMS else platform
+        if code == "belge_okuma":  # istemci yalnız "kullanıcı okunan türü değiştirdi" der; alanlar sabit sözlükten
+            if ev.get("reason") != "user_changed_type" or ev.get("doc_type") not in DOC_TYPES:
+                continue
+            record(code, belge_yeri(ev["doc_type"], ev.get("path") or "", "user_changed_type", ev.get("to_type")),
+                   uid=uid, app_version=ev.get("app_version"), platform=plat)
+            n += 1
+            continue
         if code not in CLIENT_CODES:
             continue
-        plat = ev.get("platform") if ev.get("platform") in PLATFORMS else platform
         place = ekran(ev.get("screen"))
         if code == "eklenti_hatasi" and ev.get("plugin"):  # hangi telefon özelliği: kısa ad
             place = f"{place} · {re.sub(r'[^a-z0-9_-]', '', str(ev['plugin']).lower())[:20]}"
@@ -622,19 +669,29 @@ def list_kinds(status: str | None = None, days: int = 30, severity: str | None =
         rows = c.execute("SELECT * FROM incident_kinds WHERE last_seen >= ? ORDER BY last_seen DESC", (since,)).fetchall()
         counts = {s: 0 for s in STATUSES}
         items = []
+        # belge_okuma ayrı grup (okuma kodlarından türetilir): durum sayılarına çift girmez, özeti doc_reads'te
+        reads = {"kinds": 0, "count": 0, "users": 0, "items": []}
         for k in rows:
-            counts[k["status"]] = counts.get(k["status"], 0) + 1
+            if k["code"] == "belge_okuma":
+                st = stats.get(k["id"], {"users": 0, "count": 0})
+                reads["kinds"] += 1
+                reads["count"] += st["count"] or 0
+                reads["users"] += st["users"] or 0
+                reads["items"].append({"id": k["id"], "place": k["place"], "count": st["count"] or 0, "users": st["users"] or 0})
+            else:
+                counts[k["status"]] = counts.get(k["status"], 0) + 1
             if status and k["status"] != status:
                 continue
             if severity and KODLAR.get(k["code"], ("", "bilgi"))[1] != severity:
                 continue
             st = stats.get(k["id"], {"users": 0, "count": 0, "anon": 0, "last_hour_users": 0})
-            items.append(_kind_out(k, {**st,
+            items.append(_kind_out(k, {**st, **({"group": "belge_okuma"} if k["code"] == "belge_okuma" else {}),
                                        "versions": _top(vers.get(k["id"], {})), "platforms": _top(plats.get(k["id"], {}))}))
     order = {"yeni": 0, "inceleniyor": 1, "duzeltildi": 2}
     sev_order = {"kritik": 0, "uyari": 1, "bilgi": 2}
     items.sort(key=lambda x: (order.get(x["status"], 3), sev_order.get(x["severity"], 3), -x["users"], -x["count"]))
-    return {"items": items, "counts": counts, "days": days,
+    reads["items"].sort(key=lambda x: -x["count"])
+    return {"items": items, "counts": counts, "days": days, "doc_reads": reads,
             "thresholds": {"spike_users": SPIKE_USERS, "spike_minutes": SPIKE_WINDOW, "alert_gap_minutes": ALERT_GAP // 60,
                            "keep_days": KEEP_DAYS, "notify_days": NOTIFY_DAYS}}
 
