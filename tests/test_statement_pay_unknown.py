@@ -113,16 +113,88 @@ def test_choose_account_or_outside_closes_unknown(client, tmpdb):
     assert _nw()["unknown_payments"] == 0
 
 
-def test_unknown_only_when_some_balance_predates_payment(client, tmpdb):
-    # hesabın bakiyesi ödemeden SONRA güncellenmiş: ödeme bakiyenin içinde, ayrıca düşülmez
+def _acc(client, name, as_of, balance=10000, kind="banka"):
+    client.post("/api/accounts", json={"name": name, "kind": kind, "balance": balance, "as_of": as_of})
+
+
+def _st(tmpdb, card, amount, period_end, h):
+    with tmpdb.connect() as c:
+        return c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt) "
+                         "VALUES (?, 'Deneme Bank', ?, ?, ?, ?)", (h, card, period_end, period_end, amount)).lastrowid
+
+
+def test_anchor_rule_live_like(client, tmpdb):
+    """Canlıdaki tabloya benzer uydurma veri: çapalar 15 Kas / 29 Eki / 18 Eki. 31.10'da hesapsız ödenen ekstreler
+    15 Kas bakiyesinin içinde (düşülmez, uyarı çıkar); 16 Kas'ta hesapsız ödenenler hiçbir bakiyede yok (düşülür)."""
+    from datetime import date as _d
+
+    day = _d(2026, 11, 16)
+    _acc(client, "Birinci Bank", "2026-11-15")
+    _acc(client, "İkinci Bank", "2026-10-29")
+    _acc(client, "Üçüncü Bank", "2026-10-18")
+    old = [_st(tmpdb, f"4000***{n}", a, "2026-10-08", f"e{n}") for n, a in ((1111, 50000.10), (2222, 54000.20), (3333, 74000.30))]
+    new = [_st(tmpdb, f"4000***{n}", a, "2026-11-08", f"y{n}") for n, a in ((2222, 53267.98), (3333, 51538.59))]
+    for sid in old:
+        client.post(f"/api/statements/{sid}/pay", json={"amount": 1, "paid_at": "2026-10-31"})
+    for sid in new:
+        client.post(f"/api/statements/{sid}/pay", json={"amount": 1, "paid_at": "2026-11-16"})
+    with tmpdb.connect() as c:  # tutarlar ekstre borcu kadar
+        c.execute("UPDATE statements SET paid_amount = total_debt")
+    nw = finance.net_worth(day)
+    items = {u["statement_id"]: u for u in nw["unknown_payments_items"]}
+    assert set(items) == set(old) | set(new)
+    assert not any(items[s]["deducted"] for s in old)  # (b) bir çapa 15 Kas → bakiyenin içinde
+    assert all(items[s]["deducted"] for s in new)  # (a) bütün çapalar ≤ 15 Kas
+    assert nw["unknown_payments"] == 104806.57  # beklenen düşüm: yalnız 16 Kas ödemeleri
+    keys = [i["key"] for i in finance.insights("2026-11", day) if i["key"].startswith("belirsiz_odeme:")]
+    assert len(keys) == 5  # uyarı hepsinde
+
+
+def test_anchor_rule_choose_account_and_same_day(client, tmpdb):
     aid, sid = _setup(client, tmpdb, as_of=D(1))
     client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": D(2)})
-    assert _nw()["unknown_payments"] == 0
+    nw = _nw()
+    assert nw["unknown_payments"] == 0 and nw["unknown_payments_items"][0]["deducted"] is False  # bakiyenin içinde
+    # (c) hesap seçilince: ödeme çapadan önce → bakiye zaten içeriyor, değişmez; belirsiz kalmaz
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": D(2), "account_id": aid})
+    assert _current(client, aid) == 50000 and _nw()["unknown_payments_items"] == []
+    # aynı gün: çapa işaretlemeden SONRA güncellendiyse içinde, önce güncellendiyse değil
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": D(1)})  # hesapsıza geri: anahtar yok
+    client.post(f"/api/statements/{sid}/pay", json={"amount": 12500, "paid_at": D(1), "account_id": None})
+    with tmpdb.connect() as c:
+        c.execute("UPDATE statements SET paid_via = NULL, paid_marked_at = '2026-01-01 10:00:00' WHERE id = ?", (sid,))
+        c.execute("UPDATE accounts SET updated_at = '2026-01-01 09:00:00'")
+    assert _nw()["unknown_payments"] == 12500  # çapa işaretlemeden önce: ödeme içinde değil
+    with tmpdb.connect() as c:
+        c.execute("UPDATE accounts SET updated_at = '2026-01-01 11:00:00'")
+    assert _nw()["unknown_payments"] == 0  # çapa sonra güncellendi: içinde
     # çok eski işaret aranmaz
     with tmpdb.connect() as c:
         c.execute("UPDATE accounts SET as_of = ? WHERE id = ?", (D(200), aid))
         c.execute("UPDATE statements SET paid_at = ? WHERE id = ?", (D(90), sid))
-    assert _nw()["unknown_payments"] == 0
+    assert _nw()["unknown_payments_items"] == []
+
+
+def test_pay_account_hint_last_then_same_bank(client, tmpdb):
+    _acc(client, "Halkbank Vadesiz", D(5))
+    _acc(client, "VakıfBank Maaş", D(5))
+    _acc(client, "VakıfBank Ek", D(5))
+    _acc(client, "Cüzdan", D(5), kind="nakit")
+    accs = {a["name"]: a["id"] for a in client.get("/api/accounts").json()["accounts"]}
+    with tmpdb.connect() as c:  # VakıfBank Ek daha çok kullanılıyor
+        for _ in range(3):
+            c.execute("INSERT INTO entries (entry_date, month, description, amount, kind, account_id) "
+                      "VALUES (?, ?, 'Deneme', 10, 'gider', ?)", (D(3), D(3)[:7], accs["VakıfBank Ek"]))
+        v = c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt) "
+                      "VALUES ('v', 'T. VAKIFLAR BANKASI T.A.O.', '4000***5555', ?, ?, 900)", (D(12), D(-5))).lastrowid
+        z = c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt) "
+                      "VALUES ('z', 'Örnek Kart Bank', '4000***6666', ?, ?, 900)", (D(12), D(-5))).lastrowid
+    hint = lambda sid: next((p["pay_account_hint"], p["pay_account_hint_source"])  # noqa: E731
+                            for p in client.get("/api/payables").json() if p["type"] == "statement" and p["id"] == sid)
+    assert hint(v) == (accs["VakıfBank Ek"], "ayni_banka")  # aynı banka, en çok kullanılan
+    assert hint(z) == (None, None)  # bu bankada hesap yok: seçim boş
+    client.post(f"/api/statements/{v}/pay", json={"amount": 900, "paid_at": D(1), "account_id": accs["Halkbank Vadesiz"]})
+    assert hint(v) == (accs["Halkbank Vadesiz"], "son")  # son ödenen hesap önce gelir
 
 
 def test_account_alerts_negative_and_stale(client, tmpdb):

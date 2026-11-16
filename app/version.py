@@ -554,8 +554,11 @@ CAPABILITIES = (
                               # bağsız aynı ödeme varsa ona bağlanır, linked). Belirsiz
                               # ödeme döküm gelene kadar /api/net-worth unknown_payments (+ _items, totals.unknown_payments,
                               # spendable_parts key "unknown_payments") olarak free/spendable/net'ten düşülür (cash'ten
-                              # değil) + Özet uyarısı key "belirsiz_odeme:…". /api/payables ekstre kaleminde
-                              # pay_account_hint (bu kartın son ödendiği hesap id | null) ve account_unknown
+                              # değil) + Özet uyarısı key "belirsiz_odeme:…". Yalnız ödeme gününden sonra güncellenmiş
+                              # hiçbir banka/nakit hesabı yoksa düşülür (items[].deducted); yoksa yalnız uyarı. /api/payables ekstre kaleminde
+                              # pay_account_hint (bu kartın son ödendiği hesap; yoksa kartla aynı bankadaki banka hesabı,
+                              # birden fazlaysa en çok kullanılan; yoksa null), pay_account_hint_source "son" | "ayni_banka"
+                              # | null ve account_unknown
     "account_alerts",         # /api/net-worth accounts[].alert ve account_alerts [{account_id, name, kind eksi|guncel_degil,
                               # negative, stale, text, balance, as_of, days}]: bakiyesi eksi banka/nakit hesabı ya da 14+
                               # gündür güncellenmemiş banka hesabı; Özet uyarısı key "hesap_eksi:…" / "hesap_guncel_degil:…"
@@ -563,7 +566,8 @@ CAPABILITIES = (
                               # ve tür uyuşmazlığını kendisi kaydeder; istemci kullanıcının okunan türü değiştirdiğini
                               # POST /api/incidents/client {code: "belge_okuma", doc_type fis|fatura|dekont|ekstre|dokum,
                               # path parse|classify|upload|dekont, reason "user_changed_type", to_type?} ile bildirir
-                              # (içerik / kişisel veri yok)
+                              # (içerik / kişisel veri yok). /api/admin/incidents: kalemde group "belge_okuma"; durum
+                              # sayılarına (counts) girmez, özeti doc_reads {kinds, count, users, items [{id, place, count, users}]}
 )
 
 

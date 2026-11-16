@@ -669,19 +669,29 @@ def list_kinds(status: str | None = None, days: int = 30, severity: str | None =
         rows = c.execute("SELECT * FROM incident_kinds WHERE last_seen >= ? ORDER BY last_seen DESC", (since,)).fetchall()
         counts = {s: 0 for s in STATUSES}
         items = []
+        # belge_okuma ayrı grup (okuma kodlarından türetilir): durum sayılarına çift girmez, özeti doc_reads'te
+        reads = {"kinds": 0, "count": 0, "users": 0, "items": []}
         for k in rows:
-            counts[k["status"]] = counts.get(k["status"], 0) + 1
+            if k["code"] == "belge_okuma":
+                st = stats.get(k["id"], {"users": 0, "count": 0})
+                reads["kinds"] += 1
+                reads["count"] += st["count"] or 0
+                reads["users"] += st["users"] or 0
+                reads["items"].append({"id": k["id"], "place": k["place"], "count": st["count"] or 0, "users": st["users"] or 0})
+            else:
+                counts[k["status"]] = counts.get(k["status"], 0) + 1
             if status and k["status"] != status:
                 continue
             if severity and KODLAR.get(k["code"], ("", "bilgi"))[1] != severity:
                 continue
             st = stats.get(k["id"], {"users": 0, "count": 0, "anon": 0, "last_hour_users": 0})
-            items.append(_kind_out(k, {**st,
+            items.append(_kind_out(k, {**st, **({"group": "belge_okuma"} if k["code"] == "belge_okuma" else {}),
                                        "versions": _top(vers.get(k["id"], {})), "platforms": _top(plats.get(k["id"], {}))}))
     order = {"yeni": 0, "inceleniyor": 1, "duzeltildi": 2}
     sev_order = {"kritik": 0, "uyari": 1, "bilgi": 2}
     items.sort(key=lambda x: (order.get(x["status"], 3), sev_order.get(x["severity"], 3), -x["users"], -x["count"]))
-    return {"items": items, "counts": counts, "days": days,
+    reads["items"].sort(key=lambda x: -x["count"])
+    return {"items": items, "counts": counts, "days": days, "doc_reads": reads,
             "thresholds": {"spike_users": SPIKE_USERS, "spike_minutes": SPIKE_WINDOW, "alert_gap_minutes": ALERT_GAP // 60,
                            "keep_days": KEEP_DAYS, "notify_days": NOTIFY_DAYS}}
 

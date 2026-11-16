@@ -1864,7 +1864,7 @@ def _payables(today: date) -> list[dict]:
     statements = db.list_statements()
     latest = {st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     by_card = {st["card_no"]: st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
-    hints = None
+    hints = banks = None
     unknown_ids = {u["statement_id"] for u in db.unknown_statement_payments(today.isoformat(), statements)}
     for st in statements:
         if not st["due_date"] or st.get("source") == "excel":  # kart Excel'inden üretilen ekstre: borç ve son ödeme kurgu
@@ -1885,8 +1885,13 @@ def _payables(today: date) -> list[dict]:
             # ödenmemiş eski ekstre: kalanı kartın son ekstresine devretti; gecikmiş bilgisi, toplama girmez
             item["rolled_into"] = by_card[st["card_no"]]
         # yetenek statement_pay_account: Ödendi'de varsayılan hesap (bu kartın son ödendiği hesap) ve hesabı belirsiz mi
-        hints = hints if hints is not None else db.last_pay_accounts()
-        item["pay_account_hint"] = hints.get((st["card_no"] or "")[-4:])
+        # önce kartın son ödendiği hesap ("son"), yoksa kartla aynı bankadaki banka hesabı ("ayni_banka"), yoksa boş
+        if hints is None:
+            hints, banks = db.last_pay_accounts(), db.same_bank_accounts()
+        last = hints.get((st["card_no"] or "")[-4:])
+        same = None if last else db.same_bank_account(st["bank"], banks)
+        item["pay_account_hint"] = last or same
+        item["pay_account_hint_source"] = "son" if last else "ayni_banka" if same else None
         item["account_unknown"] = st["id"] in unknown_ids
         if item["in_total"]:  # kartın faiz satırı (Kartlar ile aynı; yetenek card_interest)
             interest = interest or _card_interest_fn(today)
@@ -2395,7 +2400,10 @@ def insights(month: str, today: date | None = None) -> list[dict]:
             out.append({"level": "uyari", "title": f"{_tl(u['amount'])} ödemenin hesabı belli değil — seç",
                         "detail": f"{u['title']} ekstresini ödendi olarak işaretledin ama hangi hesaptan ödediğin belli "
                                   "değil. Hesabı seçersen bakiyesi düşer; seçmezsen banka dökümü gelince aynı ödemeyle "
-                                  "eşleşir. O zamana kadar bu tutar Harcanabilir'den ayrıca düşülüyor.",
+                                  "eşleşir. " + ("O zamana kadar bu tutar Harcanabilir'den ayrıca düşülüyor."
+                                                 if u["deducted"] else
+                                                 "Bir hesabının bakiyesi ödemeden sonra güncellendiği için ödeme o "
+                                                 "bakiyenin içinde sayılıyor, ayrıca düşülmüyor."),
                         "pay": {"type": "statement", "id": u["statement_id"]},
                         "key": f"belirsiz_odeme:{u['statement_id']}:{u['paid_at']}:{_round(u['amount']):g}",
                         "target": {"screen": "odemeler", "type": "statement", "id": u["statement_id"]}})
@@ -2871,7 +2879,8 @@ def net_worth(today: date | None = None) -> dict:
     stale = [a["name"] for a in accounts if a["as_of"] and a["source"] == "dokum" and (today - date.fromisoformat(a["as_of"])).days > 35]
     # hesabı belli olmayan kart ekstresi ödemeleri: kart borcu kapandı ama para hiçbir hesaptan düşmedi (db docstring)
     unknown_items = db.unknown_statement_payments(today.isoformat(), statements, accounts)
-    unknown = _round(sum(x["amount"] for x in unknown_items))
+    # yalnız hiçbir bakiyeye yansımamış olanlar düşülür (deducted); ötekiler yalnız uyarı
+    unknown = _round(sum(x["amount"] for x in unknown_items if x["deducted"]))
     alerts = account_alerts(accounts, today)
     for a in accounts:
         a["alert"] = alerts.get(a["id"])

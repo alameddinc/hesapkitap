@@ -67,3 +67,8 @@ def test_admin_list_shows_counts(owner):  # noqa: F811
     items = owner.get("/api/admin/incidents").json()["items"]
     k = next(x for x in items if x["code"] == "belge_okuma")
     assert k["place"] == "fatura/parse/unreadable" and k["count"] == 2 and k["label"].startswith("Belge okuma")
+    assert k["group"] == "belge_okuma"
+    # ayrı grup: durum sayılarına çift girmez (yalnız fatura_okunamadi türü sayılır), özet doc_reads'te
+    body = owner.get("/api/admin/incidents").json()
+    assert sum(body["counts"].values()) == 1
+    assert body["doc_reads"]["count"] == 2 and body["doc_reads"]["items"][0]["place"] == "fatura/parse/unreadable"
