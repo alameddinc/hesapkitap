@@ -328,30 +328,84 @@ def salary_awaited(expected: str, today: date) -> bool:
     return workdays.add_business_days(expected, SALARY_GRACE_DAYS) >= today
 
 
-def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) -> list[dict]:
+def salary_realized(month: str, recurring: list[dict], entries: list[dict],
+                    overrides: dict | None = None) -> dict[int, dict]:
+    """O dönemin maaşı KALEM BAŞINA yattı mı: {maaş kalemi id: o dönemin maaşı sayılan kayıt}. Yalnız etkin, gelir türü
+    maaş kalemleri (_is_salary). Kalemin kendisine bağlı (recurring_id) atlanmamış gelir kaydı varsa o. Bağsız maaş
+    satırları (dökümden "MAAS …", kategori Maaş; başka bir sabit kaleme bağlı olmayan):
+      - tek maaş kalemi: herhangi biri o kalemin maaşıdır (eski kural; banka metni kalemin adını taşımaz)
+      - birden çok maaş kalemi (iki iş, 1'i ve 15'i; ailede iki kişi): her satır EN İYİ eşleşen kaleme, bir kez
+        (db.salary_entry_fit: işveren/kalem adı > hesap > en yakın gün > tutar ±%20). Hiçbir kaleme uymayan satır
+        hiçbir kalemi "yattı" yapmaz: biri yatınca ötekinin beklenen geliri silinmez (eskiden silinirdi; P0 iki maaş).
+    Birden çok kayıt varsa en erken tarihlisi döner (salary_arrived "bugüne kadar yattı mı" ona bakar)."""
+    sal = [r for r in recurring if r["kind"] == INCOME and _is_salary(r) and is_active(r, month)]
+    if not sal:
+        return {}
+    ids, all_ids = {r["id"] for r in sal}, {r["id"] for r in recurring}
+    inc = [e for e in entries if e["kind"] == INCOME and e["month"] == month and not e["skipped"]]
+    got: dict[int, dict] = {}
+    for e in sorted(inc, key=lambda x: (x["entry_date"], x["id"] or 0)):
+        if e["recurring_id"] in ids:
+            got.setdefault(e["recurring_id"], e)
+    free = [e for e in inc if (not e["recurring_id"] or e["recurring_id"] not in all_ids) and _salary_entry(e, ids)]
+    open_ = [r for r in sal if r["id"] not in got]
+    if not open_ or not free:
+        return got
+    if len(sal) == 1:
+        got[open_[0]["id"]] = min(free, key=lambda x: (x["entry_date"], x["id"] or 0))
+        return got
+    ov = db.recurring_overrides() if overrides is None else overrides
+    pairs = []
+    for r in open_:
+        due = db.occurrence_date(month, db.day_at(r, month))
+        planned = db.planned_amount(r, month, ov)
+        emp = [_fold(x["employer"]) for x in db.salary_changes(r["id"]) if x.get("employer")]
+        for e in free:
+            fit = db.salary_entry_fit(r, e, due, planned, emp)
+            if fit is not None:
+                pairs.append((fit, r["id"], e["entry_date"], e["id"] or 0, e))
+    used: set = set()
+    for _fit, rid, _d, eid, e in sorted(pairs, key=lambda x: x[:4]):
+        if rid in got or eid in used:
+            continue
+        got[rid] = e
+        used.add(eid)
+    return got
+
+
+def primary_salary(month: str, recurring: list[dict], overrides: dict | None = None) -> dict | None:
+    """Birincil maaş: o dönem etkin maaş kalemlerinden beklenen tutarı en büyük olan (eşitse önce açılan)."""
+    sal = [r for r in recurring if r["kind"] == INCOME and _is_salary(r) and is_active(r, month)]
+    if not sal:
+        return None
+    ov = db.recurring_overrides() if overrides is None else overrides
+    return max(sal, key=lambda r: (db.planned_amount(r, month, ov), -r["id"]))
+
+
+def pending_recurring(month: str, recurring: list[dict], entries: list[dict], today: date | None = None) -> list[dict]:
+    """Dönemin girilmemiş sabit kalemleri. today: hesabın günü (geçmiş tarihli hesapta o gün; verilmezse bugün) —
+    "geçmiş dönem mi" ve maaş toleransı (salary_awaited) ona göre."""
+    today = today or date.today()
     done = {e["recurring_id"] for e in entries if e["recurring_id"] and e["month"] == month}
     ov = db.recurring_overrides()
-    # geçmiş ayda maaş geliri hiç yoksa (maaşın yattığı hesabın dökümü yüklenmemiş): maaş kalemi tahmini gelir sayılır;
-    # o ayın gerçek maaşı (döküm) gelince kendiliğinden kalkar
-    salary_ids = {r["id"] for r in recurring if _is_salary(r)}
-    salary_seen = any(e["kind"] == INCOME and e["month"] == month and not e["skipped"] and _salary_entry(e, salary_ids)
-                      for e in entries)
-    past = month < current_period()
+    # maaş kalem başına: o kalemin bu dönemki maaşı (bağlı ya da en iyi eşleşen bağsız maaş satırı) yattıysa "bekliyor"
+    # gösterilmez; yatmadıysa (ikinci iş, ailede öbür kişi) beklenen gelirde kalır
+    realized = salary_realized(month, recurring, entries, ov)
+    past = month < current_period(today)
     out = []
     for r in recurring:
         if not is_active(r, month) or r["id"] in done:
             continue
         row = _pending_row(r, month, ov)
-        is_salary = _is_salary(r)
-        if r["kind"] == INCOME and is_salary and salary_seen:  # o ayın maaşı dökümden gelmiş: "bekliyor" gösterme
+        is_salary = r["kind"] == INCOME and _is_salary(r)
+        if is_salary and r["id"] in realized:  # o kalemin bu dönemki maaşı dökümden gelmiş: "bekliyor" gösterme
             continue
-        if past and r["kind"] == INCOME and is_salary and not salary_seen \
-                and salary_awaited(row["date"], date.today()):
+        if past and is_salary and salary_awaited(row["date"], today):
             # beklenen gün hafta sonu/bayrama denk gelmiş olabilir (15'i Cumartesi → Pazartesi yatar): dönem bitse de
             # tolerans içinde maaş "bekliyor" kalır (Maaş gelince'ye girer; lead 16.11 kayma A)
             out.append(row)
             continue
-        if past and r["kind"] == INCOME and is_salary and not salary_seen:
+        if past and is_salary:
             # maaş tahmini GERÇEK gelire sayılır (ayrılmaz): dökümü yüklenmemiş/elle giren kullanıcıda geçmiş aylar
             # gelirsiz görünmesin. Ayrılan yalnız ekstresiz kart ödemesi tahmini (gider şişmesin). Kullanıcı kararı 30.10.
             row = {**row, "pending": False, "estimated": False, "salary_estimate": True, "source": "estimate",
@@ -360,21 +414,30 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict]) ->
     return out
 
 
-def transactions(month: str | None, include_deleted: bool = False, include_estimates: bool = False) -> list[dict]:
+def _rows_at(month: str | None, include_deleted: bool, today: date | None) -> list[dict]:
+    """_all_rows; today bugünse (ya da verilmemişse) kwarg'sız çağrılır: önbellek anahtarı ikiye bölünmesin."""
+    if today is None or today == date.today():
+        return _all_rows(month, include_deleted)
+    return _all_rows(month, include_deleted, today=today)
+
+
+def transactions(month: str | None, include_deleted: bool = False, include_estimates: bool = False,
+                 today: date | None = None) -> list[dict]:
     """Birleşik işlem listesi. TAHMİNİ satırlar (estimated: ekstresiz kart ödemesi) gerçek değildir: varsayılan listede
     ve hiçbir gerçek toplamda (özet, bütçe, istatistik, kıyas, dönem özeti) yer almaz; ayrı gösterilmek için
     include_estimates=True ya da estimates().
     Değişmez I9'un bilinçli istisnası (kullanıcı kararı 30.10): dökümü olmayan GEÇMİŞ ayın maaş tahmini estimated
     DEĞİLDİR (salary_estimate=True); gerçek gelire sayılır, aksi hâlde döküm yüklemeyen kullanıcıda geçmiş aylar
     gelirsiz görünür. O ayın gerçek maaşı (döküm ya da elle kayıt) gelince tahmin kendiliğinden kalkar.
+    today: hesabın günü (geçmiş tarihli hesapta; "geçmiş dönem" ve maaş toleransı pending_recurring'de ona göre).
     Test: tests/test_card_estimate.py::test_salary_estimated_for_months_without_statement."""
-    rows = _all_rows(month, include_deleted)
+    rows = _rows_at(month, include_deleted, today)
     return rows if include_estimates else [r for r in rows if not r.get("estimated")]
 
 
-def estimates(month: str | None) -> list[dict]:
+def estimates(month: str | None, today: date | None = None) -> list[dict]:
     """Sadece tahmini satırlar (en yeni önce)."""
-    return [r for r in _all_rows(month, False) if r.get("estimated")]
+    return [r for r in _rows_at(month, False, today) if r.get("estimated")]
 
 
 def estimate_item(r: dict) -> dict:
@@ -392,7 +455,7 @@ def _estimate_totals(rows: list[dict]) -> dict:
 
 
 @_memo(zakat=False)
-def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
+def _all_rows(month: str | None, include_deleted: bool = False, today: date | None = None) -> list[dict]:
     states, aliases = db.subscription_states(), db.merchant_aliases()
     card = [_card_row(t, states, aliases) for t in db.card_transactions(include_deleted, period=month)]
     entries = db.list_entries(month)
@@ -422,9 +485,9 @@ def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
             rows.append(_card_payment_estimate_row(p, pm, cut_days))
     out = _apply_splits(card + rows) + [_debt_row(d) for d in db.debt_rows(month)]
     if month:
-        out += pending_recurring(month, db.list_recurring(), entries)
+        out += pending_recurring(month, db.list_recurring(), entries, today)
     else:  # tüm aylar (trend, devreden): dökümü olmayan geçmiş aylardaki maaş tahminleri de girsin
-        cur = current_period()
+        cur = current_period(today)
         recs = db.list_recurring()
         by_m: dict[str, list] = defaultdict(list)
         for e in entries:
@@ -432,7 +495,8 @@ def _all_rows(month: str | None, include_deleted: bool = False) -> list[dict]:
         starts = [r["start_month"] for r in recs if r["kind"] == INCOME]
         m = min(starts) if starts else cur
         while m < cur:
-            out += [r for r in pending_recurring(m, recs, by_m.get(m, [])) if r.get("estimated") or r.get("salary_estimate")]
+            out += [r for r in pending_recurring(m, recs, by_m.get(m, []), today)
+                    if r.get("estimated") or r.get("salary_estimate")]
             m = add_months(m, 1)
     # güvenlik ağı: alt kategori yalnız kendi ana kategorisinin listesindeyse gösterilir (kategori başka yoldan
     # değiştiyse — kişiye kategori, eşleşmeyi geri alma — eski alt kategori yeni ana kategoriye taşınmaz)
@@ -641,7 +705,7 @@ def available_months() -> list[str]:
 
 @_memo  # veri değişmedikçe (dosya damgası) ve gün dönmedikçe tekrar hesaplanmaz
 def summary(month: str, today: date | None = None) -> dict:
-    rows = transactions(month)
+    rows = transactions(month, today=today)
     live = [r for r in rows if not r.get("skipped") and not r.get("pending") and not r.get("linked")]
     expenses = [r for r in live if _spends(r)]
     spend = [r for r in live if _spends(r, CARD_SPEND)]
@@ -650,13 +714,13 @@ def summary(month: str, today: date | None = None) -> dict:
     pending = [r for r in rows if r.get("pending")]
 
     # Son 12 ay trend (gelir vs gider)
-    all_rows = transactions(None)
+    all_rows = transactions(None, today=today)
     by_month: dict[str, list] = defaultdict(list)
     for r in all_rows:
         by_month[r["month"]].append(r)
     # tahmini satırlar (ekstresiz kart ödemesi, dökümsüz maaş) gerçek toplamlara girmez; ayrı katman olarak gelir
     est_by_month: dict[str, list] = defaultdict(list)
-    for r in estimates(None):
+    for r in estimates(None, today=today):
         est_by_month[r["month"]].append(r)
     trend_months = sorted(set(by_month) | set(est_by_month))[-12:]
     trend = [{"month": m, **{k: v for k, v in _totals(by_month.get(m, [])).items() if k in ("income", "expense", "net")},
@@ -675,7 +739,7 @@ def summary(month: str, today: date | None = None) -> dict:
     open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
     totals["receivable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "alacak"))
     totals["payable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "borc"))
-    est = estimates(month)
+    est = estimates(month, today=today)
     totals.update(_estimate_totals(est))
 
     from app import book
@@ -1314,7 +1378,7 @@ def cards_summary(today: date | None = None, recent: int = 20) -> dict:
     nw = net_worth(today)
     proj = card_projection()
     cyc = open_cycles(today, proj)
-    rows = [r for r in transactions(None) if r["kind"] in CARD_ROW_KINDS]
+    rows = [r for r in transactions(None, today=today) if r["kind"] in CARD_ROW_KINDS]
     sts = {s["id"]: s for s in db.list_statements()}
     manual = db.card_limits()
     interest = _card_interest_fn(today)
@@ -1411,7 +1475,7 @@ def installments_due(month: str, today: date | None = None) -> dict:
         return None
 
     items: list[dict] = []
-    for r in transactions(month):
+    for r in transactions(month, today=today):
         parts = _inst_parts(r.get("installment"))
         if not parts or r["month"] != month or r["kind"] not in (*CARD_SPEND, FEE, EXPENSE):
             continue
@@ -1672,7 +1736,7 @@ def _plan(months: int, today: date) -> dict:
         card_got: dict[str, list] = defaultdict(list)
         rec_got: dict[int, list] = defaultdict(list)
         other_got: list[dict] = []
-        for r in transactions(m):
+        for r in transactions(m, today=today):
             if r["month"] != m or not any(counts(r)):
                 continue
             if r["source"] == "card":
@@ -1683,7 +1747,7 @@ def _plan(months: int, today: date) -> dict:
                 other_got.append(r)
         # henüz girilmemiş sabit kalemler: Özet'in "bekliyor"u ile aynı kaynak (pending_recurring; ör. o ayın maaşı
         # dökümden gelmişse maaş ikinci kez eklenmez)
-        pend = {x["recurring_id"]: x for x in pending_recurring(m, raw_recurring, entries_by_m.get(m, [])) if x.get("pending")}
+        pend = {x["recurring_id"]: x for x in pending_recurring(m, raw_recurring, entries_by_m.get(m, []), today) if x.get("pending")}
         # --- kart
         for acc, p in proj.items():
             st = next((s for s in statements if s["card_no"] == acc and s["period"] == m), None)
@@ -2389,7 +2453,7 @@ def interest_report(months: int = 12, today: date | None = None) -> dict:
     tax = _round(sum(i["amount"] for i in items if i["type"] in TAX_KINDS))
     fee = _round(sum(i["amount"] for i in items if i["type"] in FEE_KINDS))
     # istemeden gelen faiz geliri (vadesizde gecelik faiz vb.): interest_alarm ile aynı ölçüt
-    inc = [r for r in transactions(None) if is_interest_income(r) and not r.get("pending") and r["month"] >= start]
+    inc = [r for r in transactions(None, today=today) if is_interest_income(r) and not r.get("pending") and r["month"] >= start]
     ec = early_close_cards()
     return {
         **empty, "from": start, "total": total, "interest": _round(total - tax - fee), "tax": tax, "fee": fee,
@@ -2481,7 +2545,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     """Seçili ay + önümüzdeki aylar için dikkat edilmesi gerekenler. level: kritik | uyari | bilgi | iyi"""
     today = today or date.today()
     out = []
-    rows = transactions(month)
+    rows = transactions(month, today=today)
     live = [r for r in rows if not r.get("pending") and not r.get("skipped")]
     t = _totals(rows)
     statements = db.list_statements()
@@ -2742,7 +2806,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
 
     # 6) Kategori artışı
     prev = add_months(month, -1)
-    prev_rows = [r for r in transactions(prev) if not r.get("pending") and not r.get("skipped")]
+    prev_rows = [r for r in transactions(prev, today=today) if not r.get("pending") and not r.get("skipped")]
     accounts_now = {st["card_no"] for st in statements if st["period"] == month}
     accounts_prev = {st["card_no"] for st in statements if st["period"] == prev}
     # Ekstre kapsamı farklıysa (ör. önceki ayın ekstresi yüklenmemiş) kıyas yanıltıcı olur
@@ -3002,7 +3066,10 @@ def net_worth(today: date | None = None) -> dict:
     # Ödemelerden sonra'nın TEK ufku (spend_horizon): vadesi ufka kadar olan (geçmiş ve vadesiz dahil) kalemler düşülür,
     # ufuktan sonraki dönemin sonuna kadar vadeli olanlar spendable_later'da (bilgi; düşülmez)
     hz = spend_horizon(today)
-    h_end, l_end = hz["end"].isoformat(), hz["later_end"].isoformat()
+    l_end = hz["later_end"].isoformat()
+    # düşülen son vade: ufuk; bir sonraki birincil maaş ufuktan sonraysa maaştan önce vadeli kesin ödemeler de (_deduct_end)
+    d_end, pre_salary = _deduct_end(today, hz)
+    h_end = d_end.isoformat()
     later: list[dict] = []
 
     def in_h(due: str | None) -> bool:
@@ -3087,7 +3154,7 @@ def net_worth(today: date | None = None) -> dict:
         payable_sp += now - c_now
         # TL borç: vadesi ne kadar ileride olursa olsun (bilinen tüm borçlar; lead 16.11), kumbaranın karşılamadığı kısım
         to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "borc", any_date=True, debt_id=d["id"])
-    due = _due_this_period(today, pending_all, hz)
+    due = _due_this_period(today, pending_all, {**hz, "end": d_end} if d_end != hz["end"] else hz)
     for b in due.pop("_later_bills"):
         to_later(b["title"], b["amount"], b["date"], "bill", bill_id=b["id"])
     extra = sum(due[k]["amount"] for k in DUE_KEYS)
@@ -3143,7 +3210,10 @@ def net_worth(today: date | None = None) -> dict:
             "forecast_balance": _forecast_balance(_round(cash - unknown - jars["total"]), spendable, sai, hz, today),
             # yetenek spendable_horizon: ufuk (bu tarihe kadar vadeli olanlar düşüldü) ve ufuktan sonra, bir sonraki dönem
             # sonuna kadar vadeli kesin ödemeler ("Maaştan sonra ödenecek"; spendable'dan DÜŞÜLMEZ)
-            "spendable_horizon": h_end, "spendable_later": spendable_later,
+            "spendable_horizon": hz["end"].isoformat(), "spendable_later": spendable_later,
+            # maaştan önce vadeli kesin ödemeler de düşüldüyse son vadeleri (ufuktan sonra; yoksa None) ve maaş günü
+            "spendable_pre_salary": ({"until": h_end, "salary_date": pre_salary.isoformat()}
+                                     if d_end != hz["end"] and pre_salary else None),
             "spendable_explain": SPENDABLE_EXPLAIN + (SPENDABLE_JAR_NOTE if in_jar else ""),
             "stale": stale}
 
@@ -3226,14 +3296,53 @@ SALARY_HORIZON_DAYS = 7  # dönem sonuna bu kadar gün kala bu dönemin maaşı 
 
 
 def salary_arrived(period: str, today: date) -> bool:
-    """Bu dönemin maaşı yattı mı: maaş sabit kalemi (_is_salary) varsa ve o döneme bağlı (entries.month) gerçek, atlanmamış,
-    bugüne kadar tarihli maaş geliri kaydı varsa (sabit kaleme bağlı ya da maaş metni / kategorisi; bayram öncesi erken
-    yatan da dönemine bağlanır). Maaş kalemi yoksa False (ufuk eski kural)."""
-    salary_ids = {r["id"] for r in db.list_recurring() if r["kind"] == INCOME and _is_salary(r) and is_active(r, period)}
-    if not salary_ids:
+    """Bu dönemin BİRİNCİL maaşı yattı mı (primary_salary: beklenen tutarı en büyük maaş kalemi; iki maaşta ikincinin
+    yatması ufku kaydırmaz). salary_realized'ın o kaleme saydığı kayıt bugüne kadar tarihliyse True (kaleme bağlı ya da
+    maaş metni/kategorisi; bayram öncesi erken yatan da dönemine bağlanır). Maaş kalemi yoksa False (ufuk eski kural)."""
+    rec = db.list_recurring()
+    ov = db.recurring_overrides()
+    main = primary_salary(period, rec, ov)
+    if not main:
         return False
-    return any(e["kind"] == INCOME and e["month"] == period and not e["skipped"] and e["entry_date"] <= today.isoformat()
-               and (e.get("recurring_id") in salary_ids or _salary_entry(e, salary_ids)) for e in db.list_entries(period))
+    e = salary_realized(period, rec, db.list_entries(period), ov).get(main["id"])
+    return bool(e) and str(e["entry_date"])[:10] <= today.isoformat()
+
+
+PRE_SALARY_MARGIN_BDAYS = 1  # maaştan önce vadeli ödeme: maaş bu kadar iş günü gecikebilir (güvenlik payı)
+
+
+def next_salary_date(today: date) -> date | None:
+    """Bir sonraki beklenen BİRİNCİL maaşın günü (yatmamış ilk oluşum): önceki dönemin tolerans içinde hâlâ beklenen
+    maaşı, bu dönemin ya da sonraki iki dönemin maaşı. Günü geçmiş ama hâlâ beklenen maaş için bugün. Maaş kalemi
+    yoksa ya da bulunamazsa None."""
+    rec = db.list_recurring()
+    ov = db.recurring_overrides()
+    cur = current_period(today)
+    for per in (add_months(cur, k) for k in (-1, 0, 1, 2)):
+        main = primary_salary(per, rec, ov)
+        if not main or main["id"] in salary_realized(per, rec, db.list_entries(per), ov):
+            continue
+        d = date.fromisoformat(db.occurrence_date(per, db.day_at(main, per)))
+        if d < today:
+            if not salary_awaited(d.isoformat(), today):  # çok gecikti: tahmini gerçek gelir sayılır, beklenmez
+                continue
+            d = today
+        return d
+    return None
+
+
+def _deduct_end(today: date, hz: dict) -> tuple[date, date | None]:
+    """Ödemelerden sonra'dan DÜŞÜLEN ödemelerin son vadesi: ufkun sonu; ama bir sonraki birincil maaş ufuktan sonraysa ve
+    arada vadesi gelen kesin ödeme varsa (kart ekstresi, kesilecek ekstrenin kesin kısmı, fatura, borç taksidi) o para
+    maaşı beklemeden ELDEKİ paradan çıkar: maaş günü + PRE_SALARY_MARGIN_BDAYS iş gününden ÖNCE vadeli olanlar da
+    düşülür (P0 H5; eskiden "Maaştan sonra ödenecek"te kalıp ana sayıyı iyimser gösteriyordu). Sonraki dönemin düzenli
+    ödemeleri (kira…) bu yamada yok: dönem modeli (faz) işi. Dönüş: (son vade, maaş günü ya da None)."""
+    end = hz["end"]
+    sal = next_salary_date(today)
+    if not sal:
+        return end, None
+    cutoff = workdays.add_business_days(sal, PRE_SALARY_MARGIN_BDAYS) - timedelta(days=1)
+    return (cutoff, sal) if cutoff > end else (end, sal)
 
 
 def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str | None]:
@@ -3313,7 +3422,7 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
     late_from = (today - timedelta(days=db.TRANSFER_LATE_DAYS)).isoformat()
     prev = add_months(hz["periods"][0], -1)
     for per in [prev, *hz["periods"]]:
-        for r in pending_recurring(per, recurring, db.list_entries(per)):
+        for r in pending_recurring(per, recurring, db.list_entries(per), today):
             if per == prev and not (late_from <= r["date"] <= today.isoformat()):
                 continue
             if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
@@ -3356,7 +3465,7 @@ def _cash_variable_estimate(today: date) -> float:
     per = []
     for i in range(1, 7):
         m = add_months(cur, -i)
-        rows = [r for r in transactions(m) if r["source"] == "manual" and r["kind"] == EXPENSE and not r.get("pending")
+        rows = [r for r in transactions(m, today=today) if r["source"] == "manual" and r["kind"] == EXPENSE and not r.get("pending")
                 and not r.get("recurring_id") and (r.get("payment") or "") != "kredi_karti" and counts(r)[0]]
         if rows:
             per.append(sum(r["amount"] for r in rows))
@@ -3420,7 +3529,7 @@ def _spendable_after_income(spendable: float, today: date, periods: list[str] | 
     periods = periods or [current_period(today)]
     # önceki dönemin hâlâ beklenen (SALARY_GRACE_DAYS içinde yatmamış) maaşı da (pending_recurring yalnız onu bekletir)
     prev, salary_ids = add_months(periods[0], -1), {r["id"] for r in rec if _is_salary(r)}
-    rows = [r for per in [prev, *periods] for r in pending_recurring(per, rec, db.list_entries(per))
+    rows = [r for per in [prev, *periods] for r in pending_recurring(per, rec, db.list_entries(per), today)
             if r.get("pending") and r["kind"] == INCOME and money.gt(r["amount"] or 0, 0)
             and (per != prev or (r["recurring_id"] in salary_ids
                                  and salary_awaited(r["date"], today)))]
@@ -3445,7 +3554,9 @@ SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − kumbaraya 
                      "demektir. Bugünün rakamıdır: Dönem sonu dönem bitene kadar beklenen gelirleri (maaş gibi) de "
                      "katar; bu yüzden bu rakam eksiyken Dönem sonu artı olabilir. Tek ufuk: vadesi dönem sonuna "
                      "kadar olanlar (dönemin son günündeysen bir sonraki dönemin sonuna kadar) düşülür; daha sonra "
-                     "vadeli olanlar \"Maaştan sonra ödenecek\" diye ayrıca gösterilir, düşülmez.")
+                     "vadeli olanlar \"Maaştan sonra ödenecek\" diye ayrıca gösterilir, düşülmez. Ama vadesi bir "
+                     "sonraki maaşından önce gelen kesin ödemeler (kart ekstresi, fatura, borç taksidi) maaşı beklemeden "
+                     "elindeki paradan çıkacağı için onlar da düşülür.")
 
 
 SPENDABLE_JAR_NOTE = (" Bir borç için kumbarada biriktirdiğin para o borcun kalanından düşülmüş sayılır: borç ve kumbara "
@@ -3687,7 +3798,7 @@ def targets(today: date | None = None) -> list[dict]:
     ayda gereken ve son 3 tamamlanmış dönemin ortalamasıyla tahmini ulaşma ayı."""
     today = today or date.today()
     cur = current_period(today)
-    all_rows = transactions(None)
+    all_rows = transactions(None, today=today)
     by_month: dict[str, list] = defaultdict(list)
     for r in all_rows:
         by_month[r["month"]].append(r)
@@ -3762,7 +3873,7 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
     bounds = {m: period_bounds(m) for m in months}
     lo, hi = bounds[months[-1]][0], bounds[month][1]
     daily: dict[str, dict[int, float]] = {m: defaultdict(float) for m in months}
-    for r in transactions(None):
+    for r in transactions(None, today=today):
         if r.get("deleted") or r.get("skipped") or r.get("pending") or r.get("linked"):
             continue
         if not _spends(r):
@@ -3842,7 +3953,7 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
     # tahmini satırlar (ekstresiz kart ödemesi) kıyasa girmez; ödeme gününe göre ayrı toplam
     def est_in(m: str, n: int) -> float:
         a_, b_ = bounds[m][0], bounds[m][0] + timedelta(days=n - 1)
-        return _round(sum(r["amount"] for r in estimates(None) if r["kind"] == EXPENSE
+        return _round(sum(r["amount"] for r in estimates(None, today=today) if r["kind"] == EXPENSE
                           and a_ <= date.fromisoformat(str(r["date"])[:10]) <= b_))
     # olağandışı gün: son 3 dönemin günlük ortalamasının 2,5 katından fazla
     base = sum(sum(daily[m].values()) for m in months[1:]) / max(1, sum(lens[m] for m in months[1:]))

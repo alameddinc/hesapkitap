@@ -1093,6 +1093,50 @@ def _is_salary_recurring(r: dict) -> bool:
                                      or "MAAS" in fold_key(r["description"]))
 
 
+SALARY_MATCH_RATIO = 0.20  # birden çok maaş kaleminde ad/işveren tutmuyorsa kayıt tutarı kalemin ±%20'si içinde olmalı
+_SALARY_NAME_STOP = {"UCRET", "UCRETI", "ODEME", "ODEMESI", "ODEMES", "AYLIK", "NET", "BRUT", "GELIR", "GELIRI", "ISCI",
+                     "PERSONEL", "BORDRO", "HESABI", "HESAP", "ICIN", "OCAK", "SUBAT", "MART", "NISAN", "MAYIS",
+                     "HAZIRAN", "TEMMUZ", "AGUSTOS", "EYLUL", "EKIM", "KASIM", "ARALIK"}
+
+
+def _salary_name_tokens(text: str | None) -> list[str]:
+    """Maaş kaleminin adındaki ayırt edici sözcükler (kişi/işveren: "Ayşe maaş" → AYSE); maaş sözcükleri ve ay adları
+    hariç (her maaş satırında geçer, ayırt etmez)."""
+    from app.categorize import fold_key
+
+    toks = (fold_key(w) for w in re.split(r"[\s\-–·/,.;:()]+", text or ""))
+    return [t for t in toks if len(t) >= 3 and not t.isdigit() and not SALARY_TEXT.search(t)
+            and t not in _SALARY_NAME_STOP]
+
+
+def salary_entry_fit(rec, e, due: str, planned: float, employers: list[str]) -> tuple | None:
+    """Gelir kaydı `e` bu maaş kaleminin (`rec`; o dönemki günü `due`, tutarı `planned`) maaşı olabilir mi.
+    Tek kaynak: hem bağlama (link_salary_entries) hem finansın "o dönemin maaşı yattı mı" (finance.salary_realized)
+    birden çok maaş kalemi olduğunda bunu kullanır. Dönüş: sıralama anahtarı (küçük = daha iyi) ya da None (olamaz).
+    Öncelik: açıklamada işveren / kalem adındaki kişi-işveren sözcüğü > aynı hesap > en yakın gün > en yakın tutar.
+    Ad tutmuyorsa: tutar ±SALARY_MATCH_RATIO içinde olmalı ve hesaplar (ikisi de biliniyorsa) aynı olmalı."""
+    from datetime import date as _date
+
+    from app.categorize import fold_key
+
+    key = fold_key(e["description"] or "")
+    named = any(x and x in key for x in employers) or any(t in key for t in _salary_name_tokens(rec["description"]))
+    ra, ea = _row_get(rec, "account_id"), _row_get(e, "account_id")
+    acct = 0 if ra and ea and ra == ea else 2 if ra and ea else 1
+    rel = abs((e["amount"] or 0) - planned) / planned if planned and planned > 0 else 1.0
+    gap = abs((_date.fromisoformat(str(e["entry_date"])[:10]) - _date.fromisoformat(due)).days)
+    if not named and (acct == 2 or rel > SALARY_MATCH_RATIO + 1e-9):
+        return None
+    return (0 if named else 1, acct, gap, rel)
+
+
+def _row_get(r, k):
+    try:
+        return r[k]
+    except (KeyError, IndexError):
+        return None
+
+
 def link_salary_entries() -> int:
     """Maaş satırı gibi görünen gelir kayıtları (bağlanmamış, kategorisi genel): kategori 'Maaş'; tek maaş kalemi varsa
     (ya da işveren adı tutuyorsa) o dönemin boş maaş yerine bağlanır. Böylece maaş her dönemde bir kez sayılır, gelir
@@ -1114,7 +1158,7 @@ def link_salary_entries() -> int:
             if r["recurring_id"] in salary_ids and r["category"] in _GENERIC_INCOME and is_salary_text(r["description"]):
                 c.execute("UPDATE entries SET category = 'Maaş' WHERE id = ?", (r["id"],))
                 n += 1
-        cands = rows(c.execute("SELECT id, entry_date, amount, description, month, category FROM entries WHERE kind = 'gelir' "
+        cands = rows(c.execute("SELECT id, entry_date, amount, description, month, category, account_id FROM entries WHERE kind = 'gelir' "
                                "AND recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL ORDER BY entry_date, amount DESC"))
         for e in cands:
             if not is_salary_text(e["description"]) or e["category"] not in _GENERIC_INCOME and e["category"] != "Maaş":
@@ -1123,6 +1167,20 @@ def link_salary_entries() -> int:
             active = [r for r in recs if r["start_month"] <= e["month"] and (not r["end_month"] or e["month"] <= r["end_month"])]
             by_emp = [r for r in active if any(x and x in key for x in employers[r["id"]])]
             rec = by_emp[0] if len(by_emp) == 1 else active[0] if len(active) == 1 else None
+            if rec is None and active:
+                # birden çok maaş kalemi (iki iş, ailede iki kişi), işveren tek başına seçmiyor: boş dönemi olan kalemler
+                # arasında en iyi eşleşme (salary_entry_fit: ad/işveren > hesap > gün > tutar ±%20); hiçbiri tutmazsa
+                # bağlanmaz (yanlış kaleme bağlamaktansa kategori yeter)
+                best = None
+                for r in by_emp or active:
+                    slot = _recurring_slot(c, r, e["entry_date"], e["amount"], taken[r["id"]])
+                    if not slot:
+                        continue
+                    fit = salary_entry_fit(r, e, occurrence_date(slot, day_at(r, slot)), _planned_in(c, r, slot),
+                                           employers[r["id"]])
+                    if fit is not None and (best is None or (fit, r["id"]) < best[:2]):
+                        best = (fit, r["id"], r)
+                rec = best[2] if best else None
             sets = {}
             if e["category"] != "Maaş":
                 sets["category"] = "Maaş"
@@ -1818,12 +1876,17 @@ def period_name_month(month: str, start_day: int | None = None) -> str:
 def occurrence_date(month: str, day: int, start_day: int | None = None) -> str:
     """Bir sabit kalemin (ayın `day`'inde) `month` dönemine denk gelen tarihi.
     Dönem = [önceki ayın ay dönümü günü, bu ayın ay dönümü günü - 1]. Ör. ay dönümü 3, maaş 20 →
-    Kasım dönemi (3 Eki – 2 Kas) maaşı 20 Ekim'dir."""
+    Kasım dönemi (3 Eki – 2 Kas) maaşı 20 Ekim'dir.
+    Gün o takvim ayının son gününe kırpılır (31'i maaşı Nisan'da 30, Şubat'ta 28/29); eskiden 28'e yuvarlanıyordu ve
+    31'i kirası/maaşı 3 gün erken görünüyordu. Ay dönümü 28'den büyük olamadığından (cycle_start_day) tarih yine dönemin
+    içinde kalır: day ≥ start ise önceki ayın day'i ≥ start, değilse day < start ≤ 28."""
+    import calendar
+
     start = start_day or cycle_start_day()
     y, m = map(int, month.split("-"))
     if start > 1 and day >= start:
         y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-    return f"{y:04d}-{m:02d}-{min(day, 28):02d}"
+    return f"{y:04d}-{m:02d}-{max(1, min(day, calendar.monthrange(y, m)[1])):02d}"
 
 
 def _months_around(period: str) -> list[str]:
