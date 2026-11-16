@@ -109,7 +109,7 @@ def _spends(r: dict, kinds: tuple = ()) -> bool:
     return r["kind"] in (kinds or (*CARD_SPEND, FEE, EXPENSE)) and not _saving(r)
 SUBSCRIPTION_CATEGORIES = {"Dijital Abonelik", "AI & Yazılım Abonelik"}
 VARIABLE_LOOKBACK = 6  # değişken harcama geçmişi: son kaç dönem okunur (tahmin variable_estimate)
-VARIABLE_WEIGHTS = (3, 2, 1)  # son 3 dönem ağırlıklı ortalama (en yeni 3); backtest: app/card_backtest.py
+VARIABLE_WEIGHTS = (3, 2, 1)  # variable_estimate(method="weighted"): backtest seçeneği (app/card_backtest.py)
 
 
 def is_variable_spend(t: dict) -> bool:
@@ -120,11 +120,11 @@ def is_variable_spend(t: dict) -> bool:
         and (t["installment_no"] is None or t["installment_no"] == 1)
 
 
-def variable_estimate(history: list[float], method: str = "weighted") -> float:
+def variable_estimate(history: list[float], method: str = "median") -> float:
     """Geçmiş dönemlerin değişken harcamasından (eskiden yeniye) sıradaki dönemin tahmini.
-    weighted (varsayılan): son 3 dönem 3:2:1 ağırlıklı ortalama — artış trendini medyandan hızlı izler, tek uç ayın
-    etkisi 1/2'yi geçmez. median: eski yöntem (son VARIABLE_LOOKBACK dönemin medyanı). Seçim backtest'le
-    (app/card_backtest.py: sentetik + canlı kopya, ortalama mutlak yüzde hata)."""
+    median (varsayılan; lead 16.11): son VARIABLE_LOOKBACK dönemin medyanı — ilk taksitler değişkene dahil olunca
+    (is_variable_spend) canlı kopyada sistematik düşüklük kalktı (bias ≈ 0) ve tek uç aya dayanıklı. weighted: son 3
+    dönem 3:2:1 (backtest seçeneği; trendi hızlı izler ama uç aya duyarlı). Karşılaştırma app/card_backtest.py."""
     if not history:
         return 0.0
     if method == "median":
@@ -1107,7 +1107,7 @@ def card_projection() -> dict:
                 subs[m]["amount"] += t["amount"]
 
         # Değişken = taksitsiz harcama + o dönem açılan taksitlerin ilk taksiti − abonelikler (is_variable_spend);
-        # tahmin variable_estimate (son 3 dönem ağırlıklı)
+        # tahmin variable_estimate (son dönemlerin medyanı)
         periods = sorted({p for (a, p) in by_acc_period if a == acc})[-VARIABLE_LOOKBACK:]
         variable = [sum(t["amount"] for t in by_acc_period[(acc, p)] if is_variable_spend(t)) for p in periods]
 
@@ -1702,7 +1702,7 @@ def _plan(months: int, today: date) -> dict:
                                                  + (f" (girilen {money.tl(cyc['spent'], decimals=0)} hariç)" if cyc["spent"] else "")})
             elif p["variable_avg"] > 0:
                 lines.append({"type": "degisken", "kind": EXPENSE, "amount": p["variable_avg"],
-                              "description": f"{acc} tahmini kart harcaması (son {min(3, p['variable_periods'])} dönem ağırlıklı)",
+                              "description": f"{acc} tahmini kart harcaması (son {p['variable_periods']} dönem medyanı)",
                               "account": acc})
         # --- kısma hedefleri: ekstresi olmayan aylarda değişken kart tahmini hedef kadar azalır
         saving = sum(g["baseline"] - g["target"] for g in goals if g["start_month"] <= m and g["baseline"] > g["target"])
@@ -2947,8 +2947,8 @@ def net_worth(today: date | None = None) -> dict:
     def in_h(due: str | None) -> bool:
         return not due or due <= h_end
 
-    def to_later(title: str, amount: float, due: str | None, kind: str, **extra) -> None:
-        if due and h_end < due <= l_end and money.gt(amount, 0):
+    def to_later(title: str, amount: float, due: str | None, kind: str, any_date: bool = False, **extra) -> None:
+        if due and h_end < due and (any_date or due <= l_end) and money.gt(amount, 0):
             later.append({"title": title, "amount": _round(amount), "due_date": due, "type": kind, **extra})
 
     card_debt_now = 0.0
@@ -3017,7 +3017,8 @@ def net_worth(today: date | None = None) -> dict:
         covered = min(max(0.0, jars.get("by_debt", {}).get(d["id"], 0.0)), d["remaining"])
         c_now = min(covered, now)
         payable_sp += now - c_now
-        to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "debt", debt_id=d["id"])
+        # TL borç: vadesi ne kadar ileride olursa olsun (bilinen tüm borçlar; lead 16.11), kumbaranın karşılamadığı kısım
+        to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "borc", any_date=True, debt_id=d["id"])
     due = _due_this_period(today, pending_all, hz)
     for b in due.pop("_later_bills"):
         to_later(b["title"], b["amount"], b["date"], "bill", bill_id=b["id"])
@@ -3116,7 +3117,8 @@ def spend_horizon(today: date) -> dict:
 def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str | None]:
     """TL borcun kalanı ufka göre: (ufka kadar vadeli, ufuk sonrası l_end'e kadar vadeli, o kısmın vadesi).
     Vadesiz ya da vadesi geçmiş/ufuk içinde: tamamı şimdi. Ödeme planlı borç: ufka kadar vadesi gelen taksitlerden
-    ödenmemiş kısım şimdi, l_end'e kadarki taksitler sonra (daha ilerisi hiçbirinde)."""
+    ödenmemiş kısım şimdi, kalan taksitlerin hepsi sonra (vadesi: ufuktan sonraki ilk taksit). l_end kullanılmaz:
+    borçta spendable_later bilinen tüm borcu gösterir (lead 16.11)."""
     from app import debt_schedule
 
     rem = max(0.0, d["remaining"] or 0.0)
@@ -3124,15 +3126,14 @@ def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str 
         rows = debt_schedule.installments(d)
         paid = debt_schedule.plan_paid(d)
         thru_h = sum(r["amount"] for r in rows if r["date"] <= h_end)
-        thru_l = sum(r["amount"] for r in rows if r["date"] <= l_end)
         now = min(rem, max(0.0, thru_h - paid))
-        nxt = min(rem - now, max(0.0, thru_l - paid - now))
-        nd = next((r["date"] for r in rows if h_end < r["date"] <= l_end), None)
+        nxt = max(0.0, rem - now)
+        nd = next((r["date"] for r in rows if h_end < r["date"]), None)
         return _round(now), _round(nxt), nd
     due = d.get("due_date")
     if not due or due <= h_end:
         return _round(rem), 0.0, None
-    return 0.0, (_round(rem) if due <= l_end else 0.0), due
+    return 0.0, _round(rem), due
 
 
 DUE_KEYS = ("pending_other", "card_interest", "card_late_interest", "bills", "recurring")

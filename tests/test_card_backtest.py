@@ -1,5 +1,5 @@
-"""Kart tahmini (U3, 16.11): yeni açılan taksitlerin ilk taksiti değişken harcamaya dahil, değişken tahmin son 3 dönem
-3:2:1 ağırlıklı. Sentetik geçmişte (artan harcama + her ay yeni taksitli alışveriş) geriye dönük sınama: yeni yöntemin
+"""Kart tahmini (U3, 16.11): yeni açılan taksitlerin ilk taksiti değişken harcamaya dahil, değişken tahmin son dönemlerin
+medyanı (ağırlıklı yöntem backtest seçeneği). Sentetik geçmişte (artan harcama + her ay yeni taksitli alışveriş) geriye dönük sınama: yeni yöntemin
 ortalama mutlak yüzde hatası eskisinden (taksitsiz medyan) düşük, sistematik düşük tahmin (bias) azalır. Kart
 numaraları, işyerleri ve tutarlar uydurmadır."""
 from datetime import date
@@ -40,23 +40,22 @@ def history(tmpdb):
 
 def test_new_method_beats_old(history):
     res = card_backtest.backtest()
-    old, new = res["median"], res["weighted"]
-    assert old["n"] == new["n"] >= 5
-    assert new["mape"] < old["mape"]
+    old, new, w = res["median"], res[card_backtest.CHOSEN], res["weighted"]
+    assert old["n"] == new["n"] == w["n"] >= 5
+    assert new["mape"] < old["mape"] and w["mape"] < old["mape"]
     assert old["bias"] < 0 and abs(new["bias"]) < abs(old["bias"])  # eski yöntem sistematik düşük
 
 
 def test_first_installment_counts_as_variable(history):
     p = finance.card_projection()[CARD]
-    # son 3 dönem: (taksitsiz + yeni alışverişin ilk taksiti) 3:2:1
-    v = [round(10000 * 1.06 ** i, 2) + 1500.0 for i in (6, 7, 8)]
-    assert p["variable_avg"] == round((3 * v[2] + 2 * v[1] + v[0]) / 6, 2)
+    # son 6 dönemin (taksitsiz + yeni alışverişin ilk taksiti) medyanı
+    v = [round(10000 * 1.06 ** i, 2) + 1500.0 for i in range(3, 9)]
+    assert p["variable_avg"] == round((v[2] + v[3]) / 2, 2)
 
 
 def test_variable_estimate_methods():
     assert finance.variable_estimate([]) == 0.0
     assert finance.variable_estimate([100.0]) == 100.0
-    assert finance.variable_estimate([100.0, 400.0]) == (3 * 400 + 2 * 100) / 5
-    assert finance.variable_estimate([1, 2, 3, 100.0], "median") == 2.5
-    # tek uç ay: ağırlıklı tahminin en çok yarısı
-    assert finance.variable_estimate([1000.0, 1000.0, 7000.0]) == 4000.0
+    assert finance.variable_estimate([1, 2, 3, 100.0]) == 2.5  # varsayılan medyan: uç aya dayanıklı
+    assert finance.variable_estimate([100.0, 400.0], "weighted") == (3 * 400 + 2 * 100) / 5
+    assert finance.variable_estimate([1000.0, 1000.0, 7000.0], "weighted") == 4000.0

@@ -89,7 +89,7 @@ def test_single_horizon(book, day):
     assert p["bills"] == BILL and p["recurring"] == RENT
     assert p["pending_cards"] == 0 and p["payable"] == 0 and p["card_debt"] == 0
     assert nw["spendable"] == CASH - BILL - RENT
-    assert _later(nw) == {("card_estimate", "2026-12-23"): INST, ("debt", "2026-12-31"): DEBT}
+    assert _later(nw) == {("card_estimate", "2026-12-23"): INST, ("borc", "2026-12-31"): DEBT}
     assert nw["spendable_later"]["total"] == INST + DEBT
     assert [x["date"] for x in nw["recurring_items"]] == ["2026-11-18"]  # 18 Ara kirası yok
     # Net durum değişmedi: borç ve tahmin orada tam
@@ -98,11 +98,12 @@ def test_single_horizon(book, day):
 
 def test_before_last_day_horizon_is_this_period(book):
     """14 Kas: dönemin bitmesine 2 gün var, ufuk 16 Kas. 19 Kas faturası sonraya; kira (18 Kas, sonraki dönemin) hiçbir
-    yerde; 23 Kas'ta ödenmiş ekstre yok; 23 Ara tahmini ve 31 Ara borç sonraki dönem sonundan (16 Ara) da sonra."""
+    yerde; 23 Kas'ta ödenmiş ekstre yok; 23 Ara tahmini sonraki dönem sonundan (16 Ara) da sonra: yok. 31 Ara borcu
+    var (TL borç vadesi ne kadar ileride olursa olsun; lead 16.11)."""
     nw = _nw(date(2026, 11, 14))
     assert nw["spendable_horizon"] == "2026-11-16"
     assert nw["spendable"] == CASH
-    assert _later(nw) == {("bill", "2026-11-19"): BILL}
+    assert _later(nw) == {("bill", "2026-11-19"): BILL, ("borc", "2026-12-31"): DEBT}
     assert not nw["recurring_items"]
 
 
@@ -128,6 +129,20 @@ def test_overdue_and_undated_debt_always_now(book, client):
     assert nw["spendable"] == CASH - BILL - RENT - 1400.0
 
 
+def test_far_future_debt_in_later_bill_not(book, client):
+    """Mart 2027 vadeli borç spendable_later'da (bilinen tüm borçlar); aynı vadeli fatura yok (pencere sonraki dönem sonu)."""
+    assert client.post("/api/debts", json={"person": "Örnek Akraba", "direction": "borc", "amount": 30000.0,
+                                           "debt_date": "2026-11-01", "due_date": "2027-03-10",
+                                           "pay_terms": "tek"}).status_code == 200
+    assert client.post("/api/bills", json={"provider": "Örnek Sigorta", "amount": 4000.0,
+                                           "due_date": "2027-03-10"}).status_code == 200
+    nw = _nw(date(2026, 11, 20))
+    later = _later(nw)
+    assert later[("borc", "2027-03-10")] == 30000.0 and ("bill", "2027-03-10") not in later
+    assert nw["spendable"] == CASH - BILL - RENT  # düşülmedi
+    assert nw["spendable_later"]["total"] == INST + DEBT + 30000.0
+
+
 def test_debt_jar_not_double_counted_later(book, client, tmpdb):
     """31 Ara borcu için kumbarada 2.000: kumbara düşülür (reserved), sonraya yalnız karşılanmayan 3.000."""
     did = next(d["id"] for d in tmpdb.list_debts() if d["person"] == "Örnek Kişi")
@@ -139,7 +154,7 @@ def test_debt_jar_not_double_counted_later(book, client, tmpdb):
     assert r.status_code == 200, r.text
     nw = _nw(date(2026, 11, 20))
     assert nw["reserved"] == 2000.0
-    assert _later(nw)[("debt", "2026-12-31")] == DEBT - 2000.0
+    assert _later(nw)[("borc", "2026-12-31")] == DEBT - 2000.0
     assert nw["spendable"] == CASH - BILL - RENT - 2000.0
 
 
@@ -153,7 +168,7 @@ def test_scheduled_debt_only_installments_in_horizon(client, tmpdb):
     assert r.status_code == 200, r.text
     nw = _nw(date(2026, 11, 20))  # ufuk 16 Ara: 25 Kas taksiti; sonra 25 Ara (≤ 16 Oca); 25 Oca+ hiçbirinde
     assert _parts(nw)["payable"] == 1000.0
-    assert _later(nw) == {("debt", "2026-12-25"): 1000.0}
+    assert _later(nw) == {("borc", "2026-12-25"): 5000.0}  # kalan 5 taksit, vadesi sıradaki taksit
 
 
 # ---------------------------------------------------------------- U2: ekstresi yüklenmemiş döngü ödendi

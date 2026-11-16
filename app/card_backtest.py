@@ -4,8 +4,9 @@ taksitler + abonelikler + değişken harcama tahmini) gerçek dönem harcamasıy
 
 Gerçek = o dönemin ekstresindeki alışveriş/iade satırları (taksitler dahil) + taksitli ücret satırları; devreden borç,
 faiz, ödeme yok (tahminin kapsamıyla aynı). Ardışık olmayan dönem (arada ekstre yüklenmemiş) ve gerçeği çok küçük dönem
-(< MIN_ACTUAL) atlanır. Yöntemler: "median" (eski: taksitsiz harcamanın son 6 dönem medyanı), "weighted" (yeni: ilk
-taksitler dahil, son 3 dönem 3:2:1) ve karşılaştırma için ara adımlar. Kişisel veri dönmez: yalnız sayılar.
+(< MIN_ACTUAL) atlanır. Yöntemler: "median" (eski: taksitsiz harcamanın son 6 dönem medyanı), "median_first_inst"
+(SEÇİLEN, finance.card_projection: ilk taksitler dahil medyan), "weighted" (ilk taksitler dahil, son 3 dönem 3:2:1) ve
+ara adım. CHOSEN seçilen yöntemin adı. Kişisel veri dönmez: yalnız sayılar.
 
 Kullanım: backtest() → {method: {n, mape, bias, mae}}; komut satırı: python -m app.card_backtest (EKSTRE_DB'deki defter).
 """
@@ -18,6 +19,7 @@ from app.parsers.base import FEE
 MIN_ACTUAL = 500.0  # bu tutarın altındaki dönem (kart pek kullanılmamış) yüzde hatayı şişirir: atlanır
 MIN_HISTORY = 3     # tahmin için en az kaç önceki dönem
 
+CHOSEN = "median_first_inst"  # finance.card_projection'ın kullandığı (is_variable_spend + variable_estimate varsayılanı)
 METHODS = {
     # ad: (ilk taksitler değişkene dahil mi, tahmin yöntemi)
     "median": (False, "median"),
