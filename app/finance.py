@@ -328,48 +328,68 @@ def salary_awaited(expected: str, today: date) -> bool:
     return workdays.add_business_days(expected, SALARY_GRACE_DAYS) >= today
 
 
+def _salary_decision_entries(month: str, entries: list[dict] | None) -> list[dict]:
+    """"Maaş yattı mı" kararı için kayıtlar. Ortak defter üyesi süzülmüş veri görür (gizli hesaba yatan maaş yok);
+    karar süzülmemiş kayıtlarla verilir (book.owner_view): sahip ve üye aynı ufku ve beklenen geliri görür. Gösterilen
+    tutarlar yine süzülü kaynaklardan. Üye değilse verilen kayıtlar (yoksa dönemin kayıtları)."""
+    from app import book
+
+    if book.member():
+        with book.owner_view():
+            return db.list_entries(month)
+    return db.list_entries(month) if entries is None else entries
+
+
 def salary_realized(month: str, recurring: list[dict], entries: list[dict],
                     overrides: dict | None = None) -> dict[int, dict]:
     """O dönemin maaşı KALEM BAŞINA yattı mı: {maaş kalemi id: o dönemin maaşı sayılan kayıt}. Yalnız etkin, gelir türü
     maaş kalemleri (_is_salary). Kalemin kendisine bağlı (recurring_id) atlanmamış gelir kaydı varsa o. Bağsız maaş
-    satırları (dökümden "MAAS …", kategori Maaş; başka bir sabit kaleme bağlı olmayan):
-      - tek maaş kalemi: herhangi biri o kalemin maaşıdır (eski kural; banka metni kalemin adını taşımaz)
+    satırları (dökümden "MAAS …", kategori Maaş; recurring_id BOŞ — silinmiş/pasif başka bir kaleme bağlı kayıt o
+    kalemindir, kalan kalemi yatmış yapmaz) — fark/ikramiye/prim/açık sözcüklü ya da planlananın %50'sinden küçük satır
+    hiçbir zaman maaş sayılmaz (db.is_salary_extra, SALARY_MIN_SHARE):
+      - tek maaş kalemi: kalan herhangi biri o kalemin maaşıdır (banka metni kalemin adını taşımaz)
       - birden çok maaş kalemi (iki iş, 1'i ve 15'i; ailede iki kişi): her satır EN İYİ eşleşen kaleme, bir kez
-        (db.salary_entry_fit: işveren/kalem adı > hesap > en yakın gün > tutar ±%20). Hiçbir kaleme uymayan satır
-        hiçbir kalemi "yattı" yapmaz: biri yatınca ötekinin beklenen geliri silinmez (eskiden silinirdi; P0 iki maaş).
+        (db.salary_entry_fit: işveren/kalem adı > hesap > gün ≤3 iş günü > tutar ±%20). İkinci tur: ilk turda kimseye
+        uymayan satır kalan kaleme gün yakınlığıyla (≤3 iş günü, tutar ≥ planlananın %50'si; zamlı maaş). Uymayan satır
+        hiçbir kalemi "yattı" yapmaz: biri yatınca ötekinin beklenen geliri silinmez.
     Birden çok kayıt varsa en erken tarihlisi döner (salary_arrived "bugüne kadar yattı mı" ona bakar)."""
     sal = [r for r in recurring if r["kind"] == INCOME and _is_salary(r) and is_active(r, month)]
     if not sal:
         return {}
-    ids, all_ids = {r["id"] for r in sal}, {r["id"] for r in recurring}
+    ids = {r["id"] for r in sal}
     inc = [e for e in entries if e["kind"] == INCOME and e["month"] == month and not e["skipped"]]
     got: dict[int, dict] = {}
     for e in sorted(inc, key=lambda x: (x["entry_date"], x["id"] or 0)):
         if e["recurring_id"] in ids:
             got.setdefault(e["recurring_id"], e)
-    free = [e for e in inc if (not e["recurring_id"] or e["recurring_id"] not in all_ids) and _salary_entry(e, ids)]
+    free = [e for e in inc if not e["recurring_id"] and not e.get("former_recurring_id") and _salary_entry(e, ids)
+            and not db.is_salary_extra(e["description"])]
     open_ = [r for r in sal if r["id"] not in got]
     if not open_ or not free:
         return got
-    if len(sal) == 1:
-        got[open_[0]["id"]] = min(free, key=lambda x: (x["entry_date"], x["id"] or 0))
-        return got
     ov = db.recurring_overrides() if overrides is None else overrides
-    pairs = []
-    for r in open_:
-        due = db.occurrence_date(month, db.day_at(r, month))
-        planned = db.planned_amount(r, month, ov)
-        emp = [_fold(x["employer"]) for x in db.salary_changes(r["id"]) if x.get("employer")]
-        for e in free:
-            fit = db.salary_entry_fit(r, e, due, planned, emp)
-            if fit is not None:
-                pairs.append((fit, r["id"], e["entry_date"], e["id"] or 0, e))
+    planned = {r["id"]: db.planned_amount(r, month, ov) for r in open_}
+    free = [e for e in free if any((e["amount"] or 0) >= planned[r["id"]] * db.SALARY_MIN_SHARE for r in open_)]
+    if len(sal) == 1:
+        free = [e for e in free if (e["amount"] or 0) >= planned[open_[0]["id"]] * db.SALARY_MIN_SHARE]
+        if free:
+            got[open_[0]["id"]] = min(free, key=lambda x: (x["entry_date"], x["id"] or 0))
+        return got
     used: set = set()
-    for _fit, rid, _d, eid, e in sorted(pairs, key=lambda x: x[:4]):
-        if rid in got or eid in used:
-            continue
-        got[rid] = e
-        used.add(eid)
+    for loose in (False, True):
+        pairs = []
+        for r in (r for r in open_ if r["id"] not in got):
+            due = db.occurrence_date(month, db.day_at(r, month))
+            emp = [_fold(x["employer"]) for x in db.salary_changes(r["id"]) if x.get("employer")]
+            for e in (e for e in free if (e["id"] or 0) not in used):
+                fit = db.salary_entry_fit(r, e, due, planned[r["id"]], emp, loose)
+                if fit is not None:
+                    pairs.append((fit, r["id"], e["entry_date"], e["id"] or 0, e))
+        for _fit, rid, _d, eid, e in sorted(pairs, key=lambda x: x[:4]):
+            if rid in got or eid in used:
+                continue
+            got[rid] = e
+            used.add(eid)
     return got
 
 
@@ -390,7 +410,7 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict], to
     ov = db.recurring_overrides()
     # maaş kalem başına: o kalemin bu dönemki maaşı (bağlı ya da en iyi eşleşen bağsız maaş satırı) yattıysa "bekliyor"
     # gösterilmez; yatmadıysa (ikinci iş, ailede öbür kişi) beklenen gelirde kalır
-    realized = salary_realized(month, recurring, entries, ov)
+    realized = salary_realized(month, recurring, _salary_decision_entries(month, entries), ov)
     past = month < current_period(today)
     out = []
     for r in recurring:
@@ -736,7 +756,7 @@ def summary(month: str, today: date | None = None) -> dict:
     totals = _totals(rows)
     totals["carry_in"] = _round(carry)
     totals["balance"] = _round(carry + totals["cash_net"])
-    open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
+    open_try = [d for d in db.list_debts(open_only=True, today=today) if d["asset"] == "TRY"]
     totals["receivable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "alacak"))
     totals["payable"] = _round(sum(d["remaining"] for d in open_try if d["direction"] == "borc"))
     est = estimates(month, today=today)
@@ -2017,7 +2037,7 @@ def _payables(today: date) -> list[dict]:
     from app import book
 
     rules = book.active()
-    for d in [] if rules and "borclar" in rules["hidden_pages"] else db.list_debts():
+    for d in [] if rules and "borclar" in rules["hidden_pages"] else db.list_debts(today=today):
         sch = d.get("schedule")
         if sch and d["direction"] == "borc" and not d["settled_at"] and sch["next"]:
             # ödeme planı olan borç: sıradaki taksit (geçmişte eksik kalan dahil); ödeme borcun kendisine düşer
@@ -2130,7 +2150,7 @@ def cycle_payments(today: date, cycles: list[dict]) -> dict[str, dict]:
             continue
         # son yüklenmiş ekstrenin kalanı varsa (geç ödendi, kesimden sonra) ödeme önce onu kapatır: döngüye fazlası
         st = latest.get(cy["account"])
-        owed = db.statement_remaining(st, today.isoformat()) if st else 0.0
+        owed = db.statement_remaining(st, today.isoformat(), today.isoformat()) if st else 0.0
         total = _round(max(0.0, sum(p["amount"] for p in ps) - owed))
         if not money.gt(total, 0):
             continue
@@ -2694,7 +2714,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
                     "link": "ekstreler", "key": f"ekstre_yok:{last4}:{_fp(*sorted(x['pay_date'] for x in ps))}"})
 
     # 2c) Ödemeler kartında görünmeyen açık borçlar (vadesiz ya da döviz/altın)
-    open_debt = [d for d in db.list_debts(open_only=True) if d["direction"] == "borc" and d["remaining"] > 0
+    open_debt = [d for d in db.list_debts(open_only=True, today=today) if d["direction"] == "borc" and d["remaining"] > 0
                  and (d["asset"] != "TRY" or not d["due_date"])]
     if open_debt:
         out.append({"level": "bilgi", "title": f"{len(open_debt)} açık borcun var",
@@ -2715,7 +2735,7 @@ def insights(month: str, today: date | None = None) -> list[dict]:
 
     # 2d) Bekleyen alacaklar (sana borçlu olanlar)
     # kapanmış (settled_at) ya da kalanı sıfır olan (tamamı tahsil edilmiş / vazgeçilmiş) alacak sayılmaz
-    open_rec = [d for d in db.list_debts(open_only=True) if d["direction"] == "alacak" and d["remaining"] > 0]
+    open_rec = [d for d in db.list_debts(open_only=True, today=today) if d["direction"] == "alacak" and d["remaining"] > 0]
     if open_rec:
         parts = [f"{d['person']}: {fmt_asset(d['remaining'], d['asset'])}"
                  + (f" (vade {date.fromisoformat(d['due_date']):%d.%m})" if d["due_date"] else
@@ -3047,7 +3067,7 @@ def net_worth(today: date | None = None) -> dict:
     cards, overdue = [], []
     # kart borcu: kart başına yalnız SON ekstrenin kalanı (db.card_debt_at ile aynı kural; Ödemeler toplamı da bu)
     for st in sorted(db.latest_card_statements(today.isoformat(), statements).values(), key=lambda x: x["period_end"]):
-        left = db.statement_remaining(st, today.isoformat())
+        left = db.statement_remaining(st, today.isoformat(), today.isoformat())
         if left:
             cards.append({"title": f"{st['bank']} {st['card_no']}", "amount": left, "due_date": st["due_date"],
                           "estimated": False, "statement_id": st["id"]})
@@ -3093,7 +3113,7 @@ def net_worth(today: date | None = None) -> dict:
         if not in_h(x["due_date"]):
             to_later(x["title"], x["amount"], x["due_date"], "card_estimate", account=x["account"])
     pending_cards = sum(x["amount"] for x in pending_items)
-    open_try = [d for d in db.list_debts(open_only=True) if d["asset"] == "TRY"]
+    open_try = [d for d in db.list_debts(open_only=True, today=today) if d["asset"] == "TRY"]
     receivable = sum(d["remaining"] for d in open_try if d["direction"] == "alacak")
     payable = sum(d["remaining"] for d in open_try if d["direction"] == "borc")
     stale = [a["name"] for a in accounts if a["as_of"] and a["source"] == "dokum" and (today - date.fromisoformat(a["as_of"])).days > 35]
@@ -3112,7 +3132,7 @@ def net_worth(today: date | None = None) -> dict:
     credit_cards = []
     for card_no, st in sorted(latest.items(), key=lambda kv: kv[1]["period_end"], reverse=True):
         title = f"{st['bank']} {card_no}"
-        unpaid = 0.0 if st.get("source") == "excel" else db.statement_remaining(st, today.isoformat())
+        unpaid = 0.0 if st.get("source") == "excel" else db.statement_remaining(st, today.isoformat(), today.isoformat())
         nxt = est.get(title)
         credit_cards.append({"title": title, "bank": st["bank"], "card_no": card_no, "last_period_end": st["period_end"],
                              "last_total": st["total_debt"], "last_due": st["due_date"], "paid_at": st["paid_at"],
@@ -3304,7 +3324,7 @@ def salary_arrived(period: str, today: date) -> bool:
     main = primary_salary(period, rec, ov)
     if not main:
         return False
-    e = salary_realized(period, rec, db.list_entries(period), ov).get(main["id"])
+    e = salary_realized(period, rec, _salary_decision_entries(period, None), ov).get(main["id"])
     return bool(e) and str(e["entry_date"])[:10] <= today.isoformat()
 
 
@@ -3320,7 +3340,7 @@ def next_salary_date(today: date) -> date | None:
     cur = current_period(today)
     for per in (add_months(cur, k) for k in (-1, 0, 1, 2)):
         main = primary_salary(per, rec, ov)
-        if not main or main["id"] in salary_realized(per, rec, db.list_entries(per), ov):
+        if not main or main["id"] in salary_realized(per, rec, _salary_decision_entries(per, None), ov):
             continue
         d = date.fromisoformat(db.occurrence_date(per, db.day_at(main, per)))
         if d < today:
@@ -3438,7 +3458,7 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
                                       "account": ln.get("account"), "type": ln["type"]})
     interest = None
     for st in db.latest_card_statements(today.isoformat()).values():
-        left = db.statement_remaining(st, today.isoformat())
+        left = db.statement_remaining(st, today.isoformat(), today.isoformat())
         if not left or not workdays.past_due(st["due_date"], today):
             continue
         interest = interest or _card_interest_fn(today)
@@ -3531,8 +3551,11 @@ def _spendable_after_income(spendable: float, today: date, periods: list[str] | 
     prev, salary_ids = add_months(periods[0], -1), {r["id"] for r in rec if _is_salary(r)}
     rows = [r for per in [prev, *periods] for r in pending_recurring(per, rec, db.list_entries(per), today)
             if r.get("pending") and r["kind"] == INCOME and money.gt(r["amount"] or 0, 0)
-            and (per != prev or (r["recurring_id"] in salary_ids
-                                 and salary_awaited(r["date"], today)))]
+            and (per != prev or r["recurring_id"] in salary_ids)
+            # günü geçmiş maaş: next_salary_date ile AYNI kural (salary_awaited) — tolerans bittiyse beklenen gelir
+            # değil (cari dönemde de; Özet'in "bekliyor"u dönem bitene kadar kalır, bu rakam eldeki paraya bakar)
+            and (r["recurring_id"] not in salary_ids or r["date"] >= today.isoformat()
+                 or salary_awaited(r["date"], today))]
     if not rows:
         return None
     income = _round(sum(r["amount"] for r in rows))

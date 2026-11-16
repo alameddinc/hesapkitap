@@ -60,10 +60,6 @@ def _inv(nw):
 
 # ---------------------------------------------------------------- iki maaş: zam, ad yok
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finance.salary_realized / db.salary_entry_fit: adsız satır yalnız tutar ±%20 ile kabul ediliyor; B'nin %25 zamlı "
-    "maaşı (B'nin günü, fark 0 gün) B'ye uymuyor, A zaten eşleşmiş → B 'bekliyor' kalır: beklenen gelir +40.000 fazla, "
-    "Maaş gelince yanlış. Öneri: ilk turdan sonra kalan maaş satırını kalan kaleme gün yakınlığıyla (ör. ±3 iş günü) bağla."))
 def test_two_salaries_raise_25_no_name_both_paid_strict(tmpdb):
     _cycle(tmpdb)
     _salary(tmpdb, A_DESC, 60000.0, 1)
@@ -73,11 +69,6 @@ def test_two_salaries_raise_25_no_name_both_paid_strict(tmpdb):
     assert _pending_income("2026-11", date(2026, 11, 16)) == {}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "salary_entry_fit gün farkına sınır koymuyor: B'nin (15'i, 40.000) %25 zamlı adsız 50.000'i B'ye uymaz (tutar), "
-    "ama A'ya (20'si, 60.000; fark %16,7, 5 gün) uyar → A YATMIŞ sayılır. A birincil olduğundan salary_arrived True: "
-    "24 Kas'ta ufuk (dönem sonuna 6 gün) Aralık sonuna kayar, A'nın 60.000'i 'bekliyor'dan düşer, B 40.000 bekliyor görünür. "
-    "Öneri: adsız eşleşmede gün farkı sınırı (ör. 3 iş günü) ve önce gün."))
 def test_raised_second_salary_does_not_realize_primary(tmpdb):
     _cycle(tmpdb)
     _salary(tmpdb, A_DESC, 60000.0, 20)
@@ -97,11 +88,6 @@ def test_two_salary_small_diff_line_does_not_realize(tmpdb):
     assert _pending_income("2026-11", date(2026, 11, 6)) == {A_DESC: 60000.0, B_DESC: 40000.0}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Tek maaş kalemi kuralı (salary_realized len(sal)==1): HERHANGİ bir maaş metinli satır o dönemin maaşı sayılır. "
-    "5 Kas'taki 2.500 'MAAS FARKI' 15 Kas'ın 50.000 maaşını yatmış yapar: beklenen gelir 0, salary_arrived True "
-    "(dönem sonuna ≤7 gün kalınca ufuk kayar). Eski kuraldan devralınmış ama ufuk kaydırma ile etkisi büyüdü. "
-    "Öneri: tek kalemde de tutar alt sınırı (ör. planlananın %50'si) ya da fark/ikramiye sözcüklerini dışla."))
 def test_single_salary_diff_line_does_not_realize(tmpdb):
     _cycle(tmpdb)
     _salary(tmpdb, "Maaş", 50000.0, 15)
@@ -113,11 +99,6 @@ def test_single_salary_diff_line_does_not_realize(tmpdb):
 
 # ---------------------------------------------------------------- silinmiş / pasif maaş kalemi
 
-@pytest.mark.xfail(strict=True, reason=(
-    "db.delete_recurring kayıtların recurring_id'sini boşaltmıyor; salary_realized silinmiş kaleme bağlı kaydı 'bağsız' "
-    "sayıyor ve kalan TEK maaş kalemine (A) veriyor: B işinden son maaş (15 Kas, 40.000) A'yı (20 Kas, 60.000) yatmış "
-    "yapar. Öneri: silinmiş/pasif başka bir maaş kalemine bağlı ya da onun dönemindeki kayıt başka kalemi yatmış yapmasın "
-    "(ya da silmede recurring_id NULL + tutar kontrolü)."))
 def test_deleted_second_salary_entry_does_not_realize_remaining(tmpdb):
     _cycle(tmpdb)
     a = _salary(tmpdb, A_DESC, 60000.0, 20)
@@ -323,11 +304,6 @@ def test_late_salary_tolerance_and_deduct_end(client, tmpdb, today, exp_until):
     assert ("2026-12-05" in _bills(nw)) == bool(exp_until)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Tutarsızlık: 20 Kas'ta Kasım maaşı (10'u) tolerans dışı → next_salary_date onu ATLAYIP 10 Ara'yı esas alıyor ve "
-    "10 Ara'ya kadar vadelileri düşüyor; ama pending_recurring cari dönemde toleransa bakmadığı için aynı yanıtta "
-    "spendable_after_income hâlâ 'Maaş gelince +50.000 (10 Kas)' diyor. İki alan aynı maaşa iki farklı karar veriyor. "
-    "Öneri: ikisi aynı kural (salary_awaited) — ya Kasım maaşı bekleniyor (deduct_end bugün) ya beklenmiyor (gelirde yok)."))
 def test_late_salary_out_of_tolerance_consistent(client, tmpdb):
     _cycle(tmpdb)
     assert client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": 40000.0,
@@ -354,10 +330,6 @@ def owner(client, monkeypatch):
     return client
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Ortak defter: maaş üyeye GİZLİ hesaba yattıysa üyenin list_entries'inde yok → üye için salary_realized boş: "
-    "salary_arrived False (ufuk kaymaz), spendable_after_income 'Maaş gelince +50.000' (zaten yatmış maaş). Sahip ve üye "
-    "aynı defterde farklı ufuk/ödemeler görür. Öneri: maaş 'yattı mı' kararı filtresiz kayıtlarla, tutar gösterimi süzülü."))
 def test_member_same_salary_decision(owner, tmpdb, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -380,4 +352,6 @@ def test_member_same_salary_decision(owner, tmpdb, monkeypatch):
     on, mn = owner.get("/api/net-worth").json(), m.get("/api/net-worth").json()
     assert on["spendable_horizon"] == "2026-12-31"
     assert mn["spendable_horizon"] == on["spendable_horizon"]
-    assert mn["spendable_after_income"] == on["spendable_after_income"]
+    # karar (beklenen gelir) aynı; "amount" = spendable + gelir, spendable üyede gizli hesap olmadan (gösterim süzülü)
+    pick = ("income", "count", "label", "date", "main")
+    assert {k: mn["spendable_after_income"][k] for k in pick} == {k: on["spendable_after_income"][k] for k in pick}

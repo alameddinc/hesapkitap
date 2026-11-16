@@ -144,7 +144,7 @@ def owner(client, monkeypatch):
 
 def test_family_book_two_people_salaries(owner):
     """Aile defteri: sahip ve eşinin maaşları ayrı kalem, ayrı hesap. Eşi (üye) kendi maaşını kendi hesabına girer
-    (adsız "MAAS ODEMESI", 2 Mart: gün sahibinin maaşına yakın; tutar iki kalemin de ±%20'sinde): hesap eşinin
+    (adsız "MAAS ODEMESI"; iki maaş da ayın 1'i, tutar ikisinin de ±%20'sinde, sahibinkine daha yakın): hesap eşinin
     kalemini seçer, sahibin maaşı beklenmeye devam eder. Dönem uzak gelecekte: CI hangi gün koşarsa koşsun "bekliyor" (geçmiş dönem tahmini değil)."""
     from app.api.main import app
 
@@ -152,7 +152,7 @@ def test_family_book_two_people_salaries(owner):
         assert owner.post("/api/accounts", json={"name": name, "kind": "banka", "balance": 1000}).status_code == 200
     ids = {a["name"]: a["id"] for a in owner.get("/api/accounts").json()["accounts"]}
     acc_a, acc_b = ids["Örnek Banka A"], ids["Örnek Banka B"]
-    for desc, amt, day, acc in (("Ayşe maaş", 40000.0, 1, acc_a), ("Ali maaş", 35000.0, 15, acc_b)):
+    for desc, amt, day, acc in (("Ayşe maaş", 40000.0, 1, acc_a), ("Ali maaş", 35000.0, 1, acc_b)):
         r = owner.post("/api/recurring", json={"description": desc, "amount": amt, "kind": "gelir", "category": "Maaş",
                                                "day_of_month": day, "start_month": "2030-01", "account_id": acc})
         assert r.status_code == 200, r.text
@@ -160,7 +160,7 @@ def test_family_book_two_people_salaries(owner):
     m = TestClient(app)
     assert m.post("/api/auth/register", json={"code": inv["code"], "username": "esim",
                                               "password": "esim-sifre-12345"}).status_code == 200
-    r = m.post("/api/entries", json={"entry_date": "2030-03-02", "description": "MAAS ODEMESI", "amount": 36500.0,
+    r = m.post("/api/entries", json={"entry_date": "2030-03-01", "description": "MAAS ODEMESI", "amount": 37500.0,
                                      "kind": "gelir", "category": "Diğer Gelir", "payment": "havale",
                                      "account_id": acc_b})
     assert r.status_code == 200, r.text
@@ -280,3 +280,51 @@ def test_no_salary_no_change(pre_salary_book):
     nw = finance.net_worth(date(2026, 11, 20))
     assert nw["spendable_pre_salary"] is None and nw["spendable"] == CASH
     _invariants(nw)
+
+
+# ---------------------------------------------------------------- doğrulama turu (P1–P6) ek testleri
+
+def test_link_single_salary_skips_extra_and_small(tmpdb):
+    """Tek maaş kaleminde de "MAAS FARKI" ve planlananın yarısından küçük satır o dönemin yerine bağlanmaz (yalnız
+    kategori); asıl maaş gelince o bağlanır."""
+    _calendar_month(tmpdb)
+    rid = _salary(tmpdb, "Maaş", 50000.0, 15)
+    e1 = _raw_income(tmpdb, "2026-11-05", "MAAS FARKI ODEMESI", 2500.0)
+    e2 = _raw_income(tmpdb, "2026-11-06", "MAAS AVANS", 10000.0)
+    e3 = _raw_income(tmpdb, "2026-11-16", "MAAS ODEMESI", 50000.0)
+    tmpdb.link_salary_entries()
+    got = {e["id"]: e["recurring_id"] for e in tmpdb.list_entries("2026-11")}
+    assert got[e1] is None and got[e2] is None and got[e3] == rid
+
+
+def test_deleted_salary_entries_not_relinked(tmpdb):
+    """Silinen maaş kaleminin kaydı kalan kaleme bağlanmaz (former_recurring_id)."""
+    _calendar_month(tmpdb)
+    a = _salary(tmpdb, "Maaş Örnek Yazılım", 60000.0, 15)
+    b = _salary(tmpdb, "Maaş Deneme Lojistik", 55000.0, 15)
+    e = _raw_income(tmpdb, "2026-11-15", "MAAS ODEMESI", 55000.0)
+    tmpdb.link_salary_entries()
+    assert {x["id"]: x["recurring_id"] for x in tmpdb.list_entries("2026-11")}[e] == b
+    tmpdb.delete_recurring(b)
+    tmpdb.link_salary_entries()
+    row = {x["id"]: x for x in tmpdb.list_entries("2026-11")}[e]
+    assert row["recurring_id"] is None and row["former_recurring_id"] == b
+    assert a and _pending_income("2026-11", date(2026, 11, 16)) == {"Maaş Örnek Yazılım": 60000.0}
+
+
+def test_statement_paid_uses_given_today(tmpdb):
+    """İleri tarihli "ödendi" işareti: hesabın günü (today) sistem gününden geride olsa da o gün ödenmiş sayılır."""
+    st = {"paid_at": "2026-11-25", "paid_amount": 1000.0, "total_debt": 1000.0}
+    assert tmpdb.statement_paid(st, "2026-11-20", "2026-11-20") == 1000.0  # bugün = 20 Kas: ileri tarihli de sayılır
+    assert tmpdb.statement_paid(st, "2026-11-20", "2026-11-22") is None    # geçmiş gün sorusu: 25'i henüz değil
+    assert tmpdb.statement_remaining(st, "2026-11-20", "2026-11-20") == 0.0
+
+
+def test_list_debts_schedule_uses_given_today(client, tmpdb):
+    r = client.post("/api/debts", json={"person": "Örnek Mağaza", "direction": "borc", "creditor_type": "magaza",
+                                        "plan_installment": 1000.0, "plan_count": 6, "plan_start": "2030-01",
+                                        "plan_day": 5, "debt_date": "2029-12-20"})
+    assert r.status_code == 200, r.text
+    a = tmpdb.list_debts(today=date(2030, 1, 2))[0]["schedule"]
+    b = tmpdb.list_debts(today=date(2030, 3, 2))[0]["schedule"]
+    assert a != b
