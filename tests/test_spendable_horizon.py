@@ -310,9 +310,9 @@ def _check_invariant(nw):
     assert fb["horizon"] == nw["spendable_horizon"]
     p = {x["key"]: x["amount"] for x in fb["parts"]}
     assert round(p["free"] - p["payments"] + p["income"] - p["funded"] - p["variable"], 2) == fb["amount"]
-    # fonlama ilkesi: gelir eklendiyse onun fonladığı (until'e kadar vadeli) kesin ödemeler de düşüldü
-    assert fb["no_new_spend"] == round(nw["spendable"] + p["income"] - p["funded"], 2)
-    assert (p["income"] > 0) == (fb["until"] > fb["horizon"]) or not p["income"] or fb["until"] >= fb["horizon"]
+    # MAAŞA KADAR (kullanıcı kararı 16.11): maaş eklenmez, no_new_spend == spendable, ana sayı ≤ spendable
+    assert p["income"] == 0 and p["funded"] == 0 and fb["no_new_spend"] == nw["spendable"]
+    assert fb["amount"] <= nw["spendable"] + 0.005 and fb["label_kind"] in ("maasa_kadar", "donem_sonu")
     assert p["free"] == nw["free"]
 
 
@@ -325,12 +325,14 @@ def test_forecast_balance_cut_passed_cycle_mid_and_last_day(cut_passed, client):
     for day in (date(2026, 11, 20), date(2026, 12, 15), date(2026, 12, 16)):
         nw = _nw(day)
         _check_invariant(nw)
-    mid = _nw(date(2026, 11, 20))["forecast_balance"]
+    # 20 Kas'ta 15 Kas maaşı hâlâ tolerans içinde bekleniyor (next_salary_date = bugün → until bugün)
+    assert _nw(date(2026, 11, 20))["forecast_balance"]["until"] == "2026-11-20"
+    mid = _nw(date(2026, 11, 25))["forecast_balance"]  # tolerans bitti: sıradaki maaş 15 Ara
     p = {x["key"]: x["amount"] for x in mid["parts"]}
     # kesimi geçmiş döngü: bundan sonraki kart harcaması sonraki ekstrede (son ödeme 25 Ara > ufuk 16 Ara): bilgi, düşülmez
-    # 15 Ara maaşı bekleniyor → hesap 14 Oca'ya kadar (fonlama ilkesi): kesimi geçmiş döngünün sonraki ekstresi (25 Ara)
-    # until'den önce ödenir → tahmini kart harcaması düşülür
-    assert mid["until"] == "2027-01-14" and p["variable_card"] > 0 and mid["amount"] < mid["no_new_spend"]
+    # maaşa kadar (15 Ara maaşı → 14 Ara): kesimi geçmiş döngünün sonraki ekstresi (25 Ara) maaştan sonra → kart bilgi
+    assert mid["until"] == "2026-12-14" and mid["label_kind"] == "maasa_kadar"
+    assert p["variable_card"] == 0 and p["variable_card_later"] > 0 and mid["amount"] == mid["no_new_spend"]
 
 
 def test_forecast_cash_variable_deducted(book, client, tmpdb, monkeypatch):
@@ -341,7 +343,9 @@ def test_forecast_cash_variable_deducted(book, client, tmpdb, monkeypatch):
                                                  "kind": "gider", "category": "Market & Gıda", "payment": "nakit"}).status_code == 200
     fb = _nw(date(2026, 11, 20))["forecast_balance"]
     p = {x["key"]: x["amount"] for x in fb["parts"]}
-    assert p["variable_cash"] == round(3000.0 * 26 / 30, 2)  # 20 Kas → 16 Ara 26 gün; 2026-12 dönemi 30 gün
+    # maaş kalemi yok → dönem sonuna (16 Ara) kadar 26 gün; günlük = medyan(3000/31, 3000/30, 3000/31) (Eyl/Eki/Kas dönemleri)
+    assert fb["label_kind"] == "donem_sonu" and fb["until"] == "2026-12-16"
+    assert p["variable_cash"] == round(3000.0 / 31 * 26, 2)
     assert fb["amount"] == round(fb["no_new_spend"] - p["variable"], 2) < fb["no_new_spend"]
 
 
@@ -354,7 +358,7 @@ def test_forecast_balance_salary_arrives(book, client, monkeypatch):
     assert r.status_code == 200, r.text
     before = _nw(date(2026, 11, 25))
     _check_invariant(before)
-    assert {x["key"]: x["amount"] for x in before["forecast_balance"]["parts"]}["income"] == 40000.0
+    assert before["forecast_balance"]["after_salary"]["income"] == 40000.0  # maaş ana sayıya EKLENMEZ, ikincil bilgi
     acc = client.get("/api/accounts").json()
     acc_id = (acc if isinstance(acc, list) else acc["accounts"])[0]["id"]
     r = client.post("/api/entries", json={"entry_date": "2026-12-15", "description": "Maaş", "amount": 40000.0, "kind": "gelir",
@@ -365,7 +369,7 @@ def test_forecast_balance_salary_arrives(book, client, monkeypatch):
     _check_invariant(after)
     # Aralık maaşı girildi: gelirden kalktı; 15 Ara dönemin sondan bir önceki günü → ufuk 16 Oca, yalnız Ocak maaşı
     assert after["spendable_horizon"] == "2027-01-16"
-    assert {x["key"]: x["amount"] for x in after["forecast_balance"]["parts"]}["income"] == 40000.0
+    assert after["forecast_balance"]["after_salary"]["income"] == 40000.0
 
 
 def test_payables_in_horizon(book):
