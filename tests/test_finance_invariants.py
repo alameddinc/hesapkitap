@@ -118,8 +118,6 @@ def test_card_payment_from_account_keeps_net(tmpdb, pay):
     assert "odendi_hesapsiz" not in _codes()
 
 
-@pytest.mark.xfail(strict=True, reason="fix/ekstre-odendi-hesap: hesap seçilmeden 'ödendi' denince para hiçbir hesaptan "
-                                       "düşmüyor, Ödemelerden sonra ödeme kadar şişiyor (bulgu sebebi 1)")
 def test_card_payment_without_account_keeps_net(tmpdb):
     _acc(tmpdb, BANK_A, 20000.0, as_of=T - timedelta(days=3))
     sid = _stmt(tmpdb, 3000.0)
@@ -238,8 +236,6 @@ def test_period_turn_without_new_data_keeps_cash_and_card_debt(tmpdb):
     assert _parts_total(b) == b["spendable"]
 
 
-@pytest.mark.xfail(strict=True, reason="fix/odemelerden-sonra-tek-ufuk: kesimi geçmiş, ekstresi yüklenmemiş ama hesaptan "
-                                       "ödenmiş döngü hâlâ 'kesilecek ekstre' olarak düşülüyor (sebep 4): ödeme iki kez")
 def test_paid_cycle_without_statement_not_deducted_twice(tmpdb):
     aid = _acc(tmpdb, BANK_A, 20000.0, as_of=T - timedelta(days=45))
     # son yüklenen ekstre 40 gün önce kesildi; sıradaki kesim 10 gün önce geçti (ekstresi yüklenmedi), son ödemesi 2 gün sonra
@@ -261,8 +257,6 @@ def test_paid_cycle_without_statement_not_deducted_twice(tmpdb):
     assert after["spendable"] == before["spendable"]  # nakit 500 azaldı, kesilecek ekstre 500 düşmeli
 
 
-@pytest.mark.xfail(strict=True, reason="fix/odemelerden-sonra-tek-ufuk: Ödemelerden sonra kalemlerinin ufku farklı "
-                                       "(sebep 5) — kesilecek ekstre 45 gün ileriyi, düzenli ödeme/fatura dönem sonunu sayıyor")
 def test_spendable_items_share_one_horizon(tmpdb):
     _acc(tmpdb, BANK_A, 30000.0)
     _, end = finance.period_bounds(finance.current_period(T))

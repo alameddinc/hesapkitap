@@ -389,10 +389,6 @@ def test_c_halk_dokum_merges_and_classifies(client, tmpdb, monkeypatch):
     assert out == [(-T_VAKIF, 1, 1), (-T_KUVEYT, None, 1)]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Alıcısı yazmayan 'GIDEN FAST - <KULLANICI ADI> TARAFINDAN GÖNDERİLEN' (kendi hesabına) satırı virman değil "
-    "'Kategorisiz' GİDER kaydı oluyor (bank_import.classify_reason: kalıp yok, TRANSFER kelimesi yok, ad bir kez geçiyor): "
-    "12.600 harcama/‘Şimdiye kadar’a yazılır. Nakit/Ödemelerden sonra etkilenmez (çapa)."))
 def test_c_own_name_fast_without_receiver_is_not_expense(client, tmpdb, monkeypatch):
     run(client, tmpdb, monkeypatch, "c")
     with tmpdb.connect() as c:
