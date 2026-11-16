@@ -1,0 +1,8 @@
+# Geliştirme / test bağımlılıkları (üretim imajına girmez: Dockerfile yalnız requirements.txt kurar)
+-r requirements.txt
+# çılgın testçiler: durumlu özellik testi (tests/cilgin/test_cilgin_hypothesis.py; yoksa o dosya atlanır)
+hypothesis==6.170.15
+# paralel test koşusu (-n 6); gece işi ve deploy kapısı kullanır
+pytest-xdist==3.8.0
+# mutasyon testi (scripts/mutasyon.sh; yalnız rapor)
+mutmut==3.8.1

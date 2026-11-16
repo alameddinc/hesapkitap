@@ -1,0 +1,57 @@
+name: Gece (simülasyon + çılgın testçiler)
+# Her gece: 10 aylık zaman hızlandırmalı simülasyon (6 persona) + çılgın testçilerin uzun turu YENİ tohumla.
+# Kırılan tohum iş özetine ve artefakta yazılır; yerelde: HK_SEED=<tohum> pytest -m uzun tests/cilgin
+on:
+  schedule:
+    - cron: "17 1 * * *"   # 04:17 TR
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "HK_SEED (boş: tarih + çalışma no)"
+        required: false
+
+jobs:
+  uzun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Tohum
+        id: seed
+        run: |
+          S="${{ github.event.inputs.seed }}"
+          [ -n "$S" ] || S="$(date -u +%Y%m%d)${{ github.run_number }}"
+          echo "HK_SEED=$S" >> "$GITHUB_ENV"
+          echo "seed=$S" >> "$GITHUB_OUTPUT"
+          echo "### Tohum: \`HK_SEED=$S\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Simülasyon + çılgın testçiler (uzun)
+        env:
+          SIM_RAPOR: sim-rapor
+          HK_ADIM: "400"
+        run: |
+          set -o pipefail
+          pytest -m uzun -n 4 -q tests/simulasyon tests/cilgin --hypothesis-seed="$HK_SEED" 2>&1 | tee uzun.log
+      - name: Hızlı çılgın tur (hypothesis, yeni tohum)
+        env:
+          HK_ADIM: "60"
+        run: pytest -q tests/cilgin -m "not uzun" --hypothesis-seed="$HK_SEED" -n 4
+      - name: Kırılan tohum
+        if: failure()
+        run: |
+          echo "### KIRMIZI — tekrar: \`HK_SEED=$HK_SEED pytest -m uzun tests/simulasyon tests/cilgin\`" >> "$GITHUB_STEP_SUMMARY"
+          grep -E "HK_SEED=|tohum|Falsifying|FAILED" uzun.log | head -40 >> "$GITHUB_STEP_SUMMARY" || true
+          echo "$HK_SEED" > kirilan-tohum.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gece-${{ steps.seed.outputs.seed }}
+          path: |
+            sim-rapor/
+            uzun.log
+            kirilan-tohum.txt
+          if-no-files-found: ignore
