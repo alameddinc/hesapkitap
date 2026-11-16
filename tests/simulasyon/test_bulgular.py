@@ -220,3 +220,30 @@ def test_s8_dekont_ascii_ad_dogru_kucuk_harf(client, tmpdb, monkeypatch):
     r = client.post("/api/dekont/save", json={"date": "2026-11-10", "amount": 100.0, "direction": "giden",
                                               "counterparty": "ORNEK EV SAHIBI", "account_id": aid}).json()
     assert r["counterparty"] in ("Ornek Ev Sahibi", "Örnek Ev Sahibi")
+
+
+# ---------------------------------------------------------------- S9 Ay sonunda kalacak: taksitli borç (89629f9)
+
+@pytest.mark.xfail(strict=True, reason="S9 (ORTA, 89629f9): finance._forecast_balance funded'a spendable_later'ın "
+                   "borç kalemini olduğu gibi ekliyor; o kalem (_debt_due_split → to_later any_date) ufuktan sonraki "
+                   "KALANIN TAMAMI, vadesi ilk taksit. İlk taksit until'e kadarsa bütün kalan düşülüyor: 6 × 1.500 "
+                   "planlı borçta 'Yeni harcama yapmazsan' 6.000 ₺ eksik (simülasyon P1, 101 gün). Öneri: funded'a "
+                   "yalnız until'e kadar vadeli taksitler (debt_schedule.installments) girsin.")
+def test_s9_ay_sonu_taksitli_borcun_yalniz_vadesi_gelen_taksidi(client, tmpdb, monkeypatch):
+    freeze(monkeypatch, date(2026, 11, 1))
+    tmpdb.set_setting("cycle_mode", "manual")
+    tmpdb.set_cycle_start_day(17)
+    tmpdb.set_account_balance("Örnek Banka A", 100000.0, "2026-10-31", "elle")
+    assert client.post("/api/recurring", json={"description": "Maaş", "amount": 61500.0, "kind": "gelir",
+                                               "category": "Maaş", "day_of_month": 15,
+                                               "start_month": "2026-06"}).status_code == 200
+    r = client.post("/api/debts", json={"person": "Örnek Komşu", "direction": "borc", "creditor_type": "kisi",
+                                        "plan_installment": 1500.0, "plan_count": 6, "plan_start": "2026-11",
+                                        "plan_day": 10, "debt_date": "2026-11-01"})
+    assert r.status_code == 200, r.text
+    n = finance.net_worth(date(2026, 11, 1))
+    fb = n["forecast_balance"]
+    inc = (n["spendable_after_income"] or {}).get("income") or 0.0
+    assert inc == 61500.0 and n["spendable_horizon"] == "2026-11-16" and fb["until"] == "2026-12-14"
+    # ufuk 16 Kas: 10 Kas taksidi spendable'da; until 14 Ara: yalnız 10 Ara taksidi (1.500) fonlanır
+    assert fb["no_new_spend"] == round(n["spendable"] + inc - 1500.0, 2), fb.get("funded_items")

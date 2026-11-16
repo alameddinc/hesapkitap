@@ -40,4 +40,5 @@ KNOWN: dict[str, str] = {
     "BULGU_dekont_kira": "S2 test_s2_dekonttan_kira_duzenli_kaleme_baglanir",
     "BULGU_dekont_aktarim_birlesti": "S3 test_s3_dekontlu_ikinci_aktarim_dunkune_baglanmaz",
     "BULGU_kesim_sonrasi_harcama": "S4 test_s4_kesimden_sonraki_elle_harcama_kapanmis_donguye_yazilmaz",
+    "BULGU_funded_borc_tamami": "S9 test_s9_ay_sonu_taksitli_borcun_yalniz_vadesi_gelen_taksidi",
 }

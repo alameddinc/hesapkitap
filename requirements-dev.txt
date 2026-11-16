@@ -4,5 +4,3 @@
 hypothesis==6.170.15
 # paralel test koşusu (-n 6); gece işi ve deploy kapısı kullanır
 pytest-xdist==3.8.0
-# mutasyon testi (scripts/mutasyon.sh; yalnız rapor)
-mutmut==3.8.1
