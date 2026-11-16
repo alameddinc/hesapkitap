@@ -566,7 +566,8 @@ CAPABILITIES = (
                               # satırında card_no ve cycle_paid {amount, date, covered, manual, payment_ids} (dökümden
                               # kart ödemesi ya da elle); covered (≥ kesin kısım ya da ≥ tahminin %80'i) ise döngü
                               # Ödemelerden sonra'dan ve Net durumun kesilecek ekstre tahmininden düşülmez, değilse kalan.
-                              # status yine "tahmini". net-worth credit_cards[].next_paid aynı nesne. Elle: POST
+                              # status yine "tahmini"; tahmin satırında da pay_account_hint / pay_account_hint_source
+                              # (ekstreyle aynı kural). net-worth credit_cards[].next_paid aynı nesne. Elle: POST
                               # /api/cards/cycle-pay {card_no, amount, paid_at?, account_id?} (kesim gelmediyse 409; hesap
                               # verilirse bakiye düşer), geri al DELETE /api/cards/cycle-pay?card_no=… (yalnız elle girilen)
     "forecast_balance",       # GET /api/net-worth forecast_balance {amount ("Ay sonunda kalacak", bakiye tabanlı), no_new_spend
