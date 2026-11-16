@@ -705,6 +705,13 @@ MIGRATIONS = [
     # silinen sabit kalemin eski id'si (kalem silinince recurring_id NULL olur; FK SET NULL): o kaydın maaşı silinen
     # kaleme aitti — kalan maaş kalemini "yattı" yapmaz, ona bağlanmaz (finance.salary_realized, link_salary_entries)
     ("entries", "former_recurring_id", "INTEGER"),
+    # fatura Ödendi'nin hesabı (yetenek bill_pay_account): 'disarida' = kullanıcı "Hesabımdan değil" dedi (nakit / takip
+    # edilmeyen hesap; denetim hesapsiz_hareket sormaz). NULL: hesaplı ya da hesabı belirsiz (eski istemci)
+    ("bills", "paid_via", "TEXT"),
+    # elle kaydın çapa günü cevabı (card_payments.in_anchor ile aynı anlam; şimdilik fatura Ödendi): 1 çapanın içinde
+    # (bakiyeden düşmez), 0 çapadan sonra (düşer). Yalnız kayıt hesabın son bakiye güncellemesinden SONRA girildiyse
+    # (id > anchor_entry_id) geçerli; daha yeni bakiye girilince eski kural (o bakiye kaydı zaten içerir)
+    ("entries", "in_anchor", "INTEGER"),
 ]
 
 # Göçlerden SONRA kurulan indeksler: kolonların bir kısmı (entries.account_id, card_payments.statement_id) eski
@@ -718,6 +725,24 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS ix_debt_payments_client ON debt_payments(client_key) WHERE client_key IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS ix_shopping_list_client ON shopping_list(client_key) WHERE client_key IS NOT NULL",
 ]
+
+
+_IMPORT_LOCKS: dict[str, threading.RLock] = {}
+_IMPORT_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def import_lock():
+    """Defter başına hesap dökümü içe aktarma kilidi (C1): 'zaten var' (import_hash) denetimi ile ekleme aynı kilitte;
+    aynı dökümün eşzamanlı ikinci yüklemesi birincinin bitmesini bekler, satırlarını "tekrar" görür. Yeniden girilir
+    (uç ve db.import_bank_rows ikisi de alır). Sunucu tek süreç (uvicorn, işçisiz): süreç içi kilit yeter. entries.
+    import_hash'e UNIQUE dizin KONMADI: eşleştirme (sync._merge_bank_entry) izi elle kayda yazıp banka kaydını sonra
+    siler, aynı işlemde kısa süre iki kayıt aynı izi taşır (dizin bunu kırar)."""
+    path = os.path.abspath(db_path())
+    with _IMPORT_LOCKS_GUARD:
+        lock = _IMPORT_LOCKS.setdefault(path, threading.RLock())
+    with lock:
+        yield
 
 
 # ---------------------------------------------------------------- aktif kullanıcının alanı
@@ -2052,7 +2077,8 @@ def transfer_recurring_candidates(c, data: dict) -> list:
     return out
 
 
-def _transfer_recurring_slots(c, data: dict, exclude_id: int | None = None) -> list[tuple[int, object, str]]:
+def _transfer_recurring_slots(c, data: dict, exclude_id: int | None = None,
+                              cands: list | None = None) -> list[tuple[int, object, str]]:
     """Kategori/açıklama + tutar + vade penceresi kuralıyla (yukarıda) bu giden transferin olabileceği düzenli ödeme
     oluşumları: [(uzaklık gün, sabit kalem, dönem)], en yakını önce. Dolu (o döneme zaten bağlı kayıt var), etkin
     olmayan ve atlanan dönem dışarıda. Kural yalnız ad/kişi anahtarı tutmayan kayıtlar için (recurring_for önce)."""
@@ -2062,7 +2088,7 @@ def _transfer_recurring_slots(c, data: dict, exclude_id: int | None = None) -> l
         return []
     d = _date.fromisoformat(str(data["entry_date"])[:10])
     out = []
-    for rec in transfer_recurring_candidates(c, data):
+    for rec in (transfer_recurring_candidates(c, data) if cands is None else cands):
         taken = {r[0] for r in c.execute("SELECT month FROM entries WHERE recurring_id = ? AND id IS NOT ?",
                                          (rec["id"], exclude_id))}
         for m in _months_around(period_of(d)):
@@ -2076,6 +2102,44 @@ def _transfer_recurring_slots(c, data: dict, exclude_id: int | None = None) -> l
                 continue
             out.append((abs(gap), abs(data["amount"] - plan) / plan if plan > 0 else 1.0, rec, m))
     return [(g, r, m) for g, _, r, m in sorted(out, key=lambda x: (x[0], x[1], x[2]["id"]))]
+
+
+def _stem_match(want: set[str], have: set[str]) -> bool:
+    """Kalemin her kelimesi metinde ya aynen ya da Türkçe ek farkıyla (biri öbürünün ≥4 harfli ön eki) geçiyor mu:
+    'EV KIRASI' ↔ 'EV ... KIRA', 'AIDAT' ↔ 'AIDATI'."""
+    def hit(w: str) -> bool:
+        return any(w == h or (len(h) >= 4 and w.startswith(h)) or (len(w) >= 4 and h.startswith(w)) for h in have)
+    return bool(want) and all(hit(w) for w in want)
+
+
+def dekont_recurring(c, data: dict) -> None:
+    """Dekonttan kaydedilen giden havaleyi düzenli ödemeye bağla (S2): önce elle kayıt kuralı (_attach_recurring: ad,
+    kişi anahtarı, kategori/açıklama + tutar + vade penceresi). Tutmazsa dekonta özgü ek adaylar, AYNI tutar/vade
+    penceresi/doluluk kuralıyla: (a) kalemin adının kelimeleri açıklamada/kişi adında ek farkıyla geçiyor ('Ev kirası'
+    ↔ 'Örnek Ev Sahibi · Kira'); (b) aynı kişiye (alıcı adı) daha önce giden havale bu kaleme bağlı. Kalemin hesabı
+    belliyse dekontun hesabı aynı olmalı. Bağlanınca kategori genelse kalemin kategorisi yazılır. data yerinde değişir."""
+    from app.categorize import fold_key
+    from app.textnorm import normalize
+
+    _attach_recurring(c, data)
+    if not data.get("recurring_id") and _is_transfer_expense(data):
+        words = set(normalize(" ".join(x for x in (data.get("description"), data.get("counterparty"), data.get("note"))
+                                       if x)).split())
+        prior = set()
+        if data.get("counterparty"):
+            key = fold_key(data["counterparty"])
+            prior = {r[0] for r in c.execute("SELECT DISTINCT recurring_id, counterparty FROM entries "
+                                             "WHERE recurring_id IS NOT NULL AND counterparty IS NOT NULL").fetchall()
+                     if fold_key(r[1]) == key}
+        cands = [rec for rec in c.execute("SELECT * FROM recurring WHERE kind = 'gider' ORDER BY id").fetchall()
+                 if (not rec["account_id"] or not data.get("account_id") or rec["account_id"] == data["account_id"])
+                 and (rec["id"] in prior or _stem_match(set(normalize(rec["description"] or "").split()), words))]
+        if cands and (slots := _transfer_recurring_slots(c, data, cands=cands)):
+            data["recurring_id"], data["month"] = slots[0][1]["id"], slots[0][2]
+    if data.get("recurring_id") and data.get("category") in _GENERIC_CATEGORIES:
+        r = c.execute("SELECT category FROM recurring WHERE id = ?", (data["recurring_id"],)).fetchone()
+        if r and r[0]:
+            data["category"] = r[0]
 
 
 RECURRING_BACKFILL_DAYS = 45
@@ -3021,7 +3085,32 @@ def unknown_statement_payments(today: str | None = None, statements: list[dict] 
                          "title": (r["description"] or "Kart ödemesi").replace("Kart ödemesi · ", ""), "bank": None,
                          "card_no": r["card_last4"], "amount": round(r["amount"], 2), "paid_at": pd},
                         neden(pd, r["created_at"], win, r["amount"], banks.get(r["card_last4"]), r["card_last4"])))
-    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"] or 0, x.get("card_payment_id") or 0))
+    # fatura Ödendi'de hesap söylenmemiş (anahtar yok, eski istemci; yetenek bill_pay_account): aynı kavram, aynı kural.
+    # Havale / banka ya da yolu boş gider kaydı, hesabı yok, "Hesabımdan değil" denmemiş. Kartla ödenen ekstrede, nakitle
+    # ödenen elde (hesap takibi yok) belirsiz değil. İşaretlenme anı = gider kaydının created_at; karşılık penceresi
+    # ödeme günü −20 / +7 (dökümde aynı tutarlı gider). type "fatura"; ötekiler type "kart"
+    for b in unknown_bill_payments(since, day):
+        pd = b["entry_date"][:10]
+        pdd = _date.fromisoformat(pd)
+        win = ((pdd - _td(days=21)).isoformat(), (pdd + _td(days=7)).isoformat())
+        out.append(item({"statement_id": None, "bill_id": b["id"], "entry_id": b["entry_id"], "type": "fatura",
+                         "title": b["provider"], "bank": None, "card_no": None, "amount": round(b["amount"], 2),
+                         "paid_at": pd}, neden(pd, b["created_at"], win, b["amount"], None, None)))
+    for x in out:
+        x.setdefault("type", "kart")
+    return sorted(out, key=lambda x: (x["paid_at"], x["statement_id"] or 0, x.get("card_payment_id") or 0,
+                                      x.get("bill_id") or 0))
+
+
+def unknown_bill_payments(since: str, day: str) -> list[dict]:
+    """Hesabı belirsiz fatura ödemeleri (unknown_statement_payments'ın fatura kolu): bağlı gider kaydı hesapsız, ödeme
+    yolu havale / banka / boş, paid_via boş (Hesabımdan değil denmemiş), dökümden gelmemiş, ödeme günü [since, day]."""
+    with connect() as c:
+        return rows(c.execute(
+            "SELECT b.id, b.provider, e.id AS entry_id, e.entry_date, e.amount, e.created_at FROM bills b "
+            "JOIN entries e ON e.id = b.entry_id WHERE b.paid_via IS NULL AND e.account_id IS NULL AND e.wallet_id IS NULL "
+            "AND e.import_hash IS NULL AND e.skipped = 0 AND COALESCE(e.payment, 'havale') IN ('havale', 'banka') "
+            "AND e.amount > 0 AND e.entry_date BETWEEN ? AND ?", (since, day)))
 
 
 def last_pay_accounts() -> dict[str, int]:
@@ -3111,20 +3200,48 @@ def delete_bill(bid: int) -> None:
             remove_file("bills", b["file_name"])
 
 
-def pay_bill(bid: int, amount: float, paid_at: str, payment: str | None) -> int:
-    """Fatura ödendi → gider kaydı oluştur (kredi kartıyla ödendiyse ekstre gelince eşleşir)."""
+def check_bill_pay_account(account_id, payment: str | None) -> None:
+    """Fatura ödemesinin hesabı geçerli mi (ValueError): kartla ödenen fatura banka hesabından seçilmez; hesap banka ya
+    da nakit hesabı olmalı. None / _KEEP her zaman geçer."""
+    if not isinstance(account_id, int):
+        return
+    if payment == "kredi_karti":
+        raise ValueError("Kartla ödenen fatura banka hesabından seçilmez")
+    with connect() as c:
+        if not c.execute("SELECT 1 FROM accounts WHERE id = ? AND kind IN ('banka', 'nakit')", (account_id,)).fetchone():
+            raise ValueError("Hesap bulunamadı")
+
+
+def pay_bill(bid: int, amount: float, paid_at: str, payment: str | None, account_id=_KEEP) -> int:
+    """Fatura ödendi → gider kaydı oluştur (kredi kartıyla ödendiyse ekstre gelince eşleşir). account_id (yetenek
+    bill_pay_account; ekstre Ödendi ile aynı üç hâl): X → o hesaptan (bakiye düşer; ödeme yolu verilmediyse havale);
+    None → hesabımdan değil (nakit / takip edilmeyen hesap: paid_via 'disarida', denetim sormaz); _KEEP (anahtar yok) →
+    yeniden ödemede önceki kaydın hesabı korunur, ilk ödemede hesabı belirsiz (eski davranış; denetim uyarır)."""
     amount = money.money(amount)
     b = get_bill(bid)
     if not b:
         raise ValueError("Fatura yok")
+    check_bill_pay_account(account_id, payment)
+    if account_id is _KEEP:  # anahtar yok: önceki ödemenin hesabı / "hesabımdan değil" cevabı korunur
+        via = b.get("paid_via") if b["entry_id"] else None
+    else:
+        via = "disarida" if account_id is None else None
     with connect() as c:
         if b["entry_id"]:
+            if account_id is _KEEP:
+                old = c.execute("SELECT account_id FROM entries WHERE id = ?", (b["entry_id"],)).fetchone()
+                account_id = old[0] if old else None
             c.execute("DELETE FROM entries WHERE id = ?", (b["entry_id"],))
+    if account_id is _KEEP:
+        account_id = None
+    if isinstance(account_id, int):
+        payment = payment or "havale"
     eid = create_entry({"entry_date": paid_at, "description": b["provider"], "amount": amount, "kind": "gider",
-                        "category": b["category"] or "Faturalar", "payment": payment,
+                        "category": b["category"] or "Faturalar", "payment": payment, "account_id": account_id,
                         "note": " · ".join(x for x in ("Fatura", b["description"]) if x)})
     with connect() as c:
-        c.execute("UPDATE bills SET paid_at = ?, paid_amount = ?, entry_id = ? WHERE id = ?", (paid_at, amount, eid, bid))
+        c.execute("UPDATE bills SET paid_at = ?, paid_amount = ?, entry_id = ?, paid_via = ? WHERE id = ?",
+                  (paid_at, amount, eid, via, bid))
     auto_link()
     return eid
 
@@ -3136,7 +3253,7 @@ def unpay_bill(bid: int) -> None:
     with connect() as c:
         if b["entry_id"]:
             c.execute("DELETE FROM entries WHERE id = ?", (b["entry_id"],))
-        c.execute("UPDATE bills SET paid_at = NULL, paid_amount = NULL, entry_id = NULL WHERE id = ?", (bid,))
+        c.execute("UPDATE bills SET paid_at = NULL, paid_amount = NULL, entry_id = NULL, paid_via = NULL WHERE id = ?", (bid,))
 
 
 def save_bill_file(data: bytes, ext: str) -> str | None:
@@ -3883,21 +4000,34 @@ def delete_own_pair(tid: int) -> int:
     return len(legs)
 
 
-def find_own_leg(day: str, signed_amount: float, account_id: int | None, ref: str | None = None) -> dict | None:
-    """Bu hesapta aynı tutar ve yönde (±1 gün) kayıtlı aktarım bacağı (elle, dekont ya da döküm). Başka sorgu numaralı
-    dekontun bacağı sayılmaz (aynı gün aynı tutarda iki ayrı aktarım)."""
+def own_leg_candidates(day: str, signed_amount: float, account_id: int | None, ref: str | None = None) -> list[dict]:
+    """Bu hesapta aynı tutar ve yönde (±1 gün) kayıtlı aktarım bacakları (elle, dekont ya da döküm), en yakın gün önce.
+    Başka sorgu numaralı dekontun bacağı sayılmaz (aynı gün aynı tutarda iki ayrı aktarım)."""
     if not account_id:
-        return None
+        return []
     with connect() as c:
         cands = rows(c.execute(
             "SELECT * FROM own_transfers WHERE account_id = ? AND ROUND(amount * 100) = ? "
             "AND transfer_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') "
             "ORDER BY ABS(julianday(transfer_date) - julianday(?)), id", (account_id, money.kurus(signed_amount), day, day, day)))
-    for x in cands:
-        if ref and x.get("ref") and x["ref"] != ref:
-            continue
-        return x
+    return [x for x in cands if not (ref and x.get("ref") and x["ref"] != ref)]
+
+
+def find_own_leg(day: str, signed_amount: float, account_id: int | None, ref: str | None = None) -> dict | None:
+    """Sorgu numarası tutmadan KESİN eşleşen bacak: ±1 gün penceresinde TEK aday ve aynı gün. Birden çok aday ya da
+    farklı gün (dün elle girilmiş başka bir aktarım olabilir; S3) kesin değil: own_leg_maybe, kullanıcıya sorulur."""
+    cands = own_leg_candidates(day, signed_amount, account_id, ref)
+    if len(cands) == 1 and cands[0]["transfer_date"] == day:
+        return cands[0]
     return None
+
+
+def own_leg_maybe(day: str, signed_amount: float, account_id: int | None, ref: str | None = None) -> dict | None:
+    """Kesin olmayan aday (find_own_leg tutmadıysa en yakını): "Bu aktarım daha önce eklenmiş olabilir — bağla?"."""
+    cands = own_leg_candidates(day, signed_amount, account_id, ref)
+    if len(cands) == 1 and cands[0]["transfer_date"] == day:
+        return None
+    return cands[0] if cands else None
 
 
 def own_leg_by_ref(ref: str | None) -> dict | None:
@@ -4011,7 +4141,14 @@ def _tr_day(d: str) -> str:
 def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | None = None, account_id: int | None = None,
                      iban: str | None = None, new_account: bool = False, check_overlap: bool = True) -> dict:
     """Ayrıştırılmış hesap hareketlerini kaydet. Özet sayaçları döner.
-    account: dökümün bankası (metin); account_id: kullanıcının seçtiği hesap (yoksa IBAN / banka adıyla bulunur)."""
+    account: dökümün bankası (metin); account_id: kullanıcının seçtiği hesap (yoksa IBAN / banka adıyla bulunur).
+    Defter başına tek içe aktarma (import_lock; C1)."""
+    with import_lock():
+        return _import_bank_rows(rows, account, owners, account_id, iban, new_account, check_overlap)
+
+
+def _import_bank_rows(rows: list[dict], account: str, owners: list[str] | None, account_id: int | None,
+                      iban: str | None, new_account: bool, check_overlap: bool) -> dict:
     import re as _re
     from datetime import date as _date, timedelta
 
@@ -5376,8 +5513,8 @@ def anchor_conflict(account_id: int | None, day: str | None) -> dict | None:
 
 def set_in_anchor(table: str, ids: list[int], in_balance: bool | None) -> None:
     """Kullanıcının cevabını yaz (elle kayıtlar; dökümden gelenlere dokunulmaz: onlar zaten bakiyede). debts: hesaplı
-    borç/alacak açılışı (hareketi olmayan verildi/alındı adımı)."""
-    if in_balance is None or not ids or table not in ("card_payments", "own_transfers", "debts"):
+    borç/alacak açılışı (hareketi olmayan verildi/alındı adımı); entries: hesaplı elle gider/gelir (fatura ödemesi)."""
+    if in_balance is None or not ids or table not in ("card_payments", "own_transfers", "debts", "entries"):
         return
     with connect() as c:
         if table == "debts":
@@ -5458,6 +5595,13 @@ def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | N
                          AND pay_date <= ?""",
                       (a["id"], a["as_of"], a["as_of"], cp_id, cp_id, a.get("updated_at"), hi)).fetchone()[0]
     flows -= cards
+    # elle kayıt (fatura Ödendi) çapa günü cevabı (entries.in_anchor): yalnız son bakiye güncellemesinden sonra girilmiş,
+    # çapa günü ya da öncesindeki kayıtlar. Eski kural bunları yalnız çapa günündeyse sayardı; cevap onun yerine geçer
+    for r in c.execute("""SELECT kind, amount, entry_date, in_anchor FROM entries WHERE account_id = ? AND skipped = 0
+                          AND in_anchor IS NOT NULL AND id > ? AND entry_date <= ? AND entry_date <= ?""",
+                       (a["id"], a["anchor_entry_id"] or 0, a["as_of"], hi)):
+        signed = r["amount"] if r["kind"] == "gelir" else -r["amount"]
+        flows += signed * ((r["in_anchor"] == 0) - (r["entry_date"] == a["as_of"]))
     # elle / dekonttan girilen aktarım çapa günü girildiyse bakiye güncellemesinden sonra mı (kart ödemesi gibi)
     flows += c.execute("""SELECT COALESCE(SUM(amount), 0) FROM own_transfers WHERE account_id = ?
                           AND (import_hash IS NULL OR import_hash LIKE 'mail:%')

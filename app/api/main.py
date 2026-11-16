@@ -3701,7 +3701,9 @@ def bank_import_run(file: UploadFile = File(...), mapping: str = Form("{}"), hea
     from app import undo
 
     raw = _file_bytes(file)
-    with undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
+    # defter başına tek içe aktarma (C1): aynı döküm aynı anda iki kez (çift dokunuş, iki sekme) satırları ikilemesin;
+    # hesap çözümlemesi (new_account) de kilidin içinde
+    with db.import_lock(), undo.batch(f"Hesap dökümü: {file.filename or account or 'dosya'}") as b:
         if account_id and not any(a["id"] == account_id and a["kind"] == "banka" for a in db.list_accounts()):
             raise HTTPException(422, "Hesap bulunamadı")
         # açık seçim yoksa önizlemeyle aynı çözümleme (IBAN → hesap, banka adı → hesap): hesapsız eklenmesin
@@ -6649,6 +6651,8 @@ class OwnTransferIn(BaseModel):
     ref: str | None = Field(None, max_length=40)                                    # dekontun sorgu / referans no
     dekont_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.(?:jpg|pdf)$")  # okuma yanıtındaki dosya
     dekont_side: Literal["giden", "gelen"] | None = None                            # dekont hangi bacağın (doc_direction)
+    # yetenek own_transfer_maybe: dekont okumasındaki own.maybe_match.id ("daha önce eklenmiş olabilir — bağla?" onayı)
+    link_to: int | None = Field(None, gt=0)
     # yetenek anchor_conflict: aktarım günü hesabın çapa günü ya da öncesiyse istemci sorar — true: bu aktarım o bakiyede
     # zaten var (düşülmez), false: bakiyeden sonra yapıldı (düşer). Yoksa: önceki gün içinde, aynı gün kayıt sırası
     in_balance: bool | None = None
@@ -8740,6 +8744,9 @@ class BillIn(BaseModel):
     paid_at: date | None = None
     payment: Payment | None = None
     spender: str | None = Field(None, max_length=20)  # kim harcadı (ortak defter; ödenmiş açılan faturanın gider kaydı)
+    # ödenmiş açılıyorsa (paid_at) ödemenin hesabı ve çapa cevabı: POST /api/bills/{id}/pay ile aynı (bill_pay_account)
+    account_id: int | None = None
+    in_balance: bool | None = None
 
 
 class BillPatch(BaseModel):
@@ -9628,16 +9635,24 @@ def create_bill(body: BillIn):
     """Fatura ekle. Yetenek save_book_choice: üye öbür defterine kaydedebilir (X-HK-Book): okumadaki file_name öbür
     defterdeyse kopyalanır; spender (POST /api/entries gibi) ödenmiş açılan faturanın gider kaydına uygulanır."""
     choice = _save_spender(body.spender)
-    data = body.model_dump(exclude={"paid_at", "payment", "spender"})
+    data = body.model_dump(exclude={"paid_at", "payment", "spender", "account_id", "in_balance"})
     data["due_date"] = body.due_date.isoformat()
+    acc = body.account_id if "account_id" in body.model_fields_set else db._KEEP
+    if body.paid_at is not None:
+        _visible_or_404("account", body.account_id)
+        try:
+            db.check_bill_pay_account(acc, body.payment)
+        except ValueError as e:
+            raise HTTPException(422, errors.user_text(e, 422)) from e
     if data.get("file_name") and not db.file_indexed("bills", data["file_name"]):
         _adopt_file("bills", data["file_name"])  # üyenin öbür defterinde okunmuş fatura (eski davranış: ad aynen kalır)
     bid = db.create_bill(data)
     if body.paid_at is None:
         return {"id": bid}
-    eid = db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment)
+    eid = db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment, acc)
     _apply_spender(choice, eid)
-    return {"id": bid, "entry_id": eid}
+    return {"id": bid, "entry_id": eid, **_anchor_answer("entries", eid, acc if isinstance(acc, int) else None,
+                                                          body.paid_at.isoformat(), body.in_balance)}
 
 
 @app.patch("/api/bills/{bid}")
@@ -9655,12 +9670,30 @@ def delete_bill(bid: int):
     return {"ok": True}
 
 
+class BillPayIn(PayIn):
+    # yetenek bill_pay_account ("Nereden ödendi?"; ekstre Ödendi ile aynı üç hâl): X → o hesaptan (bakiye düşer);
+    # null → hesabımdan değil (nakit / takip edilmeyen hesap); anahtar yok → eski davranış (hesabı belirsiz; yeniden
+    # ödemede önceki hesap korunur)
+    account_id: int | None = None
+    # yetenek anchor_conflict: ödeme günü hesabın çapa günü ya da öncesiyse istemci sorar — true: bu ödeme o bakiyede
+    # zaten var (düşülmez), false: bakiyeden sonra yapıldı (düşer). Yoksa: önceki gün içinde, aynı gün kayıt sırası
+    in_balance: bool | None = None
+
+
 @app.post("/api/bills/{bid}/pay")
-def pay_bill(bid: int, body: PayIn):
+def pay_bill(bid: int, body: BillPayIn):
+    """Fatura ödendi: gider kaydı. Dönüş {entry_id, anchor_conflict?} (hesaplıysa ve ödeme günü çapa günü/öncesiyse)."""
+    if not db.get_bill(bid):
+        raise HTTPException(404, errors.GENERIC[404])
+    _visible_or_404("account", body.account_id)
+    acc = body.account_id if "account_id" in body.model_fields_set else db._KEEP
     try:
-        return {"entry_id": db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment)}
+        eid = db.pay_bill(bid, body.amount, body.paid_at.isoformat(), body.payment, acc)
     except ValueError as e:
-        raise HTTPException(404, errors.user_text(e, 404)) from e
+        raise HTTPException(422, errors.user_text(e, 422)) from e
+    with db.connect() as c:  # anahtar yoksa önceki ödemenin hesabı korunmuş olabilir
+        acc_id = c.execute("SELECT account_id FROM entries WHERE id = ?", (eid,)).fetchone()[0]
+    return {"entry_id": eid, **_anchor_answer("entries", eid, acc_id, body.paid_at.isoformat(), body.in_balance)}
 
 
 @app.delete("/api/bills/{bid}/pay")

@@ -148,10 +148,18 @@ def test_unpaid_bill_this_period_deducted(book):
 def test_paid_bill_not_deducted(book):
     once = _nw(book)
     bid = _bill(book, 640.0, T)
-    assert book.post(f"/api/bills/{bid}/pay", json={"amount": 640.0, "paid_at": T.isoformat()}).status_code == 200
+    # "Hesabımdan değil" (account_id null): fatura kalemi düşmez, hesap belirsizliği de yok
+    assert book.post(f"/api/bills/{bid}/pay", json={"amount": 640.0, "paid_at": T.isoformat(),
+                                                   "account_id": None}).status_code == 200
     nw = _nw(book)
     assert "bills" not in _parts(nw) and nw["bills_items"] == []
     assert nw["spendable"] == once["spendable"]
+    # hesap söylenmeden (eski istemci): fatura kalemi yine yok, ödeme ekstrenin belirsiz ödemesiyle aynı kuralla
+    # "Hesabı belli olmayan ödeme" satırında (yetenek bill_pay_account; çapa kuralı tutarsa düşülür)
+    assert book.post(f"/api/bills/{bid}/pay", json={"amount": 640.0, "paid_at": T.isoformat()}).status_code == 200
+    nw = _nw(book)
+    assert "bills" not in _parts(nw) and nw["bills_items"] == []
+    assert nw["spendable"] == once["spendable"]  # anahtar yok: önceki "Hesabımdan değil" cevabı korunur
 
 
 def test_bill_due_next_period_not_deducted(book, monkeypatch):

@@ -68,11 +68,6 @@ def test_s1_iki_maas_dokum_birinci_maasin_ustune_yazmaz(client, tmpdb, monkeypat
 
 # ---------------------------------------------------------------- S2 dekonttan kira
 
-@pytest.mark.xfail(strict=True, reason="S2 (YÜKSEK): dekonttan kaydedilen kira (POST /api/dekont/save → "
-                   "app/dekont_parse.py save ~419) düzenli kaleme bağlanmıyor (kategori 'Kategorisiz', recurring_id yok; "
-                   "db._attach_recurring/_transfer_recurring_slots tutmuyor). Kira hem bakiyeden düştü hem 'Düzenli "
-                   "ödemeler'de bekliyor: Ödemelerden sonra her ay kira kadar (14–24 bin ₺) EKSİK; denetim "
-                   "duzenli_bekliyor doğru yakalıyor.")
 def test_s2_dekonttan_kira_duzenli_kaleme_baglanir(client, tmpdb, monkeypatch):
     belgeler.install(monkeypatch)
     freeze(monkeypatch, date(2026, 11, 10))
@@ -95,15 +90,32 @@ def test_s2_dekonttan_kira_duzenli_kaleme_baglanir(client, tmpdb, monkeypatch):
     n = finance.net_worth(date(2026, 11, 10))
     assert n["cash"] == 36000.0
     assert not n["recurring_items"], n["recurring_items"]
+    with tmpdb.connect() as c:
+        e = dict(c.execute("SELECT category, month, recurring_id FROM entries").fetchone())
+    assert e["category"] == "Kira & Aidat" and e["month"] == "2026-11" and e["recurring_id"]
+
+
+def test_s2_dekont_baska_kisiye_ayni_tutar_kiraya_baglanmaz(client, tmpdb, monkeypatch):
+    """Ters yön: adı/açıklaması kalemi tutmayan ya da başka hesaptan giden havale kiraya bağlanmaz."""
+    freeze(monkeypatch, date(2026, 11, 10))
+    tmpdb.set_setting("cycle_mode", "manual")
+    tmpdb.set_cycle_start_day(1)
+    tmpdb.set_account_balance("Örnek Banka A", 50000.0, "2026-11-01", "elle")
+    tmpdb.set_account_balance("Örnek Banka B", 50000.0, "2026-11-01", "elle")
+    ids = _ids(tmpdb)
+    assert client.post("/api/recurring", json={"description": "Ev kirası", "amount": 14000.0, "kind": "gider",
+                                               "category": "Kira & Aidat", "day_of_month": 10, "start_month": "2026-06",
+                                               "account_id": ids["Örnek Banka A"]}).status_code == 200
+    for body in ({"counterparty": "ORNEK OTO GALERI", "account_id": ids["Örnek Banka A"], "description": "Kapora"},
+                 {"counterparty": "ORNEK EV SAHIBI", "account_id": ids["Örnek Banka B"], "description": "Kira"}):
+        assert client.post("/api/dekont/save", json={"date": "2026-11-10", "amount": 14000.0, "direction": "giden",
+                                                     **body}).status_code == 200
+    with tmpdb.connect() as c:
+        assert c.execute("SELECT COUNT(*) FROM entries WHERE recurring_id IS NOT NULL").fetchone()[0] == 0
 
 
 # ---------------------------------------------------------------- S3 dekontlu aktarım dünkü elle aktarıma bağlanıyor
 
-@pytest.mark.xfail(strict=True, reason="S3 (ORTA): app/dekont_parse.py save_own → db.find_own_leg (app/db.py ~3825) "
-                   "±1 gün, aynı tutar ve hesapta sorgu numarasız bir bacak bulunca YENİ dekontu ona bağlıyor "
-                   "(linked: true, created: 0). Dün elle girilmiş 5.000'lik aktarımdan sonra bugün yapılan ikinci "
-                   "5.000'lik aktarımın dekontu kayboluyor: iki hesabın bakiyesi 5.000 yanlış (toplam nakit doğru). "
-                   "Öneri: tarihi farklı + öbür bacakta ref yoksa sor ya da yeni kayıt aç.")
 def test_s3_dekontlu_ikinci_aktarim_dunkune_baglanmaz(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 22))
     tmpdb.set_account_balance("Örnek Banka A", 10000.0, "2026-11-10", "elle")
@@ -157,10 +169,6 @@ def test_s5_hesapli_alacak_acilisi_capa_gunu_bakiyeden_duser(client, tmpdb, monk
 
 # ---------------------------------------------------------------- S6 fatura Ödendi hesap sormuyor
 
-@pytest.mark.xfail(strict=True, reason="S6 (ORTA, tasarım): POST /api/bills/{id}/pay (PayIn: amount, paid_at, payment) "
-                   "hesap almıyor; havaleyle ödenen faturanın gideri hesapsız yazılır (db.pay_bill ~3011), banka "
-                   "bakiyesi uygulamada DÜŞMEZ (free fatura kadar fazla; denetim hesapsiz_hareket uyarır). Simülasyonda "
-                   "elle hesaplı personalarda her fatura ödemesinde görülür; ancak döküm/elle bakiye ile düzelir.")
 def test_s6_fatura_odendi_hesaptan_duser(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 20))
     tmpdb.set_account_balance("Örnek Banka A", 10000.0, "2026-11-15", "elle")
@@ -193,8 +201,6 @@ def test_s7_acik_recurring_id_erken_maasi_dogru_doneme_yazar(client, tmpdb, monk
 
 # ---------------------------------------------------------------- S8 kişi adı büyük/küçük harf
 
-@pytest.mark.xfail(strict=True, reason="S8 (KOZMETİK): dekonttaki ASCII büyük harfli ad 'ORNEK EV SAHIBI' kayıtta "
-                   "'Ornek Ev Sahıbı' oluyor (dekont._title: I → ı). Türkçe olmayan (ASCII) metinde I → i olmalı.")
 def test_s8_dekont_ascii_ad_dogru_kucuk_harf(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 10))
     tmpdb.set_account_balance("Örnek Banka A", 50000.0, "2026-11-01", "elle")

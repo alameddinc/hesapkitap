@@ -36,6 +36,5 @@ def test_simulasyon(persona, client, monkeypatch, tmp_path):
 # uyuşmazlığı K* yerine BULGU_* sınıfına yazar (sim.py check_day). Minimal tekrarları test_bulgular.py'de xfail(strict).
 # Hata düzeltilince: xfail XPASS olur → işareti kaldır, buradan ve sim.py'deki modelden sil.
 KNOWN: dict[str, str] = {
-    "BULGU_dekont_kira": "S2 test_s2_dekonttan_kira_duzenli_kaleme_baglanir",
-    "BULGU_dekont_aktarim_birlesti": "S3 test_s3_dekontlu_ikinci_aktarim_dunkune_baglanmaz",
+    # 16.11 entegrasyon: S1–S9 hepsi düzeldi (test_bulgular.py'de xfail yok); bilinen hata kalmadı
 }

@@ -281,6 +281,7 @@ class Sim:
         self.rent_app_pending: set = set()
         self.unknown: list[dict] = []              # hesapsız Ödendi: {stmt, amount, day, seq, acc, linked}
         self.lost: list[tuple] = []                # (seq, hesap, ±tutar) dekontu eski aktarıma bağlanıp kaybolan
+        self.two_sal_seen = False
         self.steps: list[str] = []
         self.mismatches: list[Mismatch] = []
         self.stats = {"gun": 0, "kontrol": 0, "adim": 0, "api": 0, "derin_gun": 0}
@@ -715,11 +716,11 @@ class Sim:
             self.log(f"fatura {b.provider} {b.amount} karttan otomatik")
             return
         a = self.accs[b.acc]
-        # faturanın "Ödendi"si hesap sormuyor (PayIn'de account_id yok): bakiye uygulamada düşmez → bildirilmemiş
-        self.move(b.acc, -b.amount, f"{b.provider.upper()} FATURA ODEMESI", informed=False, tag="fatura")
+        # S6 düzeldi: "Ödendi"de "Nereden ödendi?" (yetenek bill_pay_account) → hesaptan düşer (bildirilmiş hareket)
+        self.move(b.acc, -b.amount, f"{b.provider.upper()} FATURA ODEMESI", informed=True, tag="fatura")
         self.api("post", f"/api/bills/{b.bid}/pay", json={"amount": b.amount, "paid_at": self.today.isoformat(),
-                                                         "payment": "havale"})
-        self.log(f"fatura {b.provider} {b.amount} {a.cfg.key}'dan (hesap sorulmadı)")
+                                                         "payment": "havale", "account_id": a.id})
+        self.log(f"fatura {b.provider} {b.amount} {a.cfg.key}'dan")
 
     def do_cash(self) -> None:
         nakit = next((a for a in self.accs.values() if a.cfg.kind == "nakit"), None)
@@ -770,8 +771,9 @@ class Sim:
                              "dekont_side": (r or {}).get("doc_direction") or "giden"})
             r = self.api("post", "/api/own-transfers", json=body)
             ms.informed = md.informed = True
-            if r and r.get("linked"):
-                self.lost += [(ms.seq, src.cfg.key, amt), (md.seq, dst.cfg.key, -amt)]  # iki bacak da uygulamada (döküm kipindeki bacak döküm gelene dek)
+            if r and r.get("linked"):  # S3 düzeldi: yeni aktarımın dekontu kayıtlı başka aktarıma bağlanmamalı
+                self.fail("K1_aktarim_birlesti", "yeni aktarımın dekontu kayıtlı başka bir aktarıma bağlandı",
+                          {"linked": False}, {k: r.get(k) for k in ("id", "linked", "created")})
         self.log(f"aktarım {src.cfg.key}→{dst.cfg.key} {amt}{' ATM' if atm else ''} "
                  f"({'elle' if both_elle else 'karışık/döküm'})")
 
@@ -1042,6 +1044,20 @@ class Sim:
         k = diff / self.p.rent[0]
         return abs(k - round(k)) < 1e-6
 
+    def two_salary_bug(self, a_inc: float, e_inc: float) -> bool:
+        """Bulgu modeli: iki maaşlı defterde dökümdeki maaş satırı ilk "MAAS" kalemine bağlanır ve o dönemin elle
+        girilmiş öbür maaşının üstüne yazılır → öbür kalem "bekliyor" kalır (fark = bir maaş tutarı)."""
+        if len(self.p.salaries) < 2 or a_inc <= e_inc + EPS:
+            return False
+        return any(abs(a_inc - e_inc - s.amount) <= EPS for s in self.p.salaries) or self.two_sal_seen
+
+    def two_salary_k1(self, diff: float) -> bool:
+        sal = self.p.salaries
+        if len(sal) < 2:
+            return False
+        ds = {round(x.amount - y.amount, 2) for x in sal for y in sal if x is not y}
+        return any(abs(diff - k) <= EPS for k in ds) or any(abs(abs(diff) - x.amount) <= EPS for x in sal)
+
     def dokum_covers(self, card: Card, st: Stmt) -> bool:
         a = self.accs[card.cfg.pay_acc]
         return st.pay_day is not None and a.dokum_until is not None and st.pay_day <= a.dokum_until
@@ -1085,6 +1101,9 @@ class Sim:
                 if got is not None and lost and abs(got - e - lost) <= EPS:
                     self.fail("BULGU_dekont_aktarim_birlesti", f"{a.cfg.key}: yeni aktarımın dekontu önceki günün "
                                                               f"elle aktarımına bağlandı, {lost} kayıp", e, got)
+                elif got is not None and self.two_salary_k1(got - e):
+                    self.fail("BULGU_iki_maas_dokum", f"{a.cfg.key}: elle girilmiş maaşın tutarı/tarihi dökümdeki "
+                              "öbür maaşla değiştirildi", e, got)
                 else:
                     self.fail("K1_bakiye", f"{a.cfg.key} ({a.cfg.mode}) çapa {a.anchor_day}/{a.anchor_bal}", e, got)
         # K2 free (K1 bozuksa sonucudur: yazılmaz)
@@ -1118,6 +1137,10 @@ class Sim:
                 if k == "recurring" and self.dekont_rent_bug(parts.get(k, 0.0) - ep[k]):
                     self.fail("BULGU_dekont_kira", "dekonttan kaydedilen kira düzenli kaleme bağlanmadı: kira hâlâ "
                               f"'bekliyor' ve ikinci kez düşülüyor: {nw.get('recurring_items')}", ep[k], parts.get(k))
+                    continue
+                if k == "pending_cards" and abs(parts.get(k, 0.0) - ep["_pending_alt"]) <= EPS:
+                    self.fail("BULGU_kesim_sonrasi_harcama", "kesimden SONRA elle girilen kart harcaması, ekstresi "
+                              "yüklenmemiş KAPANMIŞ döngünün son ödemesine yazıldı", ep[k], parts.get(k))
                     continue
                 extra = ""
                 if k == "pending_cards":

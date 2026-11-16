@@ -2045,7 +2045,9 @@ def _payables(today: date) -> list[dict]:
     latest = {st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     by_card = {st["card_no"]: st["id"] for st in db.latest_card_statements(today.isoformat(), statements).values()}
     hints = banks = None
-    unknown_ids = {u["statement_id"] for u in db.unknown_statement_payments(today.isoformat(), statements)}
+    unknown_all = db.unknown_statement_payments(today.isoformat(), statements)
+    unknown_ids = {u["statement_id"] for u in unknown_all if u["statement_id"]}
+    unknown_bills = {u["bill_id"] for u in unknown_all if u.get("bill_id")}
     for st in statements:
         if not st["due_date"] or st.get("source") == "excel":  # kart Excel'inden üretilen ekstre: borç ve son ödeme kurgu
             continue
@@ -2087,7 +2089,7 @@ def _payables(today: date) -> list[dict]:
                     "days_left": (date.fromisoformat(b["due_date"]) - today).days,
                     "paid_amount": b["paid_amount"], "paid_at": b["paid_at"], "status": status,
                     "in_total": status != "odendi", "has_file": bool(b["file_name"]), "category": b["category"], "note": b["note"],
-                    "description": b["description"]})
+                    "description": b["description"], "account_unknown": b["id"] in unknown_bills})
     # Vadeli borçlarım (kişilere): TL ise tutar, değilse birimiyle (ortak defterde Borç sayfası kapalıysa gösterilmez)
     from app import book
 
@@ -2654,17 +2656,20 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     try:
         accs = db.list_accounts()
         for u in db.unknown_statement_payments(today.isoformat(), statements, accs):
+            fatura = u.get("type") == "fatura"  # fatura Ödendi'de hesap söylenmemiş (db.unknown_bill_payments)
             out.append({"level": "uyari", "title": f"{_tl(u['amount'])} ödemenin hesabı belli değil — seç",
-                        "detail": f"{u['title']} ekstresini ödendi olarak işaretledin ama hangi hesaptan ödediğin belli "
+                        "detail": f"{u['title']} {'faturasını' if fatura else 'ekstresini'} ödendi olarak işaretledin ama hangi hesaptan ödediğin belli "
                                   "değil. Hesabı seçersen bakiyesi düşer; seçmezsen banka dökümü gelince aynı ödemeyle "
                                   "eşleşir. " + ("O zamana kadar bu tutar Harcanabilir'den ayrıca düşülüyor."
                                                  if u["deducted"] else
                                                  "Bir hesabının bakiyesi ödemeden sonra güncellendiği için ödeme o "
                                                  "bakiyenin içinde sayılıyor, ayrıca düşülmüyor."),
-                        **({"pay": {"type": "statement", "id": u["statement_id"]},
+                        **({"pay": {"type": "bill", "id": u["bill_id"]},
+                            "target": {"screen": "odemeler", "type": "bill", "id": u["bill_id"]}} if fatura else
+                           {"pay": {"type": "statement", "id": u["statement_id"]},
                             "target": {"screen": "odemeler", "type": "statement", "id": u["statement_id"]}}
                            if u["statement_id"] else {"target": {"screen": "kartlar"}}),
-                        "key": f"belirsiz_odeme:{u['statement_id'] or 'c' + str(u.get('card_payment_id'))}:{u['paid_at']}:"
+                        "key": f"belirsiz_odeme:{'f' + str(u['bill_id']) if fatura else u['statement_id'] or 'c' + str(u.get('card_payment_id'))}:{u['paid_at']}:"
                                f"{_round(u['amount']):g}"})
         # 2++) Bakiyesi eksi ya da uzun süredir güncellenmemiş hesap (sessiz kalmasın)
         for a in account_alerts(accs, today).values():
@@ -3239,7 +3244,7 @@ def net_worth(today: date | None = None) -> dict:
     spendable = cash - unknown - card_debt_now - pending_cards - payable_sp - jars["total"] - zakat_due - extra
     # eski satırlar (cash … zakat_due) her zaman, sırası aynı; yeni satırlar (DUE_KEYS, unknown_payments) yalnız sıfırdan büyükse
     rows = [("cash", "Bankadaki ve nakit para", cash, "+"),
-            ("unknown_payments", "Hesabı belli olmayan kart ödemesi", unknown, "−"),
+            ("unknown_payments", "Hesabı belli olmayan ödeme", unknown, "−"),
             ("card_debt", "Ödenecek kart ekstresi", card_debt_now, "−"),
             ("pending_cards", "Kesilecek kart ekstreleri (harcadıkların)", pending_cards, "−")]
     rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("pending_other", "card_interest", "card_late_interest")]
