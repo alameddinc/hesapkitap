@@ -619,7 +619,9 @@ CAPABILITIES = (
                               # GET /api/debts payments[].note. Eski sunucu alanı yok sayar (istemci borcun notuna ekler)
     "debt_anchor_conflict",   # hesaplı borç ödemesi / tahsilatı (POST /api/debts/{id}/pay account_id) ödeme günü hesabın
                               # çapa günü ya da öncesiyse yanıtta anchor_conflict {account_id, name, as_of}; istek alanı
-                              # in_balance (anchor_conflict ile aynı anlam). Yoksa eski kural: çapa gününden sonraki ödeme düşer
+                              # in_balance (anchor_conflict ile aynı anlam). Yoksa eski kural: çapa gününden sonraki ödeme düşer.
+                              # Açılış da (POST /api/debts account_id, in_balance): tarih çapa günü/öncesi → anchor_conflict;
+                              # cevapsız çapa günü açılışı bakiye güncellemesinden sonra girildiyse bakiyeye yansır
     "salary_late_status",     # cari dönemin maaşı beklenen günden 5 iş günü (SALARY_GRACE_DAYS) sonra hâlâ yatmadıysa bekleyen
                               # satır (GET /api/transactions, plan months[].lines) status "gecikti", status_label
                               # "Gecikti — maaş yattı mı?", actions ["yatti_dokum" (döküm yükle), "yatti_elle" (POST

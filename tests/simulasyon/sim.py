@@ -279,9 +279,8 @@ class Sim:
         self.salary_wait: list[tuple] = []
         self.rent_wait: list[tuple] = []
         self.rent_app_pending: set = set()
-        self.unknown: list[dict] = []
+        self.unknown: list[dict] = []              # hesapsız Ödendi: {stmt, amount, day, seq, acc, linked}
         self.lost: list[tuple] = []                # (seq, hesap, ±tutar) dekontu eski aktarıma bağlanıp kaybolan
-        self.two_sal_seen = False              # hesapsız Ödendi: {stmt, amount, day, seq, acc, linked}
         self.steps: list[str] = []
         self.mismatches: list[Mismatch] = []
         self.stats = {"gun": 0, "kontrol": 0, "adim": 0, "api": 0, "derin_gun": 0}
@@ -929,7 +928,6 @@ class Sim:
         later = 0.0
         by: dict[str, float] = {}
         late_ok = False
-        alt = 0.0
         for card in self.cards.values():
             up = [s for s in card.stmts if s.sid is not None and s.cut <= self.today]
             if up:
@@ -946,17 +944,6 @@ class Sim:
                         later += rem
             # kesilecek ekstrelerin kesin kısmı: elle girilen kart harcamaları (yüklenmemiş döngüler)
             last_up = max((s.cut for s in up), default=None)
-            closed = [s for s in card.stmts if s.sid is None and s.cut <= self.today]
-            for b in card.buys:
-                # bulgu modeli: yüklenmemiş kapanmış döngü varken kesimden sonraki elle harcama o döngüye yazılır
-                if closed and b.manual and b.day > closed[-1].cut and b.day <= self.today:
-                    if closed[-1].due <= d_end:
-                        alt += b.amount
-                    continue
-                if b.manual and (last_up is None or b.day > last_up) and b.day <= self.today:
-                    cut = self.next_cut_on_or_after(card.cfg, b.day)
-                    if self.due_of(card.cfg, cut) <= d_end:
-                        alt += b.amount
             for b in card.buys:
                 if b.manual and (last_up is None or b.day > last_up) and b.day <= self.today:
                     cut = self.next_cut_on_or_after(card.cfg, b.day)
@@ -992,7 +979,7 @@ class Sim:
             elif not d.due or d.due <= d_end:
                 out["payable"] += left
         return {k: round(v, 2) for k, v in out.items()} | {"_later_card": round(later, 2), "_pending_by": by,
-                                                           "_late_ok": late_ok, "_pending_alt": round(alt, 2)}
+                                                           "_late_ok": late_ok}
 
     def forecast_until(self, hz: dict, income: float) -> date:
         if income <= EPS:
@@ -1025,38 +1012,12 @@ class Sim:
             interest = parts.get("card_late_interest", 0.0) + parts.get("card_interest", 0.0)
         e_nns = round(nw["free"] + e_inc - eu["card_debt"] - eu["pending_cards"] - eu["bills"] - eu["payable"]
                       - eu["recurring"] - rec_next - interest, 2)
-        got = fb["no_new_spend"]
-        over = self.funded_debt_over(hz, until)
-        s4 = round(eu["_pending_alt"] - eu["pending_cards"], 2)  # S4 modeli: kesim sonrası harcama kapanmış döngüde
-        models = [(o, k) for o in (0.0, over) for k in (0.0, s4) if o or k]
-        hit = next(((o, k) for o, k in models if abs(got - (e_nns - o - k)) <= EPS), None)
-        if abs(got - e_nns) > EPS and hit:
-            name = "BULGU_funded_borc_tamami" if hit[0] else "BULGU_kesim_sonrasi_harcama"
-            self.fail(name, f"Ay sonunda kalacak: bilinen hata modeli (taksitli borcun kalanı {hit[0]}, kesim sonrası "
-                            f"harcama {hit[1]})", e_nns, got)
-        elif abs(fb["no_new_spend"] - e_nns) > EPS:
+        if abs(fb["no_new_spend"] - e_nns) > EPS:
             fp = {x["key"]: x["amount"] for x in fb["parts"]}
             self.fail("K7_ay_sonu", f"no_new_spend (until {until}; gelir {e_inc}; funded {fp.get('funded')}; "
                                     f"beklenen kalemler ≤until: {({k: v for k, v in eu.items() if not k.startswith('_')})}"
                                     f" + sonraki dönem kirası {rec_next}; uyg. funded_items {fb.get('funded_items')})",
                       e_nns, fb["no_new_spend"])
-
-    def funded_debt_over(self, hz: dict, until: date) -> float:
-        """Bulgu modeli (89629f9 _forecast_balance): spendable_later'daki borç kalemi ufuktan sonraki KALANIN tamamı,
-        vadesi ilk taksit; funded bu kalemi vadesi until'e kadarsa tamamen düşüyor."""
-        over = 0.0
-        for d in self.debts.values():
-            if d.direction != "borc" or not d.plan:
-                continue
-            left = round(d.amount - d.paid, 2)
-            thru_h = sum(a for on, a in d.plan if on <= hz["d_end"])
-            now = min(left, max(0.0, thru_h - d.paid))
-            after = round(left - now, 2)
-            nxt = next((on for on, _ in d.plan if on > hz["d_end"]), None)
-            if after > EPS and nxt and nxt <= until:
-                due_u = sum(a for on, a in d.plan if hz["d_end"] < on <= until)
-                over += after - min(after, due_u)
-        return round(over, 2)
 
     def expected_income(self, hz: dict) -> float:
         tot = 0.0
@@ -1074,20 +1035,6 @@ class Sim:
 
     def lost_transfer(self, a: Acc) -> float:
         return round(sum(x for seq, key, x in self.lost if key == a.cfg.key and seq > a.anchor_seq), 2)
-
-    def two_salary_bug(self, a_inc: float, e_inc: float) -> bool:
-        """Bulgu modeli: iki maaşlı defterde dökümdeki maaş satırı ilk "MAAS" kalemine bağlanır ve o dönemin elle
-        girilmiş öbür maaşının üstüne yazılır → öbür kalem "bekliyor" kalır (fark = bir maaş tutarı)."""
-        if len(self.p.salaries) < 2 or a_inc <= e_inc + EPS:
-            return False
-        return any(abs(a_inc - e_inc - s.amount) <= EPS for s in self.p.salaries) or self.two_sal_seen
-
-    def two_salary_k1(self, diff: float) -> bool:
-        sal = self.p.salaries
-        if len(sal) < 2:
-            return False
-        ds = {round(x.amount - y.amount, 2) for x in sal for y in sal if x is not y}
-        return any(abs(diff - k) <= EPS for k in ds) or any(abs(abs(diff) - x.amount) <= EPS for x in sal)
 
     def dekont_rent_bug(self, diff: float) -> bool:
         if not self.p.rent or self.p.rent[3] != "dekont" or diff <= EPS:
@@ -1138,9 +1085,6 @@ class Sim:
                 if got is not None and lost and abs(got - e - lost) <= EPS:
                     self.fail("BULGU_dekont_aktarim_birlesti", f"{a.cfg.key}: yeni aktarımın dekontu önceki günün "
                                                               f"elle aktarımına bağlandı, {lost} kayıp", e, got)
-                elif got is not None and self.two_salary_k1(got - e):
-                    self.fail("BULGU_iki_maas_dokum", f"{a.cfg.key}: elle girilmiş maaşın tutarı/tarihi dökümdeki "
-                              "öbür maaşla değiştirildi", e, got)
                 else:
                     self.fail("K1_bakiye", f"{a.cfg.key} ({a.cfg.mode}) çapa {a.anchor_day}/{a.anchor_bal}", e, got)
         # K2 free (K1 bozuksa sonucudur: yazılmaz)
@@ -1157,19 +1101,11 @@ class Sim:
         app_dend = (nw.get("spendable_pre_salary") or {}).get("until") or app_hz
         e_inc = self.expected_income(hz)
         a_inc = (nw["spendable_after_income"] or {}).get("income") or 0.0
-        two_sal = self.two_salary_bug(a_inc, e_inc)
         if abs(a_inc - e_inc) > EPS:
-            if two_sal:
-                self.fail("BULGU_iki_maas_dokum", f"dökümdeki ikinci maaş birincinin elle kaydının üstüne yazıldı; "
-                                                  f"beklenen gelir (dönemler {hz['periods']})", e_inc, a_inc)
-            else:
-                self.fail("K3_gelir", f"beklenen gelir (dönemler {hz['periods']})", e_inc, a_inc)
+            self.fail("K3_gelir", f"beklenen gelir (dönemler {hz['periods']})", e_inc, a_inc)
         if app_hz != hz["end"].isoformat() or app_dend != hz["d_end"].isoformat():
-            self.fail("BULGU_iki_maas_dokum" if two_sal else "K3_ufuk", "ufuk / maaştan önce vadeli son gün",
+            self.fail("K3_ufuk", "ufuk / maaştan önce vadeli son gün",
                       (str(hz["end"]), str(hz["d_end"])), (app_hz, app_dend))
-            if not two_sal:
-                hz = {**hz, "end": date.fromisoformat(app_hz), "d_end": date.fromisoformat(app_dend)}
-        if two_sal:  # sonraki kalemler uygulamanın ufkuyla karşılaştırılır (ufuk hatası tek yerde sayılsın)
             hz = {**hz, "end": date.fromisoformat(app_hz), "d_end": date.fromisoformat(app_dend)}
         parts = {p["key"]: p["amount"] for p in nw["spendable_parts"]}
         ep = self.expected_parts(hz)
@@ -1179,10 +1115,6 @@ class Sim:
         for k in ("card_debt", "pending_cards", "bills", "recurring", "payable"):
             if abs(parts.get(k, 0.0) - ep[k]) > EPS:
                 partbad = True
-                if k == "pending_cards" and abs(parts.get(k, 0.0) - ep["_pending_alt"]) <= EPS:
-                    self.fail("BULGU_kesim_sonrasi_harcama", "kesimden SONRA elle girilen kart harcaması, ekstresi "
-                              "yüklenmemiş KAPANMIŞ döngünün son ödemesine yazıldı", ep[k], parts.get(k))
-                    continue
                 if k == "recurring" and self.dekont_rent_bug(parts.get(k, 0.0) - ep[k]):
                     self.fail("BULGU_dekont_kira", "dekonttan kaydedilen kira düzenli kaleme bağlanmadı: kira hâlâ "
                               f"'bekliyor' ve ikinci kez düşülüyor: {nw.get('recurring_items')}", ep[k], parts.get(k))

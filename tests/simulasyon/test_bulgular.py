@@ -1,4 +1,5 @@
-"""Simülasyonun ve çılgın testçilerin bulduğu hataların MİNİMAL tekrarları. Hepsi xfail(strict=True): düzeltme
+"""Simülasyonun ve çılgın testçilerin bulduğu hataların MİNİMAL tekrarları. Açık olanlar xfail(strict=True) (S1, S4,
+S5, S7, S9 düzeltildi: işaretsiz, gerileme testi). Düzeltme
 gelince test "XPASS(strict)" ile kırmızıya döner, işaret kaldırılır (ve tests/simulasyon/sim.py'deki BULGU_* modeli
 silinir). Kimlik (S1…) rapordaki sıra. Tutarlar, kişiler, IBAN'lar UYDURMADIR."""
 from __future__ import annotations
@@ -36,12 +37,6 @@ def _dokum(client, aid: int, rows: list) -> dict:
 
 # ---------------------------------------------------------------- S1 iki maaş + döküm
 
-@pytest.mark.xfail(strict=True, reason="S1 (YÜKSEK): db.import_bank_rows (app/db.py ~4138) dökümdeki maaş satırını İLK "
-                   "'MAAS' sabit kalemine bağlıyor (hesap/gün/tutar uyumuna bakmadan; salary_entry_fit kullanılmıyor) ve "
-                   "o kalemin en yakın dönemdeki ELLE girilmiş maaşının tutarını/tarihini dökümünkiyle DEĞİŞTİRİYOR "
-                   "(~4152-4160). İki maaşlı ailede eşin maaşı (B hesabı, 15'i) birinci maaşın (A hesabı, 1'i) kaydının "
-                   "üstüne yazılır: eşin maaşı 'bekliyor' kalır (+39.000 beklenen gelir), birinci maaş kaydı 48.000→39.000 "
-                   "ve tarihi çapadan sonraya taşınırsa A'nın bakiyesi +39.000 şişer.")
 def test_s1_iki_maas_dokum_birinci_maasin_ustune_yazmaz(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 12, 18))
     tmpdb.set_setting("cycle_mode", "manual")
@@ -124,11 +119,6 @@ def test_s3_dekontlu_ikinci_aktarim_dunkune_baglanmaz(client, tmpdb, monkeypatch
 
 # ---------------------------------------------------------------- S4 kesimden sonra elle kart harcaması
 
-@pytest.mark.xfail(strict=True, reason="S4 (ORTA-DÜŞÜK): finance.open_cycles (app/finance.py ~1267) ekstresi henüz "
-                   "yüklenmemiş KAPANMIŞ döngüye (kesim 15 Ara, son ödeme 25 Ara) kesimden SONRA (16 Ara) elle girilen "
-                   "kart harcamasını da yazıyor. O harcama sonraki ekstrede (son ödeme 25 Oca, ufuk dışında) ödenir: "
-                   "Ödemelerden sonra, ekstre yüklenene dek (1–4 gün) harcama kadar düşük. Simülasyonda 6 personanın 5'inde "
-                   "her ay görülüyor.")
 def test_s4_kesimden_sonraki_elle_harcama_kapanmis_donguye_yazilmaz(client, tmpdb, monkeypatch):
     from tests.cilgin.ortak import stmt_text
 
@@ -154,10 +144,6 @@ def test_s4_kesimden_sonraki_elle_harcama_kapanmis_donguye_yazilmaz(client, tmpd
 
 # ---------------------------------------------------------------- S5 hesaplı borç/alacak açılışı çapa günündeyse
 
-@pytest.mark.xfail(strict=True, reason="S5 (DÜŞÜK): POST /api/debts account_id ile (verilen/alınan) açılış adımı çapa "
-                   "günündeyse bakiyeye hiç yansımıyor (db.debt_after_anchor: aynı gün in_anchor 0 değilse 'çapanın "
-                   "içinde'); DebtIn'de in_balance alanı yok, istemci soramıyor. Elle kayıtta aynı gün çapadan SONRA "
-                   "girilen kayıt bakiyeye eklenir (anchor_entry_id): iki kural tutarsız.")
 def test_s5_hesapli_alacak_acilisi_capa_gunu_bakiyeden_duser(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 1))
     assert client.post("/api/accounts", json={"name": "Örnek Banka A", "kind": "banka", "balance": 24000.0,
@@ -189,10 +175,6 @@ def test_s6_fatura_odendi_hesaptan_duser(client, tmpdb, monkeypatch):
 
 # ---------------------------------------------------------------- S7 açık recurring_id ile erken maaş
 
-@pytest.mark.xfail(strict=True, reason="S7 (DÜŞÜK, yalnız API): POST /api/entries recurring_id AÇIKÇA verilince dönem "
-                   "kaydın tarihinden (30 Eki → 2026-10) alınıyor; recurring_id verilmeden aynı kayıt _attach_recurring "
-                   "ile doğru döneme (2026-11, erken yatan maaş) bağlanıyor. İstemciler bugün confirm ucunu kullanıyor; "
-                   "API'yi doğrudan kullanan (Kısayol, betik) maaşı yanlış döneme yazar: beklenen gelir bir maaş fazla.")
 def test_s7_acik_recurring_id_erken_maasi_dogru_doneme_yazar(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 1))
     tmpdb.set_setting("cycle_mode", "manual")
@@ -224,11 +206,6 @@ def test_s8_dekont_ascii_ad_dogru_kucuk_harf(client, tmpdb, monkeypatch):
 
 # ---------------------------------------------------------------- S9 Ay sonunda kalacak: taksitli borç (89629f9)
 
-@pytest.mark.xfail(strict=True, reason="S9 (ORTA, 89629f9): finance._forecast_balance funded'a spendable_later'ın "
-                   "borç kalemini olduğu gibi ekliyor; o kalem (_debt_due_split → to_later any_date) ufuktan sonraki "
-                   "KALANIN TAMAMI, vadesi ilk taksit. İlk taksit until'e kadarsa bütün kalan düşülüyor: 6 × 1.500 "
-                   "planlı borçta 'Yeni harcama yapmazsan' 6.000 ₺ eksik (simülasyon P1, 101 gün). Öneri: funded'a "
-                   "yalnız until'e kadar vadeli taksitler (debt_schedule.installments) girsin.")
 def test_s9_ay_sonu_taksitli_borcun_yalniz_vadesi_gelen_taksidi(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 1))
     tmpdb.set_setting("cycle_mode", "manual")

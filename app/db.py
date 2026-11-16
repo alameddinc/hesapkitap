@@ -697,6 +697,11 @@ MIGRATIONS = [
     # çapa günü cevabı (yetenek debt_anchor_conflict; card_payments.in_anchor ile aynı anlam): 1 çapanın içinde (bakiyeden
     # düşmez), 0 çapadan sonra (düşer), NULL eski kural (ödeme günü çapa gününden sonraysa)
     ("debt_payments", "in_anchor", "INTEGER"),
+    # hesaplı borç/alacak AÇILIŞININ (verildi/alındı adımı) çapa günü cevabı (S5; debt_payments.in_anchor ile aynı anlam).
+    # NULL: çapa gününde açılan, çapadan SONRA girilmiş (id > accounts.anchor_debt_id) açılış bakiyeye eklenir
+    ("debts", "in_anchor", "INTEGER"),
+    # çapa anındaki en büyük borç id'si (anchor_card_payment_id gibi; NULL: eski çapa → çapa günündeki açılış içinde)
+    ("accounts", "anchor_debt_id", "INTEGER"),
     # silinen sabit kalemin eski id'si (kalem silinince recurring_id NULL olur; FK SET NULL): o kaydın maaşı silinen
     # kaleme aitti — kalan maaş kalemini "yattı" yapmaz, ona bağlanmaz (finance.salary_realized, link_salary_entries)
     ("entries", "former_recurring_id", "INTEGER"),
@@ -1169,6 +1174,49 @@ def _row_get(r, k):
         return r[k]
     except (KeyError, IndexError):
         return None
+
+
+def _import_income_recurring(recurring: list[dict], raw: str, d, acc_id: int | None, amount: float) -> dict | None:
+    """Dökümdeki gelir satırının bağlanacağı sabit gelir kalemi. Aday: adı (ya da işvereni) satırda geçen kalemler; yoksa
+    satır maaş metinliyse (MAAS/UCRET/BORDRO) adı "maaş" olan kalemler. Tek aday: o (tek maaş; banka metni kalemin adını
+    taşımaz). Birden çok aday (iki iş, ailede iki maaş): link_salary_entries / finance.salary_realized ile AYNI kural —
+    salary_entry_fit (ad/işveren > hesap > gün ≤ SALARY_MATCH_BDAYS iş günü > tutar ±%20; ikinci tur zamlı maaş); hiçbiri
+    tutmazsa ya da satır maaş farkı/ikramiye ise None (yanlış kalemin elle kaydının üstüne yazılmasın; S1)."""
+    from app.categorize import fold_key
+    from app.textnorm import normalize
+
+    norm = normalize(raw)
+    emp = {x["id"]: [fold_key(ch["employer"]) for ch in salary_changes(x["id"]) if ch["employer"]]
+           for x in recurring if x["kind"] == "gelir"}
+    # ad: kalemin adı satırda geçiyor — yalnız "Maaş" gibi genel maaş sözcüğü ad sayılmaz (her maaş satırında geçer)
+    named = [x for x in recurring if x["kind"] == "gelir" and (
+        (normalize(x["description"]) in norm
+         and not (_is_salary_recurring(x) and not _salary_name_tokens(x["description"])))
+        or any(e and e in fold_key(raw) for e in emp[x["id"]]))]
+    cands = named or ([x for x in recurring if x["kind"] == "gelir" and re.search(r"MAAS", normalize(x["description"]))]
+                      if re.search(r"MAAS|UCRET|BORDRO", norm) else [])
+    if len(cands) <= 1:
+        return cands[0] if cands else None
+    month = period_of(d)
+    cands = [x for x in cands if x["start_month"] <= month and (not x.get("end_month") or month <= x["end_month"])] \
+        or cands
+    if len(cands) == 1:
+        return cands[0]
+    if is_salary_extra(raw):
+        return None
+    row = {"description": raw, "account_id": acc_id, "amount": amount, "entry_date": d.isoformat()}
+    with connect() as c:
+        for loose in (False, True):
+            best = None
+            for x in cands:
+                slot = _nearest_recurring_month(x, d)
+                fit = salary_entry_fit(x, row, occurrence_date(slot, day_at(x, slot)), _planned_in(c, x, slot),
+                                       emp[x["id"]], loose)
+                if fit is not None and (best is None or (fit, x["id"]) < best[:2]):
+                    best = (fit, x["id"], x)
+            if best:
+                return best[2]
+    return None
 
 
 def link_salary_entries() -> int:
@@ -2111,6 +2159,19 @@ def _recurring_slot(c, rec, entry_date, amount, taken) -> str | None:
         if plan > 0 and amount < plan / TRANSFER_RATIO:
             return None
     return best
+
+
+def explicit_recurring_month(recurring_id: int, entry_date, amount) -> str | None:
+    """Sabit kalemi AÇIKÇA verilen yeni kaydın dönemi (POST /api/entries recurring_id; S7): kalem adıyla bağlanan elle
+    kayıtla aynı kural (_recurring_slot: tarihine en yakın boş dönem; 30 Eki'de erken yatan 1'i maaşı Kasım'ın). Kalem
+    yoksa ya da komşu dönemlerin hepsi doluysa None (çağıran tarihin dönemini kullanır)."""
+    with connect() as c:
+        rec = c.execute("SELECT * FROM recurring WHERE id = ?", (recurring_id,)).fetchone()
+        if not rec:
+            return None
+        rec = dict(rec)
+        taken = {r["month"] for r in c.execute("SELECT month FROM entries WHERE recurring_id = ?", (recurring_id,))}
+        return _recurring_slot(c, rec, entry_date, amount, taken)
 
 
 def attach_recurring_series(rec, entries: list[dict]) -> dict[int, str]:
@@ -4135,11 +4196,7 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
         category = sub = None
         rec = None
         if kind == "gelir":
-            rec = next((x for x in recurring if x["kind"] == "gelir"
-                        and (normalize(x["description"]) in norm
-                             or any(ch["employer"] and normalize(ch["employer"]) in norm for ch in salary_changes(x["id"]))
-                             or (_re.search(r"MAAS|UCRET|BORDRO", norm)
-                             and _re.search(r"MAAS", normalize(x["description"]))))), None)
+            rec = _import_income_recurring(recurring, r["description"], d, acc_id, amount)
             if rec:
                 desc, category = rec["description"], rec["category"]  # sabit kaleme bağlansın
                 stats["maas"] += 1
@@ -4975,6 +5032,7 @@ def debt_rows(month: str | None = None) -> list[dict]:
         if not d["given_entry_id"] and not d.get("split_id"):  # harcamanın payıysa veriliş o harcamanın alt kalemi
             out.append({"uid": f"d{d['id']}g", "debt_id": d["id"], "date": d["debt_date"], "flow": out_flow,
                         "amount": d["amount"], "person": d["person"], "account_id": d.get("account_id"),
+                        "in_anchor": d.get("in_anchor"), "opening": True,
                         "step": "verildi" if d["direction"] == "alacak" else "alindi"})
         for p in pays:
             if p["debt_id"] == d["id"] and not p["entry_id"]:
@@ -5296,7 +5354,12 @@ def propose_split(items: list[dict], category: str | None, total: float | None) 
 
 # ---------------------------------------------------------------- hesaplar (bakiye tamponu)
 
-ANCHOR_IDS = "(SELECT COALESCE(MAX(id), 0) FROM card_payments), (SELECT COALESCE(MAX(id), 0) FROM own_transfers)"
+ANCHOR_IDS = ("(SELECT COALESCE(MAX(id), 0) FROM card_payments), (SELECT COALESCE(MAX(id), 0) FROM own_transfers), "
+              "(SELECT COALESCE(MAX(id), 0) FROM debts)")
+# hesabın bakiyesi elle/dökümle yeniden çapalanınca (UPDATE): çapa anındaki en büyük kart ödemesi / aktarım / borç id'si
+ANCHOR_SET = ("anchor_card_payment_id = (SELECT COALESCE(MAX(id), 0) FROM card_payments), "
+              "anchor_transfer_id = (SELECT COALESCE(MAX(id), 0) FROM own_transfers), "
+              "anchor_debt_id = (SELECT COALESCE(MAX(id), 0) FROM debts)")
 
 
 def anchor_conflict(account_id: int | None, day: str | None) -> dict | None:
@@ -5312,10 +5375,15 @@ def anchor_conflict(account_id: int | None, day: str | None) -> dict | None:
 
 
 def set_in_anchor(table: str, ids: list[int], in_balance: bool | None) -> None:
-    """Kullanıcının cevabını yaz (elle kayıtlar; dökümden gelenlere dokunulmaz: onlar zaten bakiyede)."""
-    if in_balance is None or not ids or table not in ("card_payments", "own_transfers"):
+    """Kullanıcının cevabını yaz (elle kayıtlar; dökümden gelenlere dokunulmaz: onlar zaten bakiyede). debts: hesaplı
+    borç/alacak açılışı (hareketi olmayan verildi/alındı adımı)."""
+    if in_balance is None or not ids or table not in ("card_payments", "own_transfers", "debts"):
         return
     with connect() as c:
+        if table == "debts":
+            c.execute(f"UPDATE debts SET in_anchor = ? WHERE id IN ({','.join('?' * len(ids))}) "
+                      "AND given_entry_id IS NULL", (int(bool(in_balance)), *ids))
+            return
         c.execute(f"UPDATE {table} SET in_anchor = ? WHERE id IN ({','.join('?' * len(ids))}) "
                   "AND (import_hash IS NULL OR import_hash LIKE 'mail:%')", (int(bool(in_balance)), *ids))
 
@@ -5330,12 +5398,13 @@ def set_account_balance(name: str, balance: float, as_of: str, source: str = "el
             return
         anchor = c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]
         c.execute(f"""INSERT INTO accounts (name, kind, balance, as_of, source, anchor_entry_id, origin, updated_at,
-                     anchor_card_payment_id, anchor_transfer_id)
+                     anchor_card_payment_id, anchor_transfer_id, anchor_debt_id)
                      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, {ANCHOR_IDS})
                      ON CONFLICT(name) DO UPDATE SET balance = excluded.balance, as_of = excluded.as_of,
                      source = excluded.source, anchor_entry_id = excluded.anchor_entry_id, updated_at = CURRENT_TIMESTAMP,
                      anchor_card_payment_id = excluded.anchor_card_payment_id,
-                     anchor_transfer_id = excluded.anchor_transfer_id""",
+                     anchor_transfer_id = excluded.anchor_transfer_id,
+                     anchor_debt_id = excluded.anchor_debt_id""",
                   (name, kind, round(balance, 2), as_of, source, anchor, origin or ("elle" if source == "elle" else "dokum")))
 
 
@@ -5349,13 +5418,19 @@ def ensure_account(name: str, kind: str = "banka") -> int:
                          (name, kind)).lastrowid
 
 
-def debt_after_anchor(r: dict, as_of: str) -> bool:
+def debt_after_anchor(r: dict, as_of: str, anchor_debt_id: int | None = None) -> bool:
     """Borç adımı (debt_rows) hesabın çapasından sonra mı (bakiyeye eklenir)? card_payments.in_anchor ile aynı kural:
     çapa gününden sonraysa çapanın içinde denmedikçe (in_anchor 1) sonra; çapa günü ya da öncesindeyse yalnız kullanıcı
-    "sonra yaptım" dediyse (in_anchor 0). Cevapsız (NULL, eski istemci / verilen-alınan adımı): tarih > çapa günü."""
+    "sonra yaptım" dediyse (in_anchor 0). Cevapsız (NULL, eski istemci): tarih > çapa günü; ancak çapa GÜNÜNDEKİ
+    açılış (verildi/alındı adımı) çapadan sonra girildiyse (borç id > anchor_debt_id; elle kayıttaki anchor_entry_id
+    kuralı) sonra (S5). anchor_debt_id NULL (eski çapa): çapanın içinde."""
+    ia = r.get("in_anchor")
     if r["date"] > as_of:
-        return r.get("in_anchor") != 1
-    return r.get("in_anchor") == 0
+        return ia != 1
+    if ia is not None:
+        return ia == 0
+    return bool(r.get("opening") and r["date"] == as_of and anchor_debt_id is not None
+                and (r.get("debt_id") or 0) > anchor_debt_id)
 
 
 def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | None = None) -> float | None:
@@ -5395,7 +5470,7 @@ def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | N
                        (a["id"], a["as_of"], a["as_of"], tr_id, tr_id, a.get("updated_at"), hi)).fetchone()[0]
     debt = 0.0
     for d in debt_rows() if debts is None else debts:  # debts: çok hesaplı çağıran bir kez hesaplayıp verir
-        if d.get("account_id") == a["id"] and d["date"] <= hi and d["step"] != "vazgecildi" and debt_after_anchor(d, a["as_of"]):
+        if d.get("account_id") == a["id"] and d["date"] <= hi and d["step"] != "vazgecildi" and debt_after_anchor(d, a["as_of"], a.get("anchor_debt_id")):
             debt += d["flow"] * d["amount"]
     return round(a["balance"] + flows + debt, 2)
 
@@ -5420,8 +5495,7 @@ def update_account(acc_id: int, data: dict) -> bool:
     with connect() as c:
         if "balance" in data:  # yeni çapa: bu andan sonraki hareketler üstüne eklenir
             data["anchor_entry_id"] = c.execute("SELECT COALESCE(MAX(id), 0) FROM entries").fetchone()[0]
-        extra = (", anchor_card_payment_id = (SELECT COALESCE(MAX(id), 0) FROM card_payments), "
-                 "anchor_transfer_id = (SELECT COALESCE(MAX(id), 0) FROM own_transfers)") if "balance" in data else ""
+        extra = f", {ANCHOR_SET}" if "balance" in data else ""
         return c.execute(f"UPDATE accounts SET {', '.join(f'{k} = ?' for k in data)}, updated_at = CURRENT_TIMESTAMP{extra} "
                          "WHERE id = ?", (*data.values(), acc_id)).rowcount > 0
 
@@ -6553,7 +6627,6 @@ def entry_to_opening_balance(entry_id: int, account_id: int) -> str:
             return f"{a['name']} bakiyesi {a['as_of']} tarihli daha yeni bilgiden geliyor; kayıt gelirden çıkarıldı"
         same = a["as_of"] == e["entry_date"]
         c.execute("UPDATE accounts SET balance = ?, as_of = ?, anchor_entry_id = 0, source = 'elle', updated_at = CURRENT_TIMESTAMP, "
-                  "anchor_card_payment_id = (SELECT COALESCE(MAX(id), 0) FROM card_payments), "
-                  "anchor_transfer_id = (SELECT COALESCE(MAX(id), 0) FROM own_transfers) WHERE id = ?", (round((a["balance"] if same else 0) + e["amount"], 2), e["entry_date"], account_id))
+                  f"{ANCHOR_SET} WHERE id = ?", (round((a["balance"] if same else 0) + e["amount"], 2), e["entry_date"], account_id))
         c.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
         return f"{a['name']} başlangıç bakiyesi {e['entry_date']} itibarıyla kaydedildi; gelirden çıkarıldı"
