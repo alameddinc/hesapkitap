@@ -532,6 +532,14 @@ CAPABILITIES = (
                               # <key>_items [{title, amount, date (fatura vadesi / düzenli ödeme günü / son ödeme; kart dışı
                               # taksitte null), …}]; card_debt_items [{title, amount, date, overdue}]. pending_cards_items
                               # satırında account. Yeni gelir ve değişken harcama tahmini dahil değil (forecast_net'te)
+    "own_transfer_manual",    # hesaplar arası aktarım: POST /api/own-transfers {date, amount, from_account_id, to_account_id,
+                              # description, note, ref?, dekont_file?, dekont_side?} (iki bacak, pair_id; dekonttan: ikinci
+                              # dekont aynı aktarıma bağlanır, linked), PUT/DELETE /api/own-transfers/{id} (elle girilen),
+                              # GET …/{id}/receipt; own satırlarında pair_id, source elle|dekont, ref, receipt_file;
+                              # dekont okumasında own {from_account, to_account, side, match} ve doc_direction
+    "dekont_doc",             # POST /api/documents/parse dekont=1 ve /api/statements/upload dekont_docs=1: para transferi
+                              # dekontu (Gelen FAST dahil) fatura/fiş sanılmaz → {type: "dekont", …dekont okuması} /
+                              # status document, doc_type "dekont"
 )
 
 

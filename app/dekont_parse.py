@@ -19,8 +19,9 @@ from app import db, dekont, money
 
 # ---------------------------------------------------------------- tür tanıma (yapay zekâsız)
 
-_TRANSFER_MARKS = re.compile(r"GÖNDEREN|\bALICI\b|ALICI IBAN|\bFAST\b|\bEFT\b|HAVALE|PARA TRANSFER|\bIBAN\b")
-_STRONG_MARKS = re.compile(r"GÖNDEREN|ALICI IBAN|\bFAST\b|\bEFT\b|HAVALE|PARA TRANSFER")
+# GONDEREN: bazı bankalar (VakıfBank "GONDEREN AD SOYAD/UNVAN") Türkçe harfsiz yazar
+_TRANSFER_MARKS = re.compile(r"G[ÖO]NDEREN|\bALICI\b|ALICI IBAN|\bFAST\b|\bEFT\b|HAVALE|PARA TRANSFER|\bIBAN\b")
+_STRONG_MARKS = re.compile(r"G[ÖO]NDEREN|ALICI IBAN|\bFAST\b|\bEFT\b|HAVALE|PARA TRANSFER")
 # banka "fatura ödeme dekontu" da DEKONT başlığı taşır: Ödemeler akışına aittir
 _BILL_MARKS = re.compile(r"FATURA|ABONE|TESİSAT|SÖZLEŞME HESAP|KURUM KODU|SON ÖDEME")
 
@@ -39,7 +40,7 @@ def is_transfer(text: str | None) -> bool:
         return False
     if dekont.is_dekont(text) and _STRONG_MARKS.search(up):
         return True
-    return bool(re.search(r"GÖNDEREN", up) and re.search(r"\bALICI\b", up) and re.search(r"\bIBAN\b|FAST|EFT|HAVALE", up))
+    return bool(re.search(r"G[ÖO]NDEREN", up) and re.search(r"\bALICI\b", up) and re.search(r"\bIBAN\b|FAST|EFT|HAVALE", up))
 
 
 def classify_text(text: str | None) -> str | None:
@@ -82,8 +83,9 @@ def iban_parts(v: str | None) -> tuple[str, str]:
     if full := dekont._iban(s):
         return full, full[-4:]
     m = re.search(r"TR[\d\s*•xX.-]{8,40}", s)
-    if not m:
-        return "", ""
+    if not m:  # IBAN yerine hesap numarası ("ALICI HESAP NO 0012…3456"): IBAN'ın sonu, son 4 hane eşleşir
+        n = re.sub(r"[\s-]", "", s)
+        return ("", n[-4:]) if re.fullmatch(r"\d{8,26}", n) else ("", "")
     digits = re.sub(r"\D", "", m.group(0)[2:])
     return "", digits[-4:] if len(digits) >= 4 else ""
 
@@ -109,6 +111,27 @@ def _type_of(*texts: str) -> str | None:
     return None
 
 
+_DIR_LABELS = ("İŞLEM TÜRÜ", "İŞLEM TİPİ", "İŞLEM ADI", "İŞLEM")
+
+
+def doc_direction(text: str | None, kind_txt: str | None = None) -> str | None:
+    """Belgeyi düzenleyen bankanın bakışıyla yön: "giden" (GİDEN FAST/EFT, hesaptan gönderilen) | "gelen" (GELEN FAST,
+    gelen havale) | None. Önce işlem türü alanı; yoksa metinde ilk geçen ("AÇIKLAMA: GİDEN FAST - X TARAFINDAN
+    GÖNDERİLEN" alıcı bankanın dekontunda da gönderenin metnidir, işlem türü satırı ondan önce gelir)."""
+    def pick(t: str) -> str | None:
+        m = re.search(r"\b(GELEN|GİDEN|GIDEN)\b", _up(t))
+        return None if not m else "gelen" if m.group(1) == "GELEN" else "giden"
+
+    if kind_txt and (d := pick(kind_txt)):
+        return d
+    if not text:
+        return None
+    for lab in _DIR_LABELS:
+        if (v := dekont._field(text, lab)) and (d := pick(v)):
+            return d
+    return pick(text[:4000])
+
+
 def fields_from_text(text: str) -> dict:
     """Kural okuması (PDF metni): {date, amount, sender_name, sender_iban, sender_bank, receiver_name, receiver_iban,
     receiver_bank, bank, description, transfer_type, ref}. Tarih/tutar yoksa ValueError (yapay zekâya geçilir)."""
@@ -116,18 +139,26 @@ def fields_from_text(text: str) -> dict:
 
     p = dekont.parse(text)  # tarih, tutar, ref, belgeyi veren banka (tarih ya da tutar yoksa ValueError)
     f = dekont._field
-    sender = f(text, "GÖNDEREN", "GÖNDEREN ADI", "GÖNDEREN AD SOYAD", "GÖNDEREN ADI SOYADI", "GÖNDEREN UNVAN") or ""
+    sender = f(text, "GÖNDEREN", "GÖNDEREN ADI", "GÖNDEREN AD SOYAD", "GÖNDEREN ADI SOYADI", "GÖNDEREN UNVAN",
+               "GONDEREN", "GONDEREN AD SOYAD/UNVAN", "GONDEREN AD SOYAD", "GÖNDEREN AD SOYAD/UNVAN") or ""
     receiver = f(text, "ALICI", "ALICI ADI", "ALICI AD SOYAD", "ALICI ADI SOYADI", "ALICI UNVAN") or ""
-    s_iban = f(text, "GÖNDEREN IBAN", "GÖNDEREN HESAP") or ""
+    s_iban = f(text, "GÖNDEREN IBAN", "GÖNDEREN HESAP", "GONDEREN IBAN") or ""
     r_iban = f(text, "ALICI IBAN", "ALICI HESAP", "ALICI HESAP NO") or ""
     own = f(text, "IBAN") or ""
-    if not s_iban and own and own != r_iban:  # belgede tek "IBAN" alanı: belgeyi alan (gönderen) hesap
+    kind_txt = f(text, "İŞLEM TÜRÜ", "İŞLEM TİPİ", "İŞLEM ADI", "İŞLEM") or ""
+    side = doc_direction(text, kind_txt)
+    if side == "gelen":  # gelen dekontunda belgenin sahibi alıcıdır: tek "IBAN" ve müşteri adı alıcıya
+        if not r_iban and own and own != s_iban:
+            r_iban = own
+        if not receiver:
+            receiver = f(text, "MÜŞTERİ AD SOYAD", "MÜŞTERİ ADI SOYADI", "MÜŞTERİ ADI", "AD SOYAD") or ""
+    elif not s_iban and own and own != r_iban:  # belgede tek "IBAN" alanı: belgeyi alan (gönderen) hesap
         s_iban = own
-    kind_txt = f(text, "İŞLEM TÜRÜ", "İŞLEM TİPİ") or ""
     return {"date": p["date"], "amount": p["amount"], "sender_name": _clean(sender), "sender_iban": s_iban,
             "sender_bank": "", "receiver_name": _clean(receiver), "receiver_iban": r_iban,
             "receiver_bank": _clean(f(text, "ALICI BANKA", "ALICI BANKASI") or ""), "bank": p["bank"] or bank_of(text),
-            "description": _clean(p["purpose"]), "transfer_type": _type_of(kind_txt, text[:1500]), "ref": p["ref"]}
+            "description": _clean(p["purpose"]), "transfer_type": _type_of(kind_txt, text[:1500]), "ref": p["ref"],
+            "doc_direction": side}
 
 
 DEKONT_PROMPT = """Bu belge Türkiye'den bir banka PARA TRANSFERİ dekontu (havale, EFT ya da FAST); fotoğraf ya da PDF.
@@ -139,13 +170,14 @@ SADECE şu JSON'u döndür (bilinmeyen alan null):
   "sender_name": "GÖNDEREN ad soyad / unvan, belgede yazdığı gibi",
   "sender_iban": "gönderen IBAN, belgede yazdığı gibi (maskeli olabilir)",
   "sender_bank": "gönderen banka",
-  "receiver_name": "ALICI ad soyad / unvan",
-  "receiver_iban": "alıcı IBAN",
+  "receiver_name": "ALICI ad soyad / unvan; belgede alıcı adı yoksa ve işlem GELEN ise belgenin müşterisi (MÜŞTERİ AD SOYAD)",
+  "receiver_iban": "alıcı IBAN (yoksa ALICI HESAP NO)",
   "receiver_bank": "alıcı banka",
   "bank": "dekontu düzenleyen banka",
   "description": "açıklama / ödeme amacı / mesaj, belgede yazdığı gibi",
   "transfer_type": "havale | eft | fast",
-  "ref": "sorgu / referans / işlem numarası"
+  "doc_direction": "giden | gelen: belgeyi düzenleyen bankanın İŞLEM / İŞLEM TÜRÜ satırına göre ('Giden FAST' → giden, 'Gelen FAST', 'Gelen EFT', 'Gelen havale' → gelen); açıklama satırındaki gönderenin metnine göre değil",
+  "ref": "sorgu / referans / işlem numarası (SORGU NO, SORGU REFERANS NO varsa o)"
 }
 Türk sayı formatında 1.234,56 = 1234.56. Tutar işlem tutarıdır (masraf hariç)."""
 
@@ -170,6 +202,8 @@ def fields_from_ai(data: bytes, mime: str, ocr_text: str | None = None) -> dict:
             "transfer_type": (_clean(raw.get("transfer_type")).lower() or None) if
             _clean(raw.get("transfer_type")).lower() in ("havale", "eft", "fast") else None,
             "ref": re.sub(r"\W", "", _clean(raw.get("ref")))[:30],
+            "doc_direction": _clean(raw.get("doc_direction")).lower() if
+            _clean(raw.get("doc_direction")).lower() in ("giden", "gelen") else None,
             "not_transfer": str(raw.get("is_transfer")).strip().lower() == "false", "model": meta.get("model")}
 
 
@@ -203,6 +237,54 @@ def _side(name: str, iban: str, bank: str, accounts: list[dict], own: set[str]) 
             "is_me": me, "account_id": acc}
 
 
+def _own_info(f: dict, s: dict, r: dict, side: str | None, accounts: list[dict]) -> dict:
+    """Kendi hesapları arası dekont: kaynak/hedef hesap önerisi (IBAN, yoksa banka adı: alıcı bankanın gelen
+    dekontunda düzenleyen banka alıcıdır, gidende gönderen) ve aynı aktarımın kayıtlı bacağı (ikinci dekont)."""
+    issuer = f.get("bank")
+    from_acc = s["account_id"] or _account_by_bank(s["bank"] or (issuer if side == "giden" else None), accounts)
+    to_acc = r["account_id"] or _account_by_bank(r["bank"] or (issuer if side == "gelen" else None), accounts)
+    if from_acc and from_acc == to_acc:  # iki taraf aynı hesaba düştü: yalnız belgenin tarafı kalır
+        if side == "giden":
+            to_acc = None
+        elif side == "gelen":
+            from_acc = None
+        else:
+            from_acc = to_acc = None
+    out = {"from_account": from_acc, "to_account": to_acc, "side": side, "match": None}
+    if f.get("amount") and f.get("date"):
+        if m := own_match(f["date"], f["amount"], f.get("ref") or "", from_acc, to_acc):
+            out["match"] = m
+            out["from_account"] = out["from_account"] or m["from_account"]
+            out["to_account"] = out["to_account"] or m["to_account"]
+    return out
+
+
+def _clean_ref(ref: str | None) -> str:
+    return re.sub(r"[^0-9A-Za-z]", "", ref or "")[:30]
+
+
+def own_match(on: str, amount: float, ref: str, from_acc: int | None, to_acc: int | None) -> dict | None:
+    """Aynı aktarımın kayıtlı bacağı: aynı sorgu numarası ya da (aynı tutar, ±1 gün) kaynak hesapta çıkış / hedef
+    hesapta giriş. {id (aktarım; pair varsa pair_id), from_account, to_account, has_file {from, to}}."""
+    ref = _clean_ref(ref)
+    legs = []
+    if hit := db.own_leg_by_ref(ref):
+        legs = db.own_pair_legs(hit["id"])
+    else:
+        for acc, signed in ((from_acc, -amount), (to_acc, amount)):
+            if (leg := db.find_own_leg(on, signed, acc, ref or None)) is not None:
+                legs = db.own_pair_legs(leg["id"]) if leg.get("pair_id") else [leg]
+                break
+    if not legs:
+        return None
+    out_leg = next((x for x in legs if x["amount"] < 0), None)
+    in_leg = next((x for x in legs if x["amount"] > 0), None)
+    return {"id": (out_leg or in_leg)["pair_id"] or (out_leg or in_leg)["id"],
+            "from_account": (out_leg or {}).get("account_id"), "to_account": (in_leg or {}).get("account_id"),
+            "has_file": {"from": bool((out_leg or {}).get("receipt_file")), "to": bool((in_leg or {}).get("receipt_file"))},
+            "message": "Bu aktarım kayıtlı: dekont ona bağlanır"}
+
+
 def _account_by_bank(bank: str | None, accounts: list[dict]) -> int | None:
     """Tek banka hesabı o bankadaysa onu öner (ad ya da dökümün banka adı)."""
     if not bank:
@@ -215,17 +297,29 @@ def _account_by_bank(bank: str | None, accounts: list[dict]) -> int | None:
 
 
 def resolve(f: dict) -> dict:
-    """Okunan alanlardan istemci sonucu (IBAN'lar maskeli). type "dekont"."""
+    """Okunan alanlardan istemci sonucu (IBAN'lar maskeli). type "dekont".
+    Gönderenle alıcının adı aynıysa (ya da iki IBAN da kullanıcının hesabıysa) kendi hesapları arası aktarım:
+    own_transfer true, own {from_account, to_account, side, match} (yetenek own_transfer_manual; kayıt
+    POST /api/own-transfers). Taraflardan kullanıcı anlaşılamadıysa yön, belgenin işlem türünden (GİDEN / GELEN)."""
     accounts = _bank_accounts()
     own = _own_keys()
     s = _side(f.get("sender_name") or "", f.get("sender_iban") or "", f.get("sender_bank") or "", accounts, own)
     r = _side(f.get("receiver_name") or "", f.get("receiver_iban") or "", f.get("receiver_bank") or "", accounts, own)
+    side = f.get("doc_direction") if f.get("doc_direction") in ("giden", "gelen") else None
+    sk, rk = _key(f.get("sender_name")), _key(f.get("receiver_name"))
+    if len(sk) >= 6 and sk == rk:  # gönderen = alıcı: kendi hesapları arası (adı henüz bilinmese de)
+        s["is_me"] = r["is_me"] = True
     if s["is_me"] and not r["is_me"]:
         direction, mine, other = "giden", s, r
     elif r["is_me"] and not s["is_me"]:
         direction, mine, other = "gelen", r, s
+    elif not s["is_me"] and not r["is_me"] and side:  # kullanıcı tanınmadı: belgenin işlem türü ("Giden FAST")
+        direction, mine, other = side, (s if side == "giden" else r), (r if side == "giden" else s)
     else:
         direction, mine, other = None, None, None
+    own_info = None
+    if s["is_me"] and r["is_me"]:
+        own_info = _own_info(f, s, r, side, accounts)
     counterparty = known = None
     if other and other["name"]:
         counterparty = db.known_counterparty(other["name"])
@@ -242,8 +336,11 @@ def resolve(f: dict) -> dict:
            "counterparty": counterparty, "counterparty_known": known, "iban_last4": (other or {}).get("iban_last4"),
            "bank": (mine or {}).get("bank") or f.get("bank") or None, "description": f.get("description") or "",
            "transfer_type": f.get("transfer_type"), "ref": f.get("ref") or "", "account_hint": account_hint,
-           "own_transfer": bool(s["is_me"] and r["is_me"]), "parties": {"sender": s, "receiver": r}}
-    if f.get("amount") and f.get("date"):
+           "own_transfer": bool(s["is_me"] and r["is_me"]), "parties": {"sender": s, "receiver": r},
+           "doc_direction": side}
+    if own_info is not None:
+        out["own"] = own_info
+    if own_info is None and f.get("amount") and f.get("date"):
         kind = {"giden": "gider", "gelen": "gelir"}.get(direction or "")
         if dup := find_duplicate(f["date"], f["amount"], f.get("ref") or "", counterparty, kind, account_hint):
             out["duplicate"] = {"entry_id": dup, "message": "Bu dekont zaten eklenmiş"}
@@ -362,3 +459,96 @@ def save(b: dict) -> dict:
         debt = db.link_debt_movement(who, kind, amount, b["date"], eid)
     return {"id": eid, "counterparty": who, "debt_settled": debt[1]["id"] if debt else None,
             "debt_step": debt[0] if debt else None}
+
+
+# ---------------------------------------------------------------- kendi hesapları arası (POST /api/own-transfers)
+
+def save_own(b: dict) -> dict:
+    """Hesaplar arası aktarım: b {date, amount, from_account_id, to_account_id, description, note, ref, dekont_file,
+    dekont_side (giden|gelen: dosya hangi bacağın), created_by}. Dekonttan geliyorsa (ref ya da dosya) aynı aktarımın
+    kayıtlı bacağı aranır: ikinci dekont yeni kayıt açmaz, o bacağa bağlanır; dökümden gelmiş tek bacağın eksik karşılığı
+    eklenir. Aynı sorgu numaralı, daha önce gelir/gider sanılıp kaydedilmiş dekont kaydı (borca bağlı değilse) aktarıma
+    dönüşür (çift sayım kalkar). Dönüş {id, linked, created, replaced}. Aynı dekont aynı bacakta zaten varsa Duplicate."""
+    amount = money.money(abs(b["amount"]))
+    ref = _clean_ref(b.get("ref"))
+    from_id, to_id = b["from_account_id"], b["to_account_id"]
+    side = b.get("dekont_side") if b.get("dekont_side") in ("giden", "gelen") else None
+    dfile = b.get("dekont_file")
+    from_dekont = bool(ref or dfile)
+    replaced = _dekont_entries(b["date"], amount, ref) if ref else []
+    files = {"giden": None, "gelen": None}
+    for e in replaced:  # yanlış kayda bağlı dekont dosyası aktarımın bacağına geçer
+        files["giden" if e["kind"] == "gider" else "gelen"] = files["giden" if e["kind"] == "gider" else "gelen"] or e["receipt_file"]
+    if side and dfile:
+        files[side] = dfile
+    if from_dekont:
+        legs = []
+        if hit := db.own_leg_by_ref(ref):
+            legs = db.own_pair_legs(hit["id"])
+        else:
+            for acc, signed in ((from_id, -amount), (to_id, amount)):
+                if (leg := db.find_own_leg(b["date"], signed, acc, ref or None)) is not None:
+                    legs = db.own_pair_legs(leg["id"]) if leg.get("pair_id") else [leg]
+                    break
+        if legs:
+            out = _link_legs(legs, b, amount, ref, files, replaced)
+            _drop_entries(replaced)
+            return out
+    pid = db.add_own_pair(b["date"], amount, from_id, to_id, b.get("description"), b.get("note"),
+                          source="dekont" if from_dekont else "elle", ref=ref or None, from_file=files["giden"],
+                          to_file=files["gelen"], created_by=b.get("created_by"))
+    _drop_entries(replaced)
+    return {"id": pid, "linked": False, "created": 2, "replaced": [e["id"] for e in replaced]}
+
+
+def _link_legs(legs: list[dict], b: dict, amount: float, ref: str, files: dict, replaced: list[dict]) -> dict:
+    out_leg = next((x for x in legs if x["amount"] < 0), None)
+    in_leg = next((x for x in legs if x["amount"] > 0), None)
+    side = b.get("dekont_side")
+    target = out_leg if side == "giden" else in_leg if side == "gelen" else None
+    if target and target.get("receipt_file") and not replaced and (
+            target["receipt_file"] == b.get("dekont_file") or (ref and target.get("ref") == ref)):
+        raise Duplicate(target["pair_id"] or target["id"])  # bu dekont bu bacakta zaten var
+    created = 0
+    with db.connect() as c:
+        for leg, key in ((out_leg, "giden"), (in_leg, "gelen")):
+            if leg is None:
+                continue
+            sets = {"receipt_file": files[key]} if files[key] and not leg.get("receipt_file") else {}
+            if ref and not leg.get("ref"):
+                sets["ref"] = ref
+            if sets:
+                c.execute(f"UPDATE own_transfers SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?",
+                          (*sets.values(), leg["id"]))
+    if out_leg is None or in_leg is None:  # dökümden gelmiş tek bacak: karşı hesaba eksik bacak eklenir
+        have = out_leg or in_leg
+        acc_id = b["to_account_id"] if out_leg else b["from_account_id"]
+        if acc_id and acc_id != have.get("account_id"):
+            with db.connect() as c:
+                acc = db._own_account(c, acc_id)
+                pid = have["pair_id"] or have["id"]
+                c.execute("UPDATE own_transfers SET pair_id = ? WHERE id = ?", (pid, have["id"]))
+                c.execute("INSERT INTO own_transfers (transfer_date, amount, account, description, account_id, pair_id, "
+                          "source, ref, receipt_file, note, created_at, created_by) "
+                          "VALUES (?, ?, ?, ?, ?, ?, 'dekont', ?, ?, ?, CURRENT_TIMESTAMP, ?)",
+                          (have["transfer_date"], amount if out_leg else -amount, acc["name"],
+                           have.get("description"), acc["id"], pid, ref or None,
+                           files["gelen" if out_leg else "giden"], b.get("note") or None, b.get("created_by")))
+            created = 1
+    first = out_leg or in_leg
+    return {"id": first["pair_id"] or first["id"], "linked": True, "created": created, "replaced": [e["id"] for e in replaced]}
+
+
+def _dekont_entries(on: str, amount: float, ref: str) -> list[dict]:
+    """Aynı sorgu numaralı dekontun gelir/gider sanılmış kaydı (borç hareketine bağlı değilse)."""
+    h = dekont_hash(on, amount, ref)
+    with db.connect() as c:
+        return db.rows(c.execute(
+            "SELECT id, kind, receipt_file FROM entries WHERE (import_hash = ? OR import_hash LIKE ?) AND debt_id IS NULL "
+            "AND id NOT IN (SELECT entry_id FROM debt_payments WHERE entry_id IS NOT NULL)", (h, h + "~%")))
+
+
+def _drop_entries(entries: list[dict]) -> None:
+    """Aktarıma dönüşen kayıtları sil (dosyaları aktarımın bacağına geçti; delete_entry onu silmez)."""
+    for e in entries:
+        db.delete_entry(e["id"])

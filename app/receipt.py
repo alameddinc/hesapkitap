@@ -502,10 +502,12 @@ def _iso(d) -> str | None:
 DOC_PROMPT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapılmış, POS/yazar kasa fişi) ya da
 ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). Bir faturanın banka ödeme
 dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). Restoran, kafe, market, mağaza ya da akaryakıtın
-"e-Arşiv Fatura" / "e-Fatura" başlıklı SATIŞ belgesi (ödenmiş, son ödeme tarihi yok) "fis"tir. PDF veya fotoğraf olabilir.
+"e-Arşiv Fatura" / "e-Fatura" başlıklı SATIŞ belgesi (ödenmiş, son ödeme tarihi yok) "fis"tir. Kişiye / hesaba PARA TRANSFERİ
+dekontu (havale, EFT, FAST; gönderen, alıcı, IBAN var; kurum, abone no, son ödeme yok; "Gelen FAST" dahil) "transfer"dir,
+fatura DEĞİLDİR. PDF veya fotoğraf olabilir.
 SADECE şu JSON'u döndür:
 {{
-  "doc_type": "fis | fatura",
+  "doc_type": "fis | fatura | transfer",
   "merchant": "MARKA / tabela / kurum adı, kısa (ör. Espressolab, Enerjisa)",
   "legal_name": "belgedeki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
   "address": "fişte yazan işyeri adresi (mahalle/cadde, ilçe/il) kısa, veya null",
@@ -552,10 +554,12 @@ Fiş kısaltmalarını çöz (ör. "MRLB TCH BLU" = Marlboro sigara). Emin deği
 DOC_PROMPT_COMPACT = """Bu belge Türkiye'den; ya bir ALIŞVERİŞ FİŞİ (ödeme yapılmış, POS/yazar kasa fişi) ya da
 ödenecek bir FATURA (elektrik, doğalgaz, su, internet, telefon, aidat; "son ödeme tarihi" içerir). Bir faturanın banka ödeme
 dekontu ya da tahsilat makbuzu da "fatura" sayılır (paid true). Restoran, kafe, market, mağaza ya da akaryakıtın
-"e-Arşiv Fatura" / "e-Fatura" başlıklı SATIŞ belgesi (ödenmiş, son ödeme tarihi yok) "fis"tir. PDF veya fotoğraf olabilir.
+"e-Arşiv Fatura" / "e-Fatura" başlıklı SATIŞ belgesi (ödenmiş, son ödeme tarihi yok) "fis"tir. Kişiye / hesaba PARA TRANSFERİ
+dekontu (havale, EFT, FAST; gönderen, alıcı, IBAN var; kurum, abone no, son ödeme yok; "Gelen FAST" dahil) "transfer"dir,
+fatura DEĞİLDİR. PDF veya fotoğraf olabilir.
 SADECE şu JSON'u TEK SATIR, girintisiz döndür (null olan alanı ve kalemde q 1, u "adet", up null değerini YAZMA):
 {{
-  "doc_type": "fis | fatura",
+  "doc_type": "fis | fatura | transfer",
   "merchant": "MARKA / tabela / kurum adı, kısa (ör. Espressolab, Enerjisa)",
   "legal_name": "belgedeki resmi şirket unvanı (ör. NEW TASTE GIDA SAN.VE DIŞ.TİC.LTD.ŞTİ.) veya null",
   "address": "fişte yazan işyeri adresi (mahalle/cadde, ilçe/il) kısa, veya null",
@@ -737,9 +741,14 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
     VKN'si fiş şablonu imzası olur, yapay zekâ okumasında tutar/tarih/VKN karekodla düzeltilir. Boş/None: eski davranış."""
     from app import bill_templates, karekod, ocr, receipt_templates
 
+    from app import dekont_parse
+
     text = (ocr_text or "").replace("\r\n", "\n").strip()[:MAX_OCR_CHARS] or None
     code = karekod.best(qr) if qr else None
-    if text and (hit := bill_templates.read(text)):
+    # para transferi dekontu fatura şablonuyla okunmaz (eskiden yanlış öğrenilmiş banka "fatura" şablonu olabilir)
+    transfer_text = dekont_parse.is_transfer(text) or (mime == "application/pdf" and not more
+                                                        and dekont_parse.is_transfer(bill_templates.text_of(data, mime)))
+    if text and not transfer_text and (hit := bill_templates.read(text)):
         return bill_templates.as_doc(hit)  # telefon metni kurumun fatura şablonunu tutuyor: yapay zekâsız
     # kural okumasının metni: telefon metni, yoksa (karekod sunucuda okunduysa) PDF metin katmanı
     # PDF'te metin katmanı her zaman (karekod okunmasa da): IKEA / online mağazanın e-Arşiv PDF'i alışveriştir; son kontrol
@@ -755,7 +764,7 @@ def parse_document(data: bytes, mime: str, categories: list[str], split_categori
 
     if text and (hit := receipt_templates.read(text, categories, vkn=qr_vkn)):
         return hints(hit)  # zincir / akaryakıt fişi şablonu: yapay zekâsız (app/receipt_templates.py)
-    if not more and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
+    if not more and not transfer_text and (hit := bill_templates.read(bill_templates.text_of(data, mime))):
         return bill_templates.as_doc(hit)  # kurumun fatura şablonu: yapay zekâsız (app/bill_templates.py)
     if not enabled():
         return hints(_local(data, mime, categories, "Yapay zekâ anahtarı yok; yerel okuma kullanıldı", more, text))
@@ -799,7 +808,8 @@ def _parse_document_ai(data: bytes, mime: str, categories: list[str], split_cate
     doc = _doc_of(raw, categories)
     # şablon metni: PDF metin katmanı; fotoğrafta (metin katmanı yok) telefon metni — metin yolu da ondan öğreniyordu
     own = bill_templates.text_of(data, mime)
-    if doc["type"] == "bill" and learn_bill and (learn_from := (own if not more else None) or ocr_text):
+    if doc["type"] == "bill" and learn_bill and not doc.get("looks_like_transfer") and \
+            (learn_from := (own if not more else None) or ocr_text):
         bill_templates.learn(learn_from, raw)
     if doc["type"] == "receipt" and (own or ocr_text):  # e-arşiv PDF'i / telefon metni: KDV/VKN kural yedeği
         vat.fill(doc, own or ocr_text)
@@ -836,16 +846,20 @@ def parse_document_text(text: str, categories: list[str], split_categories: list
     raw, _ = _gemini_json(prompt, None, "text/plain", max_output_tokens=8000, kind="otomatik_metin",
                           thinking=receipt_thinking())
     doc = _doc_of(raw, categories)
-    if doc["type"] == "bill":
+    if doc["type"] == "bill" and not doc.get("looks_like_transfer"):
         bill_templates.learn(text, raw)
     return vat.fill(doc, text)  # model KDV/VKN'yi boş bıraktıysa metindeki TOPKDV / V.NO satırından
 
 
 def _doc_of(raw: dict, categories: list[str]) -> dict:
     """Modelin ham JSON'undan fiş/fatura sonucu (fotoğraf ve metin yolu aynı)."""
-    if raw.get("doc_type") == "fatura" or raw.get("due_date"):
+    # para transferi dekontu (yetenek dekont_doc): eski istemci için bugünkü gibi fatura biçimi + looks_like_transfer;
+    # yeni istemcide okuma yolu dekont okumasına geçer (app/api/main.py _read_document). Fatura şablonu öğrenilmez.
+    transfer = str(raw.get("doc_type") or "").strip().lower() == "transfer" and not raw.get("subscriber_no")
+    if raw.get("doc_type") == "fatura" or raw.get("due_date") or transfer:
         paid = _bill_paid(raw)
         return {
+            **({"looks_like_transfer": True} if transfer else {}),
             "type": "bill",
             "provider": (raw.get("merchant") or "").strip()[:60] or "Fatura",
             "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,

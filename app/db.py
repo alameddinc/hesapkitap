@@ -622,6 +622,12 @@ MIGRATIONS = [
     ("own_transfers", "raw", "TEXT"),           # ham banka metni (description temiz: 'Kendi hesabına · Halkbank → VakıfBank')
     ("own_transfers", "note", "TEXT"),          # kullanıcının notu
     ("own_transfers", "account_id", "INTEGER"),
+    ("own_transfers", "pair_id", "INTEGER"),          # elle / dekonttan girilen aktarımın iki bacağı (çıkışın id'si): tek transfer
+    ("own_transfers", "source", "TEXT"),              # elle | dekont (boş: döküm / e-posta bildirimi)
+    ("own_transfers", "ref", "TEXT"),                 # dekontun sorgu / referans no (ikinci dekont aynı aktarıma bağlanır)
+    ("own_transfers", "receipt_file", "TEXT"),        # bu bacağın dekontu (receipts/<sha256>.jpg|pdf)
+    ("own_transfers", "created_at", "TEXT"),          # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
+    ("own_transfers", "created_by", "INTEGER"),
     ("statements", "source", "TEXT"),           # 'excel': kart işlem dökümünden üretilmiş (borç alanı kurgu; borca girmez); PDF: parser | sablon | yapay_zeka (nasıl okundu)
     ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
     ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)
@@ -1921,6 +1927,7 @@ def delete_entry(entry_id: int) -> None:
         drop_orphan_spenders(c)
         name = r[0] if r else None
         used = name and (c.execute("SELECT 1 FROM entries WHERE receipt_file = ?", (name,)).fetchone()
+                         or c.execute("SELECT 1 FROM own_transfers WHERE receipt_file = ?", (name,)).fetchone()
                          or c.execute("SELECT 1 FROM warranty_files WHERE kind = 'receipts' AND name = ?", (name,)).fetchone())
     if name and not used:
         remove_file("receipts", name)
@@ -2540,7 +2547,8 @@ def gc_files(min_age_hours: int = 24) -> list[str]:
         refs = {
             "uploads": {r[0] + ".pdf" for r in c.execute("SELECT file_hash FROM statements")},
             "bills": {r[0] for r in c.execute("SELECT file_name FROM bills WHERE file_name IS NOT NULL")},
-            "receipts": {r[0] for r in c.execute("SELECT receipt_file FROM entries WHERE receipt_file IS NOT NULL")},
+            "receipts": {r[0] for r in c.execute("SELECT receipt_file FROM entries WHERE receipt_file IS NOT NULL "
+                                                 "UNION SELECT receipt_file FROM own_transfers WHERE receipt_file IS NOT NULL")},
             "statements-bank": {r[0] for r in c.execute("SELECT file_name FROM bank_documents WHERE stored = 1")},
             "warranty": set(),
         }
@@ -2997,6 +3005,121 @@ def own_transfer_to_entry(tid: int, owners: list[str] | None = None) -> int | No
     return eid
 
 
+# ---------------------------------------------------------------- hesaplar arası aktarım (elle / dekonttan)
+# Kullanıcının girdiği aktarım iki bacaktır (kaynak hesaptan −, hedef hesaba +), pair_id ikisinde aynı (çıkışın id'si):
+# gelir/gider sayılmaz, iki hesabın bakiyesi de değişir (import_hash boş: çapadan sonra sayılır). O hesabın dökümü
+# gelince aynı hareket bu bacakla birleşir (import_bank_rows): iki kez sayılmaz.
+
+OWN_ACCOUNT_KINDS = ("banka", "nakit", "diger")
+
+
+class OwnTransferError(ValueError):
+    pass
+
+
+def _own_account(c, aid: int | None):
+    r = c.execute("SELECT id, name, kind FROM accounts WHERE id = ?", (aid,)).fetchone() if aid else None
+    if not r or r["kind"] not in OWN_ACCOUNT_KINDS:
+        raise OwnTransferError("Hesap bulunamadı")
+    return r
+
+
+def own_pair_legs(tid: int) -> list[dict]:
+    """Aktarımın bacakları (çıkış önce). Eşi olmayan (dökümden) tek bacak da döner."""
+    with connect() as c:
+        r = c.execute("SELECT id, pair_id FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+        if not r:
+            return []
+        if r["pair_id"] is None:
+            return rows(c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)))
+        return rows(c.execute("SELECT * FROM own_transfers WHERE pair_id = ? ORDER BY amount", (r["pair_id"],)))
+
+
+def add_own_pair(day: str, amount: float, from_id: int, to_id: int, description: str | None = None,
+                 note: str | None = None, source: str = "elle", ref: str | None = None, from_file: str | None = None,
+                 to_file: str | None = None, created_by: int | None = None) -> int:
+    """Kaynak hesaptan hedef hesaba aktarım: iki bacak, aynı pair_id. Dönüş: pair_id (çıkış bacağının id'si)."""
+    amount = money.money(abs(amount))
+    if not money.gt(amount, 0):
+        raise OwnTransferError("Tutar sıfırdan büyük olmalı")
+    if from_id == to_id:
+        raise OwnTransferError("Nereden ve nereye aynı hesap olamaz")
+    with connect() as c:
+        fa, ta = _own_account(c, from_id), _own_account(c, to_id)
+        label = (description or "").strip() or f"{fa['name']} → {ta['name']}"
+        ins = ("INSERT INTO own_transfers (transfer_date, amount, account, description, account_id, pair_id, source, ref, "
+               "receipt_file, note, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)")
+        out_id = c.execute(ins, (day, -amount, fa["name"], label[:500], fa["id"], None, source, ref or None, from_file,
+                                 note or None, created_by)).lastrowid
+        c.execute("UPDATE own_transfers SET pair_id = ? WHERE id = ?", (out_id, out_id))
+        c.execute(ins, (day, amount, ta["name"], label[:500], ta["id"], out_id, source, ref or None, to_file, note or None,
+                        created_by))
+    return out_id
+
+
+def _editable_pair(legs: list[dict]) -> bool:
+    """Yalnız elle / dekonttan girilmiş, henüz dökümle birleşmemiş aktarım değişir ya da silinir."""
+    return bool(legs) and all(x["source"] and x["import_hash"] is None and x["pair_id"] is not None for x in legs)
+
+
+def update_own_pair(tid: int, day: str, amount: float, from_id: int, to_id: int, description: str | None,
+                    note: str | None) -> list[dict]:
+    legs = own_pair_legs(tid)
+    if not legs:
+        raise KeyError(tid)
+    if not _editable_pair(legs) or len(legs) != 2:
+        raise OwnTransferError("Dökümden gelen aktarımın yalnız açıklaması ve notu değişir")
+    amount = money.money(abs(amount))
+    if not money.gt(amount, 0):
+        raise OwnTransferError("Tutar sıfırdan büyük olmalı")
+    if from_id == to_id:
+        raise OwnTransferError("Nereden ve nereye aynı hesap olamaz")
+    out, inn = legs[0], legs[1]
+    with connect() as c:
+        fa, ta = _own_account(c, from_id), _own_account(c, to_id)
+        label = (description or "").strip() or f"{fa['name']} → {ta['name']}"
+        for leg, acc, signed in ((out, fa, -amount), (inn, ta, amount)):
+            c.execute("UPDATE own_transfers SET transfer_date = ?, amount = ?, account = ?, account_id = ?, description = ?, "
+                      "note = ? WHERE id = ?", (day, signed, acc["name"], acc["id"], label[:500], note or None, leg["id"]))
+    return own_pair_legs(tid)
+
+
+def delete_own_pair(tid: int) -> int:
+    legs = own_pair_legs(tid)
+    if not legs:
+        raise KeyError(tid)
+    if not _editable_pair(legs):
+        raise OwnTransferError("Dökümden gelen aktarım silinmez; yanlışsa gelir/gider olarak say")
+    with connect() as c:
+        c.execute(f"DELETE FROM own_transfers WHERE id IN ({','.join('?' * len(legs))})", [x["id"] for x in legs])
+    return len(legs)
+
+
+def find_own_leg(day: str, signed_amount: float, account_id: int | None, ref: str | None = None) -> dict | None:
+    """Bu hesapta aynı tutar ve yönde (±1 gün) kayıtlı aktarım bacağı (elle, dekont ya da döküm). Başka sorgu numaralı
+    dekontun bacağı sayılmaz (aynı gün aynı tutarda iki ayrı aktarım)."""
+    if not account_id:
+        return None
+    with connect() as c:
+        cands = rows(c.execute(
+            "SELECT * FROM own_transfers WHERE account_id = ? AND ROUND(amount * 100) = ? "
+            "AND transfer_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') "
+            "ORDER BY ABS(julianday(transfer_date) - julianday(?)), id", (account_id, money.kurus(signed_amount), day, day, day)))
+    for x in cands:
+        if ref and x.get("ref") and x["ref"] != ref:
+            continue
+        return x
+    return None
+
+
+def own_leg_by_ref(ref: str | None) -> dict | None:
+    if not ref:
+        return None
+    with connect() as c:
+        r = c.execute("SELECT * FROM own_transfers WHERE ref = ? ORDER BY id LIMIT 1", (ref,)).fetchone()
+    return dict(r) if r else None
+
+
 def _raw_note(e: dict) -> str:
     note = e.get("note") or ""
     return (note.partition("\n")[0][len("Hesap hareketi · "):] if note.startswith("Hesap hareketi · ")
@@ -3156,6 +3279,22 @@ def import_bank_rows(rows: list[dict], account: str = "", owners: list[str] | No
             if dk:
                 seen.add(r["hash"])
                 stats["tekrar"] += 1
+                continue
+        # elle / dekonttan girilmiş hesaplar arası aktarımın bu hesaptaki bacağı: dökümdeki satırla birleşir (iki kez sayılmaz;
+        # bacak artık çapanın içinde). Bildirim (mail:) satırı bacağı değiştirmez, yalnız tekrar sayılır.
+        if acc_id and r["hash"] not in seen and r.get("amount") is not None and r.get("type") in ("gelir", "gider", "virman"):
+            with connect() as c:
+                leg = c.execute("SELECT id FROM own_transfers WHERE import_hash IS NULL AND source IS NOT NULL "
+                                "AND account_id = ? AND ROUND(amount * 100) = ? "
+                                "AND transfer_date BETWEEN date(?, '-2 days') AND date(?, '+2 days') "
+                                "ORDER BY ABS(julianday(transfer_date) - julianday(?)), id LIMIT 1",
+                                (acc_id, money.kurus(r["amount"]), r["date"], r["date"], r["date"])).fetchone()
+                if leg and not r["hash"].startswith("mail:"):
+                    c.execute("UPDATE own_transfers SET import_hash = ?, raw = ?, transfer_date = ? WHERE id = ?",
+                              (r["hash"], (r.get("description") or "")[:500], r["date"], leg["id"]))
+            if leg:
+                seen.add(r["hash"])
+                stats["tekrar" if r["hash"].startswith("mail:") else "virman"] += 1
                 continue
         if r["hash"] in seen or (r["hash"].startswith("mail:") and _already_imported(r, people, owners)):
             stats["tekrar"] += 1
@@ -4445,10 +4584,13 @@ def _account_balance(c, a: dict, until: str | None = None, debts: list[dict] | N
                          AND pay_date <= ?""",
                       (a["id"], a["as_of"], a["as_of"], a.get("updated_at"), hi)).fetchone()[0]
     flows -= cards
+    # elle / dekonttan girilen aktarım çapa günü girildiyse bakiye güncellemesinden sonra mı (kart ödemesi gibi)
     flows += c.execute("""SELECT COALESCE(SUM(amount), 0) FROM own_transfers WHERE account_id = ?
-                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%') AND transfer_date > ?
+                          AND (import_hash IS NULL OR import_hash LIKE 'mail:%')
+                          AND (transfer_date > ? OR (transfer_date = ? AND created_at IS NOT NULL
+                               AND created_at > COALESCE(?, '')))
                           AND transfer_date <= ?""",
-                       (a["id"], a["as_of"], hi)).fetchone()[0]
+                       (a["id"], a["as_of"], a["as_of"], a.get("updated_at"), hi)).fetchone()[0]
     debt = 0.0
     for d in debt_rows() if debts is None else debts:  # debts: çok hesaplı çağıran bir kez hesaplayıp verir
         if d.get("account_id") == a["id"] and a["as_of"] < d["date"] <= hi and d["step"] != "vazgecildi":
