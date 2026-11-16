@@ -314,7 +314,7 @@ def invariants(nw) -> None:
 #   f) V elle 14.650                                                                            nakit 111.555,87
 # Belirsiz ödeme (hesapsız ödendi): a'dan sonra V2 46.832,72 + K1 44.917,36 = 91.750,08; d'de K1 Kuveyt dökümündeki
 #   kart ödemesine bağlanır; V2 ancak f'de (V bakiyesi ödemeden SONRA girildi) "bakiyenin içinde" olur. c, d, e'de
-#   güncellenen hesapların (H, K) dökümü V2 ödemesini İÇERMİYOR → V2 hâlâ düşülmeli (bkz. xfail).
+#   güncellenen hesapların (H, K) dökümü V2 ödemesini İÇERMİYOR → V2 hâlâ düşülmeli (aday hesap kuralı).
 # Elinde (free) = nakit − belirsiz − kumbara 83.000:
 #   0: 252.562,51 − 0 − 83.000 = 169.562,51      a/b: 252.562,51 − 91.750,08 − 83.000 = 77.812,43
 #   c: 194.762,51 − 91.750,08 − 83.000 = 20.012,43 (Kuveyt'e giden 45.200 henüz Kuveyt'te görünmüyor: ihtiyatlı)
@@ -342,12 +342,6 @@ EXP = {  # adım: (bakiyeler H, V, K), free, spendable
     "g": ((95436.17, 14650.0, 1469.70), 28555.87, 10948.87),
     "h": ((95436.17, 14650.0, 1469.70), 28555.87, 23198.87),
 }
-ANCHOR_RULE = pytest.mark.xfail(strict=True, reason=(
-    "B1 çapa kuralı: belirsiz ödeme, ödemeden sonra HERHANGİ bir hesap güncellenince 'içinde' sayılıyor "
-    "(db.unknown_statement_payments.icinde). H (c) ve K (d) dökümleri V2 ödemesini içermediği hâlde V2 46.832,72 "
-    "düşülmez olur; c'de K1 de. Elinde/Ödemelerden sonra c: +91.750,08, d/e: +46.832,72 şişer."))
-
-
 def _go(client, tmpdb, monkeypatch, k):
     if k == "0":
         build(client, tmpdb, monkeypatch)
@@ -372,7 +366,7 @@ def test_step_balances_and_invariants(client, tmpdb, monkeypatch, k):
     assert n["forecast_balance"]["no_new_spend"] == round(n["spendable"] + SALARY, 2)
 
 
-@pytest.mark.parametrize("k", [pytest.param(k, marks=ANCHOR_RULE) if k in "cde" else k for k in EXP])
+@pytest.mark.parametrize("k", list(EXP))
 def test_step_free_and_spendable(client, tmpdb, monkeypatch, k):
     n = _go(client, tmpdb, monkeypatch, k)
     assert (n["free"], n["spendable"]) == EXP[k][1:], (n["free"], n["spendable"], n["unknown_payments_items"])
@@ -449,11 +443,12 @@ def test_g_next_day_new_period(client, tmpdb, monkeypatch):
 
 
 def test_forecast_variable_on_last_day(client, tmpdb, monkeypatch):
-    """BİLGİ (lead kararı): f'de 'Ay sonunda kalacak' = 97.448,87 (10.948,87 + maaş 86.500) − tahmini kart harcaması
-    121.156,49 = −23.707,62. Değişken: V1 37.000×30/31 = 35.806,45 (kesimi geçmiş, ödenmiş döngünün ortalaması sonraki
-    döngüye vekil) + V2 43.316,36 ×30/30 + K1 42.033,68 ×30/30. Bu harcamaların ekstreleri 23–25 Ara'da (ufuk 16 Ara'dan
-    SONRA) ödenir; spendable aynı ekstrelerin kesin kısmını later'a atıyor."""
+    """Lead kararı (16.11): "Ay sonunda kalacak" ufka (16 Ara) kadar NAKİT çıkışı. f'de tahmini kart harcaması 121.156,49
+    (V1 37.000×30/31 = 35.806,45 — kesimi geçmiş döngü, harcama sonraki ekstreye; V2 43.316,36; K1 42.033,68) ama bu
+    ekstreler 23–25 Ara'da (ufuktan SONRA) ödenir: toplamdan DÜŞÜLMEZ, bilgi satırı variable_card_later. Kart dışı
+    değişken gider geçmişi yok → 0. Ay sonunda kalacak = 10.948,87 + maaş 86.500 = 97.448,87 = yeni harcama yapmazsan."""
     _, n = run(client, tmpdb, monkeypatch, "f")
     fb = n["forecast_balance"]
-    assert {x["key"]: x["amount"] for x in fb["parts"]}["variable"] == 121156.49
-    assert fb["amount"] == -23707.62
+    p = {x["key"]: x["amount"] for x in fb["parts"]}
+    assert p["variable"] == 0.0 and p["variable_card_later"] == 121156.49
+    assert fb["amount"] == fb["no_new_spend"] == 97448.87 <= round(n["spendable"] + 86500.0, 2)

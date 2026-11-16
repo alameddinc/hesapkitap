@@ -3098,7 +3098,7 @@ def net_worth(today: date | None = None) -> dict:
     spendable_parts = [{"key": k, "label": lbl, "amount": _round(v), "sign": sg} for k, lbl, v, sg in rows
                        if (k not in DUE_KEYS and k != "unknown_payments") or money.gt(v, 0)]
     card_items = [{"title": c["title"], "amount": c["amount"], "date": c["due_date"],
-                   "overdue": bool(c["due_date"] and c["due_date"] < today.isoformat())}
+                   "overdue": workdays.past_due(c["due_date"], today)}
                   for c in cards if not c["estimated"] and in_h(c["due_date"])]
     later.sort(key=lambda x: (x["due_date"], x["title"]))
     spendable_later = {"total": _round(sum(x["amount"] for x in later)), "items": later,
@@ -3323,29 +3323,69 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
     return out
 
 
+CASH_VARIABLE_LOOKBACK = 3  # kart dışı değişken gider tahmini: son kaç TAMAMLANMIŞ dönemin medyanı
+
+
+def _cash_variable_estimate(today: date) -> float:
+    """Kart dışı (nakit / banka kartı / havale) değişken giderlerin dönem başına tahmini: son CASH_VARIABLE_LOOKBACK
+    tamamlanmış dönemin (kaydı olanların) medyanı. Değişken = elle ya da dökümden gelen, sabit kaleme bağlı OLMAYAN,
+    kredi kartıyla ödenmemiş, gider sayılan kayıt (counts). Kayıt yoksa 0."""
+    cur = current_period(today)
+    per = []
+    for i in range(1, 7):
+        m = add_months(cur, -i)
+        rows = [r for r in transactions(m) if r["source"] == "manual" and r["kind"] == EXPENSE and not r.get("pending")
+                and not r.get("recurring_id") and (r.get("payment") or "") != "kredi_karti" and counts(r)[0]]
+        if rows:
+            per.append(sum(r["amount"] for r in rows))
+        if len(per) >= CASH_VARIABLE_LOOKBACK:
+            break
+    return median(per) if per else 0.0
+
+
 def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict, today: date) -> dict:
-    """Bakiye tabanlı "Ay sonunda kalacak" (H1, lead 16.11; yetenek forecast_balance). Ufuk = Ödemelerden sonra'nın
-    ufku (spend_horizon), ikisi tutarlı:
+    """Bakiye tabanlı "Ay sonunda kalacak" (H1, lead 16.11; yetenek forecast_balance): ufka kadar NAKİT çıkışı. Ufuk =
+    Ödemelerden sonra'nın ufku (spend_horizon), ikisi tutarlı:
       no_new_spend ("Yeni harcama yapmazsan") = spendable + ufka kadar beklenen gelir (spendable_after_income.income:
                      girilmemiş sabit gelirler, SALARY_GRACE_DAYS iş günü içinde yatmamış maaş dahil)
-      amount       = no_new_spend − ufka kadar kalan günlerin tahmini kart harcaması (açık döngü başına henüz
-                     harcanmamış değişken pay: min(variable_at_cut − spent, variable_avg × kalan gün / döngü günü))
+      amount       = no_new_spend − variable; variable = ufka kadar ÖDENECEK tahmini harcama:
+                     • kart: açık döngü başına henüz harcanmamış değişken pay (min(variable_at_cut − spent, variable_avg ×
+                       kalan gün / döngü günü)), YALNIZ döngünün son ödemesi ufka kadarsa; sonrasında ödenecek kısım
+                       parts'ta "variable_card_later" (sign "bilgi"; toplamdan düşülmez — o para ufuktan sonra çıkar)
+                     • kart dışı: _cash_variable_estimate × ufka kalan gün / içinde bulunulan dönemin gün sayısı
     Bekleyen düzenli ödeme / taksit / abonelik spendable'da zaten (ufka kadar vadeliler); ayrıca düşülmez.
     Değişmez: amount ≤ no_new_spend ≤ spendable + beklenen gelir. Dönem akışı (gelir − gider) summary.expected'da kalır.
-    parts: [{key, label, amount, sign}] — free (Elinde şu an) +, payments (= free − spendable) −, income +, variable −."""
+    parts: free +, payments (= free − spendable) −, income +, variable − (= variable_card + variable_cash; kırılımı ayrı
+    satır, sign "bilgi"), variable_card_later (bilgi)."""
     income = (sai or {}).get("income") or 0.0
+    h_end = hz["end"].isoformat()
     days = max(0, (hz["end"] - today).days)
-    var = 0.0
+    card_now = card_later = 0.0
     for c in open_cycles(today).values():
         rest = max(0.0, (c.get("variable_at_cut") or 0.0) - (c.get("spent") or 0.0))
-        var += min(rest, (c.get("variable_avg") or 0.0) * days / max(1, c.get("days_total") or 1))
-    var = _round(var)
+        part = min(rest, (c.get("variable_avg") or 0.0) * days / max(1, c.get("days_total") or 1))
+        due = c.get("due")
+        if due and c.get("cut") and c["cut"] < today.isoformat():  # kesimi geçmiş: bundan sonraki harcama SONRAKİ ekstrede
+            d = date.fromisoformat(due)
+            due = date(d.year + (d.month == 12), d.month % 12 + 1, min(d.day, 28)).isoformat()
+        if due and due > h_end:
+            card_later += part
+        else:
+            card_now += part
+    p0, p1 = period_bounds(current_period(today))
+    cash = _cash_variable_estimate(today) * days / max(1, (p1 - p0).days + 1)
+    card_now, card_later, cash = _round(card_now), _round(card_later), _round(cash)
+    var = _round(card_now + cash)
     base = _round(spendable + income)
     parts = [{"key": "free", "label": "Elinde şu an", "amount": _round(free), "sign": "+"},
              {"key": "payments", "label": "Ödemeler (dönem sonuna kadar)", "amount": _round(free - spendable), "sign": "−"},
              {"key": "income", "label": "Beklenen gelir", "amount": _round(income), "sign": "+"},
-             {"key": "variable", "label": "Tahmini kart harcaması", "amount": var, "sign": "−"}]
-    return {"amount": _round(base - var), "no_new_spend": base, "horizon": hz["end"].isoformat(), "parts": parts}
+             {"key": "variable", "label": "Tahmini harcama (dönem sonuna kadar ödenecek)", "amount": var, "sign": "−"},
+             {"key": "variable_card", "label": "Kartla (ekstresi dönem içinde ödenecek)", "amount": card_now, "sign": "bilgi"},
+             {"key": "variable_cash", "label": "Nakit / banka kartıyla", "amount": cash, "sign": "bilgi"},
+             {"key": "variable_card_later", "label": "Kartla yapılacak tahmini harcama (sonraki ödemede)",
+              "amount": card_later, "sign": "bilgi"}]
+    return {"amount": _round(base - var), "no_new_spend": base, "horizon": h_end, "parts": parts}
 
 
 def _spendable_after_income(spendable: float, today: date, periods: list[str] | None = None) -> dict | None:

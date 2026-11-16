@@ -323,7 +323,21 @@ def test_forecast_balance_cut_passed_cycle_mid_and_last_day(cut_passed, client):
         nw = _nw(day)
         _check_invariant(nw)
     mid = _nw(date(2026, 11, 20))["forecast_balance"]
-    assert mid["no_new_spend"] - mid["amount"] > 0  # kalan günlerin kart harcaması
+    p = {x["key"]: x["amount"] for x in mid["parts"]}
+    # kesimi geçmiş döngü: bundan sonraki kart harcaması sonraki ekstrede (son ödeme 25 Ara > ufuk 16 Ara): bilgi, düşülmez
+    assert p["variable_card_later"] > 0 and p["variable_card"] == 0 and mid["amount"] == mid["no_new_spend"]
+
+
+def test_forecast_cash_variable_deducted(book, client, tmpdb, monkeypatch):
+    """Kart dışı değişken gider (son 3 tamamlanmış dönem medyanı) × ufka kalan gün / dönem günü düşülür."""
+    _freeze(monkeypatch, date(2026, 11, 20))
+    for d in ("2026-08-20", "2026-09-20", "2026-10-20"):
+        assert client.post("/api/entries", json={"entry_date": d, "description": "Örnek Market", "amount": 3000.0,
+                                                 "kind": "gider", "category": "Market & Gıda", "payment": "nakit"}).status_code == 200
+    fb = _nw(date(2026, 11, 20))["forecast_balance"]
+    p = {x["key"]: x["amount"] for x in fb["parts"]}
+    assert p["variable_cash"] == round(3000.0 * 26 / 30, 2)  # 20 Kas → 16 Ara 26 gün; 2026-12 dönemi 30 gün
+    assert fb["amount"] == round(fb["no_new_spend"] - p["variable"], 2) < fb["no_new_spend"]
 
 
 def test_forecast_balance_salary_arrives(book, client, monkeypatch):

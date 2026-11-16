@@ -143,10 +143,6 @@ def test_unknown_payment_eft_without_card_digits_links(client, two, tmpdb):
     assert n["unknown_payments"] == 0 and n["free"] == A0 + B0 - TOTAL
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "B1 çapa kuralı 'ödemeden sonra güncellenmiş HERHANGİ bir banka/nakit hesabı varsa ödeme o bakiyenin içinde' "
-    "(db.unknown_statement_payments.icinde): ödemeyi İÇERMEDİĞİ dökümden belli olan başka hesabın dökümü yüklenince "
-    "belirsiz ödeme düşülmez olur; Elinde/Ödemelerden sonra ödeme tutarı kadar şişer (gün tekrarı c–e adımları)."))
 def test_unknown_payment_stays_deducted_when_other_account_dokum_lacks_it(client, two, tmpdb):
     pay(client, two["sid"], TOTAL)
     set_ts(tmpdb, "UPDATE statements SET paid_marked_at = '2026-11-16 03:00:00' WHERE id = ?", two["sid"])
@@ -228,10 +224,6 @@ def test_unknown_then_corrected_with_account(client, two, tmpdb):
 
 # ---------------------------------------------------------------- aynı saniye: çapa ve ödeme/aktarım sırası
 
-@pytest.mark.xfail(strict=True, reason=(
-    "_account_balance kart ödemesini ve elle aktarımı çapa günü 'created_at > accounts.updated_at' (saniye çözünürlüklü "
-    "CURRENT_TIMESTAMP) ile ayırıyor; aynı saniyede bakiye güncellemesinden SONRA girilen ödeme çapanın içinde sayılır, "
-    "bakiye düşmez (girişlerde anchor_entry_id ile kimlik sırası kullanılıyor, tutarsız)."))
 def test_same_second_anchor_then_card_payment(client, two, tmpdb):
     assert client.patch(f"/api/accounts/{two['a']}", json={"balance": A0}).status_code == 200
     pay(client, two["sid"], TOTAL, account_id=two["a"])  # bakiye güncellemesinden SONRA
@@ -311,10 +303,6 @@ def test_cycle_partial_and_over_payment(client, cut_cycle, paid, left):
     assert n["spendable"] == round(s0 - paid + (1250.0 - left), 2)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "add_cycle_payment hesapsız (_KEEP) yolda dökümdeki eşi bulunca (_unknown_cycle_candidate) card_last4 YAZMIYOR "
-    "(hesaplı yol COALESCE ile yazıyor). Hanesiz EFT, tutarı tahminin 1,5 katını aşınca finance.cycle_payments onu "
-    "hiçbir döngüye saymaz: kullanıcı 'Ödendi' dedi, yanıt linked=true, ama döngü hâlâ ödenmemiş görünür."))
 def test_cycle_pay_unknown_links_eft_without_digits(client, cut_cycle, tmpdb):
     _dokum(tmpdb, [("2026-11-16", "KREDI KARTI ODEMESI ORNEK BANKASI", -20000.0, A0 - 20000.0)], "Örnek Banka A",
            cut_cycle)
@@ -324,11 +312,6 @@ def test_cycle_pay_unknown_links_eft_without_digits(client, cut_cycle, tmpdb):
     assert _pending(nw()) == {}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Kart ödemesi dökümde 'KART' kelimesi olmadan gelir (FAST) ve tutarı yüklü hiçbir ekstreyle tutmazsa (döngünün ekstresi "
-    "henüz yok) sıradan GİDER kaydı olur. Kullanıcı sonra döngüye hesapsız 'Ödendi' derse _unknown_cycle_candidate yalnız "
-    "card_payments'a bakar, bulamaz, belirsiz ödeme açar; A'nın çapası (aynı gün, işaretlemeden önce) 'içinde' sayılmaz → "
-    "20.000 hem bakiyeden hem belirsiz kalemden: ÇİFT DÜŞÜM (ve 20.000 gider olarak harcamaya yazılır)."))
 def test_cycle_pay_unknown_after_dokum_gider_no_double(client, cut_cycle, tmpdb):
     _dokum(tmpdb, [("2026-11-16", "FAST ODEME ORNEK BANKASI", -20000.0, A0 - 20000.0)], "Örnek Banka A", cut_cycle)
     set_ts(tmpdb, "UPDATE accounts SET updated_at = '2026-11-16 04:00:00'")
@@ -348,10 +331,6 @@ def test_cycle_pay_then_undo_restores(client, cut_cycle):
 
 # ---------------------------------------------------------------- hafta sonu / bayram son ödeme
 
-@pytest.mark.xfail(strict=True, reason=(
-    "net_worth.card_debt_items[].overdue 'due_date < bugün' ile hesaplanıyor (finance.py card_items), "
-    "workdays.past_due değil: Cumartesi vadeli ekstre Pazartesi 'gecikti' görünür; aynı gün fatura ve faiz satırı "
-    "iş günü kuralıyla 'gecikmedi' der (tutarsız rozet)."))
 def test_weekend_due_card_not_overdue_on_monday(client, tmpdb, monkeypatch):
     freeze(monkeypatch, date(2026, 11, 30))  # Pazartesi
     tmpdb.set_cycle_start_day(17)
@@ -468,11 +447,6 @@ def _member(owner, name="esim"):
     return m
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Ortak defter: unknown_statement_payments çapa kuralına yalnız ÜYENİN GÖREBİLDİĞİ hesaplar girer "
-    "(list_accounts → book.filter_accounts). Ödemeden sonra güncellenen hesap üyeye gizliyse sahip için belirsiz ödeme "
-    "'bakiyenin içinde' (düşülmez), üye için 'düşülür': üyenin Elinde/Ödemelerden sonra'sı görmediği bir ödeme kadar "
-    "düşük; iki kişi aynı defterde farklı karar görür."))
 def test_member_sees_same_unknown_decision(owner, tmpdb, monkeypatch):
     freeze(monkeypatch, TODAY)
     tmpdb.set_cycle_start_day(17)
