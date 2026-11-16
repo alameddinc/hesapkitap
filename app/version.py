@@ -566,7 +566,8 @@ CAPABILITIES = (
                               # satırında card_no ve cycle_paid {amount, date, covered, manual, payment_ids} (dökümden
                               # kart ödemesi ya da elle); covered (≥ kesin kısım ya da ≥ tahminin %80'i) ise döngü
                               # Ödemelerden sonra'dan ve Net durumun kesilecek ekstre tahmininden düşülmez, değilse kalan.
-                              # status yine "tahmini". net-worth credit_cards[].next_paid aynı nesne. Elle: POST
+                              # status yine "tahmini"; tahmin satırında da pay_account_hint / pay_account_hint_source
+                              # (ekstreyle aynı kural). net-worth credit_cards[].next_paid aynı nesne. Elle: POST
                               # /api/cards/cycle-pay {card_no, amount, paid_at?, account_id?} (kesim gelmediyse 409; hesap
                               # verilirse bakiye düşer), geri al DELETE /api/cards/cycle-pay?card_no=… (yalnız elle girilen)
     "forecast_balance",       # GET /api/net-worth forecast_balance {amount ("Ay sonunda kalacak", bakiye tabanlı), no_new_spend
@@ -595,6 +596,18 @@ CAPABILITIES = (
                               # path parse|classify|upload|dekont, reason "user_changed_type", to_type?} ile bildirir
                               # (içerik / kişisel veri yok). /api/admin/incidents: kalemde group "belge_okuma"; durum
                               # sayılarına (counts) girmez, özeti doc_reads {kinds, count, users, items [{id, place, count, users}]}
+    "anchor_conflict",        # hesaplı ödeme / aktarım (POST /api/statements/{id}/pay, /api/cards/cycle-pay, /api/own-transfers)
+                              # ödeme günü hesabın çapa (bakiye) günü ya da öncesiyse yanıtta anchor_conflict {account_id,
+                              # name, as_of} (aktarımda + anchor_conflicts). İstek alanı in_balance: true → bu ödeme o bakiyede
+                              # zaten var (bakiyeden düşmez), false → bakiyeden sonra yapıldı (düşer); yoksa eski kural (önceki
+                              # gün içinde, aynı gün kayıt sırası). İstemci formda sorar: "X bakiyesini bugün güncelledin. Bu
+                              # ödeme o bakiyede zaten var mı?" (varsayılan seçim yok)
+    "finance_audit_own_question",  # Yapılacaklar kendi_adi_hareket: karşı bacak bulunduysa action entry_to_transfer
+                              # (+ counter_account_id, counter_entry_id | counter_own_transfer_id); bulunmadıysa action
+                              # "own_question" (title "Alıcısı okunamadı — …", cta "Kendi hesabım" → hesap seç → POST
+                              # /api/finance-audit/entry-to-transfer {entry_id, account_id}; cta_no "Başkasına" → POST
+                              # /api/finance-audit/not-own {entry_id}: gider kalır, bir daha sorulmaz). Bilmeyen istemci
+                              # own_question'ı route ile kaydı açar. virman_bekliyor bekleme süresi 3 gün
 )
 
 

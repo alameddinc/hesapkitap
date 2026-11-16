@@ -4016,6 +4016,25 @@ class EntryToTransferIn(BaseModel):
     account_id: int | None = None  # öbür bacağın hesabı; yoksa tek bacak (karşı bacak beklenir)
 
 
+class NotOwnIn(BaseModel):
+    entry_id: int
+
+
+@app.post("/api/finance-audit/not-own")
+def finance_audit_not_own(body: NotOwnIn):
+    """own_question maddesi "Başkasına": kayıt gelir/gider kalır ve bir daha sorulmaz (entries.not_virman). Evet →
+    POST /api/finance-audit/entry-to-transfer {entry_id, account_id}. Ortak defter üyesi 403; kayıt yoksa 422."""
+    from app import finance_audit
+
+    _own_owner_only()
+    try:
+        finance_audit.not_own(body.entry_id)
+    except finance_audit.FixError as e:
+        raise HTTPException(422, str(e)) from e
+    finance_audit.run()
+    return {"ok": True}
+
+
 @app.post("/api/finance-audit/entry-to-transfer")
 def finance_audit_entry_to_transfer(body: EntryToTransferIn):
     """kendi_adi_hareket maddesi: karşı tarafı kullanıcının kendisi olan gelir/gider kaydı aktarım bacağı olur (bakiye
@@ -6587,6 +6606,9 @@ class OwnTransferIn(BaseModel):
     ref: str | None = Field(None, max_length=40)                                    # dekontun sorgu / referans no
     dekont_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.(?:jpg|pdf)$")  # okuma yanıtındaki dosya
     dekont_side: Literal["giden", "gelen"] | None = None                            # dekont hangi bacağın (doc_direction)
+    # yetenek anchor_conflict: aktarım günü hesabın çapa günü ya da öncesiyse istemci sorar — true: bu aktarım o bakiyede
+    # zaten var (düşülmez), false: bakiyeden sonra yapıldı (düşer). Yoksa: önceki gün içinde, aynı gün kayıt sırası
+    in_balance: bool | None = None
 
     @model_validator(mode="after")
     def _two_accounts(self):
@@ -6630,7 +6652,16 @@ def create_own_transfer(body: OwnTransferIn):
     except db.OwnTransferError as e:
         raise HTTPException(422, str(e)) from e
     sync.reconcile()
-    return {**out, **_own_out(out["id"])}
+    res = {**out, **_own_out(out["id"])}
+    if not out.get("linked"):  # yeni iki bacak: çapa gününde/öncesinde olan hesabın bacağına cevap yazılır
+        confs = []
+        for leg in res["legs"]:
+            if conf := db.anchor_conflict(leg.get("account_id"), data["date"]):
+                db.set_in_anchor("own_transfers", [leg["id"]], body.in_balance)
+                confs.append(conf)
+        if confs:
+            res["anchor_conflict"], res["anchor_conflicts"] = confs[0], confs
+    return res
 
 
 class OwnTransferEdit(BaseModel):
@@ -8565,6 +8596,9 @@ def payables(totals: bool = False, days: int | None = Query(None, ge=0, le=366),
 
 class StatementPayIn(PayIn):
     account_id: int | None = None  # ödemenin çıktığı banka/nakit hesabı (isteğe bağlı)
+    # yetenek anchor_conflict: ödeme günü hesabın çapa günü ya da öncesiyse istemci sorar — true: bu ödeme o bakiyede
+    # zaten var (düşülmez), false: bakiyeden sonra yapıldı (düşer). Yoksa: önceki gün içinde, aynı gün kayıt sırası
+    in_balance: bool | None = None
 
 
 @app.post("/api/statements/{sid}/pay")
@@ -8581,7 +8615,20 @@ def pay_statement(sid: int, body: StatementPayIn):
         r = db.mark_statement_paid(sid, body.amount, body.paid_at.isoformat(), acc)
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
-    return {"ok": True, **r}
+    return {"ok": True, **r, **_anchor_answer("card_payments", r.get("card_payment_id"),
+                                               body.account_id if isinstance(acc, int) else None,
+                                               body.paid_at.isoformat(), body.in_balance)}
+
+
+def _anchor_answer(table: str, row_id: int | None, account_id: int | None, day: str, in_balance: bool | None) -> dict:
+    """Hesaplı kayıt çapa gününde / öncesindeyse yanıta anchor_conflict {account_id, name, as_of} ve kullanıcının cevabı
+    (in_balance) kayda yazılır (db.set_in_anchor). Çakışma yoksa boş."""
+    conf = db.anchor_conflict(account_id, day)
+    if not conf:
+        return {}
+    if row_id:
+        db.set_in_anchor(table, [row_id], in_balance)
+    return {"anchor_conflict": conf}
 
 
 @app.delete("/api/statements/{sid}/pay")
@@ -8597,6 +8644,9 @@ class CyclePayIn(BaseModel):
     # ödemenin çıktığı hesap (ekstre Ödendi ile aynı): X → o hesap (bakiye düşer); null → hesaptan değil (nakit);
     # anahtar yok → hesabı belirsiz (unknown_payments; döküm gelince birleşir)
     account_id: int | None = None
+    # yetenek anchor_conflict: ödeme günü hesabın çapa günü ya da öncesiyse istemci sorar — true: bu ödeme o bakiyede
+    # zaten var (düşülmez), false: bakiyeden sonra yapıldı (düşer). Yoksa: önceki gün içinde, aynı gün kayıt sırası
+    in_balance: bool | None = None
 
 
 def _estimate_cycle(card_no: str) -> dict:
@@ -8622,7 +8672,8 @@ def pay_estimate_cycle(body: CyclePayIn):
         r = db.add_cycle_payment(body.card_no, cyc.get("bank") or "", body.amount, on, acc)
     except ValueError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
-    return {"ok": True, **r}
+    return {"ok": True, **r, **_anchor_answer("card_payments", None if r.get("linked") else r.get("card_payment_id"),
+                                               acc if isinstance(acc, int) else None, on, body.in_balance)}
 
 
 @app.delete("/api/cards/cycle-pay")

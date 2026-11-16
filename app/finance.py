@@ -1991,6 +1991,12 @@ def _payables(today: date) -> list[dict]:
                 "in_total": False, "card_no": d["account"]}
         if d["account"] in cyc_paid:
             item["cycle_paid"] = cyc_paid[d["account"]]
+        # döngü Ödendi'sinde varsayılan hesap: ekstre satırıyla aynı kural (son ödendiği → aynı banka → boş)
+        if hints is None:
+            hints, banks = db.last_pay_accounts(), db.same_bank_accounts()
+        last = hints.get((d["account"] or "")[-4:])
+        same = None if last else db.same_bank_account(d["bank"], banks)
+        item["pay_account_hint"], item["pay_account_hint_source"] = last or same, "son" if last else "ayni_banka" if same else None
         out.append(item)
     # key: kalemin kararlı, benzersiz kimliği (yetenek payables_key). Tahminin id'si yok (None): iki kartın tahmini aynı
     # günde düşünce istemcinin "tür-id-tarih" anahtarı çakışıyordu ve React çakışan satırı silmeden bırakıp her yeniden

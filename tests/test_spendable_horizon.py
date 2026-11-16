@@ -422,3 +422,17 @@ def test_unknown_cycle_pay_merges_with_bank_statement_row(cut_passed, client, tm
     nw = _nw(date(2026, 11, 20))
     assert not [u for u in nw["unknown_payments_items"] if u.get("cycle")]
     assert _pending(nw) == {}
+
+
+def test_estimate_row_has_pay_account_hint(cut_passed, client, tmpdb):
+    """Tahmini kart satırı (döngü Ödendi varsayılanı): önce aynı banka, döngü ödemesi bir hesaptan girilince 'son'."""
+    acc = client.get("/api/accounts").json()
+    aid = (acc if isinstance(acc, list) else acc["accounts"])[0]["id"]
+    tmpdb.set_account_balance("VakıfBank vadesiz", 1000.0, "2026-11-01", "elle")
+    vid = next(a["id"] for a in tmpdb.list_accounts() if a["name"] == "VakıfBank vadesiz")
+    est = next(p for p in finance.payables(date(2026, 11, 20)) if p["type"] == "estimate")
+    assert (est["pay_account_hint"], est["pay_account_hint_source"]) == (vid, "ayni_banka")
+    r = client.post("/api/cards/cycle-pay", json={"card_no": CARD, "amount": 9000.0, "paid_at": "2026-11-19", "account_id": aid})
+    assert r.status_code == 200, r.text
+    est = next(p for p in finance.payables(date(2026, 11, 20)) if p["type"] == "estimate")
+    assert (est["pay_account_hint"], est["pay_account_hint_source"]) == (aid, "son")

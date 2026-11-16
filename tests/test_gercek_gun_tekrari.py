@@ -312,20 +312,23 @@ def invariants(nw) -> None:
 #   d) K dökümü çapası 1.469,70 (= 1.187,06 + 45.200 − 44.917,36)                              nakit 195.045,15
 #   e) V −48.900 (döngü ödemesi V hesabından) = 49.239,28                                        nakit 146.145,15
 #   f) V elle 14.650                                                                            nakit 111.555,87
-# Belirsiz ödeme (hesapsız ödendi): a'dan sonra V2 46.832,72 + K1 44.917,36 = 91.750,08; d'de K1 Kuveyt dökümündeki
-#   kart ödemesine bağlanır; V2 ancak f'de (V bakiyesi ödemeden SONRA girildi) "bakiyenin içinde" olur. c, d, e'de
-#   güncellenen hesapların (H, K) dökümü V2 ödemesini İÇERMİYOR → V2 hâlâ düşülmeli (aday hesap kuralı).
-# Elinde (free) = nakit − belirsiz − kumbara 83.000:
-#   0: 252.562,51 − 0 − 83.000 = 169.562,51      a/b: 252.562,51 − 91.750,08 − 83.000 = 77.812,43
-#   c: 194.762,51 − 91.750,08 − 83.000 = 20.012,43 (Kuveyt'e giden 45.200 henüz Kuveyt'te görünmüyor: ihtiyatlı)
-#   d: 195.045,15 − 46.832,72 − 83.000 = 65.212,43  e: 146.145,15 − 46.832,72 − 83.000 = 16.312,43
+# Belirsiz ödeme (hesapsız ödendi): a'dan sonra V2 46.832,72 + K1 44.917,36 = 91.750,08 UYARIDA. MUHAFAZAKÂR kural
+#   (lead 16.11, canlı kopya; db.unknown_statement_payments): aday hesabın çapası 14 günden eskiyse DÜŞÜLMEZ (bayat
+#   hesapta giriş/çıkış da eksik, yalnız ödemeyi düşmek çift sayım). V2'nin adayı VakıfBank (çapa 29 Eki, 18 gün),
+#   K1'in adayı Kuveyt Türk (18 Eki): a–e'de ikisi de "capa_bayat" → deducted false, belirsiz_odeme uyarısı kalır.
+#   d'de K1 Kuveyt dökümündeki kart ödemesine bağlanır; f'de V elle güncellenir (çapa ödemeden sonra: "capa_sonra").
+#   Önceki kural (aday güncel değilse de düş) a–e'de 91.750,08 / 46.832,72 düşüyordu: Elinde ve Ödemelerden sonra
+#   o kadar daha düşüktü; canlıda bu kural ana defterde 283k düşüp rakamı eksiye çevirdi.
+# Elinde (free) = nakit − belirsiz (düşülen) − kumbara 83.000:
+#   0/a/b: 252.562,51 − 83.000 = 169.562,51   c: 194.762,51 − 83.000 = 111.762,51
+#   d: 195.045,15 − 83.000 = 112.045,15        e: 146.145,15 − 83.000 = 63.145,15
 #   f/g/h: 111.555,87 − 0 − 83.000 = 28.555,87  (ölçekli kullanıcı beklentisi 28.100–28.600 ✓)
 # Ödemelerden sonra (spendable) = free − kart ekstresi − V1 döngüsünün kesin kısmı (1.350; e'den sonra ödendi → 0)
 #   − kişi borcu 12.250 (7 taksit, hepsi gecikmiş) − faturalar 5.357 (19 Kas ≤ ufuk) − kira 0 (18 Kas kirası 16 Kas'ta
 #   ödendi; 18 Eki kirası girildi) − 83.000 borç (kumbara karşılıyor → 0):
 #   0: 169.562,51 − 91.750,08 (ekstreler) − 1.350 − 12.250 − 5.357 = 58.855,43
-#   a/b: 77.812,43 − 1.350 − 17.607 = 58.855,43 (ödeme kart borcundan belirsize geçti: değişmez)
-#   c: 20.012,43 − 18.957 = 1.055,43   d: 65.212,43 − 18.957 = 46.255,43   e: 16.312,43 − 17.607 = −1.294,57
+#   a/b: 169.562,51 − 18.957 = 150.605,51 (kart borcu kalktı, belirsiz ödeme düşülmedi: uyarı)
+#   c: 111.762,51 − 18.957 = 92.805,51   d: 112.045,15 − 18.957 = 93.088,15   e: 63.145,15 − 17.607 = 45.538,15
 #   f/g: 28.555,87 − 17.607 = 10.948,87   h: kişi borcu nakit ödendi → 28.555,87 − 5.357 = 23.198,87
 # Maaştan sonra (spendable_later): V2 Ara döngüsü (son ödeme 23 Ara > ufuk 16 Ara) kesin kısmı = taksit 2.750; K1 Ara
 #   (25 Ara) 2.150; V1'in Ara döngüsü modellenmiyor (ekstresi yüklenmemiş kartta yalnız açık döngü). Toplam 4.900.
@@ -333,11 +336,11 @@ def invariants(nw) -> None:
 
 EXP = {  # adım: (bakiyeler H, V, K), free, spendable
     "0": ((HALK0, -30360.72, KUVEYT0), 169562.51, 58855.43),
-    "a": ((HALK0, -30360.72, KUVEYT0), 77812.43, 58855.43),
-    "b": ((153236.17, 98139.28, KUVEYT0), 77812.43, 58855.43),
-    "c": ((95436.17, 98139.28, KUVEYT0), 20012.43, 1055.43),
-    "d": ((95436.17, 98139.28, 1469.70), 65212.43, 46255.43),
-    "e": ((95436.17, 49239.28, 1469.70), 16312.43, -1294.57),
+    "a": ((HALK0, -30360.72, KUVEYT0), 169562.51, 150605.51),
+    "b": ((153236.17, 98139.28, KUVEYT0), 169562.51, 150605.51),
+    "c": ((95436.17, 98139.28, KUVEYT0), 111762.51, 92805.51),
+    "d": ((95436.17, 98139.28, 1469.70), 112045.15, 93088.15),
+    "e": ((95436.17, 49239.28, 1469.70), 63145.15, 45538.15),
     "f": ((95436.17, 14650.0, 1469.70), 28555.87, 10948.87),
     "g": ((95436.17, 14650.0, 1469.70), 28555.87, 10948.87),
     "h": ((95436.17, 14650.0, 1469.70), 28555.87, 23198.87),

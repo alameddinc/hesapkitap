@@ -143,15 +143,17 @@ def test_unknown_payment_eft_without_card_digits_links(client, two, tmpdb):
     assert n["unknown_payments"] == 0 and n["free"] == A0 + B0 - TOTAL
 
 
-def test_unknown_payment_stays_deducted_when_other_account_dokum_lacks_it(client, two, tmpdb):
+def test_unknown_payment_not_deducted_when_any_candidate_updated_after(client, two, tmpdb):
+    """Muhafazakâr kural (lead 16.11): kartın bankası hiçbir hesapla eşleşmiyor → adaylar bütün hesaplar; B'nin dökümü
+    ödemeden sonra yüklendi → ödeme bir bakiyenin içinde olabilir: DÜŞÜLMEZ (şüphede düşme), uyarı kalır."""
     pay(client, two["sid"], TOTAL)
     set_ts(tmpdb, "UPDATE statements SET paid_marked_at = '2026-11-16 03:00:00' WHERE id = ?", two["sid"])
-    # B'nin dökümü 16 Kas'ı kapsıyor, içinde kart ödemesi YOK (yalnız market harcaması)
     _dokum(tmpdb, [("2026-11-16", "ORNEK MARKET POS", -500.0, B0 - 500.0)], "Örnek Banka B", two["b"])
     set_ts(tmpdb, "UPDATE accounts SET updated_at = '2026-11-16 04:00:00' WHERE id = ?", two["b"])
     n = nw()
-    assert n["unknown_payments"] == TOTAL  # ödeme hâlâ hiçbir bakiyede değil
-    assert n["free"] == A0 + B0 - 500.0 - TOTAL
+    assert n["unknown_payments"] == 0
+    assert [(u["deducted"], u["reason"]) for u in n["unknown_payments_items"]] == [(False, "capa_sonra")]
+    assert n["free"] == A0 + B0 - 500.0
 
 
 def test_unknown_payment_manual_balance_after_is_inside(client, two, tmpdb):
@@ -467,3 +469,79 @@ def test_member_sees_same_unknown_decision(owner, tmpdb, monkeypatch):
     on, mn = owner.get("/api/net-worth").json(), m.get("/api/net-worth").json()
     assert on["unknown_payments"] == 0
     assert mn["unknown_payments"] == on["unknown_payments"]
+
+
+# ---------------------------------------------------------------- muhafazakâr belirsiz ödeme kuralı (lead 16.11, canlı)
+
+@pytest.fixture()
+def fresh(client, tmpdb, monkeypatch):
+    """Kartla aynı bankada (VakıfBank) tek güncel hesap, çapası 14 Kas (elle); ödenmemiş ekstre 10.000."""
+    freeze(monkeypatch, TODAY)
+    tmpdb.set_cycle_start_day(17)
+    tmpdb.set_account_balance("VakıfBank", A0, "2026-11-14", "elle")
+    set_ts(tmpdb, "UPDATE accounts SET updated_at = '2026-11-14 09:00:00'")
+    with tmpdb.connect() as c:
+        aid = c.execute("SELECT id FROM accounts").fetchone()[0]
+    return {"a": aid, "sid": _stmt(tmpdb)}
+
+
+def _marked(tmpdb, sid, at="2026-11-16 03:00:00"):
+    set_ts(tmpdb, "UPDATE statements SET paid_marked_at = ? WHERE id = ?", at, sid)
+
+
+def _why(n):
+    return [(u["deducted"], u["reason"]) for u in n["unknown_payments_items"]]
+
+
+def test_conservative_fresh_candidate_no_match_is_deducted(client, fresh, tmpdb):
+    """Güncel aday, çapası ödemeden önce, eşleşen ödeme yok, işaretlenme anı biliniyor → düşülür."""
+    pay(client, fresh["sid"], TOTAL)
+    _marked(tmpdb, fresh["sid"])
+    n = nw()
+    assert _why(n) == [(True, None)] and n["unknown_payments"] == TOTAL and n["free"] == A0 - TOTAL
+
+
+def test_conservative_dokum_anchor_same_day_after_marking_not_deducted(client, fresh, tmpdb):
+    """Dökümlü çapa 16 Kas (işaretlemeden sonra güncellendi) + hesapsız ödendi 16 Kas: döküm kapanış bakiyesi o güne
+    kadarki ödemeyi içerir → düşülmez."""
+    pay(client, fresh["sid"], TOTAL)
+    _marked(tmpdb, fresh["sid"])
+    tmpdb.set_account_balance("VakıfBank", A0 - TOTAL, "2026-11-16", "dokum")
+    set_ts(tmpdb, "UPDATE accounts SET updated_at = '2026-11-16 05:00:00'")
+    n = nw()
+    assert _why(n) == [(False, "capa_sonra")] and n["unknown_payments"] == 0
+
+
+def test_conservative_unknown_marked_at_not_deducted(client, fresh, tmpdb):
+    """paid_marked_at NULL (eski kayıt) → düşülmez, uyarı kalır."""
+    pay(client, fresh["sid"], TOTAL)
+    set_ts(tmpdb, "UPDATE statements SET paid_marked_at = NULL WHERE id = ?", fresh["sid"])
+    n = nw()
+    assert _why(n) == [(False, "isaretlenme_yok")] and n["unknown_payments"] == 0
+
+
+def test_conservative_stale_candidate_not_deducted_and_warned(client, fresh, tmpdb):
+    """Adayın çapası 18 gün önce (29 Eki) → düşülmez; hesap_guncel_degil ve belirsiz_odeme uyarıları çıkar."""
+    set_ts(tmpdb, "UPDATE accounts SET as_of = '2026-10-29', updated_at = '2026-10-29 09:00:00'")
+    pay(client, fresh["sid"], TOTAL)
+    _marked(tmpdb, fresh["sid"])
+    n = nw()
+    assert _why(n) == [(False, "capa_bayat")] and n["unknown_payments"] == 0
+    keys = [i.get("key") or "" for i in finance.insights(finance.current_period(TODAY), today=TODAY)]
+    assert any(k.startswith("belirsiz_odeme:") for k in keys) and any(k.startswith("hesap_guncel_degil:") for k in keys)
+
+
+def test_conservative_unlinked_bank_payment_counts_as_paid(client, fresh, tmpdb):
+    """Aynı kart için bağsız döküm kart ödemesi var (okumada eşleşir, YAZILMAZ) → ödenmiş ve bakiyede: düşülmez."""
+    with tmpdb.connect() as c:
+        c.execute("INSERT INTO card_payments (pay_date, amount, card_last4, account, description, import_hash) "
+                  "VALUES ('2026-11-15', 9990, '0002', 'VakıfBank', 'KREDI KARTI ODEMESI', 'h-muh-1')")
+    pay(client, fresh["sid"], TOTAL)
+    with tmpdb.connect() as c:
+        c.execute("UPDATE card_payments SET statement_id = NULL")  # pay sırasında bağlandıysa çöz: okuma kuralını dene
+        c.execute("UPDATE statements SET paid_source = 'elle'")
+    _marked(tmpdb, fresh["sid"])
+    n = nw()
+    assert _why(n) == [(False, "karsilik_var")] and n["unknown_payments"] == 0
+    with tmpdb.connect() as c:  # okuma veri yazmadı
+        assert c.execute("SELECT statement_id FROM card_payments WHERE import_hash = 'h-muh-1'").fetchone()[0] is None
