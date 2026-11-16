@@ -103,9 +103,12 @@ def invariants(d: date) -> list[str]:
     if n["spendable_later"]["total"] < 0 or any(x["amount"] <= 0 for x in n["spendable_later"]["items"]):
         bad.append(f"later eksi/sıfır kalem {n['spendable_later']}")
     fp = {x["key"]: x["amount"] for x in fb["parts"]}
-    if abs(round(n["spendable"] + income - fp.get("funded", 0.0), 2) - fb["no_new_spend"]) > 0.01:
-        bad.append(f"no_new_spend {fb['no_new_spend']} ≠ spendable + gelir − funded ({n['spendable']}, {income}, "
-                   f"{fp.get('funded')})")
+    # ana sayı MAAŞA KADAR (b930045): maaş eklenmez, no_new_spend == spendable, amount ≤ spendable
+    if abs(fb["no_new_spend"] - n["spendable"]) > 0.01 or fp.get("income", 0) or fp.get("funded", 0):
+        bad.append(f"no_new_spend {fb['no_new_spend']} ≠ spendable {n['spendable']} (gelir {fp.get('income')}, "
+                   f"funded {fp.get('funded')})")
+    if fb["amount"] > n["spendable"] + 0.005:
+        bad.append(f"ana sayı {fb['amount']} > spendable {n['spendable']}")
     neg = [p for p in n["spendable_parts"] if p["sign"] == "−" and p["amount"] < -0.005]
     if neg:
         bad.append(f"eksi işaretli kalem eksi değer: {neg}")

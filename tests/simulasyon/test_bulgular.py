@@ -227,6 +227,8 @@ def test_s9_ay_sonu_taksitli_borcun_yalniz_vadesi_gelen_taksidi(client, tmpdb, m
     n = finance.net_worth(date(2026, 11, 1))
     fb = n["forecast_balance"]
     inc = (n["spendable_after_income"] or {}).get("income") or 0.0
-    assert inc == 61500.0 and n["spendable_horizon"] == "2026-11-16" and fb["until"] == "2026-12-14"
-    # ufuk 16 Kas: 10 Kas taksidi spendable'da; until 14 Ara: yalnız 10 Ara taksidi (1.500) fonlanır
-    assert fb["no_new_spend"] == round(n["spendable"] + inc - 1500.0, 2), fb.get("funded_items")
+    assert inc == 61500.0 and n["spendable_horizon"] == "2026-11-16"
+    # MAAŞA KADAR (b930045): until 14 Kas (15 Kas maaşından bir gün önce); maaş eklenmez, funded yok → borcun kalanı
+    # ana sayıya hiç girmez; 10 Kas taksidi spendable'da (yalnız vadesi gelen taksit, kalanın tamamı değil)
+    assert fb["until"] == "2026-11-14" and fb["no_new_spend"] == n["spendable"]
+    assert {p["key"]: p["amount"] for p in n["spendable_parts"]}["payable"] == 1500.0

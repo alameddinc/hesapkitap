@@ -152,7 +152,8 @@ def test_ufuk_gunu_vadeli_taksit_simdi_sonraki_sonra(client, tmpdb, monkeypatch)
 
 
 def test_erken_odenen_taksit_funded_icinde_iki_kez_dusmez(client, tmpdb, monkeypatch):
-    """S9 sınırı: ufuktan sonraki taksit önceden ödendiyse funded'a girmez (steps ödemeyi önce sayar)."""
+    """S9 sınırı: ufuktan sonraki taksit önceden ödendiyse "Maaştan sonra ödenecek"te kalanı ödenmemiş taksitlerden
+    (steps ödemeyi önce sayar). Ana sayı MAAŞA KADAR (b930045): until 14 Kas, funded hiç yok."""
     freeze(monkeypatch, date(2026, 11, 1))
     tmpdb.set_setting("cycle_mode", "manual")
     tmpdb.set_cycle_start_day(17)
@@ -167,8 +168,7 @@ def test_erken_odenen_taksit_funded_icinde_iki_kez_dusmez(client, tmpdb, monkeyp
     assert client.post(f"/api/debts/{did}/pay", json={"amount": 3000.0, "paid_at": "2026-11-01"}).status_code == 200
     n = finance.net_worth(date(2026, 11, 1))
     fb = n["forecast_balance"]
-    assert fb["until"] == "2026-12-14"
-    assert not [x for x in fb["funded_items"] if x["type"] == "borc"]
+    assert fb["until"] == "2026-11-14" and fb["funded_items"] == []
     later = [x for x in n["spendable_later"]["items"] if x["type"] == "borc"]
     assert later[0]["amount"] == 6000.0 and later[0]["steps"][0] == {"date": "2027-01-10", "amount": 1500.0}
 

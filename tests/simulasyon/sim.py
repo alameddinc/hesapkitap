@@ -983,43 +983,41 @@ class Sim:
         return {k: round(v, 2) for k, v in out.items()} | {"_later_card": round(later, 2), "_pending_by": by,
                                                            "_late_ok": late_ok}
 
-    def forecast_until(self, hz: dict, income: float) -> date:
-        if income <= EPS:
-            return hz["end"]
-        nxt = next_period(hz["periods"][-1])
-        until = hz["later_end"]
-        dates = [occurrence(nxt, s.day, self.p.cycle_day) for s in self.p.salaries if (s.desc, nxt) not in self.salary_info]
-        if dates:
-            until = min(until, min(dates) - timedelta(days=1))
-        return until
+    def next_salary(self) -> date | None:
+        """Uygulamanın next_salary_date'i ile aynı kural (birincil maaş = en büyük tutarlı): bugün ya da sonra, yatmamış
+        ilk oluşum; günü geçmiş ama 5 iş günü toleransı içinde hâlâ beklenen → bugün. Maaş yoksa None."""
+        if not self.p.salaries:
+            return None
+        main = max(self.p.salaries, key=lambda s: s.amount)
+        per0 = next_period(self.horizon()["periods"][0], -1)
+        for k in range(4):
+            per = next_period(per0, k)
+            if (main.desc, per) in self.salary_info:
+                continue
+            d = occurrence(per, main.day, self.p.cycle_day)
+            if d < self.today:
+                if workdays.add_business_days(d, 5) < self.today:
+                    continue
+                d = self.today
+            return d
+        return None
 
     def check_forecast(self, nw: dict, hz: dict, e_inc: float, ep: dict) -> None:
+        """K7 ana sayı MAAŞA KADAR (kullanıcı kararı 16.11, b930045): until = sonraki birincil maaştan bir gün önce
+        (maaş yoksa ufuk sonu); maaş eklenmez (income/funded 0), no_new_spend == spendable, amount ≤ spendable."""
         fb = nw["forecast_balance"]
-        until = self.forecast_until(hz, e_inc)
-        if fb.get("until") and fb["until"] != until.isoformat():
-            self.fail("K7_until", "Ay sonunda kalacak günü (until)", str(until), fb.get("until"))
+        sal = self.next_salary()
+        until = max(self.today, sal - timedelta(days=1)) if sal else hz["end"]
+        kind = "maasa_kadar" if sal else "donem_sonu"
+        if fb.get("until") != until.isoformat() or fb.get("label_kind") != kind:
+            self.fail("K7_until", "maaşa kadar günü (until, label_kind)", (str(until), kind), (fb.get("until"), fb.get("label_kind")))
             return
-        cutoff = max(until, hz["d_end"])
-        eu = self.expected_parts({**hz, "d_end": cutoff})
-        rec_next = 0.0
-        if self.p.rent and until > hz["end"]:
-            amt, day, _, _ = self.p.rent
-            nxt = next_period(hz["periods"][-1])
-            on = occurrence(nxt, day, self.p.cycle_day)
-            if hz["end"] < on <= until and (nxt not in self.rent_paid or nxt in self.rent_app_pending):
-                rec_next = amt
-        interest = 0.0
-        parts = {p["key"]: p["amount"] for p in nw["spendable_parts"]}
-        if ep["_late_ok"]:
-            interest = parts.get("card_late_interest", 0.0) + parts.get("card_interest", 0.0)
-        e_nns = round(nw["free"] + e_inc - eu["card_debt"] - eu["pending_cards"] - eu["bills"] - eu["payable"]
-                      - eu["recurring"] - rec_next - interest, 2)
-        if abs(fb["no_new_spend"] - e_nns) > EPS:
-            fp = {x["key"]: x["amount"] for x in fb["parts"]}
-            self.fail("K7_ay_sonu", f"no_new_spend (until {until}; gelir {e_inc}; funded {fp.get('funded')}; "
-                                    f"beklenen kalemler ≤until: {({k: v for k, v in eu.items() if not k.startswith('_')})}"
-                                    f" + sonraki dönem kirası {rec_next}; uyg. funded_items {fb.get('funded_items')})",
-                      e_nns, fb["no_new_spend"])
+        fp = {x["key"]: x["amount"] for x in fb["parts"]}
+        if abs(fb["no_new_spend"] - nw["spendable"]) > EPS or fp.get("income", 0) or fp.get("funded", 0):
+            self.fail("K7_ay_sonu", "no_new_spend == spendable, gelir ve funded 0", nw["spendable"],
+                      (fb["no_new_spend"], fp.get("income"), fp.get("funded")))
+        if fb["amount"] > nw["spendable"] + EPS:
+            self.fail("K7_ay_sonu_le_sp", "ana sayı ≤ Ödemelerden sonra", nw["spendable"], fb["amount"])
 
     def expected_income(self, hz: dict) -> float:
         tot = 0.0
@@ -1158,9 +1156,7 @@ class Sim:
                      - (parts.get("card_late_interest", 0.0) + parts.get("card_interest", 0.0) if interest_ok else 0.0), 2)
         if abs(nw["spendable"] - e_sp) > EPS and not partbad:
             self.fail("K3_spendable", "free − kesin ödemeler (kalemler doğru, toplam tutmuyor)", e_sp, nw["spendable"])
-        # K7 Ay sonunda kalacak (fonlama ilkesi, 89629f9): no_new_spend = until günündeki bakiye − until'e kadar kesin
-        # ödemeler + ufka giren beklenen gelir (tahmini harcama hariç). until bağımsız: gelir yoksa ufuk sonu; varsa
-        # sonraki dönemin ilk beklenen gelirinden bir gün önce (en geç sonraki dönem sonu)
+        # K7 ana sayı MAAŞA KADAR (b930045): until = sonraki birincil maaştan bir gün önce, no_new_spend == spendable
         if not partbad and abs(a_inc - e_inc) <= EPS:
             self.check_forecast(nw, hz, e_inc, ep)
         self.day_bad = len(self.mismatches) > n0
@@ -1182,6 +1178,7 @@ class Sim:
             ("K4_forecast_le_nns", fb["amount"] <= fb["no_new_spend"] + 0.005, (fb["amount"], fb["no_new_spend"])),
             ("K4_nns_le_sp_income", fb["no_new_spend"] <= round(nw["spendable"] + income, 2) + 0.005,
              (fb["no_new_spend"], nw["spendable"], income)),
+            ("K4_forecast_le_sp", fb["amount"] <= nw["spendable"] + 0.005, (fb["amount"], nw["spendable"])),
             ("K4_sp_le_free", nw["spendable"] <= nw["free"] + 0.005, (nw["spendable"], nw["free"])),
             ("K4_later_ge0", nw["spendable_later"]["total"] >= 0
              and all(x["amount"] > 0 for x in nw["spendable_later"]["items"]), nw["spendable_later"]["total"]),
@@ -1193,9 +1190,9 @@ class Sim:
         p = {x["key"]: x["amount"] for x in fb["parts"]}
         checks.append(("K4_forecast_parts", abs(round(p["free"] - p["payments"] + p["income"] - p.get("funded", 0.0)
                                                       - p["variable"], 2) - fb["amount"]) <= EPS, (p, fb["amount"])))
-        checks.append(("K4_nns_formul", abs(round(nw["spendable"] + income - p.get("funded", 0.0), 2)
-                                            - fb["no_new_spend"]) <= EPS,
-                       (fb["no_new_spend"], nw["spendable"], income, p.get("funded"))))
+        # MAAŞA KADAR (b930045): maaş eklenmez, funded yok → no_new_spend == spendable
+        checks.append(("K4_nns_formul", abs(nw["spendable"] - fb["no_new_spend"]) <= EPS and not p.get("income")
+                       and not p.get("funded"), (fb["no_new_spend"], nw["spendable"], p.get("income"), p.get("funded"))))
         checks.append(("K4_funded_ge0", p.get("funded", 0.0) >= -0.005 and (income > EPS or p.get("funded", 0.0) <= EPS),
                        (income, p.get("funded"))))
         for name, ok, val in checks:
