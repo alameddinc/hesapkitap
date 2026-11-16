@@ -775,7 +775,43 @@ def entry_to_transfer(eid: int, to_account_id: int | None = None) -> dict:
                              e.get("created_at") or "")).lastrowid
         c.execute("DELETE FROM entries WHERE id = ?", (eid,))
     counter = db.add_counter_leg(tid, to_account_id) if to_account_id else None
+    with db.connect() as c:  # geri alma için kaydın anlık görüntüsü (transfer_to_entry)
+        c.execute("UPDATE own_transfers SET from_entry = ? WHERE id = ?",
+                  (json.dumps({"entry": e, "counter_id": counter}, ensure_ascii=False, default=str), tid))
     return {"own_transfer_id": tid, "counter_id": counter}
+
+
+def transfer_to_entry(tid: int) -> dict:
+    """entry_to_transfer'ı geri al: aktarım bacağı, çevrilmeden önceki gelir/gider kaydına anlık görüntüden aynen döner
+    (aynı id boştaysa aynı id, aynı parmak izi: döküm yeniden yüklenince ikinci kayıt açılmaz; not_virman: onarım ve eşleme
+    onu bir daha aktarıma taşımaz). Çevirirken eklenen öbür bacak (dökümle birleşmemişse) silinir; başka bacaklar (öbür
+    hesabın dökümünden gelip bağlanan) eşsiz kalır. Bakiyeler çevirmeden önceki hâline döner. Dönüş {entry_id, kind}."""
+    with db.connect() as c:
+        t = c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+        if not t:
+            raise FixError("Aktarım bulunamadı")
+        if not t["from_entry"]:
+            raise FixError("Bu aktarım bir kayıttan çevrilmedi; geri alınamaz")
+        t = dict(t)
+        snap = json.loads(t["from_entry"])
+        e, counter = dict(snap["entry"]), snap.get("counter_id")
+        cols = {r[1] for r in c.execute("PRAGMA table_info(entries)")}
+        e = {k: v for k, v in e.items() if k in cols}
+        e["import_hash"] = t["import_hash"] or e.get("import_hash")  # dökümle birleştiyse onun izi (aynı satır)
+        e["not_virman"] = 1
+        if c.execute("SELECT 1 FROM entries WHERE id = ?", (e.get("id"),)).fetchone():
+            e.pop("id", None)
+        others = [dict(r) for r in c.execute("SELECT * FROM own_transfers WHERE id <> ? AND (pair_id = ? OR id = ?)",
+                                             (tid, tid, t["pair_id"] or -1))]
+        for o in others:
+            if o["id"] == counter and o["import_hash"] is None:
+                c.execute("DELETE FROM own_transfers WHERE id = ?", (o["id"],))
+            else:  # öbür hesabın dökümündeki bacak: eşsiz kalır (denetim yeniden sorar)
+                c.execute("UPDATE own_transfers SET pair_id = NULL WHERE id = ?", (o["id"],))
+        c.execute("DELETE FROM own_transfers WHERE id = ?", (tid,))
+        new_id = c.execute(f"INSERT INTO entries ({', '.join(e)}) VALUES ({', '.join('?' * len(e))})",
+                           tuple(e.values())).lastrowid
+    return {"entry_id": new_id, "kind": e["kind"]}
 
 
 # ---------------------------------------------------------------- elle

@@ -637,6 +637,9 @@ MIGRATIONS = [
     ("own_transfers", "receipt_file", "TEXT"),        # bu bacağın dekontu (receipts/<sha256>.jpg|pdf)
     ("own_transfers", "created_at", "TEXT"),          # elle girildiği an (aynı gün bakiye çapasıyla sıralama)
     ("own_transfers", "created_by", "INTEGER"),
+    # gelir/gider kaydından çevrildiyse (POST /api/finance-audit/entry-to-transfer) kaydın anlık görüntüsü (JSON
+    # {"entry": {...entries satırı}, "counter_id": öbür bacak | null}): geri alma (transfer-to-entry) kaydı aynen döndürür
+    ("own_transfers", "from_entry", "TEXT"),
     ("statements", "source", "TEXT"),           # 'excel': kart işlem dökümünden üretilmiş (borç alanı kurgu; borca girmez); PDF: parser | sablon | yapay_zeka (nasıl okundu)
     ("entries", "not_virman", "INTEGER NOT NULL DEFAULT 0"),  # kullanıcı "virman değil" dedi: onarım/eşleme taşımaz
     ("card_payments", "account_id", "INTEGER"),   # ödemenin çıktığı hesap (banka/nakit)

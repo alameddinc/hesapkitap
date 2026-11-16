@@ -608,6 +608,10 @@ CAPABILITIES = (
                               # /api/finance-audit/entry-to-transfer {entry_id, account_id}; cta_no "Başkasına" → POST
                               # /api/finance-audit/not-own {entry_id}: gider kalır, bir daha sorulmaz). Bilmeyen istemci
                               # own_question'ı route ile kaydı açar. virman_bekliyor bekleme süresi 3 gün
+    "transfer_undo",          # POST /api/finance-audit/transfer-to-entry {own_transfer_id}: entry-to-transfer'ı geri al
+                              # (yanıttaki own_transfer_id). Kayıt anlık görüntüden aynen döner (aynı parmak izi, mümkünse
+                              # aynı id, not_virman); çevirirken eklenen öbür bacak silinir; bakiyeler önceki hâline döner.
+                              # Kayıttan çevrilmemiş aktarım 422, ortak defter üyesi 403. {ok, entry_id, kind}
 )
 
 
