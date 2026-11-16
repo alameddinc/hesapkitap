@@ -3,17 +3,17 @@ anahtar 2026-08 = 17 Tem – 16 Ağu. Maaş ayın 15'i → 2026-08 döneminin ma
 
 Kural (beklenen): bir oluşum (maaş, kira, kesim) birkaç gün erken/geç gelse de AİT OLDUĞU dönem beklenen gününün
 dönemidir; her dönem tam bir kez sayılır, "gecikti/yatmadı" uyarısı hafta sonu/bayram yüzünden erken çıkmaz.
-Kırmızılar xfail(strict=True): düzeltme gelince XPASS olur, işaret kaldırılır.
+Kalan kırmızılar xfail(strict=True): düzeltme gelince XPASS olur, işaret kaldırılır. İş günü / tatil: app/workdays.py.
 
 Takvim: 15 Ağu 2026 Cumartesi (17'si Pazartesi); 13 Haz 2026 Cumartesi; 16 May 2026 Cumartesi; 24 Eki 2026
-Cumartesi; 30 Eki 2027 Cumartesi; 15 May 2027 Cumartesi. 2027 Kurban Bayramı YAKLAŞIK 16–19 Mayıs (arife 15 Mayıs;
-app.zakat.next_hijri 17 Mayıs der, ±1 gün; Diyanet takvimiyle doğrulanmadı) → ilk iş günü 20 Mayıs Perşembe.
+Cumartesi; 30 Eki 2027 Cumartesi; 15 May 2027 Cumartesi. 2027 Kurban Bayramı 16–19 Mayıs (
+Diyanet: arife 15 Mayıs, bayram 16–19 Mayıs; app/workdays.RELIGIOUS_HOLIDAYS) → ilk iş günü 20 Mayıs Perşembe.
 Bütün kişi/işyeri/tutar uydurmadır."""
 from datetime import date
 
 import pytest
 
-from app import finance, push, reminders, sub_detail
+from app import finance, push, reminders, sub_detail, workdays
 from app.parsers.base import PURCHASE, Statement, Transaction
 
 CYCLE = 17
@@ -76,19 +76,16 @@ def _stmt(db, card: str, bank: str, pe: date, due: date, total: float = 3000.0, 
     return db.save_statement(f"st-{card}-{pe}".encode(), "e.pdf", s)
 
 
-XF_BANK_SALARY = pytest.mark.xfail(strict=True, reason=(
-    "db.link_salary_entries dönemi e['month'] (= period_of(tarih)) alır; ay dönümünü aşan geç maaş SONRAKİ döneme "
-    "bağlanır. Elle 'Maaş' yolu (_attach_recurring → _nearest_recurring_month) doğru; içe aktarma yolu değil."))
 
 
 # ---------------------------------------------------------------- 1–3, 7: maaş kayması → hangi dönem
 
 @pytest.mark.parametrize("pay_date,want", [
     pytest.param("2026-08-13", "2026-08", id="s2-erken-13-bayram"),
-    pytest.param("2026-08-17", "2026-08", id="s1-pazartesi-17-banka", marks=XF_BANK_SALARY),
-    pytest.param("2026-08-18", "2026-08", id="s3-uzun-bayram-18-banka", marks=XF_BANK_SALARY),
+    pytest.param("2026-08-17", "2026-08", id="s1-pazartesi-17-banka"),
+    pytest.param("2026-08-18", "2026-08", id="s3-uzun-bayram-18-banka"),
     pytest.param("2027-05-14", "2027-05", id="s7-kurban-oncesi-cuma-14"),
-    pytest.param("2027-05-20", "2027-05", id="s7-kurban-sonrasi-persembe-20-banka", marks=XF_BANK_SALARY),
+    pytest.param("2027-05-20", "2027-05", id="s7-kurban-sonrasi-persembe-20-banka"),
 ])
 def test_bank_salary_belongs_to_expected_period(book, pay_date, want):
     _salary_rec(book)
@@ -111,9 +108,9 @@ def test_manual_salary_belongs_to_expected_period(book, pay_date, want):
 @pytest.mark.parametrize("source,late,nxt,months", [
     pytest.param("manual", "2026-08-17", "2026-09-15", ("2026-08", "2026-09"), id="s1-elle"),
     pytest.param("manual", "2026-08-18", "2026-09-15", ("2026-08", "2026-09"), id="s3-elle"),
-    pytest.param("bank", "2026-08-17", "2026-09-15", ("2026-08", "2026-09"), id="s1-banka", marks=XF_BANK_SALARY),
-    pytest.param("bank", "2026-08-18", "2026-09-15", ("2026-08", "2026-09"), id="s3-banka", marks=XF_BANK_SALARY),
-    pytest.param("bank", "2027-05-20", "2027-06-15", ("2027-05", "2027-06"), id="s7-banka", marks=XF_BANK_SALARY),
+    pytest.param("bank", "2026-08-17", "2026-09-15", ("2026-08", "2026-09"), id="s1-banka"),
+    pytest.param("bank", "2026-08-18", "2026-09-15", ("2026-08", "2026-09"), id="s3-banka"),
+    pytest.param("bank", "2027-05-20", "2027-06-15", ("2027-05", "2027-06"), id="s7-banka"),
 ])
 def test_each_period_exactly_one_salary(book, monkeypatch, source, late, nxt, months):
     """Geç maaş + sonraki ayın zamanında maaşı: iki dönemde de TAM BİR maaş; 'tahmini, döküm yok' yok, çift yok.
@@ -128,7 +125,7 @@ def test_each_period_exactly_one_salary(book, monkeypatch, source, late, nxt, mo
         assert finance.summary(m)["totals"]["income"] == SALARY
 
 
-@pytest.mark.parametrize("source", ["manual", pytest.param("bank", marks=XF_BANK_SALARY)])
+@pytest.mark.parametrize("source", ["manual", pytest.param("bank")])
 def test_late_salary_current_period_still_expects_own_salary(book, monkeypatch, source):
     """S1: 17 Ağu (Pzt) yatan maaş içe aktarıldı, bugün 18 Ağu (dönem 2026-09). Eylül maaşı (15 Eyl) hâlâ beklenmeli:
     Gelir'in 'bekliyor'u, Dönem sonu (expected/forecast), Planlama satırı, 'Maaş gelince' tek maaş."""
@@ -151,7 +148,7 @@ def test_late_salary_current_period_still_expects_own_salary(book, monkeypatch, 
 @pytest.mark.xfail(strict=True, reason=(
     "pending_recurring: dönem bitince (17 Ağu) geçmiş dönemin yatmamış maaşı ANINDA 'tahmini, döküm yok' gerçek gelire "
     "döner; içinde bulunulan dönemin beklenen gelirine (spendable_after_income) girmez. Hafta sonu/bayram toleransı "
-    "(beklenen gün + N gün) içinde 'bekliyor' kalmalı."))
+    "(beklenen gün + N iş günü) içinde 'bekliyor' kalmalı. Plan 2 → fix/odemelerden-sonra-tek-ufuk dalında."))
 def test_salary_due_saturday_not_yet_arrived_is_still_awaited(book, monkeypatch):
     """S1 (içe aktarmadan önce): 15 Ağu Cumartesi, bugün 17 Ağu Pazartesi sabah, Ağustos maaşı henüz görünmüyor.
     Beklenen: Ağustos maaşı 'bekliyor' (tahmini gerçek gelir değil) ve bu dönemin beklenen gelirlerinde (Maaş gelince)
@@ -187,18 +184,12 @@ def test_push_salary_truly_missing_fires(book):
     assert len(_gelir_ids(date(2026, 9, 17))) == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "push._gelir takvim günü sayar (beklenen gün + GELIR_LATE=2): Cumartesi 15'i → Pazartesi 17'si sabah 'Maaş yatmadı "
-    "mı?' gider; o gün maaşın yattığı gün. İş günü (sonraki iş günü + 2 iş günü) beklenmeli."))
 def test_push_salary_due_on_weekend_not_premature(book):
     _salary_rec(book)
     _salary(book, "2026-07-15", "bank")
     assert _gelir_ids(date(2026, 8, 17)) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Bayram: 15 May 2027 Cumartesi/arife, Kurban ≈16–19 May; push._gelir 17 May'da (bayramın 2. günü) bildirim atar. "
-    "Resmi tatil listesi olmadan iş günü bilinmez."))
 def test_push_salary_kurban_2027_not_during_bayram(book):
     _salary_rec(book, start="2027-01")
     _salary(book, "2027-04-15", "bank")
@@ -219,13 +210,6 @@ def test_card_cut_shift_same_month_keeps_period(book):
     assert periods == ["2026-03", "2026-04", "2026-05", "2026-06"]
 
 
-XF_CUT_RULE = pytest.mark.xfail(strict=True, reason=(
-    "Sonraki kesim tahmini SON ekstrenin gününden (reminders._cut_rule: ends[-1].day; finance._next_cut: pe.day): "
-    "hafta sonu yüzünden 15'ine kaymış bir kesim kalıcı 'kesim 15' sanılır; Temmuz kesimi 13 yerine 15 beklenir "
-    "(ekstre hatırlatması, kesim/son ödeme tahmini 2 gün kayar). Son 3–6 ekstrenin en sık/küçük günü alınmalı."))
-
-
-@XF_CUT_RULE
 def test_next_cut_after_shifted_cut_uses_usual_day_reminders(book):
     for pe, due in [("2026-03-13", "2026-03-23"), ("2026-04-13", "2026-04-23"), ("2026-05-13", "2026-05-23"),
                     ("2026-06-15", "2026-06-25")]:
@@ -234,7 +218,6 @@ def test_next_cut_after_shifted_cut_uses_usual_day_reminders(book):
     assert (k["cut"], k["due"]) == (date(2026, 7, 13), date(2026, 7, 23))
 
 
-@XF_CUT_RULE
 def test_next_cut_after_shifted_cut_uses_usual_day_finance(book):
     for pe, due in [("2026-03-13", "2026-03-23"), ("2026-04-13", "2026-04-23"), ("2026-05-13", "2026-05-23"),
                     ("2026-06-15", "2026-06-25")]:
@@ -243,10 +226,6 @@ def test_next_cut_after_shifted_cut_uses_usual_day_finance(book):
     assert finance._next_cut(st) == (date(2026, 7, 13), date(2026, 7, 23))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Otomatik ay dönümü (db.suggested_cycle_day = her kartın SON kesim günlerinin en geçi + 1): B kartının kesimi "
-    "16 May 2026 Cumartesi yüzünden 18'ine kayınca ay dönümü 17 → 19 olur, set_cycle_start_day bütün elle kayıtların "
-    "dönemini yeniden hesaplar; sonraki ay geri 17'ye döner (salınım)."))
 def test_auto_cycle_day_stable_under_weekend_cut(tmpdb):
     tmpdb.set_setting("cycle_mode", "auto")
     for pe, due in [("2026-03-13", "2026-03-23"), ("2026-04-13", "2026-04-23"), ("2026-05-13", "2026-05-25")]:
@@ -260,10 +239,6 @@ def test_auto_cycle_day_stable_under_weekend_cut(tmpdb):
     assert tmpdb.cycle_start_day() == 17
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Ekstre dönemi = substr(period_end, 1, 7) (db.list_statements). Ay sonu kesimi (30 Eki 2027 Cumartesi) 1 Kasım'a "
-    "kayınca Ekim'de ekstre yok, Kasım'da iki ekstre (Planlama/Özet kart harcaması Ekim 0, Kasım çift). Dönem, "
-    "önceki ekstreden ~1 ay sonrası / SAME_PERIOD toleransıyla atanmalı."))
 def test_month_end_cut_shift_crossing_month(book):
     for pe, due in [("2027-08-30", "2027-09-09"), ("2027-09-30", "2027-10-11"), ("2027-11-01", "2027-11-11"),
                     ("2027-11-30", "2027-12-10")]:
@@ -283,10 +258,6 @@ def test_card_due_printed_monday_not_late_on_weekend(book):
     assert p["status"] == "bekliyor" and p["interest"]["state"] == "before_due"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finance._status: due < today → 'gecikti'. Ekstrede son ödeme Cumartesi (24 Eki 2026) yazıyorsa Pazar günü "
-    "'gecikti' + faiz 'after_due' (spendable'dan gecikme faizi düşülür). Kart yönetmeliği: tatile denk gelen son "
-    "ödeme ilk iş günüdür; ödeme günü sonraki iş gününe yuvarlanmalı."))
 def test_card_due_saturday_not_late_on_sunday(book):
     _stmt(book, CARD_A, "Örnek Bank", date(2026, 10, 14), date(2026, 10, 24))
     p = _statement_payable(date(2026, 10, 25))
@@ -329,7 +300,7 @@ def test_rent_shift_belongs_to_due_period(book, pay_date, source):
     "_due_this_period yalnız içinde bulunulan dönemin girilmemiş düzenli giderini düşer (bilinçli: 'geçmiş dönem "
     "düşülmez'). 16 May Cumartesi vadeli kira Pazartesi ödenecek; 17 May Pazar günü dönem 2026-06 başladı ve Mayıs "
     "kirası Ödemelerden sonra'dan düşer, para hâlâ hesapta. Tolerans penceresinde (≤ TRANSFER_LATE_DAYS) önceki "
-    "dönemin ödenmemiş kalemi de düşülmeli. (Ödemelerden sonra alanı: başka dalda çalışılıyor; yalnız test.)"))
+    "dönemin ödenmemiş kalemi de düşülmeli. Plan 8 → fix/odemelerden-sonra-tek-ufuk dalında."))
 def test_rent_due_saturday_still_deducted_on_sunday(book, monkeypatch):
     today = date(2026, 5, 17)
     _freeze(monkeypatch, today)
@@ -350,9 +321,6 @@ def test_subscription_slip_within_slack_no_gap():
     assert sub_detail._gap_months(tx, ["2026-05", "2026-06", "2026-07"], date(2026, 8, 17)) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sub_detail._gap_months ödemeli ayı TAKVİM ayıyla sayar (date[:7]): 30'unda çekilen abonelik 30 Eki 2027 "
-    "Cumartesi yüzünden 1 Kasım'a kayınca Ekim 'ödemesiz' satırı çıkar, Kasım iki ödemeli görünür."))
 def test_subscription_month_end_slip_no_gap():
     tx = _sub_txns(["2027-08-30", "2027-09-30", "2027-11-01", "2027-11-30"])
     paid = sorted({x["date"][:7] for x in tx})
@@ -369,9 +337,6 @@ def _bill_payable(today: date) -> dict:
     return next(p for p in finance.payables(today) if p["type"] == "bill")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finance._status: son ödemesi Cumartesi (24 Eki 2026) olan fatura Pazar 'gecikti' görünür (_due_this_period "
-    "overdue=True); sonraki iş günü (26 Eki Pzt) geçmeden gecikti denmemeli."))
 def test_bill_due_saturday_not_late_on_sunday(book):
     _bill(book, "2026-10-24")
     assert _bill_payable(date(2026, 10, 25))["status"] == "bekliyor"
@@ -384,9 +349,97 @@ def test_bill_due_saturday_late_after_monday(book):
     assert _bill_payable(date(2026, 10, 27))["status"] == "gecikti"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "S7: son ödeme 17 May 2027 (Kurban ≈ 2. gün, Pazartesi). 18 May'da 'gecikti'; ilk iş günü 20 May. Yalnız hafta "
-    "sonu kuralı yetmez: resmi tatil (dini bayram) listesi gerekir."))
 def test_bill_due_in_kurban_2027_not_late_during_bayram(book):
     _bill(book, "2027-05-17")
     assert _bill_payable(date(2027, 5, 18))["status"] == "bekliyor"
+
+
+# ---------------------------------------------------------------- iş günü yardımcıları ve sınırlar
+
+
+@pytest.mark.parametrize("d,want", [
+    ("2026-08-15", "2026-08-17"),  # Cumartesi → Pazartesi
+    ("2026-08-14", "2026-08-14"),  # Cuma iş günü
+    ("2027-05-15", "2027-05-20"),  # arife Cmt, Kurban 16–19 → Perşembe
+    ("2027-05-14", "2027-05-14"),
+    ("2026-03-19", "2026-03-19"),  # Ramazan arifesi (yarım gün) iş günü
+    ("2026-03-20", "2026-03-23"),  # Ramazan 20–22 Mar → Pazartesi
+    ("2026-10-29", "2026-10-30"),  # Cumhuriyet Bayramı Perşembe → Cuma
+    ("2026-10-28", "2026-10-28"),  # 28 Ekim yarım gün: iş günü
+    ("2030-04-12", "2030-04-12"),  # 2030 Kurban arifesi Cuma
+    ("2030-04-13", "2030-04-17"),  # Kurban 13–16 Nis 2030 → Çarşamba
+])
+def test_next_business_day(d, want):
+    assert workdays.next_business_day(d).isoformat() == want
+
+
+def test_religious_table_matches_hijri_fallback_within_a_day():
+    """Tablodaki (Diyanet) 1. günler hicri yaklaşık hesapla en çok 1 gün farklı: tablo yazım hatası yakalanır."""
+    from app import zakat
+
+    for y, t in workdays.RELIGIOUS_HOLIDAYS.items():
+        for key, (m, d) in {"ramazan": (10, 1), "kurban": (12, 10)}.items():
+            approx = zakat.next_hijri(m, d, date(y, 1, 1))
+            assert abs((approx - date.fromisoformat(t[key])).days) <= 1, (y, key)
+
+
+def test_year_outside_table_falls_back_to_hijri():
+    hs = workdays.holidays(2031)
+    assert date(2031, 10, 29) in hs and sum(1 for d in hs if d.month in (1, 2, 3, 4) and d.day not in (1, 23)) >= 7
+
+
+@pytest.mark.parametrize("dates,want", [
+    (["2026-03-13", "2026-04-13", "2026-05-13", "2026-06-15"], 13),  # 13 Haz Cmt → 15: kayma
+    (["2026-01-13", "2026-02-13", "2026-03-20"], 20),               # tatille açıklanmıyor: banka günü değiştirdi
+    (["2027-08-30", "2027-09-30", "2027-11-01"], 30),               # 30 Eki Cmt → 1 Kas: önceki ayın kayması
+    (["2026-05-16"], 16),
+])
+def test_usual_day(dates, want):
+    assert workdays.usual_day(dates) == want
+
+
+def test_push_salary_thursday_due_fires_after_two_business_days(book):
+    """15 Eki 2026 Perşembe; +2 iş günü = 19 Eki Pazartesi (takvimle 17'si Cumartesi olurdu)."""
+    _salary_rec(book)
+    _salary(book, "2026-09-15", "bank")
+    assert _gelir_ids(date(2026, 10, 17)) == []
+    assert _gelir_ids(date(2026, 10, 19)) == ["gelir:1:2026-10"]
+
+
+def test_bank_salary_extra_small_payment_does_not_take_next_period(book):
+    """Aynı dönemde ikinci, küçük 'MAAS' ödemesi (fark/prim) sonraki dönemin maaş yerini kapmaz (elle kayıtla aynı)."""
+    _salary_rec(book)
+    _salary(book, "2026-08-14", "bank")
+    eid = book.create_entry({"entry_date": "2026-08-16", "description": "MAAS FARKI ORNEK TEKSTIL AS", "amount": 2500.0,
+                             "kind": "gelir", "category": "Diğer Gelir", "import_hash": "h-fark"})
+    book.link_salary_entries()
+    e = _entry(book, eid)
+    assert (e["recurring_id"], e["month"], e["category"]) == (None, "2026-08", "Maaş")
+
+
+def test_month_end_cut_not_moved_when_previous_month_has_statement(book):
+    """Ay sonu kesimli kartın erken ay kesimi, önceki ayda zaten ekstre varsa kendi ayında kalır (iki ekstre aynı ay
+    olmasın)."""
+    for pe, due in [("2027-08-30", "2027-09-09"), ("2027-09-30", "2027-10-11"), ("2027-10-29", "2027-11-08"),
+                    ("2027-11-02", "2027-11-12")]:
+        _stmt(book, CARD_A, "Örnek Bank", date.fromisoformat(pe), date.fromisoformat(due))
+    assert sorted(s["period"] for s in book.list_statements()) == ["2027-08", "2027-09", "2027-10", "2027-11"]
+    assert {t["period"] for t in book.card_transactions() if t["period_end"] == "2027-11-02"} == {"2027-11"}
+
+
+def test_month_end_cut_shift_moves_card_transactions_too(book):
+    for pe, due in [("2027-08-30", "2027-09-09"), ("2027-09-30", "2027-10-11"), ("2027-11-01", "2027-11-11")]:
+        _stmt(book, CARD_A, "Örnek Bank", date.fromisoformat(pe), date.fromisoformat(due))
+    assert {t["period"] for t in book.card_transactions() if t["period_end"] == "2027-11-01"} == {"2027-10"}
+    assert finance.summary("2027-10")["statements"][0]["period_end"] == "2027-11-01"
+
+
+def test_next_cut_after_month_end_shift_is_same_month(book):
+    """30 Eki 2027 Cumartesi → 1 Kas kesimi: sıradaki kesim 30 Kas (reminders) / 28 Kas (finance: gün 28 ile sınırlı),
+    Aralık değil."""
+    for pe, due in [("2027-08-30", "2027-09-09"), ("2027-09-30", "2027-10-11"), ("2027-11-01", "2027-11-11")]:
+        _stmt(book, CARD_A, "Örnek Bank", date.fromisoformat(pe), date.fromisoformat(due))
+    k = next(x for x in reminders.card_cuts(date(2027, 11, 5)) if x["card_no"] == CARD_A)
+    assert k["cut"] == date(2027, 11, 30)
+    st = finance._latest_statement_per_account()[CARD_A]
+    assert finance._next_cut(st)[0] == date(2027, 11, 28)

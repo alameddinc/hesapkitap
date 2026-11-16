@@ -17,7 +17,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app import db
+from app import db, workdays
 
 TZ = ZoneInfo("Europe/Istanbul")
 AY = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
@@ -141,15 +141,16 @@ def _add_month(d: date, day: int, month_end: bool) -> date:
 
 
 def _cut_rule(sts: list[dict]) -> tuple[int, bool]:
-    """Kartın kesim günü, son ekstrelerden öğrenilir: en son ekstrenin günü; son iki ekstre de ay sonundaysa "ay sonu"
-    (30 Nisan ve 31 Mayıs kesimli kart Haziran'da 30'unda kesilir, 28'inde değil)."""
-    ends = sorted(date.fromisoformat(s["period_end"]) for s in sts)[-3:]
+    """Kartın kesim günü, son ekstrelerden öğrenilir: son 6 ekstrenin olağan günü (workdays.usual_day: en sık gün;
+    hafta sonu/bayram yüzünden kaymış tek kesim günü değiştirmez, tatille açıklanmayan yeni gün değiştirir); son iki
+    ekstre de ay sonundaysa "ay sonu" (30 Nisan ve 31 Mayıs kesimli kart Haziran'da 30'unda kesilir, 28'inde değil)."""
+    ends = sorted(date.fromisoformat(s["period_end"]) for s in sts)[-6:]
 
     def eom(d: date) -> bool:
         return d.day == calendar.monthrange(d.year, d.month)[1]
 
     tail = ends[-2:]
-    return ends[-1].day, len(tail) == 2 and all(eom(d) and d.day >= 28 for d in tail)
+    return workdays.usual_day(ends), len(tail) == 2 and all(eom(d) and d.day >= 28 for d in tail)
 
 
 def card_cuts(now: date, grace: int = EKSTRE_GRACE) -> list[dict]:
@@ -168,6 +169,9 @@ def card_cuts(now: date, grace: int = EKSTRE_GRACE) -> list[dict]:
         cut = date.fromisoformat(st["next_period_end"]) if st.get("next_period_end") else _add_month(pe, day, month_end)
         if cut <= pe:  # bozuk okuma: sonraki kesim öncekinden önce
             cut = _add_month(pe, day, month_end)
+        if not st.get("next_period_end") and (cut - pe).days > 45:
+            # ay sonu kesimi tatil yüzünden sonraki ayın başına kaymıştı (30 Eki → 1 Kas): sıradaki kesim aynı ayın 30'u
+            cut = date(pe.year, pe.month, min(day, calendar.monthrange(pe.year, pe.month)[1]))
         # son ödeme: ekstrede yazan "sonraki son ödeme" ya da son ekstredeki kesim → son ödeme aralığı
         gap = (date.fromisoformat(st["due_date"]) - pe) if st.get("due_date") else None
         due = date.fromisoformat(st["next_due_date"]) if st.get("next_due_date") else (cut + gap if gap else None)
@@ -283,7 +287,11 @@ def _odeme(now: date) -> list[dict]:
     for card_no, st in _latest_statement_per_account().items():
         if not st.get("due_date") or not (st.get("total_debt") or 0) > 0:
             continue
-        due = date.fromisoformat(st["due_date"])
+        # hatırlatma ekstrede yazan güne göre (ihtiyatlı: 3 gün, 1 gün, son gün). Yazan gün hafta sonu/bayramsa ve
+        # geçtiyse son ödeme ilk iş günüdür (app/workdays.py; finance._status da o gün geçmeden "gecikti" demez):
+        # o güne kadar hatırlatma sürer ("yarın", "bugün") — Cumartesi'yi kaçıran Pazartesi faizsiz öder
+        printed = date.fromisoformat(st["due_date"])
+        due = printed if printed >= now else workdays.next_business_day(printed)
         left = (due - now).days
         if not 0 <= left <= ODEME_DAYS or _status(st["total_debt"], st.get("paid_amount"), st["due_date"], now) == "odendi":
             continue
@@ -293,8 +301,9 @@ def _odeme(now: date) -> list[dict]:
         out.append({"id": f"odeme:{_cid(card_no)}:{due.isoformat()}", "kind": "odeme",
                     "severity": "urgent" if left <= 1 else "warn",
                     "title": f"{st['bank']} ••{_last4(card_no)} · Son ödeme {when}",
-                    "text": f"{ay} ekstresinin son ödeme günü {_d(due)} {GUN[due.weekday()]}. Ödediysen işaretle; "
-                            "faiz işlemesin.",
+                    "text": f"{ay} ekstresinin son ödeme günü {_d(due)} {GUN[due.weekday()]}"
+                            + (f" ({_d(printed)} tatile denk geldi)" if due != printed else "")
+                            + ". Ödediysen işaretle; faiz işlemesin.",
                     "cta": "Ödemeye bak", "route": "ozet", "action": "pay", "due": due.isoformat(),
                     "tag": "Bugün" if left == 0 else "Yarın" if left == 1 else f"{left} gün kaldı",
                     "period": _month(due), "bank": st["bank"], "last4": _last4(card_no), "card_no": card_no,

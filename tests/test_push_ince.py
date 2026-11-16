@@ -126,7 +126,12 @@ def test_ekstre_one_day_after_cut_and_payment_3_and_1_days(client):
     assert son["title"] == "Bugün son gün · ••9602 · ₺2.500" and son["id"].endswith(":songun")
     assert son["body"] == "Örnek Banka · 5 Aralık Cumartesi. Ödediysen işaretle."
     _ok(son)
-    assert odeme(date(2026, 12, 6)) == []
+    # 5 Aralık Cumartesi: son ödeme ilk iş günü 7 Aralık Pazartesi (app/workdays.py). Pazar "yarın", Pazartesi son gün
+    [ertesi] = odeme(date(2026, 12, 6))
+    assert ertesi["title"] == "Son ödeme yarın · ••9602" and ertesi["id"].endswith("2026-12-07:1gun")
+    [pzt] = odeme(date(2026, 12, 7))
+    assert pzt["title"] == "Bugün son gün · ••9602 · ₺2.500"
+    assert odeme(date(2026, 12, 8)) == []
     # ödendi: bildirim yok
     with db.connect() as c:
         c.execute("UPDATE statements SET paid_amount = total_debt WHERE period_end = '2026-11-24'")

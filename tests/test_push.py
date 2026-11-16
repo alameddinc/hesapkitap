@@ -435,12 +435,14 @@ def test_gelir_late_only_when_usually_seen(client, keys):
     for d in ("2026-09-15", "2026-10-15"):
         db.create_entry({"entry_date": d, "description": "MAAS ODEMESI", "amount": 30000, "kind": "gelir",
                          "category": "Maaş", "payment": "havale", "recurring_id": rid})
-    [g] = push._gelir(date(2026, 11, 17))
+    # 15 Kasım 2026 Pazar: maaş Pazartesi 16'sı yatar; uyarı 2 İŞ GÜNÜ sonra, 18'i (app/workdays.py)
+    assert push._gelir(date(2026, 11, 17)) == []
+    [g] = push._gelir(date(2026, 11, 18))
     assert g["id"] == f"gelir:{rid}:2026-11" and g["route"] == "#/islemler"
-    assert push._gelir(date(2026, 11, 16)) == []  # 2 gün dolmadı
+    assert push._gelir(date(2026, 11, 16)) == []  # 2 iş günü dolmadı
     db.create_entry({"entry_date": "2026-11-14", "description": "MAAS ODEMESI", "amount": 30000, "kind": "gelir",
                      "category": "Maaş", "payment": "havale", "recurring_id": rid})
-    assert push._gelir(date(2026, 11, 17)) == []  # yattı
+    assert push._gelir(date(2026, 11, 18)) == []  # yattı
 
 
 def test_zekat_only_when_module_on(client, keys, monkeypatch):
