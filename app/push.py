@@ -971,9 +971,10 @@ def _butce(today: date) -> list[dict]:
 
 
 def _gelir(today: date) -> list[dict]:
-    """Düzenli gelir (maaş) günü GELIR_LATE gün geçti, son haftada yatmış görünmüyor. Yalnız önceki aylarda dökümde
-    görünen gelir için (döküm yüklemeyen kişiye her ay boşuna uyarı gitmesin)."""
-    from app import finance, money
+    """Düzenli gelir (maaş) günü GELIR_LATE İŞ GÜNÜ geçti (hafta sonu/bayram sayılmaz: app/workdays.py), son haftada
+    yatmış görünmüyor. Yalnız önceki aylarda dökümde görünen gelir için (döküm yüklemeyen kişiye her ay boşuna uyarı
+    gitmesin)."""
+    from app import finance, money, workdays
 
     m = today.strftime("%Y-%m")
     recs = [r for r in db.list_recurring() if r["kind"] == "gelir" and r["start_month"] <= m
@@ -982,9 +983,20 @@ def _gelir(today: date) -> list[dict]:
         return []
     entries = [e for e in db.list_entries() if e["kind"] == "gelir" and not e["skipped"]]
     out = []
+    prev_m = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     for r in recs:
-        exp = today.replace(day=min(max(1, r["day_of_month"] or 1), calendar.monthrange(today.year, today.month)[1]))
-        if (today - exp).days != GELIR_LATE:
+        # beklenen gün: kalemin o dönemki günü (db.day_at: iş değişikliğinde maaş günü değişebilir). Bildirim günü
+        # takvimle değil iş günüyle: beklenen gün hafta sonu/bayramsa ilk iş günü + GELIR_LATE iş günü (15'i Cumartesi →
+        # Pazartesi yatar, bildirim Çarşamba). Bu yüzden önceki ayın beklenen günü de bu aya düşebilir.
+        exp = None
+        for ym_ in (prev_m, m):
+            y_, mo_ = map(int, ym_.split("-"))
+            last_ = calendar.monthrange(y_, mo_)[1]
+            cand = date(y_, mo_, min(max(1, r["day_of_month"] or 1), last_))
+            cand = cand.replace(day=min(max(1, db.day_at(r, db.period_of(cand)) or 1), last_))
+            if workdays.add_business_days(cand, GELIR_LATE) == today:
+                exp = cand
+        if exp is None:
             continue
         salary = finance._is_salary(r)
         mine = [date.fromisoformat(e["entry_date"]) for e in entries
@@ -992,7 +1004,7 @@ def _gelir(today: date) -> list[dict]:
         lo = exp - timedelta(days=7)
         if any(lo <= d <= today for d in mine) or not any(exp - timedelta(days=70) <= d < lo for d in mine):
             continue
-        out.append(item("gelir", f"gelir:{r['id']}:{m}", f"{_ad(r['description'], 22)} yatmadı mı?",
+        out.append(item("gelir", f"gelir:{r['id']}:{exp:%Y-%m}", f"{_ad(r['description'], 22)} yatmadı mı?",
                         f"Beklenen gün {exp.day} {AY[exp.month - 1]} · {money.tl(r['amount'], trim=True)}. Yattıysa "
                         "dökümü yükle.", R_ISLEMLER, obj=f"gelir:{r['id']}"))
     return out

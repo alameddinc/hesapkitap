@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db, money, rawnote, store_subs, sub_catalog, terms
+from app import db, money, rawnote, store_subs, sub_catalog, terms, workdays
 from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 import copy as _copy
@@ -1102,13 +1102,18 @@ def card_projection() -> dict:
 
 @_memo(zakat=False)
 def _next_cut(st: dict) -> tuple[date, date | None]:
-    """Son ekstreden sonraki kesim ve son ödeme günü (ekstrede yazmıyorsa bir ay sonrası)."""
+    """Son ekstreden sonraki kesim ve son ödeme günü (ekstrede yazmıyorsa bir ay sonrası, kartın OLAĞAN kesim gününde:
+    hafta sonu yüzünden 15'ine kaymış kesimden sonra yine 13'ü; workdays.usual_day)."""
     pe = date.fromisoformat(st["period_end"])
     if st.get("next_period_end"):
         cut = date.fromisoformat(st["next_period_end"])
     else:
         y, m = divmod(pe.year * 12 + pe.month, 12)
-        cut = pe.replace(year=y, month=m + 1, day=min(pe.day, 28))
+        day = workdays.usual_day([s["period_end"] for s in db.list_statements() if s["card_no"] == st["card_no"]]
+                                 or [st["period_end"]])
+        cut = date(y, m + 1, min(day, 28))
+        if (cut - pe).days > 45:  # ay sonu kesimi tatille sonraki ayın başına kaymıştı (30 Eki → 1 Kas): aynı ay
+            cut = date(pe.year, pe.month, min(day, 28))
     due = st.get("next_due_date")
     if due:
         return cut, date.fromisoformat(due)
@@ -1832,7 +1837,8 @@ def _status(amount: float, paid: float | None, due: str, today: date) -> str:
         return "odendi"
     if paid:
         return "kismi"
-    return "gecikti" if date.fromisoformat(due) < today else "bekliyor"
+    # son ödeme hafta sonu/bayrama denk geldiyse ilk iş günü sayılır (app/workdays.py)
+    return "gecikti" if workdays.past_due(due, today) else "bekliyor"
 
 
 def _card_interest_fn(today: date):
@@ -3063,7 +3069,7 @@ def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
     for b in db.list_bills():  # bu dönem: plan'ın "fatura" satırı ile aynı kural; önceki dönemden kalan ödenmemiş de (gecikti)
         if b["paid_at"] is None and b["due_date"] and db.period_of(b["due_date"]) <= cur and money.gt(b["amount"] or 0, 0):
             add("bills", {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"],
-                          "overdue": b["due_date"] < today.isoformat()})
+                          "overdue": workdays.past_due(b["due_date"], today)})
     for r in pending_recurring(cur, db.list_recurring(), db.list_entries(cur)):
         if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
             add("recurring", {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],
@@ -3079,7 +3085,7 @@ def _due_this_period(today: date, pending_items: list[dict]) -> dict[str, dict]:
     interest = None
     for st in db.latest_card_statements(today.isoformat()).values():
         left = db.statement_remaining(st, today.isoformat())
-        if not left or not st["due_date"] or st["due_date"] >= today.isoformat():
+        if not left or not workdays.past_due(st["due_date"], today):
             continue
         interest = interest or _card_interest_fn(today)
         ci = interest(st["card_no"], left, st)

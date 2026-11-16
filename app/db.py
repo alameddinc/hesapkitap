@@ -1097,8 +1097,8 @@ def link_salary_entries() -> int:
             if r["recurring_id"] in salary_ids and r["category"] in _GENERIC_INCOME and is_salary_text(r["description"]):
                 c.execute("UPDATE entries SET category = 'Maaş' WHERE id = ?", (r["id"],))
                 n += 1
-        cands = rows(c.execute("SELECT id, description, month, category FROM entries WHERE kind = 'gelir' AND "
-                               "recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL ORDER BY entry_date, amount DESC"))
+        cands = rows(c.execute("SELECT id, entry_date, amount, description, month, category FROM entries WHERE kind = 'gelir' "
+                               "AND recurring_id IS NULL AND skipped = 0 AND debt_id IS NULL ORDER BY entry_date, amount DESC"))
         for e in cands:
             if not is_salary_text(e["description"]) or e["category"] not in _GENERIC_INCOME and e["category"] != "Maaş":
                 continue
@@ -1109,9 +1109,14 @@ def link_salary_entries() -> int:
             sets = {}
             if e["category"] != "Maaş":
                 sets["category"] = "Maaş"
-            if rec and e["month"] not in taken[rec["id"]]:
+            # dönem: kalemin gününe en yakın boş dönem (elle kayıtla aynı kural, _recurring_slot): 15'i maaşı Cumartesi
+            # yüzünden 17'sinde (ay dönümü 17) yatsa da kendi döneminin maaşıdır, sonraki dönemin yerini kapmaz
+            slot = _recurring_slot(c, rec, e["entry_date"], e["amount"], taken[rec["id"]]) if rec else None
+            if slot and rec["start_month"] <= slot and (not rec["end_month"] or slot <= rec["end_month"]):
                 sets["recurring_id"] = rec["id"]
-                taken[rec["id"]].add(e["month"])
+                if slot != e["month"]:
+                    sets["month"] = slot
+                taken[rec["id"]].add(slot)
             if sets:
                 c.execute(f"UPDATE entries SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", (*sets.values(), e["id"]))
                 n += 1
@@ -1282,6 +1287,32 @@ def same_period(c, card_no: str, period_end: str, days: int = SAME_PERIOD_DAYS) 
     return rows(c.execute(
         "SELECT * FROM statements WHERE substr(card_no, -4) = ? AND ABS(julianday(period_end) - julianday(?)) <= ?",
         ((card_no or "")[-4:], period_end, days)))
+
+
+MONTH_END_CUT_DAY = 25  # kartın kesimlerinin çoğu bu günden sonraysa "ay sonu kesimli" kart
+
+
+def statement_periods(c) -> dict[int, str]:
+    """Ekstre id → dönem (kesim ayı, YYYY-MM). Genelde kesimin takvim ayı; AY SONU kesimli kartta (kesimlerin çoğu
+    MONTH_END_CUT_DAY'den sonra) hafta sonu/bayram yüzünden sonraki ayın ilk SAME_PERIOD_DAYS gününe kayan kesim
+    (30 Eki 2027 Cumartesi → 1 Kasım) önceki ayın ekstresidir — o ayda kartın başka ekstresi yoksa. Böylece Ekim
+    boş, Kasım çift görünmez."""
+    by_card: dict[str, list] = {}
+    for r in c.execute("SELECT id, card_no, period_end FROM statements ORDER BY period_end, id"):
+        by_card.setdefault((r[1] or "")[-4:], []).append((r[0], str(r[2])[:10]))
+    out: dict[int, str] = {}
+    for sts in by_card.values():
+        late = sum(1 for _, pe in sts if int(pe[8:10]) >= MONTH_END_CUT_DAY) * 2 > len(sts)
+        natural = [pe[:7] for _, pe in sts]
+        for sid, pe in sts:
+            p = pe[:7]
+            if late and int(pe[8:10]) <= SAME_PERIOD_DAYS:
+                y, m = int(p[:4]), int(p[5:7])
+                prev = f"{y - (m == 1):04d}-{(m - 2) % 12 + 1:02d}"
+                if prev not in natural:
+                    p = prev
+            out[sid] = p
+    return out
 
 
 def statement_exists(data: bytes, stmt: Statement, source: str | None = None) -> bool:
@@ -1591,8 +1622,10 @@ def _load_statements() -> list[dict]:
                       COALESCE(SUM(CASE WHEN t.txn_type = 'odeme' AND t.is_deleted = 0 THEN 1 END), 0) AS payment_rows
                FROM statements s LEFT JOIN transactions t ON t.statement_id = s.id
                GROUP BY s.id ORDER BY s.period_end DESC""")))
+        periods = statement_periods(c)
     hide = book.hide_fees()
     for s in out:
+        s["period"] = periods.get(s["id"], s["period"])  # ay sonu kesimi sonraki aya kaydıysa önceki ay
         agg = {"parsed": s.pop("parsed_total"), "fee_txns": s.pop("fee_txns"), "refunds": s.pop("refund_txns"),
                "rows_total": s.pop("rows_total"), "payment_rows": s.pop("payment_rows")}
         ev = statement_fix.evaluate(s, agg, hide)
@@ -1645,11 +1678,15 @@ def card_transactions(include_deleted: bool = False, period: str | None = None) 
 
     def load():
         with connect() as c:
-            return book.filter_card_txns(rows(c.execute(
+            out = book.filter_card_txns(rows(c.execute(
                 f"""SELECT t.*, s.bank, s.card_no AS account, s.period_end, substr(s.period_end, 1, 7) AS period
                     FROM transactions t JOIN statements s ON s.id = t.statement_id
                     {'' if include_deleted else 'WHERE t.is_deleted = 0'}
                     ORDER BY t.txn_date DESC, t.id DESC""")))
+            periods = statement_periods(c)  # ekstre dönemiyle aynı (list_statements)
+        for r in out:
+            r["period"] = periods.get(r["statement_id"], r["period"])
+        return out
     # tek istekte birkaç kez okunuyor; çağıran satırı değiştirebilir: kopyası döner
     return [dict(r) for r in _cached("card_txns", load, include_deleted, _viewer()) if not period or r["period"] == period]
 
@@ -1929,16 +1966,25 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
         return
     taken = {r["month"] for r in c.execute(
         "SELECT month FROM entries WHERE recurring_id = ? AND id IS NOT ?", (rec["id"], exclude_id))}
-    best = _nearest_recurring_month(rec, data["entry_date"], taken)
+    best = _recurring_slot(c, rec, data["entry_date"], data.get("amount"), taken)
     if best is None:
-        return  # komşu dönemlerin hepsi dolu: bağlama, çift kayıt uyarısı görünsün
-    if taken and best != _nearest_recurring_month(rec, data["entry_date"]) and data.get("amount"):
-        # kendi dönemi dolu, komşu döneme kayacak: "eksik tutar" gibi küçük ek ödeme sonraki dönemin yerini kapmasın
-        # (o dönemin asıl ödemesi gelince bağlanamaz, dönem "ödenmedi" kalırdı). Küçük ödeme tek seferlik kalır.
-        plan = _planned_in(c, rec, best)
-        if plan > 0 and data["amount"] < plan / TRANSFER_RATIO:
-            return
+        return  # komşu dönemlerin hepsi dolu (ya da küçük ek ödeme): bağlama, çift kayıt uyarısı görünsün
     data["recurring_id"], data["month"] = rec["id"], best
+
+
+def _recurring_slot(c, rec, entry_date, amount, taken) -> str | None:
+    """Kaydın bağlanacağı sabit kalem dönemi (elle kayıt ve dökümden gelen maaş aynı kural): tarihine en yakın boş
+    dönem (_nearest_recurring_month; hafta sonu/bayram yüzünden ay dönümünü aşan geç maaş kendi dönemine). Kendi dönemi
+    dolu, komşu döneme kayacaksa: "eksik tutar" gibi küçük ek ödeme sonraki dönemin yerini kapmasın (o dönemin asıl
+    ödemesi gelince bağlanamaz, dönem "ödenmedi" kalırdı) → None, tek seferlik kalır."""
+    best = _nearest_recurring_month(rec, entry_date, taken)
+    if best is None:
+        return None
+    if taken and best != _nearest_recurring_month(rec, entry_date) and amount:
+        plan = _planned_in(c, rec, best)
+        if plan > 0 and amount < plan / TRANSFER_RATIO:
+            return None
+    return best
 
 
 def attach_recurring_series(rec, entries: list[dict]) -> dict[int, str]:
@@ -1980,11 +2026,17 @@ def set_cycle_start_day(day: int) -> int:
 
 
 def suggested_cycle_day() -> int | None:
-    """Her kartın SON ekstresindeki kesim günlerinin en geçinden bir gün sonrası: her ekstre kendi dönemine düşer.
-    Banka kesim gününü kaydırırsa ya da yeni kart eklenirse öneri de değişir."""
+    """Her kartın OLAĞAN kesim gününün (son 6 ekstre, workdays.usual_day) en geçinden bir gün sonrası: her ekstre
+    kendi dönemine düşer. Hafta sonu/bayram yüzünden bir kez kayan kesim ay dönümünü oynatmaz (salınım: 17 → 19 → 17,
+    her seferinde bütün kayıtların dönemi yeniden hesaplanırdı); banka kesim gününü gerçekten değiştirirse ya da yeni
+    kart eklenirse öneri değişir."""
+    from app import workdays
+
+    by_card: dict[str, list[str]] = {}
     with connect() as c:
-        days = [int(r[0][8:10]) for r in c.execute(
-            "SELECT MAX(period_end) FROM statements GROUP BY card_no")]
+        for r in c.execute("SELECT card_no, period_end FROM statements ORDER BY period_end"):
+            by_card.setdefault(r[0], []).append(r[1])
+    days = [d for d in (workdays.usual_day(v) for v in by_card.values()) if d]
     return min(28, max(days) + 1) if days else None
 
 

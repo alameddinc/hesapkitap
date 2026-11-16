@@ -120,7 +120,16 @@ def _gap_months(txns: list[dict], paid: list[str], end: date | None) -> list[str
     (en sık çekim günü + GAP_SLACK) geçmiş aylar."""
     if not paid or _cycle(txns) != "aylik":
         return []
+    days = Counter(int(x["date"][8:10]) for x in txns[-6:])
+    day = max(days, key=lambda d: (days[d], d))
     have = set(paid)
+    if day >= db.MONTH_END_CUT_DAY:
+        # ay sonu çekimi (30'u) hafta sonu/bayram yüzünden sonraki ayın ilk günlerine kaydıysa (30 Eki Cumartesi →
+        # 1 Kasım) önceki ayın ödemesidir: o ay "ödemesiz" görünmesin (ekstre dönemiyle aynı kural: db.statement_periods)
+        for x in txns:
+            if int(x["date"][8:10]) <= db.SAME_PERIOD_DAYS:
+                y, mo = int(x["date"][:4]), int(x["date"][5:7])
+                have.add(f"{y - (mo == 1):04d}-{(mo - 2) % 12 + 1:02d}")
     out = []
     m = paid[0]
     while m < paid[-1]:
@@ -128,8 +137,6 @@ def _gap_months(txns: list[dict], paid: list[str], end: date | None) -> list[str
             out.append(m)
         m = finance.add_months(m, 1)
     if end:
-        days = Counter(int(x["date"][8:10]) for x in txns[-6:])
-        day = max(days, key=lambda d: (days[d], d))
         m = finance.add_months(paid[-1], 1)
         while True:
             y, mo = int(m[:4]), int(m[5:7])
