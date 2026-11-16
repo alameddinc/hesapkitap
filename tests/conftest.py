@@ -7,6 +7,15 @@ from pathlib import Path
 import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def pytest_configure(config):
+    # uzun: zaman hızlandırmalı simülasyon (tests/simulasyon) ve çılgın testçilerin uzun turu (tests/cilgin). Varsayılan
+    # koşuda da çalışır; hızlı koşu: -m "not uzun". Gece işi (.github/workflows/nightly.yml) ve scripts/deploy_gate.sh
+    # yalnız bunları koşar: -m uzun
+    config.addinivalue_line("markers", "uzun: uzun süren simülasyon / çılgın testçi turu (-m 'not uzun' ile atlanır)")
+
+
 STATEMENTS = ["vakifbank_a.txt", "vakifbank_b.txt", "kuveytturk.txt"]
 
 

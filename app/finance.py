@@ -1264,6 +1264,23 @@ def _next_cut(st: dict) -> tuple[date, date | None]:
     return cut, None
 
 
+def _cycle_after(st: dict, cut: date, due: date | None) -> tuple[date, date | None]:
+    """Kesimi geçmiş (ekstresi yüklenmemiş) döngüden SONRAKİ döngünün kesimi ve son ödeme günü (S4: kesimden sonra
+    girilen harcama oraya düşer). Kesim: kartın olağan kesim günü bir ay sonra; son ödeme: kesimden kartın olağan
+    (tatille kaymamış: en küçük) kesim→son ödeme farkı kadar sonra, iş gününe ötelenmiş."""
+    own = [s for s in db.list_statements() if s["card_no"] == st["card_no"]] or [st]
+    day = workdays.usual_day([s["period_end"] for s in own] + [cut.isoformat()]) or cut.day
+    y, m = divmod(cut.year * 12 + cut.month, 12)
+    cut2 = date(y, m + 1, min(day, 28))
+    gaps = [(date.fromisoformat(s["due_date"]) - date.fromisoformat(s["period_end"])).days
+            for s in own if s.get("due_date")]
+    if due:
+        gaps.append((due - cut).days)
+    if not gaps:
+        return cut2, None
+    return cut2, workdays.next_business_day(cut2 + timedelta(days=min(gaps)))
+
+
 def open_cycles(today: date | None = None, proj: dict | None = None, entries: list[dict] | None = None) -> dict:
     """Kesilmemiş ekstre, kart başına: bugüne kadar ne birikti, kesimde tahminen ne olur.
 
@@ -1302,7 +1319,7 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         out[acc] = {"account": acc, "bank": p["bank"], "start": start.isoformat(), "cut": cut.isoformat(),
                     "due": due.isoformat() if due else None, "days_left": max(0, (cut - today).days),
                     "days_total": max(1, (cut - start).days), "installments": _round(inst), "subscriptions": _round(subs),
-                    "spent": 0.0, "unassigned": 0.0, "entries": 0, "variable_avg": p["variable_avg"], "items": items}
+                    "spent": 0.0, "unassigned": 0.0, "after_cut": 0.0, "after_cut_items": [], "entries": 0, "variable_avg": p["variable_avg"], "items": items}
     if not out:
         return {}
     main = max(out.values(), key=lambda c: c["variable_avg"])["account"]
@@ -1337,6 +1354,15 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
         c = out.get(acc or main)
         if not c or e["entry_date"] > today.isoformat():
             continue
+        if e["entry_date"] > c["cut"]:
+            # kesimden SONRA girilen harcama (ekstresi henüz yüklenmemiş, kesimi geçmiş döngü): bu döngünün son ödemesine
+            # değil SONRAKİ ekstreye girer (S4). so_far/pending_cards'a yazılmaz; limitten düşer (after_cut)
+            amt = e["amount"] / max(1, int(e.get("installments") or 1))
+            c["after_cut"] += amt
+            c["after_cut_items"].append({"type": "harcama", "uid": f"m{e['id']}", "txn_id": None,
+                                         "description": e["description"], "amount": _round(amt), "date": e["entry_date"],
+                                         "entry_id": e["id"], "unassigned": not acc})
+            continue
         # son kesimden önceki ama o ekstreye girmemiş (eşleşmemiş) harcama: kesimden en çok POSTING_DAYS gün önceyse
         # provizyonda kalıp bu ekstreye devretmiştir (carried); daha eskisi "ekstrede bulunamadı" diye sorulur
         carried = e["entry_date"] <= c["start"]
@@ -1355,7 +1381,11 @@ def open_cycles(today: date | None = None, proj: dict | None = None, entries: li
     for c in out.values():
         pace = c["variable_avg"] * c["days_left"] / c["days_total"]
         c["variable_at_cut"] = _round(max(c["variable_avg"], c["spent"] + pace))
-        c["spent"], c["unassigned"] = _round(c["spent"]), _round(c["unassigned"])
+        c["spent"], c["unassigned"], c["after_cut"] = _round(c["spent"]), _round(c["unassigned"]), _round(c["after_cut"])
+        if c["after_cut_items"]:  # sonraki döngünün kesimi / son ödemesi (kesimden sonraki harcama orada ödenir)
+            st = latest[c["account"]]
+            cut2, due2 = _cycle_after(st, date.fromisoformat(c["cut"]), date.fromisoformat(c["due"]) if c["due"] else None)
+            c["after_cut_cut"], c["after_cut_due"] = cut2.isoformat(), due2.isoformat() if due2 else None
         c["so_far"] = _round(c["installments"] + c["subscriptions"] + c["spent"])
         c["at_cut"] = _round(c["installments"] + c["subscriptions"] + c["variable_at_cut"])
     return out
@@ -1395,7 +1425,7 @@ def card_limit(card_no: str, statements: list[dict], manual: dict[str, float], u
         return {"limit": None, "limit_source": None, "statement_limit": None, "available": None,
                 "available_source": None, "available_as_of": None, "used": None, "used_pct": None}
     cy = cycle or {}
-    so_far = cy.get("so_far") or 0.0
+    so_far = (cy.get("so_far") or 0.0) + (cy.get("after_cut") or 0.0)  # kesimden sonraki harcama da limitten düşer
     last = own[0] if own else None
     if last and last.get("available_limit") is not None:
         paid = max(0.0, (last["total_debt"] or 0) - unpaid)  # kesimden sonra son ekstreye yapılan ödemeler
@@ -3197,8 +3227,11 @@ def net_worth(today: date | None = None) -> dict:
         covered = min(max(0.0, jars.get("by_debt", {}).get(d["id"], 0.0)), d["remaining"])
         c_now = min(covered, now)
         payable_sp += now - c_now
-        # TL borç: vadesi ne kadar ileride olursa olsun (bilinen tüm borçlar; lead 16.11), kumbaranın karşılamadığı kısım
-        to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "borc", any_date=True, debt_id=d["id"])
+        # TL borç: vadesi ne kadar ileride olursa olsun (bilinen tüm borçlar; lead 16.11), kumbaranın karşılamadığı kısım.
+        # steps: ödeme planlı borcun ufuktan sonraki ödenmemiş taksitleri [(vade, tutar)]; Ay sonunda kalacak (funded)
+        # yalnız until'e kadar vadesi gelen TAKSİTLERİ düşer, kalanın tamamını değil (S9)
+        to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "borc", any_date=True, debt_id=d["id"],
+                 **({"steps": st} if (st := _debt_steps_after(d, h_end)) else {}))
     due = _due_this_period(today, pending_all, {**hz, "end": d_end} if d_end != hz["end"] else hz)
     for b in due.pop("_later_bills"):
         to_later(b["title"], b["amount"], b["date"], "bill", bill_id=b["id"])
@@ -3317,6 +3350,21 @@ def _pending_cards(today: date) -> list[dict]:
         out.append({"title": p["title"], "account": cyc["account"], "amount": amt, "installments": cyc["installments"],
                     "subscriptions": cyc["subscriptions"], "spent": cyc["spent"], "cut": cyc["cut"], "due_date": p["due_date"],
                     **({"paid_amount": paid["amount"]} if paid else {})})
+    return out + _after_cut_items(today, out)
+
+
+def _after_cut_items(today: date, seen: list[dict]) -> list[dict]:
+    """Kesimi geçmiş, ekstresi yüklenmemiş döngüden SONRA kartla girilen harcamalar (S4): kapanmış döngünün son ödemesine
+    değil SONRAKİ döngünün son ödemesine (after_cut_due) yazılır; kart başına bir kalem (installments/subscriptions 0;
+    next_cycle: true). Vadesi ufka kadarsa Harcanabilir'den, sonraysa spendable_later / Ay sonunda kalacak'tan düşer."""
+    out = []
+    for c in open_cycles(today).values():
+        if not money.gt(c.get("after_cut") or 0, 0) or not c.get("after_cut_due"):
+            continue
+        title = next((x["title"] for x in seen if x["account"] == c["account"]), f"{c['bank']} {c['account']}")
+        out.append({"title": title, "account": c["account"], "amount": c["after_cut"], "installments": 0.0,
+                    "subscriptions": 0.0, "spent": c["after_cut"], "cut": c["after_cut_cut"],
+                    "due_date": c["after_cut_due"], "next_cycle": True})
     return out
 
 
@@ -3411,6 +3459,27 @@ def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str 
     if not due or due <= h_end:
         return _round(rem), 0.0, None
     return 0.0, _round(rem), due
+
+
+def _debt_steps_after(d: dict, h_end: str) -> list[dict]:
+    """Ödeme planlı borcun ufuktan (h_end) SONRA vadesi gelen, henüz ödenmemiş taksitleri [{date, amount}] (tarih
+    sırasıyla). Plana sayılan ödeme önce ufka kadar vadeli taksitleri, artanı sıradaki taksitleri kapatır (erken
+    ödenen taksit iki kez düşülmez). Planlı değilse (ya da kapanmışsa) boş: tek vadeli borç tek kalemdir."""
+    from app import debt_schedule
+
+    if not debt_schedule.is_scheduled(d) or d.get("settled_at"):
+        return []
+    rows = debt_schedule.installments(d)
+    ahead = max(0.0, debt_schedule.plan_paid(d) - sum(r["amount"] for r in rows if r["date"] <= h_end))
+    out = []
+    for r in rows:
+        if r["date"] <= h_end:
+            continue
+        take = min(ahead, r["amount"])
+        ahead -= take
+        if money.gt(r["amount"] - take, 0):
+            out.append({"date": r["date"], "amount": _round(r["amount"] - take)})
+    return out
 
 
 DUE_KEYS = ("pending_other", "card_interest", "card_late_interest", "bills", "recurring")
@@ -3550,8 +3619,13 @@ def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict,
             until_d = min(until_d, date.fromisoformat(inc_dates[0]) - timedelta(days=1))
         u = until_d.isoformat()
         for x in later_items or []:
-            if x["due_date"] <= u:
-                funded_items.append({"title": x["title"], "amount": x["amount"], "date": x["due_date"], "type": x["type"]})
+            if x["due_date"] > u:
+                continue
+            amt = x["amount"]
+            if x.get("steps"):  # ödeme planlı borç: yalnız until'e kadar vadesi gelen taksitler (kalanın tamamı değil)
+                amt = _round(min(amt, sum(t["amount"] for t in x["steps"] if t["date"] <= u)))
+            if money.gt(amt, 0):
+                funded_items.append({"title": x["title"], "amount": amt, "date": x["due_date"], "type": x["type"]})
         for r in pend:
             if r["kind"] == EXPENSE and h_end < r["date"] <= u and money.gt(r["amount"] or 0, 0):
                 funded_items.append({"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],

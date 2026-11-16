@@ -3000,6 +3000,10 @@ def create_entry(body: EntryIn):
         data["created_by"] = u["id"]  # ortak defterde kimin eklediği
     if data.get("receipt_file") and not _adopt_file("receipts", data["receipt_file"]):
         data["receipt_file"] = None  # bu defterde (ya da üyenin öbür defterinde) saklanmış bir fotoğraf değil: bağlanmaz
+    if data.get("recurring_id") and not data["skipped"]:
+        # sabit kalem açıkça verildi: dönem kayıt tarihinden değil, kalem adıyla bağlanan kayıttaki kuraldan (S7)
+        if slot := db.explicit_recurring_month(data["recurring_id"], data["entry_date"], data.get("amount")):
+            data["month"] = slot
     eid = db.create_entry(data)
     alerts = {"check": {}, "items": [i for i in body.items or [] if isinstance(i, dict)], "merchant": body.description}
     if body.items and body.kind == "gider":
@@ -6250,6 +6254,10 @@ class DebtIn(DebtPlanFields):
     due_date: date | None = None
     note: str | None = None
     account_id: int | None = None  # banka/nakit hesabı
+    # yetenek debt_anchor_conflict (açılış, S5): hesaplı borç/alacağın tarihi hesabın çapa günü ya da öncesiyse yanıtta
+    # anchor_conflict; true: bu para o bakiyede zaten var (düşmez/eklenmez), false: bakiyeden sonra (yansır). Yoksa: çapa
+    # gününden sonraki tarih ya da çapa günü, bakiye güncellemesinden SONRA girilen açılış yansır
+    in_balance: bool | None = None
 
     @model_validator(mode="after")
     def _tl(self):
@@ -6342,7 +6350,11 @@ def create_debt(body: DebtIn):
         if body.plan_installment is None or body.plan_interest != "var":
             raise HTTPException(422, _PAYOFF_ONLY_INTEREST)
         data.update(payoff)
-    return {"id": db.create_debt(data)}
+    did = db.create_debt(data)
+    conf = db.anchor_conflict(body.account_id, data["debt_date"]) if (body.asset or "TRY") == "TRY" else None
+    if conf:
+        db.set_in_anchor("debts", [did], body.in_balance)
+    return {"id": did, **({"anchor_conflict": conf} if conf else {})}
 
 
 @app.patch("/api/debts/{did}")
