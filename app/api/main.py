@@ -1917,7 +1917,7 @@ def support_pending_retry(pid: int, body: RetryIn | None = None):
             results = _upload_statements([uf], body.password, body.remember)
             b["summary"] = [{k: r.get(k) for k in ("filename", "status", "bank", "card_no", "period_end", "txn_count",
                                                     "message")} for r in results]
-    r = {**results[0], **{k: v for k, v in results[-1].items() if k in ("cycle_day", "storage_warning")}}
+    r = {**results[0], **{k: v for k, v in results[-1].items() if k in ("cycle_day", "cycle_from", "storage_warning")}}
     ok = r.get("status") in ("saved", "duplicate")
     if ok:
         with support.own_space(uid):
@@ -2402,6 +2402,9 @@ def meta():
         "cycle_start_day": db.cycle_start_day(),
         "cycle_mode": db.cycle_mode(),
         "suggested_cycle_day": db.suggested_cycle_day(),
+        # son otomatik ay dönümü değişikliği {from, to, at}: "Ay dönümü 17 → 16 oldu · Geri al" (POST
+        # /api/settings/cycle/undo; kapat: DELETE /api/settings/cycle/change)
+        "cycle_auto_change": db.cycle_auto_change(),
         "modules": prefs.modules(), "modules_chosen": prefs.modules_chosen(), "ui": _ui_out(),
         "module_labels": {k: {"label": v[0], "desc": v[1]} for k, v in prefs.MODULES.items()},
         "module_consent": {k: prefs.CONSENT[k] for k in prefs._consent_needed()},
@@ -7016,6 +7019,8 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
     changed = db.auto_update_cycle()
     if changed and results:
         results[-1]["cycle_day"] = changed  # arayüz "ay dönümü X'e güncellendi" der
+        if ch := db.cycle_auto_change():  # önceki gün (Geri al: POST /api/settings/cycle/undo)
+            results[-1]["cycle_from"] = ch["from"]
     if (warn := db.take_storage_warning()) and results:
         results[-1]["storage_warning"] = warn
     return results
@@ -9676,11 +9681,27 @@ class CycleIn(BaseModel):
 @app.put("/api/settings/cycle")
 def set_cycle(body: CycleIn):
     db.set_setting("cycle_mode", body.mode)
+    db.set_setting("cycle_auto_change", None)  # kullanıcı kendisi seçti: "ay dönümü değişti" uyarısı kapanır
     if body.mode == "auto":
-        db.auto_update_cycle()
+        db.auto_update_cycle(force=True)  # otomatiğe geçiş: öneri histerezissiz uygulanır
     elif body.day:
         db.set_cycle_start_day(body.day)
     return {"day": db.cycle_start_day(), "mode": db.cycle_mode(), "current_month": finance.current_period()}
+
+
+@app.post("/api/settings/cycle/undo")
+def undo_cycle_change():
+    """Otomatik ay dönümü değişikliğini geri al ("Ay dönümü 17 → 16 oldu · Geri al"): eski gün, elle seçilmiş sayılır."""
+    if db.undo_cycle_change() is None:
+        raise HTTPException(404, "Geri alınacak otomatik ay dönümü değişikliği yok")
+    return {"day": db.cycle_start_day(), "mode": db.cycle_mode(), "current_month": finance.current_period()}
+
+
+@app.delete("/api/settings/cycle/change")
+def dismiss_cycle_change():
+    """Otomatik değişiklik uyarısını kapat (yeni gün kalır)."""
+    db.set_setting("cycle_auto_change", None)
+    return {"ok": True}
 
 
 class ConfigIn(BaseModel):
