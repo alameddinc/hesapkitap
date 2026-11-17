@@ -4815,6 +4815,11 @@ class OverpayError(ValueError):
     """Ödeme kalan borçtan fazla (ya da kayıt kapanmış): kullanıcıya gösterilecek Türkçe neden."""
 
 
+class DebtClosedError(OverpayError):
+    """Kayıt zaten kapanmış (tamamı ödenmiş ya da vazgeçilmiş). Çoğunlukla istemcinin listesi bayat: ödeme az önce yazıldı,
+    liste tazelenmeden aynı satıra yeniden basıldı (16.11 canlı: aynı gövde, yeni anahtar, 0,6 sn sonra)."""
+
+
 def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None = None, account_id: int | None = None,
              client_key: str | None = None, note: str | None = None, in_anchor: bool | None = None) -> int:
     """Ödeme/tahsilat işle: kalanın tamamıysa kapanır, azsa kısmi. amount None → kalanın tamamı.
@@ -4835,7 +4840,7 @@ def pay_debt(debt_id: int, amount: float | None, on: str, entry_id: int | None =
         try_ = d["asset"] == "TRY"
         unit = "TL" if try_ else d["asset"]
         if d["written_off_at"] or (money.le(left, 0) if try_ else left <= 1e-9):
-            raise OverpayError("Bu kayıt kapanmış; yeni ödeme yazılamaz")
+            raise DebtClosedError("Bu kayıt zaten kapanmış; ödemesi daha önce yazılmış. Liste yenilendi.")
         amt = amount if amount is not None else left
         if amount is None:
             # ödeme planı olan borçta "tamamı" sıradaki taksittir (geçmişte eksik kalan dahil), bütün borç değil: eski
