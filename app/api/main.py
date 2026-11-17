@@ -115,6 +115,7 @@ async def _http_error(request: Request, exc: StarletteHTTPException):
         detail = errors.GENERIC.get(exc.status_code, errors.GENERIC[400 if exc.status_code < 500 else 500])
     if exc.status_code == 404:
         extra["refresh"] = True  # istemci listeyi tazelesin (kayıt başka cihazda silinmiş/değişmiş olabilir)
+    extra.update(getattr(exc, "extra", None) or {})  # uç ek alanları (ör. kapanmış borç: code + refresh)
     _incidents.mark_detail(detail)  # sorun kaydının kısa özeti (süzülür)
     return JSONResponse({"detail": detail, **extra}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
@@ -369,6 +370,11 @@ async def require_login(request: Request, call_next):
             _incidents.finish(request, response.status_code)
         return response
     except Exception as e:  # noqa: BLE001
+        if system.is_busy(e):  # veritabanı kilitli (ör. canlı kopya alınırken): geçici, 500 değil 503 + yeniden dene
+            logging.getLogger("hesapkitap.api").warning("veritabanı meşgul: %s %s: %s", request.method, request.url.path, e)
+            _incidents.finish(request, 503, exc=e)
+            return JSONResponse({"detail": "Sunucu şu an çok yoğun; birkaç saniye sonra tekrar dene."}, status_code=503,
+                                headers={"Retry-After": "3"})
         logging.getLogger("hesapkitap.api").exception("işlenmemiş hata: %s %s", request.method, request.url.path)
         _incidents.finish(request, 500, exc=e)
         return JSONResponse({"detail": errors.GENERIC[500]}, status_code=500)
@@ -6563,6 +6569,15 @@ def _client_key(request: Request) -> str | None:
     return f"{(db.current_user() or {}).get('id') or 0}:{key}"
 
 
+def _debt_closed(e: Exception) -> HTTPException:
+    """Kapanmış borca ödeme: 422 + code "debt_closed" + refresh (istemci listeyi tazeler, Ödendi düğmesi kalkar).
+    code'lu yanıtta istemci message'ı gösterir (lib/api.ts failure); refresh'i 1.0.10 istemcileri de tanır."""
+    msg = errors.user_text(e, 422)
+    exc = HTTPException(422, msg)
+    exc.extra = {"code": "debt_closed", "message": msg, "refresh": True}
+    return exc
+
+
 @app.post("/api/debts/{did}/pay")
 def pay_debt(did: int, body: DebtPayIn, request: Request):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
@@ -6590,6 +6605,8 @@ def pay_debt(did: int, body: DebtPayIn, request: Request):
             db.close_debt_early(did)
     except KeyError as e:
         raise HTTPException(404, "Kayıt yok") from e
+    except db.DebtClosedError as e:
+        raise _debt_closed(e) from e
     except db.OverpayError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
     # Geri al: DELETE /api/debt-payments/{payment_id}

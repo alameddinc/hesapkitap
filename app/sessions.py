@@ -11,7 +11,9 @@ olarak kalır, yeniden canlanmaz). "Tümünden çık" ayrıca oturum sürümün�
 import hashlib
 import os
 import re
+import logging
 import secrets
+import sqlite3
 import time
 
 from app import system
@@ -81,24 +83,37 @@ def create(uid: int, nonce: str, kind: str, device: str | None, via: str | None 
 
 
 def check(uid: int, nonce: str) -> bool:
-    """Oturum geçerli mi (ve kullanımı yaz). Satırı yoksa: bu tablodan önceki anahtar, listeye eklenir."""
+    """Oturum geçerli mi (ve kullanımı yaz). Satırı yoksa: bu tablodan önceki anahtar, listeye eklenir.
+    Karar okumadan çıkar; yazmalar (son görülme, eski anahtarın eklenmesi, süresi dolanın kapatılması) en iyi çaba:
+    veritabanı kilitliyse (ör. canlı kopya alınırken) istek 500 olmaz, yazma bir sonraki isteğe kalır."""
     now = time.time()
-    with _c() as c:
+    with system.connect(system.READ_BUSY_S) as c:
         _ensure(c)
         r = c.execute("SELECT user_id, kind, last_seen, revoked FROM sessions WHERE sid_hash = ?", (_h(nonce),)).fetchone()
-        if r is None:
-            c.execute("INSERT OR IGNORE INTO sessions (sid_hash, public_id, user_id, kind, device, created_at, last_seen) "
-                      "VALUES (?, ?, ?, 'eski', 'Önceki oturum', ?, ?)", (_h(nonce), secrets.token_urlsafe(9), uid, now, now))
-            return True
-        user_id, kind, last_seen, revoked = r
-        if revoked or user_id != uid:
-            return False
-        if now - last_seen > idle_days(kind) * 86400:
-            c.execute("UPDATE sessions SET revoked = 1 WHERE sid_hash = ?", (_h(nonce),))
-            return False
-        if now - last_seen > TOUCH_EVERY:
-            c.execute("UPDATE sessions SET last_seen = ? WHERE sid_hash = ?", (now, _h(nonce)))
+    if r is None:
+        _best_effort("INSERT OR IGNORE INTO sessions (sid_hash, public_id, user_id, kind, device, created_at, last_seen) "
+                     "VALUES (?, ?, ?, 'eski', 'Önceki oturum', ?, ?)", (_h(nonce), secrets.token_urlsafe(9), uid, now, now))
+        return True
+    user_id, kind, last_seen, revoked = r
+    if revoked or user_id != uid:
+        return False
+    if now - last_seen > idle_days(kind) * 86400:  # yazılamasa da karar aynı: bir sonraki istekte de süresi dolmuş
+        _best_effort("UPDATE sessions SET revoked = 1 WHERE sid_hash = ?", (_h(nonce),))
+        return False
+    if now - last_seen > TOUCH_EVERY:
+        _best_effort("UPDATE sessions SET last_seen = ? WHERE sid_hash = ?", (now, _h(nonce)))
     return True
+
+
+def _best_effort(sql: str, args: tuple) -> None:
+    """İstek başı yazma: kısa kilit beklemesi, kilitliyse atla (günlüğe uyarı). Diğer hatalar yükselir."""
+    try:
+        with system.connect(system.BEST_EFFORT_BUSY_S) as c:
+            c.execute(sql, args)
+    except sqlite3.OperationalError as e:
+        if not system.is_busy(e):
+            raise
+        logging.getLogger("hesapkitap.sessions").warning("oturum yazması atlandı (veritabanı meşgul): %s", e)
 
 
 def revoke(uid: int | None, nonce: str) -> None:

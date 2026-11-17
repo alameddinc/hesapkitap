@@ -418,6 +418,21 @@ def _alter(c, sql: str) -> None:
         if "duplicate column name" not in str(e):
             raise
 
+# Kilit beklemesi (rollback günlüğü, journal_mode=delete): bir okuyucu (ör. canlı kopya alan sqlite backup) SHARED
+# tutarken yazıcı PENDING'de bekler; PENDING sürerken YENİ okuyucular da bekler. Okuma, yazıcının bekleme süresinden
+# uzun beklerse yazıcı vazgeçince geçer (17.11: kopya sırasında GET /api/cards/summary → system.user "database is
+# locked" → 500). İstek başı en iyi çaba yazmalar (oturum "son görülme") kısa bekler: PENDING'i uzun tutup okumaları
+# kilitlemesin, kilitliyse atlanır.
+BUSY_S = float(os.environ.get("HESAPKITAP_SQLITE_BUSY_S", "5"))
+READ_BUSY_S = float(os.environ.get("HESAPKITAP_SQLITE_READ_BUSY_S", "12"))
+BEST_EFFORT_BUSY_S = 0.25
+
+
+def is_busy(e: BaseException) -> bool:
+    """SQLite kilit/meşgul hatası mı (database is locked / database table is locked / busy)."""
+    return isinstance(e, sqlite3.OperationalError) and ("locked" in str(e) or "busy" in str(e))
+
+
 def _path() -> str:
     return SYSTEM_DB
 
@@ -426,10 +441,11 @@ _ready: set[str] = set()
 
 
 @contextmanager
-def connect():
+def connect(timeout: float | None = None):
+    """timeout: kilit beklemesi (saniye); None → BUSY_S. Okuma için READ_BUSY_S, en iyi çaba yazma için BEST_EFFORT_BUSY_S."""
     p = _path()
     os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
-    conn = sqlite3.connect(p)
+    conn = sqlite3.connect(p, timeout=BUSY_S if timeout is None else timeout)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if p not in _ready:  # şema (ve göçler) her dosya için bir kez kurulur
@@ -557,7 +573,8 @@ def users() -> list[dict]:
 
 
 def user(uid: int) -> dict | None:
-    with connect() as c:
+    """Her istekte oturum denetiminde çağrılır (auth.token_user): salt okuma, yazıcıdan uzun bekler (READ_BUSY_S)."""
+    with connect(READ_BUSY_S) as c:
         r = c.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
         return dict(r) if r else None
 
