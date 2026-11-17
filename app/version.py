@@ -475,6 +475,15 @@ CAPABILITIES = (
                               # ödemeli aya göre. Sondaki ödemesiz ay 2'den çoksa tek özet satırı {gap true, gap_since,
                               # gap_count, label "Mart 2026'dan beri ödeme yok (8 ay)"}. Yıllıkta boşluk yok. gaps
                               # verilmezse yanıt eskisi gibi
+    "subscription_after_cancel",  # iptalden sonra çekim uyarısına karar (app/sub_cancel.py): POST
+                              # /api/subscriptions/after-cancel {merchant | app, action iade_istedim|son_cekim|iade_geldi|
+                              # sifirla}; GET /api/subscriptions/detail transactions[] after_cancel_closed (iade|son_cekim|
+                              # iade_geldi|null), refund {uid, date, amount}|null (aynı işyerinden eşleşen iade) ve
+                              # after_cancel_info {cancelled_at, open_amount, open_count, closed_count, refund_requested_at,
+                              # refund_waiting, closed_why, manage [{label, url, app_url}] (yalnız mağaza)}|null;
+                              # after_cancel yalnız açık çekim. İçgörü: kart uyarısında target.merchant; iade istenince
+                              # "X: iade bekleniyor" (uyari, anahtar iade_bekle:…, push yok); /api/savings subscriptions[]
+                              # ve /api/subscriptions/apps items[] refund_requested_at, refund_waiting
     "card_early_close",       # taksitleri erken kapattım (app/early_close.py): GET /api/cards/summary cards[].early_close
                               # {available, rest, fee_left (faiz gizliyse null), hint, months [{month, label}], default_month,
                               # record {month, label, amount, total, rest, saved, at, text, saved_text} | null, detected

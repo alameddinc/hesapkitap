@@ -8440,6 +8440,33 @@ def subscription_detail(merchant: str | None = Query(None, min_length=1, max_len
     return out
 
 
+class AfterCancelIn(BaseModel):
+    merchant: str | None = Field(None, min_length=1, max_length=200)
+    app_id: str | None = Field(None, alias="app", min_length=1, max_length=40)
+    action: Literal["iade_istedim", "son_cekim", "iade_geldi", "sifirla"]
+
+
+@app.post("/api/subscriptions/after-cancel")
+def subscription_after_cancel(body: AfterCancelIn):
+    """İptalden sonra çekim uyarısına karar (yetenek subscription_after_cancel; app/sub_cancel.py): {merchant | app,
+    action iade_istedim (uyarı "iade bekleniyor" olur, iade gelince kapanır) | son_cekim ("İptal tamam, bu son çekimdi")
+    | iade_geldi | sifirla (geri al)}. "Abonelik devam ediyor": PUT /api/subscriptions status aktif. 409: iptal değil."""
+    from app import sub_cancel
+
+    if bool(body.merchant) == bool(body.app_id):
+        raise HTTPException(422, "merchant ya da app verilmeli")
+    try:
+        if body.merchant:
+            sub_cancel.act("card", body.merchant, body.action)
+        else:
+            sub_cancel.act("store", body.app_id, body.action)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- uygulama mağazası abonelikleri (app/store_subs.py)
 
 @app.get("/api/subscriptions/catalog")

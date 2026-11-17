@@ -30,7 +30,7 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db, finance, money, store_subs, sub_catalog
+from app import db, finance, money, store_subs, sub_cancel, sub_catalog
 from app.textnorm import merchant_name
 
 AY = store_subs.AY
@@ -191,14 +191,19 @@ def _change(cur: dict, prev: dict | None) -> dict | None:
 
 
 def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount: float | None,
-             changed_at: str | None, gaps: bool = False) -> dict:
+             changed_at: str | None, gaps: bool = False, closed: dict[str, dict] | None = None) -> dict:
     """Ortak gövde: toplamlar, ay ay, işlemler (yeniden eskiye). cancelled_at: iptal günü (sonraki çekim uyarılı);
     new_amount + changed_at: paket düşürüldü (sonraki aylarda yeni tutarın %15 fazlası "fazla"). gaps: aylık
-    abonelikte ödemesiz aylar da ("gap": true, tutar 0) listelenir."""
+    abonelikte ödemesiz aylar da ("gap": true, tutar 0) listelenir. closed: iptal sonrası kapanan çekimler (uid →
+    {closed, refund}; app/sub_cancel.py): after_cancel false, after_cancel_closed nedeni, refund eşleşen iade."""
     txns = sorted(txns, key=lambda x: (x["date"], x["uid"]))
+    closed = closed or {}
     by: dict[str, dict] = {}
     for x in txns:
-        x["after_cancel"] = bool(cancelled_at and x["date"] > cancelled_at)
+        c = closed.get(x["uid"])
+        x["after_cancel"] = bool(cancelled_at and x["date"] > cancelled_at) and not c
+        x["after_cancel_closed"] = c["closed"] if c else None
+        x["refund"] = c["refund"] if c else None
         ym = x["date"][:7]
         m = by.setdefault(ym, {"month": ym, "label": month_label(ym), "amount": 0.0, "count": 0, "_fx": defaultdict(float),
                                "after_cancel": False})
@@ -228,7 +233,8 @@ def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount
     out_months.sort(key=lambda m: m["month"], reverse=True)
     out_txns = [{"uid": x["uid"], "date": x["date"], "month": x["row_month"], "amount": money.money(x["amount"]) + 0.0,
                  "label": x["label"], "via": x["via"], "fx": f"{x['fx'][0]:g} {x['fx'][1]}" if x["fx"] else None,
-                 "description": x["description"], "after_cancel": x["after_cancel"]} for x in reversed(txns)]
+                 "description": x["description"], "after_cancel": x["after_cancel"],
+                 "after_cancel_closed": x["after_cancel_closed"], "refund": x["refund"]} for x in reversed(txns)]
     after = [x for x in txns if x["after_cancel"]]
     has_fx = any(x["fx"] for x in txns)
     return {
@@ -240,6 +246,19 @@ def _payload(txns: list[dict], today: date, cancelled_at: str | None, new_amount
         "fx_note": "Dövizle ödendi: tutarlar kart ekstresindeki TL karşılığı; kur değiştikçe aydan aya oynar." if has_fx else None,
         "after_cancel": {"amount": money.money(sum(x["amount"] for x in after)) + 0.0, "count": len(after)} if after else None,
     }
+
+
+def _info(resolved: list[dict], st: dict, cancelled_at: str, manage: list[dict]) -> dict | None:
+    """after_cancel_info (yetenek subscription_after_cancel): iptal sonrası çekim kararı için özet. İptal sonrası çekim
+    hiç yoksa None. manage: hizmetin abonelik sayfası (yalnız mağaza aboneliğinde; kart aboneliğinde sunucu adres
+    bilmez, boş)."""
+    if not resolved:
+        return None
+    sm = sub_cancel.summary(resolved, st)
+    return {"cancelled_at": str(cancelled_at)[:10], "open_amount": sm["open_amount"], "open_count": sm["open_count"],
+            "closed_count": sm["closed_count"], "refund_requested_at": sm["refund_at"], "refund_waiting": sm["waiting"],
+            "closed_why": st.get("closed_why") if sm["closed_count"] else None,
+            "manage": [{"label": m["label"], "url": m["url"], "app_url": m.get("app_url")} for m in manage]}
 
 
 # ---------------------------------------------------------------- kart aboneliği
@@ -257,7 +276,10 @@ def card_detail(merchant: str, today: date | None = None, gaps: bool = False) ->
     status = st["status"] if st else "aktif"
     cancelled_at = st["changed_at"] if st and status == "iptal" else None
     new_amount = st["new_amount"] if st and status == "dusuruldu" else None
-    body = _payload([_card_txn(t) for t in ts], today, cancelled_at, new_amount, st["changed_at"] if st else None, gaps)
+    ac = finance.card_after_cancel(key) if cancelled_at else None
+    closed = {c["uid"]: c for c in ac["charges"] if c["closed"]} if ac else {}
+    body = _payload([_card_txn(t) for t in ts], today, cancelled_at, new_amount, st["changed_at"] if st else None, gaps,
+                    closed)
     monthly = sub["monthly"] if sub else None
     status_text = {"aktif": "Etkin", "iptal": "İptal ettim", "dusuruldu": "Paket düşürüldü"}[status]
     return {
@@ -268,6 +290,7 @@ def card_detail(merchant: str, today: date | None = None, gaps: bool = False) ->
         "amount": new_amount if new_amount is not None else monthly, "prev_amount": monthly if new_amount is not None else None,
         "per": "ay", "store_label": None,
         **body,
+        "after_cancel_info": _info(ac["charges"], ac["state"], cancelled_at, []) if ac else None,
     }
 
 
@@ -301,7 +324,16 @@ def store_detail(sid: str, today: date | None = None, gaps: bool = False) -> dic
     charges = [{"uid": c["uid"]} for c in x["_charges"]] if x else [{"uid": c["uid"]} for c in it["charges"]]
     status = it["status"]
     cancelled_at = it["cancelled_at"] if status == "iptal" else None
-    body = _payload(_store_txns(charges), today, cancelled_at, None, None, gaps)
+    txns = _store_txns(charges)
+    info = None
+    closed: dict[str, dict] = {}
+    if cancelled_at:
+        st = sub_cancel.get(sub_cancel.ref("store", sid), cancelled_at)
+        res = sub_cancel.resolve([{"uid": x["uid"], "date": x["date"], "amount": x["amount"]} for x in txns
+                                  if x["date"] > cancelled_at], st)
+        closed = {c["uid"]: c for c in res if c["closed"]}
+        info = _info(res, st, cancelled_at, it.get("manage") or [])
+    body = _payload(txns, today, cancelled_at, None, None, gaps, closed)
     status_text = {"abonelik": "Etkin", "aday": "Tek çekim · abonelik mi?", "iptal": "İptal ettim",
                    "degil": "Abonelik değil"}.get(status, status)
     if it["stale"]:
@@ -313,4 +345,5 @@ def store_detail(sid: str, today: date | None = None, gaps: bool = False) -> dic
         "per": "ay" if it["cycle"] == "aylik" else "yıl" if it["cycle"] == "yillik" else None,
         "store_label": it["store_label"],
         **body,
+        "after_cancel_info": info,
     }
