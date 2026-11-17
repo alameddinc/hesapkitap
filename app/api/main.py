@@ -2858,6 +2858,9 @@ class EntryIn(BaseModel):
     tax_office: str | None = Field(None, max_length=80)
     vat_total: Money | None = Field(None, ge=0)
     vat_lines: list[dict] | None = Field(None, max_length=10)  # [{rate: 1|10|20, amount}]
+    # yetenek entry_anchor_conflict: hesaplı kaydın günü hesabın çapa (bakiye) günü ya da öncesiyse istemci sorar — true:
+    # bu gelir/gider o bakiyede zaten var (bakiye değişmez), false: bakiyeden sonra oldu (yansır). Yoksa eski kural
+    in_balance: bool | None = None
 
 
 class EntryPatch(BaseModel):
@@ -2987,7 +2990,7 @@ def create_entry(body: EntryIn):
     fişi öbür defterine kaydedebilir (X-HK-Book: kendi | ortak): okumadaki receipt_file öbür defterdeyse kopyalanır."""
     _visible_or_404("account", body.account_id)  # üye gizli hesaba kayıt yazamaz
     choice = _save_spender(body.spender)
-    data = body.model_dump(exclude={"splits", "items", "branch", "spender"})
+    data = body.model_dump(exclude={"splits", "items", "branch", "spender", "in_balance"})
     _tax_fields(data)
     data["entry_date"] = body.entry_date.isoformat()
     data["skipped"] = int(body.skipped)
@@ -3034,7 +3037,10 @@ def create_entry(body: EntryIn):
     _apply_spender(choice, eid)
     match = sync.match_info().get(eid)
     shopping_link = _shopping_link(eid) if body.items and body.kind == "gider" else None  # kalemler kaydedildikten sonra
-    return {"id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
+    # hesaplı kayıt çapa günü / öncesindeyse anchor_conflict + cevap (in_balance) kayda (ön ödemeli kart ve "olmadı" hariç)
+    anchor = _anchor_answer("entries", eid, data.get("account_id"), data["entry_date"], body.in_balance) \
+        if not data["skipped"] and not data.get("wallet_id") else {}
+    return {**anchor, "id": eid, "linked": any(e["id"] == eid and e["linked_txn_id"] for e in db.list_entries()), "match": match,
             "debt_settled": debt[1]["id"] if debt else None, "debt_step": debt[0] if debt else None,
             "splits": [{"category": x["category"], "amount": x["amount"]} for x in splits],
             "price_alerts": alerts["check"].get("price_alerts", []),  # yetenek price_alerts
@@ -3288,6 +3294,9 @@ class RecurringPatch(BaseModel):
 class RecurringAction(BaseModel):
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
     amount: Money | None = Field(default=None, ge=0)  # o ay farklı tutar olduysa
+    # yetenek entry_anchor_conflict (yalnız confirm): kalemin hesabı varsa ve günü hesabın çapa günü ya da öncesiyse
+    # istemci sorar ("Bu maaş o bakiyede zaten var mı?") — true: bakiye değişmez, false: yansır. Yoksa eski kural
+    in_balance: bool | None = None
 
 
 @app.get("/api/payroll/net")
@@ -3439,13 +3448,15 @@ def confirm_recurring(rid: int, body: RecurringAction):
     from app import sync
 
     r = _recurring_or_404(rid)
+    day = db.occurrence_date(body.month, db.day_at(r, body.month))
     eid = db.create_entry({
-        "entry_date": db.occurrence_date(body.month, db.day_at(r, body.month)), "month": body.month, "description": r["description"],
+        "entry_date": day, "month": body.month, "description": r["description"],
         "amount": body.amount if body.amount is not None else db.planned_amount(r, body.month), "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 0, "account_id": r["account_id"],
     })
     sync.reconcile()  # kira dökümden zaten geldiyse: aynı hareketle birleşir, iki kez sayılmaz
-    return {"id": eid}
+    # hesaplı kalemin günü hesabın çapa günü / öncesindeyse: anchor_conflict + cevap kayda (yetenek entry_anchor_conflict)
+    return {"id": eid, **_anchor_answer("entries", eid, r["account_id"], day, body.in_balance)}
 
 
 class MonthAmount(BaseModel):
