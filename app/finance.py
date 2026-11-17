@@ -844,6 +844,8 @@ def summary(month: str, today: date | None = None) -> dict:
         # Özet faiz satırı (yetenek "summary_interest_latest"; first_look.latest_fees): kart başına son ekstredeki faiz ve
         # ücret, dönem adı yerine ekstreye dayalı ("Son ekstrelerinde faiz ve ücret ₺X"). Ortak defterde gizliyse null
         "interest_latest": _latest_fees(today),
+        # dönemde ödenen kart ekstreleri (yetenek "summary_card_payments"; card_payments_in): BİLGİ, toplamlara katılmaz
+        "card_payments": card_payments_in(month),
     }
 
 
@@ -4369,6 +4371,31 @@ def compare(month: str | None = None, variable_only: bool = True, today: date | 
 
 
 
+def _paid_in_window(s: dict) -> bool:
+    """Ekstrenin ödendi işareti gerçek bir ödeme mi: tutarı var ve ödeme günü kesim ile son ödeme + 10 gün arasında. Geç
+    yüklenen eski ekstreler "yükleme günü ödendi" diye işaretlenmiş olabilir (day_detail, card_payments_in)."""
+    d = s.get("paid_at")
+    if not d or not s.get("paid_amount"):
+        return False
+    d = str(d)[:10]
+    son = (date.fromisoformat(s["due_date"]) + timedelta(days=10)).isoformat() if s.get("due_date") else d
+    return s["period_end"] <= d <= son
+
+
+def card_payments_in(month: str) -> dict:
+    """Dönemde ödenen kart ekstreleri (yetenek "summary_card_payments"; Özet ve Hareketler "Bu ay"daki "Kart ödemeleri"
+    bilgi satırı). Ödeme günü dönemin içinde olan, ödendi işaretli ekstreler (otomatik eşleşen döküm ödemesi ya da elle
+    "Ödendi"; _paid_in_window). BİLGİDİR: harcamaya da gelire de katılmaz — kartla yapılan alışveriş yapıldığı dönemde
+    harcama sayılır, ekstre ödemesi yalnız borcu kapatır. items: ödeme gününe göre (yeniden eskiye)."""
+    start, end = (x.isoformat() for x in period_bounds(month))
+    items = [{"statement_id": s["id"], "title": f"{s['bank']} {s['card_no']}", "bank": s["bank"], "card_no": s["card_no"],
+              "amount": _round(s["paid_amount"]), "paid_at": str(s["paid_at"])[:10], "period_end": s["period_end"],
+              "due_date": s.get("due_date"), "total_debt": s.get("total_debt")}
+             for s in db.list_statements() if _paid_in_window(s) and start <= str(s["paid_at"])[:10] <= end]
+    items.sort(key=lambda x: (x["paid_at"], x["statement_id"]), reverse=True)
+    return {"total": _round(sum(x["amount"] for x in items)), "count": len(items), "items": items}
+
+
 def day_detail(d: str, variable_only: bool = False) -> dict:
     """Bir günün harcamaları (gerçek tarihe göre; kart işlemi harcandığı gün)."""
     rows = []
@@ -4385,7 +4412,6 @@ def day_detail(d: str, variable_only: bool = False) -> dict:
     # o gün ödenen kart ekstreleri: bankadan para çıkar ama harcama değildir (harcamalar kendi günlerinde sayılır)
     # ödeme tarihi ödeme penceresinde olmalı: geç yüklenen eski ekstreler "yükleme günü ödendi" diye işaretlenmiş olabilir
     paid = [{"title": f"{s_['bank']} {s_['card_no']}", "amount": s_["paid_amount"], "period_end": s_["period_end"]}
-            for s_ in db.list_statements() if s_["paid_at"] == d and s_["paid_amount"]
-            and s_["period_end"] <= d <= (s_["due_date"] and (date.fromisoformat(s_["due_date"]) + timedelta(days=10)).isoformat() or d)]
+            for s_ in db.list_statements() if s_["paid_at"] == d and _paid_in_window(s_)]
     return {"date": d, "total": _round(sum(r["amount"] for r in rows)), "rows": rows,
             "by_category": _group(rows, "category"), "card_payments": paid}
