@@ -930,15 +930,51 @@ def subscription_groups(states: dict | None = None) -> dict[str, list[dict]]:
     return by_m
 
 
+def _after_cancel(m: str, ts: list[dict], st: dict | None, refunds: list[dict]) -> list[dict]:
+    """İptal edilmiş kart aboneliğinin iptal gününden sonraki çekimleri, kapanışlarıyla (app/sub_cancel.py: iade
+    eşleşti / "bu son çekimdi" / "iade geldi"). İptal değilse boş."""
+    from app import sub_cancel
+
+    if not st or st["status"] != "iptal":
+        return []
+    after = [{"uid": f"c{t['id']}", "date": str(t["txn_date"])[:10], "amount": float(t["amount"]), "fx": t.get("orig_currency")}
+             for t in ts if t["txn_date"] > st["changed_at"]]
+    return sub_cancel.resolve(after, sub_cancel.get(sub_cancel.ref("card", m), st["changed_at"]), refunds)
+
+
+def card_after_cancel(merchant: str) -> dict | None:
+    """Tek kart aboneliğinin iptal sonrası çekimleri (sub_cancel.act, abonelik ayrıntısı): {status, cancelled_at,
+    charges [{uid, date, amount, fx, closed, refund}], state}. Abonelik yoksa None."""
+    from app import sub_cancel
+
+    states = db.subscription_states()
+    ts = subscription_groups(states).get(merchant)
+    if not ts:
+        return None
+    st = states.get(merchant)
+    refunds = sub_cancel.card_refunds({merchant}).get(merchant, []) if st and st["status"] == "iptal" else []
+    charges = _after_cancel(merchant, ts, st, refunds)
+    cancelled = st["changed_at"] if st and st["status"] == "iptal" else None
+    return {"status": st["status"] if st else "aktif", "cancelled_at": cancelled, "charges": charges,
+            "state": sub_cancel.get(sub_cancel.ref("card", merchant), cancelled)}
+
+
 def subscriptions() -> list[dict]:
-    """Abonelik kategorisindeki işyerleri: son tutar, görüldüğü aylar, iptal durumu, iptalden sonra çekim var mı."""
+    """Abonelik kategorisindeki işyerleri: son tutar, görüldüğü aylar, iptal durumu, iptalden sonra çekim var mı.
+    charged_after_cancel: iptalden sonra çekilip KAPANMAMIŞ tutar (iadesi eşleşen ya da "bu son çekimdi" denen çekim
+    sayılmaz; app/sub_cancel.py). refund_requested_at: açık çekim için iade istendiyse günü."""
+    from app import sub_cancel
+
     states = db.subscription_states()
     by_m = subscription_groups(states)
+    refunds = sub_cancel.card_refunds({m for m, st in states.items() if st["status"] == "iptal" and m in by_m})
     out = []
     for m, ts in by_m.items():
         last_period = max(t["period"] for t in ts)
         st = states.get(m)
         after = [t for t in ts if st and t["txn_date"] > st["changed_at"]]
+        ac = _after_cancel(m, ts, st, refunds.get(m, []))
+        acs = sub_cancel.summary(ac, sub_cancel.get(sub_cancel.ref("card", m), st["changed_at"]) if ac else {})
         monthly = _round(sum(t["amount"] for t in ts if t["period"] == last_period))
         before = [t["period"] for t in ts if t["period"] < last_period]  # bir önceki görüldüğü dönem (zam bildirimi)
         prev_monthly = _round(sum(t["amount"] for t in ts if t["period"] == max(before))) if before else None
@@ -962,7 +998,8 @@ def subscriptions() -> list[dict]:
             "last_seen": max(t["txn_date"] for t in ts), "months": len({t["period"] for t in ts}),
             "fx": next((f"{t['orig_currency']}" for t in ts if t["orig_currency"]), None),
             "status": st["status"] if st else "aktif", "cancelled_at": st["changed_at"] if st else None,
-            "charged_after_cancel": _round(sum(t["amount"] for t in after)) if after and st["status"] == "iptal" else 0,
+            "charged_after_cancel": _round(acs["open_amount"]) if acs["open_count"] else 0,
+            "refund_requested_at": acs["refund_at"], "refund_waiting": acs["waiting"],
         })
     return sorted(out, key=lambda x: (x["status"] != "aktif", -x["monthly"]))
 
@@ -2913,12 +2950,19 @@ def insights(month: str, today: date | None = None) -> list[dict]:
 
     # 7) Abonelikler
     for sub in subscriptions():
-        if sub["status"] == "iptal" and sub["charged_after_cancel"]:
+        if sub["status"] == "iptal" and sub["charged_after_cancel"] and sub.get("refund_waiting"):
+            # iade istendi, o günden sonra yeni çekim yok: durum notu (push yok: anahtar iptal_cekim değil)
+            out.append({"level": "uyari", "title": f"{sub['merchant'].title()}: iade bekleniyor",
+                        "detail": f"{_tl(sub['charged_after_cancel'])} iadesini {date.fromisoformat(sub['refund_requested_at']):%d.%m} "
+                                  "tarihinde istedin. İade ekstreye düşünce bu uyarı kendiliğinden kapanır.", "link": "tasarruf",
+                        "key": f"iade_bekle:{_slug(sub['merchant'])}:{_round(sub['charged_after_cancel']):g}",
+                        "target": {"screen": "abonelikler", "merchant": sub["merchant"]}})
+        elif sub["status"] == "iptal" and sub["charged_after_cancel"]:
             out.append({"level": "kritik", "title": f"{sub['merchant'].title()} iptal edilmişti ama yine çekildi",
                         "detail": f"{date.fromisoformat(sub['cancelled_at']):%d.%m} iptalinden sonra {_tl(sub['charged_after_cancel'])} "
                                   "çekim var. İptal tamamlanmamış olabilir; hesabını kontrol et, iade iste.", "link": "tasarruf",
                         "key": f"iptal_cekim:{_slug(sub['merchant'])}:{_round(sub['charged_after_cancel']):g}",
-                        "target": {"screen": "abonelikler"}})
+                        "target": {"screen": "abonelikler", "merchant": sub["merchant"]}})
         if sub["status"] == "dusuruldu" and sub["overcharged"]:
             out.append({"level": "uyari", "title": f"{sub['merchant'].title()} paketi düşmemiş görünüyor",
                         "detail": f"Yeni paket {_tl(sub['new_amount'])} olmalıydı; {_tl(sub['overcharged'])} fazla çekildi.",

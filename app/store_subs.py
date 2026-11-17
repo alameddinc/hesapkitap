@@ -31,7 +31,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from statistics import median
 
-from app import db, money, sub_catalog, sub_prices_tr
+from app import db, money, sub_cancel, sub_catalog, sub_prices_tr
 from app.parsers.base import PURCHASE, REFUND
 from app.textnorm import normalize
 
@@ -397,6 +397,10 @@ def _item(x: dict, srcs: list[dict], labels: list[dict], today: date) -> dict:
     if prev is not None and amount - prev >= max(0.5, prev / 100):  # zam: son tahsilat öncekinden yüksek (en az %1)
         up = {"from": money.money(prev), "to": money.money(amount), "date": last["date"].isoformat()}
     after = [c for c in cs if cancelled_at and c["date"].isoformat() > cancelled_at] if status == "iptal" else []
+    # kapanış (app/sub_cancel.py): "bu son çekimdi" / "iade geldi"; iadesi gelen tahsilat _charges'ta zaten düşmüş
+    ac_st = sub_cancel.get(sub_cancel.ref("store", x["id"]), cancelled_at) if after else {}
+    acs = sub_cancel.summary(sub_cancel.resolve([{"uid": c["uid"], "date": c["date"].isoformat(), "amount": c["amount"]}
+                                                 for c in after], ac_st), ac_st)
     monthly = money.money(amount) if cycle == "aylik" else money.money(amount / 12) if cycle == "yillik" else None
     yearly = money.money(amount * 12) if cycle == "aylik" else money.money(amount) if cycle == "yillik" else None
     first = cs[0]["date"]
@@ -418,7 +422,8 @@ def _item(x: dict, srcs: list[dict], labels: list[dict], today: date) -> dict:
         "next_text": f"Sonraki tahsilat {_dm(nxt)}" + (" (tahmini)" if not (src and src.get("renews")) else "") if nxt else None,
         "stale": stale, "stale_text": f"Son çekim {_dm(last['date'], True)} · durmuş olabilir" if stale else None,
         "cancelled_at": cancelled_at,
-        "charged_after_cancel": money.money(sum(c["amount"] for c in after)) if after else 0.0,
+        "charged_after_cancel": acs["open_amount"] if acs["open_count"] else 0.0,
+        "refund_requested_at": acs["refund_at"], "refund_waiting": acs["waiting"],
         "guesses": guesses, "hint": x["hint"], "fx": last.get("fx"),
         "source": src["source"] if src else None, "source_id": src["id"] if src else None,
         "plan": src.get("plan") if src else None,
@@ -457,7 +462,7 @@ def _loose_item(s: dict, labels: list[dict], today: date) -> dict:
         "next_date": nxt.isoformat() if nxt else None,
         "next_text": f"Sonraki tahsilat {_dm(nxt)}" if nxt else None,
         "stale": False, "stale_text": None, "cancelled_at": str(lb["changed_at"])[:10] if status == "iptal" else None,
-        "charged_after_cancel": 0.0, "guesses": [], "hint": None, "fx": None,
+        "charged_after_cancel": 0.0, "refund_requested_at": None, "refund_waiting": False, "guesses": [], "hint": None, "fx": None,
         "source": s["source"], "source_id": s["id"], "plan": s.get("plan"), "charges": [], "pending": True,
     }
 
@@ -715,6 +720,14 @@ def cancel_alerts(today: date | None = None) -> list[dict]:
         if i["status"] == "iptal" and i["charged_after_cancel"]:
             d = date.fromisoformat(i["cancelled_at"])
             slug = re.sub(r"[\s/:]+", "-", i["title"].casefold())[:40]
+            if i.get("refund_waiting"):  # iade istendi, sonra yeni tahsilat yok: durum notu (push yok)
+                out.append({"level": "uyari", "title": f"{i['title']}: iade bekleniyor",
+                            "detail": f"{money.tl(i['charged_after_cancel'])} iadesini "
+                                      f"{date.fromisoformat(i['refund_requested_at']):%d.%m} tarihinde istedin. İade ekstreye "
+                                      "düşünce bu uyarı kendiliğinden kapanır.", "link": "tasarruf",
+                            "key": f"iade_bekle:store-{i['id']}:{slug}:{money.money(i['charged_after_cancel']):g}",
+                            "target": {"screen": "abonelik", "id": i["id"]}})
+                continue
             out.append({"level": "kritik", "title": f"{i['title']} iptal edilmişti ama yine çekildi",
                         "detail": f"{d:%d.%m} iptalinden sonra {money.tl(i['charged_after_cancel'])} çekim var. İptal "
                                   "tamamlanmamış olabilir; mağazanın abonelikler sayfasından kontrol et, iade iste.",
