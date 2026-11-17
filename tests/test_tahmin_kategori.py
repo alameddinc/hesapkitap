@@ -58,13 +58,16 @@ def test_four_of_six_counts(book):
         _gider(book, d, 3000.0, "Sağlık")
     it = _items()
     assert it["Sağlık"]["daily"] > 0
+    assert (it["Sağlık"]["months"], it["Sağlık"]["window"]) == (4, 6)
+    assert (it["Market & Gıda"]["months"], it["Market & Gıda"]["window"]) == (6, 6)
 
 
 def test_short_history_uses_available_periods(book):
     """Yalnız son 2 dönem verisi (yeni kullanıcı): olan dönemlerle (öncesi 0 sayılmaz)."""
     for d in GUNLER[-2:]:
         _gider(book, d, 3000.0, "Sağlık")
-    assert _items()["Sağlık"]["daily"] > 0
+    it = _items()
+    assert it["Sağlık"]["daily"] > 0 and (it["Sağlık"]["months"], it["Sağlık"]["window"]) == (2, 6)
 
 
 def test_exclude_endpoint(book, client):

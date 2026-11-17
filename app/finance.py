@@ -3756,7 +3756,8 @@ def _cash_variable_items(today: date) -> list[dict]:
     bağlı (kira, abonelik) ve faturaya bağlı (bill_provider) kayıtlar, bekleyen, Bağış* / zekât, kendi adına havale
     (owner_party_transfer; kullanıcı "Başkasına" dediyse — not_virman — sayılır), borç ve kumbara hareketleri, kart ve
     hesaplar arası aktarım. Tek seferlik büyük kayıt dönemin kayıt medyanının CASH_OUTLIER_X katına kırpılır.
-    Dönüş: [{category, daily, excluded, until}] (günlüğe göre büyükten küçüğe; günlüğü 0 olanlar yok)."""
+    Dönüş: [{category, daily, excluded, until, months, window}] (günlüğe göre büyükten küçüğe; günlüğü 0 olanlar yok);
+    months: son `window` (= CASH_VARIABLE_LOOKBACK) tamamlanmış dönemden o kategoride harcama olan dönem sayısı."""
     cur = current_period(today)
     keep = _cash_row_filter()
     temp = {k for k, v in forecast_temporary(today).items()}  # "geçici" denmiş tekrar grupları tahmine girmez
@@ -3783,7 +3784,8 @@ def _cash_variable_items(today: date) -> list[dict]:
     for k in cats:
         daily = round(median([d.get(k, 0.0) for d in per]), 4)  # × gün sonra yuvarlanır (kuruş kaybı birikmesin)
         if money.gt(daily, 0):
-            out.append({"category": k, "daily": daily, "excluded": k in ex, "until": ex.get(k)})
+            out.append({"category": k, "daily": daily, "excluded": k in ex, "until": ex.get(k),
+                        "months": sum(1 for d in per if money.gt(d.get(k, 0.0), 0)), "window": CASH_VARIABLE_LOOKBACK})
     return sorted(out, key=lambda x: -x["daily"])
 
 

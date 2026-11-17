@@ -658,7 +658,8 @@ CAPABILITIES = (
                               # haftalık kalemin dönemde birden çok oluşumu; bekleyenler ve Ödemelerden sonra buna göre)
     "recurring_frequency",
     "forecast_cash_items",    # forecast_balance.variable_cash_items (ve parts variable_cash.items): kart dışı tahminin kategori
-                              # dökümü [{category, daily, amount, excluded, until}] — kategori başına son 6 tamamlanmış
+                              # dökümü [{category, daily, amount, excluded, until, months, window}] (months: son window=6
+                              # tamamlanmış dönemden harcama olan dönem sayısı) — kategori başına son 6 tamamlanmış
                               # dönemin günlük medyanı (geçici patlama şişirmez). POST /api/forecast/exclude {category,
                               # until?} ("Bu ay olmayacak": until dönem sonu; yoksa "Tahmine katma" kalıcı), DELETE
                               # /api/forecast/exclude?category=… ; dışlanan kategori tahmine girmez (excluded true)
