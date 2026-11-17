@@ -13,6 +13,7 @@ sonu kesimi kısa ayda ayın son günü). Bir ay yüklenmediyse en son geçen ke
 Dönem ve gün hesapları Europe/Istanbul saatine göre yapılır.
 """
 import calendar
+import hashlib
 import json
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -460,6 +461,34 @@ def _sabit_tekrar(now: date) -> list[dict]:
     return out
 
 
+def _duzenli(now: date) -> list[dict]:
+    """"Bu düzenli mi?" (finance.regular_candidates; kullanıcı kararı 16.11): sabit kaleme bağlı olmayan, sıklık kalıbına
+    (haftalık / 2 haftalık / aylık) uyan kart dışı tekrar. Kimlik duzenli:<grup anahtarı>:<kalıp>. Cevaplar:
+    Yalnız ?regular=1 isteyen istemciye (build regular). Evet → POST /api/recurring {…öneri, frequency, anchor_date, link_group} (sabit kalem YALNIZ bu onayla oluşur);
+    Hayır, geçici → POST /api/forecast/temporary {key, pattern} (tahmine girmez, REGULAR_TEMP_DAYS sorulmaz; kalıp
+    değişirse yeniden sorulur); Sonra → snooze. Sabit kalemleri değiştirebilene (sahip, tam yetkili), Planlama açıksa."""
+    from app import book, finance
+
+    m = book.member()
+    if (m and book.role(m) != "full") or _page_hidden("plan"):
+        return []
+    out = []
+    for c in finance.regular_candidates(now):
+        what = c["description"] or c["category"] or "Bu ödeme"
+        title = (f"{what} artık {c['frequency_label']} gibi görünüyor — düzenli mi?" if c["changed"]
+                 else f"{what} {c['frequency_label']} tekrarlıyor — düzenli mi?")
+        kid = hashlib.sha1(c["key"].encode()).hexdigest()[:12]  # anahtar serbest metin; kimlik REMINDER_ID'ye uysun
+        out.append({"id": f"duzenli:{kid}:{c['frequency']}", "kind": "duzenli_mi", "severity": "info",
+                    "title": title, "text": f"Son {c['count']} kez yaklaşık {_tl(c['amount'])}. Düzenliyse sabit "
+                    "kalem olur ve tahminde ayrıca sayılır; geçiciyse tahmine katılmaz.",
+                    "cta": "Evet, düzenli", "cta_no": "Hayır, geçici", "action": "regular_confirm",
+                    "route": "plan", "due": now.isoformat(), "amount": c["amount"], "key": c["key"],
+                    "frequency": c["frequency"], "frequency_label": c["frequency_label"],
+                    "anchor_date": c["anchor_date"], "day_of_month": c["day_of_month"], "category": c["category"],
+                    "description": c["description"], "changed": c["changed"]})
+    return out
+
+
 def _ekstre_oku() -> list[dict]:
     """"Ekstre yeniden okunabilir" (app/statement_reread.py; yalnız önbellekten, ekstreyi değiştirebilene). Kimlik:
     ekstre_oku:<ekstre id>; "Şimdi değil" = dismiss; uygulanınca (kaynak 'sablon') kendiliğinden düşer."""
@@ -474,9 +503,11 @@ def _ekstre_oku() -> list[dict]:
         return []
 
 
-def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: int = EKSTRE_GRACE) -> list[dict]:
+def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: int = EKSTRE_GRACE,
+          regular: bool = False) -> list[dict]:
     """Bugün gösterilecek hatırlatmalar (önce acil olanlar). ekstre_grace: push bildirimi 0 verir (kesimden 1 gün
-    sonra "ekstreni yükle"); Yapılacaklar varsayılanla (banka PDF'i geç gönderebilir)."""
+    sonra "ekstreni yükle"); Yapılacaklar varsayılanla (banka PDF'i geç gönderebilir). regular: "Bu düzenli mi?"
+    maddeleri (kind duzenli_mi) — yalnız tanıyan istemci ister (?regular=1); eski mobil bilinmeyen türü "Yükle" sanmasın."""
     now = now or today()
     items: list[dict] = []
     upload = _can_upload()
@@ -495,6 +526,12 @@ def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: i
         logging.getLogger(__name__).exception("sabit kalem tekrarı hesaplanamadı")
     items += _dogruluk()
     items += _finans()
+    try:
+        items += _duzenli(now) if regular else []
+    except Exception:  # noqa: BLE001 - öneri hesabı Yapılacaklar'ı bozmasın
+        import logging
+
+        logging.getLogger(__name__).exception("düzenli mi adayları hesaplanamadı")
     oku = _ekstre_oku()
     fix = {i["statement_id"] for i in oku}  # düzeltmesi hazır ekstrede "kontrol et" ayrıca sorulmaz
     items += [i for i in _belge(upload) if not (i.get("action") == "statement_confirm" and i.get("statement_id") in fix)]

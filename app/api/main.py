@@ -3257,6 +3257,12 @@ class RecurringIn(BaseModel):
     gross_amount: Money | None = Field(default=None, ge=0)
     advance_pay: bool | None = None  # maaş peşin (memur): zam farkı ilk zamlı maaşta
     account_id: int | None = None  # banka/nakit hesabı
+    # yetenek recurring_frequency: ayda bir (varsayılan) | 2 haftada bir | haftada bir (anchor_date'ten itibaren)
+    frequency: Literal["monthly", "biweekly", "weekly"] | None = None
+    anchor_date: date | None = None
+    # "Bu düzenli mi?" Evet: o tekrar grubunun (finance.regular_candidates key) geçmiş kayıtları yeni kaleme bağlanır
+    # (tahminde iki kez sayılmasın)
+    link_group: str | None = Field(default=None, max_length=200)
 
 
 class RecurringPatch(BaseModel):
@@ -3387,7 +3393,15 @@ def _with_gross_net(data: dict) -> dict:
 @app.post("/api/recurring")
 def create_recurring(body: RecurringIn):
     _visible_or_404("account", body.account_id)  # üye gizli hesaba yazamaz (gövdedeki id)
-    rid = db.create_recurring(_with_gross_net(body.model_dump()))
+    data = _with_gross_net(body.model_dump())
+    if data.get("anchor_date"):
+        data["anchor_date"] = data["anchor_date"].isoformat()
+    if data.get("frequency") in ("biweekly", "weekly") and not data.get("anchor_date"):
+        raise HTTPException(422, "Haftalık / 2 haftalık kalemde ilk ödeme günü (anchor_date) gerekli")
+    group = data.pop("link_group", None)
+    rid = db.create_recurring(data)
+    if group:
+        finance.link_regular_group(group, rid)
     if body.kind == "gider":  # elle açılan kalem: dökümden önceden gelmiş bu dönemin kira havalesi bağlansın ("bekliyor"
         db.link_recurring_transfers()  # görünmesin). Öneriden kabul kendi serisini bağlar (accept_recurring_suggestion)
     return {"id": rid}
@@ -4029,6 +4043,48 @@ class NotOwnIn(BaseModel):
     entry_id: int
 
 
+class ForecastExcludeIn(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+    until: date | None = None  # "Bu ay olmayacak": bu tarihe kadar (istemci dönem sonunu gönderir); yok: kalıcı
+
+
+class ForecastTemporaryIn(BaseModel):
+    key: str = Field(min_length=3, max_length=200)
+    pattern: Literal["monthly", "biweekly", "weekly"] | None = None
+
+
+@app.post("/api/forecast/temporary")
+def forecast_temporary_set(body: ForecastTemporaryIn):
+    """"Bu düzenli mi?" → Hayır, geçici: grup tahmine katılmaz, 90 gün sorulmaz (kalıp değişirse yeniden sorulur)."""
+    _own_owner_only()
+    finance.set_forecast_temporary(body.key, body.pattern)
+    return {"ok": True}
+
+
+@app.delete("/api/forecast/temporary")
+def forecast_temporary_remove(key: str = Query(min_length=3, max_length=200)):
+    _own_owner_only()
+    finance.set_forecast_temporary(key, None, on=False)
+    return {"ok": True}
+
+
+@app.post("/api/forecast/exclude")
+def forecast_exclude(body: ForecastExcludeIn):
+    """Ana sayının kart dışı tahmininden bir kategoriyi çıkar (yetenek forecast_cash_items): until verilirse o güne kadar
+    ("Bu ay olmayacak"), verilmezse kalıcı ("Tahmine katma"). Ortak defter üyesi 403. Dönüş: {ok, excludes}."""
+    _own_owner_only()
+    finance.set_forecast_exclude(body.category.strip(), body.until.isoformat() if body.until else None)
+    return {"ok": True, "excludes": finance.forecast_excludes()}
+
+
+@app.delete("/api/forecast/exclude")
+def forecast_exclude_remove(category: str = Query(min_length=1, max_length=80)):
+    """Dışlamayı kaldır: kategori yeniden tahmine girer."""
+    _own_owner_only()
+    finance.set_forecast_exclude(category.strip(), None, on=False)
+    return {"ok": True, "excludes": finance.forecast_excludes()}
+
+
 @app.post("/api/finance-audit/not-own")
 def finance_audit_not_own(body: NotOwnIn):
     """own_question maddesi "Başkasına": kayıt gelir/gider kalır ve bir daha sorulmaz (entries.not_virman). Evet →
@@ -4227,7 +4283,7 @@ def onboarding_dismiss():
 
 REMINDER_ID = (r"^((ekstre|dokum|odeme):[^\s/]{1,80}:\d{4}-\d{2}(-\d{2})?|esles:\d{1,12}:[et]\d{1,12}|"
                r"(hesap|borc|sabit):\d{1,12}:\d{1,12}|kart:\d{1,12}|dogruluk:[0-9a-f]{10}|"
-               r"(gelen|dokum_kontrol|ekstre_kontrol):\d{1,12})$")
+               r"(gelen|dokum_kontrol|ekstre_kontrol):\d{1,12}|duzenli:[0-9a-f]{12}:(monthly|biweekly|weekly))$")
 
 
 class SnoozeIn(BaseModel):
@@ -4235,11 +4291,12 @@ class SnoozeIn(BaseModel):
 
 
 @app.get("/api/reminders")
-def reminders_list():
-    """Yapılacaklar: [{id, kind, title, text, cta, route, action, due, severity, tag, period, ...}]; id döneme bağlı, kararlı."""
+def reminders_list(regular: bool = False):
+    """Yapılacaklar: [{id, kind, title, text, cta, route, action, due, severity, tag, period, ...}]; id döneme bağlı, kararlı.
+    regular=1: "Bu düzenli mi?" maddeleri de (yetenek regular_confirm; eski istemci bu türü tanımaz)."""
     from app import reminders
 
-    return reminders.build()
+    return reminders.build(regular=regular)
 
 
 def _reminder_id(rid: str) -> str:

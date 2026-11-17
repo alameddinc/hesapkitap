@@ -648,6 +648,21 @@ CAPABILITIES = (
                               # has_file, message "Bu aktarım daha önce eklenmiş olabilir — bağla?"}; istemci sorar,
                               # "Bağla" → POST /api/own-transfers link_to = maybe_match.id (tutar/hesaplar tutmazsa 422);
                               # "Yeni aktarım" → link_to'suz (yeni iki bacak; yanıtta maybe_match bilgi olarak)
+    "regular_confirm",        # Yapılacaklar kind "duzenli_mi" (action regular_confirm; id duzenli:<key>:<kalıp>): kart dışı tekrar
+                              # bir sıklık kalıbına uyuyor (frequency monthly|biweekly|weekly, frequency_label, anchor_date,
+                              # day_of_month, amount, category, description, key, changed: kalıp değişti). Evet → POST
+                              # /api/recurring {description, amount, kind gider, category, day_of_month, start_month,
+                              # frequency, anchor_date, link_group: key}; Hayır, geçici → POST /api/forecast/temporary {key,
+                              # pattern} (DELETE ?key= geri al); Sonra → snooze. Sabit kalem yalnız bu onayla oluşur.
+                              # Yetenek recurring_frequency: POST /api/recurring frequency + anchor_date (haftalık / 2
+                              # haftalık kalemin dönemde birden çok oluşumu; bekleyenler ve Ödemelerden sonra buna göre)
+    "recurring_frequency",
+    "forecast_cash_items",    # forecast_balance.variable_cash_items (ve parts variable_cash.items): kart dışı tahminin kategori
+                              # dökümü [{category, daily, amount, excluded, until, months, window}] (months: son window=6
+                              # tamamlanmış dönemden harcama olan dönem sayısı) — kategori başına son 6 tamamlanmış
+                              # dönemin günlük medyanı (geçici patlama şişirmez). POST /api/forecast/exclude {category,
+                              # until?} ("Bu ay olmayacak": until dönem sonu; yoksa "Tahmine katma" kalıcı), DELETE
+                              # /api/forecast/exclude?category=… ; dışlanan kategori tahmine girmez (excluded true)
 )
 
 
