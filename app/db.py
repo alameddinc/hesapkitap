@@ -564,6 +564,10 @@ DEFAULT_ITEM_RULE = ("sigara, marlboro, parliament, camel, winston, kent, lucky 
 MIGRATIONS = [
     ("entries", "card_last4", "TEXT"),
     ("recurring", "match_key", "TEXT"),
+    # sıklık (16.11 "düzenli mi?"): NULL / 'monthly' = ayda bir (day_of_month); 'biweekly' / 'weekly' = anchor_date'ten
+    # 14 / 7 günde bir (dönem içinde birden çok oluşum)
+    ("recurring", "frequency", "TEXT"),
+    ("recurring", "anchor_date", "TEXT"),
     ("entries", "hidden", "INTEGER NOT NULL DEFAULT 0"),       # ortak defterde üyeye görünmez
     ("transactions", "hidden", "INTEGER NOT NULL DEFAULT 0"),
     ("entries", "created_by", "INTEGER"),                      # ekleyen kullanıcı (ortak defter)
@@ -2195,6 +2199,10 @@ def _attach_recurring(c, data: dict, exclude_id: int | None = None) -> None:
     if data.get("recurring_id") or data.get("skipped"):
         return
     rec = recurring_for(c, data)
+    if rec and FREQ_DAYS.get(rec["frequency"] if "frequency" in rec.keys() else None):
+        # haftalık / 2 haftalık: dönemde birden çok ödeme olur, hepsi kendi döneminin kalemine bağlanır
+        data["recurring_id"], data["month"] = rec["id"], period_of(data["entry_date"])
+        return
     if not rec:
         # adı/kişisi tutmayan giden havale: kategori ya da açıklama + tutar + vade penceresi (_transfer_recurring_slots).
         # Bağlanınca dönemi oluşumun dönemi olur (16'sında yatan, 17'si vadeli kira o dönemin kirası: istatistikte orada)
@@ -2428,7 +2436,30 @@ def delete_entry(entry_id: int) -> None:
 # ---------------------------------------------------------------- recurring
 
 RECURRING_FIELDS = ("description", "amount", "kind", "category", "day_of_month", "start_month", "end_month", "note", "wallet_id", "account_id",
-                    "gross_amount", "advance_pay", "match_key")
+                    "gross_amount", "advance_pay", "match_key", "frequency", "anchor_date")
+FREQ_DAYS = {"weekly": 7, "biweekly": 14}
+
+
+def recurring_dates(r: dict, month: str) -> list[str]:
+    """Sabit kalemin o dönemdeki oluşum günleri: ayda bir → [occurrence_date]; haftalık / 2 haftalık → anchor_date'ten
+    7 / 14 günde bir, dönemin içinde kalanlar (period_bounds)."""
+    step = FREQ_DAYS.get(r.get("frequency") or "")
+    if not step or not r.get("anchor_date"):
+        return [occurrence_date(month, day_at(r, month))]
+    from datetime import date as _date, timedelta as _td
+
+    from app import finance
+
+    p0, p1 = finance.period_bounds(month)
+    a = _date.fromisoformat(r["anchor_date"][:10])
+    k = max(0, -(-(p0 - a).days // step)) if a < p0 else 0
+    d = a + _td(days=step * k)
+    out = []
+    while d <= p1:
+        if d >= p0:
+            out.append(d.isoformat())
+        d += _td(days=step)
+    return out
 
 
 def list_recurring() -> list[dict]:

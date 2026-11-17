@@ -58,6 +58,7 @@ P3 = Persona(
     rent=(14000.0, 10, "A", "dekont"),
     bills=[BillCfg("Örnek Elektrik", 450.0, 18, "A"), BillCfg("Örnek Su", 260.0, 24, "A"),
            BillCfg("Örnek Telefon", 390.0, 3, "A")],
+    biweekly=(600.0, 3),  # 2 haftada bir nakit temizlik ödemesi
     cash_p=0.8, cash_mean=180.0, atm_p=0.1,
     debts=[{"key": "akraba", "person": "Örnek Akraba", "direction": "borc", "amount": 12000.0, "plan": (8, 12),
             "acc": "A", "with_account": True}],

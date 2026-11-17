@@ -431,7 +431,14 @@ def pending_recurring(month: str, recurring: list[dict], entries: list[dict], to
     past = month < current_period(today)
     out = []
     for r in recurring:
-        if not is_active(r, month) or r["id"] in done:
+        if not is_active(r, month):
+            continue
+        if db.FREQ_DAYS.get(r.get("frequency") or ""):  # haftalık / 2 haftalık: dönemin oluşumlarından girilmeyenler
+            n_done = sum(1 for e in entries if e["recurring_id"] == r["id"] and e["month"] == month)
+            for i, d in enumerate(db.recurring_dates(r, month)[n_done:], start=n_done):
+                out.append({**_pending_row(r, month, ov), "uid": f"r{r['id']}-{month}-{i}", "date": d})
+            continue
+        if r["id"] in done:
             continue
         row = _pending_row(r, month, ov)
         is_salary = r["kind"] == INCOME and _is_salary(r)
@@ -1821,7 +1828,11 @@ def _plan(months: int, today: date) -> dict:
                 other_got.append(r)
         # henüz girilmemiş sabit kalemler: Özet'in "bekliyor"u ile aynı kaynak (pending_recurring; ör. o ayın maaşı
         # dökümden gelmişse maaş ikinci kez eklenmez)
-        pend = {x["recurring_id"]: x for x in pending_recurring(m, raw_recurring, entries_by_m.get(m, []), today) if x.get("pending")}
+        pend: dict[int, dict] = {}
+        for x in pending_recurring(m, raw_recurring, entries_by_m.get(m, []), today):
+            if x.get("pending"):  # haftalık / 2 haftalık kalemde dönemin birden çok oluşumu: tutarlar toplanır
+                pend[x["recurring_id"]] = {**x, "amount": _round(pend[x["recurring_id"]]["amount"] + x["amount"])} \
+                    if x["recurring_id"] in pend else x
         # --- kart
         for acc, p in proj.items():
             st = next((s for s in statements if s["card_no"] == acc and s["period"] == m), None)
@@ -3574,41 +3585,211 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
     return out
 
 
-CASH_VARIABLE_LOOKBACK = 3  # kart dışı değişken gider tahmini: son kaç TAMAMLANMIŞ dönemin medyanı
+CASH_VARIABLE_LOOKBACK = 6  # kart dışı değişken gider tahmini: son kaç TAMAMLANMIŞ dönem (kategori başına medyan)
+CASH_MIN_PERIODS = 3        # bu kadar dönemden az veri varsa olan dönemlerle (kategori medyanı = dönem ortalaması)
 CASH_OUTLIER_X = 3          # tek kayıt, dönemin kayıt medyanının bu katından büyükse o kata kırpılır (tek seferlik aykırı)
+FORECAST_EXCLUDE_KEY = "forecast_exclude"  # ayar: {kategori: until (YYYY-MM-DD) | null (kalıcı)}
 
 
-def _cash_variable_estimate(today: date) -> float:
-    """Kart dışı (nakit / banka kartı / havale) "her zamanki" değişken giderin GÜNLÜK tahmini: son CASH_VARIABLE_LOOKBACK
-    tamamlanmış dönemin (kaydı olanların) günlük ortalamalarının medyanı. Sayılan: elle ya da dökümden gelen, gider
-    sayılan (counts), kredi kartıyla ödenmemiş kayıt. SAYILMAYAN (canlı 16.11: 59 güne 105k şişikti): sabit kaleme bağlı
-    (kira, abonelik) ve faturaya bağlı (bill_provider; fatura modülü ayrı sayar) kayıtlar, bekleyen, Bağış* / zekât, kendi
-    adına havale (owner_party_transfer;
-    kullanıcı "Başkasına" dediyse — not_virman — sayılır), borç ve kumbara hareketleri (counts zaten saymaz), kart ve
-    hesaplar arası aktarım (gider kaydı değil). Tek seferlik büyük kayıt dönemin kayıt medyanının CASH_OUTLIER_X katına
-    kırpılır."""
-    cur = current_period(today)
+def forecast_excludes(today: date | None = None) -> dict[str, str | None]:
+    """Kullanıcının tahmine katmadığı kategoriler (POST /api/forecast/exclude): {kategori: until | None}. Süresi geçen
+    ("Bu ay olmayacak", until < bugün) dönmez."""
+    import json
+
+    day = (today or date.today()).isoformat()
+    try:
+        raw = json.loads(db.get_setting(FORECAST_EXCLUDE_KEY) or "{}")
+    except ValueError:
+        raw = {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and (v is None or str(v) >= day)}
+
+
+def set_forecast_exclude(category: str, until: str | None, on: bool = True) -> dict[str, str | None]:
+    import json
+
+    try:
+        raw = json.loads(db.get_setting(FORECAST_EXCLUDE_KEY) or "{}")
+    except ValueError:
+        raw = {}
+    if on:
+        raw[category] = until
+    else:
+        raw.pop(category, None)
+    db.set_setting(FORECAST_EXCLUDE_KEY, json.dumps(raw, ensure_ascii=False))
+    return raw
+
+
+FORECAST_TEMP_KEY = "forecast_temporary"  # ayar: {grup anahtarı: {until, pattern}} — "Hayır, geçici" denmiş tekrarlar
+REGULAR_TEMP_DAYS = 90                      # "geçici" cevabı bu kadar gün geçerli (kalıp değişirse beklemeden sorulur)
+REGULAR_MIN = 3                             # düzenli sayılmak için en az tekrar
+PATTERNS = {"weekly": (7, 2), "biweekly": (14, 3), "monthly": (30, 3)}  # (aralık, ±tolerans gün); aylıkta 27–33
+PATTERN_LABELS = {"weekly": "haftada bir", "biweekly": "2 haftada bir", "monthly": "ayda bir"}
+
+
+def _cash_row_filter():
+    """Kart dışı "her zamanki" değişken gider satırı mı (tahmin ve "düzenli mi?" ile aynı kural; _cash_variable_items)."""
     owners = db.owner_names()
     with db.connect() as c:  # kullanıcı "Başkasına / kendi hesabım değil" dedi: gider, sayılır
         not_virman = {r[0] for r in c.execute("SELECT id FROM entries WHERE not_virman = 1")}
         bill_ids = {r[0] for r in c.execute("SELECT id FROM entries WHERE bill_provider IS NOT NULL AND bill_provider <> ''")}
-    per = []
-    for i in range(1, 7):
-        m = add_months(cur, -i)
-        rows = [r for r in transactions(m, today=today) if r["source"] == "manual" and r["kind"] == EXPENSE
-                and not r.get("pending") and not r.get("recurring_id") and (r.get("payment") or "") != "kredi_karti"
-                and counts(r)[0] and not (r.get("category") or "").startswith("Bağış") and not r.get("debt_id")
+
+    def keep(r: dict) -> bool:
+        return (r["source"] == "manual" and r["kind"] == EXPENSE and not r.get("pending") and not r.get("recurring_id")
+                and (r.get("payment") or "") != "kredi_karti" and counts(r)[0]
+                and not (r.get("category") or "").startswith("Bağış") and not r.get("debt_id")
                 and r.get("id") not in bill_ids
-                and not (owners and r.get("id") not in not_virman and db.owner_party_transfer(r.get("description") or "",
-                                                                                         -r["amount"], owners))]
-        if rows:
-            amts = [r["amount"] for r in rows]
-            cap = CASH_OUTLIER_X * median(amts) if len(amts) >= 3 else None
-            p0, p1 = period_bounds(m)
-            per.append(sum(min(a, cap) if cap else a for a in amts) / ((p1 - p0).days + 1))
-        if len(per) >= CASH_VARIABLE_LOOKBACK:
-            break
-    return median(per) if per else 0.0
+                and not (owners and r.get("id") not in not_virman
+                         and db.owner_party_transfer(r.get("description") or "", -r["amount"], owners)))
+    return keep
+
+
+def _regular_key(r: dict) -> str:
+    """Tekrar grubunun kimliği: kişi ya da işyeri (db.recurring_key) + kategori."""
+    return f"{db.recurring_key(r.get('description'), r.get('counterparty'))}|{r.get('category') or ''}"
+
+
+def forecast_temporary(today: date | None = None) -> dict[str, dict]:
+    """"Hayır, geçici" denmiş tekrar grupları (süresi geçmeyenler): {anahtar: {until, pattern}}."""
+    import json
+
+    day = (today or date.today()).isoformat()
+    try:
+        raw = json.loads(db.get_setting(FORECAST_TEMP_KEY) or "{}")
+    except ValueError:
+        raw = {}
+    return {k: v for k, v in raw.items() if isinstance(v, dict) and str(v.get("until") or "") >= day}
+
+
+def set_forecast_temporary(key: str, pattern: str | None, today: date | None = None, on: bool = True) -> None:
+    import json
+
+    try:
+        raw = json.loads(db.get_setting(FORECAST_TEMP_KEY) or "{}")
+    except ValueError:
+        raw = {}
+    if on:
+        raw[key] = {"until": ((today or date.today()) + timedelta(days=REGULAR_TEMP_DAYS)).isoformat(), "pattern": pattern}
+    else:
+        raw.pop(key, None)
+    db.set_setting(FORECAST_TEMP_KEY, json.dumps(raw, ensure_ascii=False))
+
+
+def _pattern(dates: list[date]) -> str | None:
+    """Ardışık tekrar günlerinden sıklık: aralıkların hepsi (en az REGULAR_MIN tekrar) bir kalıbın toleransı içindeyse
+    o kalıp (haftalık 7±2, 2 haftalık 14±3, aylık 27–33 ya da ayın aynı günü ±3); aralıklar tutarsızsa None."""
+    if len(dates) < REGULAR_MIN:
+        return None
+    gaps = [(b - a).days for a, b in zip(dates, dates[1:])]
+    for name, (step, tol) in PATTERNS.items():
+        if all(abs(g - step) <= tol for g in gaps):
+            return name
+    days = [d.day for d in dates]
+    if all(25 <= g <= 35 for g in gaps) and max(days) - min(days) <= 6:  # aylık: ayın aynı günü ±3
+        return "monthly"
+    return None
+
+
+def regular_candidates(today: date | None = None) -> list[dict]:
+    """"Bu düzenli mi?" adayları (kullanıcı kararı 16.11): sabit kaleme bağlı olmayan kart dışı giderlerden aynı kişi /
+    işyeri + kategori (_regular_key), tutarı grubun medyanına ±%25 yakın tekrarlar; son REGULAR_MIN tekrarın aralıkları bir
+    sıklık kalıbına uyuyorsa (_pattern: haftalık / 2 haftalık / aylık) aday. Aralıklar tutarsızsa sorulmaz.
+    "Hayır, geçici" denmiş grup REGULAR_TEMP_DAYS gün sorulmaz; ama son tekrarlar o cevaptaki kalıptan FARKLI yeni bir
+    kalıp oluşturduysa beklemeden yeniden sorulur (changed true). Dönüş: [{key, description, category, amount, frequency,
+    anchor_date (son tekrar), day_of_month, count, changed}]."""
+    today = today or date.today()
+    keep = _cash_row_filter()
+    cur = current_period(today)
+    rows = [r for i in range(0, CASH_VARIABLE_LOOKBACK + 1) for r in transactions(add_months(cur, -i), today=today)
+            if keep(r) and r["date"][:10] <= today.isoformat()]
+    groups: dict[str, list] = defaultdict(list)
+    for r in rows:
+        groups[_regular_key(r)].append(r)
+    temp = forecast_temporary(today)
+    names = {(x["description"] or "").strip().casefold() for x in db.list_recurring()}
+    out = []
+    for key, rs in groups.items():
+        if key.startswith(("p:|", "m:|")) or len(rs) < REGULAR_MIN:
+            continue
+        all_dates = sorted(date.fromisoformat(r["date"][:10]) for r in rs)
+        med = median(r["amount"] for r in rs)
+        rs = sorted((r for r in rs if abs(r["amount"] - med) <= 0.25 * med), key=lambda r: r["date"])
+        dates = sorted({date.fromisoformat(r["date"][:10]) for r in rs})
+        pat = _pattern(dates[-REGULAR_MIN:])
+        if not pat or any((r["description"] or "").strip().casefold() in names for r in rs):
+            continue
+        # aynı grupta kalıbın arasına düşen başka ödemeler varsa (her gün pazar alışverişi gibi) düzenli değil: tutarı
+        # benzer üç kayıt tesadüfen kalıba uymuş olabilir
+        span0 = dates[-REGULAR_MIN]
+        if sum(1 for d in all_dates if d >= span0) > REGULAR_MIN + 1:
+            continue
+        t = temp.get(key)
+        if t and t.get("pattern") == pat:
+            continue
+        last = rs[-1]
+        out.append({"key": key, "description": (last.get("counterparty") or last["description"] or "")[:60],
+                    "category": last.get("category"), "amount": _round(median(r["amount"] for r in rs[-REGULAR_MIN:])),
+                    "frequency": pat, "frequency_label": PATTERN_LABELS[pat], "anchor_date": dates[-1].isoformat(),
+                    "day_of_month": dates[-1].day, "count": len(dates), "changed": bool(t)})
+    return sorted(out, key=lambda x: -x["amount"])
+
+
+def link_regular_group(key: str, rid: int, today: date | None = None) -> int:
+    """"Evet, düzenli": grubun bağsız geçmiş kayıtları yeni sabit kaleme bağlanır (dönemi kaydın dönemi). Sayı."""
+    today = today or date.today()
+    keep = _cash_row_filter()
+    cur = current_period(today)
+    ids = [r["id"] for i in range(0, CASH_VARIABLE_LOOKBACK + 1) for r in transactions(add_months(cur, -i), today=today)
+           if keep(r) and _regular_key(r) == key]
+    with db.connect() as c:
+        for i in ids:
+            c.execute("UPDATE entries SET recurring_id = ? WHERE id = ? AND recurring_id IS NULL", (rid, i))
+    return len(ids)
+
+
+def _cash_variable_items(today: date) -> list[dict]:
+    """Kart dışı (nakit / banka kartı / havale) "her zamanki" değişken gider, KATEGORİ BAŞINA GÜNLÜK tahmin (kullanıcı
+    kararı 16.11: geçici patlama — ör. 2–3 aylık sağlık harcaması — tahmini şişirmesin):
+      her kategori için son CASH_VARIABLE_LOOKBACK tamamlanmış dönemin günlük harcaması; verinin başladığı dönemden
+      itibaren o kategoride harcama olmayan dönem 0 sayılır; kategori günlüğü = bu dönemlerin MEDYANI. 6 dönemin 2–3'ünde
+      olan geçici harcama 0'a iner, 4+ dönemdir süren sayılır. CASH_MIN_PERIODS'dan az dönem verisi varsa olan dönemlerle.
+    Sayılan: elle ya da dökümden gelen, gider sayılan (counts), kredi kartıyla ödenmemiş kayıt. SAYILMAYAN: sabit kaleme
+    bağlı (kira, abonelik) ve faturaya bağlı (bill_provider) kayıtlar, bekleyen, Bağış* / zekât, kendi adına havale
+    (owner_party_transfer; kullanıcı "Başkasına" dediyse — not_virman — sayılır), borç ve kumbara hareketleri, kart ve
+    hesaplar arası aktarım. Tek seferlik büyük kayıt dönemin kayıt medyanının CASH_OUTLIER_X katına kırpılır.
+    Dönüş: [{category, daily, excluded, until}] (günlüğe göre büyükten küçüğe; günlüğü 0 olanlar yok)."""
+    cur = current_period(today)
+    keep = _cash_row_filter()
+    temp = {k for k, v in forecast_temporary(today).items()}  # "geçici" denmiş tekrar grupları tahmine girmez
+    per: list[dict[str, float]] = []  # en yeniden eskiye: {kategori: günlük}
+    for i in range(1, CASH_VARIABLE_LOOKBACK + 1):
+        m = add_months(cur, -i)
+        rows = [r for r in transactions(m, today=today) if keep(r) and _regular_key(r) not in temp]
+        amts = [r["amount"] for r in rows]
+        cap = CASH_OUTLIER_X * median(amts) if len(amts) >= 3 else None
+        p0, p1 = period_bounds(m)
+        n = (p1 - p0).days + 1
+        by: dict[str, float] = defaultdict(float)
+        for r in rows:
+            by[r.get("category") or "Diğer"] += (min(r["amount"], cap) if cap else r["amount"]) / n
+        per.append(dict(by))
+    # veri penceresi: en eski verili dönemden en yeniye (öncesi "henüz kullanmıyordu", 0 sayılmaz)
+    while per and not per[-1]:
+        per.pop()
+    if not per:
+        return []
+    ex = forecast_excludes(today)
+    cats = sorted({k for d in per for k in d})
+    out = []
+    for k in cats:
+        daily = round(median([d.get(k, 0.0) for d in per]), 4)  # × gün sonra yuvarlanır (kuruş kaybı birikmesin)
+        if money.gt(daily, 0):
+            out.append({"category": k, "daily": daily, "excluded": k in ex, "until": ex.get(k)})
+    return sorted(out, key=lambda x: -x["daily"])
+
+
+def _cash_variable_estimate(today: date) -> float:
+    """Tahmine katılan (dışlanmamış) kategorilerin günlük toplamı (_cash_variable_items)."""
+    return sum(x["daily"] for x in _cash_variable_items(today) if not x["excluded"])
 
 
 def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict, today: date,
@@ -3641,7 +3822,8 @@ def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict,
             card_later += part
         else:
             card_now += part
-    cash = _cash_variable_estimate(today) * days
+    cash_items = [{**x, "amount": _round(x["daily"] * days)} for x in _cash_variable_items(today)]
+    cash = sum(x["amount"] for x in cash_items if not x["excluded"])
     card_now, card_later, cash = _round(card_now), _round(card_later), _round(cash)
     var = _round(card_now + cash)
     base = _round(spendable)
@@ -3652,12 +3834,15 @@ def _forecast_balance(free: float, spendable: float, sai: dict | None, hz: dict,
              {"key": "funded", "label": "Gelirden sonra ödenecekler", "amount": 0.0, "sign": "−"},
              {"key": "variable", "label": "Tahmini harcama" + (" (maaşa kadar)" if sal else ""), "amount": var, "sign": "−"},
              {"key": "variable_card", "label": "Kartla (ekstresi o güne kadar ödenecek)", "amount": card_now, "sign": "bilgi"},
-             {"key": "variable_cash", "label": "Nakit / banka kartıyla", "amount": cash, "sign": "bilgi"},
+             {"key": "variable_cash", "label": "Nakit / banka kartıyla", "amount": cash, "sign": "bilgi",
+              # yetenek forecast_cash_items: kategori dökümü [{category, daily, amount, excluded, until}]
+              "items": cash_items},
              {"key": "variable_card_later", "label": "Kartla tahmini harcama — maaştan sonra ödenecek",
               "amount": card_later, "sign": "bilgi"}]
     income = (sai or {}).get("income") or 0.0
     return {"amount": _round(base - var), "no_new_spend": base, "horizon": hz["end"].isoformat(), "until": until,
             "label_kind": "maasa_kadar" if sal else "donem_sonu", "parts": parts, "funded_items": [],
+            "variable_cash_items": cash_items,
             "after_salary": {"date": sal.isoformat(), "income": _round(income), "variable_card": card_later} if sal else None}
 
 

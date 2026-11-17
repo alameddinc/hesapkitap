@@ -101,6 +101,7 @@ class Persona:
     update_every: tuple = (6, 13)
     dokum_every: tuple = (5, 11)
     income_irregular: bool = False
+    biweekly: tuple | None = None  # (tutar, ilk gün offset'i): nakitten 2 haftada bir aynı ödeme ("Bu düzenli mi?" sorusu)
 
 
 # ---------------------------------------------------------------------------- gerçek defter
@@ -722,6 +723,34 @@ class Sim:
                                                          "payment": "havale", "account_id": a.id})
         self.log(f"fatura {b.provider} {b.amount} {a.cfg.key}'dan")
 
+    def do_biweekly(self) -> None:
+        """2 haftada bir nakit ödeme (ör. temizlik). 3. tekrardan sonra "Bu düzenli mi?" sorulmalı (K8); cevap "Hayır,
+        geçici" (simülatörün beklenen modeli sabit kalemsiz kalır)."""
+        if not self.p.biweekly:
+            return
+        amt, off = self.p.biweekly
+        nakit = next((a for a in self.accs.values() if a.cfg.kind == "nakit"), None)
+        k = (self.today - self.START).days - off
+        if nakit and k >= 0 and k % 14 == 0 and nakit.truth > amt + 10:
+            self.move(nakit.cfg.key, -amt, "NAKIT TEMIZLIK", informed=True, tag="nakit")
+            self.api("post", "/api/entries", json={"entry_date": self.today.isoformat(), "description": "Örnek Temizlik",
+                                                   "amount": amt, "kind": "gider", "category": "Ev", "payment": "nakit"})
+            self.bw_n = getattr(self, "bw_n", 0) + 1
+            self.log(f"2 haftalık ödeme {amt} ({self.bw_n}.)")
+            if self.bw_n >= 3 and not getattr(self, "bw_answered", False):
+                from app import reminders as _rem  # /api/reminders gerçek saati kullanır (reminders.today): simülasyon günüyle
+
+                self.stats["api"] += 1
+                r = _rem.build(self.today, regular=True)
+                q = [i for i in r if i.get("kind") == "duzenli_mi" and i.get("frequency") == "biweekly"]
+                if not q:
+                    self.fail("K8_duzenli", "3 tekrardan sonra 2 haftalık ödeme için 'Bu düzenli mi?' sorulmadı",
+                              "duzenli_mi", [(i.get("kind"), i.get("frequency"), i.get("title")) for i in r
+                                             if i.get("kind") == "duzenli_mi"])
+                else:
+                    self.api("post", "/api/forecast/temporary", json={"key": q[0]["key"], "pattern": "biweekly"})
+                self.bw_answered = True
+
     def do_cash(self) -> None:
         nakit = next((a for a in self.accs.values() if a.cfg.kind == "nakit"), None)
         if not nakit:
@@ -1261,6 +1290,7 @@ class Sim:
                 self.do_cards()
                 self.do_debts()
                 self.do_cash()
+                self.do_biweekly()
                 self.do_transfers()
                 self.do_jar()
                 self.do_updates()
