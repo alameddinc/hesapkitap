@@ -80,9 +80,10 @@ def test_salary_entered_moves_horizon(book, monkeypatch):
 
 
 def test_early_salary_before_holiday(book, monkeypatch):
-    """Bayram öncesi 13 Ara'da erken yattı: 13'ünde (dönem sonuna 3 gün) ufuk kayar."""
+    """Bayram öncesi 13 Ara'da erken yattı: 13'ünde (dönem sonuna 3 gün) ufuk kayar. Maaş 15'i, ay dönümü 17: maaş
+    sonraki dönemi fonlar (db.salary_lead) → 13 Ara maaşı 2027-01 (Aralık dönemi 17 Ara – 16 Oca)."""
     eid = _maas(book, "2026-12-13")
-    assert next(e for e in book.list_entries() if e["id"] == eid)["month"] == "2026-12"
+    assert next(e for e in book.list_entries() if e["id"] == eid)["month"] == "2027-01"
     nw = _nw(monkeypatch, date(2026, 12, 13))
     assert nw["spendable_horizon"] == "2027-01-16"
 

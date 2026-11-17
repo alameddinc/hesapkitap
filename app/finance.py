@@ -297,7 +297,7 @@ def _installment_row(e: dict, k: int, month: str, amount: float) -> dict:
 def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
     return {
         "uid": f"r{r['id']}-{month}", "source": "recurring", "id": r["id"],
-        "date": db.occurrence_date(month, db.day_at(r, month)), "month": month,
+        "date": db.recurring_due(r, month), "month": month,
         "description": r["description"], "merchant": r["description"],
         "amount": db.planned_amount(r, month, overrides), "template_amount": r["amount"], "kind": r["kind"], "category": r["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
@@ -374,6 +374,10 @@ def salary_realized(month: str, recurring: list[dict], entries: list[dict],
     free = [e for e in free if any((e["amount"] or 0) >= planned[r["id"]] * db.SALARY_MIN_SHARE for r in open_)]
     if len(sal) == 1:
         free = [e for e in free if (e["amount"] or 0) >= planned[open_[0]["id"]] * db.SALARY_MIN_SHARE]
+        if db.salary_lead(open_[0], month):
+            # maaş sonraki dönemi fonluyor (15 Kas maaşı Kasım dönemi 17 Kas – 16 Ara): bağsız satır tarihinin
+            # takvim dönemine değil kalemin en yakın dönemine sayılır; başka döneminki bu dönemi "yattı" yapmaz
+            free = [e for e in free if db._nearest_recurring_month(open_[0], e["entry_date"]) == month]
         if free:
             got[open_[0]["id"]] = min(free, key=lambda x: (x["entry_date"], x["id"] or 0))
         return got
@@ -381,7 +385,7 @@ def salary_realized(month: str, recurring: list[dict], entries: list[dict],
     for loose in (False, True):
         pairs = []
         for r in (r for r in open_ if r["id"] not in got):
-            due = db.occurrence_date(month, db.day_at(r, month))
+            due = db.recurring_due(r, month)
             emp = [_fold(x["employer"]) for x in db.salary_changes(r["id"]) if x.get("employer")]
             for e in (e for e in free if (e["id"] or 0) not in used):
                 fit = db.salary_entry_fit(r, e, due, planned[r["id"]], emp, loose)
@@ -2285,7 +2289,7 @@ def paid_recurring(today: date | None = None) -> list[dict]:
         r = recs.get(e.get("recurring_id"))
         if not r or e["skipped"] or e["kind"] != EXPENSE or not (since <= e["entry_date"] <= today.isoformat()):
             continue
-        due = db.occurrence_date(e["month"], db.day_at(r, e["month"]))
+        due = db.recurring_due(r, e["month"])
         out.append({"type": "recurring", "id": e["id"], "recurring_id": r["id"], "title": r["description"],
                     "subtitle": " · ".join(x for x in ("Düzenli ödeme", e.get("counterparty")) if x),
                     "amount": _round(db.planned_amount(r, e["month"], ov)), "min_payment": None, "due_date": due,
@@ -3443,13 +3447,22 @@ def spend_horizon(today: date) -> dict:
     end = period_bounds(cur)[1]
     periods = [cur]
     left = (end - today).days
-    if left <= 1 or (left <= SALARY_HORIZON_DAYS and salary_arrived(cur, today)):
+    if left <= 1 or (left <= SALARY_HORIZON_DAYS and salary_arrived(_horizon_salary_period(cur), today)):
         periods.append(add_months(cur, 1))
         end = period_bounds(periods[-1])[1]
     return {"end": end, "periods": periods, "later_end": period_bounds(add_months(periods[-1], 1))[1]}
 
 
 SALARY_HORIZON_DAYS = 7  # dönem sonuna bu kadar gün kala bu dönemin maaşı yattıysa ufuk sonraki dönem sonuna geçer
+
+
+def _horizon_salary_period(cur: str) -> str:
+    """Ufku kaydıran maaşın dönemi: birincil maaş sonraki dönemi fonluyorsa (db.salary_lead; ay dönümü 17, maaş 15 →
+    15 Kas maaşı Kasım dönemi 17 Kas – 16 Ara'nın) bu dönemin sonunda yatan SONRAKİ dönemin maaşı; değilse bu dönemin
+    maaşı (dönemin içinde yatar). Para hesaba aynı günde girer: ufuk eskisi gibi maaş yatınca kayar."""
+    nxt = add_months(cur, 1)
+    main = primary_salary(nxt, db.list_recurring())
+    return nxt if main and db.salary_lead(main, nxt) else cur
 
 
 def salary_arrived(period: str, today: date) -> bool:
@@ -3479,7 +3492,7 @@ def next_salary_date(today: date) -> date | None:
         main = primary_salary(per, rec, ov)
         if not main or main["id"] in salary_realized(per, rec, _salary_decision_entries(per, None), ov):
             continue
-        d = date.fromisoformat(db.occurrence_date(per, db.day_at(main, per)))
+        d = date.fromisoformat(db.recurring_due(main, per))
         if d < today:
             if not salary_awaited(d.isoformat(), today):  # çok gecikti: tahmini gerçek gelir sayılır, beklenmez
                 continue
@@ -3905,9 +3918,13 @@ def _spendable_after_income(spendable: float, today: date, periods: list[str] | 
     periods = periods or [current_period(today)]
     # önceki dönemin hâlâ beklenen (SALARY_GRACE_DAYS içinde yatmamış) maaşı da (pending_recurring yalnız onu bekletir)
     prev, salary_ids = add_months(periods[0], -1), {r["id"] for r in rec if _is_salary(r)}
-    rows = [r for per in [prev, *periods] for r in pending_recurring(per, rec, db.list_entries(per), today)
+    # sonraki dönemi fonlayan maaş (db.salary_lead) ufkun son döneminin sonunda yatar: ufuk içinde yatacaksa o da
+    # beklenen gelir (para hesaba o gün girer; dönemi sonraki dönem olsa da "Maaş gelince" onu gösterir)
+    nxt, h_end = add_months(periods[-1], 1), period_bounds(periods[-1])[1].isoformat()
+    rows = [r for per in [prev, *periods, nxt] for r in pending_recurring(per, rec, db.list_entries(per), today)
             if r.get("pending") and r["kind"] == INCOME and money.gt(r["amount"] or 0, 0) and not is_late(r)
-            and (per != prev or r["recurring_id"] in salary_ids)
+            and (per not in (prev, nxt) or r["recurring_id"] in salary_ids)
+            and (per != nxt or r["date"] <= h_end)
             # günü geçmiş maaş: next_salary_date ile AYNI kural (salary_awaited) — tolerans bittiyse beklenen gelir
             # değil (cari dönemde de; Özet'in "bekliyor"u dönem bitene kadar kalır, bu rakam eldeki paraya bakar)
             and (r["recurring_id"] not in salary_ids or r["date"] >= today.isoformat()

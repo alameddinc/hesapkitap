@@ -98,7 +98,7 @@ def prev_gross(r: dict, month: str, changes: list[dict]) -> float | None:
     if g:
         return g
     if r.get("amount"):
-        paid = db.occurrence_date(add_months(month, -1), db.day_at(r, add_months(month, -1), before))
+        paid = db.recurring_due(r, add_months(month, -1), before)
         return gross_for_net(r["amount"], int(paid[:4]))
     return None
 
@@ -258,7 +258,7 @@ def suggestion_for(r: dict, today=None, entries: list[dict] | None = None) -> di
         if abs(jump) < (THR_EXPECTED if reg else THR):
             continue  # yatan, planın beklediği gibi (bu başlangıca göre)
         if start == last:
-            paid_month = int(db.occurrence_date(last, db.day_at(r, last, changes))[5:7])
+            paid_month = int(db.recurring_due(r, last, changes)[5:7])
             if not (reg or (paid_month in RAISE_MONTHS and 0 < jump <= SINGLE_MAX)):
                 continue  # ara ay / azalış / ikramiye olabilir: ikinci ayı bekle
         others = [c for c in changes if c["from_month"] != start]

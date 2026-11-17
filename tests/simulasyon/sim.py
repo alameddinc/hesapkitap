@@ -248,6 +248,18 @@ def occurrence(p: str, day: int, start: int) -> date:
     return clamp(y, m, day)
 
 
+def salary_leads(day: int, start: int) -> bool:
+    """Kullanıcı kararı 17.11 (bağımsız yazıldı; db.salary_lead): maaş günü ay dönümünden en çok 5 takvim günü önceyse
+    (en uzun ayla, 31 gün, ölçülür) maaş SONRAKİ dönemin gelirdir. Ay dönümü 17, maaş 15 → 15 Kas maaşı 2026-12'nin."""
+    dist = start - day if day < start else start + 31 - day
+    return 1 <= dist <= 5
+
+
+def salary_occurrence(p: str, day: int, start: int) -> date:
+    """Maaşın `p` dönemini fonlayan oluşumu: sonraki dönemi fonlayan maaşta önceki dönemin içindeki gün."""
+    return occurrence(next_period(p, -1), day, start) if salary_leads(day, start) else occurrence(p, day, start)
+
+
 # ---------------------------------------------------------------------------- simülatör
 
 class Sim:
@@ -445,7 +457,7 @@ class Sim:
         return workdays.next_business_day(d) if not workdays.is_business_day(d) else d
 
     def salary_date(self, s: SalaryCfg, p: str) -> date:
-        nominal = occurrence(p, s.day, self.p.cycle_day)
+        nominal = salary_occurrence(p, s.day, self.p.cycle_day)
         if s.shift == "prev" and not workdays.is_business_day(nominal):
             return workdays.prev_business_day(nominal)
         return nominal
@@ -913,7 +925,9 @@ class Sim:
         periods = [cur]
         left = (end - self.today).days
         prim = max(self.p.salaries, key=lambda s: s.amount) if self.p.salaries else None
-        arrived = bool(prim) and (prim.desc, cur) in self.salary_info and self.salary_info[(prim.desc, cur)] <= self.today
+        # ufku kaydıran maaş: sonraki dönemi fonlayan maaş bu dönemin sonunda yatar (salary_leads) → sonraki dönemin maaşı
+        sper = next_period(cur) if prim and salary_leads(prim.day, cd) else cur
+        arrived = bool(prim) and (prim.desc, sper) in self.salary_info and self.salary_info[(prim.desc, sper)] <= self.today
         if left <= 1 or (left <= 7 and arrived):
             periods.append(next_period(cur))
             end = period_bounds(periods[-1], cd)[1]
@@ -925,7 +939,7 @@ class Sim:
                 per = next_period(cur, k)
                 if (prim.desc, per) in self.salary_info:
                     continue
-                on = occurrence(per, prim.day, cd)
+                on = salary_occurrence(per, prim.day, cd)
                 if on < self.today:
                     if workdays.add_business_days(on, 5) < self.today:
                         continue
@@ -1023,13 +1037,33 @@ class Sim:
             per = next_period(per0, k)
             if (main.desc, per) in self.salary_info:
                 continue
-            d = occurrence(per, main.day, self.p.cycle_day)
+            d = salary_occurrence(per, main.day, self.p.cycle_day)
             if d < self.today:
                 if workdays.add_business_days(d, 5) < self.today:
                     continue
                 d = self.today
             return d
         return None
+
+    def check_salary_periods(self) -> None:
+        """K8 maaş dönemi (kullanıcı kararı 17.11): uygulamanın bildiği her maaş, simülatörün beklediği döneme
+        (salary_occurrence: dönüm gününden ≤5 gün önce yatan maaş SONRAKİ dönemin) bağlı; bir kalemin bir döneminde en
+        çok bir maaş kaydı ("Bu ay"da tek maaş)."""
+        from app import db
+
+        es = [e for e in db.list_entries() if e["recurring_id"] in set(self.salary_rids.values()) and not e["skipped"]]
+        per_month: dict[tuple, int] = {}
+        for e in es:
+            per_month[(e["recurring_id"], e["month"])] = per_month.get((e["recurring_id"], e["month"]), 0) + 1
+        dup = sorted(k for k, v in per_month.items() if v > 1)
+        if dup:
+            self.fail("K8_maas_cift", "aynı dönemde iki maaş kaydı", [], dup)
+        for (desc, per), on in self.salary_info.items():
+            rid = self.salary_rids.get(desc)
+            got = [e["month"] for e in es if e["recurring_id"] == rid and e["entry_date"][:10] == on.isoformat()]
+            if got and per not in got:
+                self.fail("K8_maas_donem", f"{desc} {on} maaşının dönemi", per, got)
+                return
 
     def check_forecast(self, nw: dict, hz: dict, e_inc: float, ep: dict) -> None:
         """K7 ana sayı MAAŞA KADAR (kullanıcı kararı 16.11, b930045): until = sonraki birincil maaştan bir gün önce
@@ -1051,14 +1085,17 @@ class Sim:
     def expected_income(self, hz: dict) -> float:
         tot = 0.0
         prev = next_period(hz["periods"][0], -1)
+        nxt = next_period(hz["periods"][-1])
         for s in self.p.salaries:
-            for per in [prev, *hz["periods"]]:
+            for per in [prev, *hz["periods"], nxt]:
                 if (s.desc, per) in self.salary_info:
                     continue
                 # günü SALARY_GRACE (5 iş günü) geçmiş maaş artık beklenmez (finance.salary_awaited; her dönem için)
-                nominal = occurrence(per, s.day, self.p.cycle_day)
+                nominal = salary_occurrence(per, s.day, self.p.cycle_day)
                 if workdays.add_business_days(nominal, 5) < self.today:
                     continue
+                if per == nxt and nominal > hz["end"]:
+                    continue  # sonraki dönemin maaşı yalnız ufkun içinde yatıyorsa (sonraki dönemi fonlayan maaş)
                 tot += s.amount
         return round(tot, 2)
 
@@ -1112,6 +1149,8 @@ class Sim:
             return
         self.stats["kontrol"] += 1
         n0 = len(self.mismatches)
+        if deep:
+            self.check_salary_periods()
         # K1 hesap bakiyeleri
         app_bal = {a["id"]: a["current"] for a in nw["accounts"]}
         exp_cash = 0.0

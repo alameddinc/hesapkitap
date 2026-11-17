@@ -1226,9 +1226,8 @@ def _import_income_recurring(recurring: list[dict], raw: str, d, acc_id: int | N
                       if re.search(r"MAAS|UCRET|BORDRO", norm) else [])
     if len(cands) <= 1:
         return cands[0] if cands else None
-    month = period_of(d)
-    cands = [x for x in cands if x["start_month"] <= month and (not x.get("end_month") or month <= x["end_month"])] \
-        or cands
+    cands = [x for x in cands if any(x["start_month"] <= m and (not x.get("end_month") or m <= x["end_month"])
+                                     for m in {period_of(d), _nearest_recurring_month(x, d)})] or cands
     if len(cands) == 1:
         return cands[0]
     if is_salary_extra(raw):
@@ -1239,7 +1238,7 @@ def _import_income_recurring(recurring: list[dict], raw: str, d, acc_id: int | N
             best = None
             for x in cands:
                 slot = _nearest_recurring_month(x, d)
-                fit = salary_entry_fit(x, row, occurrence_date(slot, day_at(x, slot)), _planned_in(c, x, slot),
+                fit = salary_entry_fit(x, row, recurring_due(x, slot), _planned_in(c, x, slot),
                                        emp[x["id"]], loose)
                 if fit is not None and (best is None or (fit, x["id"]) < best[:2]):
                     best = (fit, x["id"], x)
@@ -1276,7 +1275,10 @@ def link_salary_entries() -> int:
             if not is_salary_text(e["description"]) or e["category"] not in _GENERIC_INCOME and e["category"] != "Maaş":
                 continue
             key = fold_key(e["description"])
-            active = [r for r in recs if r["start_month"] <= e["month"] and (not r["end_month"] or e["month"] <= r["end_month"])]
+            # etkinlik kaydın dönemine göre; maaş sonraki dönemi fonluyorsa (salary_lead) o dönem de (15 Kas maaşı
+            # 2026-12'nin: kalem 2026-12'de başladıysa da bağlanır)
+            active = [r for r in recs if any(r["start_month"] <= m and (not r["end_month"] or m <= r["end_month"])
+                                             for m in {e["month"], _nearest_recurring_month(r, e["entry_date"])})]
             by_emp = [r for r in active if any(x and x in key for x in employers[r["id"]])]
             rec = by_emp[0] if len(by_emp) == 1 else active[0] if len(active) == 1 else None
             if rec is None and active and not is_salary_extra(e["description"]):
@@ -1289,7 +1291,7 @@ def link_salary_entries() -> int:
                         slot = _recurring_slot(c, r, e["entry_date"], e["amount"], taken[r["id"]])
                         if not slot:
                             continue
-                        fit = salary_entry_fit(r, e, occurrence_date(slot, day_at(r, slot)), _planned_in(c, r, slot),
+                        fit = salary_entry_fit(r, e, recurring_due(r, slot), _planned_in(c, r, slot),
                                                employers[r["id"]], loose)
                         if fit is not None and (best is None or (fit, r["id"]) < best[:2]):
                             best = (fit, r["id"], r)
@@ -2007,6 +2009,49 @@ def occurrence_date(month: str, day: int, start_day: int | None = None) -> str:
     return f"{y:04d}-{m:02d}-{max(1, min(day, calendar.monthrange(y, m)[1])):02d}"
 
 
+SALARY_EARLY_DAYS = 5  # maaş dönüm gününden en çok bu kadar TAKVİM günü önce yatıyorsa SONRAKİ dönemin geliridir
+
+
+def salary_lead(r, month: str, changes: list[dict] | None = None, start_day: int | None = None) -> bool:
+    """Maaş kalemi `month` dönemini bir önceki dönemin sonunda yatan maaşla mı fonluyor (kullanıcı kararı 17.11:
+    "Bu ay"da her dönemde o dönemi fonlayan TEK maaş). Kural: maaş günü dönüm gününden en çok SALARY_EARLY_DAYS takvim
+    günü önceyse maaş SONRAKİ dönemin gelirdir. Ay dönümü 17, maaş 15 → 15 Kas maaşı Kasım dönemi (17 Kas – 16 Ara;
+    anahtar 2026-12); ay dönümü 1, maaş 30/31 → 30 Kas maaşı Aralık'ın. Dönemin içinde yatan maaş (gün = dönüm günü ya
+    da daha önce) değişmez. Uzaklık en uzun ayla (31 gün) ölçülür: kalemin günü her ay aynı döneme düşer (ay boyu
+    değişince maaş bir ay öbür döneme kaymaz; 26'sı maaşı Kasım'da 5, Ekim'de 6 gün önce → hiç kaymaz). Yalnız ayda bir
+    maaş kalemleri (_is_salary_recurring); diğer gelirler ve giderler tarihine göre."""
+    r = dict(r)
+    # bordro hesabı (app/salary.py) kalemin kısmi kopyasını verebilir: tür yoksa gelir sayılır
+    if not _is_salary_recurring({"kind": "gelir", "description": "", **r}) or FREQ_DAYS.get(r.get("frequency") or ""):
+        return False
+    return salary_day_leads(day_at(r, month, changes), start_day or cycle_start_day())
+
+
+def salary_day_leads(day: int, start: int) -> bool:
+    """salary_lead'in saf kuralı: ayın `day`'inde yatan maaş, ay dönümü `start` iken sonraki dönemi mi fonlar."""
+    dist = start - day if day < start else start + 31 - day
+    return 1 <= dist <= SALARY_EARLY_DAYS
+
+
+def recurring_due(r, month: str, changes: list[dict] | None = None) -> str:
+    """Sabit kalemin `month` dönemindeki beklenen günü (tek kaynak). Ayda bir kalem: occurrence_date; dönemini önceki
+    dönemin sonunda yatan maaşla fonlayan maaş kalemi (salary_lead): önceki dönemin içine düşen günü (ay dönümü 17,
+    maaş 15: anahtar 2026-12'nin maaşı 15 Kasım)."""
+    day = day_at(r, month, changes)
+    if salary_lead(r, month, changes):
+        return occurrence_date(_shift_month(month, -1), day)
+    return occurrence_date(month, day)
+
+
+def salary_period_of(r, d, changes: list[dict] | None = None) -> str:
+    """Kalemin GÜNÜNDE (ya da o güne kırpılmış tarihte; bordro takvimi) `d` tarihinde yatan ödemenin dönemi
+    (recurring_due'nun tersi): tarihin dönemi; maaş kalemi sonraki dönemi fonluyorsa (salary_lead) sonraki dönem.
+    Rastgele tarih için değil (elle/döküm kaydı: _nearest_recurring_month)."""
+    p = period_of(d)
+    n = _shift_month(p, 1)
+    return n if salary_lead(r, n, changes) else p
+
+
 def _months_around(period: str) -> list[str]:
     y, m = map(int, period.split("-"))
     out = []
@@ -2098,7 +2143,7 @@ def _transfer_recurring_slots(c, data: dict, exclude_id: int | None = None,
         for m in _months_around(period_of(d)):
             if m in taken or rec["start_month"] > m or (rec["end_month"] and m > rec["end_month"]):
                 continue
-            gap = (d - _date.fromisoformat(occurrence_date(m, day_at(rec, m)))).days  # eksi: vadeden önce
+            gap = (d - _date.fromisoformat(recurring_due(rec, m))).days  # eksi: vadeden önce
             if not -TRANSFER_EARLY_DAYS <= gap <= TRANSFER_LATE_DAYS:
                 continue
             plan = _planned_in(c, rec, m)
@@ -2179,7 +2224,7 @@ def _recurring_gap(rec, month: str, d) -> int:
     """Kaydın tarihi ile sabit kalemin `month` dönemindeki gününün arası (gün)."""
     from datetime import date as _date
 
-    return abs((_date.fromisoformat(occurrence_date(month, day_at(rec, month))) - d).days)
+    return abs((_date.fromisoformat(recurring_due(rec, month)) - d).days)
 
 
 def _nearest_recurring_month(rec, d, taken=()) -> str | None:
@@ -2275,13 +2320,36 @@ def attach_recurring_series(rec, entries: list[dict]) -> dict[int, str]:
 def set_cycle_start_day(day: int) -> int:
     """Ay dönümünü değiştir ve elle girilen kayıtların dönemlerini yeniden hesapla."""
     day = max(1, min(28, int(day)))
+    old = cycle_start_day()
     set_setting("cycle_start_day", str(day))
     with connect() as c:
         rs = c.execute("SELECT id, entry_date, recurring_id, month FROM entries").fetchall()
         # sabit kalem onayları hangi aya onaylandıysa orada kalır; diğerleri tarihine göre
         c.executemany("UPDATE entries SET month = ? WHERE id = ?",
                       [(period_of(r["entry_date"], day), r["id"]) for r in rs if not r["recurring_id"]])
+    if old != day:
+        reslot_salary_entries()
     return day
+
+
+def reslot_salary_entries() -> int:
+    """Maaş kalemlerine bağlı kayıtların dönemi yeni ay dönümüne göre (salary_lead değişebilir: ay dönümü 1 → 17 olunca
+    15'i maaşı sonraki dönemi fonlar): tarih sırasıyla kalemin gününe en yakın dönem (_nearest_recurring_month). Yalnız
+    sonuç her dönemde bir kayıtsa yazılır (aynı döneme iki kayıt düşecekse o kalem olduğu gibi kalır: elle bölünmüş/ek
+    ödeme). Dönüş: dönemi değişen kayıt sayısı."""
+    with connect() as c:
+        recs = [r for r in rows(c.execute("SELECT * FROM recurring")) if _is_salary_recurring(r)]
+        by = {r["id"]: rows(c.execute("SELECT id, entry_date, month FROM entries WHERE recurring_id = ? "
+                                      "ORDER BY entry_date, id", (r["id"],))) for r in recs}
+    upd = []
+    for r in recs:
+        new = {e["id"]: _nearest_recurring_month(r, e["entry_date"]) for e in by[r["id"]]}
+        if len(set(new.values())) == len(new):
+            upd += [(m, eid) for eid, m in new.items() if m != next(e["month"] for e in by[r["id"]] if e["id"] == eid)]
+    if upd:
+        with connect() as c:
+            c.executemany("UPDATE entries SET month = ? WHERE id = ?", upd)
+    return len(upd)
 
 
 def suggested_cycle_day() -> int | None:
@@ -2445,7 +2513,7 @@ def recurring_dates(r: dict, month: str) -> list[str]:
     7 / 14 günde bir, dönemin içinde kalanlar (period_bounds)."""
     step = FREQ_DAYS.get(r.get("frequency") or "")
     if not step or not r.get("anchor_date"):
-        return [occurrence_date(month, day_at(r, month))]
+        return [recurring_due(r, month)]
     from datetime import date as _date, timedelta as _td
 
     from app import finance
@@ -3586,7 +3654,7 @@ def planned_amount(r: dict, month: str, overrides: dict | None = None, changes: 
             return r["amount"]
         from app.payroll import net_schedule
 
-        paid = occurrence_date(month, day_at(r, month, changes))  # maaşın o dönemde yattığı gerçek ay
+        paid = recurring_due(r, month, changes)  # maaşın o dönemde yattığı gerçek ay (önceki dönemin sonunda olabilir)
         year = int(paid[:4])
         grosses, resets = gross_schedule(r, year, changes)
         return net_schedule(year, grosses, resets)["months"][int(paid[5:7]) - 1]["net"]
@@ -3685,14 +3753,14 @@ def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, f
         or (changes[0]["gross"] if changes else 0.0)
     grosses: dict[int, float] = {}
     for m in range(1, 13):
-        period = period_of(f"{year}-{m:02d}-{min(day_at(r, f'{year}-{m:02d}', changes), 28):02d}")
+        period = salary_period_of(r, f"{year}-{m:02d}-{min(day_at(r, f'{year}-{m:02d}', changes), 28):02d}", changes)
         g = gross_at(r, period, changes)
         grosses[m] = g if g is not None else first
     # Peşin maaş (memur: ayın 15'inde o günden sonraki ay için): zam ayın 1'inde başlar, 1..(gün-1) arası eski
     # maaşla önceden ödenmiştir → aradaki fark zamlı ilk maaşa eklenir (vergiye tabi brüt olarak)
     if r.get("advance_pay"):
         day = r.get("day_of_month") or 1
-        prev_g = gross_at(r, period_of(f"{year - 1}-12-{min(day, 28):02d}"), changes) or first
+        prev_g = gross_at(r, salary_period_of(r, f"{year - 1}-12-{min(day, 28):02d}", changes), changes) or first
         for m in range(1, 13):
             base = grosses[m]
             if base > prev_g and day > 1:
@@ -3701,7 +3769,7 @@ def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, f
     resets = set()
     for ch in changes:
         if ch["reason"] == "is_degisikligi" and ch["reset_cum"]:
-            paid = occurrence_date(ch["from_month"], ch.get("pay_day") or r.get("day_of_month") or 1)
+            paid = recurring_due(r, ch["from_month"], changes)
             if int(paid[:4]) == year:
                 resets.add(int(paid[5:7]))
     return grosses, resets
@@ -6768,7 +6836,7 @@ def auto_load_wallets(today) -> int:
         for m in sorted({_shift_month(month, -1), month}):  # bir önceki dönem kaçırılmış olabilir
             if m < r["start_month"] or (r["end_month"] and m > r["end_month"]):
                 continue
-            when = occurrence_date(m, day_at(r, m))
+            when = recurring_due(r, m)
             if when > today.isoformat():
                 continue
             with connect() as c:

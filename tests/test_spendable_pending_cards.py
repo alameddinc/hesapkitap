@@ -170,8 +170,9 @@ def test_capability(client):
 # ---------------------------------------------------------------- maaş gelince (spendable_after_income)
 
 def _salary(client, amount, day=None, desc="Maaş"):
-    """Bu dönemin henüz girilmemiş sabit geliri (Özet'in "bekliyor"u)."""
-    d = day or 28
+    """Bu dönemin henüz girilmemiş sabit geliri (Özet'in "bekliyor"u). Gün 26: ay sonuna ≤5 gün kalan maaş (28'i)
+    sonraki dönemi fonlar (db.salary_lead), bu dönemin beklenen geliri olmaz."""
+    d = day or 26
     r = client.post("/api/recurring", json={"description": desc, "amount": amount, "kind": "gelir", "category": "Maaş",
                                             "day_of_month": d, "start_month": finance.add_months(finance.current_period(), -2)})
     assert r.status_code == 200, r.text

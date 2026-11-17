@@ -51,16 +51,22 @@ def test_expected_is_planlama_month_and_reconciles_with_summary(seeded, month):
     assert parts["recorded_expense"] == t["expense"] and parts["recorded_income"] == t["income"]
     assert parts["pending_installments"] == inst["expected"] > 0  # yalnız "ekstre bekliyor" kısmı
     assert parts["pending_recurring_expense"] == s["pending"]["expense"] == 20000
-    assert parts["pending_income"] == s["pending"]["income"] == 85000
+    # maaş 15'i, ay dönümü 17: maaş sonraki dönemi fonlar (db.salary_lead). 2026-11'in maaşı 15 Eki: 8 Kas'ta günü
+    # çoktan geçti → "gecikti" (beklenen gelire sayılmaz); 15 Kas maaşı 2026-12'nin
+    inc = {NOV: 0, DEC: 85000}[month]
+    assert parts["pending_income"] == s["pending"]["income"] == inc
     assert parts["pending_subscriptions"] > 0 and parts["pending_bills"] == 0
     assert money.eq(e["expense"], t["expense"] + parts["pending_expense"])
     assert money.eq(parts["pending_expense"], inst["expected"] + parts["pending_subscriptions"] + 20000)
-    assert money.eq(e["income"], t["income"] + 85000) and money.eq(e["net"], e["income"] - e["expense"])
+    assert money.eq(e["income"], t["income"] + inc) and money.eq(e["net"], e["income"] - e["expense"])
     # değişken (yeni harcama) tahmini eklenmez
     assert p["estimated"] > 0 and money.eq(e["expense"], p["expense"])
     # (i) metni yalnız olan bekleyenleri sayar
-    assert s["definitions"]["expected"] == ("Ekstresi gelmemiş kart taksitleri ve abonelikleri, girilmemiş "
-                                            "sabit giderler ve beklenen gelirler dahil tahmin; yeni harcamalar eklenmez.")
+    assert s["definitions"]["expected"] == (
+        "Ekstresi gelmemiş kart taksitleri ve abonelikleri, girilmemiş sabit giderler ve beklenen gelirler dahil "
+        "tahmin; yeni harcamalar eklenmez." if inc else
+        "Ekstresi gelmemiş kart taksitleri ve abonelikleri ve girilmemiş sabit giderler dahil tahmin; yeni harcamalar "
+        "eklenmez.")
 
 
 def test_past_period_has_no_expected(seeded):
@@ -80,7 +86,8 @@ def test_owner_text_when_only_installments_and_income(client, upload):
     assert all(r["status"] == "saved" for r in upload())
     client.post("/api/recurring", json={"description": "Maaş", "amount": 85000, "kind": "gelir", "category": "Maaş",
                                         "day_of_month": 15, "start_month": SEP})
-    parts = {**finance.expected(NOV, today=TODAY)["parts"], "pending_subscriptions": 0}
+    # 15 Kas maaşı 2026-12'yi fonlar (db.salary_lead): beklenen gelir o dönemde
+    parts = {**finance.expected(DEC, today=TODAY)["parts"], "pending_subscriptions": 0}
     assert finance._expected_text(parts) == ("Ekstresi gelmemiş kart taksitleri ve beklenen gelirler dahil "
                                              "tahmin; yeni harcamalar eklenmez.")
 
@@ -160,7 +167,9 @@ def test_totals_and_statistics_identical_with_and_without_expected(client, seede
     assert with_expected == without
     # rakamlar fikstürden (önceki sürümle alınmış değerler): Gider/Gelir/Artan aynı
     t = with_expected[f"summary {NOV}"]["totals"]
-    assert (t["expense"], t["income"], t["left"]) == (1250.5, 0.0, -1250.5)
+    # 2026-11 (17 Eki – 16 Kas) gerçek tarihle (17 Kas 2026 ve sonrası) geçmiş dönem: maaşı (15 Eki, db.salary_lead)
+    # tahmini gerçek gelir sayılır
+    assert (t["expense"], t["income"], t["left"]) == (1250.5, 85000.0, 83749.5)
     t = with_expected[f"summary {OCT}"]["totals"]
     assert (t["expense"], t["income"]) == (42735.19, 85000.0)
 

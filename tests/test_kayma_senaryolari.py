@@ -1,5 +1,6 @@
 """Hafta sonu / bayram kaymaları (maaş, kart kesimi, son ödeme, düzenli ödeme, abonelik, fatura). Ay dönümü 17:
-anahtar 2026-08 = 17 Tem – 16 Ağu. Maaş ayın 15'i → 2026-08 döneminin maaşı 15 Ağustos'tur (db.occurrence_date).
+anahtar 2026-08 = 17 Tem – 16 Ağu. Maaş ayın 15'i → dönüm gününden 2 gün önce yattığı için SONRAKİ dönemi fonlar
+(kullanıcı kararı 17.11, db.salary_lead / recurring_due): 2026-09 döneminin (17 Ağu – 16 Eyl) maaşı 15 Ağustos'tur.
 
 Kural (beklenen): bir oluşum (maaş, kira, kesim) birkaç gün erken/geç gelse de AİT OLDUĞU dönem beklenen gününün
 dönemidir; her dönem tam bir kez sayılır, "gecikti/yatmadı" uyarısı hafta sonu/bayram yüzünden erken çıkmaz.
@@ -9,7 +10,7 @@ Takvim: 15 Ağu 2026 Cumartesi (17'si Pazartesi); 13 Haz 2026 Cumartesi; 16 May 
 Cumartesi; 30 Eki 2027 Cumartesi; 15 May 2027 Cumartesi. 2027 Kurban Bayramı 16–19 Mayıs (
 Diyanet: arife 15 Mayıs, bayram 16–19 Mayıs; app/workdays.RELIGIOUS_HOLIDAYS) → ilk iş günü 20 Mayıs Perşembe.
 Bütün kişi/işyeri/tutar uydurmadır."""
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -81,11 +82,11 @@ def _stmt(db, card: str, bank: str, pe: date, due: date, total: float = 3000.0, 
 # ---------------------------------------------------------------- 1–3, 7: maaş kayması → hangi dönem
 
 @pytest.mark.parametrize("pay_date,want", [
-    pytest.param("2026-08-13", "2026-08", id="s2-erken-13-bayram"),
-    pytest.param("2026-08-17", "2026-08", id="s1-pazartesi-17-banka"),
-    pytest.param("2026-08-18", "2026-08", id="s3-uzun-bayram-18-banka"),
-    pytest.param("2027-05-14", "2027-05", id="s7-kurban-oncesi-cuma-14"),
-    pytest.param("2027-05-20", "2027-05", id="s7-kurban-sonrasi-persembe-20-banka"),
+    pytest.param("2026-08-13", "2026-09", id="s2-erken-13-bayram"),
+    pytest.param("2026-08-17", "2026-09", id="s1-pazartesi-17-banka"),
+    pytest.param("2026-08-18", "2026-09", id="s3-uzun-bayram-18-banka"),
+    pytest.param("2027-05-14", "2027-06", id="s7-kurban-oncesi-cuma-14"),
+    pytest.param("2027-05-20", "2027-06", id="s7-kurban-sonrasi-persembe-20-banka"),
 ])
 def test_bank_salary_belongs_to_expected_period(book, pay_date, want):
     _salary_rec(book)
@@ -95,8 +96,8 @@ def test_bank_salary_belongs_to_expected_period(book, pay_date, want):
 
 
 @pytest.mark.parametrize("pay_date,want", [
-    ("2026-08-13", "2026-08"), ("2026-08-17", "2026-08"), ("2026-08-18", "2026-08"),
-    ("2027-05-14", "2027-05"), ("2027-05-20", "2027-05"),
+    ("2026-08-13", "2026-09"), ("2026-08-17", "2026-09"), ("2026-08-18", "2026-09"),
+    ("2027-05-14", "2027-06"), ("2027-05-20", "2027-06"),
 ])
 def test_manual_salary_belongs_to_expected_period(book, pay_date, want):
     """Elle 'Maaş': _attach_recurring en yakın boş dönem (geçiyor — referans davranış)."""
@@ -106,17 +107,17 @@ def test_manual_salary_belongs_to_expected_period(book, pay_date, want):
 
 
 @pytest.mark.parametrize("source,late,nxt,months", [
-    pytest.param("manual", "2026-08-17", "2026-09-15", ("2026-08", "2026-09"), id="s1-elle"),
-    pytest.param("manual", "2026-08-18", "2026-09-15", ("2026-08", "2026-09"), id="s3-elle"),
-    pytest.param("bank", "2026-08-17", "2026-09-15", ("2026-08", "2026-09"), id="s1-banka"),
-    pytest.param("bank", "2026-08-18", "2026-09-15", ("2026-08", "2026-09"), id="s3-banka"),
-    pytest.param("bank", "2027-05-20", "2027-06-15", ("2027-05", "2027-06"), id="s7-banka"),
+    pytest.param("manual", "2026-08-17", "2026-09-15", ("2026-09", "2026-10"), id="s1-elle"),
+    pytest.param("manual", "2026-08-18", "2026-09-15", ("2026-09", "2026-10"), id="s3-elle"),
+    pytest.param("bank", "2026-08-17", "2026-09-15", ("2026-09", "2026-10"), id="s1-banka"),
+    pytest.param("bank", "2026-08-18", "2026-09-15", ("2026-09", "2026-10"), id="s3-banka"),
+    pytest.param("bank", "2027-05-20", "2027-06-15", ("2027-06", "2027-07"), id="s7-banka"),
 ])
 def test_each_period_exactly_one_salary(book, monkeypatch, source, late, nxt, months):
     """Geç maaş + sonraki ayın zamanında maaşı: iki dönemde de TAM BİR maaş; 'tahmini, döküm yok' yok, çift yok.
     Şu an banka yolunda: geç dönem tahmini maaş (gerçek gelire sayılır) + sonraki dönem iki gerçek maaş = 3 maaş."""
     a, b = months
-    _freeze(monkeypatch, date.fromisoformat(nxt).replace(day=25))  # ikisi de geçmiş dönem
+    _freeze(monkeypatch, date.fromisoformat(nxt).replace(day=25) + timedelta(days=31))  # ikisi de geçmiş dönem
     _salary_rec(book)
     _salary(book, late, source)
     _salary(book, nxt, source)
@@ -127,18 +128,21 @@ def test_each_period_exactly_one_salary(book, monkeypatch, source, late, nxt, mo
 
 @pytest.mark.parametrize("source", ["manual", pytest.param("bank")])
 def test_late_salary_current_period_still_expects_own_salary(book, monkeypatch, source):
-    """S1: 17 Ağu (Pzt) yatan maaş içe aktarıldı, bugün 18 Ağu (dönem 2026-09). Eylül maaşı (15 Eyl) hâlâ beklenmeli:
-    Gelir'in 'bekliyor'u, Dönem sonu (expected/forecast), Planlama satırı, 'Maaş gelince' tek maaş."""
+    """S1: 17 Ağu (Pzt) yatan maaş içe aktarıldı, bugün 18 Ağu (dönem 2026-09). 17 Ağu maaşı 2026-09'u fonlar (geç
+    yatsa da kendi dönemi); sonraki maaş (15 Eyl → 2026-10) hâlâ beklenmeli: Gelir'in 'bekliyor'u, Dönem sonu
+    (expected/forecast), Planlama satırı, 'Maaş gelince' tek maaş."""
     today = date(2026, 8, 18)
     _freeze(monkeypatch, today)
     _salary_rec(book)
     _salary(book, "2026-07-15", source)
     _salary(book, "2026-08-17", source)
     s = finance.summary("2026-09", today=today)
-    assert s["pending"]["income"] == SALARY
-    assert s["totals"]["income"] == 0
+    assert s["pending"]["income"] == 0
+    assert s["totals"]["income"] == SALARY
     assert s["expected"]["income"] == SALARY
-    plan_row = next(m for m in finance.plan(3, today=today)["months"] if m["month"] == "2026-09")
+    s = finance.summary("2026-10", today=today)
+    assert s["pending"]["income"] == SALARY and s["totals"]["income"] == 0
+    plan_row = next(m for m in finance.plan(3, today=today)["months"] if m["month"] == "2026-10")
     assert [ln["amount"] for ln in plan_row["lines"] if ln["kind"] == finance.INCOME] == [SALARY]
     sai = finance.net_worth(today)["spendable_after_income"]
     assert sai and sai["income"] == SALARY and sai["date"] == "2026-09-15"
@@ -146,14 +150,14 @@ def test_late_salary_current_period_still_expects_own_salary(book, monkeypatch, 
 
 
 def test_salary_due_saturday_not_yet_arrived_is_still_awaited(book, monkeypatch):
-    """S1 (içe aktarmadan önce): 15 Ağu Cumartesi, bugün 17 Ağu Pazartesi sabah, Ağustos maaşı henüz görünmüyor.
-    Beklenen: Ağustos maaşı 'bekliyor' (tahmini gerçek gelir değil) ve bu dönemin beklenen gelirlerinde (Maaş gelince)
-    iki maaş: bugün gelecek Ağustos + 15 Eylül."""
+    """S1 (içe aktarmadan önce): 15 Ağu Cumartesi, bugün 17 Ağu Pazartesi sabah, 15 Ağu maaşı (2026-09'u fonlar) henüz
+    görünmüyor. Beklenen: o maaş 'bekliyor' (tahmini gerçek gelir değil) ve beklenen gelirlerde (Maaş gelince) iki
+    maaş: bugün gelecek 15 Ağu + 15 Eylül (ufkun sonunda yatan 2026-10 maaşı)."""
     today = date(2026, 8, 17)
     _freeze(monkeypatch, today)
     _salary_rec(book)
     _salary(book, "2026-07-15", "bank")
-    assert _salary_counts("2026-08") == (0, 0)
+    assert _salary_counts("2026-09") == (0, 0)
     sai = finance.net_worth(today)["spendable_after_income"]
     assert sai and sai["income"] == 2 * SALARY
 
@@ -426,7 +430,9 @@ def test_month_end_cut_shift_moves_card_transactions_too(book):
 
 
 def test_measure_script_finds_wrongly_linked_salary(book):
-    """scripts/olc_maas_donem.py (salt okuma): eski kuralla sonraki döneme bağlanmış geç maaşı bulur, veriyi değiştirmez."""
+    """scripts/olc_maas_donem.py (salt okuma): güncel kurala (maaş 15'i, dönüm 17 → sonraki dönemi fonlar) göre yanlış
+    döneme bağlanmış maaşı bulur, veriyi değiştirmez. 15 Eyl maaşı 2026-09'a (17 Ağu maaşının dönemine) bağlanmış:
+    aynı dönemde iki maaş; doğrusu 2026-10."""
     import importlib.util
     from pathlib import Path
 
@@ -445,8 +451,9 @@ def test_measure_script_finds_wrongly_linked_salary(book):
     spec.loader.exec_module(mod)
     r = mod.measure(book.db_path())
     assert r["double_periods"] == 1
-    assert [(m["entry_id"], m["now"], m["new"]) for m in r["moves"]] == [(late, "2026-09", "2026-08")]
-    assert _entry(book, late)["month"] == "2026-09" and _entry(book, ok)["month"] == "2026-07"  # yazmadı
+    assert [(m["entry_id"], m["now"], m["new"]) for m in r["moves"]] == [(nxt, "2026-09", "2026-10")]
+    assert _entry(book, nxt)["month"] == "2026-09" and _entry(book, ok)["month"] == "2026-08"  # yazmadı
+    assert _entry(book, late)["month"] == "2026-09"  # geç (17 Ağu) maaş zaten doğru dönemde
 
 
 def test_next_cut_after_month_end_shift_is_same_month(book):

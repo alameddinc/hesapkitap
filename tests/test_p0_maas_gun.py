@@ -171,14 +171,15 @@ def test_family_book_two_people_salaries(owner):
 # ---------------------------------------------------------------- H2 date.today() yerine verilen gün
 
 def test_pending_recurring_uses_given_day_not_system_clock(tmpdb):
-    """Ekim maaşı 30 Eki (Cuma); 2 Kas'ta Ekim dönemi geçmiş ama maaş tolerans içinde (5 iş günü): "bekliyor".
-    Eskiden geçmiş/tolerans sistem saatine göre hesaplanırdı (16 Kas'ta tolerans bitmiş → tahmini gerçek gelir)."""
+    """Ekim maaşı 26 Eki (Pazartesi; 29 Eki bayram); 2 Kas'ta Ekim dönemi geçmiş ama maaş tolerans içinde (5 iş günü):
+    "bekliyor". Eskiden geçmiş/tolerans sistem saatine göre hesaplanırdı (16 Kas'ta tolerans bitmiş → tahmini gerçek
+    gelir). (Gün 26: 30'u maaşı artık sonraki ayı fonlar, db.salary_lead; 26'sı en uzun ayda 6 gün önce → kaymaz.)"""
     _calendar_month(tmpdb)
-    _salary(tmpdb, "Maaş", 42000.0, 30)
+    _salary(tmpdb, "Maaş", 42000.0, 26)
     day = date(2026, 11, 2)
     assert _pending_income("2026-10", day) == {"Maaş": 42000.0}
     sai = finance.net_worth(day)["spendable_after_income"]
-    assert sai["income"] == 42000.0 + 42000.0  # Ekim (bekliyor) + Kasım (30 Kas)
+    assert sai["income"] == 42000.0 + 42000.0  # Ekim (bekliyor) + Kasım (26 Kas)
     # Ekim'in kendi içinden bakınca dönem geçmiş değil: tahmin satırı yok, yalnız bekleyen
     rows = finance.pending_recurring("2026-10", tmpdb.list_recurring(), [], date(2026, 10, 20))
     assert [r.get("salary_estimate") for r in rows] == [None] and rows[0]["pending"]
@@ -216,10 +217,13 @@ def test_salary_and_rent_on_31st(tmpdb):
                             "day_of_month": 31, "start_month": "2026-09"})
     rec = tmpdb.list_recurring()
     dates = {m: {r["description"]: r["date"] for r in finance.pending_recurring(m, rec, [], date(2026, 9, 1))}
-             for m in ("2026-10", "2026-11", "2027-02")}
-    assert dates["2026-10"] == {"Maaş": "2026-10-31", "Kira": "2026-10-31"}
-    assert dates["2026-11"] == {"Maaş": "2026-11-30", "Kira": "2026-11-30"}
-    assert dates["2027-02"] == {"Maaş": "2027-02-28", "Kira": "2027-02-28"}
+             for m in ("2026-10", "2026-11", "2027-02", "2027-03")}
+    # ay sonu maaşı sonraki ayı fonlar (db.salary_lead: dönüm gününden ≤5 gün önce): Ekim'in maaşı 30 Eylül; kira
+    # (gider) tarihine göre
+    assert dates["2026-10"] == {"Maaş": "2026-09-30", "Kira": "2026-10-31"}
+    assert dates["2026-11"] == {"Maaş": "2026-10-31", "Kira": "2026-11-30"}
+    assert dates["2027-02"] == {"Maaş": "2027-01-31", "Kira": "2027-02-28"}
+    assert dates["2027-03"]["Maaş"] == "2027-02-28"
 
 
 # ---------------------------------------------------------------- H5 maaştan önce vadeli kesin ödeme
