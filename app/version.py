@@ -679,6 +679,10 @@ CAPABILITIES = (
                               # dönemin günlük medyanı (geçici patlama şişirmez). POST /api/forecast/exclude {category,
                               # until?} ("Bu ay olmayacak": until dönem sonu; yoksa "Tahmine katma" kalıcı), DELETE
                               # /api/forecast/exclude?category=… ; dışlanan kategori tahmine girmez (excluded true)
+    "summary_card_payments",  # summary.card_payments {total, count, items: [{statement_id, title, bank, card_no, amount,
+                              # paid_at, period_end, due_date, total_debt}]}: dönemde (ödeme günü dönem içinde) ödenen,
+                              # ödendi işaretli kart ekstreleri (finance.card_payments_in). BİLGİ: harcama, gelir ve
+                              # hiçbir toplam (totals, by_category, trend, budgets) değişmez
 )
 
 
