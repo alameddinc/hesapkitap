@@ -1939,7 +1939,8 @@ def _plan(months: int, today: date) -> dict:
             if r["id"] not in pend:
                 continue
             planned = pend[r["id"]]["amount"]
-            late = {k: pend[r["id"]][k] for k in ("status", "status_label", "actions")} if is_late(pend[r["id"]]) else {}
+            # gecikmiş satırda beklenen gün (date): "Yattı" onayında istemci çapa sorusunu bununla sorar (entry_anchor_conflict)
+            late = {k: pend[r["id"]][k] for k in ("status", "status_label", "actions", "date")} if is_late(pend[r["id"]]) else {}
             lines.append({"type": "sabit", "kind": r["kind"], "amount": planned,
                           "description": r["description"], "recurring_id": r["id"], "confirmed": False,
                           "custom": planned != r["amount"], "template_amount": r["amount"], "month": m, **late})

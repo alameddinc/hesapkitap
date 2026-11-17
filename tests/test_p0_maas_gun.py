@@ -348,7 +348,7 @@ def test_late_salary_status_not_in_expected_income(tmpdb):
     assert pend["income"] == 0 and pend["late_income"] == 50000.0 and pend["late_count"] == 1
     m = finance.plan(1, today=day)["months"][0]
     line = next(l for l in m["lines"] if l.get("recurring_id") == rid)
-    assert line["status"] == "gecikti" and line["amount"] == 50000.0
+    assert line["status"] == "gecikti" and line["amount"] == 50000.0 and line["date"] == "2026-11-10"
     assert m["income"] == 0 and m["parts"]["pending_income"] == 0 and "gelir" not in m["groups"]
     nw = finance.net_worth(day)
     assert nw["spendable_after_income"] is None  # Maaş gelince'de yok; next_salary_date de 10 Ara'yı esas alır

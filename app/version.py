@@ -635,7 +635,8 @@ CAPABILITIES = (
     "entry_anchor_conflict",  # hesaplı elle gelir/gider (POST /api/entries account_id) ve sabit kalem onayı (POST
                               # /api/recurring/{id}/confirm; kalemin hesabı) günü hesabın çapa günü ya da öncesiyse yanıtta
                               # anchor_conflict {account_id, name, as_of}; istek alanı in_balance (true: o bakiyede zaten var,
-                              # bakiye değişmez; false: sonra oldu, yansır). Bekleyen sabit kalem satırında account_id.
+                              # bakiye değişmez; false: sonra oldu, yansır). Bekleyen sabit kalem satırında account_id;
+                              # gecikmiş maaşın plan satırında (GET /api/plan lines, status "gecikti") beklenen gün date.
                               # Eski sunucu in_balance'ı yok sayar (istemci sormaz): ör. bakiye bugün girildi, 15'indeki maaş
                               # sonradan "yattı" denince eski kuralla bakiyede sayılır, sorulmazdı
     "debt_opening_anchor",    # hesaplı borç/alacak AÇILIŞI (POST /api/debts account_id, TL): tarih hesabın çapa günü ya da
