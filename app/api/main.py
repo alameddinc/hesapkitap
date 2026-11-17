@@ -3448,7 +3448,7 @@ def confirm_recurring(rid: int, body: RecurringAction):
     from app import sync
 
     r = _recurring_or_404(rid)
-    day = db.occurrence_date(body.month, db.day_at(r, body.month))
+    day = db.recurring_due(r, body.month)
     eid = db.create_entry({
         "entry_date": day, "month": body.month, "description": r["description"],
         "amount": body.amount if body.amount is not None else db.planned_amount(r, body.month), "kind": r["kind"],
@@ -3478,7 +3478,7 @@ def skip_recurring(rid: int, body: RecurringAction):
     """Sabit kalem bu ay olmadı (ör. psikoloğa gidilmedi)."""
     r = _recurring_or_404(rid)
     return {"id": db.create_entry({
-        "entry_date": db.occurrence_date(body.month, db.day_at(r, body.month)), "month": body.month,
+        "entry_date": db.recurring_due(r, body.month), "month": body.month,
         "description": r["description"], "amount": 0, "kind": r["kind"],
         "category": r["category"], "recurring_id": rid, "skipped": 1,
     })}

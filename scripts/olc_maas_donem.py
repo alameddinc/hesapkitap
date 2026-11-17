@@ -3,8 +3,9 @@
 fix/kayma-is-gunu öncesi link_salary_entries dökümden gelen maaşı tarihinin takvim dönemine (period_of) bağlıyordu;
 ay dönümü 17, maaş 15'i Cumartesi → 17'sinde yatan maaş SONRAKİ döneme gidiyordu (o dönem 2 maaş, önceki dönem
 "tahmini" maaş). Bu betik hiçbir şey yazmaz: veritabanını belleğe kopyalar (sqlite backup, kaynak mode=ro) ve her
-maaş kalemi için bağlı kayıtların bugünkü dönemi ile yeni kuralın (db._nearest_recurring_month, tarih sırasıyla,
-her dönem bir kez) vereceği dönemi karşılaştırır. Çıktıda tutar/açıklama yok: yalnız kayıt id, tarih, dönem.
+maaş kalemi için bağlı kayıtların bugünkü dönemi ile GÜNCEL kuralın (db._nearest_recurring_month / recurring_due,
+tarih sırasıyla, her dönem bir kez; maaş dönüm gününden ≤5 gün önce yatıyorsa sonraki dönem — 17.11) vereceği dönemi
+karşılaştırır. Maaş dönem ataması göçünün (salary_funding_v1) etkisi için: scripts/olc_maas_fonlama.py. Çıktıda tutar/açıklama yok: yalnız kayıt id, tarih, dönem.
 
 Kullanım (sunucuda, uygulama kökünde):
     python scripts/olc_maas_donem.py data/ekstre.db data/users/*/ekstre.db
@@ -65,7 +66,11 @@ def measure(path: str) -> dict:
                 continue
 
             def gap(m: str) -> int:
-                occ = date.fromisoformat(db.occurrence_date(m, db.day_at(rec, m, changes), cycle))
+                # kalemin o dönemdeki günü (db.recurring_due ile aynı kural, ay dönümü bu defterinki): maaş dönüm
+                # gününden ≤5 gün önceyse sonraki dönemi fonlar (db.salary_day_leads; kullanıcı kararı 17.11)
+                day = db.day_at(rec, m, changes)
+                pm = db._shift_month(m, -1) if db.salary_day_leads(day, cycle) else m
+                occ = date.fromisoformat(db.occurrence_date(pm, day, cycle))
                 return abs((occ - d).days)
 
             best = min(cands, key=gap)

@@ -93,14 +93,15 @@ def test_recurring_counted_once_per_period(client, tmpdb):
     tmpdb.set_cycle_start_day(17)
     rid = client.post("/api/recurring", json={"description": "Maaş", "amount": 1000, "kind": "gelir",
                                               "day_of_month": 15, "start_month": "2026-01"}).json()["id"]
-    client.post(f"/api/recurring/{rid}/confirm", json={"month": "2026-10"})
-    # geçmiş maaşlar yanlış günle (19) girildi: yine de kendi aylarına bağlanır, Ekim'e çift düşmez
+    # ay dönümü 17, maaş 15: maaş sonraki dönemi fonlar (db.salary_lead) → 2026-11'in maaşı 15 Ekim
+    client.post(f"/api/recurring/{rid}/confirm", json={"month": "2026-11"})
+    # geçmiş maaşlar yanlış günle (19) girildi: yine de kendi aylarına bağlanır, 2026-11'e çift düşmez
     for d in ("2026-09-19", "2026-08-19", "2026-07-19"):
         client.post("/api/entries", json={"entry_date": d, "description": "maaş", "amount": 1000, "kind": "gelir"})
     months = sorted(e["month"] for e in tmpdb.list_entries())
-    assert months == ["2026-07", "2026-08", "2026-09", "2026-10"]
+    assert months == ["2026-08", "2026-09", "2026-10", "2026-11"]
     assert all(e["recurring_id"] == rid for e in tmpdb.list_entries())
-    assert client.get("/api/summary", params={"month": "2026-10"}).json()["totals"]["income"] == 1000
+    assert client.get("/api/summary", params={"month": "2026-11"}).json()["totals"]["income"] == 1000
 
 
 def test_occurrence_when_salary_after_cycle_day(client, tmpdb):

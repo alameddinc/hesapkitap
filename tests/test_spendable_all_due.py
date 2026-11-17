@@ -88,9 +88,9 @@ def _bill(client, amount, due, provider="Örnek Elektrik"):
     return r.json()["id"]
 
 
-def _rent(client, amount=15000.0, desc="Kira", kind="gider"):
+def _rent(client, amount=15000.0, desc="Kira", kind="gider", day=28):
     r = client.post("/api/recurring", json={"description": desc, "amount": amount, "kind": kind, "category": "Kira",
-                                            "day_of_month": 28, "start_month": finance.add_months(finance.current_period(), -2)})
+                                            "day_of_month": day, "start_month": finance.add_months(finance.current_period(), -2)})
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -286,7 +286,8 @@ def test_forecast_relation_documented(client, tmpdb):
     _account(client)
     _bill(client, 640.0, T)
     _rent(client)
-    _rent(client, 40000.0, desc="Maaş", kind="gelir")
+    # maaş 26'sı: bu dönemin geliri (28'i ay sonuna ≤5 gün → sonraki dönemi fonlardı, db.salary_lead)
+    _rent(client, 40000.0, desc="Maaş", kind="gelir", day=26)
     nw, exp = _nw(client), _expected(client)
     # kartsız defter: forecast_net = gelir − (fatura + kira); spendable = nakit − (fatura + kira)
     assert exp["forecast_net"] == round(40000.0 - 640.0 - 15000.0, 2)
