@@ -939,6 +939,9 @@ def init_db() -> None:
             merchant_rekey.mark_book(c)
         except sqlite3.OperationalError:
             pass
+    # maaş dönem ataması (17.11): eski (önceki döneme bağlı) maaş verisi bir dönem ileri. Ay dönümü güncellemesinden ve
+    # maaş bağlamadan ÖNCE: ikisi de yeni kuralla yazar, göç eski kuralla yazılmış veriyi bekler
+    _once("salary_funding_v1", salary_funding_periods)
     auto_update_cycle()
     _ensure_imported_bank_accounts()
     _once("salary_linked_v2", link_salary_entries)
@@ -2350,6 +2353,74 @@ def reslot_salary_entries() -> int:
         with connect() as c:
             c.executemany("UPDATE entries SET month = ? WHERE id = ?", upd)
     return len(upd)
+
+
+def salary_funding_periods() -> int:
+    """GÖÇ (bir kez, _once "salary_funding_v1"; kullanıcı kararı 17.11): sonraki dönemi fonlayan maaş kalemlerinin
+    (salary_lead: maaş dönüm gününden ≤SALARY_EARLY_DAYS gün önce) dönem anahtarlı verisi bir dönem ileri. Eskiden
+    ay dönümü 17, maaş 15 → 15 Kas maaşı 2026-11'e (17 Eki – 16 Kas) bağlıydı; artık fonladığı 2026-12'nin geliri.
+    Kalem başına (yalnız o dönemdeki günü kurala giren dönemler, iş değişikliğinde gün değişebilir):
+      - bağlı kayıtlar (atlanan "bu ay yok" dahil): tarih sırasıyla yeni kuralın en yakın dönemi (_nearest_recurring_month);
+        sonuç her dönemde tek kayıt değilse (bölünmüş/ek ödeme) eski dönem + 1 (aynı yapı korunur)
+      - maaş değişikliği (zam/iş değişikliği) ve tutar değişikliği başlangıç dönemi, aya özel tutar, kalemin
+        başlangıç/bitiş dönemi: + 1 (aynı fiziksel maaşı göstersin)
+    Kart, bakiye, kayıt tarihi değişmez. Dönüş: dönemi değişen kayıt sayısı. Etkisi: scripts/olc_maas_fonlama.py."""
+    start = cycle_start_day()
+    with connect() as c:
+        recs = [r for r in rows(c.execute("SELECT * FROM recurring"))
+                if _is_salary_recurring(r) and not FREQ_DAYS.get(r.get("frequency") or "")]
+        plan = []
+        for r in recs:
+            changes = rows(c.execute("SELECT * FROM salary_changes WHERE recurring_id = ? ORDER BY from_month, id",
+                                     (r["id"],)))
+
+            def fwd(m, r=r, changes=changes):
+                return _shift_month(m, 1) if m and salary_day_leads(day_at(r, m, changes), start) else m
+
+            es = rows(c.execute("SELECT id, entry_date, month FROM entries WHERE recurring_id = ? ORDER BY entry_date, id",
+                                (r["id"],)))
+            plan.append((r, changes, fwd, es))
+    n = 0
+    for r, changes, fwd, es in plan:
+        if not any(fwd(m) != m for m in {r["start_month"], r["end_month"], *(e["month"] for e in es),
+                                          *(ch["from_month"] for ch in changes)} if m):
+            continue  # kalem hiçbir döneminde sonraki dönemi fonlamıyor
+        # yeni kural (göç sonrası anahtarlarla): kayıtların dönemi tarihten
+        moved_changes = [{**ch, "from_month": fwd(ch["from_month"])} for ch in changes]
+        rr = {**r, "start_month": fwd(r["start_month"]), "end_month": fwd(r["end_month"])}
+        by_date = {e["id"]: _nearest_recurring_month_with(rr, moved_changes, e["entry_date"]) for e in es}
+        if len(set(by_date.values())) != len(by_date):
+            by_date = {e["id"]: fwd(e["month"]) for e in es}
+        with connect() as c:
+            upd = [(m, e["id"]) for e in es if (m := by_date[e["id"]]) != e["month"]]
+            c.executemany("UPDATE entries SET month = ? WHERE id = ?", upd)
+            n += len(upd)
+            c.executemany("UPDATE salary_changes SET from_month = ? WHERE id = ?",
+                          [(fwd(ch["from_month"]), ch["id"]) for ch in changes if fwd(ch["from_month"]) != ch["from_month"]])
+            c.executemany("UPDATE recurring_changes SET from_month = ? WHERE id = ?",
+                          [(fwd(x["from_month"]), x["id"]) for x in rows(c.execute(
+                              "SELECT id, from_month FROM recurring_changes WHERE recurring_id = ?", (r["id"],)))
+                           if fwd(x["from_month"]) != x["from_month"]])
+            # aya özel tutar: anahtar (kalem, ay) birincil; sondan başa taşınır (bir sonrakinin yerine çakışmasın)
+            for (m,) in c.execute("SELECT month FROM recurring_overrides WHERE recurring_id = ? ORDER BY month DESC",
+                                  (r["id"],)).fetchall():
+                if fwd(m) != m:
+                    c.execute("UPDATE OR IGNORE recurring_overrides SET month = ? WHERE recurring_id = ? AND month = ?",
+                              (fwd(m), r["id"], m))
+            c.execute("UPDATE recurring SET start_month = ?, end_month = ? WHERE id = ?",
+                      (rr["start_month"], rr["end_month"], r["id"]))
+    return n
+
+
+def _nearest_recurring_month_with(rec: dict, changes: list[dict], d) -> str:
+    """_nearest_recurring_month, kalemin maaş değişiklikleri verilerek (göç: değişiklikler henüz yazılmadı)."""
+    from datetime import date as _date
+
+    d = _date.fromisoformat(str(d)[:10])
+
+    def gap(m):
+        return abs((_date.fromisoformat(recurring_due(rec, m, changes)) - d).days)
+    return min(_months_around(period_of(d)), key=gap)
 
 
 def suggested_cycle_day() -> int | None:
