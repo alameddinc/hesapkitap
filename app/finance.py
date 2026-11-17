@@ -302,6 +302,8 @@ def _pending_row(r: dict, month: str, overrides: dict | None = None) -> dict:
         "amount": db.planned_amount(r, month, overrides), "template_amount": r["amount"], "kind": r["kind"], "category": r["category"] or "Diğer",
         "card": None, "account": None, "bank": None, "installment": None, "fx": None,
         "note": r["note"], "recurring_id": r["id"], "pending": True, "deleted": False,
+        # kalemin hesabı (Maaş → banka): onayda (POST /api/recurring/{id}/confirm) istemci çapa sorusunu bununla sorar
+        "account_id": r.get("account_id"),
     }
 
 
