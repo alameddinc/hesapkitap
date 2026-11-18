@@ -35,10 +35,13 @@ def _num(v: str) -> float | None:
 
 def _image_text(data: bytes) -> str:
     """Ön işleme (gri, büyütme, kontrast) + Tesseract (tur+eng)."""
-    from PIL import Image, ImageOps
+    from PIL import ImageOps
 
-    im = Image.open(io.BytesIO(data))
-    im = ImageOps.exif_transpose(im).convert("L")
+    from app import images
+
+    # piksel sınırı çözmeden önce (görüntü bombası, Y1): JPEG ~2800 px'e draft ile, diğerleri çevirmeden önce küçülür
+    with images.open_limited(data, images.MAX_PIXELS, edge=1400) as src:
+        im = images.transpose_exif(src, images.reduce_native(src, 1400)).convert("L")
     if im.width < 1400:  # küçük fotoğraflarda karakterler okunaklı olsun
         k = 1400 / im.width
         im = im.resize((int(im.width * k), int(im.height * k)))

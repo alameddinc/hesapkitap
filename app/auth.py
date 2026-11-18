@@ -197,6 +197,7 @@ def set_password(uid: int, pw: str, must_change: bool = False) -> None:
     system.update_user(uid, password_hash=_hash(pw), must_change_password=int(must_change))
     system.put(f"pw_unset:{uid}", None)
     system.bump_session(uid)  # eski oturumlar düşsün
+    system.revoke_tokens(uid)  # kişisel API anahtarları da (O2)
 
 
 def username_optional() -> bool:

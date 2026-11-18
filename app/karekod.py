@@ -610,6 +610,9 @@ def pos_slip(text: str | None, categories: list[str]) -> dict | None:
 SCAN_BUDGET = 1.5  # sn: yedek okuma bütçesi (adımlar arasında denetlenir; tek çağrı ~5–70 ms)
 PDF_PAGES = 2      # PDF'te taranan ilk sayfalar
 PDF_DPI = 200
+SCAN_MAX_PIXELS = 16_000_000  # özgün fotoğraf taraması: bundan büyüğü (JPEG'de draft ile) küçültülür ya da atlanır
+# PDF sayfası: A4 200 dpi (~3,9M piksel) sığar; büyük sayfa ölçek düşürülerek çizilir (_variants 1,5× büyütür)
+PDF_SCAN_MAX_PIXELS = 4_200_000
 _PDFIUM = __import__("threading").Lock()  # pdfium çizimi iş parçacığına güvenli değil
 
 
@@ -664,35 +667,41 @@ def _scan_pil(img, deadline: float) -> list[str]:
 def scan(data: bytes | None, mime: str, original: bytes | None = None, budget: float = SCAN_BUDGET) -> list[str]:
     """Telefon karekod göndermediyse (eski uygulama, web yüklemesi, PDF) sunucuda oku: fotoğrafta önce hazırlanmış
     (1600 px) görüntü, olmazsa özgün tam çözünürlük; PDF'te ilk PDF_PAGES sayfa PDF_DPI ile çizilir. Süre sınırı
-    budget; kütüphane (zxing-cpp) yoksa ya da hata olursa []. İçerik yalnız okumada kullanılır, saklanmaz."""
-    import io
+    budget; kütüphane (zxing-cpp) yoksa ya da hata olursa []. İçerik yalnız okumada kullanılır, saklanmaz.
+    Bellek sınırı: özgün fotoğraf en çok SCAN_MAX_PIXELS, PDF sayfası en çok PDF_SCAN_MAX_PIXELS pikselle çizilir."""
     import time
 
     if not data or _zx() is None:
         return []
     deadline = time.monotonic() + budget
     try:
-        from PIL import Image, ImageOps
+        from app import images
 
         if mime.startswith("image/"):
             for raw in dict.fromkeys(x for x in (data, original) if x):  # önce küçük (hızlı), sonra özgün
                 if time.monotonic() > deadline:
                     break
-                with Image.open(io.BytesIO(raw)) as im:
-                    from app import images
-
-                    if im.width * im.height > images.MAX_PIXELS:
-                        continue
-                    got = _scan_pil(ImageOps.exif_transpose(im).convert("RGB"), deadline)
+                try:  # piksel sınırı çözmeden önce (görüntü bombası, Y1); JPEG sınıra draft ile küçültülür
+                    im = images.open_limited(raw, SCAN_MAX_PIXELS)
+                except images.ImageTooLarge:
+                    continue
+                with im:
+                    got = _scan_pil(images.transpose_exif(im, im).convert("RGB"), deadline)
                 if got:
                     return got
         elif mime == "application/pdf":
             import pypdfium2 as pdfium
 
+            pages = []
             with _PDFIUM:
                 pdf = pdfium.PdfDocument(data)
                 try:
-                    pages = [pdf[i].render(scale=PDF_DPI / 72).to_pil() for i in range(min(len(pdf), PDF_PAGES))]
+                    for i in range(min(len(pdf), PDF_PAGES)):
+                        page = pdf[i]
+                        # sayfa boyutu çizmeden önce (PDF çizim bombası, Y2): dev MediaBox bütçeye göre küçük ölçekle
+                        scale = images.pdf_scale(*page.get_size(), PDF_DPI / 72, PDF_SCAN_MAX_PIXELS)
+                        if scale is not None:
+                            pages.append(page.render(scale=scale).to_pil())
                 finally:
                     pdf.close()
             for page in pages:

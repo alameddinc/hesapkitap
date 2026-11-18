@@ -136,11 +136,13 @@ def verify(email: str, code: str) -> dict | None:
         return None
     with system.connect() as c:
         c.executescript(SCHEMA)
-        row = c.execute("SELECT code_hash, expires, tries FROM email_codes WHERE user_id = ?", (u["id"],)).fetchone()
-        if not row or row[1] < time.time() or row[2] >= MAX_TRIES:
+        # deneme hakkı ÖNCE atomik olarak ayrılır (güvenlik denetimi 18.11, D3): eşzamanlı istekler aynı sayaç değerini
+        # okuyup 5'ten fazla deneyemez. Doğru kod da bir deneme sayılır (hesap zaten doğrulanır).
+        if not c.execute("UPDATE email_codes SET tries = tries + 1 WHERE user_id = ? AND tries < ? AND expires >= ?",
+                         (u["id"], MAX_TRIES, time.time())).rowcount:
             return None
-        if not hmac.compare_digest(row[0], _digest(u["id"], code)):
-            c.execute("UPDATE email_codes SET tries = tries + 1 WHERE user_id = ?", (u["id"],))
+        row = c.execute("SELECT code_hash FROM email_codes WHERE user_id = ?", (u["id"],)).fetchone()
+        if not row or not hmac.compare_digest(row[0], _digest(u["id"], code)):
             return None
     mark_verified(u["id"])
     return u

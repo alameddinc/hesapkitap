@@ -3305,8 +3305,11 @@ def net_worth(today: date | None = None) -> dict:
     from app.bank_import import short_bank
 
     have = {a["name"] for a in accounts if a["as_of"]}
+    from app import book
+
+    # ortak defter üyesi: gizli hesabın adı "bakiyesi bilinmeyen banka" olarak da görünmez (O7)
     seen_banks = sorted(({short_bank(b) for b in db.imported_bank_names()} | {a["name"] for a in accounts if not a["as_of"]})
-                        - have - {"Banka hesabı"})
+                        - have - {"Banka hesabı"} - book.hidden_account_names())
     in_wallets = sum(w["balance"] for w in wallets)
     from app import zakat
 

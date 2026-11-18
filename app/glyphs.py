@@ -364,6 +364,8 @@ def _ocr_votes(data: bytes, password: str | None, pages: list[int], chars, boxes
 
     import pypdfium2 as pdfium
 
+    from app import images
+
     budget = _num("HESAPKITAP_GLYPH_OCR_SECONDS", 60)
     end = time.monotonic() + budget
     votes: Counter = Counter()
@@ -381,20 +383,27 @@ def _ocr_votes(data: bytes, password: str | None, pages: list[int], chars, boxes
                     left = end - time.monotonic()
                     if left <= 1:
                         break
-                    batch = pages[i:i + PARALLEL]
-                    pngs = []
-                    for k in batch:
+                    batch, pngs, scales = [], [], []
+                    for k in pages[i:i + PARALLEL]:
+                        page = pdf[k]
+                        # sayfa boyutu çizmeden önce (PDF çizim bombası, Y2): piksel bütçesine göre ölçek düşer,
+                        # anlamsız büyüklükte sayfa atlanır
+                        s = images.pdf_scale(*page.get_size(), scale)
+                        if s is None:
+                            continue
                         buf = io.BytesIO()
-                        pdf[k].render(scale=scale, grayscale=True).to_pil().save(buf, format="PNG")
+                        page.render(scale=s, grayscale=True).to_pil().save(buf, format="PNG")
+                        batch.append(k)
                         pngs.append(buf.getvalue())
+                        scales.append(s)
                     futs = [pool.submit(_ocr_words, png, left) for png in pngs]
-                    for k, f in zip(batch, futs):
+                    for k, s, f in zip(batch, scales, futs):
                         try:
                             words = f.result()
                         except subprocess.TimeoutExpired:
                             continue
                         done += 1
-                        _vote_page(words, chars[k], boxes[k], scale, reg, votes)
+                        _vote_page(words, chars[k], boxes[k], s, reg, votes)
                     if unknown <= {s for s, _ in votes}:
                         break  # bilinmeyen her glife en az bir oy: kalan sayfalar gereksiz
         finally:

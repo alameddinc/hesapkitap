@@ -29,7 +29,7 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "istatistik": ("/api/compare", "/api/year-summary", "/api/interest-history", "/api/book/member-spend"),
     "ekstreler": ("/api/statements",),
     "hesaplar": ("/api/accounts", "/api/jars", "/api/wallets", "/api/net-worth"),
-    "transferler": ("/api/transfers", "/api/dekont"),
+    "transferler": ("/api/transfers", "/api/dekont", "/api/own-transfers"),
     "borclar": ("/api/debts", "/api/debt-payments"),
     "zekat": ("/api/zakat", "/api/donations", "/api/holdings"),
     "tasarruf": ("/api/savings", "/api/goals", "/api/subscriptions", "/api/targets"),
@@ -75,7 +75,9 @@ EMPTY = {"hidden_cards": [], "hidden_accounts": [], "hide_fees": False, "hidden_
 ROLES = ("viewer", "editor", "full")
 ROLE_LABELS = {"viewer": "Sadece görür", "editor": "Görür ve ekler", "full": "Tam yetki"}
 # tam yetkili üyeye de kapalı: defterin yönetimi sahibindir
-FULL_CLOSED = ("/api/settings", "/api/admin", "/api/book/")
+# /api/imports: yükleme geri alma ham satır farkıyla çalışır (gizli kart/hesap satırları dahil); listesi gizli kartın
+# numarasını gösterir (güvenlik denetimi 18.11, O4). İstemciler bu ucu kullanmıyor.
+FULL_CLOSED = ("/api/settings", "/api/admin", "/api/book/", "/api/imports")
 # yetkisi ne olursa olsun kişinin kendi hesabıyla ilgili yazmalar
 PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"),
                    ("DELETE", r"/api/settings/tokens/\d+"), ("POST", r"/api/me/delete"), ("POST", r"/api/digest/dismiss"),
@@ -269,8 +271,83 @@ def can_see_account(aid: int) -> bool:
     return not r or aid not in set(r["hidden_accounts"])
 
 
+HIDDEN_ACCOUNT_LABEL = "Gizli hesap"  # üyeye gizli hesabın adı yerine (kumbara, net durum)
+HIDDEN_TRANSFER_LABEL = "Gizli hesapla aktarım"  # karşı bacağı gizli hesapta olan aktarımın açıklaması yerine
+
+
+def hidden_account_ids() -> set[int]:
+    r = active()
+    return set(r["hidden_accounts"]) if r else set()
+
+
+def hidden_account_names() -> set[str]:
+    """Üyeye gizli hesapların adları (sahip için boş): yanıttan ad süzmek için."""
+    ids = sorted(hidden_account_ids())
+    if not ids:
+        return set()
+    with db.connect() as c:
+        return {n for (n,) in c.execute(f"SELECT name FROM accounts WHERE id IN ({','.join('?' * len(ids))})", ids) if n}
+
+
+def _own_leg_hidden(o: dict, ids: set[int], names: set[str]) -> bool:
+    """Hesabı biliniyorsa (account_id) ona göre; bilinmiyorsa dökümün banka adı gizli hesabın adıysa gizli."""
+    from app.bank_import import short_bank
+
+    if o.get("account_id") is not None:
+        return o["account_id"] in ids
+    acc = (o.get("account") or "").strip()
+    return bool(acc) and (acc in names or short_bank(acc) in names)
+
+
+def filter_own_transfers(rows: list[dict]) -> list[dict]:
+    """Kendi hesapları arası aktarım bacakları: gizli hesabın bacağı üyeye görünmez (güvenlik denetimi 18.11, O6).
+    Karşı bacağı gizli olan görünür bacak kalır (görünen hesabın parası) ama açıklaması, dekontu ve banka metni
+    gizli hesabı anlatabileceğinden maskelenir."""
+    ids = hidden_account_ids()
+    if not ids:
+        return rows
+    names = hidden_account_names()
+    hidden_pairs = {o.get("pair_id") for o in rows if o.get("pair_id") is not None and _own_leg_hidden(o, ids, names)}
+    out = []
+    for o in rows:
+        if _own_leg_hidden(o, ids, names):
+            continue
+        if o.get("pair_id") in hidden_pairs:
+            o = {**o, "description": HIDDEN_TRANSFER_LABEL, "receipt_file": None, "raw": None, "ref": None, "note": None}
+        out.append(o)
+    return out
+
+
+def can_see_own_transfer(tid: int) -> bool:
+    """Aktarımın iki bacağı da görünürse (dekont iki bacağa ortak: biri gizliyse dekont da gizli, O5)."""
+    with db.connect() as c:
+        r = c.execute("SELECT * FROM own_transfers WHERE id = ?", (tid,)).fetchone()
+        if not r:
+            return True  # yok: uç kendi 404'ünü verir
+        legs = [dict(x) for x in c.execute("SELECT * FROM own_transfers WHERE pair_id = ?", (r["pair_id"],))] \
+            if r["pair_id"] is not None else [dict(r)]
+    return len(filter_own_transfers(legs)) == len(legs)
+
+
+def entry_sql(alias: str = "e") -> tuple[str, list]:
+    """filter_entries'in SQL karşılığı (toplama sorguları için): " AND …" ve argümanları; sahipte ("", [])."""
+    r = active()
+    if not r:
+        return "", []
+    parts, args = [f"COALESCE({alias}.hidden, 0) = 0"], []
+    if r["hidden_accounts"]:
+        parts.append(f"({alias}.account_id IS NULL OR {alias}.account_id NOT IN ({','.join('?' * len(r['hidden_accounts']))}))")
+        args += list(r["hidden_accounts"])
+    last4 = sorted(_hidden_last4(r))
+    if last4:
+        parts.append(f"NOT (COALESCE({alias}.payment, '') = 'kredi_karti' AND COALESCE({alias}.card_last4, '') "
+                     f"IN ({','.join('?' * len(last4))}))")
+        args += last4
+    return " AND " + " AND ".join(parts), args
+
+
 CAN_SEE = {"entry": can_see_entry, "txn": can_see_txn, "card": can_see_txn, "statement": can_see_statement,
-           "account": can_see_account}
+           "account": can_see_account, "own_transfer": can_see_own_transfer}
 # yoldaki id → nesne türü. Bu uçlardaki her istek (okuma ve yazma) üyenin göremediği nesnede 404 alır; uç kendi
 # kontrolünü unutsa da (ör. gizli kaydı id ile silmek) middleware'de durur.
 PATH_TARGETS = [
@@ -278,6 +355,7 @@ PATH_TARGETS = [
     (re.compile(r"/api/card-transactions/(\d+)(?:/.*)?"), "txn"),
     (re.compile(r"/api/statements/(\d+)(?:/.*)?"), "statement"),
     (re.compile(r"/api/accounts/(\d+)(?:/.*)?"), "account"),
+    (re.compile(r"/api/own-transfers/(\d+)(?:/.*)?"), "own_transfer"),
     (re.compile(r"/api/(?:splits|donations/mark)/(entry|card)/(\d+)"), None),  # tür yolda
 ]
 

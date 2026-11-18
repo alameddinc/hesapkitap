@@ -7,11 +7,14 @@ Hangi sayfa/özellik hangi pakette: CATALOG (tek tablo; yönetici panelinden de�
 Paket defter sahibinindir; ortak deftere davet edilen üye sahibin paketini kullanır (okuma sayacı kişi başı).
 Abonelik mağazadan (App Store / Google Play) RevenueCat üzerinden gelir: plan + bitiş tarihi kullanıcıya yazılır.
 """
+import logging
 import os
 import re
 from datetime import date, datetime, timezone
 
 from app import system
+
+log = logging.getLogger("ekstre.plans")
 
 FREE, PREMIUM, FAMILY, SELF = "free", "premium", "aile", "self"
 TIERS = (FREE, PREMIUM, FAMILY)  # sayfa tablosunda bir satırın açık olduğu en düşük paket
@@ -622,6 +625,10 @@ def apply_revenuecat(event: dict) -> dict:
     olay silme kaydına not düşer (app/deletion.py): ör. silinmiş hesapta yenileme = kullanıcı mağazada iptal etmemiş."""
     from app import deletion
 
+    if _sandbox(event) and not all(_sandbox_allowed(system.user(i)) for i in _event_users(event)):
+        # TestFlight / sandbox satın alımı bedavadır: yalnız yönetici ve izinli test hesaplarına uygulanır (Y3)
+        log.warning("revenuecat sandbox olayı yok sayıldı: %s %s", event.get("type"), _event_users(event))
+        return {"ignored": "sandbox"}
     if event.get("type") == "TRANSFER":  # satın alım başka hesaba taşındı (mağaza hesabı / geri yükleme)
         return _apply_transfer(event)
     uid_raw = str(event.get("app_user_id") or "")
@@ -640,6 +647,11 @@ def apply_revenuecat(event: dict) -> dict:
     exp_ms = event.get("expiration_at_ms")
     until = datetime.fromtimestamp(exp_ms / 1000, timezone.utc).isoformat(timespec="seconds") if exp_ms else None
     store = event.get("store") or u.get("plan_store")
+    if kind in END_EVENTS and _ends_before_current(u, exp_ms, event):
+        # önceki dönemin geç gelen EXPIRATION'ı: yenilenmiş (daha geç biten) paketi düşürmez (O3)
+        return {"user": u["id"], "ignored": "stale_expiration"}
+    if (kind in END_EVENTS or kind in ACTIVE_EVENTS or kind == "CANCELLATION") and not _claim_event(u, event):
+        return {"user": u["id"], "ignored": "stale"}  # daha yeni bir olay zaten uygulandı (sırasız teslim, O3)
     if kind in END_EVENTS:
         if u.get("plan_source") == "manual" and _active(u):  # yöneticinin verdiği (test) paketi mağaza bitişi silmesin
             return {"user": u["id"], "ignored": "manual"}
@@ -659,6 +671,66 @@ def apply_revenuecat(event: dict) -> dict:
         system.update_user(u["id"], plan_renews=0, plan_store=store, **({"plan_until": until} if until else {}))
         return {"user": u["id"], "until": until, "will_renew": False}
     return {"ignored": kind}
+
+
+def _sandbox(event: dict) -> bool:
+    return str(event.get("environment") or "").upper() == "SANDBOX"
+
+
+def _event_users(event: dict) -> list[int]:
+    """Olayın dokunduğu bizim kullanıcılarımız (TRANSFER: iki taraf; anonim kimlik yok sayılır)."""
+    if event.get("type") == "TRANSFER":
+        return _ids(event.get("transferred_from")) + _ids(event.get("transferred_to"))
+    return _ids([event.get("app_user_id")])
+
+
+def sandbox_testers() -> set[str]:
+    """HESAPKITAP_SANDBOX_USERS: sandbox (TestFlight) satın alımı uygulanan test hesapları; virgülle kullanıcı kimliği
+    ya da e-posta. Yönetici her zaman izinli."""
+    return {x.strip().lower() for x in os.environ.get("HESAPKITAP_SANDBOX_USERS", "").split(",") if x.strip()}
+
+
+def _sandbox_allowed(u: dict | None) -> bool:
+    if not u:
+        return True  # olmayan/silinmiş hesap: normal yol "ignored: user" der, silme kaydına not düşer
+    if u.get("role") == "admin":
+        return True
+    allow = sandbox_testers()
+    return str(u["id"]) in allow or (u.get("username") or "").lower() in allow
+
+
+def _ms(iso: str | None) -> int | None:
+    try:
+        d = datetime.fromisoformat(iso) if iso else None
+    except ValueError:
+        return None
+    if d is None:
+        return None
+    return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp() * 1000)
+
+
+def _ends_before_current(u: dict, exp_ms, event: dict) -> bool:
+    """EXPIRATION'ın bitiş anı, kullanıcının şu anki mağaza paketinin bitişinden belirgin (1 dk) önceyse True: olay
+    önceki dönemin bitişidir, arada yenileme gelmiştir. Yalnız zaman damgalı (event_timestamp_ms: RevenueCat her olayda
+    gönderir) olaya uygulanır; iade/erken bitişte RevenueCat önce CANCELLATION ile bitişi öne çeker (plan_until güncellenir),
+    EXPIRATION o bitişle gelir ve uygulanır."""
+    if u.get("plan_source") != "revenuecat" or not isinstance(exp_ms, (int, float)) \
+            or not isinstance(event.get("event_timestamp_ms"), (int, float)):
+        return False
+    cur = _ms(u.get("plan_until"))
+    return cur is not None and exp_ms < cur - 60_000
+
+
+def _claim_event(u: dict, event: dict) -> bool:
+    """event_timestamp_ms en son uygulanandan eski değilse kaydet ve True (atomik: eşzamanlı iki olaydan eskisi
+    kaybeder). Zamanı olmayan olay (eski biçim) her zaman uygulanır."""
+    ts = event.get("event_timestamp_ms")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool) or ts <= 0:
+        return True
+    with system.connect() as c:
+        n = c.execute("UPDATE users SET plan_event_ms = ? WHERE id = ? AND (plan_event_ms IS NULL OR plan_event_ms <= ?)",
+                      (int(ts), u["id"], int(ts))).rowcount
+    return n > 0
 
 
 def _end_store_plan(u: dict) -> None:
