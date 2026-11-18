@@ -145,7 +145,11 @@ def snapshot(today: date) -> dict:
     snap["owner_names"] = [_squash(n) for n in (db.owner_names() + db.card_holders()) if len(_squash(n)) >= 6]
     snap["today"] = today.isoformat()
     owners = db.owner_names()  # kart sahibi adı değil, öğrenilmiş hesap sahibi adı (lead 16.11)
+    own_sq = {_squash(n) for n in owners if len(_squash(n)) >= 6}
+    # kayıtta karşı taraf (counterparty) başka biriyse aday değil (canlı 18.11: alıcı adı dolu, sahip yalnız gönderen)
     snap["owner_party"] = [e["id"] for e in snap["entries"] if e.get("import_hash") and not e.get("not_virman")
+                           and (not e.get("counterparty") or not own_sq
+                                or db.counterparty_is_owner(e["counterparty"], own_sq, head_only=False))
                            and e["kind"] in ("gelir", "gider") and db.owner_party_transfer(
                                e.get("description") or "", e["amount"] if e["kind"] == "gelir" else -e["amount"], owners)]
     try:

@@ -162,7 +162,7 @@ def detect(cur: list[dict], prev: list[dict]) -> dict | None:
 # ---------------------------------------------------------------- projeksiyon
 
 def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None,
-          detected: dict | None) -> tuple[list[dict], dict | None]:
+          detected: dict | None, new_buys: set[str] | None = None) -> tuple[list[dict], dict | None]:
     """Kartın son ekstresinden kurulan taksit dilimleri (finance.card_projection biçimi) → (düzeltilmiş dilimler, bilgi).
     bilgi (card_projection'da early_close; istemciye card_info ile gider): kalan toplamlar ham dilimlerden (kayıt
     öncesi), etkin kayıt, ekstreden tanıma."""
@@ -176,7 +176,21 @@ def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None,
     if detected:
         verified = bool(rec and rec.get("month") and rec["month"] <= st["period"])
         info["detected"] = {"saved": detected["saved"], "verified": verified, "by_line": detected["by_line"]}
-    # kapama ayının ekstresi (ya da daha yenisi) gelene kadar etkin; araya giren ekstre kaydı düşürmez
+    # kapama ayının ekstresi (ya da daha yenisi) geldikten sonra da kayıt vade farkı/vergi dilimleri için geçerli kalır
+    # (canlı 18.11: kayıt Ekim ekstresine bağlı, Kasım ekstresi kalan vade farkı dilimlerini yine basıyor → "₺1.771
+    # ödetecek" duruyordu). Dilimler bitene ya da kayıttan sonra yeni taksitli alışveriş açılana (new_buy) dek düşer;
+    # alışveriş taksitleri ekstrenin gerçeğiyle kalır
+    if rec and rec.get("month") and rec["month"] <= st["period"] and fee:
+        # yeni alışverişin (new_buys: kayıttan sonra açılan taksitlerin installment_base'i) vade farkı kalır; açıklamadan
+        # hangisine ait olduğu anlaşılmıyorsa (genel "VADE FARKI") kayıt biter, hepsi sayılır
+        nb = new_buys or set()
+        keep = [i for i in fee if any(b in installment_base(i["description"]) for b in nb)]
+        if not nb or keep:
+            gone = [i for i in fee if i not in keep]
+            info["record"] = {"month": rec["month"], "label": month_label(rec["month"]), "amount": rec.get("amount"),
+                              "total": 0.0, "rest": 0.0, "saved": _r(sum(i["amount"] for i in gone)), "at": rec.get("at"),
+                              "after": True}
+            return [i for i in installments if not i["fee"] or i in keep], info
     active = rec and rec.get("month") and rec["month"] > st["period"]
     m = rec["month"] if active else None
     closing = [i for i in buy if m and i["month"] >= m]
@@ -230,6 +244,8 @@ def card_info(info: dict | None, bank: str | None = None) -> dict | None:
         out["record"] = {**rec, "saved": saved,
                          "text": f"Kalan taksitler {rec['label']} ekstrende tek seferde: {money.tl(rec['total'])}."
                          if money.gt(rec["total"], 0) else
+                         f"Kapattın ({rec['label']}): ekstrede basılan kalan vade farkı ve vergi dilimleri sayılmıyor."
+                         if rec.get("after") else
                          f"Kapattın: {rec['label']} ekstrenden sonra vade farkı ve vergi dilimi sayılmıyor; ekstre gelince doğrulanır.",
                          "saved_text": f"Erken kapama: {money.tl(saved)} vade farkından kurtuldun."
                          if saved is not None and money.gt(saved, 0) else None}

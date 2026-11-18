@@ -127,3 +127,35 @@ def test_single_old_question_has_no_bulk_skip(client, tmpdb):
     eid = _gider(tmpdb, a, 12)
     finance_audit.run(T)
     assert "skip_old" not in _questions(client)[eid]
+
+
+def test_named_other_receiver_is_not_asked(client, tmpdb):
+    """Canlı 18.11: dökümde alıcı adı başta ("<KİŞİ> · GIDEN FAST - <SAHİP> TARAFI …"), sahip yalnız gönderen → soru yok.
+    counterparty alanı başka biriyse de aday değil; sahibin kendi adıysa soru kalır."""
+    tmpdb.remember_owner_name(OWNER)
+    a = _acc(tmpdb, BANK_A)
+    _acc(tmpdb, BANK_B)
+    other = _gider(tmpdb, a, 3, desc=f"MEHMET DENEME · {OUT_DESC}")
+    by_cp = tmpdb.create_entry({"entry_date": (T - timedelta(days=2)).isoformat(), "description": OUT_DESC, "amount": 900.0,
+                                "kind": "gider", "category": "Kategorisiz", "payment": "havale", "account_id": a,
+                                "counterparty": "Mehmet Deneme", "import_hash": "h-cp"})
+    own = _gider(tmpdb, a, 4, 5000.0, desc=f"{OWNER} · {OUT_DESC}")
+    plain = _gider(tmpdb, a, 5, 6000.0)
+    finance_audit.run(T)
+    q = _questions(client)
+    assert other not in q and by_cp not in q
+    assert own in q and plain in q
+    assert not tmpdb.owner_party_transfer(f"MEHMET DENEME · {OUT_DESC}", -14000.0, [OWNER])
+    assert tmpdb.owner_party_transfer(OUT_DESC, -14000.0, [OWNER])
+
+
+def test_quiet_old_entries_not_counted_as_findings(client, tmpdb):
+    """kendi_adi_hareket eski kaydı quiet işaretiyle döndürür; denetim sonucu (counts/refs) ve Yapılacaklar onu saymaz."""
+    tmpdb.remember_owner_name(OWNER)
+    a = _acc(tmpdb, BANK_A)
+    _acc(tmpdb, BANK_B)
+    _gider(tmpdb, a, 40)
+    snap = finance_audit.snapshot(T)
+    assert [f.get("quiet") for f in finance_audit.kendi_adi_hareket(snap)] == [True]
+    res = finance_audit.audit(snap)
+    assert "kendi_adi_hareket" not in res["counts"] and res["quiet"] == {"kendi_adi_hareket": 1}
