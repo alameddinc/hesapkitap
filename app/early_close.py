@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from app import db, money
 from app.card_reader import installment_base, is_close_line
-from app.parsers.base import FEE, PAYMENT, PURCHASE
+from app.parsers.base import FEE, PAYMENT, PURCHASE, REFUND
 
 SETTING = "card_early_close"
 TITLE = "Taksit erken kapama"
@@ -124,10 +124,38 @@ def detect(cur: list[dict], prev: list[dict]) -> dict | None:
             closed += 1
             skip |= {t["id"] for t in same}
     if not closed and not lines:
-        return None
+        # kapama satırı bilinmeyen bir kalıpla yazılmış olabilir: kalıptan bağımsız, P'nin kalan alışveriş taksitlerinin
+        # toplamına eşit (±%1) TEK taksitsiz satır (aylık dilimin en az iki katı) da kapamadır
+        # L'de olağan sırasıyla süren alışveriş (ör. son dilimi gelen telefon 6/6) kapamaya girmez
+        def goes_on(b):
+            base = installment_base(b["description"])
+            return bool(base) and any(t["txn_type"] == PURCHASE and t["installment_no"] == b["installment_no"] + 1
+                                      and installment_base(t["description"]) == base for t in cur)
+        rest = [b for b in buys if not goes_on(b)]
+        if not rest:
+            return None
+        want = sum(_rest(b) for b in rest)
+        top = max(b["installment_left_amount"] for b in rest)
+        lump = [t for t in cur if t["txn_type"] not in (PAYMENT, REFUND) and t["installment_no"] is None and t["id"] not in skip
+                and abs(money.diff_k(t["amount"], want)) <= max(100, money.kurus(want) // 100) and t["amount"] >= 2 * top]
+        if len(lump) != 1:
+            return None
+        lines = lump
+        skip.add(lump[0]["id"])
+    # kapanan alışverişin vade farkı/vergi taksitleri L'de yine "3/6, kalan 3" diye yazılmış olabilir: kalan alışveriş
+    # taksiti kalmadıysa ya da açıklaması kapanan bir alışverişinkini içeriyorsa sonraki aylara yayılmaz
+    going = {installment_base(t["description"]) for t in cur
+             if t["txn_type"] == PURCHASE and _has_rest(t) and t["id"] not in skip}  # L'de süren alışveriş taksitleri
+    closed_bases = {installment_base(b["description"]) for b in buys} - going - {""}
+    buy_left = bool(going)
+    for t in cur:
+        if t["txn_type"] == FEE and _has_rest(t) and t["id"] not in skip and (
+                not buy_left or any(b in installment_base(t["description"]) for b in closed_bases)):
+            skip.add(t["id"])
     fee_before = sum(_rest(t) for t in prev if t["txn_type"] == FEE and _has_rest(t))
-    fee_now = sum(t["amount"] + _rest(t) for t in cur if t["txn_type"] == FEE and t["installment_no"] is not None
-                  and t["id"] not in skip)
+    # L'de bu ay kesilen vade farkı/vergi dilimi ödendi (kapanandaki de); kalanı yalnız süren taksitlerde
+    fee_now = sum(t["amount"] + (0.0 if t["id"] in skip else _rest(t)) for t in cur
+                  if t["txn_type"] == FEE and t["installment_no"] is not None)
     return {"skip_ids": skip, "closed": closed, "by_line": bool(lines), "saved": _r(max(0.0, fee_before - fee_now))}
 
 
@@ -142,7 +170,9 @@ def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None,
     fee = [i for i in installments if i["fee"]]
     info = {"card_no": card_no, "latest_period": st["period"], "period_end": st["period_end"],
             "rest": _r(sum(i["amount"] for i in buy)), "fee_left": _r(sum(i["amount"] for i in fee)),
-            "last_month": max((i["month"] for i in buy), default=None), "record": None, "detected": None}
+            # kalan alışveriş taksiti yoksa da (banka yalnız vade farkı/vergi dilimlerini yazmış) kapama girilebilsin
+            "last_month": max((i["month"] for i in buy), default=None) or max((i["month"] for i in fee), default=None),
+            "record": None, "detected": None}
     if detected:
         verified = bool(rec and rec.get("month") and rec["month"] <= st["period"])
         info["detected"] = {"saved": detected["saved"], "verified": verified, "by_line": detected["by_line"]}
@@ -150,8 +180,14 @@ def apply(card_no: str, st: dict, installments: list[dict], rec: dict | None,
     active = rec and rec.get("month") and rec["month"] > st["period"]
     m = rec["month"] if active else None
     closing = [i for i in buy if m and i["month"] >= m]
+    if m and not closing and any(i["month"] >= m for i in fee):
+        # yalnız vade farkı/vergi dilimi kalmış: kapama ayından sonrakiler düşer (tek satır yok; ödenecek alışveriş yok)
+        gone = [i for i in fee if i["month"] >= m]
+        info["record"] = {"month": m, "label": month_label(m), "amount": rec.get("amount"), "total": _r(rec.get("amount") or 0),
+                          "rest": 0.0, "saved": _r(sum(i["amount"] for i in gone)), "at": rec.get("at")}
+        return [i for i in installments if i["month"] < m], info
     if not closing:
-        return installments, info if (buy or detected) else None
+        return installments, info if (buy or fee or detected) else None
     keep = [i for i in installments if i["month"] < m]
     gone = [i for i in installments if i["month"] >= m]
     rest_buy = sum(i["amount"] for i in closing)
@@ -192,7 +228,9 @@ def card_info(info: dict | None, bank: str | None = None) -> dict | None:
     if rec:
         saved = None if hide else rec["saved"]
         out["record"] = {**rec, "saved": saved,
-                         "text": f"Kalan taksitler {rec['label']} ekstrende tek seferde: {money.tl(rec['total'])}.",
+                         "text": f"Kalan taksitler {rec['label']} ekstrende tek seferde: {money.tl(rec['total'])}."
+                         if money.gt(rec["total"], 0) else
+                         f"Kapattın: {rec['label']} ekstrenden sonra vade farkı ve vergi dilimi sayılmıyor; ekstre gelince doğrulanır.",
                          "saved_text": f"Erken kapama: {money.tl(saved)} vade farkından kurtuldun."
                          if saved is not None and money.gt(saved, 0) else None}
     if det:

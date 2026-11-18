@@ -123,9 +123,13 @@ def latest_fees(today: date | None = None) -> dict | None:
     named = [name(s) for s in latest]
     source = (f"{' · '.join(named)} {'ekstresi' if len(latest) == 1 else 'ekstreleri'}" if len(latest) <= MAX_NAMED
               else f"{len(latest)} ekstre")
+    paid = {s["id"]: finance.statement_settled(s["id"], today, real) for s in latest}
+    with_fee = [s for s in latest if money.gt(per.get(s["id"], 0.0), 0)]
     return {**fees, "state": "var" if money.gt(fees["total"], 0) else "yok", "statement_count": len(latest),
             "statements": [{"id": s["id"], "bank": s["bank"], "last4": str(s["card_no"])[-4:], "period_end": s["period_end"],
-                            "total": money.money(per.get(s["id"], 0.0))} for s in latest],
+                            "total": money.money(per.get(s["id"], 0.0)), "paid": paid[s["id"]]} for s in latest],
+            # faizli ekstrelerin hepsi ödendi: geçmiş bilgi (istemci uyarı saymaz; yetenek summary_interest_paid_flag)
+            "paid": bool(with_fee) and all(paid[s["id"]] for s in with_fee),
             "source": source}
 
 

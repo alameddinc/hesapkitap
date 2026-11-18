@@ -1247,14 +1247,19 @@ def is_safe(spec: dict) -> bool:
 # kapama satırı ("ERKEN KAPAMA", "TAKSİT KAPAMA", "KALAN TAKSİT TUTARI") ya da kalan taksitler aynı ekstrede tek tek
 # ("4/6", "5/6", "6/6"). İkisi de tek çekimdir: kalan taksit (installment_left_amount) yazılırsa Planlama ve Özet aynı
 # tutarı sonraki aylara yeniden yayar. "Kalan taksit: 3" gibi sayı bildiren satır kapama değildir (yalnız tutar/çoğul).
-_CLOSE_LINE = re.compile(r"erken\s*(?:kapa(?:ma|tma)|odeme)|taksit\w*\s*(?:islem\w*\s*)?kapa(?:ma|tma)|toplu\s*kapa(?:ma|tma)"
-                         r"|kalan\s*taksit(?:ler|\s*tutar)")
+# 18.11: bankaların öbür kalıpları da ("TAKSİTLİ İŞLEMLER TOPLU TAHSİLAT", "KALAN TAKSİT TAHSİLATI", "TAKSİT ERKEN ÖDEME",
+# "ERKEN KAPANIŞ", "TOPLU TAKSİT ÖDEMESİ"); ödeme satırı (PAYMENT) zaten dışarıda.
+_CLOSE_LINE = re.compile(r"erken\s*(?:kapa(?:ma|tma|nis|nan)|odeme|tahsil)"
+                         r"|taksit\w*\s*(?:islem\w*\s*)?(?:kapa(?:ma|tma|nis)|toplu|erken)"
+                         r"|toplu\s*(?:kapa(?:ma|tma)|taksit|odeme|tahsil)"
+                         r"|kalan\s*taksit(?:ler|\s*tutar|\w*\s*(?:tahsil|odeme|kapa))")
 _INST_MARK = re.compile(r"(?<![\d/.])\d{1,2}\s*/\s*\d{1,2}(?![\d/])|\d{1,2}\.\s*(?:taksit|iade)|son\s*taksit"
                         r"|\d{1,2}\s*[x×]\s*[\d.,]+|taksit\w*")
 
 
 def is_close_line(desc: str) -> bool:
-    """Açıklama taksit erken kapama satırı mı ("ERKEN KAPAMA", "TAKSİT KAPAMA", "KALAN TAKSİTLER", "KALAN TAKSİT TUTARI")."""
+    """Açıklama taksit erken kapama satırı mı ("ERKEN KAPAMA", "TAKSİT KAPAMA", "KALAN TAKSİTLER", "KALAN TAKSİT TUTARI",
+    "TOPLU TAHSİLAT", "TAKSİT ERKEN ÖDEME" …)."""
     return bool(_CLOSE_LINE.search(_fold(desc or "")))
 
 
