@@ -883,6 +883,7 @@ def _social_login(verify, body: SocialIn, request: Request, response: Response):
         system.update_user(u["id"], password_hash=auth._hash(secrets.token_urlsafe(32)))
         system.put(f"pw_unset:{u['id']}", "1")
         system.bump_session(u["id"])
+        system.revoke_tokens(u["id"])  # önceki sahibin açtığı kişisel API anahtarları da (O2)
         email_verify.mark_verified(u["id"])
         email_verify.notify_taken_over(u)
         u = system.user(u["id"])
@@ -1084,6 +1085,7 @@ def _register_with_code(body: RegisterIn, request: Request, ip: str) -> dict:
             # doğrulanmamış hesap (belki başkası açtı): yeni şifre, yeni kod; kodu giren (e-postanın sahibi) hesabı alır
             system.update_user(u["id"], password_hash=pw_hash)
             system.bump_session(u["id"])
+            system.revoke_tokens(u["id"])  # doğrulanmamış hesabı açanın kişisel API anahtarları da (O2)
             email_verify.send_code(u)
         elif u:
             email_verify.notify_existing(u)
@@ -1129,6 +1131,7 @@ def _register_invite_with_code(body: RegisterIn, inv: dict, request: Request) ->
             # (hesabı alan sonra davet bağlantısıyla var olan hesabıyla katılabilir: app/book_join.py)
             system.update_user(u["id"], password_hash=pw_hash)
             system.bump_session(u["id"])
+            system.revoke_tokens(u["id"])  # doğrulanmamış hesabı açanın kişisel API anahtarları da (O2)
             email_verify.send_code(u)
             return {"ok": True, "verify_required": True, "email": name}
         if u:
@@ -3522,9 +3525,18 @@ async def _quota_full(request: Request, exc: QuotaFull):
 # çalıştırır (bağlam — db.use_space — kopyalanır), olay döngüsü ve diğer kullanıcıların istekleri beklemez. Bu yüzden
 # yardımcılar da senkron: yüklenen dosya UploadFile.file (SpooledTemporaryFile) üzerinden doğrudan okunur.
 
-def _file_bytes(file: UploadFile) -> bytes:
+def _file_bytes(file: UploadFile, cap: int | None = -1) -> bytes:
+    """Yüklenen dosyanın baytları; en çok cap (varsayılan limits.max_file_bytes; None: sınırsız, yalnız yedek geri
+    yükleme) okunur: büyük dosya belleğe tamamen alınmadan 413 (güvenlik denetimi 18.11, D1)."""
     file.file.seek(0)
-    return file.file.read()
+    if cap is None:
+        return file.file.read()
+    cap = limits.max_file_bytes() if cap == -1 else cap
+    data = file.file.read(cap + 1)
+    if len(data) > cap:
+        raise limits.LimitError(f"{file.filename + ': ' if file.filename else ''}dosya çok büyük "
+                                f"(en fazla {cap // (1024 * 1024)} MB)")
+    return data
 
 
 def _doc_check(file: UploadFile, status: int = 422) -> bytes:
@@ -6854,7 +6866,11 @@ def delete_own_transfer(tid: int):
 
 @app.get("/api/own-transfers/{tid}/receipt")
 def own_transfer_receipt(tid: int):
-    """Aktarım bacağının dekontu (fotoğraf ya da PDF)."""
+    """Aktarım bacağının dekontu (fotoğraf ya da PDF). Ortak defter üyesi: bacaklardan biri gizli hesaptaysa 404 (O5)."""
+    from app import book
+
+    if not book.visible("own_transfer", tid):
+        raise HTTPException(404, "Dekont yok")
     with db.connect() as c:
         r = c.execute("SELECT id, transfer_date, receipt_file FROM own_transfers WHERE id = ?", (tid,)).fetchone()
     if not r or not r["receipt_file"]:
@@ -7026,7 +7042,7 @@ def _upload_statements(files: list[UploadFile], password: str | None, remember: 
     results = []
     tried = ([password] if password else []) + db.pdf_passwords()
     for f in files:
-        data = _file_bytes(f)
+        data = _upload_bytes(f, limits.max_file_bytes())  # en çok sınır + 1 bayt: büyük dosya aşağıda dosya başı hata
         res = {"filename": f.filename}
         name = (f.filename or "").lower()
         try:
@@ -8350,7 +8366,10 @@ def _prepare_photo(data: bytes, mime: str) -> tuple[bytes, str, bytes | None]:
 
     if not mime.startswith("image/"):
         return data, mime, None
-    small = images.prepare(data)
+    try:
+        small = images.prepare(data)
+    except images.ImageTooLarge as e:  # görüntü bombası (Y1): çözülmeden reddedilir
+        raise HTTPException(413, images.ImageTooLarge.message) from e
     if small is None:
         import logging
 
@@ -9002,16 +9021,19 @@ def _dekont_read(data: bytes, mime: str, text_hint: str = "") -> dict:
     """Dekont okuması (POST /api/dekont/parse ve belge okumasında dekont çıkan belge): yanıt parse_dekont gibi."""
     from app import dekont, dekont_parse, doc_reads
 
-    read, read_mime, photo = _prepare_photo(data, mime)
-    dfile = _store_receipt(photo) if photo else _store_dekont_pdf(data) if mime == "application/pdf" else None
     from app import doc_cache
+
+    def store(photo: bytes | None) -> str | None:
+        return _store_receipt(photo) if photo else _store_dekont_pdf(data) if mime == "application/pdf" else None
 
     hit = doc_cache.get(data, doc_cache.DEKONT)  # yapay zekâyla okunmuş alanlar (kişi/hesap eşleşmesi her seferinde)
     if hit is None:
-        try:
+        try:  # görüntü işlenmeden ÖNCE (güvenlik denetimi 18.11): hakkı biten istek ağır işi tetiklemez
             doc_reads.check(data)  # hazır sürüm: hak doluysa okunmaz; dosya saklıdır, elle girilen transfere bağlanır
         except doc_reads.QuotaError as e:
-            raise QuotaFull(502, e, dekont_file=dfile) from e
+            raise QuotaFull(502, e, dekont_file=store(_prepare_photo(data, mime)[2])) from e
+    read, read_mime, photo = _prepare_photo(data, mime)
+    dfile = store(photo)
     text = _pdf_text(data) if mime == "application/pdf" and hit is None else None
     fields, source = (hit["fields"], hit.get("source")) if hit is not None else (None, None)
     if hit is None and text and (dekont_parse.is_transfer(text) or dekont.is_dekont(text)):
@@ -9377,7 +9399,6 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     key = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in [data, *(d for d, _ in (more or []))])).digest() \
         if more else data
     need = doc_reads.weight_many([data, *(d for d, _ in more)]) if more else None
-    data, mime, photo = _prepare_photo(data, mime)
     # önbellek anahtarı telefon metnini de içerir (sonuç metne göre değişebilir: şablon, KDV/VKN yedeği); metni
     # değiştirip önbelleği atlayan okuma forget ile yeniden sayılır
     qr_part = ("\n" + "\n".join(qr)) if qr else ""  # karekod da sonucu değiştirir (yoksa anahtar eskisiyle aynı)
@@ -9388,6 +9409,13 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
     hit = doc_cache.get(ckey, doc_cache.BELGE)
     if hit is not None and hit.get("type") == "bill" and karekod.bill_without_due(dict(hit), ocr_text).get("type") != "bill":
         hit = None  # eski sürümde son ödemesiz alışveriş belgesi "fatura" okunmuş: yeniden okunur (12.11)
+    if hit is None:
+        try:  # görüntü işlenmeden ÖNCE (güvenlik denetimi 18.11): hakkı biten istek ağır işi tetiklemez
+            # tür okumadan belli değil: fotoğraf fiş sayılır (PDF belge); sayım okunan gerçek türe gider
+            doc_reads.check(key, doc_reads.guess_kind(original_mime), need)  # hazır sürüm: hak doluysa okunmaz
+        except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
+            raise QuotaFull(502, e, receipt_file=_store_receipt(_prepare_photo(data, mime)[2])) from e
+    data, mime, photo = _prepare_photo(data, mime)
     if hit is not None:  # aynı belge bu defterde okunmuştu: yapay zekâ yok
         if hit.get("type") != "bill":
             return _cached_receipt(hit, photo)
@@ -9399,11 +9427,6 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         return out
     more = [_prepare_photo(d, m)[:2] for d, m in (more or [])] or None
     cats = sorted(set(CATEGORIES) | set(EXPENSE_CATEGORIES) | set(db.known_categories()) - {"Ödeme", "Kategorisiz"})
-    try:
-        # tür okumadan belli değil: fotoğraf fiş sayılır (PDF belge); sayım okunan gerçek türe gider
-        doc_reads.check(key, doc_reads.guess_kind(original_mime), need)  # hazır sürüm: okuma hakkı doluysa okunmaz
-    except doc_reads.QuotaError as e:  # fiş fotoğrafı okunmadan saklanır: elle girilen gidere bağlanır
-        raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     doc_reads.forget(key)  # önbellekte yok: yeniden okunursa yeniden sayılır
     split = sorted({r["category"] for r in db.list_item_rules()})
     qr_by_server = False
@@ -10273,6 +10296,7 @@ WARRANTY_FULL_MSG = ("Dosya alanın doldu: belge saklanmadı. Eski belgeleri sil
 
 
 @app.post("/api/warranties/{wid}/files")
+@_heavy
 def warranty_file_add(wid: int, file: UploadFile = File(...), doc_type: str = Form("diger")):
     """Belge ekle: fotoğraf (EXIF/konum silinir, küçültülür; JPEG saklanır) ya da PDF. Ürün başına en çok
     warranty.MAX_FILES; yapay zekâ okuması yok (okuma hakkı düşmez). Alan doluysa 507."""
@@ -10286,7 +10310,10 @@ def warranty_file_add(wid: int, file: UploadFile = File(...), doc_type: str = Fo
     if data[:5] == b"%PDF-":
         name, blob = f"{db.file_hash(data)}.pdf", data
     elif mime.startswith("image/") or data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
-        blob = images.prepare(data)
+        try:
+            blob = images.prepare(data)
+        except images.ImageTooLarge as e:  # görüntü bombası (Y1)
+            raise HTTPException(413, images.ImageTooLarge.message) from e
         if blob is None:
             raise HTTPException(422, "Bu fotoğraf açılamadı; JPEG, PNG ya da PDF yükle")
         name = f"{db.file_hash(blob)}.jpg"
@@ -10330,7 +10357,7 @@ def warranty_file_delete(wid: int, fid: int):
 @_heavy
 def backup_restore(file: UploadFile = File(...), passphrase: str | None = Form(None)):
     try:
-        return backup.restore(_file_bytes(file), file.filename or "", passphrase)
+        return backup.restore(_file_bytes(file, None), file.filename or "", passphrase)
     except backup.RestoreError as e:
         raise HTTPException(422, errors.user_text(e, 422)) from e
 
@@ -10535,6 +10562,11 @@ from app.security_headers import SecurityHeaders  # noqa: E402
 
 app.add_middleware(SecurityHeaders, index_file=lambda: os.path.join(WEB_DIST, "index.html") if WEB_DIST else None,
                    site_paths=[f"/{p}" for p in SITE_PAGES])
+
+# istek gövdesi sınırı (app/body_limit.py): CORS'un içinde, 413 yanıtı da CORS başlığı alır
+from app.body_limit import BodyLimit  # noqa: E402
+
+app.add_middleware(BodyLimit)
 
 # en dışta olmalı (en son eklenen en dışta çalışır): ön istek (OPTIONS) ve 401 yanıtları da CORS başlığı alsın
 app.add_middleware(CORSMiddleware, allow_origins=APP_ORIGINS, allow_credentials=False, allow_methods=["*"],

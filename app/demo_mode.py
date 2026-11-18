@@ -22,6 +22,9 @@ COOKIE = "hk_demo"
 ANCHOR = date(2026, 10, 20)  # app.demo verisinin "bugünü": son ödemeler önümüzde, taksitler yaklaşan
 CLOSED = ("/api/statements/upload", "/api/bank-import", "/api/receipts/parse", "/api/bills/parse", "/api/share",
           "/api/documents/parse",
+          # belge/görüntü işleyen diğer uçlar (güvenlik denetimi 18.11): demoda oturumsuz ağır iş tetiklenmesin.
+          # Web dekont/sınıflandırma 403'ü "öneri yok" sayar; örnek fiş/ekstre düğmeleri (/api/demo/...) açık kalır
+          "/api/dekont/parse", "/api/documents/classify", "/api/subscriptions/apps/screenshot",
           "/api/settings", "/api/admin", "/api/book", "/api/mail", "/api/templates")
 OPEN = ("/api/book/me", "/api/feedback")  # "Sorun bildir" demoda da açık (yöneticiye gider)
 SAMPLES = {

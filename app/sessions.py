@@ -6,7 +6,7 @@ Kayan süre: son kullanımdan bu yana mobilde MOBILE_IDLE_DAYS (14), web'de WEB_
 her kullanım süreyi uzatır (yazma en fazla saatte bir). Mobil anahtarın mutlak ömrü MOBILE_MAX_DAYS (180).
 
 Bu tablodan önce verilmiş anahtar (satırı yok) ilk kullanımda listeye eklenir; çıkış onu da kapatır (satır iptal
-olarak kalır, yeniden canlanmaz). "Tümünden çık" ayrıca oturum sürümünü artırır: hiç kullanılmamış eski anahtarlar da düşer.
+olarak kalır, yeniden canlanmaz; gece temizliği iptal satırını anahtarın mutlak ömrü bitene kadar silmez). "Tümünden çık" ayrıca oturum sürümünü artırır: hiç kullanılmamış eski anahtarlar da düşer.
 """
 import hashlib
 import os
@@ -147,6 +147,7 @@ def revoke_all(uid: int) -> int:
         _ensure(c)
         n = c.execute("UPDATE sessions SET revoked = 1 WHERE user_id = ? AND revoked = 0", (uid,)).rowcount
     system.bump_session(uid)  # satırı olmayan (hiç kullanılmamış eski) anahtarlar da düşsün
+    system.revoke_tokens(uid)  # kişisel API anahtarları (hk_…) da: "tümünden çık" hepsini kapatır (O2)
     return n
 
 
@@ -172,9 +173,12 @@ def listing(uid: int, current_nonce: str | None) -> list[dict]:
 
 
 def cleanup(days: int = 200) -> int:
-    """İptal edilmiş ya da çok eski satırlar (gece işi)."""
-    cut = time.time() - days * 86400
+    """Çok eski satırlar (gece işi). İptal edilmiş satır "mezar taşı" olarak, ondan çıkmış her anahtarın mutlak ömrü
+    (en çok MOBILE_MAX_DAYS, oluşturulduğu andan) bitene kadar KALIR: satırı olmayan anahtar "tablo öncesi eski
+    oturum" sayılıp kabul edildiğinden, çıkış yapılmış ya da boşta süresi dolmuş anahtarın satırı silinirse anahtar
+    yeniden canlanıyordu (güvenlik denetimi 18.11, O1). created_at, anahtarın verildiği an (eski anahtarda ilk görülme,
+    yani verildiği andan sonra): bundan MOBILE_MAX_DAYS + 1 gün geçmiş satırın anahtarı her durumda süresi dolmuştur."""
+    keep = max(days, MOBILE_MAX_DAYS + 1) * 86400
     with _c() as c:
         _ensure(c)
-        return c.execute("DELETE FROM sessions WHERE last_seen < ? OR (revoked = 1 AND last_seen < ?)",
-                         (cut, time.time() - 30 * 86400)).rowcount
+        return c.execute("DELETE FROM sessions WHERE created_at < ?", (time.time() - keep,)).rowcount

@@ -4739,9 +4739,13 @@ def transfers_overview(month: str | None = None, start: str | None = None, end: 
 
     from app.textnorm import normalize
 
+    from app import book
+
     if month:
         start, end = f"{month}-01", f"{month}-31"
-    where, args = "e.counterparty IS NOT NULL", []
+    # ortak defter üyesi: gizli hesap/kart ve gizli işaretli kayıtlar toplamlara da girmez (güvenlik denetimi 18.11, O6)
+    hide_sql, hide_args = book.entry_sql("e")
+    where, args = "e.counterparty IS NOT NULL" + hide_sql, list(hide_args)
     if start:
         where, args = where + " AND e.entry_date >= ?", [*args, start]
     if end:
@@ -4757,7 +4761,7 @@ def transfers_overview(month: str | None = None, start: str | None = None, end: 
                       cp.category AS category, COALESCE(cp.track_debt, 0) AS track_debt
                FROM entries e LEFT JOIN counterparties cp ON cp.name = e.counterparty
                WHERE {where} GROUP BY e.counterparty ORDER BY sent + received DESC""", args))
-        own = rows(c.execute("SELECT * FROM own_transfers ORDER BY transfer_date DESC"))
+        own = book.filter_own_transfers(rows(c.execute("SELECT * FROM own_transfers ORDER BY transfer_date DESC")))
         items = rows(c.execute(
             "SELECT id, entry_date, description, amount, kind, category, counterparty, note, account_id FROM entries e "
             f"WHERE {where} ORDER BY entry_date DESC", args))
@@ -4765,7 +4769,7 @@ def transfers_overview(month: str | None = None, start: str | None = None, end: 
             "SELECT counterparty AS name, substr(entry_date, 1, 7) AS month, "
             "ROUND(SUM(CASE WHEN kind = 'gider' THEN amount ELSE 0 END), 2) AS sent, "
             "ROUND(SUM(CASE WHEN kind = 'gelir' THEN amount ELSE 0 END), 2) AS received, COUNT(*) AS count "
-            "FROM entries WHERE counterparty IS NOT NULL GROUP BY 1, 2 ORDER BY 2 DESC"))
+            f"FROM entries e WHERE counterparty IS NOT NULL{hide_sql} GROUP BY 1, 2 ORDER BY 2 DESC", hide_args))
     self_items = [i for i in items if is_self(i["counterparty"])]
     people = [p for p in people if not is_self(p["name"])]
     items = [i for i in items if not is_self(i["counterparty"])]
@@ -6445,7 +6449,10 @@ def _targets_to_jars(c) -> None:
 
 
 def list_jars(today: date | None = None, include_closed: bool = True) -> list[dict]:
+    from app import book
+
     today = today or date.today()
+    hidden_accs = book.hidden_account_ids()
     with connect() as c:
         _targets_to_jars(c)
         for j in rows(c.execute("SELECT * FROM jars WHERE closed_at IS NULL")):
@@ -6464,6 +6471,8 @@ def list_jars(today: date | None = None, include_closed: bool = True) -> list[di
             inside = sum(m["amount"] for m in j["moves"] if not m.get("outside"))
             j["in_accounts"] = round(min(max(0.0, inside), max(0.0, j["balance"])), 2)
             j["people"] = rows(c.execute("SELECT * FROM jar_people WHERE jar_id = ? ORDER BY sort, id", (j["id"],)))
+            if j.get("account_id") in hidden_accs:  # ortak defter üyesi: gizli hesabın adı görünmez (O7)
+                j["account_name"] = book.HIDDEN_ACCOUNT_LABEL
             if j["people"]:
                 j["share_changes"] = rows(c.execute("SELECT person_id, from_month, share FROM jar_share_changes WHERE jar_id = ?",
                                                     (j["id"],)))

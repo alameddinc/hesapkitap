@@ -486,7 +486,9 @@ def _migrate(c) -> None:
     # plan_env: RevenueCat environment (PRODUCTION | SANDBOX) — Ölçüm'de test abonelikleri gelire sayılmasın
     for col, typ in (("deleted_at", "TEXT"), ("delete_after", "TEXT"), ("deleted_with", "INTEGER"),
                      ("plan_renews", "INTEGER"), ("plan_store", "TEXT"), ("plan_trial", "INTEGER"),
-                     ("plan_product", "TEXT"), ("plan_env", "TEXT")):
+                     ("plan_product", "TEXT"), ("plan_env", "TEXT"),
+                     # son uygulanan RevenueCat olayının zamanı (event_timestamp_ms): sırasız gelen eski olay yok sayılır
+                     ("plan_event_ms", "INTEGER")):
         if col not in have:
             _alter(c, f"ALTER TABLE users ADD COLUMN {col} {typ}")
     # sayılmış belgenin türü (belge | fis); eski kayıtlarda NULL
@@ -979,6 +981,14 @@ def tokens(uid: int) -> list[dict]:
 def delete_token(uid: int, tid: int) -> bool:
     with connect() as c:
         return c.execute("DELETE FROM api_tokens WHERE id = ? AND user_id = ?", (tid, uid)).rowcount > 0
+
+
+def revoke_tokens(uid: int) -> int:
+    """Kullanıcının bütün kişisel API anahtarlarını (hk_…) sil: şifre değişimi/sıfırlama, "tümünden çık" ve hesabı
+    e-postanın sahibine geri veren akışlar (güvenlik denetimi 18.11, O2: hesabı ele geçiren birinin açtığı anahtar
+    kurban şifresini değiştirdikten sonra da çalışıyordu). Dönen: silinen anahtar sayısı."""
+    with connect() as c:
+        return c.execute("DELETE FROM api_tokens WHERE user_id = ?", (uid,)).rowcount
 
 
 def token_owner(token: str) -> dict | None:
