@@ -174,3 +174,51 @@ def test_capability(client):
     assert "interest_settled" in caps and "finance_audit_own_context" in caps
 
 
+
+
+# ---------------------------------------------------------------- kayıt sonraki ekstrelerde de geçerli (lead 18.11, canlı)
+
+def test_record_on_october_still_prints_fee_in_november_no_warning(client, card):
+    """Kayıt Ekim ekstresine (kapama Kasım); Kasım ekstresi kapama satırı yok ama kalan vade farkı/BSMV dilimlerini yine
+    basıyor → uyarı yok, dilimler yayılmaz."""
+    assert _put(client, "2026-11").status_code == 200
+    card.save_statement(b"st-kasim", "kasim.pdf", _st(L_END, [
+        _t("ORNEK MOBILYA 3/6 TAKSIT", 1000.0, no=3, left=3, per=1000.0),
+        _t("VADE FARKI ORNEK MOBILYA 3/6", 150.0, FEE, no=3, left=3, per=150.0),
+        _t("BSMV ORNEK MOBILYA 3/6", 22.5, FEE, no=3, left=3, per=22.5),
+    ]))
+    assert not any(i["fee"] for i in _proj()["installments"])
+    assert not _vf(today=TODAY) and not _vf("2026-12", today=TODAY)
+    assert not any(t["key"] == "erken_kapat" for t in client.get("/api/interest").json()["tips"])
+    # bir sonraki ekstre de basarsa yine yayılmaz
+    card.save_statement(b"st-aralik", "aralik.pdf", _st(date(2026, 12, 15), [
+        _t("ORNEK MOBILYA 4/6 TAKSIT", 1000.0, no=4, left=2, per=1000.0),
+        _t("VADE FARKI ORNEK MOBILYA 4/6", 150.0, FEE, no=4, left=2, per=150.0),
+    ]))
+    assert not any(i["fee"] for i in _proj()["installments"])
+    assert not _vf("2026-12", today=date(2026, 12, 18))
+
+
+def test_new_installment_purchase_after_record_ends_it(client, card):
+    """Kayıttan sonra yeni taksitli alışveriş açıldı: yeni vade farkı gerçektir, yeniden sayılır."""
+    _put(client, "2026-11")
+    card.save_statement(b"st-kasim", "kasim.pdf", _st(L_END, [
+        _t("ORNEK BEYAZ ESYA 1/6 TAKSIT", 800.0, no=1, left=5, per=800.0, d=date(2026, 11, 2)),
+        _t("VADE FARKI ORNEK BEYAZ ESYA 1/6", 90.0, FEE, no=1, left=5, per=90.0, d=date(2026, 11, 2)),
+    ]))
+    assert sum(1 for i in _proj()["installments"] if i["fee"]) == 5
+    assert _vf("2026-12", today=TODAY)
+
+
+def test_new_purchase_keeps_only_its_own_fee(client, card):
+    """Kayıttan sonra yeni taksitli alışveriş + eski alışverişin basılmaya devam eden vade farkı: yalnız yenisininki sayılır."""
+    _put(client, "2026-11")
+    card.save_statement(b"st-kasim", "kasim.pdf", _st(L_END, [
+        _t("ORNEK MOBILYA 3/6 TAKSIT", 1000.0, no=3, left=3, per=1000.0),
+        _t("VADE FARKI ORNEK MOBILYA 3/6", 150.0, FEE, no=3, left=3, per=150.0),
+        _t("ORNEK BEYAZ ESYA 1/6 TAKSIT", 800.0, no=1, left=5, per=800.0, d=date(2026, 11, 2)),
+        _t("VADE FARKI ORNEK BEYAZ ESYA 1/6", 90.0, FEE, no=1, left=5, per=90.0, d=date(2026, 11, 2)),
+    ]))
+    fees = [i for i in _proj()["installments"] if i["fee"]]
+    assert {i["description"] for i in fees} == {"VADE FARKI ORNEK BEYAZ ESYA 1/6"} and len(fees) == 5
+    assert _summary_card(client)["early_close"]["record"]["saved"] == 450.0

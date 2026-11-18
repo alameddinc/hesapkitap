@@ -224,9 +224,16 @@ def test_normal_next_statement_not_detected(client, card):
         _t("ORNEK TELEFON 6/6", 500.0, no=6, left=0, d=date(2026, 5, 3)),
     ]))
     ec = _summary_card(client)["early_close"]
-    assert ec["detected"] is None and ec["record"] is None  # kapama ayının ekstresi geldi: kayıt devre dışı
+    # kapama ayının ekstresi geldi, tanıma yok: kayıt vade farkı/vergi dilimleri için geçerli kalır (lead 18.11, canlı:
+    # kayıttan sonraki ekstre kalan vade farkını yine basıyordu); alışveriş taksitleri ekstrenin gerçeğiyle
+    assert ec["detected"] is None and ec["record"]["after"] and ec["record"]["saved"] == 450.0
+    assert ec["record"]["text"] == "Kapattın (Kasım 2026): ekstrede basılan kalan vade farkı ve vergi dilimleri sayılmıyor."
+    assert _by_month() == {"2026-12": 1000.0, "2027-01": 1000.0, "2027-02": 1000.0}
+    assert not any(i["key"].startswith("vade_farki:") for i in finance.insights("2026-11", today=date(2026, 11, 18)))
+    # kayıt yanlışsa Geri al: dilimler yeniden yayılır
+    assert client.delete("/api/cards/early-close", params={"card_no": CARD}).status_code == 200
     assert _by_month() == {"2026-12": 1150.0, "2027-01": 1150.0, "2027-02": 1150.0}
-    assert ec["fee_left"] == 450.0 and ec["months"][0]["month"] == "2026-12"
+    assert _summary_card(client)["early_close"]["fee_left"] == 450.0
 
 
 def test_intermediate_statement_keeps_record_until_closing_month(client, card):

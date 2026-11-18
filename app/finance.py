@@ -1282,7 +1282,11 @@ def card_projection() -> dict:
                 sub["amount"] = states[m]["new_amount"]
                 sub["description"] = f"{m} (yeni paket)"
 
-        installments, close = early_close.apply(acc, st, installments, closes.get(acc), detected)
+        # kayıttan sonra açılan yeni taksitli alışveriş: kaydın vade farkı düşürmesi biter (yeni vade farkı gerçek)
+        rec = closes.get(acc)
+        new_buys = {early_close.installment_base(t["description"]) for t in cur if rec and t["txn_type"] == PURCHASE
+                    and t["installments_left"] and t["txn_date"] > rec.get("period_end", "")} - {""}
+        installments, close = early_close.apply(acc, st, installments, rec, detected, new_buys)
         out[acc] = {
             "account": acc, "bank": st["bank"], "latest_period": period,
             "next_due_date": st["next_due_date"], "next_period_end": st["next_period_end"],

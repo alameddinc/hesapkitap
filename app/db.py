@@ -3995,6 +3995,8 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
     from app import doc_footer
 
     desc = doc_footer.clean(desc)  # 'X TARAFI Sayfa No:1 / 1 Türkiye Halk Bankası A.Ş …' → 'X TARAFI'
+    if not counterparty_is_owner(desc, names):
+        return False
     n = normalize(desc)
     if not _re.search(r"\b(FAST|EFT|HAVALE)\b", n) or _INSTITUTION.search(n):
         return False
@@ -4004,6 +4006,26 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
     if sr and len(sr[1]) >= 3:
         return sr[1] in names  # alıcı okunuyor: yalnız kendisiyse
     return _names_owner(desc, sorted(names))
+
+
+def counterparty_is_owner(desc_or_name: str, names: set[str], head_only: bool = True) -> bool:
+    """Dökümde karşı tarafın adı açıklamanın başında yazılıysa ("<KİŞİ ADI> · GIDEN FAST - <SAHİP> TARAFI …"; canlı 18.11:
+    13 yanlış "kendi hesabına mı" sorusu) ya da kayıtta counterparty doluysa: o ad sahibin adı DEĞİLSE kendi hesabına
+    aktarım değildir (False). Ad yoksa ya da sahibinse True (karar öbür kurallara kalır). head_only: " · " öncesine bak."""
+    from app.bank_import import _squash
+    from app.textnorm import normalize
+
+    s = desc_or_name or ""
+    if head_only:
+        if " · " not in s:
+            return True
+        s = s.split(" · ", 1)[0]
+    if re.search(r"\b(FAST|EFT|HAVALE|TARAF\w*|GIDEN|GELEN|ODEME)\b", normalize(s)):
+        return True  # baş kısım işlem metni, ad değil
+    sq = _squash(s)
+    if len(sq) < 6:
+        return True
+    return any(n in sq or sq in n for n in names)
 
 
 def add_own_transfer(c, day: str, amount: float, account: str | None, raw: str, import_hash: str | None,
