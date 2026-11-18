@@ -63,6 +63,11 @@ RECUR_TOL = 0.02        # düzenli ödeme ↔ havale tutar toleransı
 MAX_ITEMS = 10
 VIRMAN_WAIT = 3         # tek bacaklı aktarım bu kadar gün karşı bacaksız kalırsa sorulur …
 VIRMAN_LOOKBACK = 60    # … ama bundan eskisi sorulmaz (geçmiş yığını; takip edilmeyen hesaba giden aktarımlar)
+QUESTION_DAYS = 30      # "Alıcısı okunamadı — kendi hesabına mı?" yalnız son bu kadar günün havalesi için sorulur (kullanıcı
+                        # eski dökümdeki havaleyi hatırlamıyor, 18.11); eskisi sessizce gider/gelir kalır (sonuçta quiet sayısı)
+OLD_QUESTION_DAYS = 7   # bundan eski sorular "Eskileri geç" ile topluca geçilebilir (en az iki tane varsa)
+NEAR_DAYS = 3           # soru bağlamı: öbür hesaplara bu kadar gün içinde giriş/çıkış adayı (aynı tutar) …
+NEAR_PCT = 0.10         # … ya da ±1 gün içinde tutarı en çok %10 farklı olan
 
 CODES = ("odendi_hesapsiz", "eksi_bakiye", "capa_eski", "transfer_cift", "hesapsiz_hareket", "odenmis_ekstresiz",
          "cift_satir", "harcanabilir_tutarsiz", "duzenli_bekliyor", "bakiye_yok", "virman_bekliyor", "kendi_adi_hareket")
@@ -126,8 +131,8 @@ def snapshot(today: date) -> dict:
             "txns": _q(c, "SELECT t.id, t.statement_id, t.txn_date, t.amount, t.description, t.txn_type, t.installment_no, "
                           "s.card_no FROM transactions t JOIN statements s ON s.id = t.statement_id "
                           "WHERE t.is_deleted = 0 AND COALESCE(s.source, '') <> 'excel'"),
-            "own_transfers": _q(c, "SELECT id, transfer_date, amount, account_id, account, import_hash, pair_id, source "
-                                   "FROM own_transfers"),
+            "own_transfers": _q(c, "SELECT id, transfer_date, amount, account_id, account, import_hash, pair_id, source, "
+                                   "(from_entry IS NOT NULL) AS converted FROM own_transfers"),
             # faturaya bağlı gider kayıtları: "Hesabımdan değil" (paid_via) ya da hesabı belirsiz (Özet uyarısı
             # belirsiz_odeme, db.unknown_bill_payments) — hesapsiz_hareket ikinci kez sormaz
             "bill_outside": [r[0] for r in c.execute("SELECT entry_id FROM bills WHERE entry_id IS NOT NULL")],
@@ -406,11 +411,74 @@ def _counter_leg(s: dict, e: dict) -> dict | None:
     return None
 
 
+def _near_legs(s: dict, e: dict) -> list[dict]:
+    """Soru bağlamı ("Örnek Bank'a aynı gün ₺14.000 giriş var — o mu?"): kaydın tersi yönde, BAŞKA banka/nakit hesabında
+    NEAR_DAYS gün içinde aynı tutar ya da ±1 gün içinde tutarı en çok NEAR_PCT farklı hareket (gelir/gider kaydı ya da eşsiz
+    aktarım bacağı). Tam karşı bacak (aynı tutar ±1 gün) _counter_leg'dir; buraya düşmez. En yakın 3 aday."""
+    banks = {a["id"]: a for a in s["accounts"] if (a.get("kind") or "banka") in ("banka", "nakit")}
+    d, k = _d(e["entry_date"]), money.kurus(e["amount"])
+    want = "gelir" if e["kind"] == "gider" else "gider"
+    sign = 1 if e["kind"] == "gider" else -1
+    paired = {o["pair_id"] for o in s["own_transfers"] if o.get("pair_id")}
+    cands = [(o["entry_date"], money.kurus(o["amount"]), o["account_id"], {"entry_id": o["id"]}) for o in s["entries"]
+             if o["id"] != e["id"] and o["kind"] == want and o.get("account_id") in banks and o["account_id"] != e.get("account_id")
+             and not o.get("skipped")]
+    cands += [(t["transfer_date"], sign * money.kurus(t["amount"]), t["account_id"], {"own_transfer_id": t["id"]})
+              for t in s["own_transfers"] if t.get("account_id") in banks and t["account_id"] != e.get("account_id")
+              and sign * t["amount"] > 0 and t["id"] not in paired and not t.get("pair_id")]
+    out = []
+    for day, kk, acc, ref in cands:
+        dd = _d(day)
+        if not dd:
+            continue
+        gap = abs((dd - d).days)
+        same = kk == k
+        if not ((same and gap <= NEAR_DAYS) or (gap <= 1 and k and abs(kk - k) <= k * NEAR_PCT)):
+            continue
+        out.append({"account_id": acc, "account": banks[acc]["name"], "date": str(day)[:10], "amount": money.money(kk / 100),
+                    "same_amount": same, "days": (dd - d).days, **ref})
+    out.sort(key=lambda x: (not x["same_amount"], abs(x["days"]), abs(money.kurus(x["amount"]) - k)))
+    return out[:3]
+
+
+def _prior_answers(s: dict, e: dict) -> list[dict]:
+    """Aynı tutarlı (kuruşu kuruşuna) önceki cevaplar: "Başkasına" denmiş kayıt (not_virman) ya da kayıttan aktarıma
+    çevrilmiş bacak (öbür bacağın hesabıyla). En yeni 3."""
+    k = money.kurus(e["amount"])
+    names = {a["id"]: a["name"] for a in s["accounts"]}
+    out = [{"answer": "baskasi", "date": o["entry_date"]} for o in s["entries"]
+           if o["id"] != e["id"] and o.get("not_virman") and o["kind"] == e["kind"] and money.kurus(o["amount"]) == k]
+    sign = -1 if e["kind"] == "gider" else 1
+    for t in s["own_transfers"]:
+        if t.get("converted") and money.kurus(t["amount"]) == sign * k:
+            o = next((x for x in s["own_transfers"] if x["id"] != t["id"] and x.get("pair_id") == t["id"]), None)
+            out.append({"answer": "kendi", "date": t["transfer_date"], "account_id": o and o.get("account_id"),
+                        "account": o and names.get(o.get("account_id"))})
+    out.sort(key=lambda x: str(x["date"]), reverse=True)
+    return out[:3]
+
+
 def kendi_adi_hareket(s: dict) -> list[dict]:
+    """Karşı bacak bulunduysa (kanıt) her yaşta "Aktarıma çevir"; bulunmadıysa soru yalnız son QUESTION_DAYS günün
+    kaydına sorulur, eskisi quiet (sorulmaz, gider/gelir kalır; audit sonucunda yalnız sayısı)."""
     ids = set(s.get("owner_party") or [])
-    return [{"ref": f"entry:{e['id']}", "amount": money.money(e["amount"]), "date": e["entry_date"], "kind": e["kind"],
-             "account_id": e.get("account_id"), "counter": _counter_leg(s, e)}
-            for e in s["entries"] if e["id"] in ids and not e.get("skipped") and not e.get("debt_id")]
+    today = _d(s["today"])
+    out = []
+    for e in s["entries"]:
+        if e["id"] not in ids or e.get("skipped") or e.get("debt_id"):
+            continue
+        counter = _counter_leg(s, e)
+        age = (today - _d(e["entry_date"])).days if _d(e["entry_date"]) else 0
+        f = {"ref": f"entry:{e['id']}", "amount": money.money(e["amount"]), "date": e["entry_date"], "kind": e["kind"],
+             "account_id": e.get("account_id"), "counter": counter, "age": age}
+        if not counter:
+            if age > QUESTION_DAYS:
+                f["quiet"] = True
+            else:
+                f["near"] = _near_legs(s, e)
+                f["prior"] = _prior_answers(s, e)
+        out.append(f)
+    return out
 
 
 CHECKS = {"odendi_hesapsiz": odendi_hesapsiz, "eksi_bakiye": eksi_bakiye, "capa_eski": capa_eski,
@@ -422,16 +490,21 @@ CHECKS = {"odendi_hesapsiz": odendi_hesapsiz, "eksi_bakiye": eksi_bakiye, "capa_
 def audit(snap: dict) -> dict:
     """Saf: anlık görüntüden bulgular. {day, counts, amounts, refs, findings: {kod: [...]}}."""
     findings: dict[str, list[dict]] = {}
+    quiet: dict[str, int] = {}  # sorulmayan (eski) bulgular: yalnız sayı; sayımlara, imzaya, sorun kaydına girmez
     for code, fn in CHECKS.items():
         try:
-            if got := fn(snap):
+            got = fn(snap)
+            if q := sum(1 for x in got if x.get("quiet")):
+                quiet[code] = q
+                got = [x for x in got if not x.get("quiet")]
+            if got:
                 findings[code] = got
         except Exception:  # noqa: BLE001 - bir denetimin hatası ötekileri durdurmasın
             log.exception("finans denetimi %s çalışamadı", code)
             findings.setdefault("_hata", []).append({"ref": code, "amount": 0.0})
     return {"day": snap["today"], "counts": {k: len(v) for k, v in findings.items()},
             "amounts": {k: money.money(sum(x["amount"] or 0 for x in v)) for k, v in findings.items() if k != "_hata"},
-            "refs": {k: sorted({x["ref"] for x in v}) for k, v in findings.items()}, "findings": findings}
+            "refs": {k: sorted({x["ref"] for x in v}) for k, v in findings.items()}, "findings": findings, "quiet": quiet}
 
 
 def check(today: date | None = None) -> dict:
@@ -603,12 +676,26 @@ def _item(c, code: str, f: dict) -> dict | None:
                     "entry_id": int(rest), "account_id": f.get("account_id"), "counter_account_id": cnt["account_id"],
                     **({"counter_entry_id": cnt["entry_id"]} if cnt.get("entry_id") else {}),
                     **({"counter_own_transfer_id": cnt["own_transfer_id"]} if cnt.get("own_transfer_id") else {})}
+        r = one("SELECT e.description, e.entry_date, x.name FROM entries e LEFT JOIN accounts x ON x.id = e.account_id "
+                "WHERE e.id = ?", int(rest))
+        if not r:
+            return None  # kayıt silinmiş ya da çevrilmiş: madde düşer
+        near = f.get("near") or []
+        hint = ""
+        if near:
+            n0 = near[0]
+            when = "aynı gün" if n0["days"] == 0 else f"{abs(n0['days'])} gün {'sonra' if n0['days'] > 0 else 'önce'}"
+            hint = (f" {n0['account']} hesabına {when} {_tl(n0['amount'])} giriş var — o mu?" if not gelir else
+                    f" {n0['account']} hesabından {when} {_tl(n0['amount'])} çıkış var — o mu?")
         return {**base, "severity": "info",
                 "title": f"Alıcısı okunamadı — kendi hesabın{'dan geldi' if gelir else 'a gitti'} mi?",
                 "text": f"Bu havalede alıcı okunamıyor, gönderen sensin. Kendi hesabınsa hangisi olduğunu seç; başkasınaysa "
-                        f"{'gelir' if gelir else 'gider'} olarak kalsın.",
-                "cta": "Kendi hesabım", "cta_no": "Başkasına", "route": f"islemler/m{rest}", "action": "own_question",
-                "entry_id": int(rest), "account_id": f.get("account_id")}
+                        f"{'gelir' if gelir else 'gider'} olarak kalsın.{hint}",
+                "cta": "Kendi hesabım", "cta_no": "Başkasına", "cta_unknown": "Hatırlamıyorum", "route": f"islemler/m{rest}",
+                "action": "own_question", "entry_id": int(rest), "account_id": f.get("account_id"),
+                # bağlam (yetenek finance_audit_own_context): banka satırının tam metni, gün, hesap, adaylar, önceki cevaplar
+                "description": r["description"], "date": r["entry_date"], "account": r["name"], "age_days": f.get("age"),
+                "near": near, "prior": f.get("prior") or []}
     if code == "bakiye_yok":
         return {**base, "title": "Banka hesabını ekle",
                 "text": "Hiçbir hesabın bakiyesini girmedin; Ödemelerden sonra yalnız kart borcunu ve ödemeleri düşüyor, "
@@ -636,13 +723,50 @@ def todos() -> list[dict]:
         for code, fs in r["findings"].items():
             if code not in SEVERITY:
                 continue
+            if code == "kendi_adi_hareket":  # eski kayıtta (QUESTION_DAYS) soru yok; önceki koşudan kalmış olsa da
+                fs = [f for f in fs if f.get("counter") or _age(f) <= QUESTION_DAYS]
             for f in fs[:MAX_ITEMS]:
                 try:
                     if it := _item(c, code, f):
                         out.append(it)
                 except (ValueError, TypeError):  # bozuk kimlik: madde atlanır
                     continue
+    old = old_questions(r)
+    if len(old) >= 2:  # "Eskileri geç": bir haftadan eski en az iki soru
+        for it in out:
+            if it.get("action") == "own_question":
+                it["skip_old"] = {"count": len(old), "days": OLD_QUESTION_DAYS}
     return out
+
+
+def _age(f: dict) -> int:
+    d = _d(f.get("date"))
+    return (date.today() - d).days if d else 0
+
+
+def old_questions(r: dict | None) -> list[int]:
+    """Son denetimin "Alıcısı okunamadı" sorularından (karşı bacaksız kendi_adi_hareket) OLD_QUESTION_DAYS günden eski,
+    QUESTION_DAYS içindekilerin kayıt kimlikleri (MAX_ITEMS sınırı yok)."""
+    out = []
+    for f in ((r or {}).get("findings") or {}).get("kendi_adi_hareket") or []:
+        if not f.get("counter") and OLD_QUESTION_DAYS < _age(f) <= QUESTION_DAYS:
+            try:
+                out.append(int(str(f["ref"]).split(":", 1)[1]))
+            except (ValueError, IndexError):
+                continue
+    return out
+
+
+def skip_old_questions() -> int:
+    """"Eskileri geç": bir haftadan eski "Alıcısı okunamadı" sorularının hepsi "Hatırlamıyorum" (gider/gelir kalır, bir daha
+    sorulmaz: not_virman). Yalnız son denetimin soruları; kanıtlı (karşı bacaklı) madde etkilenmez. Geçilen sayı."""
+    ids = old_questions(last())
+    if not ids:
+        return 0
+    with db.connect() as c:
+        n = c.execute(f"UPDATE entries SET not_virman = 1 WHERE kind IN ('gelir', 'gider') AND not_virman = 0 "
+                      f"AND id IN ({', '.join('?' * len(ids))})", ids).rowcount
+    return n
 
 
 def signature(r: dict | None) -> str:
@@ -746,7 +870,8 @@ def own_pair(out_id: int, in_id: int) -> dict:
 
 
 def not_own(eid: int) -> None:
-    """own_question "Başkasına": kayıt gelir/gider kalır, bir daha sorulmaz (not_virman; onarım/eşleme de taşımaz)."""
+    """own_question "Başkasına" ya da "Hatırlamıyorum": kayıt gelir/gider kalır, bir daha sorulmaz (not_virman; onarım/eşleme
+    de taşımaz)."""
     with db.connect() as c:
         if not c.execute("UPDATE entries SET not_virman = 1 WHERE id = ? AND kind IN ('gelir', 'gider')", (eid,)).rowcount:
             raise FixError("Kayıt bulunamadı")

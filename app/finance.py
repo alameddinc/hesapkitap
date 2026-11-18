@@ -2428,14 +2428,34 @@ def _pay_reason(st: dict) -> dict | None:
     return None
 
 
-def interest_alarm(month: str) -> list[dict]:
-    """Faiz alarmı: bu dönem ödenen faiz / vade farkı ve NEDENİ (geç ödeme, eksik ödeme, taksit vade farkı)."""
+def statement_settled(sid: int, today: date | None = None, statements: list[dict] | None = None) -> bool:
+    """Ekstre "geçmiş" mi: ödenmiş (Ödemeler ile aynı ölçü: _status odendi) ya da kartın daha yeni bir ekstresi kesilmiş
+    (borcu yeni ekstreye devretti). Faiz alarmı yalnız açık ekstre için uyarıdır; geçmişte Faiz sayfasında bilgi kalır."""
+    today = today or date.today()
+    sts = statements if statements is not None else db.list_statements()
+    st = next((x for x in sts if x["id"] == sid), None)
+    if not st:
+        return False
+    if any(x["card_no"] == st["card_no"] and x["period_end"] > st["period_end"] and x["period_end"] <= today.isoformat()
+           and x.get("source") != "excel" for x in sts):
+        return True
+    paid = db.statement_paid(st, today=today.isoformat())
+    return paid is not None and money.diff_k(paid, st["total_debt"] or 0) >= -1
+
+
+def interest_alarm(month: str, today: date | None = None, open_only: bool = False) -> list[dict]:
+    """Faiz alarmı: bu dönem ödenen faiz / vade farkı ve NEDENİ (geç ödeme, eksik ödeme, taksit vade farkı).
+    open_only (Özet uyarısı ve bildirim): yalnız henüz ödenmemiş, kartın son ekstresi (statement_settled değil); ödenmiş
+    ya da devretmiş ekstrenin faizi "geçmiş" bilgidir (Faiz sayfası, interest_history), uyarı olmaz."""
     from app import book
 
     if book.hide_fees():  # ortak defterde faiz gizli
         return []
     out = []
+    sts = db.list_statements() if open_only else None
     for st in db.interest_charges(month):
+        if open_only and statement_settled(st["lines"][0]["statement_id"], today, sts):
+            continue
         card = f"{st['bank']} …{st['card_no'][-4:]}"
         total = round(sum(x["amount"] for x in st["lines"]), 2)
         if total <= 0:
@@ -2685,10 +2705,13 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     statements = db.list_statements()
     p = plan(6, today=today)
 
-    # 1) Faiz
+    # 1) Faiz: yalnız açık (ödenmemiş, kartın son) ekstrenin faizi uyarıdır; ödenmiş/devretmiş ekstrenin faizi geçmiş
+    # bilgi (Faiz sayfası), uyarı da bildirim de olmaz (18.11: ödenmiş Ekim ekstresinin faizi hâlâ uyarıydı)
     fee_rows = [r for r in live if r["kind"] == FEE]
-    if fee_rows:
-        out += interest_alarm(month) or [{
+    charged = {st["lines"][0]["statement_id"] for st in db.interest_charges(month)} if fee_rows else set()
+    settled = bool(charged) and all(statement_settled(sid, today, statements) for sid in charged)
+    if fee_rows and not settled:
+        out += interest_alarm(month, today, open_only=True) or [{
             "level": "kritik", "title": f"{_tl(t['fees'])} faiz ve vergi ödedin",
             "detail": "Ekstre borcunun tamamı son ödeme tarihine kadar ödenmediğinde alışveriş faizi, geç "
                       "ödendiğinde gecikme faizi işler; üstüne BSMV ve KKDF eklenir. Asgari değil, toplam borcu öde.",
@@ -2908,12 +2931,23 @@ def insights(month: str, today: date | None = None) -> list[dict]:
     if fee_inst:
         total = sum(i["amount"] for i in fee_inst)
         months_left = len({i["month"] for i in fee_inst})
+        # kart başına kalan vade farkı: istemci uyarıda "Bunu kapattım" der (yetenek insight_early_close → Faiz sayfasında
+        # o kartın erken kapama sayfası; PUT /api/cards/early-close). Kapama kaydı / ekstreden tanıma projeksiyonu düzeltir,
+        # uyarı kendiliğinden kalkar
+        per: dict[str, dict] = {}
+        for acc in p["projection"]:
+            left = sum(i["amount"] for i in acc["installments"] if i.get("fee"))
+            if money.gt(left, 0):
+                per[acc["account"]] = {"card_no": acc["account"], "card": f"{acc['bank']} …{acc['account'][-4:]}",
+                                       "fee_left": _round(left)}
         out.append({"level": "uyari", "title": f"Taksitlendirme sana {_tl(total)} daha vade farkı ve vergi ödetecek",
                     "detail": f"Önümüzdeki {months_left} ay boyunca. Taksitli alışverişte vade farkı tutarın ~%25-35'ine "
                               f"çıkabiliyor; mümkünse tek çekim yap. Taksitleri erken kapatırsan en çok {_tl(total)} vade "
-                              "farkı ve vergi ödemezsin; kesin tutarı bankandan öğren.",
+                              "farkı ve vergi ödemezsin; kesin tutarı bankandan öğren. Kapattıysan \"Bunu kapattım\" de; "
+                              "sonraki ekstre doğrular.",
                     "filter": {"kind": FEE}, "key": f"vade_farki:{current_period(today)}:{_round(total):g}",
-                    "target": {"screen": "taksitler"}})
+                    "target": {"screen": "taksitler"}, "early_close": sorted(per.values(), key=lambda c: -c["fee_left"]),
+                    "cta_closed": "Bunu kapattım"})
 
     # 5) Biten taksitler (rahatlama)
     ending: dict[str, list] = defaultdict(list)

@@ -623,6 +623,22 @@ CAPABILITIES = (
                               # /api/finance-audit/entry-to-transfer {entry_id, account_id}; cta_no "Başkasına" → POST
                               # /api/finance-audit/not-own {entry_id}: gider kalır, bir daha sorulmaz). Bilmeyen istemci
                               # own_question'ı route ile kaydı açar. virman_bekliyor bekleme süresi 3 gün
+    "finance_audit_own_context",  # own_question yalnız son 30 günün havalesine (eskisi sorulmaz; GET /api/finance-audit
+                              # quiet {kendi_adi_hareket: n}); maddede bağlam: description (banka satırının tam metni),
+                              # date, account, age_days, near [{account_id, account, date, amount, same_amount, days,
+                              # entry_id | own_transfer_id}] (öbür hesaplarda ±3 gün aynı tutar / ±1 gün %10 yakın ters
+                              # yönlü hareket), prior [{answer kendi|baskasi, date, account_id?, account?}] (aynı tutarlı
+                              # önceki cevaplar), cta_unknown "Hatırlamıyorum" → POST /api/finance-audit/not-own {entry_id,
+                              # reason: "hatirlamiyorum"}; skip_old {count, days} (bir haftadan eski en az iki soru) →
+                              # "Eskileri geç" POST /api/finance-audit/skip-old-questions → {ok, skipped}
+    "interest_settled",       # faiz alarmı (Özet uyarısı "faiz:<kart>:<ay>", bildirim) yalnız açık ekstre için: ödenmiş ya
+                              # da yeni ekstreye devretmiş ekstrenin faizi uyarı/bildirim olmaz, Faiz sayfasında bilgi kalır;
+                              # summary.interest_latest.paid (faizli son ekstrelerin hepsi ödendi) + statements[].paid →
+                              # istemci "Son ekstrende faiz" şeridini uyarı saymaz. Vade farkı uyarısı ("vade_farki:")
+                              # early_close [{card_no, card, fee_left}] + cta_closed "Bunu kapattım" → Faiz sayfasında
+                              # kartın erken kapama sayfası (PUT /api/cards/early-close; yalnız vade farkı/vergi dilimi
+                              # kalmış kartta da). Ekstreden kapama tanıma: "TOPLU TAHSİLAT", "TAKSİT ERKEN ÖDEME" vb.
+                              # kalıplar ve kalan taksit toplamına eşit tek satır; kapanan alışverişin vade farkı dilimleri yayılmaz
     "transfer_undo",          # POST /api/finance-audit/transfer-to-entry {own_transfer_id}: entry-to-transfer'ı geri al
                               # (yanıttaki own_transfer_id). Kayıt anlık görüntüden aynen döner (aynı parmak izi, mümkünse
                               # aynı id, not_virman); çevirirken eklenen öbür bacak silinir; bakiyeler önceki hâline döner.

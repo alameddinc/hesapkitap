@@ -4003,8 +4003,11 @@ def finance_audit_items():
     {day, items: [{id, code, title, text, cta, route, action, ...}]}. Ortak defter üyesine boş."""
     from app import finance_audit
 
+    from app import book
+
     r = finance_audit.last() or {}
-    return {"day": r.get("day"), "items": finance_audit.todos()}
+    # quiet: sorulmayan eski bulgular (ör. 30 günden eski "Alıcısı okunamadı" havalesi), yalnız sayı; üyeye boş
+    return {"day": r.get("day"), "items": finance_audit.todos(), "quiet": {} if book.member() else r.get("quiet") or {}}
 
 
 class OwnPairFixIn(BaseModel):
@@ -4058,6 +4061,8 @@ class EntryToTransferIn(BaseModel):
 
 class NotOwnIn(BaseModel):
     entry_id: int
+    # "baskasina" (varsayılan) | "hatirlamiyorum": ikisi de gider/gelir bırakır, bir daha sormaz; yalnız günlüğe
+    reason: Literal["baskasina", "hatirlamiyorum"] = "baskasina"
 
 
 class ForecastExcludeIn(BaseModel):
@@ -4113,8 +4118,22 @@ def finance_audit_not_own(body: NotOwnIn):
         finance_audit.not_own(body.entry_id)
     except finance_audit.FixError as e:
         raise HTTPException(422, str(e)) from e
+    logging.getLogger("hesapkitap.api").info("finans denetimi: kendi hesabına mı sorusu cevaplandı (%s)", body.reason)
     finance_audit.run()
     return {"ok": True}
+
+
+@app.post("/api/finance-audit/skip-old-questions")
+def finance_audit_skip_old_questions():
+    """"Eskileri geç" (yetenek finance_audit_own_context): bir haftadan eski bütün "Alıcısı okunamadı — kendi hesabına mı?"
+    soruları "Hatırlamıyorum" sayılır (gider/gelir kalır, bir daha sorulmaz). {ok, skipped}. Ortak defter üyesi 403."""
+    from app import finance_audit
+
+    _own_owner_only()
+    n = finance_audit.skip_old_questions()
+    if n:
+        finance_audit.run()
+    return {"ok": True, "skipped": n}
 
 
 @app.post("/api/finance-audit/entry-to-transfer")
