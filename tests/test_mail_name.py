@@ -36,17 +36,24 @@ def on(monkeypatch):
 
 
 @pytest.fixture
-def owner(tmpdb, on):
+def owner(tmpdb, monkeypatch):
+    """Ad kurallarını elle denemek için kullanıcı özellik kapalıyken açılır (kayıtta ad verilmesin)."""
     from app import auth
 
-    return auth.create_user("deniz.kaya@ornek.com", "deniz-sifre-12345")
+    monkeypatch.delenv("HESAPKITAP_MAIL_DOMAIN", raising=False)
+    u = auth.create_user("deniz.kaya@ornek.com", "deniz-sifre-12345")
+    monkeypatch.setenv("HESAPKITAP_MAIL_DOMAIN", DOMAIN)
+    return u
 
 
 @pytest.fixture
-def other(tmpdb, on):
+def other(tmpdb, monkeypatch, owner):
     from app import auth
 
-    return auth.create_user("ozan@ornek.com", "ozan-sifre-12345")
+    monkeypatch.delenv("HESAPKITAP_MAIL_DOMAIN", raising=False)
+    u = auth.create_user("ozan@ornek.com", "ozan-sifre-12345")
+    monkeypatch.setenv("HESAPKITAP_MAIL_DOMAIN", DOMAIN)
+    return u
 
 
 # ---------------------------------------------------------------- kurallar
@@ -302,3 +309,14 @@ def test_api_rate_limit(api):
 def test_api_disabled(api, monkeypatch):
     monkeypatch.delenv("HESAPKITAP_MAIL_DOMAIN")
     assert api.get("/api/mail/name").json() == {"enabled": False}
+
+
+def test_register_gives_personal_address(tmpdb, on):
+    from app import auth, mail_name
+
+    a = auth.create_user("elif.demir@ornek.com", "elif-sifre-12345")
+    b = auth.create_user("elif.demir2@ornek.com", "elif-sifre-12345")
+    assert mail_name.current(a["id"]) == "elif"
+    assert mail_name.current(b["id"]) not in (None, "elif")
+    m = auth.create_user("uye@ornek.com", "uye-sifre-12345", member_of=a["id"])
+    assert mail_name.current(m["id"]) is None  # ortak defter üyesi: adres defter sahibinin

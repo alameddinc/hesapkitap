@@ -630,6 +630,10 @@ def create_user(username: str, password_hash: str | None, role: str = "user", ma
         c.execute("INSERT OR REPLACE INTO sys_settings (key, value) VALUES ('last_user_id', ?)", (str(uid),))
         if not main_db and not member_of:
             c.execute("UPDATE users SET db_file = ? WHERE id = ?", (os.path.join(str(uid), "ekstre.db"), uid))
+    if not main_db and not member_of:  # kişisel ekstre adresi kayıtta verilir (özellik açıksa; app/mail_name.py)
+        from app import mail_name
+
+        mail_name.auto_claim(uid, name)
     return user(uid)
 
 

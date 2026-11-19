@@ -1625,6 +1625,9 @@ def admin_update_user(uid: int, body: AdminUserPatch):
 
             until = (datetime.now(timezone.utc) + timedelta(days=body.plan_days or 90)).isoformat(timespec="seconds")
             system.update_user(uid, plan=body.plan, plan_until=until, plan_source="manual")
+            from app import premium_wait
+
+            premium_wait.release_async(uid)  # Premium bekleyen ekstreler okunsun
     return _user_row(system.user(uid))
 
 
@@ -2300,6 +2303,10 @@ async def revenuecat_webhook(request: Request):
         raise HTTPException(404, errors.GENERIC[404])
     body = await request.json()
     res = await asyncio.to_thread(plans.apply_revenuecat, body.get("event") or {})  # SQLite yazma: döngü beklemesin
+    if res.get("plan") in (plans.PREMIUM, plans.FAMILY) and res.get("user"):  # bekleyen ekstreler sırayla okunsun
+        from app import premium_wait
+
+        premium_wait.release_async(int(res["user"]))
     if res.get("ignored") != "app_user_id":  # Ölçüm: yalnız toplam (app/funnel.py), kişi yazılmaz; anonim kimlik sayılmaz
         from app import funnel
 
@@ -2495,6 +2502,39 @@ def mail_pending_reject(pid: int):
         return mail_approval.reject(pid)
     except KeyError as e:
         raise HTTPException(404, errors.GENERIC[404]) from e
+
+
+@app.get("/api/mail/waiting")
+def mail_waiting_list():
+    """Ücretsiz pakette kişisel adrese gelen, okunmadan Premium bekleyen belgeler (app/premium_wait.py). Paket artık
+    izin veriyorsa (Premium'a geçildi, olay kaçtıysa) bekleyenler arka planda okunmaya başlar."""
+    from app import inbound, premium_wait
+
+    u = db.current_user()
+    if not u:
+        return {"items": [], "count": 0}
+    items = premium_wait.items()
+    if items and plans.allows(u, "posta"):
+        premium_wait.release_async(inbound._book_user(u) if not u.get("own_book") else u["id"])
+        return {"items": [], "count": 0, "processing": True}
+    return {"items": items, "count": len(items), "keep_days": premium_wait.KEEP_DAYS}
+
+
+@app.post("/api/mail/waiting/{pid}/upload")
+def mail_waiting_upload(pid: int):
+    """"Kendim yükleyeyim": bekleyen belgeyi normal yükleme gibi oku; ücretsiz okuma hakkından düşer."""
+    from app import doc_reads, mailbox, premium_wait
+
+    u = db.current_user() or {}
+    try:
+        msg = premium_wait.self_upload(pid, u)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(402, e) from e
+    except mailbox.MailError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    return {"ok": True, "message": msg}
 
 
 @app.delete("/api/mail/gmail-confirmation")

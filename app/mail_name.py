@@ -220,3 +220,22 @@ def suggestions(username: str, display: str | None = None, book_id: int | None =
         if len(out) >= limit:
             break
     return out
+
+
+def auto_claim(book_id: int, username: str) -> str | None:
+    """Kayıtta: önerilerden ilk uygun adı ver (özellik kapalıysa ya da zaten adı varsa hiçbir şey). Hata fırlatmaz."""
+    import logging
+
+    if not enabled():
+        return None
+    try:
+        if current(book_id):
+            return None
+        for s in suggestions(username or "", book_id=book_id):
+            try:
+                return claim(book_id, s)
+            except NameError_:
+                continue
+    except Exception:  # noqa: BLE001 - kayıt bu yüzden düşmesin
+        logging.getLogger("hesapkitap.mail_name").exception("kayıtta ekstre adresi verilemedi")
+    return None

@@ -303,6 +303,23 @@ def message_key(raw: bytes, to: str) -> str:
     return f"{to.lower()}|{mid or hashlib.sha256(raw).hexdigest()}"
 
 
+def _premium_wait(msg: Message, raw: bytes, u: dict, own: bool, entry: dict, verify) -> dict | None:
+    """Ücretsiz paket, kişisel adres: bankadan gelen (imzası doğrulanmış) PDF okunmadan saklanır (app/premium_wait.py).
+    Fatura / bildirim / tanınmayan gönderen: None (eskisi gibi atlanır)."""
+    from app import mailbox, premium_wait
+
+    kind, dom = classify_sender(msg, raw, [], verify)
+    if kind != "banka":
+        return None
+    pdfs, _ = _safe_pdfs(mailbox._pdfs(msg))
+    if not pdfs:
+        return None
+    got = [premium_wait.stash(u["id"], own, n, d, dom) for n, d in pdfs]
+    premium_wait.notify_arrived(u["id"], got[0]["bank"])
+    return {**entry, "kind": "bekliyor", "status": "ok",
+            "detail": "\n".join(f"📬 {g['bank']} {g['label']} ekstresi: Premium bekliyor (okunmadı)".replace("  ", " ") for g in got)}
+
+
 def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
     """Bir maili işle. Dönen: posta günlüğü satırı (+ 'user' anahtarı yok). Adres yoksa LookupError."""
     from app import doc_reads, mail_approval, mailbox, plans
@@ -328,7 +345,8 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
         if db.mail_count_today() >= DAILY_LIMIT:  # sel: imza kontrolüne, okumaya, günlüğe hiç girme
             return {**entry, "kind": "-", "status": "skip", "detail": "Günlük posta sınırı doldu"}
         if not plans.allows(ctx, "posta"):
-            r = {**entry, "kind": "-", "status": "skip", "detail": "Postadan otomatik okuma Premium paketinde"}
+            r = _premium_wait(msg, raw, u, own, entry, verify) if personal else None
+            r = r or {**entry, "kind": "-", "status": "skip", "detail": "Postadan otomatik okuma Premium paketinde"}
             db.log_mail(r)
             return r
         kind, dom = classify_sender(msg, raw, _people_emails(u.get("member_of") or u["id"]), verify)

@@ -349,6 +349,9 @@ def run_account_purge(now: datetime) -> list[int]:
     return done
 
 
+_pw_last: datetime | None = None
+
+
 async def scheduler() -> None:
     from app import mailbox
 
@@ -378,6 +381,16 @@ async def scheduler() -> None:
                 log.info("silinmiş hesap klasörleri temizlendi: %s", removed)
         except Exception:  # noqa: BLE001
             log.exception("purge_deleted failed")
+        try:  # Premium bekleyen ekstreler: saatte bir 90 gün temizliği, 7 gün uyarısı, genel sınır (app/premium_wait.py)
+            global _pw_last
+            if _pw_last is None or (now - _pw_last).total_seconds() >= 3600:
+                _pw_last = now
+                from app import premium_wait
+
+                if got := await asyncio.to_thread(premium_wait.tick):
+                    log.info("premium bekleyen: %s", got)
+        except Exception:  # noqa: BLE001
+            log.exception("premium wait tick failed")
         try:  # dünkü/bugünkü doğruluk denetiminin yönetici özeti (yalnız sayılar), günde bir kez
             from app import integrity
 

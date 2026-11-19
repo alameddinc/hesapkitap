@@ -159,11 +159,29 @@ def _what(doc_type: str) -> str:
     return {"ekstre": "ekstresi", "dokum": "hesap dökümü", "dekont": "dekontu"}.get(doc_type, "belgesi")
 
 
+def _drop_files(files: list[str]) -> None:
+    """Bekleyen belgenin dosyasını app/storage'dan sil (aynı içerik başka bekleyen satırda yoksa)."""
+    for f in set(files):
+        with db.connect() as c:
+            _init(c)
+            if c.execute("SELECT 1 FROM mail_pending WHERE file = ?", (f,)).fetchone():
+                continue
+        try:
+            db.remove_file("uploads", f)
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger("hesapkitap.inbound").exception("onay bekleyen belge dosyası silinemedi")
+
+
 def purge(days: int = PENDING_DAYS) -> int:
     cut = (_now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     with db.connect() as c:
         _init(c)
-        return c.execute("DELETE FROM mail_pending WHERE created_at < ?", (cut,)).rowcount
+        files = [r[0] for r in c.execute("SELECT file FROM mail_pending WHERE created_at < ?", (cut,))]
+        n = c.execute("DELETE FROM mail_pending WHERE created_at < ?", (cut,)).rowcount
+    _drop_files(files)
+    return n
 
 
 def pending() -> list[dict]:
@@ -203,9 +221,11 @@ def approve(pid: int) -> dict:
     with db.connect() as c:
         same = c.execute("SELECT * FROM mail_pending WHERE ident = ? ORDER BY id", (r["ident"],)).fetchall()
         c.execute("DELETE FROM mail_pending WHERE ident = ?", (r["ident"],))
+    blobs = {x["id"]: (data if x["id"] == pid else (db.read_file("uploads", x["file"]) or b"")) for x in same}
+    _drop_files([x["file"] for x in same])
     details = []
     for x in same:
-        blob = data if x["id"] == pid else (db.read_file("uploads", x["file"]) or b"")
+        blob = blobs[x["id"]]
         if not blob:
             details.append(f"⏭ {x['filename']}: belge bulunamadı")
             continue
@@ -223,7 +243,9 @@ def reject(pid: int) -> dict:
         raise KeyError(pid)
     _add(_BLOCK, r["ident"])
     with db.connect() as c:
+        files = [x[0] for x in c.execute("SELECT file FROM mail_pending WHERE ident = ?", (r["ident"],))]
         n = c.execute("DELETE FROM mail_pending WHERE ident = ?", (r["ident"],)).rowcount
+    _drop_files(files)
     return {"ok": True, "removed": n}
 
 
