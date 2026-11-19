@@ -290,8 +290,12 @@ def mentions_bill(text: str | None) -> bool:
     return bool(re.search(_BILL_RE, t) or re.search(r"\bfatura\b|\bfaturas[ıi]\b|\bfi[şs]\b|e-?ar[şs]iv", t[:3000]))
 
 
-def handle_pdf(name: str, data: bytes) -> str:
-    """PDF'i tanı ve içe aktar; kısa sonuç metni döner. Hazır sürümde yeni belge 1 okuma hakkı (app/doc_reads.py)."""
+def handle_pdf(name: str, data: bytes, gate=None) -> str:
+    """PDF'i tanı ve içe aktar; kısa sonuç metni döner. Hazır sürümde yeni belge 1 okuma hakkı (app/doc_reads.py).
+
+    gate(info, name, data) -> str | None: kişisel adreste (app/mail_approval.py) belge okunduktan sonra, kaydetmeden
+    önce çağrılır; metin dönerse belge kaydedilmez, o metin sonuç olur. info: {type: ekstre|dokum|dekont, bank,
+    card_no?, iban?, period?, amount?}."""
     from app import bank_import, bank_pdf, doc_reads
     from app.parsers import PasswordRequired, extract_text, parse_statement
 
@@ -312,6 +316,16 @@ def handle_pdf(name: str, data: bytes) -> str:
     from app import dekont
 
     if dekont.is_dekont(text):
+        if gate:
+            try:
+                p = dekont.parse(text)
+            except ValueError:
+                p = None
+            if p:
+                stop = gate({"type": "dekont", "bank": p.get("bank"), "iban": dekont._iban(dekont._field(text, "IBAN")),
+                             "period": p.get("date"), "amount": p.get("amount")}, name, data)
+                if stop:
+                    return stop
         d = dekont.import_text(text)
         if d["status"] == "duplicate":
             return f"Dekont {d['date']} {money.tl(d['amount'])}: zaten vardı"
@@ -323,6 +337,11 @@ def handle_pdf(name: str, data: bytes) -> str:
         from app import verification
 
         res = bank_pdf.parse_account_pdf(data, passwords)
+        if gate:
+            stop = gate({"type": "dokum", "bank": res.get("bank"), "iban": res.get("iban"),
+                         "period": (res["rows"][-1].get("date") if res.get("rows") else None)}, name, data)
+            if stop:
+                return stop
         owners = [res.get("owner_name") or ""] if res.get("owner_name") else []
         rows = bank_import.finalize(res["rows"], owners or db.card_holders())
         chk = verification.account_check(res)
@@ -356,6 +375,12 @@ def handle_pdf(name: str, data: bytes) -> str:
     template_stats.record_statement(stmt)  # şablon isabet ölçümü
     if db.statement_exists(data, stmt):
         return f"Ekstre {stmt.bank} {stmt.card_no}: zaten vardı"
+    if gate:
+        stop = gate({"type": "ekstre", "bank": stmt.bank, "card_no": stmt.card_no,
+                     "period": stmt.period_end.isoformat() if stmt.period_end else None, "amount": stmt.total_debt},
+                    name, data)
+        if stop:
+            return stop
     if stmt.ai_parsed:  # yapay zekâ okudu ve denklem tutmadı: onay bekler (S6)
         from app import verification
 

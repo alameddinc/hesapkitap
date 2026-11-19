@@ -1452,6 +1452,21 @@ def after_document(source: str, text: str) -> None:
         log.exception("push belge kancası")
 
 
+def after_pending(text: str) -> None:
+    """Kişisel adrese ilk kez görülen kartın/hesabın belgesi geldi: "Bu kart senin mi?" (app/mail_approval.py).
+    Hiçbir zaman hata fırlatmaz."""
+    try:
+        ctx = _ctx()
+        if not ctx:
+            return
+        line = next((x for x in (text or "").splitlines() if x.startswith("⏸")), "Yeni bir kartın belgesi geldi")
+        body = line.lstrip("⏸ ").split(":", 1)[0] + " geldi. Senin mi?"
+        pid = f"belge:onay:{hashlib.sha256((text + _utc_iso()).encode()).hexdigest()[:16]}"
+        notify(ctx[0]["id"], [item("belge", pid, "Onay bekleyen belge", body, R_OZET)])
+    except Exception:  # noqa: BLE001
+        log.exception("push onay kancası")
+
+
 # ---------------------------------------------------------------- ortak alışveriş listesi
 
 LIST_EVERY = 30 * 60     # ekleyen başına en çok bu kadar saniyede bir bildirim

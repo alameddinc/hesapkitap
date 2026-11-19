@@ -102,16 +102,30 @@ def regenerate(u: dict) -> str:
 
 def resolve(to: str) -> dict | None:
     """fatura-<kod>@... → adresin sahibi (kullanıcı satırı). Alan adına bakılmaz: ileride yeni alan adına geçilirse
-    eski adresler de çalışsın."""
-    local = (to or "").strip().lower().split("@", 1)[0]
+    eski adresler de çalışsın. Kişisel ad (<ad>@HESAPKITAP_MAIL_DOMAIN) da çözülür (app/mail_name.py)."""
+    return resolve_ex(to)[0]
+
+
+def resolve_ex(to: str) -> tuple[dict | None, bool]:
+    """(adresin sahibi, kişisel ad mı). Kişisel ad yalnız HESAPKITAP_MAIL_DOMAIN alan adında geçerlidir."""
+    from app import mail_name
+
+    full = (to or "").strip().lower()
+    local, _, dom = full.partition("@")
     m = LOCAL.match(local)
-    if not m:
-        return None
-    with system.connect() as c:
-        _init(c)
-        r = c.execute("SELECT user_id FROM inbound WHERE token = ? AND revoked = 0", (m.group(1),)).fetchone()
-    u = system.user(r[0]) if r else None
-    return u if u and not u.get("deleted_at") else None  # silinmek üzere bekleyen defterin adresi mail kabul etmez
+    personal = False
+    if m:
+        with system.connect() as c:
+            _init(c)
+            r = c.execute("SELECT user_id FROM inbound WHERE token = ? AND revoked = 0", (m.group(1),)).fetchone()
+        uid = r[0] if r else None
+    elif mail_name.enabled() and dom == mail_name.domain():
+        uid, personal = mail_name.lookup(local), True
+    else:
+        uid = None
+    u = system.user(uid) if uid else None
+    # silinmek üzere bekleyen defterin adresi mail kabul etmez
+    return (u, personal) if u and not u.get("deleted_at") else (None, False)
 
 
 # ---------------------------------------------------------------- imza
@@ -289,11 +303,28 @@ def message_key(raw: bytes, to: str) -> str:
     return f"{to.lower()}|{mid or hashlib.sha256(raw).hexdigest()}"
 
 
+def _premium_wait(msg: Message, raw: bytes, u: dict, own: bool, entry: dict, verify) -> dict | None:
+    """Ücretsiz paket, kişisel adres: bankadan gelen (imzası doğrulanmış) PDF okunmadan saklanır (app/premium_wait.py).
+    Fatura / bildirim / tanınmayan gönderen: None (eskisi gibi atlanır)."""
+    from app import mailbox, premium_wait
+
+    kind, dom = classify_sender(msg, raw, [], verify)
+    if kind != "banka":
+        return None
+    pdfs, _ = _safe_pdfs(mailbox._pdfs(msg))
+    if not pdfs:
+        return None
+    got = [premium_wait.stash(u["id"], own, n, d, dom) for n, d in pdfs]
+    premium_wait.notify_arrived(u["id"], got[0]["bank"])
+    return {**entry, "kind": "bekliyor", "status": "ok",
+            "detail": "\n".join(f"📬 {g['bank']} {g['label']} ekstresi: Premium bekliyor (okunmadı)".replace("  ", " ") for g in got)}
+
+
 def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
     """Bir maili işle. Dönen: posta günlüğü satırı (+ 'user' anahtarı yok). Adres yoksa LookupError."""
-    from app import doc_reads, mailbox, plans
+    from app import doc_reads, mail_approval, mailbox, plans
 
-    u = resolve(to)
+    u, personal = resolve_ex(to)
     if not u:
         raise LookupError("adres yok")
     msg = message_from_bytes(raw)
@@ -314,13 +345,21 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
         if db.mail_count_today() >= DAILY_LIMIT:  # sel: imza kontrolüne, okumaya, günlüğe hiç girme
             return {**entry, "kind": "-", "status": "skip", "detail": "Günlük posta sınırı doldu"}
         if not plans.allows(ctx, "posta"):
-            r = {**entry, "kind": "-", "status": "skip", "detail": "Postadan otomatik okuma Premium paketinde"}
+            r = _premium_wait(msg, raw, u, own, entry, verify) if personal else None
+            r = r or {**entry, "kind": "-", "status": "skip", "detail": "Postadan otomatik okuma Premium paketinde"}
             db.log_mail(r)
             return r
         kind, dom = classify_sender(msg, raw, _people_emails(u.get("member_of") or u["id"]), verify)
         if not kind:
             r = {**entry, "kind": "-", "status": "skip",
                  "detail": f"Tanınan bir banka/kurum değil ya da imza doğrulanamadı ({dom or 'bilinmiyor'})"}
+            db.log_mail(r)
+            return r
+        if kind == "magaza" and entry["sender"].lower() == mail_approval.GMAIL_FORWARD_SENDER:
+            # Gmail iletim onayı: kod/bağlantı uygulamada gösterilir; otomatik tıklanmaz
+            info = mail_approval.save_gmail_confirmation(mailbox._body_text(msg), received)
+            r = {**entry, "kind": "gmail_onay", "status": "ok" if info else "skip",
+                 "detail": "Gmail iletim onayı geldi · kodu uygulamada gör" if info else "Gmail maili, onay kodu yok"}
             db.log_mail(r)
             return r
         if kind in ("magaza", "kendi"):  # mağaza makbuzu: kural okuması (yapay zekâ yok, okuma hakkı düşmez)
@@ -333,6 +372,9 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             r = {**entry, "kind": "-", "status": "skip", "detail": "Belge okuma hakkı doldu"}
             db.log_mail(r)
             return r
+        # kişisel adres: bankadan gelen belge, defterde ilk kez görülen kart/hesapsa onay bekler (kendi iletimin değil)
+        held: list[int] = []
+        gate = mail_approval.make_gate(dom, held) if personal and kind == "banka" else None
         try:
             pdfs, details = _safe_pdfs(mailbox._pdfs(msg), _max_pdfs(kind, ctx))
             if details and not pdfs:  # ekler vardı ama hiçbiri uygun değil: hiçbir şey okunmaz
@@ -347,12 +389,16 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
                         details.append(f"⏭ {n}: belge okuma hakkı doldu")
                         continue
                     try:
-                        details.append(mailbox.handle_pdf(n, d))
+                        details.append(mailbox.handle_pdf(n, d, gate=gate) if gate else mailbox.handle_pdf(n, d))
                     except Exception:  # noqa: BLE001 - kullanıcının ilettiği PDF banka belgesi değilse fatura olabilir
                         if kind != "kendi":
                             raise
                         details.append(_bill(n, d, "application/pdf"))
                 r = {**entry, "kind": "pdf", "status": "ok", "detail": "\n".join(details)}
+            elif gate and not mail_approval.domain_trusted(dom):
+                # kişisel adreste işlem bildirimi yalnız bu bankadan onaylı/bilinen belge geldikten sonra okunur
+                r = {**entry, "kind": "diger", "status": "skip",
+                     "detail": "Bu bankadan henüz onaylı belge yok; bildirim okunmadı"}
             else:
                 res = mailbox.handle_notification(mailbox._body_text(msg), received, mid) if kind == "banka" else None
                 r = {**entry, "kind": "bildirim" if res else "diger", "status": "ok" if res else "skip",
@@ -362,7 +408,11 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             r = {**entry, "kind": "-", "status": "error", "detail": str(e)[:300]}
         db.log_mail(r)
         db.trim_mail_log(LOG_KEEP)
-        if r["status"] == "ok" and r["kind"] in ("pdf", "fatura"):
+        if held:
+            from app import push
+
+            push.after_pending(r["detail"])
+        elif r["status"] == "ok" and r["kind"] in ("pdf", "fatura"):
             from app import push
 
             push.after_document("posta", r["detail"])  # telefona "belge işlendi" (kapalıysa hiçbir şey yapmaz)

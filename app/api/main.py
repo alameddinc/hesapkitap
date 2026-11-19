@@ -1625,6 +1625,9 @@ def admin_update_user(uid: int, body: AdminUserPatch):
 
             until = (datetime.now(timezone.utc) + timedelta(days=body.plan_days or 90)).isoformat(timespec="seconds")
             system.update_user(uid, plan=body.plan, plan_until=until, plan_source="manual")
+            from app import premium_wait
+
+            premium_wait.release_async(uid)  # Premium bekleyen ekstreler okunsun
     return _user_row(system.user(uid))
 
 
@@ -2300,6 +2303,10 @@ async def revenuecat_webhook(request: Request):
         raise HTTPException(404, errors.GENERIC[404])
     body = await request.json()
     res = await asyncio.to_thread(plans.apply_revenuecat, body.get("event") or {})  # SQLite yazma: döngü beklemesin
+    if res.get("plan") in (plans.PREMIUM, plans.FAMILY) and res.get("user"):  # bekleyen ekstreler sırayla okunsun
+        from app import premium_wait
+
+        premium_wait.release_async(int(res["user"]))
     if res.get("ignored") != "app_user_id":  # Ölçüm: yalnız toplam (app/funnel.py), kişi yazılmaz; anonim kimlik sayılmaz
         from app import funnel
 
@@ -2388,6 +2395,177 @@ def mail_address_regenerate():
     if not plans.allows(u, "posta"):
         raise HTTPException(402, detail=str(plans.PlanRequired("posta")), headers={"X-Plan-Required": "posta"})
     return {"address": inbound.regenerate(u)}
+
+
+# ---------------------------------------------------------------- kişisel ekstre adresi (app/mail_name.py)
+
+_name_checks: dict[int, list[float]] = {}
+NAME_CHECKS_PER_MIN = 30
+
+
+def _name_check_limited(uid: int) -> bool:
+    """Uygunluk sorgusu: kullanıcı başı dakikada NAME_CHECKS_PER_MIN (ad listesi taranamasın)."""
+    import time
+
+    now = time.time()
+    with _rate_lock:
+        recent = [t for t in _name_checks.get(uid, []) if now - t < 60]
+        if len(recent) >= NAME_CHECKS_PER_MIN:
+            _name_checks[uid] = recent
+            return True
+        _name_checks[uid] = recent + [now]
+        return False
+
+
+def _mail_name_state(u: dict, with_suggestions: bool = False) -> dict:
+    from app import inbound, mail_name
+
+    if not mail_name.enabled():
+        return {"enabled": False}
+    book = inbound._book_user(u)
+    name = mail_name.current(book)
+    out = {"enabled": True, "domain": mail_name.domain(), "name": name, "address": mail_name.address_of(name),
+           "can_change": name is None or mail_name.changes_used(book) < mail_name.MAX_CHANGES,
+           "min_len": mail_name.MIN_LEN, "max_len": mail_name.MAX_LEN}
+    if with_suggestions:
+        owner = system.user(book) or u
+        out["suggestions"] = mail_name.suggestions(owner.get("username") or "", book_id=book)
+    return out
+
+
+@app.get("/api/mail/name")
+def mail_name_get(check: str | None = None):
+    """Kişisel adres durumu + öneriler; ?check=<ad> ile uygunluk (hız sınırlı). Özellik kapalıysa {enabled: false}."""
+    from app import inbound, mail_name
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Posta adresi için giriş gerekli")
+    if check is None:
+        return _mail_name_state(u, with_suggestions=True)
+    if not mail_name.enabled():
+        return {"enabled": False}
+    if _name_check_limited(u["id"]):
+        raise HTTPException(429, "Çok fazla deneme; bir dakika sonra tekrar dene.", headers={"Retry-After": "60"})
+    ok, n, code = mail_name.available(check[:64], inbound._book_user(u))
+    return {"enabled": True, "name": n, "available": ok, "reason": code,
+            "message": None if ok else mail_name._REASONS.get(code, code), "address": mail_name.address_of(n)}
+
+
+class MailNameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/mail/name")
+def mail_name_post(body: MailNameIn):
+    """Adı al ya da değiştir (ömür boyu bir kez; eski ad 90 gün başkasına verilmez ve hâlâ bu deftere gelir)."""
+    from app import inbound, mail_name
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Posta adresi için giriş gerekli")
+    if u.get("demo"):
+        raise HTTPException(403, "Demoda adres alınamaz")
+    if _name_check_limited(u["id"]):
+        raise HTTPException(429, "Çok fazla deneme; bir dakika sonra tekrar dene.", headers={"Retry-After": "60"})
+    try:
+        mail_name.claim(inbound._book_user(u), body.name)
+    except mail_name.NameError_ as e:
+        raise HTTPException(409 if e.code in ("taken", "limit", "same") else 422,
+                            detail=str(e), headers={"X-Reason": e.code}) from e
+    return _mail_name_state(u)
+
+
+@app.get("/api/mail/pending")
+def mail_pending_list():
+    """Kişisel adrese gelen, ilk kez görülen kartın/hesabın onay bekleyen belgeleri + Gmail iletim onay kodu."""
+    from app import mail_approval
+
+    return {"items": mail_approval.pending(), "gmail_confirmation": mail_approval.gmail_confirmation()}
+
+
+@app.post("/api/mail/pending/{pid}/approve")
+def mail_pending_approve(pid: int):
+    from app import mail_approval
+
+    try:
+        return mail_approval.approve(pid)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+
+
+@app.post("/api/mail/pending/{pid}/reject")
+def mail_pending_reject(pid: int):
+    from app import mail_approval
+
+    try:
+        return mail_approval.reject(pid)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+
+
+@app.get("/api/mail/waiting")
+def mail_waiting_list():
+    """Ücretsiz pakette kişisel adrese gelen, okunmadan Premium bekleyen belgeler (app/premium_wait.py). Paket artık
+    izin veriyorsa (Premium'a geçildi, olay kaçtıysa) bekleyenler arka planda okunmaya başlar."""
+    from app import inbound, premium_wait
+
+    u = db.current_user()
+    if not u:
+        return {"items": [], "count": 0}
+    items = premium_wait.items()
+    if items and plans.allows(u, "posta"):
+        premium_wait.release_async(inbound._book_user(u) if not u.get("own_book") else u["id"])
+        return {"items": [], "count": 0, "processing": True}
+    return {"items": items, "count": len(items), "keep_days": premium_wait.KEEP_DAYS}
+
+
+@app.post("/api/mail/waiting/{pid}/upload")
+def mail_waiting_upload(pid: int):
+    """"Kendim yükleyeyim": bekleyen belgeyi normal yükleme gibi oku; ücretsiz okuma hakkından düşer."""
+    from app import doc_reads, mailbox, premium_wait
+
+    u = db.current_user() or {}
+    try:
+        msg = premium_wait.self_upload(pid, u)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(402, e) from e
+    except mailbox.MailError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    return {"ok": True, "message": msg}
+
+
+class WaitingPasswordIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/api/mail/waiting/{pid}/password")
+def mail_waiting_password(pid: int, body: WaitingPasswordIn):
+    """Şifreli bekleyen ekstre: şifreyi bir kez gir (hatırlanır), belge okunur."""
+    from app import doc_reads, mailbox, premium_wait
+
+    u = db.current_user() or {}
+    try:
+        msg = premium_wait.unlock(pid, body.password, u)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(402, e) from e
+    except mailbox.MailError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    return {"ok": True, "message": msg}
+
+
+@app.delete("/api/mail/gmail-confirmation")
+def mail_gmail_confirmation_clear():
+    from app import mail_approval
+
+    mail_approval.clear_gmail_confirmation()
+    return {"ok": True}
 
 
 @app.get("/api/meta")
