@@ -2537,6 +2537,29 @@ def mail_waiting_upload(pid: int):
     return {"ok": True, "message": msg}
 
 
+class WaitingPasswordIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/api/mail/waiting/{pid}/password")
+def mail_waiting_password(pid: int, body: WaitingPasswordIn):
+    """Şifreli bekleyen ekstre: şifreyi bir kez gir (hatırlanır), belge okunur."""
+    from app import doc_reads, mailbox, premium_wait
+
+    u = db.current_user() or {}
+    try:
+        msg = premium_wait.unlock(pid, body.password, u)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    except doc_reads.QuotaError as e:
+        raise QuotaFull(402, e) from e
+    except mailbox.MailError as e:
+        raise HTTPException(422, detail=str(e)) from e
+    return {"ok": True, "message": msg}
+
+
 @app.delete("/api/mail/gmail-confirmation")
 def mail_gmail_confirmation_clear():
     from app import mail_approval

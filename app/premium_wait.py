@@ -58,6 +58,21 @@ def _init(c) -> None:
     c.execute("""CREATE TABLE IF NOT EXISTS premium_wait (
                  id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, ident TEXT NOT NULL, bank TEXT,
                  sender_domain TEXT, filename TEXT, file TEXT NOT NULL, size INTEGER NOT NULL)""")
+    if "state" not in {r[1] for r in c.execute("PRAGMA table_info(premium_wait)")}:
+        # bekliyor | sifre (okunmak istendi ama PDF şifreli; şifre girilince okunur, 90 gün kuralı aynen)
+        c.execute("ALTER TABLE premium_wait ADD COLUMN state TEXT NOT NULL DEFAULT 'bekliyor'")
+
+
+def _is_password_error(e: Exception) -> bool:
+    from app.parsers import PasswordRequired
+
+    return isinstance(e, PasswordRequired) or isinstance(e.__cause__, PasswordRequired) or "şifre" in str(e).lower()
+
+
+def _mark_password(pid: int) -> None:
+    with db.connect() as c:
+        _init(c)
+        c.execute("UPDATE premium_wait SET state = 'sifre' WHERE id = ?", (pid,))
 
 
 @contextmanager
@@ -263,13 +278,13 @@ def count() -> int:
 def items() -> list[dict]:
     with db.connect() as c:
         _init(c)
-        rows = c.execute("SELECT id, created_at, ident, bank, filename FROM premium_wait ORDER BY id DESC").fetchall()
+        rows = c.execute("SELECT id, created_at, ident, bank, filename, state FROM premium_wait ORDER BY id DESC").fetchall()
     keep = timedelta(days=KEEP_DAYS)
     out = []
     for r in rows:
         created = datetime.strptime(r["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         out.append({"id": r["id"], "created_at": r["created_at"], "bank": r["bank"], "label": _label(r["ident"]),
-                    "kind": r["ident"].split(":", 1)[0], "filename": r["filename"],
+                    "kind": r["ident"].split(":", 1)[0], "filename": r["filename"], "state": r["state"],
                     "expires_at": _iso(created + keep)})
     return out
 
@@ -298,7 +313,12 @@ def self_upload(pid: int, ctx: dict) -> str:
     from app import doc_reads
 
     doc_reads.check(data)  # hak yoksa QuotaError: belge bekler, uç "hak doldu" yanıtı verir
-    msg = str(mailbox.handle_pdf(r["filename"] or "ekstre.pdf", data))
+    try:
+        msg = str(mailbox.handle_pdf(r["filename"] or "ekstre.pdf", data))
+    except Exception as e:
+        if _is_password_error(e):
+            _mark_password(pid)  # silinmez: şifre girilince okunur
+        raise
     b, o = _book_of(ctx)
     _delete_here(b, o, [pid])
     return msg
@@ -308,7 +328,7 @@ def release(book_id: int) -> dict:
     """Premium'a geçildi: bu kullanıcının (ve kendi defterinin) bekleyenlerini sırayla oku. Yeni kart onayı geçerli."""
     from app import mail_approval, mailbox, plans
 
-    done, held_total = [], 0
+    done, held_total, locked = [], 0, 0
     with system.connect() as c:
         _init_sys(c)
         spaces = c.execute("SELECT DISTINCT book_id, own FROM premium_wait_index WHERE book_id = ?", (book_id,)).fetchall()
@@ -319,7 +339,7 @@ def release(book_id: int) -> dict:
                     continue
                 with db.connect() as c:
                     _init(c)
-                    rows = c.execute("SELECT * FROM premium_wait ORDER BY id").fetchall()
+                    rows = c.execute("SELECT * FROM premium_wait WHERE state = 'bekliyor' ORDER BY id").fetchall()
                 for r in rows:
                     held: list[int] = []
                     data = db.read_file("uploads", r["file"]) or b""
@@ -328,6 +348,10 @@ def release(book_id: int) -> dict:
                             gate = mail_approval.make_gate(r["sender_domain"] or "", held)
                             done.append(str(mailbox.handle_pdf(r["filename"] or "ekstre.pdf", data, gate=gate)))
                     except Exception as e:  # noqa: BLE001 - biri okunamazsa ötekiler sürsün
+                        if _is_password_error(e):  # şifreli: silinmez, şifre bekler
+                            _mark_password(r["id"])
+                            locked += 1
+                            continue
                         log.warning("bekleyen belge okunamadı: %s", e)
                         done.append(f"⚠️ {r['filename']}: {str(e)[:200]}")
                     held_total += len(held)
@@ -338,7 +362,44 @@ def release(book_id: int) -> dict:
                                  "detail": "\n".join(done)})
         except LookupError:
             continue
-    return {"processed": len(done), "held": held_total, "details": done}
+    read = len([d for d in done if not d.startswith(("⚠️", "⏸", "⏭"))])
+    if read or held_total or locked:  # tek bildirim
+        parts = [f"{read} ekstren okundu"] if read else []
+        if held_total:
+            parts.append(f"{held_total} belge onayını bekliyor")
+        if locked:
+            parts.append(f"{locked} ekstren şifreli, şifreyi bir kez gir")
+        _notify(book_id, "Bekleyen ekstrelerin", " · ".join(parts), f"bekleyen:okundu:{book_id}:{_iso(_now())}")
+    return {"processed": len(done), "held": held_total, "locked": locked, "details": done}
+
+
+def unlock(pid: int, password: str, ctx: dict) -> str:
+    """Şifreli bekleyen belge: şifreyi dene, doğruysa hatırla (Ayarlar → PDF şifreleri) ve oku. Premium'da posta yolu
+    (yeni kart onayı geçerli); ücretsizde "kendim yükleyeyim" gibi (okuma hakkından düşer). Yanlış şifre: ValueError."""
+    from app import mail_approval, mailbox, plans
+    from app.parsers import extract_text
+
+    with db.connect() as c:
+        _init(c)
+        r = c.execute("SELECT * FROM premium_wait WHERE id = ?", (pid,)).fetchone()
+    if not r:
+        raise KeyError(pid)
+    data = db.read_file("uploads", r["file"]) or b""
+    try:
+        extract_text(data, password)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError("Şifre yanlış; bankanın ekstre şifresini dene") from e
+    db.remember_pdf_password(password)
+    if not plans.allows(ctx, "posta"):
+        with db.connect() as c:
+            c.execute("UPDATE premium_wait SET state = 'bekliyor' WHERE id = ?", (pid,))
+        return self_upload(pid, ctx)
+    held: list[int] = []
+    msg = str(mailbox.handle_pdf(r["filename"] or "ekstre.pdf", data,
+                                 gate=mail_approval.make_gate(r["sender_domain"] or "", held)))
+    b, o = _book_of(ctx)
+    _delete_here(b, o, [pid])
+    return msg
 
 
 def release_async(book_id: int) -> None:

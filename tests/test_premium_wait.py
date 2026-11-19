@@ -226,3 +226,73 @@ def test_approval_reject_removes_storage_file(free):
         assert db.list_files("uploads")
         mail_approval.reject(mail_approval.pending()[0]["id"])
         assert db.list_files("uploads") == []
+
+
+def _premium(uid):
+    from app import system
+
+    until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(timespec="seconds")
+    system.update_user(uid, plan="premium", plan_until=until, plan_source="manual")
+    return system.user(uid)
+
+
+def test_encrypted_waits_for_password_then_reads(free, fake_text, monkeypatch):
+    """Şifreli bekleyen: Premium geçişinde silinmez, "şifre bekliyor"; şifre girilince hatırlanır ve okunur."""
+    from app import db, mailbox, premium_wait, push
+
+    sent = []
+    monkeypatch.setattr(push, "notify", lambda uid, items, **k: sent.append(items[0]["body"]))
+    with space(free):
+        premium_wait.stash(free["id"], False, "sifreli.pdf", _fake_doc(1), "halkbank.com.tr")
+        premium_wait.stash(free["id"], False, "acik.pdf", _fake_doc(2, "5400********9012"), "halkbank.com.tr")
+
+    def handle(name, data, gate=None):
+        if name == "sifreli.pdf" and "1234" not in db.pdf_passwords():
+            raise mailbox.MailError(f"{name}: PDF şifreli; Ekstreler'den bir kez elle yükleyip şifreyi hatırlat")
+        return f"💳 Halkbank {name} ekstresi kaydedildi"
+
+    monkeypatch.setattr(mailbox, "handle_pdf", handle)
+    u = _premium(free["id"])
+    r = premium_wait.release(free["id"])
+    assert r["processed"] == 1 and r["locked"] == 1
+    assert sent[-1] == "1 ekstren okundu · 1 ekstren şifreli, şifreyi bir kez gir"
+    with space(u):
+        items = premium_wait.items()
+        assert [(x["filename"], x["state"]) for x in items] == [("sifreli.pdf", "sifre")]
+        import app.parsers as parsers
+
+        real = parsers.extract_text
+        monkeypatch.setattr(parsers, "extract_text", lambda d, pw=None: real(d, pw) if pw == "1234" else (_ for _ in ()).throw(ValueError("şifreli")))
+        with pytest.raises(ValueError):
+            premium_wait.unlock(items[0]["id"], "yanlis", u)
+        assert premium_wait.items()[0]["state"] == "sifre"
+        msg = premium_wait.unlock(items[0]["id"], "1234", u)
+        assert "kaydedildi" in msg and premium_wait.items() == [] and "1234" in db.pdf_passwords()
+        assert db.list_files("uploads") == []
+    assert premium_wait.release(free["id"])["processed"] == 0  # şifre bekleyen yeniden denenmez (zaten yok)
+
+
+def test_release_push_counts_held(free, monkeypatch):
+    from app import inbound, premium_wait, push
+
+    sent = []
+    monkeypatch.setattr(push, "notify", lambda uid, items, **k: sent.append(items[0]["body"]))
+    inbound.handle(_raw(attach=pdf("vakifbank_a.txt")), f"selin@{DOMAIN}", verify=signed("vakifbank.com.tr"))
+    _premium(free["id"])
+    premium_wait.release(free["id"])
+    assert sent[-1] == "1 belge onayını bekliyor"
+
+
+def test_encrypted_self_upload_marks_password(free, fake_text, monkeypatch):
+    from app import mailbox, premium_wait
+
+    with space(free):
+        pid = premium_wait.stash(free["id"], False, "sifreli.pdf", _fake_doc(1), "halkbank.com.tr")["id"]
+
+        def locked(name, data, gate=None):
+            raise mailbox.MailError("sifreli.pdf: PDF açılamadı; şifresi Ayarlar → PDF şifreleri'nde kayıtlı mı?")
+
+        monkeypatch.setattr(mailbox, "handle_pdf", locked)
+        with pytest.raises(mailbox.MailError):
+            premium_wait.self_upload(pid, free)
+        assert premium_wait.items()[0]["state"] == "sifre"
