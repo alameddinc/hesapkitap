@@ -2390,6 +2390,121 @@ def mail_address_regenerate():
     return {"address": inbound.regenerate(u)}
 
 
+# ---------------------------------------------------------------- kişisel ekstre adresi (app/mail_name.py)
+
+_name_checks: dict[int, list[float]] = {}
+NAME_CHECKS_PER_MIN = 30
+
+
+def _name_check_limited(uid: int) -> bool:
+    """Uygunluk sorgusu: kullanıcı başı dakikada NAME_CHECKS_PER_MIN (ad listesi taranamasın)."""
+    import time
+
+    now = time.time()
+    with _rate_lock:
+        recent = [t for t in _name_checks.get(uid, []) if now - t < 60]
+        if len(recent) >= NAME_CHECKS_PER_MIN:
+            _name_checks[uid] = recent
+            return True
+        _name_checks[uid] = recent + [now]
+        return False
+
+
+def _mail_name_state(u: dict, with_suggestions: bool = False) -> dict:
+    from app import inbound, mail_name
+
+    if not mail_name.enabled():
+        return {"enabled": False}
+    book = inbound._book_user(u)
+    name = mail_name.current(book)
+    out = {"enabled": True, "domain": mail_name.domain(), "name": name, "address": mail_name.address_of(name),
+           "can_change": name is None or mail_name.changes_used(book) < mail_name.MAX_CHANGES,
+           "min_len": mail_name.MIN_LEN, "max_len": mail_name.MAX_LEN}
+    if with_suggestions:
+        owner = system.user(book) or u
+        out["suggestions"] = mail_name.suggestions(owner.get("username") or "", book_id=book)
+    return out
+
+
+@app.get("/api/mail/name")
+def mail_name_get(check: str | None = None):
+    """Kişisel adres durumu + öneriler; ?check=<ad> ile uygunluk (hız sınırlı). Özellik kapalıysa {enabled: false}."""
+    from app import inbound, mail_name
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Posta adresi için giriş gerekli")
+    if check is None:
+        return _mail_name_state(u, with_suggestions=True)
+    if not mail_name.enabled():
+        return {"enabled": False}
+    if _name_check_limited(u["id"]):
+        raise HTTPException(429, "Çok fazla deneme; bir dakika sonra tekrar dene.", headers={"Retry-After": "60"})
+    ok, n, code = mail_name.available(check[:64], inbound._book_user(u))
+    return {"enabled": True, "name": n, "available": ok, "reason": code,
+            "message": None if ok else mail_name._REASONS.get(code, code), "address": mail_name.address_of(n)}
+
+
+class MailNameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/mail/name")
+def mail_name_post(body: MailNameIn):
+    """Adı al ya da değiştir (ömür boyu bir kez; eski ad 90 gün başkasına verilmez ve hâlâ bu deftere gelir)."""
+    from app import inbound, mail_name
+
+    u = db.current_user()
+    if not u:
+        raise HTTPException(409, "Posta adresi için giriş gerekli")
+    if u.get("demo"):
+        raise HTTPException(403, "Demoda adres alınamaz")
+    if _name_check_limited(u["id"]):
+        raise HTTPException(429, "Çok fazla deneme; bir dakika sonra tekrar dene.", headers={"Retry-After": "60"})
+    try:
+        mail_name.claim(inbound._book_user(u), body.name)
+    except mail_name.NameError_ as e:
+        raise HTTPException(409 if e.code in ("taken", "limit", "same") else 422,
+                            detail=str(e), headers={"X-Reason": e.code}) from e
+    return _mail_name_state(u)
+
+
+@app.get("/api/mail/pending")
+def mail_pending_list():
+    """Kişisel adrese gelen, ilk kez görülen kartın/hesabın onay bekleyen belgeleri + Gmail iletim onay kodu."""
+    from app import mail_approval
+
+    return {"items": mail_approval.pending(), "gmail_confirmation": mail_approval.gmail_confirmation()}
+
+
+@app.post("/api/mail/pending/{pid}/approve")
+def mail_pending_approve(pid: int):
+    from app import mail_approval
+
+    try:
+        return mail_approval.approve(pid)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+
+
+@app.post("/api/mail/pending/{pid}/reject")
+def mail_pending_reject(pid: int):
+    from app import mail_approval
+
+    try:
+        return mail_approval.reject(pid)
+    except KeyError as e:
+        raise HTTPException(404, errors.GENERIC[404]) from e
+
+
+@app.delete("/api/mail/gmail-confirmation")
+def mail_gmail_confirmation_clear():
+    from app import mail_approval
+
+    mail_approval.clear_gmail_confirmation()
+    return {"ok": True}
+
+
 @app.get("/api/meta")
 def meta():
     return {
