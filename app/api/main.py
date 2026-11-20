@@ -2481,7 +2481,7 @@ def mail_pending_list():
     """Kişisel adrese gelen, ilk kez görülen kartın/hesabın onay bekleyen belgeleri + Gmail iletim onay kodu."""
     from app import mail_approval
 
-    return {"items": mail_approval.pending(), "gmail_confirmation": mail_approval.gmail_confirmation()}
+    return {"items": mail_approval.pending(), "gmail_confirmation": mail_approval.public_gmail_confirmation()}
 
 
 @app.post("/api/mail/pending/{pid}/approve")
@@ -2558,6 +2558,17 @@ def mail_waiting_password(pid: int, body: WaitingPasswordIn):
     except mailbox.MailError as e:
         raise HTTPException(422, detail=str(e)) from e
     return {"ok": True, "message": msg}
+
+
+@app.post("/api/mail/gmail-confirmation/reveal")
+def mail_gmail_confirmation_reveal():
+    """Güvenilmeyen adresten gelen iletim isteği: kullanıcı "Benim" dedi, kod ve bağlantı gösterilir."""
+    from app import mail_approval
+
+    v = mail_approval.reveal_gmail_confirmation()
+    if not v:
+        raise HTTPException(404, errors.GENERIC[404])
+    return {"code": v.get("code"), "link": v.get("link"), "from_email": v.get("from_email"), "trusted": bool(v.get("trusted"))}
 
 
 @app.delete("/api/mail/gmail-confirmation")

@@ -357,7 +357,8 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
             return r
         if kind == "magaza" and entry["sender"].lower() == mail_approval.GMAIL_FORWARD_SENDER:
             # Gmail iletim onayı: kod/bağlantı uygulamada gösterilir; otomatik tıklanmaz
-            info = mail_approval.save_gmail_confirmation(mailbox._body_text(msg), received)
+            info = mail_approval.save_gmail_confirmation(mailbox._body_text(msg), received,
+                                                         _people_emails(u.get("member_of") or u["id"]))
             r = {**entry, "kind": "gmail_onay", "status": "ok" if info else "skip",
                  "detail": "Gmail iletim onayı geldi · kodu uygulamada gör" if info else "Gmail maili, onay kodu yok"}
             db.log_mail(r)

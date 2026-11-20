@@ -178,7 +178,8 @@ def cut_passed(client, tmpdb):
     """Kesimi 15 Kas'ta geçmiş, ekstresi yüklenmemiş döngü (son ödeme 25 Kas): bilinen taksit 1.250 + kartla girilmiş
     4.000 harcama; geçmiş 3 dönem değişken harcama ~10.000."""
     tmpdb.set_setting("cycle_start_day", "17")
-    assert client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": CASH}).status_code == 200
+    assert client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": CASH,
+                                                       "as_of": "2026-11-13"}).status_code == 200
     for i, (pe, due) in enumerate([(date(2026, 8, 15), date(2026, 8, 25)), (date(2026, 9, 15), date(2026, 9, 25)),
                                    (date(2026, 10, 15), date(2026, 10, 25))]):
         nxt_pe = date(pe.year + (pe.month == 12), pe.month % 12 + 1, 15)
