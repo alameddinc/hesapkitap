@@ -255,17 +255,28 @@ GMAIL_FORWARD_SENDER = "forwarding-noreply@google.com"
 _CONFIRM = "posta:gmail_confirm"
 
 
-def save_gmail_confirmation(body: str, received: str) -> dict | None:
-    """Gmail "iletim onayı" mailinden onay kodu ve bağlantısını çıkar, defterde sakla (otomatik tıklanmaz)."""
+def save_gmail_confirmation(body: str, received: str, people: list[str] | None = None) -> dict | None:
+    """Gmail "iletim onayı" mailinden onay kodu ve bağlantısını çıkar, defterde sakla (otomatik tıklanmaz).
+
+    Güvenlik: herkes kendi Gmail'inde bu adresi yönlendirme olarak ekleyebilir; Google'ın onay maili gerçek (DKIM geçerli)
+    gelir. İsteyen adres defterdeki kişilerin / güvendiğin adreslerin (people) arasında değilse trusted=False: kod ve
+    bağlantı kullanıcı "Benim" demeden gösterilmez (public_gmail_confirmation)."""
     import re
 
-    code = re.search(r"(?:onay kodu|confirmation code)\s*[:：]?\s*(\d{6,12})", body, re.I)
+    # Gmail metni dile ve sürüme göre değişir ("Onay kodu", "Doğrulama kodu", "Confirmation code: ..."):
+    # "kod/code" kelimesinden sonra en çok 40 karakter içinde 6–12 haneli sayı; yoksa metindeki tek 9 haneli sayı.
+    code = re.search(r"(?:kod[u]?|code)\b\D{0,40}?(\d{6,12})\b", body, re.I)
+    if not code:
+        nines = set(re.findall(r"(?<!\d)(\d{9})(?!\d)", body))
+        code = re.search(rf"({nines.pop()})", body) if len(nines) == 1 else None
     link = re.search(r"https://mail(?:-settings)?\.google\.com/mail/[^\s<>\"')]+", body)
     who = re.search(r"([\w.+-]+@[\w.-]+\.\w+)\s+(?:adlı kullanıcı|has requested|kullanıcısı)", body)
     if not code and not link:
         return None
     info = {"code": code.group(1) if code else None, "link": link.group(0) if link else None,
             "from_email": who.group(1) if who else None, "received_at": received}
+    known = {p.strip().lower() for p in (people or []) if p}
+    info["trusted"] = bool(info["from_email"]) and info["from_email"].lower() in known
     db.set_setting(_CONFIRM, json.dumps(info))
     return info
 
@@ -276,6 +287,23 @@ def gmail_confirmation() -> dict | None:
     except ValueError:
         return None
     return v if isinstance(v, dict) else None
+
+
+def public_gmail_confirmation() -> dict | None:
+    """İstemciye giden hâli: güvenilmeyen istekte kod ve bağlantı yok (reveal ile açılır)."""
+    v = gmail_confirmation()
+    if not v:
+        return None
+    trusted = bool(v.get("trusted"))
+    out = {**v, "trusted": trusted}
+    if not trusted:
+        out.update(code=None, link=None)
+    return out
+
+
+def reveal_gmail_confirmation() -> dict | None:
+    """Kullanıcı "Benim" dedi: kod ve bağlantı döner. Gönderen güvendiğin adreslere EKLENMEZ (yalnız gösterilir)."""
+    return gmail_confirmation()
 
 
 def clear_gmail_confirmation() -> None:
