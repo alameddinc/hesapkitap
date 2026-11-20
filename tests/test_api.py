@@ -196,6 +196,7 @@ def test_encrypted_pdf_password_flow(client, monkeypatch, tmpdb):
     r = client.post("/api/statements/upload", files=f(), data={"password": "123456", "remember": "true"}).json()[0]
     assert r["status"] == "saved" and r["reconciliation_diff"] == 0
     assert tmpdb.pdf_passwords() == ["123456"]
+    assert "123456" not in tmpdb.get_setting("pdf_passwords")  # ayarda şifreli durur
     hints = client.get("/api/settings/pdf-passwords").json()
     assert hints == [{"index": 0, "hint": "1••••6"}] and "123456" not in str(hints)
     # hatırlanan şifreyle başka ekstre kendiliğinden açılır
