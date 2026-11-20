@@ -3879,30 +3879,92 @@ def learn_from_receipt(legal_name: str, brand: str, category: str | None) -> dic
 
 # ---------------------------------------------------------------- PDF şifreleri (kullanıcı "hatırla" derse)
 
-def pdf_passwords() -> list[str]:
+# Şifreler defter ayarında JSON liste; her öğe sunucu anahtarıyla ayrı ayrı AES-GCM ile mühürlü ("pw1:...").
+# Anahtar SECRET_KEY'den (auth._secret) HKDF ile ayrı amaçla türetilir; yeni sır gerekmez. Eski düz öğeler ilk
+# okumada mühürlenip geri yazılır (tek kısa yazma, kilit yok). Çözülemeyen öğe (ör. anahtar değişmiş) listede
+# görünmez ama silinmez: anahtar geri gelirse yine okunur. Şifre hiçbir yerde loglanmaz.
+_PDF_PW_PREFIX = "pw1:"
+_PDF_PW_AAD = b"hesapkitap/pdf-password"
+
+
+def _pdf_pw_aead():
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    from app import auth
+
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"hesapkitap/pdf-password/v1").derive(auth._secret())
+    return AESGCM(key)
+
+
+def _seal_pdf_password(pw: str) -> str:
+    import base64
+
+    n = os.urandom(12)
+    return _PDF_PW_PREFIX + base64.urlsafe_b64encode(n + _pdf_pw_aead().encrypt(n, pw.encode(), _PDF_PW_AAD)).decode()
+
+
+def _unseal_pdf_password(blob: str) -> str | None:
+    import base64
+
+    from cryptography.exceptions import InvalidTag
+
+    try:
+        raw = base64.urlsafe_b64decode(blob[len(_PDF_PW_PREFIX):].encode())
+        return _pdf_pw_aead().decrypt(raw[:12], raw[12:], _PDF_PW_AAD).decode()
+    except (InvalidTag, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _pdf_password_entries() -> list[tuple[str, str | None]]:
+    """[(saklanan öğe, çözülmüş şifre | None)]; düz eski öğeler burada mühürlenip ayara geri yazılır."""
     import json
 
     try:
-        return json.loads(get_setting("pdf_passwords") or "[]")
+        raw = json.loads(get_setting("pdf_passwords") or "[]")
     except ValueError:
         return []
+    if not isinstance(raw, list):
+        return []
+    out, migrated = [], False
+    for item in raw:
+        if not isinstance(item, str) or not item:
+            continue
+        if item.startswith(_PDF_PW_PREFIX):
+            out.append((item, _unseal_pdf_password(item)))
+        else:  # eski düz kayıt
+            out.append((_seal_pdf_password(item), item))
+            migrated = True
+    if migrated:
+        try:
+            set_setting("pdf_passwords", json.dumps([s for s, _ in out]))
+        except sqlite3.Error:
+            pass  # salt okunur bağlam vb.: bir sonraki okumada yine denenir
+    return out
+
+
+def pdf_passwords() -> list[str]:
+    return [p for _, p in _pdf_password_entries() if p is not None]
 
 
 def remember_pdf_password(pw: str) -> None:
     import json
 
-    pws = pdf_passwords()
-    if pw and pw not in pws:
-        set_setting("pdf_passwords", json.dumps([pw, *pws][:10]))
+    entries = _pdf_password_entries()
+    if pw and pw not in [p for _, p in entries]:
+        set_setting("pdf_passwords", json.dumps([_seal_pdf_password(pw), *[s for s, _ in entries]][:10]))
 
 
 def forget_pdf_password(index: int) -> None:
+    """index: pdf_passwords() listesindeki sıra (çözülemeyen öğeler sayılmaz)."""
     import json
 
-    pws = pdf_passwords()
-    if 0 <= index < len(pws):
-        pws.pop(index)
-        set_setting("pdf_passwords", json.dumps(pws))
+    entries = _pdf_password_entries()
+    readable = [i for i, (_, p) in enumerate(entries) if p is not None]
+    if 0 <= index < len(readable):
+        entries.pop(readable[index])
+        set_setting("pdf_passwords", json.dumps([s for s, _ in entries]))
 
 
 # ---------------------------------------------------------------- banka hesap hareketleri

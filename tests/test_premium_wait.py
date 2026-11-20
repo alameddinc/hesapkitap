@@ -268,6 +268,7 @@ def test_encrypted_waits_for_password_then_reads(free, fake_text, monkeypatch):
         assert premium_wait.items()[0]["state"] == "sifre"
         msg = premium_wait.unlock(items[0]["id"], "1234", u)
         assert "kaydedildi" in msg and premium_wait.items() == [] and "1234" in db.pdf_passwords()
+        assert "1234" not in db.get_setting("pdf_passwords")  # ayarda şifreli durur
         assert db.list_files("uploads") == []
     assert premium_wait.release(free["id"])["processed"] == 0  # şifre bekleyen yeniden denenmez (zaten yok)
 
