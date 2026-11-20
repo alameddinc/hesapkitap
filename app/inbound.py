@@ -400,6 +400,8 @@ def handle(raw: bytes, to: str, verify=_dkim_domains) -> dict:
                 # kişisel adreste işlem bildirimi yalnız bu bankadan onaylı/bilinen belge geldikten sonra okunur
                 r = {**entry, "kind": "diger", "status": "skip",
                      "detail": "Bu bankadan henüz onaylı belge yok; bildirim okunmadı"}
+            elif kind == "banka" and (why := mailbox.promo_reason(msg, subject, mailbox._body_text(msg))):
+                r = {**entry, "kind": "diger", "status": "skip", "detail": why}  # yapay zekâ ve okuma hakkı harcanmaz
             else:
                 res = mailbox.handle_notification(mailbox._body_text(msg), received, mid) if kind == "banka" else None
                 r = {**entry, "kind": "bildirim" if res else "diger", "status": "ok" if res else "skip",

@@ -399,6 +399,34 @@ def handle_pdf(name: str, data: bytes, gate=None) -> str:
             f"{stmt.due_date:%d.%m}" if stmt.due_date else f"💳 {stmt.bank} {stmt.card_no} ekstresi kaydedildi")
 
 
+# PDF'siz banka maili yapay zekâya gitmeden önce ucuz süzgeç: pazarlama / bilgilendirme maili (ör. Gmail filtresiyle gelen
+# "ihtiyaç finansmanı" teklifi) okunmaz, okuma hakkı ve yapay zekâ harcanmaz. İşlem kalıbı varsa her zaman okunur.
+_PROMO_RE = r"finansman|kampanya|f[ıi]rsat|kredi|teklif|avantaj|faiz oran|k[âa]r oran|puan kazan|[çc]ekili[şs]|indirim"
+_TXN_VERB_RE = (r"harcama|[öo]deme|havale|\beft\b|\bfast\b|para giri[şs]i|[çc]ekim|tahsilat|virman|"
+                r"hesab[ıi]n[ıi]za .{0,40}(?:yat|ge[çc])|hesab[ıi]n[ıi]zdan|i[şs]lem(?:iniz)? (?:ger[çc]ekle|yap[ıi]ld)")
+_AMOUNT_RE = r"\d[\d.,]*\s*(?:tl|try|₺)\b|(?:tl|try|₺)\s*\d"
+_WHEN_RE = r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b|\b\d{1,2}:\d{2}\b"
+
+
+def looks_transactional(text: str) -> bool:
+    t = _low(text)
+    return bool(re.search(_TXN_VERB_RE, t) or (re.search(_AMOUNT_RE, t) and re.search(_WHEN_RE, t)))
+
+
+def promo_reason(msg: Message, subject: str, body: str) -> str | None:
+    """Reklam / bilgilendirme maili mi? Neden (günlük için) ya da None. İşlem kalıbı (fiil ya da tutar + tarih/saat) varsa
+    toplu gönderim başlığı olsa bile None: gerçek bildirim kaçmasın."""
+    text = f"{subject}\n{body}"
+    if looks_transactional(text):
+        return None
+    bulk = bool(msg.get("List-Unsubscribe")) or (msg.get("Precedence") or "").strip().lower() in ("bulk", "list", "junk")
+    if bulk:
+        return "Reklam/bilgilendirme maili (toplu gönderim), okunmadı"
+    if re.search(_PROMO_RE, _low(text)):
+        return "Reklam/bilgilendirme maili, okunmadı"
+    return None
+
+
 def parse_notification(text: str, mail_date: str) -> dict:
     from app import receipt
 
@@ -469,7 +497,10 @@ def process(mid: str, msg: Message) -> dict:
         if pdfs:
             details = [handle_pdf(n, d) for n, d in pdfs]
             return {**entry, "kind": "pdf", "status": "ok", "detail": "\n".join(details)}
-        res = handle_notification(_body_text(msg), received, mid)
+        body = _body_text(msg)
+        if why := promo_reason(msg, subject, body):  # yapay zekâya gitmez
+            return {**entry, "kind": "diger", "status": "skip", "detail": why}
+        res = handle_notification(body, received, mid)
         if res is None:
             return {**entry, "kind": "diger", "status": "skip", "detail": "Hareket içermiyor (duyuru/kampanya)"}
         return {**entry, "kind": "bildirim", "status": "ok", "detail": res}
