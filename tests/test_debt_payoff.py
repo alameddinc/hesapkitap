@@ -106,9 +106,13 @@ def test_card_interest_states():
 
 
 def test_cards_summary_and_payables_interest(client, tmpdb):
-    _card_stmt(tmpdb, total=10000, due="2026-11-05", rate="3.75", card="4111***1111", pe="2026-10-20")
-    _card_stmt(tmpdb, total=12000, due="2026-11-20", paid=8000, card="5400***2222")
-    _card_stmt(tmpdb, total=6000, due="2026-11-25", card="5400***3333", pe="2026-11-06")
+    # Uç nokta gerçek bugünü kullanır: tarihler bugüne göre (CI'da takvimle kırılmasın).
+    import datetime as _dt
+    t = _dt.date.today()
+    d = lambda n: (t + _dt.timedelta(days=n)).isoformat()
+    _card_stmt(tmpdb, total=10000, due=d(-15), rate="3.75", card="4111***1111", pe=d(-30))
+    _card_stmt(tmpdb, total=12000, due=d(5), paid=8000, card="5400***2222")
+    _card_stmt(tmpdb, total=6000, due=d(10), card="5400***3333", pe=d(-14))
     cards = {c["card_no"]: c for c in client.get("/api/cards/summary").json()["cards"]}
     a, b, c = cards["4111***1111"]["interest"], cards["5400***2222"]["interest"], cards["5400***3333"]["interest"]
     assert a["state"] == "after_due" and a["amount"] == 487.5 and a["remaining"] == 10000
