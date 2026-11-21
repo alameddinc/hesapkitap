@@ -4586,6 +4586,7 @@ class PushPrefsIn(BaseModel):
     types: dict[str, bool] | None = None
     quiet: PushQuietIn | None = None
     digest: bool | None = None
+    daily_at: str | None = Field(default=None, max_length=5)  # günlük hatırlatma saati "SS:DD" (06:00–21:00)
 
 
 def _push_uid() -> int:

@@ -83,7 +83,9 @@ FCM_TOKEN_TTL = 55 * 60
 APNS_JWT_TTL = 50 * 60
 MAX_DEVICES = 10        # kullanıcı başı cihaz
 SENT_KEEP_DAYS = 60     # gönderilenler tablosu
-DAILY_HOUR = 9          # günlük iş bu saatten sonra (Türkiye saati)
+DAILY_HOUR = 9          # günlük işin varsayılan saati (Türkiye saati); kişi tercihinde "daily_at" ile değişir
+DEFAULT_DAILY_AT = "09:00"
+DAILY_RANGE = ("06:00", "21:00")  # günlük hatırlatma saati bu aralıkta ("Bugün son gün" geç kalmasın)
 MAX_SEPARATE = 3        # özet kapalıyken en çok bu kadar ayrı bildirim; fazlası tek özet
 MAX_TRIES = 3           # ağ hatasında yeniden deneme (kuyrukta)
 EVENT_DELAY = 20.0      # ekstre kaydı sonrası olay hesabı (toplu yüklemede tek hesap)
@@ -572,8 +574,14 @@ def get_prefs(uid: int) -> dict:
     types = raw.get("types") if isinstance(raw.get("types"), dict) else {}
     q = raw.get("quiet") if isinstance(raw.get("quiet"), dict) else {}
     quiet = {k: q[k] if isinstance(q.get(k), str) and HHMM.match(q[k]) else DEFAULT_QUIET[k] for k in ("from", "to")}
+    da = raw.get("daily_at")
+    daily_at = da if isinstance(da, str) and _daily_ok(da) else DEFAULT_DAILY_AT
     return {"types": {k: bool(types.get(k, d)) for k, (_, d) in TYPES.items()}, "quiet": quiet,
-            "digest": bool(raw.get("digest", True))}
+            "digest": bool(raw.get("digest", True)), "daily_at": daily_at}
+
+
+def _daily_ok(v: str) -> bool:
+    return bool(HHMM.match(v)) and _hhmm(DAILY_RANGE[0]) <= _hhmm(v) <= _hhmm(DAILY_RANGE[1])
 
 
 def set_prefs(uid: int, data: dict) -> dict:
@@ -590,6 +598,11 @@ def set_prefs(uid: int, data: dict) -> dict:
                 cur["quiet"][k] = v
     if data.get("digest") is not None:
         cur["digest"] = bool(data["digest"])
+    if data.get("daily_at") is not None:
+        v = data["daily_at"]
+        if not isinstance(v, str) or not _daily_ok(v):
+            raise ValueError(f"Günlük hatırlatma saati {DAILY_RANGE[0]}–{DAILY_RANGE[1]} arasında olmalı")
+        cur["daily_at"] = v
     with system.connect() as c:
         c.execute("INSERT OR REPLACE INTO push_prefs (user_id, json) VALUES (?, ?)", (uid, json.dumps(cur)))
     return cur
@@ -1277,16 +1290,21 @@ def _space_of(u: dict) -> str | None:
 
 
 def run_daily(now: datetime) -> dict:
-    """Günde bir kez (DAILY_HOUR'dan sonra), cihazı olan her kullanıcı için zamanlı bildirimler."""
+    """Günde bir kez, kişinin günlük hatırlatma saatinden (tercih "daily_at", varsayılan 09:00) sonra, cihazı olan her
+    kullanıcı için zamanlı bildirimler. Sessiz saat yine geçerli (enqueue erteler)."""
     now = now.astimezone(TZ)
     today = now.date()
-    if now.hour < DAILY_HOUR:
+    cur = now.hour * 60 + now.minute
+    if cur < _hhmm(DAILY_RANGE[0]):
         return {}
     with system.connect() as c:
         uids = [r[0] for r in c.execute("SELECT DISTINCT user_id FROM push_devices ORDER BY user_id")]
     done = {}
     for uid in uids:
         if system.get(f"push:daily:{uid}") == today.isoformat():
+            continue
+        p = get_prefs(uid)
+        if cur < _hhmm(p["daily_at"]):
             continue
         system.put(f"push:daily:{uid}", today.isoformat())
         u = system.user(uid)
@@ -1295,7 +1313,6 @@ def run_daily(now: datetime) -> dict:
         if not any(_platform_on(d["platform"]) for d in devices(uid)):
             continue
         try:
-            p = get_prefs(uid)
             with db.use_space(_space_of(u), u):
                 items = collect(u, today, p)
             done[uid] = len(notify(uid, items, now, daily=True, background=False))
