@@ -312,6 +312,21 @@ def _odeme(now: date) -> list[dict]:
     return out
 
 
+def _varlik_soru(now: date) -> list[dict]:
+    """Aşama 2: "Bu hangi araç?" — bağlanmamış araç harcamaları tek kartta (işyeri başına ayrı kart değil)."""
+    from app import asset_costs
+
+    q = asset_costs.questions(now)
+    if not q["count"] or not q["can_answer"]:
+        return []
+    top = q["items"][0]
+    more = len(q["items"]) - 1
+    return [{"id": f"varlik_soru:{now.isoformat()[:7]}", "kind": "varlik", "severity": "info", "action": "asset_question",
+             "route": "varliklar", "title": f"{q['count']} araç harcaması: hangi araç?",
+             "text": f"{top['merchant']}" + (f" ve {more} işyeri daha" if more > 0 else "") + ". Bir kez söyle, öğrenelim.",
+             "cta": "Araç seç", "tag": "Hangi araç?", "period": _month(now), "due": now.isoformat(), "amount": None}]
+
+
 def _varlik(now: date) -> list[dict]:
     """Varlıklarım: gecikmiş ve 7 gün içindeki bekleyen vadeler; 30 gün içinde tutarı girilmemiş vade ("Tutar gir") ve
     tahmini muayene ("ruhsattan doğrula"). Kart başına değil vade başına; snooze / dismiss mevcut düzenle."""
@@ -560,7 +575,7 @@ def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: i
     items += _finans()
     if assets and not _page_hidden("varliklar"):  # yalnız tanıyan istemci (?assets=1): eski mobil türü bilmez
         try:
-            items += _varlik(now)
+            items += _varlik(now) + _varlik_soru(now)
         except Exception:  # noqa: BLE001 - varlık takvimi Yapılacaklar'ı bozmasın (eski şema vb.)
             import logging
 

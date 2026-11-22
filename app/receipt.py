@@ -524,6 +524,7 @@ SADECE şu JSON'u döndür:
   "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
   "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
+  "plate": "sadece akaryakıt / otopark / servis fişi: fişte yazan ARAÇ PLAKASI (ör. PLAKA: 06 ORN 123); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
   "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV / KDV tutarı (şahıs firması fişinde de) veya null",
@@ -576,6 +577,7 @@ SADECE şu JSON'u TEK SATIR, girintisiz döndür (null olan alanı ve kalemde q 
   "payment": "nakit | kart | yemek_karti | bilinmiyor  (YEMEK ÇEKİ/KARTI, Multinet, Sodexo/Pluxee, Edenred, Setcard, Metropol → yemek_karti)",
   "payment_card": "yemek/hediye kartı markası (ör. Multinet) veya null",
   "card_last4": "kartla ödendiyse slipte/fişte maskeli yazan kart numarasının SON 4 hanesi (ör. 4000 **** **** 1234 → \"1234\"); yoksa null",
+  "plate": "sadece akaryakıt / otopark / servis fişi: fişte yazan ARAÇ PLAKASI (ör. PLAKA: 06 ORN 123); yoksa null",
   "installments": "kartla TAKSİTLİ ödendiyse taksit sayısı (fişte/slipte 'TAKSİT SAYISI: 3', '3 TAKSİT', '3 AY' gibi), tek çekimse 1",
   "category": "fiş ise şu listeden en uygunu: {categories}",
   "vat_total": "sadece fiş: TOPKDV / TOPLAM KDV / KDV tutarı (şahıs firması fişinde de) veya null",
@@ -731,9 +733,29 @@ def rule_read(text: str | None, qr: list[str] | None, categories: list[str]) -> 
     return doc  # sayım: app/api/main.py _count_receipt / _count_bill (doc["rule"])
 
 
+def _plate(v) -> str | None:
+    from app import asset_costs
+
+    return asset_costs.normalize_plate(v) if isinstance(v, str) else None
+
+
 def parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
                    more: list[tuple[bytes, str]] | None = None, ocr_text: str | None = None,
                    qr: list[str] | None = None) -> dict:
+    """Belgeyi oku (_parse_document); fişte plaka yoksa telefon metninde "PLAKA:" etiketi aranır (yapay zekâsız
+    yollar: şablon, karekod, yerel okuma)."""
+    doc = _parse_document(data, mime, categories, split_categories, more, ocr_text, qr)
+    if isinstance(doc, dict) and doc.get("type") == "receipt" and not doc.get("plate"):
+        from app import asset_costs
+
+        p = asset_costs.plate_in_text(ocr_text) if ocr_text else None
+        doc["plate"] = p
+    return doc
+
+
+def _parse_document(data: bytes, mime: str, categories: list[str], split_categories: list[str] | None = None,
+                    more: list[tuple[bytes, str]] | None = None, ocr_text: str | None = None,
+                    qr: list[str] | None = None) -> dict:
     """Fiş mi fatura mı kendisi anlar. Gemini yoksa, kota dolduysa ya da ulaşılamazsa yerel okuma (Tesseract).
     ocr_text: fotoğrafla birlikte gelen telefon metni (yardımcı): yapay zekâya gitmez; önce kurumun fatura şablonu bu
     metinle denenir, model KDV/VKN'yi boş bırakırsa metinden doldurulur, yerel okuma Tesseract yerine bu metinle yapılır.
@@ -881,6 +903,7 @@ def _doc_of(raw: dict, categories: list[str]) -> dict:
         "payment_card": (raw.get("payment_card") or "").strip()[:40] or None,
         "installments": _installments(raw.get("installments")),
         "card_last4": card_last4(raw.get("card_last4")),
+        "plate": _plate(raw.get("plate")),
         "category": category,
         "items": _items(raw),
         "legal_name": (raw.get("legal_name") or "").strip()[:120] or None,

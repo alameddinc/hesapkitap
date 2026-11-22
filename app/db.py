@@ -582,6 +582,28 @@ CREATE TABLE IF NOT EXISTS asset_files (    -- ruhsat / poliçe: yalnız saklan�
     size INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- Varlıklarım Aşama 2 (app/asset_costs.py): harcama ↔ araç bağı ve öğrenilen kural. asset_id NULL = "araçla ilgisi
+-- yok" (kullanıcı yanıtı; tekrar sorulmaz). source: user | plate | rule | auto | bulk. card_last4 '' = kartsız.
+CREATE TABLE IF NOT EXISTS asset_links (
+    id INTEGER PRIMARY KEY,
+    asset_id INTEGER REFERENCES assets(id) ON DELETE CASCADE,
+    txn_id INTEGER,
+    entry_id INTEGER,
+    cost_kind TEXT NOT NULL,                 -- yakit | yol | otopark | servis | diger
+    source TEXT NOT NULL,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (txn_id),
+    UNIQUE (entry_id)
+);
+CREATE TABLE IF NOT EXISTS asset_rules (     -- "işyeri X, kart 1234 = Aile arabası"; asset_id NULL: araçla ilgisi yok
+    id INTEGER PRIMARY KEY,
+    asset_id INTEGER REFERENCES assets(id) ON DELETE CASCADE,
+    merchant_key TEXT NOT NULL,
+    card_last4 TEXT NOT NULL DEFAULT '',
+    hits INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (merchant_key, card_last4)
+);
 -- Uygulama mağazası abonelikleri (app/store_subs.py): kullanıcının adaya verdiği karar. Aday her istekte tahsilatlardan
 -- yeniden kurulur; karar adayın tahsilat parmak izlerine (fps: "mağaza:tarih:kuruş" JSON listesi) bağlıdır, yeni
 -- ekstre yüklenip adayın kimliği değişse de karar onu bulur.
@@ -623,6 +645,9 @@ DEFAULT_ITEM_RULE = ("sigara, marlboro, parliament, camel, winston, kent, lucky 
 
 MIGRATIONS = [
     ("entries", "card_last4", "TEXT"),
+    ("entries", "plate", "TEXT"),                              # fişte okunan plaka (normalize; Varlıklarım araç bağı)
+    ("assets", "costs_since", "DATE"),                         # bu günden sonraki araç harcamaları kendiliğinden bağlanır
+    ("assets", "review_since", "DATE"),                        # "Tek tek bakayım": bu günden sonrası soruya düşer
     ("recurring", "match_key", "TEXT"),
     # sıklık (16.11 "düzenli mi?"): NULL / 'monthly' = ayda bir (day_of_month); 'biweekly' / 'weekly' = anchor_date'ten
     # 14 / 7 günde bir (dönem içinde birden çok oluşum)
@@ -1968,7 +1993,7 @@ def update_card_transaction(txn_id: int, fields: dict) -> None:
 ENTRY_FIELDS = ("entry_date", "description", "amount", "kind", "category", "subcategory", "note", "recurring_id", "skipped",
                 "payment", "linked_txn_id", "month", "import_hash", "counterparty", "debt_id", "location", "wallet_id", "account_id",
                 "installments", "card_last4", "hidden", "created_by", "receipt_file", "bill_provider", "not_virman",
-                "legal_name", "tax_no", "tax_office", "vat_total", "vat_lines")
+                "legal_name", "tax_no", "tax_office", "vat_total", "vat_lines", "plate")
 
 
 def installment_parts(e: dict) -> list[tuple[int, str, float]]:

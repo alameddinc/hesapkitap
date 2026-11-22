@@ -73,6 +73,9 @@ MEMBER_WRITES = [
     ("PATCH", r"/api/assets/\d+/obligations/\d+"), ("DELETE", r"/api/assets/\d+/obligations/\d+"),
     ("DELETE", r"/api/assets/\d+/files/\d+"),
     ("POST", r"/api/asset-dues/\d+/(pay|skip|unpay)"), ("PATCH", r"/api/asset-dues/\d+"),
+    # Aşama 2: harcamayı araca bağlama yalnız görebildiği işlemde (app/asset_costs.py uçta denetler); toplu ekleme
+    ("POST", r"/api/assets/links"), ("DELETE", r"/api/assets/links/\d+"), ("POST", r"/api/assets/plates/ignore"),
+    ("POST", r"/api/assets/\d+/backfill"),
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",
