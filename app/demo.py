@@ -170,12 +170,45 @@ def _assets(today: date) -> None:
     """Varlıklarım (uydurma): 1 araç, 1 ev; tutarlı / tutarsız / tahmini vadeler birlikte."""
     from app import assets
 
-    assets.create({"kind": "arac", "name": "Örnek Aile Arabası", "plate": "06 DMO 101", "vehicle_class": "otomobil",
+    aid = assets.create({"kind": "arac", "name": "Örnek Aile Arabası", "plate": "06 DMO 101", "vehicle_class": "otomobil",
                    "model_year": 2021, "fuel": "benzin"},
                   [{"kind": "mtv", "amount": 6400}, {"kind": "trafik", "start": "2026-12-05", "amount": 3900},
                    {"kind": "muayene"}], on=today)
     assets.create({"kind": "konut", "name": "Örnek Ev", "tenure": "sahibi"},
                   [{"kind": "emlak", "amount": 1800}, {"kind": "dask", "start": "2027-02-14"}], on=today)
+    _car_costs(today, aid)
+
+
+def _car_costs(today: date, aid: int) -> None:
+    """Araç masrafları (Aşama 2, uydurma): son 12 ay akaryakıt, otoyol, otopark, bir servis; bir fişte aracın plakası,
+    birinde tanınmayan plaka ("Bu plaka senin mi?"). Araç 12 ay önceden beri kullanılıyor: hepsi kendiliğinden bağlanır."""
+    from datetime import timedelta
+
+    from app import assets
+
+    fuel = (2150, 1980, 2420, 2260, 1890, 2340, 2610, 2480, 2050, 2290, 2370, 2180)
+    for back, amt in enumerate(fuel):
+        y, m = divmod(today.year * 12 + today.month - 1 - back, 12)
+        day = min(today.day, 18) if not back else 18
+        d = date(y, m + 1, day)
+        db.create_entry({"entry_date": d.isoformat(), "description": "Örnek Akaryakıt İstasyonu", "amount": amt,
+                         "kind": "gider", "category": "Ulaşım & Araç", "payment": "nakit"})
+        db.create_entry({"entry_date": (d - timedelta(days=9)).isoformat(), "description": "Örnek Otoyol HGS Yükleme",
+                         "amount": 400 if back % 2 else 300, "kind": "gider", "category": "Ulaşım & Araç",
+                         "payment": "nakit"})
+        if back % 3 == 0:
+            db.create_entry({"entry_date": (d - timedelta(days=4)).isoformat(), "description": "Örnek Otopark",
+                             "amount": 120, "kind": "gider", "category": "Ulaşım & Araç", "payment": "nakit"})
+    db.create_entry({"entry_date": (today - timedelta(days=75)).isoformat(), "description": "Örnek Oto Servis Bakım",
+                     "amount": 6400, "kind": "gider", "category": "Ulaşım & Araç", "payment": "nakit"})
+    db.create_entry({"entry_date": (today - timedelta(days=6)).isoformat(), "description": "Örnek Akaryakıt Fişi",
+                     "amount": 1650, "kind": "gider", "category": "Ulaşım & Araç", "payment": "nakit",
+                     "plate": "06DMO101"})
+    db.create_entry({"entry_date": (today - timedelta(days=12)).isoformat(), "description": "Örnek Akaryakıt Fişi",
+                     "amount": 900, "kind": "gider", "category": "Ulaşım & Araç", "payment": "nakit",
+                     "plate": "06DMO202"})
+    with db.connect() as c:
+        c.execute("UPDATE assets SET costs_since = ? WHERE id = ?", (assets.add_months(today, -12).isoformat(), aid))
 
 
 def _extras() -> None:

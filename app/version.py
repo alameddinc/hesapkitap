@@ -450,6 +450,12 @@ CAPABILITIES = (
                               # /api/asset-dues/{id} (pay/skip/unpay, PATCH tutar); plan months[].lines type "varlik",
                               # parts.pending_assets, plan.asset_unknown; spendable DUE_KEYS "assets"; push varlik_*;
                               # GET /api/reminders?assets=1 → kind "varlik" (action asset_due, due_id)
+    "asset_costs",            # Varlıklarım Aşama 2 (app/asset_costs.py): GET /api/assets/{id} costs {this_month, last_12,
+                              # monthly_avg, fuel_monthly, months, groups [{kind yakit|yol|otopark|servis|vade|diger, label,
+                              # total, count, monthly, this_month}], series [{month, total}]} | {locked}; GET
+                              # /api/assets/{id}/costs?group; GET /api/assets/questions ("Bu hangi araç?"); GET/POST
+                              # /api/assets/links (+ DELETE /{id}); GET /api/assets/plates (+ POST /ignore); GET/POST
+                              # /api/assets/{id}/backfill (mode all|review|skip); fiş okumasında ve kayıtta plate
     "warranty",               # garanti arşivi (app/warranty.py): GET /api/warranties?q&status → {items [{id, name, brand, model,
                               # store, purchase_date, price, months, extra_months, ends_at, days_left, status aktif|yakinda|bitti,
                               # status_label, left_text, serial_no, note, entry_id, txn_id, files [{id, doc_type, doc_label,

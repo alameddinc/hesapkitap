@@ -3042,6 +3042,7 @@ class EntryIn(BaseModel):
     account_id: int | None = None  # banka/nakit hesabı
     installments: int = Field(1, ge=1, le=36)  # kredi kartı taksit sayısı
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")  # hangi kredi kartı (fişte yazıyorsa okunur)
+    plate: str | None = Field(None, max_length=16)  # fişteki araç plakası (okuma yanıtı; Varlıklarım araç bağı)
     receipt_file: str | None = Field(None, pattern=r"^[0-9a-f]{64}\.jpg$")  # okuma yanıtındaki fiş fotoğrafı
     # kim harcadı (ortak defter, yetenek save_book_choice): "u<id>" | "ortak"; otomatikten (ekleyen) farklıysa saklanır
     spender: str | None = Field(None, max_length=20)
@@ -3071,6 +3072,7 @@ class EntryPatch(BaseModel):
     account_id: int | None = None  # banka/nakit hesabı
     installments: int | None = Field(None, ge=1, le=36)
     card_last4: str | None = Field(None, pattern=r"^\d{4}$")
+    plate: str | None = Field(None, max_length=16)
     hidden: bool | None = None  # ortak defterde üyeye gösterme (sadece sahip)
     legal_name: str | None = Field(None, max_length=160)  # fişin vergi bilgisi; "" ya da null → sil
     tax_no: str | None = Field(None, max_length=20)
@@ -3087,6 +3089,10 @@ def _tax_fields(data: dict) -> None:
 
     from app import vat
 
+    if "plate" in data:  # fişteki plaka: TR biçimine uymuyorsa saklanmaz (app/asset_costs.normalize_plate)
+        from app import asset_costs
+
+        data["plate"] = asset_costs.normalize_plate(data["plate"])
     if "legal_name" in data:
         data["legal_name"] = (data["legal_name"] or "").strip()[:120] or None
     if "tax_no" in data:
@@ -10659,6 +10665,121 @@ def assets_suggest(kind: Literal["arac", "konut", "isyeri"] = "arac",
 
     return assets.suggest(kind, tenure, vehicle_class, commercial, model_year,
                           acquired_on.isoformat() if acquired_on else None)
+
+
+# ---- Aşama 2: araç masrafları (app/asset_costs.py; yetenek "asset_costs")
+
+class AssetLinkIn(BaseModel):
+    """Harcamayı araca bağla: asset_id null = araçla ilgisi yok. remember: işyeri + kart kuralı öğrenilir.
+    clear: kullanıcı bağını kaldır (Geri al; harcama yeniden kurallarla değerlendirilir)."""
+    txn_ids: list[int] = Field(default_factory=list, max_length=500)
+    entry_ids: list[int] = Field(default_factory=list, max_length=500)
+    asset_id: int | None = None
+    cost_kind: Literal["yakit", "yol", "otopark", "servis", "vade", "diger"] | None = None
+    remember: bool = True
+    clear: bool = False
+
+
+class AssetBackfillIn(BaseModel):
+    mode: Literal["all", "review", "skip"]
+    since: date | None = None
+
+
+class AssetPlateIgnoreIn(BaseModel):
+    plate: str = Field(min_length=4, max_length=16)
+
+
+def _costs_call(fn, *a, **kw):
+    from app import asset_costs
+
+    try:
+        return fn(*a, **kw)
+    except KeyError as e:
+        raise HTTPException(404, "Kayıt bulunamadı") from e
+    except asset_costs.Forbidden as e:
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.get("/api/assets/questions")
+def assets_questions():
+    """ "Bu hangi araç?": {items [{key, merchant, card_last4, cost_kind, cost_label, count, total, txn_ids, entry_ids,
+    items (en çok 20), options [{id, name, fuel}]}], vehicles, can_answer, locked, count}. Yanıt: POST /api/assets/links."""
+    from app import asset_costs
+
+    return asset_costs.questions()
+
+
+@app.get("/api/assets/plates")
+def assets_unknown_plates():
+    """Fişte okunan ama hiçbir araca ait olmayan plakalar: {items [{plate, count, total, last_date}]}. "Araç ekle"
+    (plaka dolu form) ya da POST /api/assets/plates/ignore."""
+    from app import asset_costs
+
+    return {"items": asset_costs.unknown_plates()}
+
+
+@app.post("/api/assets/plates/ignore")
+def assets_plate_ignore(body: AssetPlateIgnoreIn):
+    from app import asset_costs
+
+    _costs_call(asset_costs.ignore_plate, body.plate)
+    return {"ok": True}
+
+
+@app.get("/api/assets/links")
+def assets_link_info(txn_id: int | None = None, entry_id: int | None = None):
+    """İşlem detayındaki araç seçici: {available, candidate, cost_kind, link {id, asset_id, asset_name, source, cost_kind}
+    | null, plate, vehicles, can_edit, cost_kinds}."""
+    from app import asset_costs
+
+    return _costs_call(asset_costs.link_info, txn_id, entry_id)
+
+
+@app.post("/api/assets/links")
+def assets_link(body: AssetLinkIn):
+    """Elle bağ (her zaman kazanır). Yanıt {ok, count, learned, previous [{txn_id, entry_id, asset_id, cost_kind,
+    source}]}: Geri al için önceki bağlar (source null = bağ yoktu → clear)."""
+    from app import asset_costs
+
+    return _costs_call(asset_costs.link, body.txn_ids, body.entry_ids, body.asset_id, body.cost_kind,
+                       body.remember, body.clear)
+
+
+@app.delete("/api/assets/links/{lid}")
+def assets_unlink(lid: int):
+    """Bağı kaldır: harcama "araçla ilgisi yok" olur."""
+    from app import asset_costs
+
+    _costs_call(asset_costs.unlink, lid)
+    return {"ok": True}
+
+
+@app.get("/api/assets/{aid}/costs")
+def asset_costs_list(aid: int, group: Literal["yakit", "yol", "otopark", "servis", "diger", "vade"] | None = None):
+    """Aracın son 12 ay masrafları: {items [{txn_id, entry_id, due_id, date, description, amount, group, cost_kind,
+    source_label, link_id, link_source}], total, label, can_edit, locked}."""
+    from app import asset_costs
+
+    return _costs_call(asset_costs.costs, aid, group)
+
+
+@app.get("/api/assets/{aid}/backfill")
+def asset_backfill_preview(aid: int, since: date | None = None):
+    """Araç eklenince: since (vars. alım tarihi ya da 12 ay önce) → bugün bağlanmamış araç harcamaları {count, total,
+    by_kind, excluded {other_plate, unknown_plate}, items, since, default_since, min_since}."""
+    from app import asset_costs
+
+    return _costs_call(asset_costs.backfill_preview, aid, since.isoformat() if since else None)
+
+
+@app.post("/api/assets/{aid}/backfill")
+def asset_backfill(aid: int, body: AssetBackfillIn):
+    """mode all: Hepsini ekle · review: Tek tek bakayım (soruya düşer) · skip: Şimdilik geç."""
+    from app import asset_costs
+
+    return _costs_call(asset_costs.backfill, aid, body.mode, body.since.isoformat() if body.since else None)
 
 
 @app.get("/api/assets/{aid}")

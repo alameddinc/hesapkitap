@@ -395,6 +395,12 @@ def get(aid: int, on: date | None = None) -> dict | None:
                      "filename": f["filename"], "size": f["size"], "pdf": f["name"].endswith(".pdf"),
                      "created_at": f["created_at"]} for f in files]
     out["needs_review"] = [o["kind"] for o in mine if o["kind"] == "muayene" and o["estimated"]]
+    if a["kind"] == "arac":  # Aşama 2: masraf özeti (app/asset_costs.py); eski istemci alanı tanımaz
+        from app import asset_costs
+
+        out["costs"] = asset_costs.summary(a, on)
+        out["costs_since"] = a.get("costs_since")
+        out["backfill_asked"] = bool(a.get("costs_since") or a.get("review_since"))
     return out
 
 
