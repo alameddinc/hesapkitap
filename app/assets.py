@@ -54,6 +54,12 @@ OBLIGATIONS = {
     "kira_beyan": ("Kira geliri beyanı", "varlik_vergi", "fixed"),
     "diger": ("Diğer", "varlik_bakim", "anniversary"),
 }
+# varlık türüne uygun yükümlülükler (araca emlak vergisi, eve MTV bağlanmaz: 422)
+ALLOWED = {
+    "arac": {"mtv", "trafik", "kasko", "muayene", "bakim", "diger"},
+    "konut": {"emlak", "dask", "konut_sig", "aidat", "kira_artis", "kira_beyan", "diger"},
+    "isyeri": {"emlak", "dask", "konut_sig", "aidat", "kira_artis", "kira_beyan", "diger"},
+}
 # sabit tarihli türler: (ay-gün, taksit adı)
 FIXED = {
     "mtv": (("01-31", "1. taksit"), ("07-31", "2. taksit")),            # 197 s. MTV Kanunu, ödeme zamanı
@@ -490,10 +496,12 @@ def _clean_asset(data: dict, partial: bool = False) -> dict:
     return out
 
 
-def _clean_ob(x: dict, on: date) -> dict:
+def _clean_ob(x: dict, on: date, asset_kind: str | None = None) -> dict:
     k = x.get("kind")
     if k not in OBLIGATIONS:
         raise ValueError("Bilinmeyen hatırlatma türü")
+    if asset_kind and k not in ALLOWED.get(asset_kind, set()):
+        raise ValueError(f"{OBLIGATIONS[k][0]} {KINDS.get(asset_kind, asset_kind).lower()} için eklenemez")
     amt = x.get("amount")
     if amt is not None and float(amt) < 0:
         raise ValueError("Tutar eksi olamaz")
@@ -528,7 +536,7 @@ def create(data: dict, obligations: list[dict], client_key: str | None = None, o
     else:
         a.pop("tenure", None)
         a["vehicle_class"] = a.get("vehicle_class") or "otomobil"
-    obs = [_clean_ob(x, on) for x in obligations or []]
+    obs = [_clean_ob(x, on, a["kind"]) for x in obligations or []]
     with db.connect() as c:
         if client_key:
             dup = c.execute("SELECT id FROM assets WHERE client_key = ?", (client_key,)).fetchone()
@@ -586,9 +594,9 @@ def update(aid: int, data: dict, on: date | None = None) -> list[str]:
 
 def add_obligation(aid: int, x: dict, on: date | None = None) -> int:
     on = on or today()
-    o = _clean_ob(x, on)
     with db.connect() as c:
-        _editable(c, aid)
+        a = _editable(c, aid)
+        o = _clean_ob(x, on, a["kind"])
         oid = _insert_ob(c, aid, o)
         _ensure(c, on)
     return oid

@@ -75,6 +75,7 @@ def seed(statements: tuple[str, ...] = ("vakifbank_a.txt", "vakifbank_b.txt", "k
     db.set_subscription_state(merchant_name("ÖRNEK E-KİTAP ABONELİĞİ"), "iptal",
                               date(2026, 10, 15).isoformat())
     _extras()
+    _assets(date(2026, 10, 20))
     if bills:
         add_plan_commit(date(2026, 10, 20))  # ANCHOR; canlı demo şablonu kaydırmadan sonra gerçek bugünle (demo_mode)
     print(f"Demo verisi yüklendi: {db.DB_PATH}")
@@ -163,6 +164,18 @@ def add_bills(today: date) -> None:
                                   "description": f"{_AYLAR[used.month - 1]} {used.year}"})
             if back:
                 db.pay_bill(bid, amount, (due - timedelta(days=3)).isoformat(), "havale")
+
+
+def _assets(today: date) -> None:
+    """Varlıklarım (uydurma): 1 araç, 1 ev; tutarlı / tutarsız / tahmini vadeler birlikte."""
+    from app import assets
+
+    assets.create({"kind": "arac", "name": "Örnek Aile Arabası", "plate": "06 DMO 101", "vehicle_class": "otomobil",
+                   "model_year": 2021, "fuel": "benzin"},
+                  [{"kind": "mtv", "amount": 6400}, {"kind": "trafik", "start": "2026-12-05", "amount": 3900},
+                   {"kind": "muayene"}], on=today)
+    assets.create({"kind": "konut", "name": "Örnek Ev", "tenure": "sahibi"},
+                  [{"kind": "emlak", "amount": 1800}, {"kind": "dask", "start": "2027-02-14"}], on=today)
 
 
 def _extras() -> None:

@@ -251,3 +251,24 @@ def test_member_permissions(owner):
 
 def test_capability(client):
     assert "assets" in client.get("/api/meta").json()["capabilities"]
+
+
+def test_obligation_kind_must_match_asset_kind(client):
+    r = client.post("/api/assets", json={**CAR, "obligations": [{"kind": "emlak", "amount": 100}]})
+    assert r.status_code == 422 and "araç için eklenemez" in r.json()["detail"]
+    ev = client.post("/api/assets", json={"kind": "konut", "name": "Örnek Ev", "tenure": "sahibi", "obligations": [{"kind": "mtv"}]})
+    assert ev.status_code == 422
+    a = _add(client)
+    assert client.post(f"/api/assets/{a['id']}/obligations", json={"kind": "dask", "start": "2027-01-01"}).status_code == 422
+    assert client.post(f"/api/assets/{a['id']}/obligations", json={"kind": "kasko", "start": "2027-01-01"}).status_code == 200
+
+
+def test_property_tax_second_installment_is_end_of_november(client):
+    a = _add(client, {"kind": "konut", "name": "Örnek Ev", "tenure": "sahibi"}, [{"kind": "emlak", "amount": 2000}])
+    d = client.get("/api/asset-dues", params={"from": "2027-01-01", "to": "2027-12-31"}).json()["items"]
+    em = [x for x in d if x["asset_id"] == a["id"]]
+    assert [x["due_date"] for x in em] == ["2027-05-31", "2027-11-30"]
+    assert em[1]["effective_date"] == "2027-11-30" and em[1]["title"] == "Emlak vergisi · 2. taksit"
+    # 30 Kasım 2025 Pazar: son gün ilk iş günü (1 Aralık)
+    from app import workdays
+    assert workdays.next_business_day(date(2025, 11, 30)) == date(2025, 12, 1)
