@@ -86,6 +86,11 @@ def classify(description: str, category: str | None = None, txn_type: str | None
     c = _norm(category)
     if txn_type == "faiz_ucret" or BANK_FEE.search(d) or BANK_CATS.search(c):
         return None
+    from app import asset_pay
+
+    pk = asset_pay.payment_kind(d)
+    if pk and pk["group"] != "muayene":
+        return None  # sigorta / vergi ödemesi: vadenin "ödendi"siyle sayılır (taksitleri de; çift sayım olmasın)
     for kind, rx in PATTERNS:
         if rx.search(d):
             if kind != "yakit" and NOT_VEHICLE.search(d):
@@ -604,7 +609,7 @@ def rows(aid: int, on: date | None = None) -> list[dict]:
         x = cands.get(f"t{lk['txn_id']}" if lk["txn_id"] is not None else f"e{lk['entry_id']}")
         if x:
             out.append({**_item_out(x, lk), "group": lk["cost_kind"], "cost_kind": lk["cost_kind"]})
-    from app import assets
+    from app import asset_pay, assets
 
     for d in dues:
         amt = d["paid_amount"] if d["paid_amount"] is not None else d["amount"]
@@ -616,7 +621,11 @@ def rows(aid: int, on: date | None = None) -> list[dict]:
         if dup:
             continue
         name = d["ob_label"] if d["ob_kind"] == "diger" and d["ob_label"] else assets.OBLIGATIONS.get(d["ob_kind"], ("Diğer",))[0]
+        inst = asset_pay.installment_info(d.get("installment"), on)
+        if inst:  # poliçe toplamı bir kez; aylık taksitler ekstre dökümünde (bağlanmaz)
+            name += f" · {inst['m']} taksit"
         out.append({"txn_id": None, "entry_id": None, "due_id": d["id"], "date": d["paid_on"], "description": name,
+                    "installment": inst,
                     "amount": round(float(amt), 2), "cost_kind": None, "group": DUE_GROUP.get(d["ob_kind"], "diger"),
                     "source_label": "Son gün", "link_id": None, "link_source": None, "card_last4": None, "plate": None})
     out.sort(key=lambda r: (r["date"], r.get("link_id") or 0), reverse=True)

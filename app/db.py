@@ -648,6 +648,9 @@ MIGRATIONS = [
     ("entries", "plate", "TEXT"),                              # fişte okunan plaka (normalize; Varlıklarım araç bağı)
     ("assets", "costs_since", "DATE"),                         # bu günden sonraki araç harcamaları kendiliğinden bağlanır
     ("assets", "review_since", "DATE"),                        # "Tek tek bakayım": bu günden sonrası soruya düşer
+    ("asset_dues", "txn_id", "INTEGER"),                       # H9: ödendi önerisi onaylanan işlem (app/asset_pay.py)
+    ("asset_dues", "entry_id", "INTEGER"),
+    ("asset_dues", "installment", "TEXT"),                     # taksitli poliçe: JSON {key, m, per, total, start}
     ("recurring", "match_key", "TEXT"),
     # sıklık (16.11 "düzenli mi?"): NULL / 'monthly' = ayda bir (day_of_month); 'biweekly' / 'weekly' = anchor_date'ten
     # 14 / 7 günde bir (dönem içinde birden çok oluşum)

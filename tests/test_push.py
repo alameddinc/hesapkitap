@@ -174,9 +174,10 @@ def test_device_register_move_delete_and_limit(owner, nokeys):  # noqa: F811
 def test_prefs_defaults_and_partial_put(owner, nokeys):  # noqa: F811
     p = owner.get("/api/push/prefs").json()
     assert p["enabled"] is False and p["digest"] is True and p["quiet"] == {"from": "22:00", "to": "09:00"}
-    assert p["types"]["ortak"] is False and all(v for k, v in p["types"].items() if k != "ortak")
+    assert p["types"]["ortak"] is False and p["types"]["varlik_soru"] is False  # varsayılan kapalı iki tür
+    assert all(v for k, v in p["types"].items() if k not in ("ortak", "varlik_soru"))
     assert set(p["labels"]) == set(p["types"]) and p["labels"]["odeme"] == "Kart son ödeme"
-    assert len(p["types"]) == 30  # + varlik_vergi / varlik_sigorta / varlik_muayene / varlik_bakim (Varlıklarım), + duzeltme (app/incidents.py), + kumbara_pay (katılımcının kendi payı), + aile, + geri_bildirim ve sistem (yalnız yöneticiye: owner yönetici), + liste, + destek
+    assert len(p["types"]) == 31  # + varlik_soru, varlik_vergi / varlik_sigorta / varlik_muayene / varlik_bakim (Varlıklarım), + duzeltme (app/incidents.py), + kumbara_pay (katılımcının kendi payı), + aile, + geri_bildirim ve sistem (yalnız yöneticiye: owner yönetici), + liste, + destek
     # + fiyat (Fiyat artışı), + borc (elden borcun söz verilen günü), + duyuru (yöneticinin duyurusu)
     # + kumbara (hedef tarihine 7 gün kala), + kart_suresi (yemek / hediye kartı son kullanma), + sadaka (Hayırlı Cumalar)
     # + garanti (garanti arşivinde bitişe 30 ve 7 gün kala)
