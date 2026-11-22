@@ -36,12 +36,14 @@ PAGES = {  # sayfa → üyeye kapanan API önekleri
     "fiyatlar": ("/api/prices",),
     "alisveris": ("/api/shopping-list", "/api/shopping-trips"),
     "garantiler": ("/api/warranties",),
+    "varliklar": ("/api/assets", "/api/asset-dues"),
 }
 # kapalı sayfanın önekinde olsa da açık: fiş kalemi adı önerisi (fiyatlar kapalıysa yanıtta fiyat yok; prices_suggest)
 PAGE_OPEN = ("/api/prices/suggest",)
 PAGE_LABELS = {"plan": "Planlama", "istatistik": "İstatistik", "ekstreler": "Ekstreler", "hesaplar": "Hesaplar",
                "transferler": "Transferler", "borclar": "Borç / Alacak", "zekat": "Zekât ve Sadaka",
-               "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar", "alisveris": "Alışveriş listesi", "garantiler": "Garantiler"}
+               "tasarruf": "Tasarruf", "fiyatlar": "Fiyatlar", "alisveris": "Alışveriş listesi", "garantiler": "Garantiler",
+               "varliklar": "Varlıklarım"}
 # üyenin yapabileceği değişiklikler (geri kalan her yazma sahibe ait)
 MEMBER_WRITES = [
     ("POST", r"/api/entries"), ("PATCH", r"/api/entries/\d+"), ("PATCH", r"/api/card-transactions/\d+"),
@@ -64,6 +66,13 @@ MEMBER_WRITES = [
     # garanti arşivi: görür ve ekler; düzenleme, silme ve belge ekleme/kaldırma yalnız kendi eklediği üründe (uçta denetlenir)
     ("POST", r"/api/warranties"), ("PATCH", r"/api/warranties/\d+"), ("DELETE", r"/api/warranties/\d+"),
     ("POST", r"/api/warranties/\d+/files"), ("DELETE", r"/api/warranties/\d+/files/\d+"),
+    # Varlıklarım: görür ve ekler; varlık/kural düzenleme, silme, belge yalnız kendi eklediğinde; vadeyi ödendi / atla /
+    # geri al her ortak vadede (kim ödedi kaydı) — app/assets.py uçta denetler
+    ("POST", r"/api/assets"), ("PATCH", r"/api/assets/\d+"), ("DELETE", r"/api/assets/\d+"),
+    ("POST", r"/api/assets/\d+/(restore|dispose|undispose|obligations|files)"),
+    ("PATCH", r"/api/assets/\d+/obligations/\d+"), ("DELETE", r"/api/assets/\d+/obligations/\d+"),
+    ("DELETE", r"/api/assets/\d+/files/\d+"),
+    ("POST", r"/api/asset-dues/\d+/(pay|skip|unpay)"), ("PATCH", r"/api/asset-dues/\d+"),
     ("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), ("POST", r"/api/settings/tokens"), ("DELETE", r"/api/settings/tokens/\d+"),
 ]
 MEMBER_CLOSED = ("/api/settings", "/api/admin", "/api/imports", "/api/templates", "/api/book/", "/api/rules",

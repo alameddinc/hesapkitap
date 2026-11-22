@@ -1807,17 +1807,18 @@ def _plan_parts(lines: list[dict]) -> dict:
     for ln in lines:
         if ln["kind"] not in (EXPENSE, INCOME) or ln["type"] == "degisken" or is_late(ln):
             continue
-        pending = ln["type"] in ("taksit", "abonelik", "fatura") or (ln["type"] == "sabit" and not ln.get("confirmed"))
+        pending = ln["type"] in ("taksit", "abonelik", "fatura", "varlik") or (ln["type"] == "sabit" and not ln.get("confirmed"))
         key = {"taksit": "pending_installments", "abonelik": "pending_subscriptions", "fatura": "pending_bills",
-               "sabit": "pending_recurring_expense"}.get(ln["type"]) if pending else "recorded_expense"
+               "sabit": "pending_recurring_expense", "varlik": "pending_assets"}.get(ln["type"]) if pending else "recorded_expense"
         if ln["kind"] == INCOME:
             key = "pending_income" if pending else "recorded_income"
         by[key] += ln["amount"]
     parts = {k: _round(by.get(k, 0.0)) for k in ("recorded_expense", "pending_installments", "pending_subscriptions",
                                                   "pending_recurring_expense", "pending_bills", "recorded_income",
-                                                  "pending_income")}
+                                                  "pending_income", "pending_assets")}
     parts["pending_expense"] = _round(parts["pending_installments"] + parts["pending_subscriptions"]
-                                      + parts["pending_recurring_expense"] + parts["pending_bills"])
+                                      + parts["pending_recurring_expense"] + parts["pending_bills"]
+                                      + parts["pending_assets"])
     return parts
 
 
@@ -1844,6 +1845,11 @@ def _plan(months: int, today: date) -> dict:
     entries = db.list_entries()
     cycles = open_cycles(today, proj, entries)
     bills = db.list_bills()
+    from app import assets as _assets
+
+    # Varlıklarım: tutarı girilmiş bekleyen vadeler (ödenen çıkar: ödeme zaten gerçekleşen gider; çift sayım yok).
+    # Önceki dönemde kalmış (gecikmiş) vade bu döneme taşınır. Tutarsız vade düşmez (asset_unknown uyarısı).
+    asset_rows = _assets.plan_dues(today)
     goals = db.list_goals(active_only=True)
     raw_recurring = db.list_recurring()
     # ay döngüsünde her ay tüm kayıtları taramamak için bir kez: sabit kalemin o ayki kaydı (ilk eşleşen)
@@ -1968,6 +1974,14 @@ def _plan(months: int, today: date) -> dict:
             if db.period_of(b["due_date"]) == m and b["paid_at"] is None:
                 lines.append({"type": "fatura", "kind": EXPENSE, "amount": b["amount"],
                               "description": f"{b['provider']} faturası (son {date.fromisoformat(b['due_date']):%d.%m})"})
+        for a in asset_rows:
+            if a["amount"] is None or not money.gt(a["amount"], 0):
+                continue
+            per = db.period_of(a["due_date"])
+            if per == m or (m == start and per < start):
+                lines.append({"type": "varlik", "kind": EXPENSE, "amount": _round(a["amount"]), "due_id": a["id"],
+                              "asset_id": a["asset_id"], "due_date": a["due_date"], "overdue": per < start,
+                              "description": f"{a['title']} (son {date.fromisoformat(a['due_date']):%d.%m})"})
 
         # Kesin: gelir, taksit, abonelik, sabit, fatura, gerçek ekstre. Tahmini: değişken kart harcaması (bilgi amaçlı)
         income = sum(l["amount"] for l in lines if l["kind"] == INCOME and not is_late(l))  # gecikmiş maaş sayılmaz
@@ -2007,8 +2021,11 @@ def _plan(months: int, today: date) -> dict:
             dues.append({"date": c["due"], "account": acc, "bank": c["bank"], "amount": c["at_cut"],
                          "min_payment": None, "estimated": True, "cycle": c})
 
+    end_m = span[-1] if span else start
+    unknown = [{"due_id": a["id"], "title": a["title"], "due_date": a["due_date"], "month": db.period_of(a["due_date"])}
+               for a in asset_rows if a["amount"] is None and db.period_of(a["due_date"]) <= end_m]
     return {"months": result, "dues": sorted(dues, key=lambda d: d["date"]),
-            "projection": list(proj.values()), "recurring": recurring}
+            "projection": list(proj.values()), "recurring": recurring, "asset_unknown": unknown}
 
 
 EXPECTED_MAX_MONTHS = 24  # Planlama'nın en uzak ufku (/api/plan months ≤ 24): daha ilerisi için beklenen yok
@@ -3354,7 +3371,7 @@ def net_worth(today: date | None = None) -> dict:
             ("pending_cards", "Kesilecek kart ekstreleri (harcadıkların)", pending_cards, "−")]
     rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("pending_other", "card_interest", "card_late_interest")]
     rows += [("payable", "TL borçların" + (" (kumbarada ayrılan kısmı hariç)" if in_jar else ""), payable_sp, "−")]
-    rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("bills", "recurring")]
+    rows += [(k, DUE_LABELS[k], due[k]["amount"], "−") for k in ("bills", "recurring", "assets")]
     rows += [("reserved", "Kumbaraya ayrılan", jars["total"], "−"), ("zakat_due", "Ödenmemiş zekât", zakat_due, "−")]
     spendable_parts = [{"key": k, "label": lbl, "amount": _round(v), "sign": sg} for k, lbl, v, sg in rows
                        if (k not in DUE_KEYS and k != "unknown_payments") or money.gt(v, 0)]
@@ -3601,11 +3618,12 @@ def _debt_steps_after(d: dict, h_end: str) -> list[dict]:
     return out
 
 
-DUE_KEYS = ("pending_other", "card_interest", "card_late_interest", "bills", "recurring")
+DUE_KEYS = ("pending_other", "card_interest", "card_late_interest", "bills", "recurring", "assets")
 DUE_LABELS = {"pending_other": "Bekleyen taksit ve abonelikler (kart dışı)",
               "card_interest": "Tahmini faiz ve vergi (devreden kalana)",
               "card_late_interest": "Tahmini gecikme faizi ve vergi",
-              "bills": "Ödenmemiş faturalar", "recurring": "Düzenli ödemeler (kira, aidat…)"}
+              "bills": "Ödenmemiş faturalar", "recurring": "Düzenli ödemeler (kira, aidat…)",
+              "assets": "Varlık ödemeleri (vergi, sigorta…)"}
 
 
 def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = None) -> dict[str, dict]:
@@ -3650,6 +3668,12 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
                 add("bills", item)
             elif b["due_date"] <= l_end:
                 later_bills.append(item)
+    from app import assets as _assets
+
+    for a in _assets.plan_dues(today):  # Varlıklarım: bekleyen, tutarlı vade ≤ ufuk (gecikmiş dahil); plan "varlik" ile aynı
+        if a["amount"] is not None and money.gt(a["amount"], 0) and a["due_date"] <= h_end:
+            add("assets", {"title": a["title"], "amount": _round(a["amount"]), "date": a["due_date"], "due_id": a["id"],
+                           "overdue": workdays.past_due(a["due_date"], today)})
     recurring, rows = db.list_recurring(), plan(len(hz["periods"]), today=today)["months"]
     # önceki dönemin girilmemiş düzenli gideri vadesinden TRANSFER_LATE_DAYS gün sonrasına kadar hâlâ ödenecek (gecikti;
     # ör. 16'sı Cumartesi vadeli kira Pazartesi ödenir, dönem 17'sinde başladı; lead 16.11 kayma B). Daha eskisi düşülmez

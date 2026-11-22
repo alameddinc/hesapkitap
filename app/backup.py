@@ -87,6 +87,7 @@ bills/        : fatura dosyaları
 receipts/     : fiş fotoğrafları (konum bilgisi silinmiş)
 statements-bank/ : içe aktarılan hesap dökümleri
 warranty/     : garanti belgeleri (fatura, garanti belgesi fotoğrafı / PDF)
+assets/       : Varlıklarım belgeleri (ruhsat, poliçe fotoğrafı / PDF)
 
 Geri yüklemek için: HesapKitap → Ayarlar → Yedekler → "Yedekten geri yükle" ile bu zip'i seç.
 Bu dosya kişisel finans verini içerir; güvenli bir yerde sakla.

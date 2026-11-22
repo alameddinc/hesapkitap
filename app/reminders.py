@@ -312,6 +312,38 @@ def _odeme(now: date) -> list[dict]:
     return out
 
 
+def _varlik(now: date) -> list[dict]:
+    """Varlıklarım: gecikmiş ve 7 gün içindeki bekleyen vadeler; 30 gün içinde tutarı girilmemiş vade ("Tutar gir") ve
+    tahmini muayene ("ruhsattan doğrula"). Kart başına değil vade başına; snooze / dismiss mevcut düzenle."""
+    from app import assets
+
+    out = []
+    for d in assets.dues(now - timedelta(days=400), now + timedelta(days=30), on=now):
+        if d["status"] not in ("bekliyor", "gecikti"):
+            continue
+        left = d["days_left"]
+        base = {"kind": "varlik", "route": "varliklar", "due_id": d["id"], "asset_id": d["asset_id"],
+                "due": d["effective_date"], "period": _month(date.fromisoformat(d["effective_date"])), "amount": d["amount"]}
+        if left < 0 or left <= 7:
+            when = "gecikti" if left < 0 else "bugün son gün" if left == 0 else f"{left} gün kaldı"
+            out.append({**base, "id": f"varlik:{d['id']}", "severity": "urgent" if left <= 1 else "warn",
+                        "title": f"{d['asset_name']} · {d['title']} {when}",
+                        "text": (d.get("late_text") or "Son günü kaçırma.") + " Ödediysen işaretle.",
+                        "cta": "Vadeye bak", "action": "asset_due",
+                        "tag": "Gecikti" if left < 0 else "Bugün" if left == 0 else f"{left} gün kaldı"})
+        elif d["amount"] is None:
+            out.append({**base, "id": f"varlik_tutar:{d['id']}", "severity": "info",
+                        "title": f"{d['asset_name']} · {d['title']}: tutar gir",
+                        "text": "Tutarı girersen Planlama'da bu ay için yer ayırırız.", "cta": "Tutar gir",
+                        "action": "asset_due", "tag": f"{left} gün kaldı"})
+        elif d["estimated"] and d["kind"] == "muayene":
+            out.append({**base, "id": f"varlik_tahmin:{d['id']}", "severity": "info",
+                        "title": f"{d['asset_name']} · muayene tarihi tahmini",
+                        "text": "Ruhsattaki muayene geçerlilik tarihini girersen hatırlatma doğru güne kurulur.",
+                        "cta": "Tarihi gir", "action": "asset_due", "tag": "Tahmin"})
+    return out
+
+
 def _tl(x: float) -> str:
     from app import money
 
@@ -504,7 +536,7 @@ def _ekstre_oku() -> list[dict]:
 
 
 def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: int = EKSTRE_GRACE,
-          regular: bool = False) -> list[dict]:
+          regular: bool = False, assets: bool = False) -> list[dict]:
     """Bugün gösterilecek hatırlatmalar (önce acil olanlar). ekstre_grace: push bildirimi 0 verir (kesimden 1 gün
     sonra "ekstreni yükle"); Yapılacaklar varsayılanla (banka PDF'i geç gönderebilir). regular: "Bu düzenli mi?"
     maddeleri (kind duzenli_mi) — yalnız tanıyan istemci ister (?regular=1); eski mobil bilinmeyen türü "Yükle" sanmasın."""
@@ -526,6 +558,13 @@ def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: i
         logging.getLogger(__name__).exception("sabit kalem tekrarı hesaplanamadı")
     items += _dogruluk()
     items += _finans()
+    if assets and not _page_hidden("varliklar"):  # yalnız tanıyan istemci (?assets=1): eski mobil türü bilmez
+        try:
+            items += _varlik(now)
+        except Exception:  # noqa: BLE001 - varlık takvimi Yapılacaklar'ı bozmasın (eski şema vb.)
+            import logging
+
+            logging.getLogger(__name__).exception("varlık vadeleri hesaplanamadı")
     try:
         items += _duzenli(now) if regular else []
     except Exception:  # noqa: BLE001 - öneri hesabı Yapılacaklar'ı bozmasın

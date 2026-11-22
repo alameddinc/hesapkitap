@@ -35,14 +35,15 @@ import sys
 log = logging.getLogger("ekstre.storage")
 
 ENV = "HESAPKITAP_FILES_S3_"
-KINDS = ("uploads", "bills", "receipts", "statements-bank", "warranty")
+KINDS = ("uploads", "bills", "receipts", "statements-bank", "warranty", "assets")
 # türün kabul ettiği adlar: yalnız onaltılık hash + izinli uzantı ("..", "/", boşluk vb. hiçbir zaman geçmez)
 NAME_RES = {
     "uploads": re.compile(r"^[0-9a-f]{64}\.pdf$"),
     "bills": re.compile(r"^[0-9a-f]{24,64}\.(?:pdf|jpg|png|webp|heic)$"),
     "receipts": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # fiş fotoğrafı; havale dekontu fotoğraf ya da PDF
     "statements-bank": re.compile(r"^[0-9a-f]{64}\.(?:pdf|xlsx|xls|csv)$"),
-    "warranty": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # garanti belgesi: fatura / garanti belgesi fotoğrafı ya da PDF
+    "warranty": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),
+    "assets": re.compile(r"^[0-9a-f]{64}\.(?:jpg|pdf)$"),  # Varlıklarım belgesi: ruhsat / poliçe (app/assets.py)  # garanti belgesi: fatura / garanti belgesi fotoğrafı ya da PDF
     # okunamayan ekstrenin "bekleyen" kopyası (app/support.py): kullanıcı onayıyla en çok 30 gün, okununca silinir. KINDS'ta
     # değil: yedeğe, dışa aktarmaya ve alan sınırına girmez; hesap silinince defter klasörüyle gider
     "pending": re.compile(r"^[0-9a-f]{64}\.(?:pdf|xlsx|xls|csv)$"),
@@ -341,7 +342,8 @@ def _local_files() -> list[tuple[str, str]]:
     dirs = [("main/uploads/", db.UPLOAD_DIR), ("main/bills/", db.BILL_DIR),
             ("main/receipts/", os.path.join(main_base, "receipts")),
             ("main/statements-bank/", os.path.join(main_base, "statements-bank")),
-            ("main/warranty/", os.path.join(main_base, "warranty"))]
+            ("main/warranty/", os.path.join(main_base, "warranty")),
+            ("main/assets/", os.path.join(main_base, "assets"))]
     root = system.data_root()
     if os.path.isdir(root):
         for d, subdirs, _ in os.walk(root):

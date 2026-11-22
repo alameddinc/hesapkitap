@@ -522,6 +522,66 @@ CREATE TABLE IF NOT EXISTS warranty_files (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS ix_warranty_files_w ON warranty_files(warranty_id);
+-- Varlıklarım (app/assets.py): araç / konut / işyeri, yükümlülük kuralları ve kuraldan üretilen vadeler. Silme
+-- yumuşak (deleted_at); disposed_on = elden çıktı. Gizli varlık yok (ortak defterde herkes görür).
+CREATE TABLE IF NOT EXISTS assets (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('arac','konut','isyeri')),
+    name TEXT NOT NULL,
+    plate TEXT,                              -- normalize ("06ABC123"); yalnız araç, bildirimde gösterilmez
+    vehicle_class TEXT,                      -- otomobil | kamyonet | motosiklet | diger (muayene kuralı)
+    model_year INTEGER,
+    commercial INTEGER NOT NULL DEFAULT 0,
+    fuel TEXT,
+    tenure TEXT,                             -- konut/işyeri: sahibi | kiraci | kiraya_verdim
+    province TEXT,
+    acquired_on DATE,
+    disposed_on DATE,
+    note TEXT,
+    created_by INTEGER,
+    client_key TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    deleted_at TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS asset_obligations (
+    id INTEGER PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                      -- mtv | trafik | kasko | muayene | bakim | emlak | dask | konut_sig | aidat | kira_artis | kira_beyan | diger
+    label TEXT,
+    rule TEXT NOT NULL DEFAULT '{}',         -- JSON {from, start?, months?}
+    amount REAL CHECK (amount IS NULL OR amount >= 0),  -- sabit tarihli türde yıllık, diğerlerinde dönem başı
+    estimated INTEGER NOT NULL DEFAULT 0,    -- tarih tahmin (muayene ruhsattan girilmedi)
+    recurring_id INTEGER REFERENCES recurring(id) ON DELETE SET NULL,  -- aidat: mevcut sabit kalem
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER
+);
+CREATE TABLE IF NOT EXISTS asset_dues (
+    id INTEGER PRIMARY KEY,
+    obligation_id INTEGER NOT NULL REFERENCES asset_obligations(id) ON DELETE CASCADE,
+    due_date DATE NOT NULL,
+    amount REAL CHECK (amount IS NULL OR amount >= 0),
+    seq TEXT NOT NULL,                       -- "2027-1" (MTV 1. taksit) ya da tarih: tekillik
+    label TEXT,
+    estimated INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'bekliyor' CHECK (status IN ('bekliyor','odendi','atlandi')),
+    skip_reason TEXT,                        -- user | dispose
+    paid_on DATE,
+    paid_amount REAL,
+    paid_by INTEGER,
+    UNIQUE (obligation_id, seq)
+);
+CREATE INDEX IF NOT EXISTS ix_asset_dues_date ON asset_dues(due_date, status);
+CREATE TABLE IF NOT EXISTS asset_files (    -- ruhsat / poliçe: yalnız saklanır, okunmaz (okuma hakkı düşmez)
+    id INTEGER PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'assets',
+    name TEXT NOT NULL,
+    doc_type TEXT NOT NULL DEFAULT 'diger',
+    filename TEXT,
+    size INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 -- Uygulama mağazası abonelikleri (app/store_subs.py): kullanıcının adaya verdiği karar. Aday her istekte tahsilatlardan
 -- yeniden kurulur; karar adayın tahsilat parmak izlerine (fps: "mağaza:tarih:kuruş" JSON listesi) bağlıdır, yeni
 -- ekstre yüklenip adayın kimliği değişse de karar onu bulur.
@@ -3568,6 +3628,7 @@ def gc_files(min_age_hours: int = 24) -> list[str]:
                                                  "UNION SELECT receipt_file FROM own_transfers WHERE receipt_file IS NOT NULL")},
             "statements-bank": {r[0] for r in c.execute("SELECT file_name FROM bank_documents WHERE stored = 1")},
             "warranty": set(),
+            "assets": {r[0] for r in c.execute("SELECT name FROM asset_files")},
         }
         for kind, name in c.execute("SELECT kind, name FROM warranty_files"):  # garanti belgeleri (bağlı fiş dahil)
             refs.setdefault(kind, set()).add(name)

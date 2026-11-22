@@ -73,7 +73,8 @@ KIND_CHANNEL = {"odeme": "odemeler", "fatura": "odemeler", "borc": "odemeler", "
                 "butce": "odemeler",
                 "destek": "destek", "duzeltme": "destek", "geri_bildirim": "destek", "sistem": "destek",
                 "aile": "aile", "ortak": "aile", "liste": "aile",
-                "zekat": "zekat", "sadaka": "zekat", "duyuru": "duyuru"}  # gerisi "hatirlatma"
+                "zekat": "zekat", "sadaka": "zekat", "duyuru": "duyuru",
+                "varlik_vergi": "odemeler", "varlik_sigorta": "odemeler"}  # gerisi "hatirlatma"
 LONG_TEXT_KINDS = {"duyuru"}  # yöneticinin yazdığı duyuru: sınırı app/announce.py (başlık 80, gövde 300)
 
 HTTP_CLIENT = None   # FCM + Google OAuth; testler httpx.MockTransport'lu istemci koyar
@@ -134,6 +135,13 @@ TYPES = {
     "garanti": ("Garanti bitişi", True),
     # yönetici bir sorunu "düzeltildi" işaretleyince o hatayı son 30 günde yaşamış kişiye bir kez (app/incidents.py)
     "duzeltme": ("Düzelttiğimiz sorunlar", True),
+    # Varlıklarım (app/assets.py push_stage): MTV / emlak / kira geliri beyanı 14, 3 gün kala ve son gün; gecikince ertesi
+    # gün ve ayda bir (en çok 3). Sigorta 30, 7 gün kala, son gün. Muayene 30, 14, 3 gün kala, son gün. Bakım 14, kira
+    # artışı 30 gün kala. Metinde plaka yok (yalnız kullanıcının verdiği varlık adı). Ortak defterde sahip + tam yetkili.
+    "varlik_vergi": ("Araç ve emlak vergisi", True),
+    "varlik_sigorta": ("Sigorta ve poliçe bitişi", True),
+    "varlik_muayene": ("Araç muayenesi", True),
+    "varlik_bakim": ("Bakım ve kira artış dönemi", True),
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -144,7 +152,8 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "liste": "alışveriş listesi bildirimi", "borc": "borç ödeme günü", "duyuru": "duyuru",
          "kumbara": "kumbara hatırlatması", "kumbara_pay": "kumbara payı", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
          "garanti": "garanti hatırlatması", "destek": "destek yanıtı",
-         "duzeltme": "düzeltilen sorun"}
+         "duzeltme": "düzeltilen sorun", "varlik_vergi": "varlık ödemesi", "varlik_sigorta": "varlık ödemesi",
+         "varlik_muayene": "varlık hatırlatması", "varlik_bakim": "varlık hatırlatması"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -161,6 +170,8 @@ R_SADAKA = "#/diger/zekat/sadaka"  # Zekât ve Sadaka, sadaka formu açık (eski
 R_KUMBARA, R_YEMEK = "#/diger/kumbara", "#/diger/yemek-kartlari"  # kumbara: /<id> ile o kumbaranın sayfası
 R_GARANTI = "#/diger/garantiler"  # /<id> ile ürünün ayrıntısı
 GARANTI_MIN_APP = (1, 0, 7)  # Garantiler ekranı bu sürümde; eski uygulamada dokununca "Yakında" açılırdı
+R_VARLIK = "#/diger/varliklar"  # /vade/<due id> ile vadenin ayrıntısı
+VARLIK_MIN_APP = (1, 0, 12)  # Varlıklarım ekranı bu sürümde (eski uygulamada rota yok)
 R_AYARLAR, R_SISTEM = "#/diger/ayarlar", "#/diger/ayarlar/sistem"  # sistem: yöneticiye "Sistem durumu" sayfası
 # Destek yazışması (kullanıcı) ve yöneticinin destek gelen kutusu; app/support.DESTEK_MIN_APP'ten eski uygulamada R_AYARLAR
 R_DESTEK, R_DESTEK_ADMIN = "#/diger/ayarlar/destek", "#/diger/ayarlar/destek-gelen"
@@ -1253,6 +1264,45 @@ def _garanti(u: dict, today: date) -> list[dict]:
                         "Garantiler'de.", f"{R_GARANTI}/{w['id']}", obj=f"garanti:{w['id']}"))
     return out
 
+def _varlik(u: dict, today: date, on: dict) -> list[dict]:  # noqa: C901
+    """Varlık vadeleri (app/assets.py): tür başına aşamalar (assets.push_stage), kimlik vade + aşama (her aşama bir kez).
+    Paket yoksa (düştüyse) push yok; ortak defterde yalnız tam yetkili üye (sahip zaten); sayfa üyeye kapalıysa yok."""
+    from app import assets, book, money, plans
+
+    r = book.active()
+    m = book.member()
+    if (r and "varliklar" in r["hidden_pages"]) or (m and book.role(m) != "full") or not plans.allows(u, "varliklar") \
+            or not has_app(u.get("id"), VARLIK_MIN_APP):
+        return []
+    out = []
+    for d in assets.dues(today - timedelta(days=100), today + timedelta(days=31), on=today):
+        kind = d["push_type"]
+        if d["status"] not in ("bekliyor", "gecikti") or not kind or not on.get(kind):
+            continue
+        stage = assets.push_stage(kind, d["kind"], d["days_left"])
+        if not stage:
+            continue
+        eff = date.fromisoformat(d["effective_date"])
+        ad, left = _ad(d["asset_name"], 16), d["days_left"]
+        what = d["title"]
+        tl = f" ({money.tl(d['amount'], trim=True)})" if d.get("amount") else ""
+        if left < 0:
+            title, body = f"{ad} · {what} gecikti", "Ödediysen işaretle. " + (d.get("late_text") or "")
+        elif kind == "varlik_sigorta":
+            title = f"{ad} · {what} " + ("bugün bitiyor" if left == 0 else f"{left} gün sonra bitiyor")
+            body = f"Bitiş {eff.day} {AY[eff.month - 1]}{tl}. " + (d.get("late_text") or "")
+        elif kind == "varlik_muayene":
+            title = f"{ad} · Muayene " + ("bugün" if left == 0 else f"{left} gün sonra")
+            body = ("Tahmini tarih — ruhsatını kontrol et. " if d["estimated"] else "") + \
+                "Randevu için erken davranmak işini kolaylaştırır."
+        else:
+            title = f"{ad} · {what}: " + ("bugün son gün" if left == 0 else f"son gün {eff.day} {AY[eff.month - 1]}")
+            body = (f"Tutar{tl}. " if tl else "") + ("Yarından itibaren gecikme zammı işler." if left == 0 and
+                                                    kind == "varlik_vergi" else "Bu ay ayırmayı unutma.")
+        out.append(item(kind, f"varlik:{d['id']}:{stage}", title, body, f"{R_VARLIK}/vade/{d['id']}", obj=f"varlik:{d['id']}"))
+    return out
+
+
 def _abonelik(u: dict, today: date) -> list[dict]:
     """Uygulama mağazası aboneliği (adsız aday dahil) yenilenmeden REMIND_DAYS gün önce. Tasarruf paketinde değilse ya
     da ortak defterde Tasarruf sayfası üyeye kapalıysa yok. Dokununca aboneliğin ayrıntısı."""
@@ -1275,8 +1325,8 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
                      ("kumbara", lambda: _kumbara(today)), ("kumbara_pay", lambda: _kumbara_pay(u, today)),
                      ("kart_suresi", lambda: _kart_suresi(today)),
                      ("sadaka", lambda: _sadaka(today)), ("garanti", lambda: _garanti(u, today)),
-                     ("abonelik", lambda: _abonelik(u, today))):
-        if kind != "odeme" and not on.get(kind):
+                     ("abonelik", lambda: _abonelik(u, today)), ("varlik", lambda: _varlik(u, today, on))):
+        if kind not in ("odeme", "varlik") and not on.get(kind):
             continue
         try:
             out += fn()
@@ -1655,6 +1705,11 @@ SAMPLES: dict[str, tuple[str, str, str]] = {
     "garanti": ("Bulaşık makinesi · garanti 30 gün kaldı", "Bitiş 15 Aralık 2026. Arıza varsa servise götür; belgeler "
                 "Garantiler'de.", R_GARANTI),
     "duzeltme": ("Sorun düzeltildi", "Ekstre okuma hatasını düzelttik; tekrar deneyebilirsin.", R_EKSTRELER),
+    "varlik_vergi": ("Aile arabası · MTV son gün 31 Ocak", "1. taksit, tutar ₺4.250. Bu ay ayırmayı unutma.", R_VARLIK),
+    "varlik_sigorta": ("Aile arabası · Trafik sig. 7 gün kaldı", "Bitiş 14 Mart. Sigortası olmayan araç trafikten "
+                       "men edilir.", R_VARLIK),
+    "varlik_muayene": ("Aile arabası · Muayene 30 gün sonra", "Randevu için erken davranmak işini kolaylaştırır.", R_VARLIK),
+    "varlik_bakim": ("Örnek ev · Kira artışı 30 gün sonra", "Artış TÜFE 12 aylık ortalamasını geçemez.", R_VARLIK),
 }
 
 

@@ -214,6 +214,14 @@ TABLES = [
       label=("purchase_date", "price", "name", "garanti")),
     T("warranty_files", keys=(("warranty_id", "kind", "name"),), fks={"warranty_id": "warranties"},
       required=("warranty_id",), when=("parent", "warranty_id"), child=True),
+    T("assets", keys=(("client_key",), _opt("kind", "name", "plate")), when="created_at",
+      label=("acquired_on", None, "name", "varlık")),
+    T("asset_obligations", keys=(("asset_id", "kind", "label", "rule"),), fks={"asset_id": "assets", "recurring_id": "recurring"},
+      required=("asset_id",), when=("parent", "asset_id"), child=True),
+    T("asset_dues", keys=(("obligation_id", "seq"),), fks={"obligation_id": "asset_obligations"},
+      required=("obligation_id",), when=("parent", "obligation_id"), child=True),
+    T("asset_files", keys=(("asset_id", "name"),), fks={"asset_id": "assets"},
+      required=("asset_id",), when=("parent", "asset_id"), child=True),
     T("stored_files", pk=None, keys=(("kind", "name"),), mode="files", child=True),
     T("settings", pk=None, keys=(("key",),), mode="settings", child=True),
     T("idempotency", pk=None, mode="target", child=True),
@@ -229,6 +237,7 @@ FILE_REFS = {  # kaynak defterden: tür → dosya adları
     "receipts": "SELECT receipt_file FROM entries WHERE receipt_file IS NOT NULL",
     "statements-bank": "SELECT file_name FROM bank_documents WHERE stored = 1",
     "warranty": "SELECT name FROM warranty_files WHERE kind = 'warranty'",
+    "assets": "SELECT name FROM asset_files",
 }
 
 
