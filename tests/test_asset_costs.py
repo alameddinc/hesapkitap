@@ -198,3 +198,59 @@ def test_member_rules(owner):
 
 def test_capability(client):
     assert "asset_costs" in client.get("/api/meta").json()["capabilities"]
+
+
+# ---------------------------------------------------------------- mutabakat düzeltmeleri (UAT 22.11; uydurma adlar)
+
+def test_classify_dealer_fuel_names():
+    for d in ("ORNEKOGLU PETROL", "ORNEK PETROL INSAAT", "ORNEK PETROL URUNLERI LTD", "ORNEK PETROLCULUK",
+              "ORNEK PET SAN TIC", "ORNEK AKARYAKIT URUNLERI"):
+        assert ac.classify(d) == "yakit", d
+    assert ac.classify("ORNEK PETROKIMYA") is None
+
+
+def test_bank_fees_never_vehicle_costs():
+    for d in ("Vade Farki - ISPARK ORNEK", "BSMV - ISPARK ORNEK", "KKDF - ISPARK ORNEK", "FAIZ - ORNEK PETROL",
+              "GECIKME FAIZI OTOYOL"):
+        assert ac.classify(d, "Ulaşım & Araç") is None, d
+    assert ac.classify("ISPARK ORNEK", "Banka Faiz & Ücret") is None
+    assert ac.classify("ISPARK ORNEK", None, "faiz_ucret") is None
+
+
+def test_unknown_vehicle_category_is_asked_not_linked(client):
+    assert ac.classify("ORNEK ODEME/ORNEKLER", "Ulaşım & Araç") == "diger"
+    assert ac.classify("UBER TRIP", "Ulaşım & Araç") is None
+    a = _car(client)
+    _entry(client, "ORNEK ODEME/ORNEKLER", 350, 0, cat="Ulaşım & Araç")
+    assert client.get(f"/api/assets/{a['id']}").json()["costs"]["last_12"] == 0  # tek araçta da bağlanmaz
+    q = client.get("/api/assets/questions").json()
+    assert q["count"] == 1 and q["items"][0]["cost_kind"] == "diger"
+
+
+def test_inspection_bosch_and_ogs_store():
+    assert ac.classify("TUVTURK ORNEK ISTASYON") == "vade"
+    assert ac.classify("BOSCH CAR SERVICE ORNEK") == "servis" and ac.classify("ORNEK BOSCH SANAYI") == "servis"
+    assert ac.classify("PAYTR*OGS ORNEK") == "yol" and ac.classify("OGSTORE ORNEK") == "yol"
+
+
+def test_toll_plate_from_statement(client):
+    assert ac.toll_plate("HGS /1234567890/06ORN123") == "06ORN123"
+    assert ac.toll_plate("HGS 06 ORN 123 GECIS") == "06ORN123"
+    assert ac.toll_plate("HGS /1234567890/") is None and ac.toll_plate("ORNEK 06ORN123") is None
+    _car(client)
+    b = _car(client, CAR2)
+    _stmt([(2, "HGS /1234567890/06ORN456", 120.0), (3, "HGS /1234567890/06ORN999", 80.0)])
+    items = client.get(f"/api/assets/{b['id']}/costs").json()["items"]
+    assert [(x["amount"], x["link_source"]) for x in items] == [(120, "plate")]
+    assert [p["plate"] for p in client.get("/api/assets/plates").json()["items"]] == ["06ORN999"]
+
+
+def test_tuvturk_payment_dedupes_with_paid_inspection(client):
+    a = _car(client)
+    client.post(f"/api/assets/{a['id']}/backfill", json={"mode": "all", "since": _d(60)})
+    a = client.post(f"/api/assets/{a['id']}/obligations", json={"kind": "muayene", "start": _d(-5), "amount": 2000}).json()
+    did = next(d for d in a["dues"] if d["kind"] == "muayene")["id"]
+    client.post(f"/api/asset-dues/{did}/pay", json={"paid_on": T.isoformat(), "amount": 2000})
+    _entry(client, "TUVTURK ORNEK", 2000, 0)
+    c = client.get(f"/api/assets/{a['id']}").json()["costs"]
+    assert c["last_12"] == 2000 and [g["kind"] for g in c["groups"]] == ["vade"]

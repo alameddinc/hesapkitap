@@ -10675,7 +10675,7 @@ class AssetLinkIn(BaseModel):
     txn_ids: list[int] = Field(default_factory=list, max_length=500)
     entry_ids: list[int] = Field(default_factory=list, max_length=500)
     asset_id: int | None = None
-    cost_kind: Literal["yakit", "yol", "otopark", "servis", "diger"] | None = None
+    cost_kind: Literal["yakit", "yol", "otopark", "servis", "vade", "diger"] | None = None
     remember: bool = True
     clear: bool = False
 

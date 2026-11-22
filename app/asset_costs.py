@@ -30,8 +30,8 @@ MAX_BACK_MONTHS = 24
 SMALL_MARKET = 150.0
 
 COST_KINDS = {"yakit": "Yakıt", "yol": "Otoyol ve köprü", "otopark": "Otopark", "servis": "Bakım ve servis",
-              "diger": "Diğer"}
-GROUPS = {**COST_KINDS, "vade": "Sigorta, vergi, muayene"}
+              "vade": "Sigorta, vergi, muayene", "diger": "Diğer"}
+GROUPS = dict(COST_KINDS)
 # vadesi ödenen yükümlülük → masraf grubu
 DUE_GROUP = {"mtv": "vade", "trafik": "vade", "kasko": "vade", "muayene": "vade", "bakim": "servis", "diger": "diger"}
 
@@ -39,14 +39,21 @@ _EV = r"ESARJ|E-SARJ|\bZES\b|TRUGO|VOLTRUN|SHARZ|\bSARJ\b"
 PATTERNS = [
     ("yakit", re.compile(r"\bOPET\b|\bSHELL\b|\bBP\b|PETROL OFIS|\bPOAS\b|^PO\b|\bTOTAL(ENERGIES)?\b|\bAYTEMIZ\b|"
                          r"TURKIYE PETROL|\bTP\b.*PETROL|\bLUKOIL\b|\bALPET\b|\bMOIL\b|\bKADOIL\b|\bSUNPET\b|"
-                         r"AKARYAKIT|\bBENZIN|\bMOTORIN\b|" + _EV)),
-    ("yol", re.compile(r"OTOYOL|\bHGS\b|\bOGS\b|\bKGM\b|KOPRU|AVRASYA TUNEL|OSMANGAZI|YAVUZ SULTAN|KARAYOLLARI")),
+                         r"AKARYAKIT|\bBENZIN|\bMOTORIN\b|\bPETROL(CULUK|ULUK)?\b|PETROL URUN|\bPET SAN\b|" + _EV)),
+    ("vade", re.compile(r"TUVTURK|ARAC MUAYENE|MUAYENE ISTASYON")),
+    ("yol", re.compile(r"OGSTORE|PAYTR.*\bOGS\b|OTOYOL|\bHGS\b|\bOGS\b|\bKGM\b|KOPRU|AVRASYA TUNEL|OSMANGAZI|YAVUZ SULTAN|KARAYOLLARI")),
     ("otopark", re.compile(r"ISPARK|OTOPARK|\bPARKING\b|\bVALE\b")),
     ("servis", re.compile(r"OTO ?SERVIS|YETKILI SERVIS|LASTIK|OTO ?YIKAMA|ARAC YIKAMA|OTO ?BAKIM|YAG DEGISIM|"
-                          r"OTO ?EKSPERTIZ|OTO ?YEDEK|OTO ?KUAFOR|TUVTURK|CAR SERVICE|\bAKU\b")),
+                          r"OTO ?EKSPERTIZ|OTO ?YEDEK|OTO ?KUAFOR|CAR SERVICE|\bBOSCH\b|\bAKU\b")),
 ]
 NOT_VEHICLE = re.compile(r"\bUBER\b|BITAKSI|\bMARTI\b|\bTAKSI\b|YEMEK|MARKET (?!.*AKARYAKIT)")
 EV_RX = re.compile(_EV)
+# banka ücreti / vergisi işyeri adını taşısa da ("Vade Farki - ISPARK…", "BSMV - …") araç masrafı değildir
+BANK_FEE = re.compile(r"^(VADE FARKI|BSMV|KKDF|FAIZ|GECIKME)\b|\bFAIZ\b|GECIKME FAIZ")
+BANK_CATS = re.compile(r"FAIZ|BANKA UCRET|BANKA FAIZ")
+VEHICLE_CAT = re.compile(r"ULASIM ?& ?ARAC|\bARAC\b")
+# HGS / OGS satırında plaka ("HGS /<no>/06ORN123"): harf-rakam bitişiğindeki rakam dizisi plaka sayılmaz
+TOLL_PLATE = re.compile(r"(?<![A-Z0-9])((?:0[1-9]|[1-7]\d|8[01]) ?[A-Z]{1,3} ?\d{2,4})(?![A-Z0-9])")
 AIRPORT = re.compile(r"HAVALIMANI|HAVA LIMANI|AIRPORT|\bIGA\b|\bSAW\b")
 CAT_KIND = [(re.compile(r"YAKIT|AKARYAKIT|BENZIN"), "yakit"), (re.compile(r"OTOPARK"), "otopark"),
             (re.compile(r"OTOYOL|KOPRU|HGS"), "yol"), (re.compile(r"ARAC BAKIM|OTO BAKIM|SERVIS"), "servis")]
@@ -70,10 +77,15 @@ def _norm(s: str | None) -> str:
     return normalize(s or "")
 
 
-def classify(description: str, category: str | None = None) -> str | None:
+def classify(description: str, category: str | None = None, txn_type: str | None = None) -> str | None:
     """Açıklama / kategoriden araç masraf türü; araçla ilgili değilse None. UBER, taksi, market (yakıt markası
-    adıyla da olsa yemek/market) araç masrafı değildir."""
+    adıyla da olsa yemek/market), banka faizi / ücreti / vergisi (Vade farkı, BSMV, KKDF) araç masrafı değildir.
+    TÜVTÜRK "vade" (muayene vadesiyle eşleşir). Kategorisi "Ulaşım & Araç" olup kalıba uymayan satır "diger": hiçbir
+    zaman kendiliğinden bağlanmaz, "Bu araç masrafı mı?" diye sorulur."""
     d = _norm(description)
+    c = _norm(category)
+    if txn_type == "faiz_ucret" or BANK_FEE.search(d) or BANK_CATS.search(c):
+        return None
     for kind, rx in PATTERNS:
         if rx.search(d):
             if kind != "yakit" and NOT_VEHICLE.search(d):
@@ -81,10 +93,20 @@ def classify(description: str, category: str | None = None) -> str | None:
             return kind
     if NOT_VEHICLE.search(d):
         return None
-    c = _norm(category)
     for rx, kind in CAT_KIND:
         if rx.search(c):
             return kind
+    return "diger" if VEHICLE_CAT.search(c) else None
+
+
+def toll_plate(description: str) -> str | None:
+    """HGS / OGS ekstre satırındaki plaka (normalize); yoksa None."""
+    d = _norm(description)
+    if not re.search(r"\bHGS\b|\bOGS\b", d):
+        return None
+    for m in TOLL_PLATE.finditer(d):
+        if p := normalize_plate(m.group(1)):
+            return p
     return None
 
 
@@ -136,12 +158,12 @@ def candidates(since: date, until: date | None = None) -> list[dict]:
     for t in db.card_transactions():
         if t.get("txn_type") != "harcama" or (t.get("amount") or 0) <= 0 or not (lo <= t["txn_date"][:10] <= hi):
             continue
-        k = classify(t["description"], t.get("category"))
+        k = classify(t["description"], t.get("category"), t.get("txn_type"))
         if k:
             out.append({"ref": f"t{t['id']}", "txn_id": t["id"], "entry_id": None, "date": t["txn_date"][:10],
                         "description": t["description"], "amount": round(float(t["amount"]), 2), "cost_kind": k,
                         "merchant_key": merchant_name(t["description"]), "card": _card_of(t.get("account")),
-                        "plate": None, "source_label": "Ekstre"})
+                        "plate": toll_plate(t["description"]) if k == "yol" else None, "source_label": "Ekstre"})
     ents = [e for e in db.list_entries() if e.get("kind") == "gider" and not e.get("skipped")
             and not e.get("linked_txn_id") and lo <= (e.get("entry_date") or "")[:10] <= hi]
     rec = [e["id"] for e in ents if e.get("receipt_file") and not e.get("plate")]
@@ -153,6 +175,8 @@ def candidates(since: date, until: date | None = None) -> list[dict]:
     for e in ents:
         plate = _entry_plate(e, items)
         k = classify(e["description"], e.get("category")) or ("yakit" if plate else None)
+        if k == "yol" and not plate:
+            plate = toll_plate(e["description"])
         if k:
             out.append({"ref": f"e{e['id']}", "txn_id": None, "entry_id": e["id"], "date": e["entry_date"][:10],
                         "description": e["description"], "amount": round(float(e["amount"]), 2), "cost_kind": k,
@@ -239,6 +263,8 @@ def resolve(x: dict, cars: list[dict], rules: list[dict]) -> tuple[str, int | No
 def doubtful(x: dict, a: dict) -> bool:
     """Tek araçta da sorulur: yakıt türü uyuşmazlığı, akaryakıt marketinde küçük tutar, havalimanı otoparkı."""
     d = _norm(x["description"])
+    if x["cost_kind"] == "diger":
+        return True  # yalnız kategoriden: "Bu araç masrafı mı?"
     if x["cost_kind"] == "yakit":
         ev = bool(EV_RX.search(d))
         fuel = a.get("fuel") or ""
