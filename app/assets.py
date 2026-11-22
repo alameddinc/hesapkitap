@@ -281,6 +281,9 @@ def _due_out(d: dict, o: dict, a: dict, on: date) -> dict:
     due = _d(d["due_date"])
     eff = workdays.next_business_day(due) if o["kind"] in FIXED else due
     st = _status(d, on)
+    from app import asset_pay
+
+    inst = asset_pay.installment_info(d.get("installment"), on) if st == "odendi" else None
     name = OBLIGATIONS.get(o["kind"], ("Diğer",))[0] if o["kind"] != "diger" else (o.get("label") or "Diğer")
     law = LAW.get(o["kind"], {})
     return {"id": d["id"], "obligation_id": o["id"], "asset_id": a["id"], "asset_name": a["name"],
@@ -288,7 +291,8 @@ def _due_out(d: dict, o: dict, a: dict, on: date) -> dict:
                                                                          if d.get("label") and " " in d["label"] else ""),
             "label": d.get("label"), "due_date": d["due_date"], "effective_date": eff.isoformat(),
             "shifted": eff != due, "days_left": (eff - on).days, "amount": d["amount"], "status": st,
-            "status_label": STATUS_LABELS[st], "estimated": bool(d["estimated"]), "paid_on": d.get("paid_on"),
+            "status_label": inst["label"] if inst else STATUS_LABELS[st], "installment": inst,
+            "paid_txn_id": d.get("txn_id"), "paid_entry_id": d.get("entry_id"), "estimated": bool(d["estimated"]), "paid_on": d.get("paid_on"),
             "paid_amount": d.get("paid_amount"), "paid_by": d.get("paid_by"),
             "late_text": law.get("late"), "where": law.get("where"), "url": law.get("url"),
             "verified": law.get("verified", True), "push_type": OBLIGATIONS.get(o["kind"], (None, None))[1],
@@ -721,7 +725,7 @@ def unpay(did: int) -> None:
     with db.connect() as c:
         _due_ctx(c, did)
         c.execute("UPDATE asset_dues SET status = 'bekliyor', paid_on = NULL, paid_amount = NULL, paid_by = NULL, "
-                  "skip_reason = NULL WHERE id = ?", (did,))
+                  "skip_reason = NULL, txn_id = NULL, entry_id = NULL, installment = NULL WHERE id = ?", (did,))
 
 
 def set_due_amount(did: int, amount: float | None) -> None:

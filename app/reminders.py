@@ -324,7 +324,28 @@ def _varlik_soru(now: date) -> list[dict]:
     return [{"id": f"varlik_soru:{now.isoformat()[:7]}", "kind": "varlik", "severity": "info", "action": "asset_question",
              "route": "varliklar", "title": f"{q['count']} araç harcaması: hangi araç?",
              "text": f"{top['merchant']}" + (f" ve {more} işyeri daha" if more > 0 else "") + ". Bir kez söyle, öğrenelim.",
-             "cta": "Araç seç", "tag": "Hangi araç?", "period": _month(now), "due": now.isoformat(), "amount": None}]
+             "cta": "Araç seç", "tag": "Araç masrafı", "period": _month(now), "due": now.isoformat(), "amount": None}]
+
+
+def _varlik_odendi(now: date, limit: int = 3) -> list[dict]:
+    """H9: "… ödendi mi?" / "Bu hangi araç?" — ekstre / dökümdeki vergi, sigorta, muayene ödemesi bir vadeyle eşleşti
+    (app/asset_pay.py). Öneri başına bir kart (en çok limit); yanıt POST /api/assets/pay-suggestions/{accept,dismiss}."""
+    from app import asset_pay
+
+    s = asset_pay.suggestions(now)
+    if not s["can_answer"]:
+        return []
+    out = []
+    for x in s["items"][:limit]:
+        when = date.fromisoformat(x["date"])
+        out.append({"id": f"varlik_odendi:{x['key']}", "kind": "varlik", "severity": "info", "action": "asset_paid",
+                    "route": "varliklar", "suggestion_key": x["key"], "title": x["title"], "text": x["text"],
+                    "cta": "Onayla" if x["question"] == "paid" else "Seç",
+                    "tag": f"{x['inst']['m']} taksit" if x["inst"] else x["group_label"], "period": _month(when),
+                    "due": x["date"], "amount": x["amount"],
+                    "due_id": x["options"][0]["due_id"] if x["options"] else None,
+                    "asset_id": (x["options"] or x.get("choices") or [{}])[0].get("asset_id")})
+    return out
 
 
 def _varlik(now: date) -> list[dict]:
@@ -575,7 +596,7 @@ def build(now: date | None = None, include_hidden: bool = False, ekstre_grace: i
     items += _finans()
     if assets and not _page_hidden("varliklar"):  # yalnız tanıyan istemci (?assets=1): eski mobil türü bilmez
         try:
-            items += _varlik(now) + _varlik_soru(now)
+            items += _varlik(now) + _varlik_soru(now) + _varlik_odendi(now)
         except Exception:  # noqa: BLE001 - varlık takvimi Yapılacaklar'ı bozmasın (eski şema vb.)
             import logging
 

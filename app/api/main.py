@@ -10711,6 +10711,73 @@ def assets_questions():
     return asset_costs.questions()
 
 
+class AssetPayAcceptIn(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    due_id: int
+    save_amount: bool = True
+
+
+class AssetPayDismissIn(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+
+
+def _pay_call(fn, *a, **kw):
+    from app import asset_pay
+
+    try:
+        return fn(*a, **kw)
+    except KeyError as e:
+        raise HTTPException(404, "Öneri artık geçerli değil; liste güncellendi") from e
+    except (asset_pay.Forbidden, PermissionError) as e:
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.get("/api/assets/pay-suggestions")
+def assets_pay_suggestions():
+    """H9 "ödendi mi?" önerileri (app/asset_pay.py): {items [{key, date, description, amount, group, group_label, company,
+    inst {m, per, total, seen, last_n, start, payments} | null, options [{due_id, due_ids, asset_id, asset_name, kind,
+    title, due_date, due_amount, amount, double}], question paid | which, ask_amount, title, text}], can_answer, locked,
+    count}. Onay: POST /api/assets/pay-suggestions/accept, ret: /dismiss."""
+    from app import asset_pay
+
+    return asset_pay.suggestions()
+
+
+@app.post("/api/assets/pay-suggestions/accept")
+def assets_pay_accept(body: AssetPayAcceptIn):
+    """Seçilen vade(ler) ödendi: {ok, due_ids, undo [unpay yolları]}. save_amount: vadenin tutarı yoksa ödeme tutarı da
+    yazılsın mı ("tutarı da kaydedelim mi?")."""
+    from app import asset_pay
+
+    return _pay_call(asset_pay.accept, body.key, body.due_id, body.save_amount)
+
+
+class AssetPayDiscoverIn(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    asset_id: int
+    kind: Literal["kasko", "trafik", "konut_sig", "dask", "muayene", "mtv"]
+
+
+@app.post("/api/assets/pay-suggestions/discover")
+def assets_pay_discover(body: AssetPayDiscoverIn):
+    """Keşif (question "discover", choices [{asset_id, asset_name, asset_kind, kinds [{kind, label}]}]): varlığa
+    hatırlatma kurulur, ödeme ilk vadesi olarak ödendi. {ok, obligation_id, due_id, next_due, undo (DELETE yolu)}.
+    "Bu araçla ilgisi yok": /dismiss."""
+    from app import asset_pay
+
+    return _pay_call(asset_pay.discover, body.key, body.asset_id, body.kind)
+
+
+@app.post("/api/assets/pay-suggestions/dismiss")
+def assets_pay_dismiss(body: AssetPayDismissIn):
+    from app import asset_pay
+
+    _pay_call(asset_pay.dismiss, body.key)
+    return {"ok": True}
+
+
 @app.get("/api/assets/plates")
 def assets_unknown_plates():
     """Fişte okunan ama hiçbir araca ait olmayan plakalar: {items [{plate, count, total, last_date}]}. "Araç ekle"

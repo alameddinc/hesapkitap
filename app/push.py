@@ -142,6 +142,9 @@ TYPES = {
     "varlik_sigorta": ("Sigorta ve poliçe bitişi", True),
     "varlik_muayene": ("Araç muayenesi", True),
     "varlik_bakim": ("Bakım ve kira artış dönemi", True),
+    # bekleyen "Bu hangi araç?" ve "Bu vade ödendi mi?" soruları: haftada en çok bir özet (kimlik ISO hafta); varsayılan
+    # kapalı, sorular çoğunlukla Yapılacaklar'da kalır
+    "varlik_soru": ("Varlık soruları (hangi araç, ödendi mi)", False),
 }
 ADMIN_TYPES = {"geri_bildirim", "sistem"}  # tercih listesinde yalnız yöneticiye görünür
 # günlük özette sayılan ad
@@ -153,7 +156,8 @@ NOUNS = {"odeme": "ödeme", "fatura": "fatura", "ekstre": "ekstre", "dokum": "d�
          "kumbara": "kumbara hatırlatması", "kumbara_pay": "kumbara payı", "kart_suresi": "kart son kullanma", "sadaka": "sadaka hatırlatması",
          "garanti": "garanti hatırlatması", "destek": "destek yanıtı",
          "duzeltme": "düzeltilen sorun", "varlik_vergi": "varlık ödemesi", "varlik_sigorta": "varlık ödemesi",
-         "varlik_muayene": "varlık hatırlatması", "varlik_bakim": "varlık hatırlatması"}
+         "varlik_muayene": "varlık hatırlatması", "varlik_bakim": "varlık hatırlatması",
+         "varlik_soru": "varlık sorusu"}
 DEFAULT_QUIET = {"from": "22:00", "to": "09:00"}
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9:_\-.]{16,4096}$")
@@ -1303,6 +1307,25 @@ def _varlik(u: dict, today: date, on: dict) -> list[dict]:  # noqa: C901
     return out
 
 
+def _varlik_soru(u: dict, today: date) -> list[dict]:
+    """Bekleyen "Bu hangi araç?" (app/asset_costs.questions) ve "ödendi mi?" (app/asset_pay.suggestions) soruları: haftada
+    en çok bir bildirim (kimlik ISO yıl-hafta; push_sent tekrarı engeller), sessiz saat enqueue'da. _varlik ile aynı kapı:
+    paket, tam yetkili üye, sayfa açık, uygulama sürümü."""
+    from app import asset_costs, asset_pay, book, plans
+
+    r = book.active()
+    m = book.member()
+    if (r and "varliklar" in r["hidden_pages"]) or (m and book.role(m) != "full") or not plans.allows(u, "varliklar") \
+            or not has_app(u.get("id"), VARLIK_MIN_APP):
+        return []
+    n = asset_costs.question_count(today) + asset_pay.count(today)
+    if not n:
+        return []
+    y, w, _ = today.isocalendar()
+    return [item("varlik_soru", f"varlik_soru:{y}-W{w:02d}", f"Varlıklarım: {n} soru bekliyor",
+                 "Hangi araç, hangi vade ödendi: tek dokunuşla yanıtla, sonrasını biz takip edelim.", R_VARLIK)]
+
+
 def _abonelik(u: dict, today: date) -> list[dict]:
     """Uygulama mağazası aboneliği (adsız aday dahil) yenilenmeden REMIND_DAYS gün önce. Tasarruf paketinde değilse ya
     da ortak defterde Tasarruf sayfası üyeye kapalıysa yok. Dokununca aboneliğin ayrıntısı."""
@@ -1325,7 +1348,8 @@ def collect(u: dict, today: date, prefs: dict | None = None) -> list[dict]:
                      ("kumbara", lambda: _kumbara(today)), ("kumbara_pay", lambda: _kumbara_pay(u, today)),
                      ("kart_suresi", lambda: _kart_suresi(today)),
                      ("sadaka", lambda: _sadaka(today)), ("garanti", lambda: _garanti(u, today)),
-                     ("abonelik", lambda: _abonelik(u, today)), ("varlik", lambda: _varlik(u, today, on))):
+                     ("abonelik", lambda: _abonelik(u, today)), ("varlik", lambda: _varlik(u, today, on)),
+                     ("varlik_soru", lambda: _varlik_soru(u, today))):
         if kind not in ("odeme", "varlik") and not on.get(kind):
             continue
         try:
@@ -1710,6 +1734,7 @@ SAMPLES: dict[str, tuple[str, str, str]] = {
                        "men edilir.", R_VARLIK),
     "varlik_muayene": ("Aile arabası · Muayene 30 gün sonra", "Randevu için erken davranmak işini kolaylaştırır.", R_VARLIK),
     "varlik_bakim": ("Örnek ev · Kira artışı 30 gün sonra", "Artış TÜFE 12 aylık ortalamasını geçemez.", R_VARLIK),
+    "varlik_soru": ("Varlıklarım: 2 soru bekliyor", "Hangi araç, hangi vade ödendi: tek dokunuşla yanıtla.", R_VARLIK),
 }
 
 
