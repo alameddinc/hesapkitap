@@ -10728,7 +10728,7 @@ def _pay_call(fn, *a, **kw):
         return fn(*a, **kw)
     except KeyError as e:
         raise HTTPException(404, "Öneri artık geçerli değil; liste güncellendi") from e
-    except asset_pay.Forbidden as e:
+    except (asset_pay.Forbidden, PermissionError) as e:
         raise HTTPException(403, str(e)) from e
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
@@ -10752,6 +10752,22 @@ def assets_pay_accept(body: AssetPayAcceptIn):
     from app import asset_pay
 
     return _pay_call(asset_pay.accept, body.key, body.due_id, body.save_amount)
+
+
+class AssetPayDiscoverIn(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    asset_id: int
+    kind: Literal["kasko", "trafik", "konut_sig", "dask", "muayene", "mtv"]
+
+
+@app.post("/api/assets/pay-suggestions/discover")
+def assets_pay_discover(body: AssetPayDiscoverIn):
+    """Keşif (question "discover", choices [{asset_id, asset_name, asset_kind, kinds [{kind, label}]}]): varlığa
+    hatırlatma kurulur, ödeme ilk vadesi olarak ödendi. {ok, obligation_id, due_id, next_due, undo (DELETE yolu)}.
+    "Bu araçla ilgisi yok": /dismiss."""
+    from app import asset_pay
+
+    return _pay_call(asset_pay.discover, body.key, body.asset_id, body.kind)
 
 
 @app.post("/api/assets/pay-suggestions/dismiss")

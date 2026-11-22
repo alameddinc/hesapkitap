@@ -167,7 +167,8 @@ def _start_of(x: dict) -> date:
 
 def group_installments(xs: list[dict]) -> list[dict]:
     """Aynı poliçenin taksitleri tek grup: aynı şirket, aynı M, taksit tutarı ±INST_TOL, başlangıç ayı ±1.
-    Dönen {key, company, m, per, total, start, seen [n...], refs, rows, pk}."""
+    Başlangıç (ve anahtar) ilk görülen taksitten: sonraki taksit eklenince anahtar değişmez (onaylanan grup yeniden
+    önerilmez). Dönen {key, company, m, per, total, start, seen [n...], refs, rows, pk}."""
     groups: list[dict] = []
     for x in sorted((x for x in xs if x.get("inst")), key=lambda x: (x["date"], x["ref"])):
         n, m = x["inst"]
@@ -181,8 +182,6 @@ def group_installments(xs: list[dict]) -> list[dict]:
         g["seen"].append(n)
         g["refs"].append(x["ref"])
         g["rows"].append(x)
-        if st < g["start"]:
-            g["start"] = st
     for g in groups:
         g["seen"].sort()
         g["total"] = round(g["per"] * g["m"], 2)
@@ -320,16 +319,127 @@ def suggestions(on: date | None = None) -> dict:
         used_refs, used_keys = _used(c)
         gone = _dismissed(c)
     xs = [x for x in xs if x["ref"] not in used_refs]
-    items = []
+    items, lost = [], []
     for u in _units(xs):
         if u["key"] in gone or u["key"] in used_keys:
             continue
         opts = match(u, dues)
-        if not opts:
-            continue
-        items.append(_out(u, opts))
+        if opts:
+            items.append(_out(u, opts))
+        else:
+            lost.append(u)
+    items += _discoveries(lost, on)
     items.sort(key=lambda s: (s["date"], s["key"]), reverse=True)
     return {"items": items, "can_answer": can_answer(), "locked": False, "count": len(items)}
+
+
+# ---------------------------------------------------------------- keşif: eşleşecek vade yok
+
+DISCOVER_KINDS = {"sigorta": ("kasko", "trafik", "konut_sig", "dask"), "muayene": ("muayene",), "vergi": ("mtv",)}
+DISCOVER_DAYS = 380  # bundan eski ödeme keşif önerisi olmaz (o poliçe zaten yenilenmiş olabilir)
+
+
+def _discoveries(units: list[dict], on: date) -> list[dict]:
+    """Vadesi kayıtlı olmayan ödeme: "Bu sigorta hangi aracın?" (keşif). Yalnız o türde hatırlatması OLMAYAN varlık
+    seçenek olur (zaten takip edilen poliçenin eski ödemesi sorulmaz); grup + şirket başına en yeni ödeme."""
+    from app import assets
+
+    with db.connect() as c:
+        alist = [dict(r) for r in c.execute("SELECT * FROM assets WHERE deleted_at IS NULL AND disposed_on IS NULL ORDER BY id")]
+        have = {(r[0], r[1]) for r in c.execute("SELECT asset_id, kind FROM asset_obligations WHERE active = 1")}
+    latest: dict[tuple, dict] = {}
+    lo = date.fromordinal(on.toordinal() - DISCOVER_DAYS).isoformat()
+    for u in units:
+        if u["group"] not in DISCOVER_KINDS or u["date"] < lo:
+            continue
+        if u["group"] == "vergi" and "mtv" not in u["kinds"]:
+            continue
+        k = (u["group"], u["company"])
+        if k not in latest or u["date"] > latest[k]["date"]:
+            latest[k] = u
+    out = []
+    for u in latest.values():
+        kinds = [k for k in DISCOVER_KINDS[u["group"]] if k in u["kinds"]]
+        choices = []
+        for a in alist:
+            ok = [k for k in kinds if k in assets.ALLOWED[a["kind"]] and (a["id"], k) not in have]
+            if ok:
+                choices.append({"asset_id": a["id"], "asset_name": a["name"], "asset_kind": a["kind"],
+                                "kinds": [{"kind": k, "label": assets.OBLIGATIONS[k][0]} for k in ok]})
+        if choices:
+            out.append(_discover_out(u, choices))
+    return out
+
+
+def policy_start(u: dict) -> date:
+    return date.fromisoformat(u["inst"]["start"] if u.get("inst") else u["date"])
+
+
+def _discover_out(u: dict, choices: list[dict]) -> dict:
+    from app import assets
+
+    cars = all(c["asset_kind"] == "arac" for c in choices)
+    st = policy_start(u)
+    i = u["inst"]
+    if u["group"] == "sigorta":
+        title = f"{u['company']} · Bu sigorta hangi " + ("aracın?" if cars else "varlığın?")
+        end = assets.add_months(st, 12)
+        text = (f"Poliçe {_gun(st)} başlamış görünüyor; bitişi {_gun(end)} kurar, yenilemeyi hatırlatırız."
+                + (f" {i['m']} taksit, ayda {_tl(i['per'])}; kalan taksitler kart ödemende." if i else ""))
+    elif u["group"] == "muayene":
+        title = "TÜVTÜRK · Bu muayene hangi aracın?"
+        text = f"{_gun(st)} muayene ödemesi. Sonraki muayeneyi bu tarihten kurala göre kurarız; tarihi düzeltebilirsin."
+    else:
+        title = "MTV · Bu vergi hangi aracın?"
+        text = f"{_gun(st)} MTV ödemesi. O dönemin taksitini ödendi sayar, sonrakileri hatırlatırız."
+    return {"key": u["key"], "txn_id": u["txn_id"], "entry_id": u["entry_id"], "date": u["date"], "start": st.isoformat(),
+            "description": u["description"], "amount": u["amount"], "group": u["group"],
+            "group_label": GROUP_LABEL[u["group"]], "company": u["company"], "inst": i, "options": [], "choices": choices,
+            "question": "discover", "ask_amount": False, "title": title, "text": text}
+
+
+def _gun(d: date) -> str:
+    from app import push
+
+    return f"{d.day} {push.AY[d.month - 1]} {d.year}"
+
+
+def discover(key: str, asset_id: int, kind: str, on: date | None = None) -> dict:
+    """Keşif önerisini onayla: varlığa hatırlatma kurulur, bu ödeme ilk vadesi olarak "ödendi" yazılır.
+    Sigorta: başlangıç = poliçe başlangıcı (taksitte ilk taksit ayı), 12 ayda bir → sonraki vade bitiş günü.
+    Muayene: son muayene = ödeme günü, sonraki kuraldan (tahmin değil). MTV: o dönemin taksiti ödendi."""
+    from app import assets
+
+    if not can_answer():
+        raise Forbidden("Bu defterde sadece görüntüleme yetkin var")
+    s = next((x for x in suggestions(on)["items"] if x["key"] == key and x["question"] == "discover"), None)
+    if not s:
+        raise KeyError(key)
+    ch = next((c for c in s["choices"] if c["asset_id"] == asset_id), None)
+    if not ch or kind not in [k["kind"] for k in ch["kinds"]]:
+        raise KeyError(asset_id)
+    st = date.fromisoformat(s["start"])
+    if kind == "mtv":
+        oid = assets.add_obligation(asset_id, {"kind": "mtv", "from": f"{st.year}-01-01"}, on=on)
+    elif kind == "muayene":
+        oid = assets.add_obligation(asset_id, {"kind": "muayene", "start": st.isoformat(), "from": st.isoformat()}, on=on)
+    else:
+        oid = assets.add_obligation(asset_id, {"kind": kind, "start": st.isoformat(), "months": 12, "amount": s["amount"],
+                                               "from": st.isoformat()}, on=on)
+    with db.connect() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM asset_dues WHERE obligation_id = ? AND status = 'bekliyor' "
+                                           "ORDER BY due_date", (oid,))]
+    if not rows:
+        raise ValueError("Vade üretilemedi")
+    d = min(rows, key=lambda r: abs((date.fromisoformat(r["due_date"]) - st).days))
+    inst = json.dumps({k: s["inst"][k] for k in ("key", "m", "per", "total", "start")}, sort_keys=True) if s["inst"] else None
+    assets.pay(d["id"], s["start"] if s["inst"] else s["date"], s["amount"], on=on)
+    with db.connect() as c:
+        c.execute("UPDATE asset_dues SET txn_id = ?, entry_id = ?, installment = ? WHERE id = ?",
+                  (s["txn_id"], s["entry_id"], inst, d["id"]))
+    nxt = next((r for r in rows if r["due_date"] > d["due_date"]), None)
+    return {"ok": True, "obligation_id": oid, "due_id": d["id"], "next_due": nxt["due_date"] if nxt else None,
+            "undo": f"/api/assets/{asset_id}/obligations/{oid}"}
 
 
 def _tl(x: float) -> str:

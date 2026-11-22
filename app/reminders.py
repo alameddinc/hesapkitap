@@ -340,10 +340,11 @@ def _varlik_odendi(now: date, limit: int = 3) -> list[dict]:
         when = date.fromisoformat(x["date"])
         out.append({"id": f"varlik_odendi:{x['key']}", "kind": "varlik", "severity": "info", "action": "asset_paid",
                     "route": "varliklar", "suggestion_key": x["key"], "title": x["title"], "text": x["text"],
-                    "cta": "Seç" if x["question"] == "which" else "Onayla",
+                    "cta": "Onayla" if x["question"] == "paid" else "Seç",
                     "tag": f"{x['inst']['m']} taksit" if x["inst"] else x["group_label"], "period": _month(when),
-                    "due": x["date"], "amount": x["amount"], "due_id": x["options"][0]["due_id"],
-                    "asset_id": x["options"][0]["asset_id"]})
+                    "due": x["date"], "amount": x["amount"],
+                    "due_id": x["options"][0]["due_id"] if x["options"] else None,
+                    "asset_id": (x["options"] or x.get("choices") or [{}])[0].get("asset_id")})
     return out
 
 

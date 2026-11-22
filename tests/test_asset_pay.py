@@ -210,7 +210,7 @@ def test_installment_policy_matches_kasko_and_counts_once(client):
     assert d["installment"]["m"] == 8 and not d["installment"]["done"]
     # yeni taksit gelse de yeniden önerilmez (aynı grup)
     pe = assets.add_months(T, 1)
-    _stmt([(0, "NEOVA SİGORTA A. Ş. ORNEK 8/8 Taksit", 1000.0, None, None)], pe)
+    _stmt([((T - pe).days, "NEOVA SİGORTA A. Ş. ORNEK 8/8 Taksit", 1000.0, None, None)], pe)
     assert _sug(client)["count"] == 0
     # Masraflar: poliçe toplamı bir kez (taksitler araca bağlanmaz), tür sigorta-vergi-muayene
     c = client.get(f"/api/assets/{a['id']}").json()["costs"]
@@ -272,3 +272,74 @@ def test_viewer_cannot_answer(owner):
 
 def test_capability(client):
     assert "asset_pay" in client.get("/api/meta").json()["capabilities"]
+
+
+# ---------------------------------------------------------------- keşif: eşleşecek vade yok
+
+def _disc(c):
+    return [x for x in _sug(c)["items"] if x["question"] == "discover"]
+
+
+def test_discover_installment_policy_before_obligation(client):
+    a = _car(client)
+    _policy_rows()  # 5/8, 6/8, 7/8: poliçe 6 ay önce başlamış, kasko hatırlatması yok
+    d = _disc(client)
+    assert len(d) == 1
+    x = d[0]
+    start = assets.add_months(T, -6)
+    assert x["title"] == "NEOVA · Bu sigorta hangi aracın?" and x["start"] == start.isoformat() and x["amount"] == 8000
+    assert x["choices"][0]["asset_id"] == a["id"]
+    assert [k["kind"] for k in x["choices"][0]["kinds"]] == ["kasko", "trafik"]  # araca konut/DASK önerilmez
+    r = client.post("/api/assets/pay-suggestions/discover", json={"key": x["key"], "asset_id": a["id"], "kind": "kasko"})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["next_due"] == assets.add_months(start, 12).isoformat()
+    paid = client.get(f"/api/asset-dues/{b['due_id']}").json()
+    assert paid["status"] == "odendi" and paid["paid_amount"] == 8000 and paid["installment"]["m"] == 8
+    assert _disc(client) == [] and _sug(client)["count"] == 0
+    c = client.get(f"/api/assets/{a['id']}").json()
+    assert next(g for g in c["costs"]["groups"] if g["kind"] == "vade")["total"] == 8000  # poliçe toplamı bir kez
+    nxt = [d for d in assets.plan_dues(T) if d["asset_id"] == a["id"]]
+    assert nxt and nxt[0]["due_date"] == b["next_due"]  # yenileme vadesi hatırlatılır
+
+
+def test_discover_tuvturk_sets_inspection_not_estimated(client):
+    a = _car(client)
+    _entry(client, "TUVTURK ORNEK ISTASYON", 1500, 20)
+    x = _disc(client)[0]
+    assert x["title"].startswith("TÜVTÜRK") and [k["kind"] for k in x["choices"][0]["kinds"]] == ["muayene"]
+    b = client.post("/api/assets/pay-suggestions/discover", json={"key": x["key"], "asset_id": a["id"], "kind": "muayene"}).json()
+    paid = date.fromisoformat(_d(20))
+    assert b["next_due"] == assets.add_months(paid, 24).isoformat()  # hususi otomobil: 2 yıl
+    due = client.get(f"/api/asset-dues/{b['due_id']}").json()
+    assert due["status"] == "odendi" and not due["estimated"]
+    ob = next(o for o in client.get(f"/api/assets/{a['id']}").json()["obligations"] if o["kind"] == "muayene")
+    assert not ob["estimated"]
+
+
+def test_discover_mtv_and_dismiss(client):
+    a = _car(client)
+    _entry(client, "GIB MTV ODEME", 3000, 3)
+    x = _disc(client)[0]
+    assert x["title"] == "MTV · Bu vergi hangi aracın?"
+    assert client.post("/api/assets/pay-suggestions/dismiss", json={"key": x["key"]}).status_code == 200
+    assert _disc(client) == []  # "Bu araçla ilgisi yok": bir daha gelmez
+    _entry(client, "GIB MTV ODEME ORNEK", 3000, 1)
+    y = _disc(client)[0]
+    b = client.post("/api/assets/pay-suggestions/discover", json={"key": y["key"], "asset_id": a["id"], "kind": "mtv"}).json()
+    assert client.get(f"/api/asset-dues/{b['due_id']}").json()["status"] == "odendi"
+    assert _disc(client) == []
+
+
+def test_discover_skips_tracked_kind_and_house_kinds(client):
+    a = _car(client)
+    _ob(client, a["id"], "trafik", _d(-200), 3000)  # trafik takipte, vade uzak: eski ödeme sorulmaz
+    _entry(client, "ORNEK SIGORTA TRAFIK", 3000, 10)
+    assert _disc(client) == []
+    h = client.post("/api/assets", json={"kind": "konut", "name": "Örnek Ev", "tenure": "sahibi", "obligations": []}).json()
+    _entry(client, "ORNEK SIGORTA DASK", 900, 5)
+    x = _disc(client)[0]
+    assert x["title"].endswith("hangi varlığın?") and x["choices"][0]["asset_id"] == h["id"]
+    assert client.post("/api/assets/pay-suggestions/discover", json={"key": x["key"], "asset_id": a["id"], "kind": "dask"}).status_code == 404
+    card = next(i for i in client.get("/api/reminders", params={"assets": 1}).json() if i.get("suggestion_key") == x["key"])
+    assert card["cta"] == "Seç" and card["due_id"] is None and card["asset_id"] == h["id"]

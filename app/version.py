@@ -457,7 +457,7 @@ CAPABILITIES = (
                               # /api/assets/links (+ DELETE /{id}); GET /api/assets/plates (+ POST /ignore); GET/POST
                               # /api/assets/{id}/backfill (mode all|review|skip); fiş okumasında ve kayıtta plate
     "asset_pay",              # Varlıklarım H9 (app/asset_pay.py): GET /api/assets/pay-suggestions ("ödendi mi?" / "Bu hangi
-                              # araç?"; taksitli poliçe inst), POST .../accept {key, due_id, save_amount}, .../dismiss {key};
+                              # araç?"; taksitli poliçe inst), POST .../accept {key, due_id, save_amount}, .../dismiss {key}; keşif question "discover" + choices → POST .../discover {key, asset_id, kind};
                               # vade installment {m, n, label "Taksitle ödeniyor (n/M)"}; reminders?assets=1 action
                               # asset_paid (suggestion_key); push varlik_soru (haftada en çok bir)
     "warranty",               # garanti arşivi (app/warranty.py): GET /api/warranties?q&status → {items [{id, name, brand, model,
