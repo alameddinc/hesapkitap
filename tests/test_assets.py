@@ -272,3 +272,19 @@ def test_property_tax_second_installment_is_end_of_november(client):
     # 30 Kasım 2025 Pazar: son gün ilk iş günü (1 Aralık)
     from app import workdays
     assert workdays.next_business_day(date(2025, 11, 30)) == date(2025, 12, 1)
+
+
+def test_no_dues_before_obligation_added():
+    """Kasım'da eklenen evin Mayıs taksiti üretilmez (büyük ihtimalle ödendi; yanlış "gecikti" alarmı yok)."""
+    on = date(2026, 11, 22)
+    o = {"kind": "emlak", "rule": '{"from": "2026-11-22"}', "amount": 2000.0}
+    start = date.fromisoformat("2026-11-22")
+    got = [d.isoformat() for _, d, _, _ in assets.occurrences(o, {}, start, date(2027, 12, 31))]
+    assert got[0] == "2026-11-30" and "2026-05-31" not in got
+
+
+def test_created_today_has_no_overdue(client):
+    _add(client, {"kind": "konut", "name": "Örnek Ev", "tenure": "sahibi"}, [{"kind": "emlak", "amount": 1000}])
+    _add(client, obligations=[{"kind": "mtv", "amount": 1000}, {"kind": "muayene"}])
+    items = client.get("/api/asset-dues", params={"from": "2000-01-01"}).json()["items"]
+    assert items and all(x["status"] != "gecikti" and x["due_date"] >= date.today().isoformat() for x in items)
