@@ -58,6 +58,11 @@ CATALOG: list[tuple[str, str, str, str, bool, str]] = [
     ("zekat", "Zekât ve Sadaka", "sayfa", FREE, False, "Her pakette ücretsiz (değiştirilemez)"),
     ("garanti", "Sınırsız garanti arşivi", "ozellik", PREMIUM, True,
      "Ücretsizde 3 ürün; ürün, fatura ve garanti belgesi, bitişten önce hatırlatma"),
+    # Varlıklarım (app/assets.py): "kayıt ekleme hiçbir pakette kilitlenmez" ilkesinin BİLİNÇLİ istisnası (sahibin kararı
+    # 22.11.2026): ücretsizde kayıt yok (kilitli önizleme). Sunucu yazma uçlarını kapatır (GATED); paket düşerse kayıtlar
+    # ve Planlama'daki vadeler kalır (okuma açık), yalnız push durur.
+    ("varliklar", "Varlıklarım: araç ve ev", "sayfa", PREMIUM, True,
+     "Vergi, sigorta, muayene, bakım son günleri; Planlama'ya düşer, bildirim gelir"),
 ]
 _ROWS = {k: (label, kind, tier, editable, desc) for k, label, kind, tier, editable, desc in CATALOG}
 DEFAULT_TIERS = {k: r[2] for k, r in _ROWS.items()}
@@ -179,7 +184,8 @@ GATED = [(None, "/api/prices", "fiyatlar"), (None, "/api/shopping-list", "alisve
          (None, "/api/book/member-spend", "aile_rapor"), (None, "/api/spender", "aile_rapor"),
          (None, "/api/plan/simulate", "alsam_mi"), (None, "/api/year-summary", "istatistik"),
          (None, "/api/interest-history", "istatistik"), ("POST", "/api/jars", "kumbara"),
-         ("POST", "/api/debt-plan/commit", "borc_plani_plus")]  # planı başlat / yeniden oluştur
+         ("POST", "/api/debt-plan/commit", "borc_plani_plus")]
+GATED += [(m, p, "varliklar") for m in ("POST", "PATCH", "PUT", "DELETE") for p in ("/api/assets", "/api/asset-dues")]  # planı başlat / yeniden oluştur
 
 
 class PlanRequired(Exception):

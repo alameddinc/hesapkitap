@@ -4528,12 +4528,12 @@ class SnoozeIn(BaseModel):
 
 
 @app.get("/api/reminders")
-def reminders_list(regular: bool = False):
+def reminders_list(regular: bool = False, assets: bool = False):
     """Yapılacaklar: [{id, kind, title, text, cta, route, action, due, severity, tag, period, ...}]; id döneme bağlı, kararlı.
     regular=1: "Bu düzenli mi?" maddeleri de (yetenek regular_confirm; eski istemci bu türü tanımaz)."""
     from app import reminders
 
-    return reminders.build(regular=regular)
+    return reminders.build(regular=regular, assets=assets)
 
 
 def _reminder_id(rid: str) -> str:
@@ -10541,6 +10541,336 @@ def warranty_file_delete(wid: int, fid: int):
     _warranty_or_404(wid)
     _warranty_call(warranty.unlink_file, wid, fid)
     return _warranty_or_404(wid)
+
+
+# ---------------------------------------------------------------- Varlıklarım (app/assets.py)
+
+class AssetObligationIn(BaseModel):
+    """Hatırlatma: kind (assets.OBLIGATIONS). amount: MTV / emlak / kira beyanında YILLIK, diğerlerinde dönem başı.
+    start: poliçe bitişi / ruhsattaki muayene tarihi / son bakım + months / sözleşme başlangıcı (muayenede boşsa tahmin).
+    months: tekrar (ay; 0 = tek sefer). recurring_id: aidat için mevcut sabit kalem."""
+    kind: str = Field(max_length=20)
+    label: str | None = Field(None, max_length=60)
+    amount: Money | None = Field(None, ge=0)
+    start: date | None = None
+    months: int | None = Field(None, ge=0, le=120)
+    recurring_id: int | None = None
+    active: bool = True
+
+
+class AssetIn(BaseModel):
+    kind: Literal["arac", "konut", "isyeri"]
+    name: str = Field(min_length=1, max_length=60)
+    plate: str | None = Field(None, max_length=16)
+    foreign_plate: bool = False
+    vehicle_class: Literal["otomobil", "kamyonet", "motosiklet", "diger"] | None = None
+    model_year: int | None = Field(None, ge=1950, le=2100)
+    commercial: bool = False
+    fuel: Literal["benzin", "dizel", "lpg", "hibrit", "elektrik", "diger"] | None = None
+    tenure: Literal["sahibi", "kiraci", "kiraya_verdim"] | None = None
+    province: str | None = Field(None, max_length=40)
+    acquired_on: date | None = None
+    note: str | None = Field(None, max_length=1000)
+    obligations: list[AssetObligationIn] = Field(default_factory=list, max_length=20)
+
+
+class AssetPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=60)
+    plate: str | None = Field(None, max_length=16)
+    foreign_plate: bool = False
+    vehicle_class: Literal["otomobil", "kamyonet", "motosiklet", "diger"] | None = None
+    model_year: int | None = Field(None, ge=1950, le=2100)
+    commercial: bool | None = None
+    fuel: Literal["benzin", "dizel", "lpg", "hibrit", "elektrik", "diger"] | None = None
+    tenure: Literal["sahibi", "kiraci", "kiraya_verdim"] | None = None
+    province: str | None = Field(None, max_length=40)
+    acquired_on: date | None = None
+    note: str | None = Field(None, max_length=1000)
+
+
+class AssetObligationPatch(BaseModel):
+    label: str | None = Field(None, max_length=60)
+    amount: Money | None = Field(None, ge=0)
+    start: date | None = None
+    months: int | None = Field(None, ge=0, le=120)
+    recurring_id: int | None = None
+    active: bool | None = None
+
+
+class AssetDisposeIn(BaseModel):
+    on: date | None = None
+
+
+class AssetPayIn(BaseModel):
+    paid_on: date | None = None
+    amount: Money | None = Field(None, ge=0)
+    next_end_date: date | None = None
+
+
+class AssetDuePatch(BaseModel):
+    amount: Money | None = Field(None, ge=0)
+
+
+def _asset_call(fn, *a, **kw):
+    from app import assets
+
+    try:
+        return fn(*a, **kw)
+    except KeyError as e:
+        raise HTTPException(404, "Kayıt bulunamadı") from e
+    except assets.Forbidden as e:
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:  # TooMany dahil
+        raise HTTPException(422, str(e)) from e
+
+
+def _asset_or_404(aid: int) -> dict:
+    from app import assets
+
+    a = assets.get(aid)
+    if not a:
+        raise HTTPException(404, "Varlık bulunamadı")
+    return a
+
+
+def _jsonable(d: dict) -> dict:
+    return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in d.items()}
+
+
+@app.get("/api/assets")
+def assets_list(include_disposed: bool = False):
+    """Varlıklarım: {items [{id, kind, name, plate, vehicle_class, model_year, commercial, fuel, tenure, ..., obligations,
+    next_due, can_edit}], upcoming (en yakın 5 açık vade), locked / read_only (paket yok: yazma 402), need, can_add,
+    disposed_count}. Ücretsizde de okunur (kilitli önizleme / paket düşünce salt-okunur)."""
+    from app import assets
+
+    return assets.listing(db.current_user(), include_disposed)
+
+
+@app.get("/api/assets/suggest")
+def assets_suggest(kind: Literal["arac", "konut", "isyeri"] = "arac",
+                   tenure: Literal["sahibi", "kiraci", "kiraya_verdim"] | None = None,
+                   vehicle_class: Literal["otomobil", "kamyonet", "motosiklet", "diger"] | None = None,
+                   commercial: bool = False, model_year: int | None = Query(None, ge=1950, le=2100),
+                   acquired_on: date | None = None):
+    """Önerilen hatırlatmalar (işaretli / işaretsiz), sabit tarihler, muayene tahmini (her zaman "Tahmin"), MTV'de geçen
+    yılın ekstresindeki ödemeden tutar önerisi (hint) ve mevzuat bilgisi (law)."""
+    from app import assets
+
+    return assets.suggest(kind, tenure, vehicle_class, commercial, model_year,
+                          acquired_on.isoformat() if acquired_on else None)
+
+
+@app.get("/api/assets/{aid}")
+def asset_get(aid: int):
+    return _asset_or_404(aid)
+
+
+@app.post("/api/assets")
+def asset_create(body: AssetIn, request: Request):
+    """Varlık + seçilen hatırlatmalar. Idempotency-Key (çevrimdışı kuyruk tekrarı aynı varlığı döner). Paket yoksa 402
+    (plans.GATED "varliklar")."""
+    from app import assets
+
+    data = _jsonable(body.model_dump(exclude={"obligations"}))
+    obs = [_jsonable(o.model_dump()) for o in body.obligations]
+    aid = _asset_call(assets.create, data, obs, _client_key(request))
+    return _asset_or_404(aid)
+
+
+@app.patch("/api/assets/{aid}")
+def asset_patch(aid: int, body: AssetPatch):
+    """Düzenle; yanıtta needs_review ["muayene"]: araç cinsi / ticari değişti, ruhsattan girilen muayene tarihi
+    değişmiş olabilir (kullanıcıya sor)."""
+    from app import assets
+
+    data = _jsonable(body.model_dump(exclude_unset=True))
+    if "name" in data and not data["name"]:
+        raise HTTPException(422, "Ad boş olamaz")
+    if body.foreign_plate:
+        data["foreign_plate"] = True
+    review = _asset_call(assets.update, aid, data)
+    return {**_asset_or_404(aid), "needs_review": review or _asset_or_404(aid)["needs_review"]}
+
+
+@app.delete("/api/assets/{aid}")
+def asset_delete(aid: int):
+    """Yumuşak silme: POST /api/assets/{aid}/restore ile geri alınır."""
+    from app import assets
+
+    _asset_call(assets.delete, aid)
+    return {"ok": True, "undo": f"/api/assets/{aid}/restore"}
+
+
+@app.post("/api/assets/{aid}/restore")
+def asset_restore(aid: int):
+    from app import assets
+
+    _asset_call(assets.restore, aid)
+    return _asset_or_404(aid)
+
+
+@app.post("/api/assets/{aid}/dispose")
+def asset_dispose(aid: int, body: AssetDisposeIn):
+    """Satıldı / taşındı: o günden sonraki bekleyen vadeler atlanır (undispose geri getirir)."""
+    from app import assets
+
+    _asset_call(assets.dispose, aid, body.on.isoformat() if body.on else None)
+    return _asset_or_404(aid)
+
+
+@app.post("/api/assets/{aid}/undispose")
+def asset_undispose(aid: int):
+    from app import assets
+
+    _asset_call(assets.undispose, aid)
+    return _asset_or_404(aid)
+
+
+@app.post("/api/assets/{aid}/obligations")
+def asset_obligation_add(aid: int, body: AssetObligationIn):
+    from app import assets
+
+    _asset_call(assets.add_obligation, aid, _jsonable(body.model_dump()))
+    return _asset_or_404(aid)
+
+
+@app.patch("/api/assets/{aid}/obligations/{oid}")
+def asset_obligation_patch(aid: int, oid: int, body: AssetObligationPatch):
+    """Kural / tutar değişince bugünden sonraki bekleyen vadeler yeniden üretilir (ödenenlere dokunulmaz)."""
+    from app import assets
+
+    _asset_call(assets.update_obligation, aid, oid, _jsonable(body.model_dump(exclude_unset=True)))
+    return _asset_or_404(aid)
+
+
+@app.delete("/api/assets/{aid}/obligations/{oid}")
+def asset_obligation_delete(aid: int, oid: int):
+    from app import assets
+
+    _asset_call(assets.delete_obligation, aid, oid)
+    return _asset_or_404(aid)
+
+
+@app.post("/api/assets/{aid}/files")
+@_heavy
+def asset_file_add(aid: int, file: UploadFile = File(...), doc_type: str = Form("diger")):
+    """Belge (ruhsat, poliçe…): fotoğraf (EXIF silinir, küçültülür) ya da PDF; yalnız saklanır, okunmaz — okuma
+    hakkından düşmez. Varlık başına en çok assets.MAX_FILES."""
+    from app import assets, images
+
+    _asset_or_404(aid)
+    _asset_call(assets.can_add_file, aid)
+    data = _file_bytes(file)
+    limits.check_size(data, file.filename)
+    mime = (file.content_type or "").lower()
+    if data[:5] == b"%PDF-":
+        name, blob = f"{db.file_hash(data)}.pdf", data
+    elif mime.startswith("image/") or data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+        try:
+            blob = images.prepare(data)
+        except images.ImageTooLarge as e:
+            raise HTTPException(413, images.ImageTooLarge.message) from e
+        if blob is None:
+            raise HTTPException(422, "Bu fotoğraf açılamadı; JPEG, PNG ya da PDF yükle")
+        name = f"{db.file_hash(blob)}.jpg"
+    else:
+        raise HTTPException(422, "Yalnız fotoğraf ya da PDF eklenebilir")
+    try:
+        stored = db.store_file("assets", name, blob)
+    except Exception as e:  # noqa: BLE001 - depo hatası
+        raise HTTPException(503, "Dosya şu an saklanamadı; biraz sonra tekrar dene") from e
+    if not stored:
+        db.take_storage_warning()
+        raise HTTPException(507, WARRANTY_FULL_MSG)
+    _asset_call(assets.link_file, aid, name, doc_type, file.filename, len(blob))
+    return _asset_or_404(aid)
+
+
+@app.get("/api/assets/{aid}/files/{fid}")
+def asset_file(aid: int, fid: int, download: bool = False):
+    from app import assets
+
+    r = assets.file_row(aid, fid)
+    if not r:
+        raise HTTPException(404, "Belge yok")
+    slug = re.sub(r"[^0-9A-Za-zçğıöşüÇĞİÖŞÜ]+", "-", r["asset"]["name"]).strip("-")[:40] or "varlik"
+    return _stored_file("assets", r["name"], f"{slug}-{r['doc_type']}-{fid}", inline=not download)
+
+
+@app.delete("/api/assets/{aid}/files/{fid}")
+def asset_file_delete(aid: int, fid: int):
+    from app import assets
+
+    _asset_or_404(aid)
+    _asset_call(assets.unlink_file, aid, fid)
+    return _asset_or_404(aid)
+
+
+@app.get("/api/asset-dues")
+def asset_dues(from_: date | None = Query(None, alias="from"), to: date | None = None,
+               status: Literal["bekliyor", "gecikti", "odendi", "atlandi"] | None = None):
+    """Takvim: gecikmiş açık vadeler her zaman (en üstte), diğerleri [from (bugün), to (12 ay)]. Her satır: id, asset_id,
+    asset_name, kind, title, due_date, effective_date (son gün tatildeyse ilk iş günü), shifted, days_left, amount,
+    status bekliyor|gecikti|odendi|atlandi, estimated (Tahmin), late_text / where / url (mevzuat bilgisi), verified,
+    asks_end_date (poliçe: ödenince yeni bitiş sorulur), can_pay."""
+    from app import assets
+
+    return {"items": assets.dues(from_, to, status)}
+
+
+@app.get("/api/asset-dues/{did}")
+def asset_due_get(did: int):
+    from app import assets
+
+    d = assets.due(did)
+    if not d:
+        raise HTTPException(404, "Vade bulunamadı")
+    return d
+
+
+def _due_or_404(did: int) -> dict:
+    from app import assets
+
+    d = assets.due(did)
+    if not d:
+        raise HTTPException(404, "Vade bulunamadı")
+    return d
+
+
+@app.post("/api/asset-dues/{did}/pay")
+def asset_due_pay(did: int, body: AssetPayIn):
+    """Ödendi: tarih (bugün), tutar (planlanan); poliçede next_end_date ile kural yeni bitişten sürer. Geri al: unpay."""
+    from app import assets
+
+    _asset_call(assets.pay, did, body.paid_on.isoformat() if body.paid_on else None, body.amount,
+                body.next_end_date.isoformat() if body.next_end_date else None)
+    return _due_or_404(did)
+
+
+@app.post("/api/asset-dues/{did}/skip")
+def asset_due_skip(did: int):
+    from app import assets
+
+    _asset_call(assets.skip, did)
+    return _due_or_404(did)
+
+
+@app.post("/api/asset-dues/{did}/unpay")
+def asset_due_unpay(did: int):
+    from app import assets
+
+    _asset_call(assets.unpay, did)
+    return _due_or_404(did)
+
+
+@app.patch("/api/asset-dues/{did}")
+def asset_due_patch(did: int, body: AssetDuePatch):
+    """Bu vadenin tutarı (yalnız bu dönem; kuralın tutarı için obligations PATCH)."""
+    from app import assets
+
+    _asset_call(assets.set_due_amount, did, body.amount)
+    return _due_or_404(did)
 
 
 @app.post("/api/settings/backup/restore")

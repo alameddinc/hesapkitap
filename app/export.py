@@ -77,6 +77,10 @@ def workbook() -> bytes:
 
     if g := warranty.export_rows():  # garanti arşivi (varsa): ürün, süre, bitiş; belgeler zip yedekte (warranty/)
         _sheet(wb, "Garantiler", warranty.EXPORT_HEAD, g)
+    from app import assets
+
+    if v := assets.export_rows():  # Varlıklarım (varsa): vadeler; belgeler zip yedekte (assets/)
+        _sheet(wb, "Varlıklar", assets.EXPORT_HEAD, v)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

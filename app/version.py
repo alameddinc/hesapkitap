@@ -445,6 +445,11 @@ CAPABILITIES = (
     "sadaka_ratio",           # GET /api/donations/ratio?months=6|12 {available, months [{month, label, short, sadaka,
                               # income|null, ratio (%)|null, note "gelir kaydı yok"|null, zakat|null (ayrı, oranda yok),
                               # partial}], sentence|null, ratio_available, basis kisi|defter, min_income, note}
+    "assets",                 # Varlıklarım (app/assets.py): GET/POST /api/assets, /api/assets/{id} (PATCH, DELETE + restore,
+                              # dispose/undispose, obligations, files), /api/assets/suggest, GET /api/asset-dues (takvim),
+                              # /api/asset-dues/{id} (pay/skip/unpay, PATCH tutar); plan months[].lines type "varlik",
+                              # parts.pending_assets, plan.asset_unknown; spendable DUE_KEYS "assets"; push varlik_*;
+                              # GET /api/reminders?assets=1 → kind "varlik" (action asset_due, due_id)
     "warranty",               # garanti arşivi (app/warranty.py): GET /api/warranties?q&status → {items [{id, name, brand, model,
                               # store, purchase_date, price, months, extra_months, ends_at, days_left, status aktif|yakinda|bitti,
                               # status_label, left_text, serial_no, note, entry_id, txn_id, files [{id, doc_type, doc_label,
