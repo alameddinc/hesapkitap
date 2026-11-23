@@ -487,15 +487,9 @@ def _strip_suffix(orig: str, folded: str) -> str:
     return orig
 
 
-_NOT_NAME = re.compile(r"(?<![a-z])(tarih|saat|fis|tel|mah|cad|sok|vkn|mersis|vd|vergi|no)(?![a-z])")
 # unvanın sonundaki genel ekler (ad türetilirken atılır); sektör kelimeleri (gıda, pastacılık) addan sayılır
 _TAIL = re.compile(r"(?:\s|[.,&/-])*(?<![a-z])(a\.?\s?s|ltd|sti|tic|ticaret|san|sanayi|ve|ith|ihr|dis|ic|anonim|limited|"
                    r"sirketi|sirket|paz|pazarlama|ltd\.?\s?sti)\.?\s*$")
-
-
-def _name_like(ln: str) -> bool:
-    return len(re.findall(r"[a-z]", ln)) >= 4 and not re.search(r"\d{3,}", ln) and not _NOT_NAME.search(ln) \
-        and not _SUFFIX.search(ln)
 
 
 def core_name(legal: str | None) -> str | None:
@@ -511,20 +505,16 @@ def core_name(legal: str | None) -> str | None:
 
 def _merchant(orig: list[str], lines: list[str]) -> tuple[str, str | None]:
     """(işyeri adı, resmi unvan) fişin başlığından: unvan eki (A.Ş., LTD. ŞTİ.) geçen satır ve üstündeki ad satırı.
-    Unvan iki satıra bölünmüşse ("ORNEK UNLU" / "MAMULLERİ PASTACILIK SAN. TİC. LTD. ŞTİ.") iki satır birleşir; üstteki
-    satır alttakinin içinde geçiyorsa (marka + unvan: "ORNEK" / "ORNEK GIDA LTD.") birleşmez."""
+    Bölünmüş unvan burada birleştirilmez (marka satırını yutma riski); kesik ad okumadan sonra aynı VKN'li kayıttan ya
+    da unvandan tamamlanır (app/merchant_name.py)."""
     head = [(o, ln) for o, ln in zip(orig[:8], lines[:8])]
     for k, (o, ln) in enumerate(head):
         if not _SUFFIX.search(ln):
             continue
-        prev = lines[k - 1] if k > 0 else ""
-        if prev and _name_like(prev) and not set(_words(prev)) <= set(_words(ln)):
-            legal = f"{orig[k - 1].strip()} {o.strip()}"[:120]
-            return _title(core_name(legal) or orig[k - 1], legal), legal
         bare = _SUFFIX.sub("", ln)
         if len(re.findall(r"[a-z]{3,}", bare)) >= 2 and not re.search(r"\d{3,}", ln):
-            return _title(core_name(o) or _strip_suffix(o, ln), o), o[:120]
-        if prev and len(re.findall(r"[a-z]", prev)) >= 4 and not re.search(r"\d{3,}", prev):
+            return _title(_strip_suffix(o, ln), o), o[:120]
+        if k > 0 and len(re.findall(r"[a-z]", lines[k - 1])) >= 4 and not re.search(r"\d{3,}", lines[k - 1]):
             return _title(orig[k - 1], o), f"{orig[k - 1]} {o}"[:120]
     for o, ln in head:
         if len(re.findall(r"[a-z]", ln)) >= 4 and not re.search(r"\d{3,}", ln) and not re.search(

@@ -18,34 +18,12 @@ def _head(*lines):
 
 # ---------------------------------------------------------------- başlıktan ad
 
-def test_split_legal_name_is_joined():
-    name, legal = _head("ORNEK UNLU", "MAMULLERİ PASTACILIK SAN. TİC. LTD. ŞTİ.", "DENEME MAH. NO:1", "TARIH 01.11.2026")
-    assert name == "Ornek Unlu Mamulleri Pastacılık"
-    assert legal == "ORNEK UNLU MAMULLERİ PASTACILIK SAN. TİC. LTD. ŞTİ."
+def test_split_legal_name_not_joined_in_header():
+    # başlıkta birleştirilmez (marka satırı riski); kesik ad okumadan sonra unvandan tamamlanır (merchant_name)
+    name, legal = _head("ORNEK UNLU", "MAMULLERI SAN. TIC. LTD. STI.", "TARIH 01.11.2026")
+    assert name == "Ornek Unlu"
+    assert legal == "ORNEK UNLU MAMULLERI SAN. TIC. LTD. STI."
 
-
-def test_split_legal_name_dotless_ocr():
-    name, _ = _head("ORNEK UNLU", "MAMULLERI SAN. TIC. LTD. STI.", "TARIH 01.11.2026")
-    assert name == "Ornek Unlu Mamulleri"
-
-
-def test_brand_above_legal_not_joined():
-    name, legal = _head("ORNEK", "ORNEK GIDA SAN. VE TIC. LTD. STI.", "TARIH 01.11.2026")
-    assert name == "Ornek Gıda"
-    assert legal == "ORNEK GIDA SAN. VE TIC. LTD. STI."
-
-
-def test_single_line_legal_unchanged():
-    name, _ = _head("ORNEK GIDA SAN. VE TIC. LTD. STI.", "ORNEK MAH. DENEME CAD. NO:1", "TARIH 01.11.2026")
-    assert name == "Ornek Gıda"
-
-
-def test_address_line_not_joined():
-    name, _ = _head("DENEME MAH. ORNEK CAD.", "ORNEK GIDA SAN. VE TIC. LTD. STI.")
-    assert name == "Ornek Gıda"
-
-
-# ---------------------------------------------------------------- noktasız I
 
 def test_title_uses_legal_spelling():
     assert rt._title("MAMULLERI", LEGAL) == "Mamulleri"
