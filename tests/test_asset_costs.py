@@ -271,3 +271,41 @@ def test_group_monthly_uses_own_first_month():
         ac.rows, ac.allowed = orig_rows, orig_allowed
     assert s["fuel_monthly"] == 900.0
     assert next(g for g in s["groups"] if g["kind"] == "yol")["monthly"] == 100.0
+
+
+def test_backfill_pick_links_only_selected(client):
+    a = _car(client)
+    _entry(client, "ORNEK AKARYAKIT", 1000, 40)
+    _entry(client, "HGS YUKLEME", 250, 30)
+    _entry(client, "ORNEK AKARYAKIT", 600, 20)
+    p = client.get(f"/api/assets/{a['id']}/backfill", params={"since": _d(60)}).json()
+    assert p["count"] == 3 and len(p["items"]) == 3
+    it = p["items"][0]
+    assert {"ref", "date", "description", "amount", "cost_kind"} <= set(it) and it["ref"][0] in "te"
+    pick = [x["ref"] for x in p["items"] if x["amount"] in (1000, 250)]
+    r = client.post(f"/api/assets/{a['id']}/backfill", json={"mode": "pick", "since": _d(60), "refs": pick + ["e999999"]})
+    assert r.status_code == 200 and r.json()["linked"] == 2 and r.json()["mode"] == "pick"
+    d = client.get(f"/api/assets/{a['id']}").json()
+    assert d["costs"]["last_12"] == 1250 and d["backfill_asked"]
+    assert {x["link_source"] for x in client.get(f"/api/assets/{a['id']}/costs").json()["items"]} == {"bulk"}
+    left = client.get(f"/api/assets/{a['id']}/backfill", params={"since": _d(60)}).json()
+    assert left["count"] == 1 and left["items"][0]["amount"] == 600  # seçilmeyen kendiliğinden bağlanmadı
+    assert client.post(f"/api/assets/{a['id']}/backfill", json={"mode": "pick", "refs": []}).json()["linked"] == 0
+
+
+def test_backfill_pick_member_rules(owner):
+    a = _car(owner)
+    _entry(owner, "ORNEK AKARYAKIT", 500, 10, card=None)
+    ref = owner.get(f"/api/assets/{a['id']}/backfill").json()["items"][0]["ref"]
+    vw = _member(owner, "goren", "viewer")
+    assert vw.post(f"/api/assets/{a['id']}/backfill", json={"mode": "pick", "refs": [ref]}).status_code == 403
+    ed = _member(owner, "esim", "editor")
+    assert ed.post(f"/api/assets/{a['id']}/backfill", json={"mode": "pick", "refs": [ref]}).status_code == 403
+
+
+def test_backfill_pick_locked_free_plan(client, monkeypatch):
+    from tests.test_debt_jar import _hosted_user
+
+    c, _ = _hosted_user(client, monkeypatch)
+    p = c.get("/api/assets/1/backfill").json()
+    assert p.get("locked") or p.get("count", 0) == 0
