@@ -543,12 +543,17 @@ def backfill_preview(aid: int, since: str | None = None, on: date | None = None)
             "total": round(sum(x["amount"] for x in take), 2),
             "by_kind": [{"kind": k, "label": COST_KINDS[k], "count": len(v), "total": round(sum(x["amount"] for x in v), 2)}
                         for k, v in sorted(by.items(), key=lambda kv: -len(kv[1]))],
-            "excluded": excluded, "items": [_item_out(x) for x in take[:50]]}
+            "excluded": excluded, "items": [{**_item_out(x), "ref": x["ref"]} for x in take[:PICK_MAX]]}
 
 
-def backfill(aid: int, mode: str, since: str | None = None, on: date | None = None) -> dict:
-    """mode all: bulunanların hepsi bu araca (source bulk), bundan sonra da kendiliğinden; review: geçmiş "Bu hangi
-    araç?" sorusuna düşer; skip: yalnız bugünden sonrası (varsayılan)."""
+PICK_MAX = 500  # önizleme listesinin üst sınırı (seçerek ekleme bu listeden)
+
+
+def backfill(aid: int, mode: str, since: str | None = None, on: date | None = None,
+             refs: list[str] | None = None) -> dict:
+    """mode all: bulunanların hepsi bu araca (source bulk), bundan sonra da kendiliğinden; pick: yalnız seçilen adaylar
+    (refs: önizlemedeki "t<txn_id>" / "e<entry_id>"); review (eski istemciler): geçmiş "Bu hangi araç?" sorusuna düşer;
+    skip: yalnız bugünden sonrası (varsayılan)."""
     from app import assets
 
     if not can_link():
@@ -560,15 +565,21 @@ def backfill(aid: int, mode: str, since: str | None = None, on: date | None = No
     if not assets.can_edit(dict(a)) and mode != "skip":
         raise Forbidden("Bu aracı yalnız ekleyen ya da tam yetkili üye düzenleyebilir")
     n = 0
-    if mode == "all":
+    if mode in ("all", "pick"):
         take, _ = _backfill_split(aid, d, on)
+        if mode == "pick":
+            want = set(refs or [])
+            take = [x for x in take if x["ref"] in want]
         with db.connect() as c:
             for x in take:
                 col = "txn_id" if x["txn_id"] else "entry_id"
                 c.execute(f"INSERT OR IGNORE INTO asset_links (asset_id, {col}, cost_kind, source, created_by) "
                           "VALUES (?, ?, ?, 'bulk', ?)", (aid, x["txn_id"] or x["entry_id"], x["cost_kind"], assets._me()))
                 n += 1
-            c.execute("UPDATE assets SET costs_since = ? WHERE id = ?", (d.isoformat(), aid))
+            if mode == "all":
+                c.execute("UPDATE assets SET costs_since = ? WHERE id = ?", (d.isoformat(), aid))
+            else:  # seçilmeyenler kendiliğinden bağlanmasın: geçmiş açık aday olarak kalır (şerit yeniden sorabilir)
+                c.execute("UPDATE assets SET costs_since = COALESCE(costs_since, ?) WHERE id = ?", (on.isoformat(), aid))
     elif mode == "review":
         with db.connect() as c:
             c.execute("UPDATE assets SET review_since = ? WHERE id = ?", (d.isoformat(), aid))
@@ -576,7 +587,7 @@ def backfill(aid: int, mode: str, since: str | None = None, on: date | None = No
         with db.connect() as c:
             c.execute("UPDATE assets SET costs_since = COALESCE(costs_since, ?) WHERE id = ?", (on.isoformat(), aid))
     else:
-        raise ValueError("mode: all | review | skip")
+        raise ValueError("mode: all | pick | review | skip")
     return {"ok": True, "linked": n, "since": d.isoformat(), "mode": mode}
 
 

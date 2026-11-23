@@ -10681,8 +10681,9 @@ class AssetLinkIn(BaseModel):
 
 
 class AssetBackfillIn(BaseModel):
-    mode: Literal["all", "review", "skip"]
+    mode: Literal["all", "pick", "review", "skip"]
     since: date | None = None
+    refs: list[str] = Field(default_factory=list, max_length=1000)  # mode pick: "t<txn_id>" / "e<entry_id>"
 
 
 class AssetPlateIgnoreIn(BaseModel):
@@ -10843,10 +10844,12 @@ def asset_backfill_preview(aid: int, since: date | None = None):
 
 @app.post("/api/assets/{aid}/backfill")
 def asset_backfill(aid: int, body: AssetBackfillIn):
-    """mode all: Hepsini ekle · review: Tek tek bakayım (soruya düşer) · skip: Şimdilik geç."""
+    """mode all: Hepsini ekle · pick: Tek tek bakayım (refs: seçilenler) · review: eski istemci (soruya düşer) ·
+    skip: Şimdilik geç."""
     from app import asset_costs
 
-    return _costs_call(asset_costs.backfill, aid, body.mode, body.since.isoformat() if body.since else None)
+    return _costs_call(asset_costs.backfill, aid, body.mode, body.since.isoformat() if body.since else None,
+                       refs=body.refs if body.mode == "pick" else None)
 
 
 @app.get("/api/assets/{aid}")

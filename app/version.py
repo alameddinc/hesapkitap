@@ -455,7 +455,7 @@ CAPABILITIES = (
                               # total, count, monthly, this_month}], series [{month, total}]} | {locked}; GET
                               # /api/assets/{id}/costs?group; GET /api/assets/questions ("Bu hangi araç?"); GET/POST
                               # /api/assets/links (+ DELETE /{id}); GET /api/assets/plates (+ POST /ignore); GET/POST
-                              # /api/assets/{id}/backfill (mode all|review|skip); fiş okumasında ve kayıtta plate
+                              # /api/assets/{id}/backfill (mode all|pick+refs|review|skip; items[].ref); fiş okumasında ve kayıtta plate
     "asset_pay",              # Varlıklarım H9 (app/asset_pay.py): GET /api/assets/pay-suggestions ("ödendi mi?" / "Bu hangi
                               # araç?"; taksitli poliçe inst), POST .../accept {key, due_id, save_amount}, .../dismiss {key}; keşif question "discover" + choices → POST .../discover {key, asset_id, kind};
                               # vade installment {m, n, label "Taksitle ödeniyor (n/M)"}; reminders?assets=1 action
