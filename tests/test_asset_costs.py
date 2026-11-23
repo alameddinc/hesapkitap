@@ -254,3 +254,20 @@ def test_tuvturk_payment_dedupes_with_paid_inspection(client):
     _entry(client, "TUVTURK ORNEK", 2000, 0)
     c = client.get(f"/api/assets/{a['id']}").json()["costs"]
     assert c["last_12"] == 2000 and [g["kind"] for g in c["groups"]] == ["vade"]
+
+
+def test_group_monthly_uses_own_first_month():
+    """Yakıt yalnız bu ay varsa ayda yakıt = bu ayın toplamı (12'ye bölünmez)."""
+    import app.asset_costs as ac
+    from datetime import date
+    on = date(2026, 11, 20)
+    rs = [{"date": f"2026-{m:02d}-05", "amount": 100.0, "group": "yol"} for m in range(1, 12)]
+    rs += [{"date": "2026-11-10", "amount": 900.0, "group": "yakit"}]
+    orig_rows, orig_allowed = ac.rows, ac.allowed
+    ac.rows, ac.allowed = (lambda _id, _on: rs), (lambda: True)
+    try:
+        s = ac.summary({"id": 1, "kind": "arac"}, on)
+    finally:
+        ac.rows, ac.allowed = orig_rows, orig_allowed
+    assert s["fuel_monthly"] == 900.0
+    assert next(g for g in s["groups"] if g["kind"] == "yol")["monthly"] == 100.0

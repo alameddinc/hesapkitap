@@ -650,7 +650,8 @@ def summary(a: dict, on: date | None = None) -> dict | None:
         if k in by_month:
             by_month[k] += r["amount"]
         g = by_group.setdefault(r["group"], {"kind": r["group"], "label": GROUPS[r["group"]], "total": 0.0, "count": 0,
-                                             "this_month": 0.0})
+                                             "this_month": 0.0, "_first": k})
+        g["_first"] = min(g["_first"], k)
         g["total"] += r["amount"]
         g["count"] += 1
         if k == this:
@@ -662,7 +663,9 @@ def summary(a: dict, on: date | None = None) -> dict | None:
     groups = sorted(by_group.values(), key=lambda g: -g["total"])
     for g in groups:
         g["total"], g["this_month"] = round(g["total"], 2), round(g["this_month"], 2)
-        g["monthly"] = round(g["total"] / months, 2)
+        # Tür ortalaması o türün kendi ilk ayından sayılır (yakıt yalnız bu ay bağlandıysa 12'ye bölünmez).
+        g_first = max(first, g.pop("_first"))
+        g["monthly"] = round(g["total"] / max(1, sum(1 for k in keys if k >= g_first)), 2)
     fuel = next((g for g in groups if g["kind"] == "yakit"), None)
     return {"locked": False, "this_month": round(by_month[this], 2), "last_12": total, "months": months,
             "monthly_avg": round(total / months, 2), "fuel_monthly": fuel["monthly"] if fuel else 0.0,
