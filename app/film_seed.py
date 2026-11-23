@@ -98,15 +98,17 @@ LIST = [("6x Süt", MEMBER), ("2,5 kg Elma", MEMBER), ("1,5 kg Domates", MEMBER)
 CARDS = [("Örnek Bank", "0000********0000", "0000***0000", 12, 60000.0, OWNER),
          ("Mavi Bank", "0000********1111", "0000***1111", 22, 45000.0, MEMBER)]
 # taksitli kart harcamaları: (kart sırası, açıklama, kategori, toplam ₺, taksit sayısı, son ekstrede kaçıncı taksit)
+# Mehmet’in kartında (1) büyük kalem yok: kesimi (22) dönemine düştüğünde de "Kim ne harcadı"da ilk kategori kahve/market
+# kalsın (test_screens_are_filled_for_both); bu yüzden telefon taksiti Ayşe’nin kartında, spor salonu kahveden az.
 CARD_INSTALLMENTS = [(0, "ORNEK ELEKTRONIK TABLET", "Elektronik", 9000.0, 6, 3),
                      (0, "ORNEK OPTIK GOZLUK", "Sağlık", 4200.0, 3, 2),
-                     (1, "ORNEK ILETISIM TELEFON", "Telefon", 18000.0, 6, 4)]
+                     (0, "ORNEK ILETISIM TELEFON", "Telefon", 18000.0, 6, 4)]
 # tek çekim kart harcamaları: (kart sırası, açıklama, kategori, ₺, kesimden kaç gün önce) — her dönem
 CARD_SPEND = [(0, "ORNEK ECZANE", "Sağlık", 340.0, 20), (0, "ORNEK GIYIM", "Giyim", 1850.0, 14),
               (0, "ORNEK AKARYAKIT", "Ulaşım & Araç", 2100.0, 9), (0, "ORNEK RESTORAN", "Kafe & Restoran", 1240.0, 5),
               (1, "ORNEK KAHVE", "Kafe & Restoran", 118.0, 25), (1, "ORNEK KAHVE", "Kafe & Restoran", 96.0, 17),
               (1, "ORNEK KAHVE", "Kafe & Restoran", 134.0, 9), (1, "ORNEK KAHVE", "Kafe & Restoran", 102.0, 3),
-              (1, "ORNEK SPOR SALONU", "Sağlık", 1200.0, 21), (1, "ORNEK KITAPCI", "Kitap & Hobi", 420.0, 12)]
+              (1, "ORNEK SPOR SALONU", "Sağlık", 900.0, 21), (1, "ORNEK KITAPCI", "Kitap & Hobi", 420.0, 12)]
 
 
 # ---------------------------------------------------------------- fiyatlar
