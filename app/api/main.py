@@ -8487,6 +8487,10 @@ def parse_receipt(file: UploadFile = File(...)):
         _mark_unreadable(out, UNREADABLE_MSG)
     elif charged := doc_reads.charge(original, doc_reads.FIS):
         out["charged"] = charged  # {daily, extra}: istemci "ek paketten N okuma kullanıldı" der
+    from app import merchant_name
+
+    with db.connect() as c:
+        merchant_name.fix(out, c)  # aynı VKN'li önceki kaydın adı; kesik ad unvandan tamamlanır
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
     receipt_verify.apply(out, None)  # bu uçta telefon metni yok: total_check null
     if not out.get("unreadable"):
@@ -9658,8 +9662,11 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         # kategori: önce kullanıcının kuralları (unvan, sonra marka), yoksa modelin tahmini
         from app.categorize import UNCATEGORIZED, categorize
 
+        from app import merchant_name
+
         with db.connect() as c:
             rules = db.load_rules(c)
+            merchant_name.fix(doc, c)  # aynı VKN'li önceki kaydın adı; kesik ad unvandan tamamlanır
         for name in (doc.get("legal_name"), doc.get("merchant")):
             cat = categorize(name, "harcama", rules) if name else UNCATEGORIZED
             if cat != UNCATEGORIZED:

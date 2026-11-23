@@ -487,17 +487,45 @@ def _strip_suffix(orig: str, folded: str) -> str:
     return orig
 
 
+_NOT_NAME = re.compile(r"(?<![a-z])(tarih|saat|fis|tel|mah|cad|sok|vkn|mersis|vd|vergi|no)(?![a-z])")
+# unvanın sonundaki genel ekler (ad türetilirken atılır); sektör kelimeleri (gıda, pastacılık) addan sayılır
+_TAIL = re.compile(r"(?:\s|[.,&/-])*(?<![a-z])(a\.?\s?s|ltd|sti|tic|ticaret|san|sanayi|ve|ith|ihr|dis|ic|anonim|limited|"
+                   r"sirketi|sirket|paz|pazarlama|ltd\.?\s?sti)\.?\s*$")
+
+
+def _name_like(ln: str) -> bool:
+    return len(re.findall(r"[a-z]", ln)) >= 4 and not re.search(r"\d{3,}", ln) and not _NOT_NAME.search(ln) \
+        and not _SUFFIX.search(ln)
+
+
+def core_name(legal: str | None) -> str | None:
+    """Resmi unvandan ad: sondaki şirket ekleri (A.Ş., LTD. ŞTİ., SAN., TİC., SANAYİ, TİCARET, VE, DIŞ …) atılır;
+    sektör kelimeleri (GIDA, PASTACILIK) ada dahil kalır. Özgün yazılış korunur (katlama uzunluğu korur)."""
+    if not legal:
+        return None
+    s = re.sub(r"\s+", " ", legal).strip(" .,*-")
+    while (m := _TAIL.search(fold(s))) and m.start() > 0:
+        s = s[:m.start()].rstrip(" .,&/-")
+    return s or None
+
+
 def _merchant(orig: list[str], lines: list[str]) -> tuple[str, str | None]:
-    """(işyeri adı, resmi unvan) fişin başlığından: unvan eki (A.Ş., LTD. ŞTİ.) geçen satır ve üstündeki ad satırı."""
+    """(işyeri adı, resmi unvan) fişin başlığından: unvan eki (A.Ş., LTD. ŞTİ.) geçen satır ve üstündeki ad satırı.
+    Unvan iki satıra bölünmüşse ("ORNEK UNLU" / "MAMULLERİ PASTACILIK SAN. TİC. LTD. ŞTİ.") iki satır birleşir; üstteki
+    satır alttakinin içinde geçiyorsa (marka + unvan: "ORNEK" / "ORNEK GIDA LTD.") birleşmez."""
     head = [(o, ln) for o, ln in zip(orig[:8], lines[:8])]
     for k, (o, ln) in enumerate(head):
         if not _SUFFIX.search(ln):
             continue
+        prev = lines[k - 1] if k > 0 else ""
+        if prev and _name_like(prev) and not set(_words(prev)) <= set(_words(ln)):
+            legal = f"{orig[k - 1].strip()} {o.strip()}"[:120]
+            return _title(core_name(legal) or orig[k - 1], legal), legal
         bare = _SUFFIX.sub("", ln)
         if len(re.findall(r"[a-z]{3,}", bare)) >= 2 and not re.search(r"\d{3,}", ln):
-            return _title(_strip_suffix(o, ln)), o[:120]
-        if k > 0 and len(re.findall(r"[a-z]", lines[k - 1])) >= 4 and not re.search(r"\d{3,}", lines[k - 1]):
-            return _title(orig[k - 1]), f"{orig[k - 1]} {o}"[:120]
+            return _title(core_name(o) or _strip_suffix(o, ln), o), o[:120]
+        if prev and len(re.findall(r"[a-z]", prev)) >= 4 and not re.search(r"\d{3,}", prev):
+            return _title(orig[k - 1], o), f"{orig[k - 1]} {o}"[:120]
     for o, ln in head:
         if len(re.findall(r"[a-z]", ln)) >= 4 and not re.search(r"\d{3,}", ln) and not re.search(
                 r"(?<![a-z])(tarih|saat|fis|tel|mah|cad|sok|vkn|mersis)(?![a-z])", ln):
@@ -505,9 +533,40 @@ def _merchant(orig: list[str], lines: list[str]) -> tuple[str, str | None]:
     return "Fiş", None
 
 
-def _title(s: str) -> str:
+_FRONT = set("EİÖÜeiöü")
+_VOWELS = set("AEIİOÖUÜaeıioöuü")
+
+
+def _i_key(w: str) -> str:
+    """İ/I/ı/i ayrımsız karşılaştırma anahtarı (OCR noktayı düşürebilir)."""
+    return fold(w).replace("ı", "i")
+
+
+def _dotted(w: str) -> str:
+    """Büyük harfli kelimede noktasız 'I': OCR 'İ'nin noktasını kaçırmış olabilir. Ünlü uyumu: önceki ünlü inceyse
+    (E, İ, Ö, Ü: "MAMULLERI") 'İ' sayılır; kalınsa (A, I, O, U: "KAPI") ya da önünde ünlü yoksa 'I' kalır."""
+    out, last = [], None
+    for ch in w:
+        if ch == "I" and last is not None and last in _FRONT:
+            ch = "İ"
+        out.append(ch)
+        if ch in _VOWELS:
+            last = ch
+    return "".join(out)
+
+
+def _title(s: str, ref: str | None = None) -> str:
+    """Büyük harfli adı başlık yazımına çevirir. ref (resmi unvan): kelime unvanda İ/I ayrımıyla geçiyorsa o yazılış
+    esas alınır ("MAMULLERI" + unvanda "MAMULLERİ" → "Mamulleri"); yoksa ünlü uyumu sezgisi (_dotted)."""
     s = re.sub(r"[\s.,*-]+$", "", re.sub(r"\s+", " ", s)).strip(" .,*-")
-    return " ".join(w[:1] + w[1:].replace("I", "ı").replace("İ", "i").lower() for w in s.split())[:80] or "Fiş"
+    known = {_i_key(w): w for w in re.findall(r"[^\W\d_]+", ref or "") if w.isupper()}
+    out = []
+    for w in s.split():
+        if w.isupper():
+            w = known.get(_i_key(w)) if _i_key(w) in known and ("İ" in known[_i_key(w)] or "I" not in known[_i_key(w)]) \
+                else _dotted(w)
+        out.append(w[:1] + w[1:].replace("I", "ı").replace("İ", "i").lower())
+    return " ".join(out)[:80] or "Fiş"
 
 
 def apply(text: str, spec: dict, categories: list[str] | None = None) -> dict | None:
