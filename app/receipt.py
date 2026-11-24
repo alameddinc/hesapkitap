@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import date
 
 import httpx
@@ -14,6 +15,16 @@ log = logging.getLogger("hesapkitap.receipt")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
+# Yoğunlukta (503/429/UNAVAILABLE) ya da zaman aşımında bir kez geçilen yedek model: GEMINI_FALLBACK_MODEL (ortam / sistem
+# ayarı), yoksa bu. ai_costs fiyat tablosundaki flash; ana model zaten buysa lite'a düşülür (farklı kapasite havuzu).
+FALLBACK_MODEL = "gemini-3.5-flash"
+# Süre sınırları (sn), ortam değişkeniyle değişir. Kısa çağrı (fiş, fatura, belge fotoğrafı, kategori): bağlantı 10,
+# ilk deneme okuma 25, yedek dahil toplam 40. Uzun çağrı (dokum ve çıktısı 8000 token'ı aşan ekstre/PDF okuması —
+# parsers/ai.py 32000, bank_pdf.py 60000): eskisi gibi 180 sn okuma, toplam 300.
+LONG_OUTPUT_TOKENS = 8000
+TIMEOUTS = {"short": {"connect": 10.0, "read": 25.0, "total": 40.0},
+            "long": {"connect": 10.0, "read": 180.0, "total": 300.0}}
+RETRY_STATUSES = {429, 503}
 MAX_BYTES = 15 * 1024 * 1024
 
 ITEM_RULES = """items (sadece fiş, en fazla 40 satır, fişteki sırayla):
@@ -302,21 +313,14 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
                              **({"mediaResolution": media_resolution} if media_resolution else {}),
                              **({"thinkingConfig": think} if think else {})},
     }
-    try:
-        r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=180,
-                       headers={"x-goog-api-key": key})
-        if think and r.status_code == 400 and "think" in r.text.lower():  # model düşünme ayarını tanımıyor
-            log.warning("Gemini düşünme ayarını reddetti (%s, %s); ayarsız yeniden deneniyor", model, think)
-            body["generationConfig"].pop("thinkingConfig")
-            r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=180,
-                           headers={"x-goog-api-key": key})
-    except httpx.HTTPError as e:
-        log.warning("Gemini'ye ulaşılamadı: %s", e)
-        raise ReceiptError("Yapay zekâ servisine ulaşılamadı; biraz sonra tekrar dene") from e
+    profile = "long" if kind == "dokum" or not max_output_tokens or max_output_tokens > LONG_OUTPUT_TOKENS else "short"
+    limits = gemini_timeouts(profile)
+    started = time.monotonic()
+    deadline = started + limits["total"]
+    r, model = _post_with_fallback(model, body, key, kind, limits, deadline, thinking)
     if r.status_code != 200:
-        msg = r.json().get("error", {}).get("message", r.text[:200]) if r.headers.get("content-type", "").startswith("application/json") else r.text[:200]
-        log.warning("Gemini hatası (%s): %s", r.status_code, msg)  # İngilizce ayrıntı günlükte, kullanıcıya Türkçe neden
-        raise ReceiptError(_gemini_reason(r.status_code, msg))
+        log.warning("Gemini hatası (%s, %s): %s", r.status_code, model, _error_message(r))  # İngilizce ayrıntı günlükte
+        raise ReceiptError(_gemini_reason(r.status_code, _error_message(r)))
 
     resp = r.json()
     try:
@@ -328,22 +332,134 @@ def _gemini_json(prompt: str, data: bytes | None, mime: str, max_output_tokens: 
     try:
         out = _extract_json(text)
     except (ReceiptError, ValueError):  # bozuk / yarım yanıt da ücretlidir: maliyet tavanları (ai_costs) saysın
-        _record_cost(AUTO_KINDS.get(kind, kind), model, usage)
+        _record_cost(AUTO_KINDS.get(kind, kind), model, usage, _ms(started))
         raise
     if kind in AUTO_KINDS:
         kind = "belge" if out.get("doc_type") == "fatura" or out.get("due_date") else AUTO_KINDS[kind]
-    _record_cost(kind, model, usage)
+    _record_cost(kind, model, usage, _ms(started))
     return out, {"model": model, "input": usage.get("promptTokenCount"), "output": usage.get("candidatesTokenCount"),
                  "thoughts": usage.get("thoughtsTokenCount"), "cached": usage.get("cachedContentTokenCount")}
 
 
-def _record_cost(kind: str, model: str, usage: dict) -> None:
-    """Maliyet ölçümü (app/ai_costs.py): token sayıları; içerik/metin kaydedilmez. Kayıt hatası okumayı bozmaz."""
+def gemini_timeouts(profile: str) -> dict:
+    """Süre sınırları (sn): HESAPKITAP_GEMINI_{CONNECT,READ,TOTAL}_S (kısa çağrı) ve ..._LONG_{...}_S (uzun) ortam
+    değişkeni; geçersiz / boş değer varsayılanı bırakır."""
+    out = dict(TIMEOUTS[profile])
+    for name in out:
+        env = f"HESAPKITAP_GEMINI_{'LONG_' if profile == 'long' else ''}{name.upper()}_S"
+        try:
+            v = float(os.environ.get(env) or 0)
+        except ValueError:
+            v = 0
+        if v > 0:
+            out[name] = v
+    return out
+
+
+def fallback_model(model: str) -> str | None:
+    """Ana model yoğun / yanıtsızken bir kez denenecek model; ana modelle aynıysa (ör. ayar yanlış) DEFAULT_MODEL ya da
+    FALLBACK_MODEL'den farklı olanı. Hiç ayrı model yoksa None."""
+    fb = config.get("GEMINI_FALLBACK_MODEL") or FALLBACK_MODEL
+    if fb == model:
+        fb = DEFAULT_MODEL if model != DEFAULT_MODEL else FALLBACK_MODEL
+    return fb if fb != model else None
+
+
+def _error_message(r) -> str:
+    try:
+        if r.headers.get("content-type", "").startswith("application/json"):
+            return str(r.json().get("error", {}).get("message", r.text[:200]))
+    except ValueError:
+        pass
+    return r.text[:200]
+
+
+def _overloaded(r) -> bool:
+    """Yoğunluk / geçici kapasite yanıtı: 503, 429 ya da gövdede UNAVAILABLE / RESOURCE_EXHAUSTED."""
+    if r.status_code in RETRY_STATUSES:
+        return True
+    return r.status_code >= 500 and "UNAVAILABLE" in r.text[:2000]
+
+
+def _log_call(model: str, kind: str, started: float, status) -> None:
+    """Süre ölçümü: günlükte model, tür, ms, durum (HTTP kodu ya da timeout / neterr). İçerik yazılmaz."""
+    log.info("Gemini çağrısı model=%s kind=%s ms=%d durum=%s", model, kind, int((time.monotonic() - started) * 1000),
+             status)
+
+
+def _post_once(model: str, body: dict, key: str, kind: str, connect: float, read: float):
+    """Tek model için istek (düşünme ayarı 400'le reddedilirse aynı modelde bir kez ayarsız). Süre her çağrıda
+    günlüğe yazılır. httpx hatası olduğu gibi yükselir."""
+    timeout = httpx.Timeout(read, connect=connect)
+    started = time.monotonic()
+    try:
+        r = httpx.post(GEMINI_URL.format(model=model), json=body, timeout=timeout, headers={"x-goog-api-key": key})
+    except httpx.TimeoutException:
+        _log_call(model, kind, started, "timeout")
+        raise
+    except httpx.HTTPError:
+        _log_call(model, kind, started, "neterr")
+        raise
+    _log_call(model, kind, started, r.status_code)
+    if "thinkingConfig" in body["generationConfig"] and r.status_code == 400 and "think" in r.text.lower():
+        log.warning("Gemini düşünme ayarını reddetti (%s, %s); ayarsız yeniden deneniyor", model,
+                    body["generationConfig"]["thinkingConfig"])
+        body = {**body, "generationConfig": {k: v for k, v in body["generationConfig"].items()
+                                             if k != "thinkingConfig"}}
+        return _post_once(model, body, key, kind, connect, read)
+    return r
+
+
+def _post_with_fallback(model: str, body: dict, key: str, kind: str, limits: dict, deadline: float,
+                        thinking: str | None = None):
+    """Ana model; yoğunluk (503/429/UNAVAILABLE) ya da zaman aşımında kalan bütçeyle bir kez yedek model. Döner:
+    (yanıt, yanıtı veren model) — maliyet doğru model adıyla sayılsın. Yedek de olmazsa ReceiptError."""
+    first_err: Exception | None = None
+    try:
+        r = _post_once(model, body, key, kind, limits["connect"], min(limits["read"], limits["total"]))
+        if r.status_code == 200 or not _overloaded(r):
+            return r, model
+        log.warning("Gemini hatası (%s): %s", r.status_code, _error_message(r))
+    except httpx.TimeoutException as e:
+        log.warning("Gemini zaman aşımı (%s): %s", model, e)
+        first_err, r = e, None
+    except httpx.HTTPError as e:
+        log.warning("Gemini'ye ulaşılamadı: %s", e)
+        raise ReceiptError("Yapay zekâ servisine ulaşılamadı; biraz sonra tekrar dene") from e
+    fb = fallback_model(model)
+    left = deadline - time.monotonic()
+    if fb and left >= 3:
+        # yedek modelin düşünme biçimi farklı olabilir (3.x düzey, 2.5 bütçe): ana modelinkini taşıma
+        fb_body = {**body, "generationConfig": {k: v for k, v in body["generationConfig"].items()
+                                                if k != "thinkingConfig"}}
+        # düzey verilmediyse yedek (çoğunlukla flash) "low" ile kısılır: varsayılan düşünmesi yavaş ve pahalı
+        think = _thinking_config(fb, thinking or "low")
+        if think:
+            fb_body["generationConfig"]["thinkingConfig"] = think
+        log.warning("Gemini yedek modele geçiliyor: %s → %s (kalan %.0f sn)", model, fb, left)
+        try:
+            r2 = _post_once(fb, fb_body, key, kind, min(limits["connect"], left), left)
+        except httpx.HTTPError as e:
+            log.warning("Gemini yedek model de yanıt vermedi (%s): %s", fb, e)
+            raise ReceiptError("Yapay zekâ servisine ulaşılamadı; biraz sonra tekrar dene") from e
+        return r2, fb
+    if r is None:
+        raise ReceiptError("Yapay zekâ servisine ulaşılamadı; biraz sonra tekrar dene") from first_err
+    return r, model
+
+
+def _ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def _record_cost(kind: str, model: str, usage: dict, ms: int | None = None) -> None:
+    """Maliyet ölçümü (app/ai_costs.py): token sayıları ve süre (ms; yedek model dahil toplam); içerik/metin
+    kaydedilmez. Kayıt hatası okumayı bozmaz."""
     try:
         from app import ai_costs, db
 
         u = db.current_user()
-        ai_costs.record((u or {}).get("id"), kind, model, usage)
+        ai_costs.record((u or {}).get("id"), kind, model, usage, ms=ms)
     except Exception:  # noqa: BLE001
         log.warning("yapay zekâ maliyet kaydı yazılamadı", exc_info=True)
 

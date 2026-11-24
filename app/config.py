@@ -24,8 +24,9 @@ EDITABLE = {
 
 # Sunucu geneli: sistem veritabanında, sadece yönetici değiştirir. Gemini anahtarı herkes için ortak kullanılır
 # (kotayla); kullanıcı kendi anahtarını girerse onunki kullanılır ve kotaya takılmaz.
-GLOBAL = {"GEMINI_API_KEY", "GEMINI_MODEL", "TELEGRAM_BOT_TOKEN"}
-ADMIN_ONLY = {"GEMINI_MODEL", "TELEGRAM_BOT_TOKEN"}
+# GEMINI_FALLBACK_MODEL: yoğunlukta geçilen yedek model (app/receipt.py fallback_model); ortam ya da sistem ayarı
+GLOBAL = {"GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "TELEGRAM_BOT_TOKEN"}
+ADMIN_ONLY = {"GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "TELEGRAM_BOT_TOKEN"}
 
 
 # HTTP isteğinin içinde miyiz? (api/main.py ara katmanı işaretler.) İstekte bağlamda kullanıcı yoksa (oturumsuz uçlar:
