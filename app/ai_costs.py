@@ -36,17 +36,18 @@ GROUP_CAP_DAY_KEY, GROUP_CAP_MONTH_KEY = "groups_ai_cap_day_try", "groups_ai_cap
 DEFAULT_GROUP_CAP_DAY_TRY, DEFAULT_GROUP_CAP_MONTH_TRY = 5.0, 50.0
 
 
-def record(uid: int | None, kind: str, model: str, usage: dict) -> None:
+def record(uid: int | None, kind: str, model: str, usage: dict, ms: int | None = None) -> None:
+    """ms: çağrının süresi (milisaniye; yedek modele geçiş dahil); bilinmiyorsa NULL."""
     from app import system
 
     now = datetime.now(timezone.utc)
     with system.connect() as c:
-        c.execute("INSERT INTO ai_calls (at, month, user_id, kind, model, input, output, thoughts, cached) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO ai_calls (at, month, user_id, kind, model, input, output, thoughts, cached, ms) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (now.isoformat(timespec="seconds"), date.today().strftime("%Y-%m"), uid,
                    kind if kind in KINDS else "belge", (model or "")[:60], int(usage.get("promptTokenCount") or 0),
                    int(usage.get("candidatesTokenCount") or 0), int(usage.get("thoughtsTokenCount") or 0),
-                   int(usage.get("cachedContentTokenCount") or 0)))
+                   int(usage.get("cachedContentTokenCount") or 0), int(ms) if ms is not None else None))
 
 
 def prune(months: int = KEEP_MONTHS) -> int:

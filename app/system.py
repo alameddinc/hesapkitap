@@ -119,7 +119,8 @@ CREATE TABLE IF NOT EXISTS ai_calls (     -- yapay zekâ maliyet ölçümü (app
     input INTEGER NOT NULL DEFAULT 0,
     output INTEGER NOT NULL DEFAULT 0,
     thoughts INTEGER NOT NULL DEFAULT 0,
-    cached INTEGER NOT NULL DEFAULT 0   -- önbellekten okunan girdi token'ı (input'un içinde, indirimli fiyat)
+    cached INTEGER NOT NULL DEFAULT 0,  -- önbellekten okunan girdi token'ı (input'un içinde, indirimli fiyat)
+    ms INTEGER                          -- çağrı süresi (milisaniye, yedek model dahil); eski kayıtlarda NULL
 );
 CREATE INDEX IF NOT EXISTS ai_calls_month ON ai_calls(month);
 CREATE TABLE IF NOT EXISTS ai_restrictions (  -- yöneticinin kötüye kullanım kısıtlaması (app/ai_restrictions.py)
@@ -497,6 +498,9 @@ def _migrate(c) -> None:
     # yapay zekâ maliyet kaydı: önbellekli girdi token'ı (app/ai_costs.py)
     if "cached" not in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}:
         _alter(c, "ALTER TABLE ai_calls ADD COLUMN cached INTEGER NOT NULL DEFAULT 0")
+    # çağrı süresi (ms; app/receipt.py _gemini_json): eski kayıtlarda NULL
+    if "ms" not in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}:
+        _alter(c, "ALTER TABLE ai_calls ADD COLUMN ms INTEGER")
     have = {r[1] for r in c.execute("PRAGMA table_info(product_groups)")}
     for col in ("category", "subcategory"):
         if col not in have:
