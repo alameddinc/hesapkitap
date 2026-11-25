@@ -1118,6 +1118,6 @@ def reread_items(image: bytes, mime: str, total: float | None, more: list[tuple[
             "kaçan ya da kayan satırı bul.\n") if total else ""
     model = reread_model()
     raw, meta = _gemini_json(REREAD_PROMPT.format(total_hint=hint), image, mime, max_output_tokens=8000, model=model,
-                             more=more, kind="fis")
+                             more=more, kind="fis", thinking=receipt_thinking() or "low")
     return {"items": _items(raw), "total": _num(raw.get("total")) or total, "model": meta["model"],
             "confidence": raw.get("confidence") or "orta"}
