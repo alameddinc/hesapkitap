@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from app import receipt as receipt_mod
 from app import receipt_check
 from tests.test_doc_reads import _jpeg, _used, hosted  # noqa: F401 - fixture
 from tests.test_plans import _user
@@ -89,13 +90,13 @@ def test_reread_charges_two_and_is_limited(hosted, reread_ai):  # noqa: F811
     r = c.post("/api/documents/parse", files=[("file", ("fis.jpg", _jpeg(), "image/jpeg"))]).json()
     assert _used(u["id"]) == 1 and r["receipt_file"] and "check" in r
     # ilk okuma fişi tutmadı: aynı istekte güçlü modelle bir kez daha okundu (otomatik: hak düşmez)
-    assert r["reread"] == {"tried": True, "used": True, "model": "gemini-3.5-flash"} and r["check"]["ok"]
+    assert r["reread"] == {"tried": True, "used": True, "model": "gemini-3.1-flash-lite"} and r["check"]["ok"]
     assert r["charged"] == {"daily": 1, "extra": 0}
     out = c.post("/api/receipts/reread", json={"receipt_file": r["receipt_file"], "total": 285.0})
     assert out.status_code == 200, out.text
     out = out.json()
-    assert out["check"]["ok"] and len(out["items"]) == 5 and out["model"] == "gemini-3.5-flash"
-    assert "GENEL TOPLAMI 285.00" in reread_ai[-1][1] and "gemini-3.5-flash:" in reread_ai[-1][0]
+    assert out["check"]["ok"] and len(out["items"]) == 5 and out["model"] == "gemini-3.1-flash-lite"
+    assert "GENEL TOPLAMI 285.00" in reread_ai[-1][1] and f"{receipt_mod.REREAD_MODEL}:" in reread_ai[-1][0]
     assert out["charged"] == {"daily": 2, "extra": 0} and _used(u["id"]) == 3  # elle yeniden okuma 2 hak
     eid = c.post("/api/entries", json={"entry_date": "2026-10-29", "description": "Ornek", "amount": 285.0,
                                        "kind": "gider", "category": "Market & Gıda",
@@ -161,7 +162,7 @@ def test_auto_reread_worse_keeps_first_and_error_is_silent(client, monkeypatch):
     first = {**_FIS, "items": [{"name": "A", "amount": 60.0}, {"name": "B", "amount": 30.0}]}  # 10 eksik
     _ai(monkeypatch, first, {"total": 100, "items": [{"name": "A", "amount": 10.0}]})
     r = client.post("/api/receipts/parse", files={"file": ("f.jpg", jpeg(), "image/jpeg")}).json()
-    assert r["reread"] == {"tried": True, "used": False, "model": "gemini-3.5-flash"} and r["check"]["diff"] == 10
+    assert r["reread"] == {"tried": True, "used": False, "model": "gemini-3.1-flash-lite"} and r["check"]["diff"] == 10
     assert [i["amount"] for i in r["items"]] == [60.0, 30.0]
     _ai(monkeypatch, first, fail=True)
     r = client.post("/api/documents/parse", files=[("file", ("f.jpg", jpeg(), "image/jpeg"))])

@@ -346,8 +346,11 @@ def test_receipt_call_sends_thinking_and_cost_record_unchanged(monkeypatch, tmpd
     monkeypatch.setenv("HESAPKITAP_RECEIPT_THINKING", "off")
     receipt._parse_document_ai(_photo("white"), "image/jpeg", CATS)
     assert "thinkingConfig" not in bodies[-1]["generationConfig"]
-    # yeniden okuma da düzey alır (25.11: varsayılan düşünme 3300 token, 20 sn sürüyordu)
+    # yeniden okuma: varsayılan lite (25.11) ayar almaz; düşünen modele geçilirse düzey alır
     monkeypatch.setenv("HESAPKITAP_RECEIPT_THINKING", "low")
+    receipt.reread_items(_photo("white"), "image/jpeg", 10.0)
+    assert "thinkingConfig" not in bodies[-1]["generationConfig"]
+    monkeypatch.setenv("GEMINI_REREAD_MODEL", "gemini-3.5-flash")
     receipt.reread_items(_photo("white"), "image/jpeg", 10.0)
     assert bodies[-1]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
 
