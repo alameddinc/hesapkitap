@@ -41,6 +41,7 @@ def _fixture_pdfs(monkeypatch):
               "MAIL_USER", "MAIL_PASSWORD", "MAIL_IMAP_HOST", "MAIL_SENDERS", "SMTP_HOST", "MAIL_FROM"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("JOBS_ENABLED", "0")
+    monkeypatch.setenv("HESAPKITAP_GEMINI_SAME_RETRY_S", "0")  # aynı modelle tekrar kapalı (beklemesiz; ayrı testte açılır)
     # sosyal giriş nonce'u varsayılan zorunlu; eski testlerin sahte belgeleri nonce'suz: geçiş kipiyle koşar (zorunlu
     # davranış test_social.py'de ortam silinerek ayrıca denenir)
     monkeypatch.setenv("HESAPKITAP_SOCIAL_NONCE", "optional")

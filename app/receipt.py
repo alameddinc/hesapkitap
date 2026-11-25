@@ -410,6 +410,18 @@ def _post_once(model: str, body: dict, key: str, kind: str, connect: float, read
     return r
 
 
+SAME_MODEL_RETRY_S = 0.8  # yoğunlukta (503/429) aynı modelle tek tekrar öncesi bekleme; 0 → kapalı
+
+
+def same_model_retry_s() -> float:
+    """HESAPKITAP_GEMINI_SAME_RETRY_S (sn; 0 kapatır), yoksa SAME_MODEL_RETRY_S."""
+    try:
+        v = os.environ.get("HESAPKITAP_GEMINI_SAME_RETRY_S")
+        return max(0.0, float(v)) if v not in (None, "") else SAME_MODEL_RETRY_S
+    except ValueError:
+        return SAME_MODEL_RETRY_S
+
+
 def _post_with_fallback(model: str, body: dict, key: str, kind: str, limits: dict, deadline: float,
                         thinking: str | None = None):
     """Ana model; yoğunluk (503/429/UNAVAILABLE) ya da zaman aşımında kalan bütçeyle bir kez yedek model. Döner:
@@ -420,6 +432,16 @@ def _post_with_fallback(model: str, body: dict, key: str, kind: str, limits: dic
         if r.status_code == 200 or not _overloaded(r):
             return r, model
         log.warning("Gemini hatası (%s): %s", r.status_code, _error_message(r))
+        # yoğunluk 503'ü çoğunlukla anlık: yavaş yedeğe geçmeden aynı modeli kısa beklemeyle bir kez daha dene
+        wait = same_model_retry_s()
+        if wait > 0 and deadline - time.monotonic() >= wait + 5:
+            time.sleep(wait)
+            log.info("Gemini aynı modelle yeniden deneniyor: %s", model)
+            r = _post_once(model, body, key, kind, limits["connect"],
+                           min(limits["read"], max(1.0, deadline - time.monotonic())))
+            if r.status_code == 200 or not _overloaded(r):
+                return r, model
+            log.warning("Gemini hatası, ikinci deneme (%s): %s", r.status_code, _error_message(r))
     except httpx.TimeoutException as e:
         log.warning("Gemini zaman aşımı (%s): %s", model, e)
         first_err, r = e, None

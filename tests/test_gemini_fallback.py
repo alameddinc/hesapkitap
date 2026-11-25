@@ -173,3 +173,38 @@ def test_old_schema_gets_ms_column(tmp_path, monkeypatch):
     system._ready.discard(p)
     with system.connect() as c:  # göç ikinci kez güvenli
         assert "ms" in {r[1] for r in c.execute("PRAGMA table_info(ai_calls)")}
+
+
+def test_503_retries_same_model_once_before_fallback(gemini, monkeypatch):
+    """Anlık yoğunluk: aynı model kısa beklemeyle bir kez daha denenir; olursa yavaş yedeğe gidilmez."""
+    from app import receipt
+
+    monkeypatch.setenv("HESAPKITAP_GEMINI_SAME_RETRY_S", "0.01")
+    gemini["plan"] = {"gemini-3.1-flash-lite": [_busy(), _ok()]}
+    out = receipt.parse_receipt(b"foto", "image/jpeg", ["Market & Gıda"])
+    assert out["total"] == 42.5 and out["model"] == "gemini-3.1-flash-lite"
+    assert [c["model"] for c in gemini["calls"]] == ["gemini-3.1-flash-lite", "gemini-3.1-flash-lite"]
+    rows = _calls()
+    assert len(rows) == 1 and rows[0]["model"] == "gemini-3.1-flash-lite"
+
+
+def test_503_twice_then_fallback(gemini, monkeypatch):
+    from app import receipt
+
+    monkeypatch.setenv("HESAPKITAP_GEMINI_SAME_RETRY_S", "0.01")
+    gemini["plan"] = {"gemini-3.1-flash-lite": [_busy(), _busy(429)], "gemini-3.5-flash": [_ok()]}
+    out = receipt.parse_receipt(b"foto", "image/jpeg", ["Market & Gıda"])
+    assert out["model"] == "gemini-3.5-flash"
+    assert [c["model"] for c in gemini["calls"]] == ["gemini-3.1-flash-lite"] * 2 + ["gemini-3.5-flash"]
+
+
+def test_same_model_retry_setting():
+    from app import receipt
+
+    import os
+
+    os.environ.pop("HESAPKITAP_GEMINI_SAME_RETRY_S", None)
+    assert receipt.same_model_retry_s() == receipt.SAME_MODEL_RETRY_S == 0.8
+    for v, want in (("0", 0.0), ("1.5", 1.5), ("x", 0.8), ("-2", 0.0)):
+        os.environ["HESAPKITAP_GEMINI_SAME_RETRY_S"] = v
+        assert receipt.same_model_retry_s() == want
