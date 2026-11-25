@@ -346,10 +346,10 @@ def test_receipt_call_sends_thinking_and_cost_record_unchanged(monkeypatch, tmpd
     monkeypatch.setenv("HESAPKITAP_RECEIPT_THINKING", "off")
     receipt._parse_document_ai(_photo("white"), "image/jpeg", CATS)
     assert "thinkingConfig" not in bodies[-1]["generationConfig"]
-    # yeniden okuma (güçlü model, doğruluk) düşünme ayarı almaz
+    # yeniden okuma da düzey alır (25.11: varsayılan düşünme 3300 token, 20 sn sürüyordu)
     monkeypatch.setenv("HESAPKITAP_RECEIPT_THINKING", "low")
     receipt.reread_items(_photo("white"), "image/jpeg", 10.0)
-    assert "thinkingConfig" not in bodies[-1]["generationConfig"]
+    assert bodies[-1]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
 
 
 def test_thinking_rejected_by_model_retries_without(monkeypatch, tmpdb):

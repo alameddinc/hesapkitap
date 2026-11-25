@@ -180,6 +180,35 @@ def test_auto_reread_daily_cap(client, monkeypatch):
     assert len(calls) == 3 and "reread" not in r  # sınır doldu: yalnız ilk okuma
 
 
+def test_auto_reread_skipped_when_first_read_was_slow(client, monkeypatch):
+    """İlk okuma (yoğunluk/yedek model) bütçeyi aştıysa ikinci okuma yapılmaz: kullanıcı ~1 dk beklemesin."""
+    from tests.test_doc_reads import _jpeg as jpeg
+
+    monkeypatch.setenv("HESAPKITAP_AUTO_REREAD_MAX_S", "0.000001")
+    first = {**_FIS, "items": [{"name": "A", "amount": 60.0}, {"name": "B", "amount": 30.0}]}  # 10 eksik
+    for url in ("/api/receipts/parse", "/api/documents/parse"):
+        calls = _ai(monkeypatch, first, {"total": 100, "items": [{"name": "A", "amount": 70.0}, {"name": "B", "amount": 30.0}]})
+        r = client.post(url, files=[("file", ("f.jpg", jpeg(), "image/jpeg"))]).json()
+        assert len(calls) == 1 and r["reread"] == {"tried": False, "used": False, "skipped": "sure"}
+        assert r["reread_reasons"] and [i["amount"] for i in r["items"]] == [60.0, 30.0]
+
+
+def test_reread_asks_low_thinking(monkeypatch):
+    from app import receipt
+
+    seen = {}
+
+    def fake(prompt, data, mime, **kw):
+        seen.update(kw)
+        return {"items": []}, {"model": "m"}
+
+    monkeypatch.delenv("HESAPKITAP_RECEIPT_THINKING", raising=False)
+    monkeypatch.setattr(receipt, "receipt_thinking", lambda: None)
+    monkeypatch.setattr(receipt, "_gemini_json", fake)
+    receipt.reread_items(b"x", "image/jpeg", 10.0)
+    assert seen["thinking"] == "low"
+
+
 # ---------------------------------------------------------------- elle yeniden okuma kullanıcının düzeltmesini korur
 
 _FADED = {**_FIS, "total": 102.95, "items": [{"name": "SUT 1 L", "amount": 20.0}, {"name": "BULASIK DETERJANI", "amount": 62.95}]}

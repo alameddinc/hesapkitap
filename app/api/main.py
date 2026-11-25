@@ -8477,6 +8477,9 @@ def parse_receipt(file: UploadFile = File(...)):
     except doc_reads.QuotaError as e:  # fotoğraf okunmadan saklanır: elle girilen gidere bağlanır
         raise QuotaFull(502, e, receipt_file=_store_receipt(photo)) from e
     doc_reads.forget(original)  # önbellekte yok: yeniden okunursa yeniden sayılır
+    import time as _time
+
+    started = _time.monotonic()  # otomatik yeniden okuma bütçesi (_auto_reread)
     try:
         out = receipt.parse_receipt(data, mime, cats)
     except doc_reads.QuotaError as e:  # yönetici kısıtlaması (yapay zekâ kapalı): fotoğraf saklanır, elle girilir
@@ -8494,7 +8497,7 @@ def parse_receipt(file: UploadFile = File(...)):
     out["check"] = receipt_check.check(out.get("items") or [], out.get("total"))
     receipt_verify.apply(out, None)  # bu uçta telefon metni yok: total_check null
     if not out.get("unreadable"):
-        _auto_reread(out, data, mime)
+        _auto_reread(out, data, mime, started=started)
         _digit_evidence(out.get("check"), out.get("items") or [], None, out.get("vat_lines"), out.get("merchant"))
     out["receipt_file"] = _store_receipt(photo)
     if not out.get("unreadable"):
@@ -9588,6 +9591,9 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
 
     from app import dekont_parse, doc_cache, doc_reads
 
+    import time as _time
+
+    started = _time.monotonic()  # otomatik yeniden okuma bütçesi (_auto_reread)
     original, original_mime = data, mime
     # para transferi dekontu (yetenek dekont_doc; istemci dekont=1): fatura/fiş okunmaz, dekont okuması döner
     # {type: "dekont", …parse_dekont yanıtı}. Önce telefon metni / PDF metni (yapay zekâsız tanıma)
@@ -9694,7 +9700,7 @@ def _read_document(data: bytes, mime: str, more: list | None = None, ocr_text: s
         text = ocr_text or (bill_templates.text_of(original, original_mime) if not more else None)
         receipt_verify.apply(doc, text)
         if not doc.get("unreadable"):
-            _auto_reread(doc, data, mime, more, text)
+            _auto_reread(doc, data, mime, more, text, started=started)
             if ocr_text and (doc.get("reread") or {}).get("used"):
                 # güçlü model kalemleri düzeltti: ilk okumadan öğrenilemeyen düzen düzeltilmiş okumadan öğrenilir
                 receipt_templates.learn(ocr_text, doc)
@@ -9746,9 +9752,13 @@ def _count_bill(doc: dict, qr: list[str] | None) -> None:
 # ---------------------------------------------------------------- kayıtlı fişin kalemleri ve yeniden okuma
 
 _AUTO_REREAD_PER_DAY = 10  # kullanıcı başına günlük otomatik yeniden okuma (maliyet sınırı; okuma hakkı düşmez)
+# ilk okuma bundan uzun sürdüyse (yoğunluk, yedek model) otomatik yeniden okuma atlanır: kullanıcı ~1 dk beklemesin;
+# ilk sonuç uyarılarıyla döner, elle yeniden okuma açık kalır. HESAPKITAP_AUTO_REREAD_MAX_S ile değişir.
+_AUTO_REREAD_MAX_S = 15.0
 
 
-def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None, text: str | None = None) -> None:
+def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None, text: str | None = None,
+                 started: float | None = None) -> None:
     """Kademeli okuma: kalemler fişi tutmuyorsa (receipt_check.reread_reasons: fiyatsız kalem, kalem toplamı fiş
     toplamından ±0,05'ten fazla sapıyor; kalemli fişte ayrıca adet × birim tutmayan kalem, iki satıra bölünmüş ürün ya
     da toplamın telefon/PDF metninde geçmemesi) aynı istekte bir kez daha güçlü modelle oku; yalnız daha iyiyse al
@@ -9764,6 +9774,18 @@ def _auto_reread(doc: dict, data: bytes, mime: str, more: list | None = None, te
     reasons = receipt_check.reread_reasons(doc.get("items") or [], chk, doc.get("total_check"))
     if not reasons or not receipt.enabled():
         return
+    if started is not None:
+        import os as _os
+        import time as _time
+
+        try:
+            limit = float(_os.environ.get("HESAPKITAP_AUTO_REREAD_MAX_S") or _AUTO_REREAD_MAX_S)
+        except ValueError:
+            limit = _AUTO_REREAD_MAX_S
+        if _time.monotonic() - started > limit:
+            doc["reread_reasons"] = reasons
+            doc["reread"] = {"tried": False, "used": False, "skipped": "sure"}
+            return
     u = db.current_user()
     key = f"receipt_auto_reread:{u['id'] if u else 0}"
     try:
