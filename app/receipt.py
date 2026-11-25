@@ -1104,7 +1104,7 @@ Her ürünün amount'u KENDİ satırının sağındaki tutardır. Türk sayı bi
 """ + ITEM_RULES
 
 
-REREAD_MODEL = "gemini-3.5-flash"
+REREAD_MODEL = "gemini-3.1-flash-lite"  # 25.11: Flash yoğun (12–28 sn, 503); gerekirse GEMINI_REREAD_MODEL
 
 
 def reread_model() -> str:

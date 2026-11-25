@@ -25,7 +25,7 @@ def test_price_table_flash_thoughts_and_fx():
 
     t = ai_costs.DEFAULT_PRICES
     assert t[receipt.DEFAULT_MODEL] == {"input": 0.25, "output": 1.50}
-    assert t[receipt.REREAD_MODEL] == {"input": 0.75, "output": 3.75}
+    assert t["gemini-3.5-flash"] == {"input": 0.75, "output": 3.75}
     assert ai_costs.DEFAULT_USD_TRY == 50.0 and ai_costs.usd_try() == 50.0
     # 1M girdi + 200k çıktı + 800k düşünme (çıktı fiyatıyla) = 0,75 + 1M × 3,75 = 4,50 $
     assert ai_costs._cost("gemini-3.5-flash", 1_000_000, 200_000, 800_000, t) == pytest.approx(4.50)
