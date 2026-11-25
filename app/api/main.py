@@ -4516,6 +4516,29 @@ def _onboarding_v2() -> dict:
     return {"steps": steps, "done": sum(s_["done"] for s_ in steps), "total": len(steps), "dismissed": dismissed}
 
 
+class KesifSeenIn(BaseModel):
+    id: str = Field(..., max_length=20)
+
+
+@app.get("/api/kesif")
+def kesif_status():
+    """Keşif koleksiyonu (mobil): 12 keşfin durumu (mevcut veriden türetilir) + görülen kutlamalar (kişiye ait)."""
+    from app import kesif
+
+    return kesif.status()
+
+
+@app.post("/api/kesif/seen")
+def kesif_seen(body: KesifSeenIn):
+    """Kutlama görüldü: idempotent; yeniden kurulumda konfeti tekrar oynamasın."""
+    from app import kesif
+
+    try:
+        return {"ok": True, "seen": sorted(kesif.mark_seen(body.id))}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/onboarding/dismiss")
 def onboarding_dismiss():
     db.set_setting("onboarding_dismissed", "1")

@@ -106,6 +106,7 @@ PERSONAL_WRITES = [("POST", r"/api/settings/password"), ("PUT", r"/api/me/ui"), 
                    ("POST", r"/api/support/(seen|report)"), ("POST", r"/api/support/pending/\d+/retry"),
                    ("DELETE", r"/api/support/pending/\d+")]
 PERSONAL_WRITES.append(("POST", r"/api/incidents/client"))  # hata kaydı (app/incidents.py): deftere yazmaz
+PERSONAL_WRITES.append(("POST", r"/api/kesif/seen"))  # görülen keşif kutlaması kişiye ait (app/kesif.py), deftere yazmaz
 
 
 def member() -> dict | None:

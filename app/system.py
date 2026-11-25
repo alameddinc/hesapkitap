@@ -715,7 +715,8 @@ def delete_user(uid: int) -> None:
             c.execute("DELETE FROM sys_settings WHERE key IN (?, ?, ?)", (f"price_share:{uid}", f"region:{uid}", f"sadaka:{uid}"))
             for sql in ("DELETE FROM password_resets WHERE user_id = ?",   # tablolar ilk kullanımda kurulur (reset, inbound)
                         # gelen posta adresi: kod hiç yeniden verilmesin diye satır kalır, hesapla bağı kopar (D12)
-                        "UPDATE inbound SET revoked = 1, user_id = 0 WHERE user_id = ?"):
+                        "UPDATE inbound SET revoked = 1, user_id = 0 WHERE user_id = ?",
+                        "DELETE FROM kesif_seen WHERE user_id = ?"):  # görülen keşif kutlamaları (app/kesif.py)
                 try:
                     c.execute(sql, (uid,))
                 except sqlite3.OperationalError:
