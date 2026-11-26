@@ -33,11 +33,18 @@ def _acc(db, name=BANK_A, balance=50000.0, as_of=None, kind="banka") -> int:
         return c.execute("SELECT id FROM accounts WHERE name = ?", (name,)).fetchone()[0]
 
 
+def _due_soon() -> date:
+    """5 gün sonra ama Harcanabilir'in ufkunu (spend_horizon) aşmadan: ayın 26'sından sonra T+5 sonraki döneme düşer,
+    ödenmemiş ekstre o zaman düşülmez ve "ödeme spendable'ı değiştirmez" değişmezleri tarihe bağlı kırmızı olur."""
+    return min(T + timedelta(days=5), finance.spend_horizon(T)["end"])
+
+
 def _stmt(db, total=3000.0, card=CARD, pe=None, due=None, tag="a", lines=None) -> int:
     pe = pe or T - timedelta(days=10)
-    s = Statement(bank="Örnek Bank", card_no=card, period_end=pe, due_date=due or T + timedelta(days=5),
+    due = due or _due_soon()
+    s = Statement(bank="Örnek Bank", card_no=card, period_end=pe, due_date=due,
                   total_debt=total, min_payment=100, credit_limit=50000, period_activity=total,
-                  next_period_end=pe + timedelta(days=30), next_due_date=(due or T + timedelta(days=5)) + timedelta(days=30))
+                  next_period_end=pe + timedelta(days=30), next_due_date=due + timedelta(days=30))
     s.transactions = lines if lines is not None else [
         Transaction(txn_date=pe - timedelta(days=5), description="ORNEK MARKET", amount=total, txn_type=PURCHASE, card=card)]
     return db.save_statement(f"st-{card}-{pe}-{tag}".encode(), "e.pdf", s)

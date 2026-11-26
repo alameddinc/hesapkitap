@@ -515,11 +515,11 @@ def test_ratio_current_month_counts_expected_income(client, tmpdb):
     gelmemiş sabit gelir (Özet "Beklenen" / Planlama ile aynı kaynak) eklenir."""
     from app import finance, sadaka_reminder as sr
 
-    today = date.today()
+    # bugün sabit: maaş günü ayın son 5 gününe düşerse (SALARY_EARLY_DAYS) maaş SONRAKİ dönemin geliri sayılır
+    # (db.salary_lead) ve bu ayın beklenen geliri olmaz; gerçek tarihle 26.11'de kırmızıydı
+    today = date(2026, 11, 10)
     cur = finance.current_period(today)
-    day = min(28, max(today.day + 1, 2))  # maaş günü bugünden sonra: henüz yatmadı
-    if day <= today.day:
-        return  # ayın son günleri: beklenen kalmaz (test anlamsız)
+    day = 20  # maaş günü bugünden sonra: henüz yatmadı
     assert client.post("/api/recurring", json={"description": "ORNEK AS MAAS", "amount": 40000, "kind": "gelir",
                                                "category": "Maaş", "day_of_month": day,
                                                "start_month": finance.add_months(cur, -3)}).status_code == 200

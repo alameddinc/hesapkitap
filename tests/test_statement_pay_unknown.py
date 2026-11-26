@@ -11,12 +11,18 @@ TODAY = date.today()
 D = lambda n: (TODAY - timedelta(days=n)).isoformat()  # noqa: E731 - n gün önce
 
 
+def _due() -> str:
+    """5 gün sonraki vade, Harcanabilir'in ufkunu (spend_horizon) aşmadan: ayın 26'sından sonra 5 gün sonrası sonraki
+    döneme düşer, ödenmemiş ekstre o zaman baştan düşülmez ve "spendable değişmez" kontrolleri tarihe bağlı kırmızı olur."""
+    return min(TODAY + timedelta(days=5), finance.spend_horizon(TODAY)["end"]).isoformat()
+
+
 def _setup(client, tmpdb, as_of=None, balance=50000):
     client.post("/api/accounts", json={"name": "Örnek Bank", "kind": "banka", "balance": balance, "as_of": as_of or D(10)})
     acc = next(a for a in client.get("/api/accounts").json()["accounts"] if a["name"] == "Örnek Bank")
     with tmpdb.connect() as c:
         sid = c.execute("INSERT INTO statements (file_hash, bank, card_no, period_end, due_date, total_debt) "
-                        "VALUES ('k', 'Deneme Bank', '4543***1234', ?, ?, 12500)", (D(12), D(-5))).lastrowid
+                        "VALUES ('k', 'Deneme Bank', '4543***1234', ?, ?, 12500)", (D(12), _due())).lastrowid
     return acc["id"], sid
 
 
