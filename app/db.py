@@ -3949,6 +3949,32 @@ def gross_parts(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, floa
     return grosses, diffs, resets
 
 
+def _raise_info(r: dict, changes: list[dict], salaried: bool, paid: str, prev_paid: str, lv: float | None,
+                prev_lv: float | None) -> dict:
+    """Zam bu ödemeyle mi başlıyor ve yüzdesi (Aylık dağılım rozeti "Zam %8"): kullanıcının girdiği yüzde (salary_changes
+    pct + pct_basis), yoksa brütten brüte değişim; brütsüz kalemde tutar değişimi (net). Netten nete HESAPLANMAZ: ocakta
+    vergi matrahı sıfırlanınca net kendiliğinden artar. İş değişikliği ve düzeltme zam sayılmaz."""
+    no = {"raise_start": False, "raise_pct": None, "raise_pct_basis": None}
+    if not salaried:
+        if lv is None or prev_lv is None or lv <= prev_lv + 0.004:
+            return no
+        return {"raise_start": True, "raise_pct": round((lv - prev_lv) / prev_lv * 100, 1) if prev_lv else None,
+                "raise_pct_basis": "net"}
+    # bu ödemeyle (takvim ayı) başlayan son maaş değişikliği; değişiklik ödemenin takvim ayından geçerli (change_period)
+    ch = next((c for c in reversed(changes) if prev_paid[:7] < c["from_month"] <= paid[:7]), None)
+    if ch is None or lv is None or ch["reason"] == "is_degisikligi" or ch.get("note") == "Düzeltme":
+        return no
+    if prev_lv is None:  # netle tanımlı kalemin ilk değişikliği: önceki brüt = şablon netin brüt karşılığı
+        from app.payroll import gross_for_net
+
+        prev_lv = gross_for_net(r["amount"], int(prev_paid[:4])) if r.get("amount") else None
+    if prev_lv is None or lv <= prev_lv + 0.004:
+        return no
+    if ch.get("pct") is not None:
+        return {"raise_start": True, "raise_pct": round(float(ch["pct"]), 1), "raise_pct_basis": ch.get("pct_basis") or "brut"}
+    return {"raise_start": True, "raise_pct": round((lv - prev_lv) / prev_lv * 100, 1), "raise_pct_basis": "brut"}
+
+
 def recurring_schedule(r: dict, start: str, months: int = 12, overrides: dict | None = None,
                        changes: list[dict] | None = None) -> list[dict]:
     """Sabit kalemin `start` döneminden itibaren `months` dönemlik ödeme dağılımı (Maaş › Aylık dağılım). Tutar
@@ -3956,7 +3982,8 @@ def recurring_schedule(r: dict, start: str, months: int = 12, overrides: dict | 
     base_net = aynı yıl, yalnız o ayın farkı çıkarılmış bordronun o ayki neti (önceki ayların matrahı aynı kalır),
     raise_diff = net − base_net. Kalemin başlangıcından önceki / bitişinden sonraki dönemler listede yok.
     Satır: period, pay_date, net, base_net, raise_diff, raise_days, gross, raised (ilk satırdan yüksek maaş),
-    raise_start (zam bu ödemeyle başlıyor), overridden (aya özel tutar), occurrences (dönemdeki ödeme sayısı)."""
+    raise_start (zam bu ödemeyle başlıyor), raise_pct + raise_pct_basis "net"|"brut" (zammın yüzdesi; _raise_info),
+    overridden (aya özel tutar), occurrences (dönemdeki ödeme sayısı)."""
     from app.payroll import net_schedule
 
     r = dict(r)
@@ -3987,7 +4014,7 @@ def recurring_schedule(r: dict, start: str, months: int = 12, overrides: dict | 
         net = planned_amount(r, cur, ov, changes)
         row = {"period": cur, "pay_date": paid, "net": net, "base_net": net, "raise_diff": 0.0, "raise_days": 0,
                "gross": None, "raised": False, "raise_start": False, "overridden": (r["id"], cur) in ov,
-               "occurrences": len(recurring_dates(r, cur))}
+               "occurrences": len(recurring_dates(r, cur)), "raise_pct": None, "raise_pct_basis": None}
         lv = level(cur, paid)
         prev_paid = recurring_due(r, _shift_month(cur, -1), changes)
         prev_lv = level(_shift_month(cur, -1), prev_paid)
@@ -4002,7 +4029,7 @@ def recurring_schedule(r: dict, start: str, months: int = 12, overrides: dict | 
                 row["raise_days"] = (r.get("day_of_month") or 1) - 1
         if first_level is None:
             first_level = lv
-        row["raise_start"] = lv is not None and prev_lv is not None and lv > prev_lv + 0.004
+        row.update(_raise_info(r, changes, salaried, paid, prev_paid, lv, prev_lv))
         row["raised"] = lv is not None and first_level is not None and lv > first_level + 0.004
         out.append(row)
     return out
