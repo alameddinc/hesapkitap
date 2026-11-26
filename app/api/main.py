@@ -3588,6 +3588,16 @@ def recurring_payroll(rid: int, body: PayrollPlanIn):
     return {**net_schedule(body.year, grosses, resets), "resets": sorted(resets), "draft_resolved": resolved}
 
 
+@app.get("/api/recurring/{rid}/schedule")
+def recurring_schedule(rid: int, months: int = Query(12, ge=1, le=36), start: str | None = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Aylık dağılım (yetenek salary_schedule): `start` döneminden (yoksa bu dönem) `months` dönem boyunca beklenen
+    tutar; planla aynı rakam (db.planned_amount). Peşin maaşta zamlı ilk ödeme base_net + raise_diff (zam farkı)."""
+    r = _recurring_or_404(rid)
+    rows_ = db.recurring_schedule(r, start or finance.current_period(), months)
+    return {"recurring_id": rid, "advance_pay": bool(r.get("advance_pay")), "months": rows_,
+            "total": money.money(sum(x["net"] * x["occurrences"] for x in rows_))}
+
+
 @app.get("/api/recurring")
 def list_recurring():
     return db.list_recurring()
