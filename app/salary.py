@@ -136,6 +136,7 @@ def resolve_draft(r: dict, changes: list[dict], draft: dict) -> dict:
         return _with(others, {**base, "gross": g})
 
     advance = bool(r.get("advance_pay")) and (r.get("day_of_month") or 1) > 1
+    fp = db.change_period(r, frm, others)  # from_month takvim ayı; planın dönemi (ay dönümü kayması) farklı olabilir
     if draft.get("gross"):
         g = money.money(draft["gross"])
     elif pct is not None and basis == "brut":
@@ -144,7 +145,7 @@ def resolve_draft(r: dict, changes: list[dict], draft: dict) -> dict:
         g = money.money(pg * (1 + pct / 100))
     else:
         # net hedefi: peşin maaşta ilk ay farkı taşır, sonraki "normal" aya göre eşleştir (zam olacaksa)
-        normal = add_months(frm, 1) if advance else frm
+        normal = add_months(fp, 1) if advance else fp
         target = draft.get("net")
         if pct is not None:
             target = net_at(r, normal, before) * (1 + pct / 100)
@@ -152,10 +153,10 @@ def resolve_draft(r: dict, changes: list[dict], draft: dict) -> dict:
             raise ValueError("Yeni tutar gerekli")
         g = _solve(lambda x: net_at(r, normal, model(x)), target, (pg or target) * 2)
         if advance and pg and g <= pg:  # zam değil (düşüş): fark yok, aynı ayın netine göre
-            g = _solve(lambda x: net_at(r, frm, model(x)), target, (pg or target) * 2)
+            g = _solve(lambda x: net_at(r, fp, model(x)), target, (pg or target) * 2)
     new = model(g)
     diff = has_advance_diff(r, frm, g, pg)
-    normal = add_months(frm, 1) if diff else frm
+    normal = add_months(fp, 1) if diff else fp
     old_net, new_net = net_at(r, normal, before), net_at(r, normal, new)
     out = {"gross": g, "prev_gross": pg, "pct": pct, "basis": basis if pct is not None else None,
            "gross_pct": round((g / pg - 1) * 100, 2) if pg else None,
@@ -168,13 +169,13 @@ def resolve_draft(r: dict, changes: list[dict], draft: dict) -> dict:
         else:
             out["text"] = f"Önceki net {_tl(old_net)} → {pct_text(pct)} zamla {_tl(new_net)} net (≈ {_tl(g)} brüt)."
     if diff:
-        first = net_at(r, frm, new)
-        plain = net_at(r, frm, new, advance=False)
+        first = net_at(r, fp, new)
+        plain = net_at(r, fp, new, advance=False)
         days = (r.get("day_of_month") or 1) - 1
         out["advance"] = {"month": frm, "first": money.money(first), "base": money.money(plain),
                           "diff": money.money(first - plain), "days": days, "next": money.money(new_net)}
         out["advance_text"] = (f"{ay_ta(frm)} {_tl(first)} (yeni maaş {_tl(plain)} + {days} günlük fark "
-                               f"{_tl(first - plain)}), {ay_tan(normal)} itibaren {_tl(new_net)}"
+                               f"{_tl(first - plain)}), {ay_tan(db.recurring_due(r, normal, new)[:7])} itibaren {_tl(new_net)}"
                                + (" (vergi dilimi yükseldiği için daha düşük)." if new_net < plain * 99 / 100 else "."))
     return out
 
@@ -253,7 +254,8 @@ def suggestion_for(r: dict, today=None, entries: list[dict] | None = None) -> di
         if not base:
             continue
         k = statistics.median_low([actual[m] / expected(m) for m in base])
-        reg = next((c for c in changes if c["from_month"] == start), None)
+        frm = db.recurring_due(r, start, changes)[:7]  # değişiklik kaydı ödemenin takvim ayıyla (dönem kayabilir)
+        reg = next((c for c in changes if c["from_month"] == frm), None)
         jump = actual[last] / (expected(last) * k) - 1
         if abs(jump) < (THR_EXPECTED if reg else THR):
             continue  # yatan, planın beklediği gibi (bu başlangıca göre)
@@ -261,22 +263,24 @@ def suggestion_for(r: dict, today=None, entries: list[dict] | None = None) -> di
             paid_month = int(db.recurring_due(r, last, changes)[5:7])
             if not (reg or (paid_month in RAISE_MONTHS and 0 < jump <= SINGLE_MAX)):
                 continue  # ara ay / azalış / ikramiye olabilir: ikinci ayı bekle
-        others = [c for c in changes if c["from_month"] != start]
-        pg = prev_gross(r, start, others)
-        new_gross = _solve(lambda g: net_at(r, last, _with(others, _draft(reg, start, g))),
+        others = [c for c in changes if c["from_month"] != frm]
+        pg = prev_gross(r, frm, others)
+        new_gross = _solve(lambda g: net_at(r, last, _with(others, _draft(reg, frm, g))),
                            actual[last] / k, (pg or actual[last]) * 2)
-        new = _with(others, _draft(reg, start, new_gross))
+        new = _with(others, _draft(reg, frm, new_gross))
         months = [m for m in ok if start <= m <= last]
         if any(abs(net_at(r, m, new) * k - actual[m]) > CONSISTENT * actual[m] for m in months):
             continue
-        return _describe(r, changes, start, last, months, new_gross, pg, k, actual, reg)
+        return _describe(r, changes, start, last, months, new_gross, pg, k, actual, reg, frm)
     return None
 
 
-def _describe(r, changes, start, last, months, g, pg, k, actual, reg) -> dict:
-    before = [c for c in changes if c["from_month"] < start]
-    new = _with([c for c in changes if c["from_month"] != start], _draft(reg, start, g))
-    diff = has_advance_diff(r, start, g, pg)
+def _describe(r, changes, start, last, months, g, pg, k, actual, reg, frm=None) -> dict:
+    """start: ilk zamlı ödemenin dönemi; frm: değişikliğin from_month'u (o ödemenin takvim ayı)."""
+    frm = frm or start
+    before = [c for c in changes if c["from_month"] < frm]
+    new = _with([c for c in changes if c["from_month"] != frm], _draft(reg, frm, g))
+    diff = has_advance_diff(r, frm, g, pg)
     normal = add_months(start, 1) if diff else start
     a, b = net_at(r, normal, before) * k, net_at(r, normal, new) * k
     p = (b / a - 1) * 100 if a else 0.0
@@ -304,15 +308,15 @@ def _describe(r, changes, start, last, months, g, pg, k, actual, reg) -> dict:
         first = actual[start]
         plain = net_at(r, start, new, advance=False) * k
         days = (r.get("day_of_month") or 1) - 1
-        adv = {"month": start, "first": money.money(first), "base": money.money(plain), "diff": money.money(first - plain),
+        adv = {"month": frm, "first": money.money(first), "base": money.money(plain), "diff": money.money(first - plain),
                "days": days, "next": money.money(b)}
-        parts.append(f"{ay_ta(start)} yatan {_tl(first)}: yeni maaş {_tl(plain)} + {days} günlük zam farkı "
+        parts.append(f"{ay_ta(frm)} yatan {_tl(first)}: yeni maaş {_tl(plain)} + {days} günlük zam farkı "
                      f"{_tl(first - plain)} (yalnız bu ay).")
     if len(months) > 1:
         parts.append("Son iki ay yeni tutarla geldi.")
-    parts.append(f"{ay_tan(start)} itibaren plana yansır; geçmiş aylar değişmez.")
+    parts.append(f"{ay_tan(frm)} itibaren plana yansır; geçmiş aylar değişmez.")
     return {"recurring_id": r["id"], "description": r["description"], "kind": "gelir", "type": "maas",
-            "old": money.money(a), "new": money.money(b), "from_month": start, "month": last,
+            "old": money.money(a), "new": money.money(b), "from_month": frm, "month": last,
             "pct": round(p, 2), "gross_pct": None if gp is None else round(gp, 2), "gross": g, "prev_gross": pg, "expected_pct": None if expected_pct is None else round(expected_pct, 2),
             "expected_basis": basis if expected_pct is not None else None,
             "actual_pct": None if actual_pct is None else round(actual_pct, 2), "advance": adv,

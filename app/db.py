@@ -2134,6 +2134,12 @@ def recurring_due(r, month: str, changes: list[dict] | None = None) -> str:
     return occurrence_date(month, day)
 
 
+def change_period(r, from_month: str, changes: list[dict] | None = None) -> str:
+    """Maaş değişikliğinin (from_month = ödemenin TAKVİM ayı) ilk uygulandığı ödemenin dönemi: ay dönümü 17, maaş 15,
+    zam 2027-01 → 15 Oca ödemesi → dönem 2027-02. Dönem kaymasız kalemde from_month'un kendisi."""
+    return salary_period_of(r, occurrence_date(from_month, min(day_at(r, from_month, changes), 28)), changes)
+
+
 def salary_period_of(r, d, changes: list[dict] | None = None) -> str:
     """Kalemin GÜNÜNDE (ya da o güne kırpılmış tarihte; bordro takvimi) `d` tarihinde yatan ödemenin dönemi
     (recurring_due'nun tersi): tarihin dönemi; maaş kalemi sonraki dönemi fonluyorsa (salary_lead) sonraki dönem.
@@ -3810,11 +3816,11 @@ def planned_amount(r: dict, month: str, overrides: dict | None = None, changes: 
         return ov[(r["id"], month)]
     changes = salary_changes(r["id"]) if changes is None else changes
     if r.get("gross_amount") or changes:
-        if gross_at(r, month, changes) is None:  # brüt bilinmeyen (ilk değişiklikten önceki) dönem: şablon net
+        paid = recurring_due(r, month, changes)  # maaşın o dönemde yattığı gerçek ay (önceki dönemin sonunda olabilir)
+        if gross_at(r, paid[:7], changes) is None:  # brüt bilinmeyen (ilk değişiklikten önceki) ödeme: şablon net
             return r["amount"]
         from app.payroll import net_schedule
 
-        paid = recurring_due(r, month, changes)  # maaşın o dönemde yattığı gerçek ay (önceki dönemin sonunda olabilir)
         year = int(paid[:4])
         grosses, resets = gross_schedule(r, year, changes)
         return net_schedule(year, grosses, resets)["months"][int(paid[5:7]) - 1]["net"]
@@ -3913,14 +3919,15 @@ def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, f
         or (changes[0]["gross"] if changes else 0.0)
     grosses: dict[int, float] = {}
     for m in range(1, 13):
-        period = salary_period_of(r, f"{year}-{m:02d}-{min(day_at(r, f'{year}-{m:02d}', changes), 28):02d}", changes)
-        g = gross_at(r, period, changes)
+        # zam/brüt değişikliği ÖDEMENİN takvim ayına göre (from_month 2027-01 → 15 Oca ödemesi ilk zamlı): ay dönümü
+        # kayması (salary_lead) 15 Ara ödemesini 2027-01 dönemine sayar ama o Aralık maaşıdır, zamı/farkı almaz
+        g = gross_at(r, f"{year}-{m:02d}", changes)
         grosses[m] = g if g is not None else first
     # Peşin maaş (memur: ayın 15'inde o günden sonraki ay için): zam ayın 1'inde başlar, 1..(gün-1) arası eski
     # maaşla önceden ödenmiştir → aradaki fark zamlı ilk maaşa eklenir (vergiye tabi brüt olarak)
     if r.get("advance_pay"):
         day = r.get("day_of_month") or 1
-        prev_g = gross_at(r, salary_period_of(r, f"{year - 1}-12-{min(day, 28):02d}", changes), changes) or first
+        prev_g = gross_at(r, f"{year - 1}-12", changes) or first
         for m in range(1, 13):
             base = grosses[m]
             if base > prev_g and day > 1:
@@ -3929,9 +3936,8 @@ def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, f
     resets = set()
     for ch in changes:
         if ch["reason"] == "is_degisikligi" and ch["reset_cum"]:
-            paid = recurring_due(r, ch["from_month"], changes)
-            if int(paid[:4]) == year:
-                resets.add(int(paid[5:7]))
+            if int(ch["from_month"][:4]) == year:  # matrah sıfırlaması da ödemenin takvim ayında
+                resets.add(int(ch["from_month"][5:7]))
     return grosses, resets
 
 
