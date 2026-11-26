@@ -714,6 +714,10 @@ CAPABILITIES = (
                               # paid_at, period_end, due_date, total_debt}]}: dönemde (ödeme günü dönem içinde) ödenen,
                               # ödendi işaretli kart ekstreleri (finance.card_payments_in). BİLGİ: harcama, gelir ve
                               # hiçbir toplam (totals, by_category, trend, budgets) değişmez
+    "salary_schedule",        # GET /api/recurring/{id}/schedule?months=12&start=YYYY-MM → {recurring_id, advance_pay, total,
+                              # months: [{period, pay_date, net, base_net, raise_diff, raise_days, gross, raised,
+                              # raise_start, overridden, occurrences}]}: Maaş › Aylık dağılım; net = planned_amount (plan
+                              # ile aynı), peşin maaşta zamlı ilk ödeme net = base_net + raise_diff (zam farkı)
 )
 
 

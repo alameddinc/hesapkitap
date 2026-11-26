@@ -3909,8 +3909,15 @@ def day_at(r: dict, month: str, changes: list[dict] | None = None) -> int:
 
 
 def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, float], set[int]]:
-    """Takvim yılının her ayında ödenen brüt + vergi matrahının sıfırlandığı aylar.
+    """Takvim yılının her ayında ödenen brüt (peşin maaş farkı dahil) + vergi matrahının sıfırlandığı aylar.
     Kayıttan önceki aylar (yıl başı) bilinen ilk brütle dolu varsayılır: kümülatif matrah gerçekçi kalsın."""
+    base, diffs, resets = gross_parts(r, year, changes)
+    return {m: round(base[m] + diffs[m], 2) if diffs[m] else base[m] for m in base}, resets
+
+
+def gross_parts(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, float], dict[int, float], set[int]]:
+    """gross_schedule'ın parçaları: ayın maaş brütü, o aya eklenen peşin maaş zam farkı (brüt; yoksa 0) ve matrah
+    sıfırlanan aylar. Fark ayrı tutulur: aylık dağılım (recurring_schedule) "maaş + zam farkı" diye gösterebilsin."""
     from app.payroll import gross_for_net
 
     r = dict(r)
@@ -3925,20 +3932,80 @@ def gross_schedule(r: dict, year: int, changes: list[dict]) -> tuple[dict[int, f
         grosses[m] = g if g is not None else first
     # Peşin maaş (memur: ayın 15'inde o günden sonraki ay için): zam ayın 1'inde başlar, 1..(gün-1) arası eski
     # maaşla önceden ödenmiştir → aradaki fark zamlı ilk maaşa eklenir (vergiye tabi brüt olarak)
+    diffs = dict.fromkeys(grosses, 0.0)
     if r.get("advance_pay"):
         day = r.get("day_of_month") or 1
         prev_g = gross_at(r, f"{year - 1}-12", changes) or first
         for m in range(1, 13):
             base = grosses[m]
             if base > prev_g and day > 1:
-                grosses[m] = round(base + (base - prev_g) * (day - 1) / 30, 2)
+                diffs[m] = round(round(base + (base - prev_g) * (day - 1) / 30, 2) - base, 2)
             prev_g = base
     resets = set()
     for ch in changes:
         if ch["reason"] == "is_degisikligi" and ch["reset_cum"]:
             if int(ch["from_month"][:4]) == year:  # matrah sıfırlaması da ödemenin takvim ayında
                 resets.add(int(ch["from_month"][5:7]))
-    return grosses, resets
+    return grosses, diffs, resets
+
+
+def recurring_schedule(r: dict, start: str, months: int = 12, overrides: dict | None = None,
+                       changes: list[dict] | None = None) -> list[dict]:
+    """Sabit kalemin `start` döneminden itibaren `months` dönemlik ödeme dağılımı (Maaş › Aylık dağılım). Tutar
+    planned_amount'un kendisi (tek kaynak); peşin maaşta zamlı ilk ödemenin neti "maaş + zam farkı" diye ikiye bölünür:
+    base_net = aynı yıl, yalnız o ayın farkı çıkarılmış bordronun o ayki neti (önceki ayların matrahı aynı kalır),
+    raise_diff = net − base_net. Kalemin başlangıcından önceki / bitişinden sonraki dönemler listede yok.
+    Satır: period, pay_date, net, base_net, raise_diff, raise_days, gross, raised (ilk satırdan yüksek maaş),
+    raise_start (zam bu ödemeyle başlıyor), overridden (aya özel tutar), occurrences (dönemdeki ödeme sayısı)."""
+    from app.payroll import net_schedule
+
+    r = dict(r)
+    ov = overrides if overrides is not None else recurring_overrides()
+    changes = salary_changes(r["id"]) if changes is None else changes
+    salaried = bool(r.get("gross_amount") or changes)
+    years: dict[int, tuple] = {}
+
+    def parts(year: int):
+        if year not in years:
+            years[year] = gross_parts(r, year, changes)
+        return years[year]
+
+    def level(p: str, paid: str) -> float | None:
+        """Ödemenin maaş seviyesi (farksız brüt; brütsüz kalemde tutar): zam karşılaştırması için."""
+        if salaried:
+            return gross_at(r, paid[:7], changes)
+        return amount_at(r, p)
+
+    out: list[dict] = []
+    p = start
+    first_level = None
+    for _ in range(max(1, min(months, 36))):
+        cur, p = p, _shift_month(p, 1)
+        if cur < (r.get("start_month") or cur) or (r.get("end_month") and cur > r["end_month"]):
+            continue
+        paid = recurring_due(r, cur, changes)
+        net = planned_amount(r, cur, ov, changes)
+        row = {"period": cur, "pay_date": paid, "net": net, "base_net": net, "raise_diff": 0.0, "raise_days": 0,
+               "gross": None, "raised": False, "raise_start": False, "overridden": (r["id"], cur) in ov,
+               "occurrences": len(recurring_dates(r, cur))}
+        lv = level(cur, paid)
+        prev_paid = recurring_due(r, _shift_month(cur, -1), changes)
+        prev_lv = level(_shift_month(cur, -1), prev_paid)
+        if salaried and lv is not None:
+            year, m = int(paid[:4]), int(paid[5:7])
+            base, diffs, resets = parts(year)
+            row["gross"] = round(base[m] + diffs[m], 2)
+            if diffs[m] and not row["overridden"]:
+                plain = dict(base) | {k: round(base[k] + diffs[k], 2) for k in base if diffs[k] and k != m}
+                row["base_net"] = net_schedule(year, plain, resets)["months"][m - 1]["net"]
+                row["raise_diff"] = round(net - row["base_net"], 2)
+                row["raise_days"] = (r.get("day_of_month") or 1) - 1
+        if first_level is None:
+            first_level = lv
+        row["raise_start"] = lv is not None and prev_lv is not None and lv > prev_lv + 0.004
+        row["raised"] = lv is not None and first_level is not None and lv > first_level + 0.004
+        out.append(row)
+    return out
 
 
 # ---------------------------------------------------------------- işyeri takma adları (fişten öğrenilir)
