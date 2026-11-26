@@ -174,9 +174,11 @@ def test_scheduled_debt_only_installments_in_horizon(client, tmpdb):
 # ---------------------------------------------------------------- U2: ekstresi yüklenmemiş döngü ödendi
 
 @pytest.fixture()
-def cut_passed(client, tmpdb):
+def cut_passed(client, tmpdb, monkeypatch):
     """Kesimi 15 Kas'ta geçmiş, ekstresi yüklenmemiş döngü (son ödeme 25 Kas): bilinen taksit 1.250 + kartla girilmiş
-    4.000 harcama; geçmiş 3 dönem değişken harcama ~10.000."""
+    4.000 harcama; geçmiş 3 dönem değişken harcama ~10.000. Bugün 20 Kas'a sabit: uçlar (cycle-pay → payables) da
+    bugünü kullanır; gerçek tarih 25 Kas'ı geçince döngü artık 'yüklenmemiş' sayılmaz (tarihe bağlı kırmızı, 26.11)."""
+    _freeze(monkeypatch, date(2026, 11, 20))
     tmpdb.set_setting("cycle_start_day", "17")
     assert client.post("/api/accounts", json={"name": "Örnek Banka", "kind": "banka", "balance": CASH,
                                                        "as_of": "2026-11-13"}).status_code == 200
