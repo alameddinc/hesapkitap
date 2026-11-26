@@ -716,7 +716,9 @@ CAPABILITIES = (
                               # hiçbir toplam (totals, by_category, trend, budgets) değişmez
     "salary_schedule",        # GET /api/recurring/{id}/schedule?months=12&start=YYYY-MM → {recurring_id, advance_pay, total,
                               # months: [{period, pay_date, net, base_net, raise_diff, raise_days, gross, raised,
-                              # raise_start, overridden, occurrences}]}: Maaş › Aylık dağılım; net = planned_amount (plan
+                              # raise_start, raise_pct, raise_pct_basis "net"|"brut", overridden, occurrences}]}:
+                              # Maaş › Aylık dağılım; rozet "Zam %X" yalnız raise_start satırında (raise_pct: girilen
+                              # yüzde, yoksa brütten brüte; netten nete değil); net = planned_amount (plan
                               # ile aynı), peşin maaşta zamlı ilk ödeme net = base_net + raise_diff (zam farkı)
 )
 
