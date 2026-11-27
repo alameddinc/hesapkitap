@@ -2740,7 +2740,7 @@ def summary(month: str | None = None, zakat: bool = False):
 @app.get("/api/upcoming")
 def upcoming_v2(days: int = Query(45, ge=1, le=120)):
     """Yaklaşan v2 (yetenek upcoming_v2; app/upcoming.py): kesin + tahmini + eksik ödemeler, maaş (toplama girmez),
-    maaştan önce ödenecek ve sonraki dönem (next_period)."""
+    maaştan önce ödenecek, sonraki dönem (next_period) ve maaş gelince ödenecekler (salary_plan; yetenek ozet_sade)."""
     from app import upcoming
 
     return FastJSON(upcoming.upcoming(upcoming._today(), days))
@@ -2752,6 +2752,15 @@ def stats_monthly(months: int = Query(6, ge=1, le=24)):
     from app import upcoming
 
     return upcoming.monthly_net(months, upcoming._today())
+
+
+@app.get("/api/stats/projection")
+def stats_projection(months: int = Query(13, ge=1, le=36)):
+    """Böyle giderse ay ay nereye varırım (yetenek ozet_sade; upcoming.projection): maaştan maaşa start + dönem başına
+    salary, fixed, end_balance. Maaş yoksa periods boş."""
+    from app import upcoming
+
+    return FastJSON(upcoming.projection(upcoming._today(), months))
 
 
 @app.get("/api/installments")

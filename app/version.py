@@ -584,6 +584,8 @@ CAPABILITIES = (
                               # fatura bir sonraki dönem sonuna (until) kadar; TL borç (borc; kumbaranın karşılamadığı
                               # kısım, planlıysa kalan taksitler, due_date sıradaki taksit) vadesi ne kadar ileride olursa
                               # olsun; sonraki dönemin düzenli ödemeleri yok.
+                              # (yetenek ozet_sade: maaş günü vadeli fatura / borç / düzenli ödeme de burada; düzenli
+                              # ödeme type "recurring", recurring_id)
                               # pending_cards_items / card_debt_items yalnız ufuktakiler. spendable_after_income ufkun
                               # dönemlerindeki beklenen gelirler. Eski istemci yalnız yeni rakamı görür (bilinçli)
     "cycle_paid",             # ekstresi yüklenmemiş (kesimi geçmiş) kart döngüsü ödendi: GET /api/payables tahmin
@@ -730,6 +732,19 @@ CAPABILITIES = (
                               # items}; geçmiş dönemde null
     "monthly_net",            # GET /api/stats/monthly?months=6 → {periods: [{period, name, income, expense, net}], count,
                               # avg_income, avg_expense, avg_net}: tamamlanmış dönemler, Özet'in gelir/gider kuralı
+    "ozet_sade",              # Sade Özet. (1) MAAŞ GÜNÜ KURALI: vadesi tam maaş günü olan kesin fatura / düzenli ödeme /
+                              # TL borç maaştan ödenir: Harcanabilir'den (spendable) düşülmez, /api/upcoming
+                              # before_salary'ye girmez; spendable_later'a (düzenli ödeme için yeni type "recurring",
+                              # recurring_id) ve salary_plan'a geçer. Kart ekstresi kuralı aynı; gecikmiş maaş
+                              # bugüne çekildiyse kural yok. (2) /api/upcoming
+                              # salary_plan {salary {date, amount}, end_date, items [{key cards|recurring|bills|debts,
+                              # label, amount, estimate, count}] (0 tutarlı kalem yok), installments_in_cards (bilgi),
+                              # total, remaining (= salary.amount − total), days, remaining_per_day, usual_per_day,
+                              # usual_monthly, basis_months, already_reserved, missing_count}|null (maaş yoksa).
+                              # total − cards = next_period.fixed_noncard. (3) GET /api/stats/projection?months=13 →
+                              # {start, variable_avg, basis_months, periods [{label, year, salary_date, end_date,
+                              # salary, fixed, end_balance}]}: end_balance = önceki (ilkinde start) + salary − fixed −
+                              # variable_avg; periods[0].end_balance = next_period.result; maaş yoksa periods boş
 )
 
 
