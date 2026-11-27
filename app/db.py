@@ -4259,6 +4259,35 @@ def owner_party_transfer(desc: str, amount: float, owners: list[str] | None) -> 
     return _names_owner(desc, sorted(names))
 
 
+def family_names() -> list[str]:
+    """Aile paketi / ortak defter: defterdeki kişilerin banka adları (dökümden öğrenilen hesap sahibi adları — ortak
+    deftere her üyenin dökümü yüklenir — ve elle verilen 'household_names' ayarı). Tek kişilik defterde boş: ev içi
+    aktarım kuralı yalnız ortak defterde."""
+    import json
+
+    from app import book
+
+    if not book.shared_people():
+        return []
+    extra = json.loads(get_setting("household_names") or "[]")
+    return [n for n in dict.fromkeys([*owner_names(), *extra]) if n]
+
+
+def household_transfer(desc: str, amount: float, family: list[str] | None) -> bool:
+    """Ev içi aktarım (aile paketi): giden havale/FAST/EFT'nin ALICISI defterdeki bir aile üyesi (ad normalize, Türkçe
+    harfler katlanmış: 'ALİ ÖRNEK' = 'ALI ORNEK'). Gider değil: üyenin harcaması kendi kaydından sayılır. Gönderen =
+    alıcı (kendi hesapları arası) classify_reason'da zaten virman; alıcı okunamıyorsa ya da aile dışı biriyse gider."""
+    if amount >= 0 or not family or not desc:
+        return False
+    from app.bank_import import _sender_receiver, _squash
+
+    sr = _sender_receiver(desc)
+    if not sr or len(sr[1]) < 6:
+        return False
+    names = {_squash(n) for n in family if n and len(_squash(n)) >= 6}
+    return sr[1] in names
+
+
 def counterparty_is_owner(desc_or_name: str, names: set[str], head_only: bool = True) -> bool:
     """Dökümde karşı tarafın adı açıklamanın başında yazılıysa ("<KİŞİ ADI> · GIDEN FAST - <SAHİP> TARAFI …"; canlı 18.11:
     13 yanlış "kendi hesabına mı" sorusu) ya da kayıtta counterparty doluysa: o ad sahibin adı DEĞİLSE kendi hesabına
@@ -4626,6 +4655,7 @@ def _import_bank_rows(rows: list[dict], account: str, owners: list[str] | None, 
     if overlap["count"]:
         stats["cakisma"] = overlap["count"]
         stats["uyari"] = overlap["message"]
+    family = family_names()
     for i_row, r in enumerate(rows):
         if i_row in overlap["rows"]:  # başka biçimde (PDF ↔ Excel) zaten yüklenmiş hareket: iki kez sayılmaz
             continue
@@ -4703,6 +4733,16 @@ def _import_bank_rows(rows: list[dict], account: str, owners: list[str] | None, 
             stats["virman_bekliyor"] = stats.get("virman_bekliyor", 0) + 1
             with connect() as c:
                 add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
+            seen.add(r["hash"])
+            continue
+        if r["type"] == "gider" and household_transfer(r["description"], r["amount"], family):
+            # aile paketi: alıcı defterdeki aile üyesi → ev içi aktarım, gider değil (üyenin harcaması kendi kaydından)
+            stats["virman"] += 1
+            stats["ev_ici"] = stats.get("ev_ici", 0) + 1
+            with connect() as c:
+                add_own_transfer(c, r["date"], r["amount"], account, r["description"], r["hash"], owners, acc_id)
+                c.execute("UPDATE own_transfers SET note = COALESCE(note, ?) WHERE import_hash = ?",
+                          ("Ev içi aktarım (aile üyesi)", r["hash"]))
             seen.add(r["hash"])
             continue
         if r["type"] == "gider" and match_card_payment(abs(r["amount"]), r["date"]):
