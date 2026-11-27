@@ -241,14 +241,15 @@ def test_cycle_28_with_31st_salary_stays_in_period(tmpdb):
 # ---------------------------------------------------------------- maaş 1'i, kart/fatura 30–31, maaştan önce vade
 
 def test_salary_1st_bills_30_and_holiday_new_year(book, client):
-    """Maaş 1'i. 20 Kas: ufuk 30 Kas; sonraki maaş 1 Ara (Salı) +1 iş günü → 1 Ara'ya kadar vadeliler düşülür, 2 Ara
-    sonraya. 20 Ara: maaş 1 Oca (Yılbaşı, Cuma) → Pzt 4 Oca + 1 iş günü → 4 Oca dahil düşülür, 5 Oca sonraya."""
+    """Maaş 1'i. 20 Kas: ufuk 30 Kas; sonraki maaş 1 Ara (Salı): maaştan ÖNCE vadeliler düşülür; tam maaş günü (1 Ara)
+    vadeli fatura maaştan ödenir, düşülmez (maaş günü kuralı, yetenek ozet_sade; eskiden düşülüyordu), 2 Ara sonraya.
+    20 Ara: maaş 1 Oca (Yılbaşı, Cuma) → Pzt 4 Oca + 1 iş günü → 4 Oca dahil düşülür, 5 Oca sonraya."""
     _bill(client, "2026-12-01", 300.0, "Örnek İnternet")
     _bill(client, "2026-12-02", 400.0, "Örnek Telefon")
     nw = finance.net_worth(date(2026, 11, 20))
     _inv(nw)
     assert nw["spendable_horizon"] == "2026-11-30"
-    assert _bills(nw) == ["2026-11-30", "2026-12-01"] and "2026-12-02" in _later_bills(nw)
+    assert _bills(nw) == ["2026-11-30"] and _later_bills(nw)[:2] == ["2026-12-01", "2026-12-02"]
     assert nw["spendable_pre_salary"] == {"until": "2026-12-01", "salary_date": "2026-12-01"}
     _bill(client, "2027-01-05", 500.0, "Örnek Aidat")
     nw = finance.net_worth(date(2026, 12, 20))

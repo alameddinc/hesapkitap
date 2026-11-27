@@ -933,8 +933,8 @@ class Sim:
             end = period_bounds(periods[-1], cd)[1]
         later_end = period_bounds(next_period(periods[-1]), cd)[1]
         d_end = end
+        nxt = late = None
         if prim:
-            nxt = None
             for k in (-1, 0, 1, 2):
                 per = next_period(cur, k)
                 if (prim.desc, per) in self.salary_info:
@@ -943,13 +943,16 @@ class Sim:
                 if on < self.today:
                     if workdays.add_business_days(on, 5) < self.today:
                         continue
-                    on = self.today
+                    on, late = self.today, True
                 nxt = on
                 break
             if nxt:
                 cutoff = workdays.add_business_days(nxt, 1) - timedelta(days=1)
                 d_end = max(end, cutoff)
-        return {"end": end, "d_end": d_end, "periods": periods, "later_end": later_end}
+        # sal: sıradaki maaş günü — o gün vadeli fatura / kira / borç maaştan ödenir, düşülmez (maaş günü kuralı);
+        # gecikmiş maaş bugüne çekildiyse kural yok
+        return {"end": end, "d_end": d_end, "periods": periods, "later_end": later_end,
+                "sal": None if late else nxt}
 
     def expected_unknown(self) -> float:
         tot = 0.0
@@ -969,6 +972,7 @@ class Sim:
 
     def expected_parts(self, hz: dict) -> dict:
         d_end = hz["d_end"]
+        sal = hz.get("sal")  # maaş günü kuralı (yetenek ozet_sade): o gün vadeli fatura / kira / borç düşülmez
         out = {"card_debt": 0.0, "pending_cards": 0.0, "bills": 0.0, "recurring": 0.0, "payable": 0.0}
         later = 0.0
         by: dict[str, float] = {}
@@ -997,7 +1001,7 @@ class Sim:
                         out["pending_cards"] += b.amount
                         by[card.cfg.key] = round(by.get(card.cfg.key, 0.0) + b.amount, 2)
         for b in self.bills:
-            if not b.paid and b.due <= d_end:
+            if not b.paid and b.due <= d_end and b.due != sal:
                 out["bills"] += b.amount
         if self.p.rent:
             amt, day, acc, _ = self.p.rent
@@ -1007,10 +1011,11 @@ class Sim:
                 known = per in self.rent_paid and per not in pend
                 if known:
                     continue
-                if per == prev:
-                    on = occurrence(per, day, self.p.cycle_day)
-                    if not (self.today - timedelta(days=15) <= on <= self.today):
-                        continue
+                on = occurrence(per, day, self.p.cycle_day)
+                if per == prev and not (self.today - timedelta(days=15) <= on <= self.today):
+                    continue
+                if on == sal:
+                    continue
                 out["recurring"] += amt
         for d in self.debts.values():
             if d.direction != "borc":
@@ -1019,9 +1024,9 @@ class Sim:
             if left <= EPS:
                 continue
             if d.plan:
-                thru = sum(a for on, a in d.plan if on <= d_end)
+                thru = sum(a for on, a in d.plan if on <= d_end and on != sal)
                 out["payable"] += min(left, max(0.0, thru - d.paid))
-            elif not d.due or d.due <= d_end:
+            elif not d.due or (d.due <= d_end and d.due != sal):
                 out["payable"] += left
         return {k: round(v, 2) for k, v in out.items()} | {"_later_card": round(later, 2), "_pending_by": by,
                                                            "_late_ok": late_ok}

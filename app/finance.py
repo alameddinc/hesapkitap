@@ -3269,13 +3269,16 @@ def net_worth(today: date | None = None) -> dict:
     # düşülen son vade: ufuk; bir sonraki birincil maaş ufuktan sonraysa maaştan önce vadeli kesin ödemeler de (_deduct_end)
     d_end, pre_salary = _deduct_end(today, hz)
     h_end = d_end.isoformat()
+    # MAAŞ GÜNÜ KURALI (yetenek ozet_sade): vadesi tam maaş günü olan kesin fatura / düzenli ödeme / TL borç maaştan
+    # ödenir: düşülmez, spendable_later'a geçer. Kart ekstresi ve varlık ödemesi bu kuralın dışında (eskisi gibi düşülür)
+    sal_day = salary_day_rule(today, pre_salary)
     later: list[dict] = []
 
     def in_h(due: str | None) -> bool:
         return not due or due <= h_end
 
     def to_later(title: str, amount: float, due: str | None, kind: str, any_date: bool = False, **extra) -> None:
-        if due and h_end < due and (any_date or due <= l_end) and money.gt(amount, 0):
+        if due and (h_end < due or due == sal_day) and (any_date or due <= l_end) and money.gt(amount, 0):
             later.append({"title": title, "amount": _round(amount), "due_date": due, "type": kind, **extra})
 
     card_debt_now = 0.0
@@ -3350,7 +3353,7 @@ def net_worth(today: date | None = None) -> dict:
     for d in open_try:
         if d["direction"] != "borc" or not money.gt(d["remaining"], 0):
             continue
-        now, nxt, nxt_due = _debt_due_split(d, h_end, l_end)
+        now, nxt, nxt_due = _debt_due_split(d, h_end, l_end, sal_day)
         covered = min(max(0.0, jars.get("by_debt", {}).get(d["id"], 0.0)), d["remaining"])
         c_now = min(covered, now)
         payable_sp += now - c_now
@@ -3358,10 +3361,12 @@ def net_worth(today: date | None = None) -> dict:
         # steps: ödeme planlı borcun ufuktan sonraki ödenmemiş taksitleri [(vade, tutar)]; Ay sonunda kalacak (funded)
         # yalnız until'e kadar vadesi gelen TAKSİTLERİ düşer, kalanın tamamını değil (S9)
         to_later(d["person"], nxt - min(covered - c_now, nxt), nxt_due, "borc", any_date=True, debt_id=d["id"],
-                 **({"steps": st} if (st := _debt_steps_after(d, h_end)) else {}))
-    due = _due_this_period(today, pending_all, {**hz, "end": d_end} if d_end != hz["end"] else hz)
+                 **({"steps": st} if (st := _debt_steps_after(d, h_end, sal_day)) else {}))
+    due = _due_this_period(today, pending_all, {**hz, "end": d_end, "salary_day": sal_day})
     for b in due.pop("_later_bills"):
         to_later(b["title"], b["amount"], b["date"], "bill", bill_id=b["id"])
+    for r in due.pop("_later_recurring"):  # yalnız maaş günü vadeli düzenli ödeme (sonraki dönemin öbürleri yok)
+        to_later(r["title"], r["amount"], r["date"], "recurring", recurring_id=r["recurring_id"])
     extra = sum(due[k]["amount"] for k in DUE_KEYS)
     spendable = cash - unknown - card_debt_now - pending_cards - payable_sp - jars["total"] - zakat_due - extra
     # eski satırlar (cash … zakat_due) her zaman, sırası aynı; yeni satırlar (DUE_KEYS, unknown_payments) yalnız sıfırdan büyükse
@@ -3574,12 +3579,30 @@ def next_salary_date(today: date) -> date | None:
     return None
 
 
+def salary_day_rule(today: date, sal: date | None) -> str | None:
+    """Maaş günü kuralının (yetenek ozet_sade) geçerli olduğu gün: sıradaki maaşın BEKLENEN günü (sal =
+    next_salary_date). Günü geçmiş, hâlâ beklenen maaş "bugün" sayılırken (gecikmiş maaş) kural YOK: maaş ne zaman
+    yatacağı belli değilken bugün vadeli ödeme eldeki paradan çıkar, düşülmeye devam eder. Kural yoksa None."""
+    if not sal:
+        return None
+    if sal == today:  # bugün: gerçekten bugün mü bekleniyor, yoksa gecikmiş maaş mı bugüne çekildi
+        rec, ov = db.list_recurring(), db.recurring_overrides()
+        cur = current_period(today)
+        nominal = {db.recurring_due(m, per) for per in (add_months(cur, k) for k in (-1, 0, 1, 2))
+                   if (m := primary_salary(per, rec, ov))}
+        if today.isoformat() not in nominal:
+            return None
+    return sal.isoformat()
+
+
 def _deduct_end(today: date, hz: dict) -> tuple[date, date | None]:
     """Ödemelerden sonra'dan DÜŞÜLEN ödemelerin son vadesi: ufkun sonu; ama bir sonraki birincil maaş ufuktan sonraysa ve
     arada vadesi gelen kesin ödeme varsa (kart ekstresi, kesilecek ekstrenin kesin kısmı, fatura, borç taksidi) o para
     maaşı beklemeden ELDEKİ paradan çıkar: maaş günü + PRE_SALARY_MARGIN_BDAYS iş gününden ÖNCE vadeli olanlar da
     düşülür (P0 H5; eskiden "Maaştan sonra ödenecek"te kalıp ana sayıyı iyimser gösteriyordu). Sonraki dönemin düzenli
-    ödemeleri (kira…) bu yamada yok: dönem modeli (faz) işi. Dönüş: (son vade, maaş günü ya da None)."""
+    ödemeleri (kira…) bu yamada yok: dönem modeli (faz) işi. Dönüş: (son vade, maaş günü ya da None).
+    İstisna (maaş günü kuralı, yetenek ozet_sade; net_worth uygular): vadesi TAM maaş günü olan fatura, düzenli ödeme
+    ve TL borç maaştan ödenir sayılır, düşülmez; kart ekstresi için kural değişmedi (maaş gecikebilir payı sürer)."""
     end = hz["end"]
     sal = next_salary_date(today)
     if not sal:
@@ -3588,41 +3611,47 @@ def _deduct_end(today: date, hz: dict) -> tuple[date, date | None]:
     return (cutoff, sal) if cutoff > end else (end, sal)
 
 
-def _debt_due_split(d: dict, h_end: str, l_end: str) -> tuple[float, float, str | None]:
+def _debt_due_split(d: dict, h_end: str, l_end: str, sal_day: str | None = None) -> tuple[float, float, str | None]:
     """TL borcun kalanı ufka göre: (ufka kadar vadeli, ufuk sonrası l_end'e kadar vadeli, o kısmın vadesi).
     Vadesiz ya da vadesi geçmiş/ufuk içinde: tamamı şimdi. Ödeme planlı borç: ufka kadar vadesi gelen taksitlerden
     ödenmemiş kısım şimdi, kalan taksitlerin hepsi sonra (vadesi: ufuktan sonraki ilk taksit). l_end kullanılmaz:
-    borçta spendable_later bilinen tüm borcu gösterir (lead 16.11)."""
+    borçta spendable_later bilinen tüm borcu gösterir (lead 16.11). sal_day (maaş günü kuralı, yetenek ozet_sade):
+    vadesi tam o gün olan borç / taksit ufuk içinde olsa da "sonra" sayılır (maaştan ödenir)."""
     from app import debt_schedule
 
     rem = max(0.0, d["remaining"] or 0.0)
     if debt_schedule.is_scheduled(d) and not d.get("settled_at"):
         rows = debt_schedule.installments(d)
         paid = debt_schedule.plan_paid(d)
-        thru_h = sum(r["amount"] for r in rows if r["date"] <= h_end)
+        thru_h = sum(r["amount"] for r in rows if r["date"] <= h_end and r["date"] != sal_day)
         now = min(rem, max(0.0, thru_h - paid))
         nxt = max(0.0, rem - now)
-        nd = next((r["date"] for r in rows if h_end < r["date"]), None)
+        nd = next((r["date"] for r in rows if h_end < r["date"] or r["date"] == sal_day), None)
         return _round(now), _round(nxt), nd
     due = d.get("due_date")
-    if not due or due <= h_end:
+    if not due or (due <= h_end and due != sal_day):
         return _round(rem), 0.0, None
     return 0.0, _round(rem), due
 
 
-def _debt_steps_after(d: dict, h_end: str) -> list[dict]:
+def _debt_steps_after(d: dict, h_end: str, sal_day: str | None = None) -> list[dict]:
     """Ödeme planlı borcun ufuktan (h_end) SONRA vadesi gelen, henüz ödenmemiş taksitleri [{date, amount}] (tarih
     sırasıyla). Plana sayılan ödeme önce ufka kadar vadeli taksitleri, artanı sıradaki taksitleri kapatır (erken
-    ödenen taksit iki kez düşülmez). Planlı değilse (ya da kapanmışsa) boş: tek vadeli borç tek kalemdir."""
+    ödenen taksit iki kez düşülmez). Planlı değilse (ya da kapanmışsa) boş: tek vadeli borç tek kalemdir. sal_day: maaş
+    günü vadeli taksit ufuk içinde olsa da "sonra"dadır (_debt_due_split ile aynı kural)."""
     from app import debt_schedule
 
     if not debt_schedule.is_scheduled(d) or d.get("settled_at"):
         return []
     rows = debt_schedule.installments(d)
-    ahead = max(0.0, debt_schedule.plan_paid(d) - sum(r["amount"] for r in rows if r["date"] <= h_end))
+
+    def now(r: dict) -> bool:
+        return r["date"] <= h_end and r["date"] != sal_day
+
+    ahead = max(0.0, debt_schedule.plan_paid(d) - sum(r["amount"] for r in rows if now(r)))
     out = []
     for r in rows:
-        if r["date"] <= h_end:
+        if now(r):
             continue
         take = min(ahead, r["amount"])
         ahead -= take
@@ -3663,11 +3692,15 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
     Ufuk (hz = spend_horizon; verilmezse bugünden): "bu dönem" = ufkun kapsadığı dönemler (dönemin son günü ya da bir
     önceki günü ise bir sonraki dönem de), faturada vade ≤ ufuk. Ufuk sonrası, sonraki dönem sonuna kadar vadeli ödenmemiş
     faturalar "_later_bills"te (çağıran spendable_later'a taşır). Sonraki dönemin düzenli ödemeleri/taksitleri ufukta
-    değilse hiçbir yerde yok (o dönem başlayınca bekleyen olur)."""
+    değilse hiçbir yerde yok (o dönem başlayınca bekleyen olur).
+    Maaş günü kuralı (hz["salary_day"]; yetenek ozet_sade): vadesi tam o gün olan fatura ve düzenli ödeme maaştan
+    ödenir: bills / recurring'e girmez, "_later_bills" / "_later_recurring"e geçer."""
     out = {k: {"amount": 0.0, "items": []} for k in DUE_KEYS}
     hz = hz or spend_horizon(today)
     h_end, l_end = hz["end"].isoformat(), hz["later_end"].isoformat()
+    sal_day = hz.get("salary_day")  # maaş günü kuralı (net_worth verir): o gün vadeli fatura / düzenli ödeme düşülmez
     later_bills: list[dict] = []
+    later_recurring: list[dict] = []
 
     def add(key: str, item: dict) -> None:
         out[key]["items"].append(item)
@@ -3677,7 +3710,7 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
         if b["paid_at"] is None and b["due_date"] and money.gt(b["amount"] or 0, 0):
             item = {"title": b["provider"], "amount": _round(b["amount"]), "date": b["due_date"], "id": b["id"],
                     "overdue": workdays.past_due(b["due_date"], today)}
-            if b["due_date"] <= h_end:
+            if b["due_date"] <= h_end and b["due_date"] != sal_day:
                 add("bills", item)
             elif b["due_date"] <= l_end:
                 later_bills.append(item)
@@ -3697,8 +3730,12 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
             if per == prev and not (late_from <= r["date"] <= today.isoformat()):
                 continue
             if r.get("pending") and r["kind"] == EXPENSE and money.gt(r["amount"] or 0, 0):
-                add("recurring", {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],
-                                  "recurring_id": r["recurring_id"], **({"overdue": True} if per == prev else {})})
+                item = {"title": r["description"], "amount": _round(r["amount"]), "date": r["date"],
+                        "recurring_id": r["recurring_id"], **({"overdue": True} if per == prev else {})}
+                if sal_day and r["date"] == sal_day:
+                    later_recurring.append(item)
+                else:
+                    add("recurring", item)
     covered = {x["account"] for x in pending_items}
     covered |= {p["cycle"]["account"] for p in payables(today) if p["type"] == "estimate" and p.get("cycle")}
     for row in (m for m in rows if m["month"] in hz["periods"]):
@@ -3722,6 +3759,7 @@ def _due_this_period(today: date, pending_items: list[dict], hz: dict | None = N
             {"title": f"{st['bank']} {st['card_no']}", "amount": _round(ci["amount"]), "date": st["due_date"],
              "remaining": _round(left), "statement_id": st["id"]})
     out["_later_bills"] = later_bills
+    out["_later_recurring"] = later_recurring
     return out
 
 
@@ -4032,7 +4070,8 @@ SPENDABLE_EXPLAIN = (f"{terms.SPENDABLE}: bankadaki ve nakit para − kumbaraya 
                      "kadar olanlar (dönemin son günündeysen bir sonraki dönemin sonuna kadar) düşülür; daha sonra "
                      "vadeli olanlar \"Maaştan sonra ödenecek\" diye ayrıca gösterilir, düşülmez. Ama vadesi bir "
                      "sonraki maaşından önce gelen kesin ödemeler (kart ekstresi, fatura, borç taksidi) maaşı beklemeden "
-                     "elindeki paradan çıkacağı için onlar da düşülür.")
+                     "elindeki paradan çıkacağı için onlar da düşülür. Vadesi tam maaş gününe denk gelen fatura, "
+                     "düzenli ödeme ve borç ise maaşından ödenir sayılır: düşülmez, \"Maaştan sonra ödenecek\"te görünür.")
 
 
 SPENDABLE_JAR_NOTE = (" Bir borç için kumbarada biriktirdiğin para o borcun kalanından düşülmüş sayılır: borç ve kumbara "

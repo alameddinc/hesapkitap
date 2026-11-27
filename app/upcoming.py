@@ -8,7 +8,10 @@ Yaklaşan: bugünden `days` gün sonrasına kadar (gecikmiş, ödenmemiş kaleml
   at_cut DEĞİL — Harcanabilir'in kesin kısmıyla aynı taban, _pending_cards), bu dönem henüz girilmemiş fatura (aynı
   kurum/abone başına son 3 faturanın ortalaması; tarih = son vade günü + 1 ay).
 - EKSİK: tutarı bilinmeyen bilinen fatura / düzenli ödeme (amount null; toplama girmez, missing_count'ta sayılır).
-- Maaş: income satırı; toplamlara GİRMEZ. before_salary = maaş gününe kadar (dahil) kesin + tahmini.
+- Maaş: income satırı; toplamlara GİRMEZ. before_salary = maaş gününden ÖNCE vadeli kesin + tahmini (+ maaş günü
+  vadeli kart ekstresi). Maaş günü kuralı (yetenek ozet_sade): vadesi tam maaş günü olan fatura / düzenli ödeme / borç
+  maaştan ödenir; before_salary'ye ve Harcanabilir'e girmez, salary_plan'a girer.
+- salary_plan (yetenek ozet_sade): maaş gelince ödenecekler ve geriye kalan; GET /api/stats/projection: ay ay gidiş.
 
 Çift sayım yok: gerçek fatura girilince o kurumun son kaydı o olur, tahmin bir ay ileri kayar; ayrıca gerçek bir
 satırın ±BILL_MATCH_DAYS gün yakınındaki aynı grubun tahmini atılır. Düzenli ödemesi olan kurumun (açıklaması aynı)
@@ -287,13 +290,42 @@ def _next_salary(today: date) -> dict | None:
         if not main or main["id"] in finance.salary_realized(per, rec, finance._salary_decision_entries(per, None), ov):
             continue
         d = date.fromisoformat(db.recurring_due(main, per))
-        if d < today:
+        late = d < today
+        if late:
             if not finance.salary_awaited(d.isoformat(), today):
                 continue
             d = today
+        # late: günü geçmiş, hâlâ beklenen maaş bugüne çekildi → maaş günü kuralı uygulanmaz (finance.salary_day_rule)
         return {"date": d.isoformat(), "amount": finance._round(db.planned_amount(main, per, ov)),
-                "recurring_id": main["id"]}
+                "recurring_id": main["id"], "period": per, "late": late}
     return None
+
+
+def _salary_series(sal: dict, n: int) -> list[dict]:
+    """Sıradaki maaştan (sal = _next_salary) başlayarak art arda n birincil maaş [{date, amount, period}]: gün
+    db.recurring_due, tutar db.planned_amount (aya özel tutar > brütten net > şablon; ay ay değişir). Maaş kalemi biterse
+    liste kısa kalır."""
+    rec, ov = db.list_recurring(), db.recurring_overrides()
+    out = [{"date": sal["date"], "amount": sal["amount"], "period": sal["period"]}]
+    for k in range(1, n + 3):
+        if len(out) >= n:
+            break
+        per = finance.add_months(sal["period"], k)
+        main = finance.primary_salary(per, rec, ov)
+        if not main:
+            break
+        d = db.recurring_due(main, per)
+        if d <= out[-1]["date"]:  # gecikmiş maaş bugüne çekildiyse sıradaki oluşum onunla çakışmasın
+            continue
+        out.append({"date": d, "amount": finance._round(db.planned_amount(main, per, ov)), "period": per})
+    return out
+
+
+def _before_salary(day: str, kind: str, sal: dict) -> bool:
+    """Satır maaştan ÖNCE mi ödenir: vadesi maaş gününden önce; tam maaş günü vadeli olanlardan yalnız kart ekstresi
+    (Harcanabilir onu düşer). Maaş günü vadeli fatura / düzenli ödeme / borç maaştan ödenir (maaş günü kuralı);
+    gecikmiş maaş bugüne çekildiyse (sal.late) kural yok: bugün vadeli her şey maaştan önce sayılır."""
+    return day < sal["date"] or (day == sal["date"] and (kind == "card" or bool(sal.get("late"))))
 
 
 # ---------------------------------------------------------------- ana hesap
@@ -385,7 +417,7 @@ def upcoming(today: date | None = None, days: int = 45, with_next: bool = True) 
 
     before = None
     if salary:
-        pre = [x for x in pay_items if x["date"] <= salary["date"]]
+        pre = [x for x in pay_items if _before_salary(x["date"], x["kind"], sal)]
         before = {"total": tot(pre), "estimate": tot(pre, "tahmini"),
                   "missing_count": sum(1 for x in pre if x["certainty"] == "eksik")}
     out = {"items": items, "total": tot(pay_items), "total_certain": tot(pay_items, "kesin"),
@@ -393,7 +425,9 @@ def upcoming(today: date | None = None, days: int = 45, with_next: bool = True) 
            "missing_count": sum(1 for x in pay_items if x["certainty"] == "eksik"),
            "from": t_iso, "until": e_iso}
     if with_next:
-        out["next_period"] = next_period(today, sal)
+        ctx = _period_ctx(today, sal, out) if sal else None
+        out["next_period"] = next_period(today, sal, ctx)
+        out["salary_plan"] = salary_plan(today, sal, ctx)
     return out
 
 
@@ -431,44 +465,191 @@ def variable_average(today: date, months: int = NEXT_BASIS) -> tuple[float, int]
     return finance._round(sum(vals) / len(vals)), len(vals)
 
 
-def next_period(today: date, sal: dict | None = None) -> dict | None:
+def _debt_steps(today: date) -> list[dict]:
+    """Vadeli TL borçların ödenmemiş adımları [{date, amount, debt_id}] (tarih sırasıyla), kumbaranın karşıladığı kısım
+    düşülmüş (kumbara en erken adımdan başlar; para zaten ayrılmış, Harcanabilir'den düşülmüş). Ödeme planlı borç: her
+    taksit kendi gününde (finance._debt_steps_after; Harcanabilir'in borç hesabıyla aynı satırlar), tek vadeli borç:
+    kalanı vadesinde. Vadesiz borç yok (Harcanabilir'de). Ortak defterde Borç sayfası gizliyse boş (payables kuralı)."""
+    from app import book, debt_schedule
+
+    rules = book.active()
+    if rules and "borclar" in rules["hidden_pages"]:
+        return []
+    jars = db.jar_reserved(today).get("by_debt", {})
+    out = []
+    for d in db.list_debts(open_only=True, today=today):
+        if d["asset"] != "TRY" or d["direction"] != "borc" or not money.gt(d["remaining"] or 0, 0):
+            continue
+        steps = finance._debt_steps_after(d, "")  # ufuk yok: ödenmemiş taksitlerin hepsi
+        if not steps and d.get("due_date") and not debt_schedule.is_scheduled(d):
+            steps = [{"date": d["due_date"], "amount": d["remaining"]}]
+        jar = max(0.0, jars.get(d["id"], 0.0))
+        for st in steps:
+            take = min(jar, st["amount"])
+            jar -= take
+            if money.gt(st["amount"] - take, 0):
+                out.append({"date": st["date"], "amount": finance._round(st["amount"] - take), "debt_id": d["id"]})
+    return sorted(out, key=lambda x: (x["date"], x["debt_id"]))
+
+
+def _period_ctx(today: date, sal: dict, up: dict | None = None, series: list[dict] | None = None) -> dict:
+    """next_period, salary_plan ve projection'ın ORTAK tabanı (üçü aynı satırları toplar; rakamlar birbirini tutar).
+    rows: maaş gününden (dahil) itibaren maaştan ödenecek kart DIŞI satırlar [{date, key recurring|bills|debts,
+    amount|None (eksik), estimate, reserved}]:
+    - düzenli ödeme ve fatura: Yaklaşan'ın satırları (kesin + tahmini; aynı çift sayım kuralları),
+    - borç: _debt_steps (kumbara-fonlu kısım hariç; planlı borcun her taksidi kendi gününde).
+    reserved: satır Harcanabilir'den ZATEN düşülmüş (maaştan sonra ama ufuk içinde vadeli kesin ödeme; maaş günü vadeli
+    olan düşülmez — maaş günü kuralı): toplamlara girmez, böylece her ödeme ya Harcanabilir'de ya burada, bir kez.
+    pre_est: maaştan önceki tahmini faturalar (Harcanabilir onları düşmez). end: sonraki maaştan önceki gün."""
+    series = series or _salary_series(sal, 2)
+    s_iso = sal["date"]
+    s_day = date.fromisoformat(s_iso)
+    end = (date.fromisoformat(series[1]["date"]) if len(series) > 1 else _add_month(s_day, 1)) - timedelta(days=1)
+    if up is None or up["until"] < end.isoformat():
+        up = upcoming(today, max(1, (end - today).days), with_next=False)
+    nw = finance.net_worth(today)
+    h_end = (nw.get("spendable_pre_salary") or {}).get("until") or nw["spendable_horizon"]
+    done_bills = {x["id"] for x in nw.get("bills_items", [])}
+    done_rec = {(x["recurring_id"], x["date"]) for x in nw.get("recurring_items", [])}
+    rows = []
+    for x in up["items"]:
+        if x["kind"] not in ("bill", "recurring") or _before_salary(x["date"], x["kind"], sal):
+            continue
+        src = x["source"]
+        reserved = (src["type"] == "bill" and src["id"] in done_bills) or \
+                   (src["type"] == "recurring" and (src["id"], x["date"]) in done_rec)
+        rows.append({"date": x["date"], "key": "bills" if x["kind"] == "bill" else "recurring", "amount": x["amount"],
+                     "estimate": x["certainty"] == "tahmini", "reserved": reserved})
+    for st in _debt_steps(today):
+        if not _before_salary(st["date"], "debt", sal):
+            rows.append({"date": st["date"], "key": "debts", "amount": st["amount"], "estimate": False,
+                         "reserved": st["date"] <= h_end and st["date"] != s_iso})
+    pre_est = finance._round(sum(x["amount"] for x in up["items"] if x["amount"] is not None
+                                 and x["source"]["type"] == "bill_estimate"
+                                 and _before_salary(x["date"], x["kind"], sal)))
+    return {"sal": sal, "series": series, "end": end, "up": up, "nw": nw, "rows": rows, "pre_est": pre_est}
+
+
+def _window(ctx: dict, a: str, b: str) -> list[dict]:
+    """a–b (dahil) arası, tutarı bilinen ve Harcanabilir'de düşülmemiş maaştan ödenecek satırlar."""
+    return [r for r in ctx["rows"] if a <= r["date"] <= b and r["amount"] is not None and not r["reserved"]]
+
+
+def next_period(today: date, sal: dict | None = None, ctx: dict | None = None) -> dict | None:
     """Maaştan sonraki dönem (maaş günü → bir sonraki maaştan önceki gün), tahakkuk bakışı, kart TEK kez:
     result = cards_close_today − pre_salary_estimate + salary − fixed_noncard − variable_avg (eksi olabilir).
     - cards_close_today: Harcanabilir − kartlarda biriken (bugüne kadarki kart harcamasının hepsi burada düşülür).
     - pre_salary_estimate: maaştan önceki tahmini faturalar (Harcanabilir onları düşmez; başka yerde de yok).
-    - fixed_noncard: maaştan SONRA end_date'e kadar kart DIŞI kesin + tahmini ödemeler (kira, fatura, borç). Kumbaradan
-      ödenen borç kısmı girmez (para zaten kumbarada ayrılmış, Harcanabilir'den düşülmüş).
+    - fixed_noncard: maaş günü (DAHİL; maaş günü kuralı) → end_date arası kart DIŞI kesin + tahmini ödemeler (kira,
+      fatura, borç; _period_ctx). Kumbaradan ödenen borç kısmı girmez (para zaten kumbarada ayrılmış, Harcanabilir'den
+      düşülmüş); Harcanabilir'den zaten düşülmüş ödeme de girmez. Her ödeme ya Harcanabilir'de ya burada: bir kez.
     - variable_avg: son 3 tamamlanmış dönemin değişken harcaması (kart dahil): gelecek dönemin kart harcaması bu; kart
       ekstresi satırları fixed_noncard'a girmediği için bir ay fazla kart sayılmaz.
-    Bilgi alanları: start_cash (Harcanabilir − pre_salary_estimate), fixed (kart dahil, kumbara-fonlu borç hariç; eski
-    alan, sonuçta kullanılmaz). Maaş tanımlı değilse None."""
+    Bilgi alanları: start_cash (Harcanabilir − pre_salary_estimate), fixed (fixed_noncard + maaştan sonra vadeli kart
+    satırları; eski alan, sonuçta kullanılmaz). Maaş tanımlı değilse None."""
     sal = sal if sal is not None else _next_salary(today)
     if not sal:
         return None
-    s_day = date.fromisoformat(sal["date"])
-    end = _add_month(s_day, 1) - timedelta(days=1)
-    up = upcoming(today, max(1, (end - today).days), with_next=False)
-    jars = db.jar_reserved(today).get("by_debt", {})
-
-    def own(x: dict) -> float:  # kumbaranın karşıladığı borç kısmı düşülür
-        if x["kind"] == "debt":
-            return max(0.0, x["amount"] - max(0.0, jars.get(x["source"]["id"], 0.0)))
-        return x["amount"]
-
-    pays = [x for x in up["items"] if x["kind"] != "income" and x["amount"] is not None]
-    pre_est = finance._round(sum(x["amount"] for x in pays
-                                 if x["date"] <= sal["date"] and x["source"]["type"] == "bill_estimate"))
-    after = [x for x in pays if sal["date"] < x["date"] <= end.isoformat()]
-    fixed = finance._round(sum(own(x) for x in after))
-    fixed_nc = finance._round(sum(own(x) for x in after if x["kind"] != "card"))
-    nw = finance.net_worth(today)
+    ctx = ctx or _period_ctx(today, sal)
+    end, nw, pre_est = ctx["end"], ctx["nw"], ctx["pre_est"]
+    fixed_nc = finance._round(sum(r["amount"] for r in _window(ctx, sal["date"], end.isoformat())))
+    cards = sum(x["amount"] for x in ctx["up"]["items"]
+                if x["kind"] == "card" and x["amount"] is not None and sal["date"] < x["date"] <= end.isoformat())
     start = finance._round(nw["spendable"] - pre_est)
     cct = nw["cards_close_today"]
     var, n = variable_average(today)
     return {"end_date": end.isoformat(), "start_cash": start, "cards_close_today": cct,
-            "pre_salary_estimate": pre_est, "salary": sal["amount"], "fixed": fixed, "fixed_noncard": fixed_nc,
+            "pre_salary_estimate": pre_est, "salary": sal["amount"], "fixed": finance._round(fixed_nc + cards),
+            "fixed_noncard": fixed_nc,
             "variable_avg": var, "result": finance._round(cct - pre_est + sal["amount"] - fixed_nc - var),
             "basis_months": n}
+
+
+# ---------------------------------------------------------------- sade Özet (yetenek ozet_sade)
+
+PLAN_LABELS = (("recurring", "Kira ve düzenli ödemeler"), ("bills", "Faturalar"), ("debts", "Borçlar"))
+DAYS_PER_MONTH = 30.4
+MONTHS_SHORT = ("Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara")
+
+
+def salary_plan(today: date, sal: dict | None = None, ctx: dict | None = None) -> dict | None:
+    """Maaş gelince neler ödenecek, geriye ne kalır (yetenek ozet_sade; /api/upcoming salary_plan). Maaş yoksa None.
+    items (tutarı 0 olan kalem yok; her biri {key, label, amount, estimate, count}):
+    - cards: net_worth.cards_accumulated.total (kesilmiş + bekleyen; Harcanabilir'den DÜŞÜLMEYEN kartlar). Kart
+      satırları yalnız burada: öbür kalemlerde kart yok (çift sayım yok).
+    - recurring / bills / debts: maaş günü (DAHİL) → end_date arası kart dışı kesin + tahmini ödemeler (_period_ctx;
+      next_period.fixed_noncard ile aynı satırlar: total − cards = fixed_noncard). estimate: kalemde tahmini satır var.
+    installments_in_cards: bu dönemin taksit toplamı (finance.installments_due cari dönem total; kartların İÇİNDE,
+    eklenmez). remaining = salary.amount − total; days: maaş günü → end_date (ikisi dahil); remaining_per_day.
+    usual_monthly = variable_average (her zamanki değişken harcama), usual_per_day = usual_monthly / 30,4.
+    already_reserved: pencerede olup Harcanabilir'den zaten düşülmüş kesin ödemeler (bilgi; total'e girmez).
+    missing_count: pencerede tutarı bilinmeyen satır sayısı (total'e girmez)."""
+    sal = sal if sal is not None else _next_salary(today)
+    if not sal:
+        return None
+    ctx = ctx or _period_ctx(today, sal)
+    s_iso, e_iso = sal["date"], ctx["end"].isoformat()
+    acc = ctx["nw"]["cards_accumulated"]
+    items = []
+    if money.gt(acc["total"], 0):
+        items.append({"key": "cards", "label": "Kartlar", "amount": acc["total"],
+                      "estimate": any(x.get("state") != "kesildi" for x in acc["items"]), "count": len(acc["items"])})
+    win = _window(ctx, s_iso, e_iso)
+    for key, label in PLAN_LABELS:
+        rows = [r for r in win if r["key"] == key]
+        amount = finance._round(sum(r["amount"] for r in rows))
+        if money.gt(amount, 0):
+            items.append({"key": key, "label": label, "amount": amount, "estimate": any(r["estimate"] for r in rows),
+                          "count": len(rows)})
+    in_win = [r for r in ctx["rows"] if s_iso <= r["date"] <= e_iso]
+    total = finance._round(sum(x["amount"] for x in items))
+    remaining = finance._round(sal["amount"] - total)
+    days = (ctx["end"] - date.fromisoformat(s_iso)).days + 1
+    var, n = variable_average(today)
+    return {"salary": {"date": s_iso, "amount": sal["amount"]}, "end_date": e_iso, "items": items,
+            "installments_in_cards": finance._round(
+                finance.installments_due(finance.current_period(today), today)["total"]),
+            "total": total, "remaining": remaining, "days": days,
+            "remaining_per_day": finance._round(remaining / days) if days > 0 else None,
+            "usual_per_day": finance._round(var / DAYS_PER_MONTH), "usual_monthly": var, "basis_months": n,
+            "already_reserved": finance._round(sum(r["amount"] for r in in_win
+                                                   if r["reserved"] and r["amount"] is not None)),
+            "missing_count": sum(1 for r in in_win if r["amount"] is None)}
+
+
+def projection(today: date | None = None, months: int = 13) -> dict:
+    """Böyle giderse ay ay nereye varırım (yetenek ozet_sade; GET /api/stats/projection?months=13), maaştan maaşa:
+    start = cards_close_today − pre_salary_estimate (next_period ile aynı taban);
+    periods[i] = {label (maaş ayının kısa adı), year, salary_date, end_date, salary, fixed, end_balance};
+    end_balance = önceki (ilkinde start) + salary − fixed − variable_avg. İstemci senaryo için variable'ı değiştirip
+    zinciri yeniden toplar: salary ve fixed dönem başına açık.
+    - salary: o dönemin birincil maaşı (_salary_series: db.planned_amount; brütten net ay ay değişir).
+    - fixed: maaş günü (dahil) → sonraki maaştan önceki gün arası kart dışı ödemeler (_period_ctx satırları): düzenli
+      ödemeler, fatura (girilmiş + tahmin: son 3 faturanın ortalaması, hat başına ayda bir; iki hat kuralı), vadeli
+      borç (kumbara-fonlu hariç). İlk dönem = next_period.fixed_noncard = salary_plan'ın kart dışı toplamı
+      (periods[0].end_balance = next_period.result). Kart harcaması variable_avg'in içinde (ayrıca eklenmez).
+    Maaş yoksa periods boş (start = cards_close_today). Maaş kalemi ileride bitiyorsa liste orada biter."""
+    today = today or date.today()
+    var, n = variable_average(today)
+    sal = _next_salary(today)
+    if not sal:
+        return {"start": finance.net_worth(today)["cards_close_today"], "variable_avg": var, "basis_months": n,
+                "periods": []}
+    series = _salary_series(sal, months + 1)
+    k = min(months, len(series))
+    starts = [date.fromisoformat(x["date"]) for x in series]
+    ends = [(starts[i + 1] if i + 1 < len(starts) else _add_month(starts[i], 1)) - timedelta(days=1) for i in range(k)]
+    up = upcoming(today, max(1, (ends[-1] - today).days), with_next=False)
+    ctx = _period_ctx(today, sal, up, series)
+    start = bal = finance._round(ctx["nw"]["cards_close_today"] - ctx["pre_est"])
+    periods = []
+    for i in range(k):
+        fixed = finance._round(sum(r["amount"] for r in _window(ctx, series[i]["date"], ends[i].isoformat())))
+        bal = finance._round(bal + series[i]["amount"] - fixed - var)
+        periods.append({"label": MONTHS_SHORT[starts[i].month - 1], "year": starts[i].year,
+                        "salary_date": series[i]["date"], "end_date": ends[i].isoformat(),
+                        "salary": series[i]["amount"], "fixed": fixed, "end_balance": bal})
+    return {"start": start, "variable_avg": var, "basis_months": n, "periods": periods}
 
 
 # ---------------------------------------------------------------- aylık ortalama
