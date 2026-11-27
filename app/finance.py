@@ -3379,6 +3379,17 @@ def net_worth(today: date | None = None) -> dict:
                    "overdue": workdays.past_due(c["due_date"], today)}
                   for c in cards if not c["estimated"] and in_h(c["due_date"])]
     later.sort(key=lambda x: (x["due_date"], x["title"]))
+    # "Kartları bugün kapatsaydın" (yetenek upcoming_v2): Harcanabilir − kartlarda biriken. Biriken = Harcanabilir'den
+    # DÜŞÜLMEYEN kart kalemleri (vadesi düşülen son günden sonra): kesilmiş ekstre kalanı ve kesilecek ekstrenin kesin
+    # kısmı (so_far; sonraki döngü dahil). Düşülenler zaten spendable'da: iki kez sayılmaz
+    acc_items = [{"title": c["title"], "account": None, "amount": _round(c["amount"]), "due_date": c["due_date"],
+                  "state": "kesildi"} for c in cards if not c["estimated"] and not in_h(c["due_date"])
+                 and money.gt(c["amount"], 0)]
+    acc_items += [{"title": x["title"], "account": x["account"], "amount": _round(x["amount"]), "due_date": x["due_date"],
+                   "state": "yeni_donem" if x.get("next_cycle") else "bekleniyor"}
+                  for x in pending_all if not in_h(x["due_date"]) and money.gt(x["amount"], 0)]
+    acc_items.sort(key=lambda x: (x["due_date"] or "", x["title"]))
+    cards_acc = _round(sum(x["amount"] for x in acc_items))
     spendable_later = {"total": _round(sum(x["amount"] for x in later)), "items": later,
                        "from": h_end, "until": l_end}
     # ekranda gösterilen Net durum: kesilecek kart ekstresi (tahmini) de düşülür (docstring)
@@ -3420,6 +3431,8 @@ def net_worth(today: date | None = None) -> dict:
             # maaştan önce vadeli kesin ödemeler de düşüldüyse son vadeleri (ufuktan sonra; yoksa None) ve maaş günü
             "spendable_pre_salary": ({"until": h_end, "salary_date": pre_salary.isoformat()}
                                      if d_end != hz["end"] and pre_salary else None),
+            "cards_accumulated": {"total": cards_acc, "items": acc_items},
+            "cards_close_today": _round(spendable - cards_acc),
             "spendable_explain": SPENDABLE_EXPLAIN + (SPENDABLE_JAR_NOTE if in_jar else ""),
             "stale": stale}
 
