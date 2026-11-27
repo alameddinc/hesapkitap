@@ -2725,9 +2725,33 @@ def summary(month: str | None = None, zakat: bool = False):
 
     with finance.zakat_split(zakat):
         out = finance.summary(month or finance.current_period())
+    # yetenek upcoming_v2: "Kartları bugün kapatsaydın" = Harcanabilir − kartlarda biriken (so_far; yalnız içinde
+    # bulunulan dönem, geçmiş dönemde null)
+    if (month or finance.current_period()) == finance.current_period():
+        nw = finance.net_worth()
+        out["cards_close_today"], out["cards_accumulated"] = nw["cards_close_today"], nw["cards_accumulated"]
+    else:
+        out["cards_close_today"], out["cards_accumulated"] = None, None
     out["insights_hidden"] = insight_state.hidden_count(out["insights"])  # kişinin kapattığı uyarılar (önbellek dışında süzülür)
     out["insights"] = insight_state.visible(out["insights"])
     return out
+
+
+@app.get("/api/upcoming")
+def upcoming_v2(days: int = Query(45, ge=1, le=120)):
+    """Yaklaşan v2 (yetenek upcoming_v2; app/upcoming.py): kesin + tahmini + eksik ödemeler, maaş (toplama girmez),
+    maaştan önce ödenecek ve sonraki dönem (next_period)."""
+    from app import upcoming
+
+    return FastJSON(upcoming.upcoming(upcoming._today(), days))
+
+
+@app.get("/api/stats/monthly")
+def stats_monthly(months: int = Query(6, ge=1, le=24)):
+    """Tamamlanmış son N dönemin gelir/gider/net'i ve ortalamaları (yetenek monthly_net)."""
+    from app import upcoming
+
+    return upcoming.monthly_net(months, upcoming._today())
 
 
 @app.get("/api/installments")

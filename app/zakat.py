@@ -719,8 +719,11 @@ def compute(today: date | None = None) -> dict:
 
 def holdings() -> dict:
     """Altın/döviz/para varlıkları: bugünkü değer, alış bedeli girildiyse kazanç. 'Ben'inkiler Net durum'a girer,
-    aile üyelerininki ayrı gösterilir. Varlık yoksa fiyat çekilmez."""
-    ps = people()
+    aile üyelerininki ayrı gösterilir. Varlık yoksa fiyat çekilmez. Zekât hiç açılmadıysa (tablo yok) yazmadan boş
+    döner: Özet net_worth'ü de okuyor (cards_close_today), ilk Özet isteği okuma önbelleğini düşürmesin."""
+    with db.connect() as c:
+        fresh = not c.execute("SELECT 1 FROM sqlite_master WHERE name = 'zakat_people'").fetchone()
+    ps = [] if fresh else people()
     if not any(p["assets"] for p in ps):
         return {"items": [], "self_total": 0.0, "family_total": 0.0, "updated": None,
                 "totals": {"self": _gain_totals([]), "family": _gain_totals([])}}
