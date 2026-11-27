@@ -30,6 +30,8 @@ BILL_HISTORY = 3          # tahmin: son kaç faturanın ortalaması
 BILL_STALE_DAYS = 100     # son faturası bundan eskiyse kurum artık gelmiyor sayılır (tahmin yok)
 BILL_MATCH_DAYS = 12      # tahmin günü gerçek kaydın bu kadar yakınındaysa aynı fatura sayılır
 CLUSTER_GAP_DAYS = 8      # aynı kurumda ayda iki fatura: ay içi günler arası en az bu boşluk varsa iki küme
+CLUSTER_MONTHS = 4        # iki hat kararı: kaydı olan son kaç aya bakılır
+CLUSTER_MIN_TWICE = 3     # bu aylardan en az kaçında aynı ay içinde iki ayrı fatura olmalı
 KIND_ORDER = {"card": 0, "bill": 1, "recurring": 2, "debt": 3, "income": 4}
 CERT_ORDER = {"kesin": 0, "tahmini": 1, "eksik": 2}
 
@@ -208,8 +210,11 @@ def _split_clusters(recs: list[dict]) -> list[list[dict]]:
     by_month: dict[str, set[int]] = defaultdict(set)
     for r in recs:
         by_month[r["date"][:7]].add(int(r["date"][8:10]))
-    twice = sum(1 for days in by_month.values() if len(days) >= 2 and max(days) - min(days) > CLUSTER_GAP_DAYS)
-    if twice < 2:
+    # yalnız son CLUSTER_MONTHS ayın (kaydı olan) en az CLUSTER_MIN_TWICE'ında aynı ay içinde iki ayrı fatura varsa iki
+    # hat; tek abonelikte vadenin ay sonu ↔ ay başı kayması (30 Kas, 3 Ara) iki hat sayılmaz (UAT 27.11)
+    recent = sorted(by_month)[-CLUSTER_MONTHS:]
+    twice = sum(1 for m in recent if len(by_month[m]) >= 2 and max(by_month[m]) - min(by_month[m]) > CLUSTER_GAP_DAYS)
+    if twice < CLUSTER_MIN_TWICE:
         return [recs]
     days = sorted({int(r["date"][8:10]) for r in recs})
     gap, at = max(((b - a, b) for a, b in zip(days, days[1:])), default=(0, 0))
@@ -427,24 +432,43 @@ def variable_average(today: date, months: int = NEXT_BASIS) -> tuple[float, int]
 
 
 def next_period(today: date, sal: dict | None = None) -> dict | None:
-    """Maaştan sonraki dönem (maaş günü → bir sonraki maaştan önceki gün): {end_date, start_cash, salary, fixed,
-    variable_avg, result, basis_months}. start_cash = Harcanabilir (kumbara zaten düşülmüş; maaştan önce vadeli kesin
-    ödemeler de) − maaştan önceki tahmini faturalar (Harcanabilir onları düşmez). fixed = maaş gününden SONRA end_date'e
-    kadar vadeli kesin + tahmini ödemeler (kart, kira, fatura, borç; tutarı bilinmeyen hariç). result eksi olabilir.
-    Maaş tanımlı değilse None."""
+    """Maaştan sonraki dönem (maaş günü → bir sonraki maaştan önceki gün), tahakkuk bakışı, kart TEK kez:
+    result = cards_close_today − pre_salary_estimate + salary − fixed_noncard − variable_avg (eksi olabilir).
+    - cards_close_today: Harcanabilir − kartlarda biriken (bugüne kadarki kart harcamasının hepsi burada düşülür).
+    - pre_salary_estimate: maaştan önceki tahmini faturalar (Harcanabilir onları düşmez; başka yerde de yok).
+    - fixed_noncard: maaştan SONRA end_date'e kadar kart DIŞI kesin + tahmini ödemeler (kira, fatura, borç). Kumbaradan
+      ödenen borç kısmı girmez (para zaten kumbarada ayrılmış, Harcanabilir'den düşülmüş).
+    - variable_avg: son 3 tamamlanmış dönemin değişken harcaması (kart dahil): gelecek dönemin kart harcaması bu; kart
+      ekstresi satırları fixed_noncard'a girmediği için bir ay fazla kart sayılmaz.
+    Bilgi alanları: start_cash (Harcanabilir − pre_salary_estimate), fixed (kart dahil, kumbara-fonlu borç hariç; eski
+    alan, sonuçta kullanılmaz). Maaş tanımlı değilse None."""
     sal = sal if sal is not None else _next_salary(today)
     if not sal:
         return None
     s_day = date.fromisoformat(sal["date"])
     end = _add_month(s_day, 1) - timedelta(days=1)
     up = upcoming(today, max(1, (end - today).days), with_next=False)
+    jars = db.jar_reserved(today).get("by_debt", {})
+
+    def own(x: dict) -> float:  # kumbaranın karşıladığı borç kısmı düşülür
+        if x["kind"] == "debt":
+            return max(0.0, x["amount"] - max(0.0, jars.get(x["source"]["id"], 0.0)))
+        return x["amount"]
+
     pays = [x for x in up["items"] if x["kind"] != "income" and x["amount"] is not None]
-    pre_est = sum(x["amount"] for x in pays if x["date"] <= sal["date"] and x["source"]["type"] == "bill_estimate")
-    fixed = finance._round(sum(x["amount"] for x in pays if sal["date"] < x["date"] <= end.isoformat()))
-    start = finance._round(finance.net_worth(today)["spendable"] - pre_est)
+    pre_est = finance._round(sum(x["amount"] for x in pays
+                                 if x["date"] <= sal["date"] and x["source"]["type"] == "bill_estimate"))
+    after = [x for x in pays if sal["date"] < x["date"] <= end.isoformat()]
+    fixed = finance._round(sum(own(x) for x in after))
+    fixed_nc = finance._round(sum(own(x) for x in after if x["kind"] != "card"))
+    nw = finance.net_worth(today)
+    start = finance._round(nw["spendable"] - pre_est)
+    cct = nw["cards_close_today"]
     var, n = variable_average(today)
-    return {"end_date": end.isoformat(), "start_cash": start, "salary": sal["amount"], "fixed": fixed,
-            "variable_avg": var, "result": finance._round(start + sal["amount"] - fixed - var), "basis_months": n}
+    return {"end_date": end.isoformat(), "start_cash": start, "cards_close_today": cct,
+            "pre_salary_estimate": pre_est, "salary": sal["amount"], "fixed": fixed, "fixed_noncard": fixed_nc,
+            "variable_avg": var, "result": finance._round(cct - pre_est + sal["amount"] - fixed_nc - var),
+            "basis_months": n}
 
 
 # ---------------------------------------------------------------- aylık ortalama

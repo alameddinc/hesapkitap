@@ -334,9 +334,46 @@ def test_next_period(book, client):
     nw = finance.net_worth(TODAY)
     assert np_["end_date"] == "2027-01-14" and np_["salary"] == SALARY
     assert np_["fixed"] == RENT + INST + 700.0
+    assert np_["fixed_noncard"] == RENT + 700.0  # kart (23 Ara) cards_close_today'de: bir kez
     assert np_["start_cash"] == round(nw["spendable"] - 700.0, 2)
+    assert np_["cards_close_today"] == nw["cards_close_today"] and np_["pre_salary_estimate"] == 700.0
     assert (np_["variable_avg"], np_["basis_months"]) == (round((3 * 3000.0 + 2000.0 + INST) / 3, 2), 3)
-    assert np_["result"] == round(np_["start_cash"] + SALARY - np_["fixed"] - np_["variable_avg"], 2)
+    assert np_["result"] == round(nw["cards_close_today"] - 700.0 + SALARY - RENT - 700.0 - np_["variable_avg"], 2)
+
+
+def test_next_period_card_counted_once(book, client):
+    """Kart harcaması bir kez: açık döngüye 10.000 eklenince result tam 10.000 düşer (cards_close_today'den); kart
+    ekstresi fixed_noncard'a girmez."""
+    a = upcoming.upcoming(TODAY, 45)["next_period"]
+    _entry(client, "2026-11-20", "Örnek Elektronik", 10000.0, "Diğer", payment="kredi_karti", card_last4="1234")
+    b = upcoming.upcoming(TODAY, 45)["next_period"]
+    assert b["fixed_noncard"] == a["fixed_noncard"] and b["variable_avg"] == a["variable_avg"]
+    assert b["result"] == round(a["result"] - 10000.0, 2)
+
+
+def test_next_period_jar_funded_debt_excluded(book, client, monkeypatch):
+    """Kumbarada ayrılmış borç (maaştan sonra vadeli) fixed_noncard'a girmez; ayrılmayan kısmı girer."""
+    d = _post(client, "/api/debts", {"person": "Örnek Kişi", "direction": "borc", "amount": 5000.0,
+                                     "debt_date": "2026-11-01", "due_date": "2026-12-31", "pay_terms": "tek"})
+    did = d.get("id") or d["debt"]["id"]
+    from app import db
+
+    real = db.jar_reserved
+    base = upcoming.upcoming(TODAY, 45)["next_period"]["fixed_noncard"]
+    monkeypatch.setattr(db, "jar_reserved", lambda today=None: {**real(today), "by_debt": {did: 5000.0}})
+    assert upcoming.upcoming(TODAY, 45)["next_period"]["fixed_noncard"] == round(base - 5000.0, 2)
+    monkeypatch.setattr(db, "jar_reserved", lambda today=None: {**real(today), "by_debt": {did: 2000.0}})
+    assert upcoming.upcoming(TODAY, 45)["next_period"]["fixed_noncard"] == round(base - 2000.0, 2)
+
+
+def test_single_line_despite_month_end_drift(book, client):
+    """Tek abonelik, vade ay sonu ↔ ay başı kayıyor (iki ayda aynı ay içinde iki fatura): iki hat SAYILMAZ; tek tahmin
+    (son 3 faturanın ortalaması), son vadeden bir ay sonra."""
+    for day, amt in (("2026-07-02", 400.0), ("2026-07-30", 500.0), ("2026-09-01", 600.0), ("2026-09-29", 700.0),
+                     ("2026-11-03", 800.0)):
+        _entry(client, day, "Örnekgaz", amt, "Doğalgaz")
+    gas = _by(_up(), short_title="Doğalgaz")
+    assert [(x["date"], x["amount"]) for x in gas] == [("2026-12-03", 700.0), ("2027-01-03", 700.0)]
 
 
 def test_next_period_can_be_negative(book, client):

@@ -724,7 +724,8 @@ CAPABILITIES = (
                               # card|bill|recurring|debt|income, certainty kesin|tahmini|eksik, note, source {type, id}}],
                               # total, total_certain, total_estimate, salary {date, amount}|null, before_salary {total,
                               # estimate, missing_count}|null, missing_count, next_period {end_date, start_cash, salary,
-                              # fixed, variable_avg, result, basis_months}|null}; maaş toplama girmez. /api/summary
+                              # cards_close_today, pre_salary_estimate, fixed, fixed_noncard, variable_avg, result,
+                              # basis_months}|null}; maaş toplama girmez. /api/summary
                               # cards_close_today (Harcanabilir − kartlarda biriken, so_far) ve cards_accumulated {total,
                               # items}; geçmiş dönemde null
     "monthly_net",            # GET /api/stats/monthly?months=6 → {periods: [{period, name, income, expense, net}], count,
