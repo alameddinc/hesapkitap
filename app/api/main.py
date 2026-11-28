@@ -2757,10 +2757,16 @@ def stats_monthly(months: int = Query(6, ge=1, le=24)):
 @app.get("/api/stats/projection")
 def stats_projection(months: int = Query(13, ge=1, le=36)):
     """Böyle giderse ay ay nereye varırım (yetenek ozet_sade; upcoming.projection): maaştan maaşa start + dönem başına
-    salary, fixed, end_balance. Maaş yoksa periods boş."""
+    salary, fixed, end_balance. Maaş yoksa periods boş.
+    Uzun görünüm Premium (yetenek projection_limited): pakette "uzun_plan" yoksa (plans.plan_months; Planlama'nın
+    1 ay kuralıyla aynı satır) months ne gelirse gelsin yalnız ilk dönem döner ve limited true olur. Kendi sunucusunda
+    sınır yok (limited false)."""
     from app import upcoming
 
-    return FastJSON(upcoming.projection(upcoming._today(), months))
+    u = db.current_user()
+    out = upcoming.projection(upcoming._today(), plans.plan_months(u, months))  # ücretsiz: yalnız bu dönem
+    out["limited"] = not plans.allows(u, "uzun_plan")
+    return FastJSON(out)
 
 
 @app.get("/api/installments")

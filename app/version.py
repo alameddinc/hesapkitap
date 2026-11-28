@@ -745,6 +745,10 @@ CAPABILITIES = (
                               # {start, variable_avg, basis_months, periods [{label, year, salary_date, end_date,
                               # salary, fixed, end_balance}]}: end_balance = önceki (ilkinde start) + salary − fixed −
                               # variable_avg; periods[0].end_balance = next_period.result; maaş yoksa periods boş
+    "projection_limited",     # GET /api/stats/projection yanıtında limited (bool): pakette "uzun_plan" yoksa (ücretsiz)
+                              # months ne olursa olsun yalnız ilk dönem (periods en çok 1) ve limited true; Premium /
+                              # Aile / kendi sunucun: istenen kadar dönem, limited false. Sınır plan.limits.plan_months
+                              # ile aynı satır (Planlama'nın 1 ay kuralı); istemci kalan dönemleri kilitli gösterir
 )
 
 
