@@ -259,8 +259,8 @@ def test_projection_api_and_capability(book, client, monkeypatch):
     r = client.get("/api/stats/projection?months=3")
     assert r.status_code == 200, r.text
     j = r.json()
-    assert set(j) == {"start", "variable_avg", "basis_months", "periods"} and len(j["periods"]) == 3
-    assert j == upcoming.projection(TODAY, 3)
+    assert set(j) == {"start", "variable_avg", "basis_months", "periods", "limited"} and len(j["periods"]) == 3
+    assert j == {**upcoming.projection(TODAY, 3), "limited": False}  # kendi sunucun: sınır yok
     assert len(client.get("/api/stats/projection").json()["periods"]) == 13
     assert client.get("/api/stats/projection?months=0").status_code == 422
     assert client.get("/api/stats/projection?months=99").status_code == 422
